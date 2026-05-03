@@ -48,12 +48,15 @@ per-turn digest of used skills, executed commands, or changed-file CRUD after ea
 `Frame::all_text()` with wide-character continuation cells skipped,
 `PtySessionBuilder::args` for non-interactive subcommand flows, the predicate-driven
 `Step::Eventually` waiter that surfaces structured failures through
-`PtySessionError::Assertion`, and the named `StartupWait` presets plus
+`PtySessionError::Assertion`, the named `StartupWait` presets plus
 `Journey::wait_for_startup_preset` / `Journey::wait_for_startup_default` constructors
-that replace hand-tuned `(stable_ms, timeout_ms)` numbers. The agentty E2E
-session-creation journeys now wait on those predicates instead of fixed `Step::sleep`
-durations. Soft accumulators, recipe `match_*` siblings, and structured failure
-rendering in HTML proof reports remain queued. | Partial |
+that replace hand-tuned `(stable_ms, timeout_ms)` numbers, the `SoftAssertions`
+accumulator that batches `match_*` failures into one end-of-scope panic and routes them
+through `ProofCapture::assertions`, `match_*` siblings for every `recipe::expect_*`
+helper, and the HTML proof report rendering structured `AssertionFailure` data as a
+side-by-side context-and-frame block with column rulers and per-row gutters. The agentty
+E2E session-creation journeys now wait on those predicates instead of fixed
+`Step::sleep` durations. | Landed |
 
 ## Active Streams
 
@@ -67,11 +70,10 @@ rendering in HTML proof reports remain queued. | Partial |
   interrupted-run recovery.
 - `Session Output`: per-turn execution digests that summarize the commands, changed
   files, and skill activity users need to review directly in the chat transcript.
-- `Testty`: published `testty` crate surface for downstream test authors and external
-  Rust TUI adopters, covering frame text utilities, PTY session ergonomics,
-  predicate-driven waiters, soft accumulators, recipe `match_*` siblings, richer
-  structured-failure rendering in the proof report, and the agentty E2E adoption that
-  retires fixed `Step::sleep` waits.
+- `Testty`: parked future work for the published `testty` crate, covering an optional
+  `SnapshotConfig` frame normalizer for non-deterministic UIs, splitting recipe helpers
+  by framework so non-ratatui adopters do not inherit tabbed-header assumptions, and an
+  async session API for `tokio::test`-friendly harnesses.
 - `Auto-Review`: agentic orchestrator-driven loop that iteratively refines session
   changes through author, reviewer, and orchestrator agents, where the orchestrator
   decides each round whether to continue, switch the reviewer backend, escalate to the
@@ -151,7 +153,51 @@ choice persists across app restarts.
   `docs/site/content/docs/getting-started/overview.md` to explain the new per-project
   delivery strategy setting without claiming session actions consume it yet.
 
-### [a9ef45e2-c6ea-4b20-ae00-f9c32e0017f7] Testty: SoftAssertions accumulator for batched test failures
+### [eff3638c-359c-4374-9388-d3e9e4c2f26c] Session Output: Define turn activity storage contract
+
+#### Assignee
+
+`@minev-dev`
+
+#### Why now
+
+The Session Output stream has no slices in flight and the queued provider-capture and
+git-derived rendering follow-ups all depend on a shared per-turn activity record. Laying
+down the storage contract first lets later slices target one stable persistence shape
+instead of inventing parallel formats per provider.
+
+#### Usable outcome
+
+Completed turns persist one shared activity-summary record covering used skills,
+executed commands, and changed-file CRUD in a stable schema, so later provider capture
+and rendering slices reuse the same stored contract without changing user-facing chat
+output yet.
+
+#### Substeps
+
+- [ ] **Persist the per-turn activity summary record.** Add the activity-summary domain
+  type, migration, and persistence wiring in `crates/agentty/src/domain/session.rs`,
+  `crates/agentty/migrations/`, and `crates/agentty/src/infra/db.rs` so each completed
+  turn stores one record covering used skills, executed commands, and changed-file CRUD.
+- [ ] **Expose the activity contract through the session worker.** Update
+  `crates/agentty/src/app/session/workflow/worker.rs` and adjacent app-layer helpers so
+  the worker emits the new activity record on turn completion through a stable shape
+  later provider capture slices can target without changing rendered chat output.
+
+#### Tests
+
+- [ ] Add coverage in `crates/agentty/src/infra/db.rs` and
+  `crates/agentty/src/app/session/workflow/worker.rs` for activity-summary round-trips
+  and worker-emitted records on turn completion.
+
+#### Docs
+
+- [ ] Refresh `///` doc comments on the new activity-summary domain type and persistence
+  helpers, and note the per-turn activity contract in
+  `docs/site/content/docs/architecture/runtime-flow.md` without claiming user-facing
+  rendering exists yet.
+
+### [8e3ba5c4-9442-4248-a6bf-dd78c1951659] Auto-Review: Surface orchestrator verdict on /auto-review one-shot
 
 #### Assignee
 
@@ -159,62 +205,52 @@ choice persists across app restarts.
 
 #### Why now
 
-The agentty E2E sleep-removal slice landed in commit `1fa0be06`, freeing the Testty
-lane. The Result-returning `match_*` matcher core, `AssertionFailure`, and `MatchResult`
-are already public, but every `match_*` call still fails fast on the first miss, so
-multi-check scenarios cannot show the full set of frame-level assertion failures in one
-run. Adding a soft accumulator now is the smallest next testty slice that turns batched
-checks into a single end-of-scope panic with all messages, and routing the accumulated
-failures into `ProofCapture::assertions` pre-wires the queued
-`[07cce0e7] Testty: Render structured assertion failures in HTML proof report` slice
-without touching the HTML report yet.
+The Auto-Review stream has no slices in flight and its highest-leverage design artifact
+is the orchestrator decision schema and prompt. Validating both against real session
+diffs in a one-shot `/auto-review` invocation now keeps the first slice reviewable while
+unblocking the queued auto-loop, escalation, and reviewer-switch follow-ups that all
+build on the same orchestrator contract.
 
 #### Usable outcome
 
-Test authors can wrap a block of `match_*` checks against a captured frame in a
-`SoftAssertions` accumulator that records every `AssertionFailure`, panics once at scope
-end with all collected messages, and attaches each failure to the active
-`ProofCapture::assertions` so a single capture can carry every failure instead of just
-the first. Existing fail-fast `match_*` call sites stay unchanged when the accumulator
-is not used.
+Users can invoke `/auto-review` in a session to run one extra reviewer pass plus a
+separate orchestrator agent invocation that inspects the current diff and reviewer
+suggestions, and the resulting structured verdict (`Continue` or `Done` with one-line
+reasoning) renders inline in the session transcript without yet auto-looping.
 
 #### Substeps
 
-- [x] **Add the `SoftAssertions` accumulator with end-of-scope panic.** Introduce a
-  `SoftAssertions` type in `crates/testty/src/assertion.rs` that exposes a
-  `check(MatchResult)`-style entry point, stores every `AssertionFailure`, panics on
-  `Drop` with all collected messages when at least one failure was recorded, and offers
-  an explicit consume method that takes ownership before drop without double-panicking;
-  export it through `crates/testty/src/prelude.rs` and `crates/testty/src/lib.rs`.
-- [x] **Route accumulated failures into the active `ProofCapture::assertions`.** Update
-  `crates/testty/src/proof/report.rs` so each soft-recorded `AssertionFailure` lands as
-  an `AssertionResult` on the most recent `ProofCapture::assertions` entry through the
-  existing `ProofReport` plumbing, keeping fail-fast `match_*` behavior unchanged when
-  the accumulator is not used.
+- [ ] **Define the `/auto-review` slash command and orchestrator decision schema.** Add
+  the slash-command parser entry plus a typed orchestrator decision shape covering
+  `Continue` and `Done` with one-line reasoning in
+  `crates/agentty/src/runtime/mode/prompt.rs`,
+  `crates/agentty/src/ui/state/help_action.rs`, and
+  `crates/agentty/src/domain/agent.rs`, and add the orchestrator prompt template under
+  `crates/agentty/src/infra/agent/template/` so the schema and prompt are the artifact
+  validated by the one-shot run.
+- [ ] **Run the one-shot reviewer plus orchestrator pass and render the verdict
+  inline.** Wire one extra reviewer turn followed by a separate orchestrator
+  `AgentChannel` invocation through `crates/agentty/src/app/review.rs`,
+  `crates/agentty/src/app/session/workflow/worker.rs`, and
+  `crates/agentty/src/infra/channel/factory.rs`, requiring the orchestrator backend to
+  differ from the author backend and surfacing the structured verdict as a session
+  transcript entry without yet auto-looping.
 
 #### Tests
 
-- [x] Add unit tests in `crates/testty/src/assertion.rs` covering an empty accumulator
-  (no panic on drop), a single recorded `AssertionFailure` (panic message includes the
-  failure), multiple recorded failures (panic message lists all of them in record
-  order), and explicit pre-drop consumption (no double-panic on drop).
-- [x] Add coverage in `crates/testty/src/proof/report.rs` (or a sibling integration
-  test) that running several soft `match_*` checks while a `ProofCapture` is active
-  attaches each failure as an `AssertionResult` on the latest
-  `ProofCapture::assertions`.
-- [x] Run
-  `prek run cargo-check --files crates/testty/src/assertion.rs crates/testty/src/proof/report.rs crates/testty/src/prelude.rs crates/testty/src/lib.rs`
-  and `prek run test-testty-src --all-files --hook-stage manual`.
+- [ ] Add coverage in `crates/agentty/src/runtime/mode/prompt.rs`,
+  `crates/agentty/src/app/review.rs`, and
+  `crates/agentty/src/app/session/workflow/worker.rs` for `/auto-review` slash-command
+  parsing, orchestrator decision schema deserialization, the
+  different-backend-from-author guard, and inline verdict rendering on the session
+  transcript.
 
 #### Docs
 
-- [x] Refresh `///` doc comments on the touched public surface in
-  `crates/testty/src/assertion.rs`, `crates/testty/src/prelude.rs`, and
-  `crates/testty/src/proof/report.rs` so the accumulator behavior, drop-time panic, and
-  `ProofCapture::assertions` wiring are clearly described.
-- [x] Add a Keep-a-Changelog entry in `CHANGELOG.md` noting that `testty` now exposes a
-  `SoftAssertions` accumulator that batches `match_*` failures and routes them into the
-  active `ProofCapture::assertions`.
+- [ ] Update `docs/site/content/docs/usage/workflow.md` and
+  `docs/site/content/docs/usage/keybindings.md` to describe the `/auto-review` one-shot
+  invocation, the structured `Continue`/`Done` verdict, and the orchestrator-backend
+  separation requirement without claiming auto-looping exists yet.
 
 ## Ready Now Execution Order
 
@@ -226,21 +262,11 @@ flowchart TD
         D1 -. queued follow-up .-> D2
     end
 
-    subgraph TesttyLane["Testty - @andagaev"]
-        T3["[a9ef45e2] SoftAssertions accumulator"]
-        T4["[ca40b36d] Recipe match_* siblings"]
-        T5["[07cce0e7] HTML structured failure diff"]
-        T3 -. queued follow-up .-> T5
-    end
-
-    subgraph LaterLanes["Queued independent streams"]
-        P1["[84aa58cc] Compact reset memory"]
-        P2["[a1b75e5c] Route provider restarts through compact memory"]
+    subgraph SessionOutputLane["Session Output - @minev-dev"]
         S1["[eff3638c] Turn activity storage"]
-        P1 -. queued follow-up .-> P2
     end
 
-    subgraph AutoReviewLane["Auto-Review queue"]
+    subgraph AutoReviewLane["Auto-Review - @andagaev"]
         AR1["[8e3ba5c4] One-shot orchestrator verdict"]
         AR2["[999fa2d1] Auto-loop with squash on Done"]
         AR3["[2fd4754b] Escalation pause and resume"]
@@ -248,6 +274,12 @@ flowchart TD
         AR1 -. queued follow-up .-> AR2
         AR2 -. queued follow-up .-> AR3
         AR3 -. queued follow-up .-> AR4
+    end
+
+    subgraph LaterLanes["Queued independent streams"]
+        P1["[84aa58cc] Compact reset memory"]
+        P2["[a1b75e5c] Route provider restarts through compact memory"]
+        P1 -. queued follow-up .-> P2
     end
 ```
 
@@ -348,23 +380,6 @@ lands and provider wiring is the next Protocol priority.
 
 `[84aa58cc-8cd0-41cb-a6fc-a97016e85f0d] Protocol: Define compact restart session memory`
 
-### [eff3638c-359c-4374-9388-d3e9e4c2f26c] Session Output: Define turn activity storage contract
-
-#### Outcome
-
-Completed turns persist one shared activity-summary record for used skills, executed
-commands, and changed-file CRUD so later provider integrations all target the same
-stored contract.
-
-#### Promote when
-
-Promote when the team has capacity for transcript-review improvements and can keep the
-first Session Output slice limited to protocol and persistence shape.
-
-#### Depends on
-
-`None`
-
 ### [29d3d82d-d1e5-452b-a93c-e873f89a8bba] Session Output: Render git-derived changed-file summaries
 
 #### Outcome
@@ -435,61 +450,6 @@ is in place and Codex is the next provider chosen for activity-summary rollout.
 #### Depends on
 
 `[29d3d82d-d1e5-452b-a93c-e873f89a8bba] Session Output: Render git-derived changed-file summaries`
-
-### [ca40b36d-2bb9-4f1a-a931-2ce93e285fab] Testty: Result-returning recipe matchers
-
-#### Outcome
-
-Every `recipe::expect_*` helper in `crates/testty/src/recipe.rs` exposes a `match_*`
-sibling returning `MatchResult`, so feature tests can compose, retry, or soft-batch
-high-level recipe checks the same way they compose low-level `assertion::match_*` calls.
-
-#### Promote when
-
-Promote when the Testty stream is ready to mirror the already-landed assertion-layer
-`match_*` pattern across the recipe surface.
-
-#### Depends on
-
-`None`
-
-### [07cce0e7-ab8e-4f36-8fd0-251de665eb01] Testty: Render structured assertion failures in HTML proof report
-
-#### Outcome
-
-Failed `match_*` calls captured during a scenario surface in
-`crates/testty/src/proof/html.rs` as a side-by-side colored frame diff with row/col
-gutters and the structured `AssertionFailure` context, instead of dying as a stderr
-panic the report cannot see.
-
-#### Promote when
-
-Promote when
-`[a9ef45e2-c6ea-4b20-ae00-f9c32e0017f7] Testty: SoftAssertions accumulator for batched test failures`
-has wired structured failures into `ProofCapture::assertions`.
-
-#### Depends on
-
-`[a9ef45e2-c6ea-4b20-ae00-f9c32e0017f7] Testty: SoftAssertions accumulator for batched test failures`
-
-### [8e3ba5c4-9442-4248-a6bf-dd78c1951659] Auto-Review: Surface orchestrator verdict on /auto-review one-shot
-
-#### Outcome
-
-Users can invoke `/auto-review` in a session to run one extra reviewer pass plus a
-separate orchestrator agent invocation that inspects the current diff and reviewer
-suggestions and renders a structured verdict (continue or done, with one-line reasoning)
-inline in the session transcript without yet auto-looping.
-
-#### Promote when
-
-Promote when the Auto-Review stream becomes the next session-workflow priority and a
-named assignee is ready to validate the orchestrator prompt and decision schema against
-real session diffs before committing to the loop.
-
-#### Depends on
-
-`None`
 
 ### [999fa2d1-e6bc-4526-a1f9-a2e151d593d3] Auto-Review: Drive iterative loop until orchestrator declares done
 
