@@ -18,9 +18,9 @@ use crate::domain::session::{Session, SessionId, Status};
 use crate::domain::transcript_notice::TRAILING_TRANSCRIPT_NOTICE_PREFIXES;
 use crate::icon::{Icon, TACHYON_LOADER_WIDTH};
 use crate::ui::component::tachyon_loader::TachyonLoaderEffect;
+use crate::ui::input_layout::{bottom_pinned_scroll_offset, panel_inner_width};
 use crate::ui::markdown::{self, render_markdown};
-use crate::ui::util::{bottom_pinned_scroll_offset, panel_inner_width};
-use crate::ui::{Component, layout, style, text_util};
+use crate::ui::{Component, session_format, style, text_util};
 
 const DRAFT_PREVIEW_HEADER: &str = "## Draft Session";
 const DRAFT_PREVIEW_EMPTY_NOTE: &str = "No draft messages staged yet. Use `Enter` to stage the \
@@ -453,7 +453,8 @@ impl<'a> SessionOutput<'a> {
         context: SessionOutputLineContext<'_>,
         markdown_render_version: u64,
     ) -> SessionOutputLayoutCacheKey {
-        let inner_width = panel_inner_width(output_area, layout::session_output_panel_borders());
+        let inner_width =
+            panel_inner_width(output_area, session_format::session_output_panel_borders());
 
         SessionOutputLayoutCacheKey {
             active_progress: TextFingerprint::from_text(context.active_progress),
@@ -517,16 +518,16 @@ impl<'a> SessionOutput<'a> {
             session_update_version: _,
         } = context;
         let status = session.status;
-        let mut active_loader_line_index = None;
         let mut published_loader_line_index = None;
         let output_text = Self::output_text(session);
         let (completed_turn_text, active_turn_text) =
             Self::transcript_sections(status, output_text.as_ref(), active_prompt_output);
         let completed_turn_text =
-            layout::session_output_text_with_spaced_user_input(completed_turn_text);
+            session_format::session_output_text_with_spaced_user_input(completed_turn_text);
         let active_turn_text =
-            active_turn_text.map(layout::session_output_text_with_spaced_user_input);
-        let inner_width = panel_inner_width(output_area, layout::session_output_panel_borders());
+            active_turn_text.map(session_format::session_output_text_with_spaced_user_input);
+        let inner_width =
+            panel_inner_width(output_area, session_format::session_output_panel_borders());
         let (completed_turn_text, trailing_notice_text) = text_util::split_trailing_line_block(
             &completed_turn_text,
             TRAILING_TRANSCRIPT_NOTICE_PREFIXES,
@@ -583,7 +584,31 @@ impl<'a> SessionOutput<'a> {
             published_loader_line_index = Some(lines.len().saturating_sub(1));
         }
 
-        if let Some(status_line) = layout::session_output_status_line(
+        let active_loader_line_index = Self::append_session_tail_lines(
+            &mut lines,
+            status,
+            active_progress,
+            review_status_message,
+            review_model,
+        );
+
+        SessionOutputLines {
+            active_loader_line_index,
+            lines,
+            published_loader_line_index,
+        }
+    }
+
+    /// Appends the trailing status, done, or spacer rows and returns the
+    /// active-loader line index when the appended status uses animation.
+    fn append_session_tail_lines(
+        lines: &mut Vec<Line<'static>>,
+        status: Status,
+        active_progress: Option<&str>,
+        review_status_message: Option<&str>,
+        review_model: AgentModel,
+    ) -> Option<usize> {
+        if let Some(status_line) = session_format::session_output_status_line(
             status,
             active_progress,
             review_status_message,
@@ -594,23 +619,24 @@ impl<'a> SessionOutput<'a> {
             }
 
             lines.push(Line::from(""));
-            if Self::status_uses_tachyon_loader(status) {
-                active_loader_line_index = Some(lines.len());
-            }
+            let active_loader_line_index =
+                Self::status_uses_tachyon_loader(status).then_some(lines.len());
             lines.push(status_line);
-        } else if status == Status::Done {
-            lines.push(Line::from(""));
-            lines.push(layout::session_output_done_line());
-            lines.push(Line::from(""));
-        } else {
-            lines.push(Line::from(""));
+
+            return active_loader_line_index;
         }
 
-        SessionOutputLines {
-            active_loader_line_index,
-            lines,
-            published_loader_line_index,
+        if status == Status::Done {
+            lines.push(Line::from(""));
+            lines.push(session_format::session_output_done_line());
+            lines.push(Line::from(""));
+
+            return None;
         }
+
+        lines.push(Line::from(""));
+
+        None
     }
 
     /// Appends one automatic published-branch sync status row when the latest
@@ -619,7 +645,8 @@ impl<'a> SessionOutput<'a> {
         lines: &mut Vec<Line<'static>>,
         session: &Session,
     ) -> bool {
-        let Some(sync_line) = layout::session_output_published_branch_sync_line(session) else {
+        let Some(sync_line) = session_format::session_output_published_branch_sync_line(session)
+        else {
             return false;
         };
 
@@ -823,7 +850,7 @@ impl<'a> SessionOutput<'a> {
         if let Some(review_markdown) = review_text
             .map(str::trim)
             .filter(|review_text| !review_text.is_empty())
-            .map(layout::annotate_review_suggestions_header)
+            .map(session_format::annotate_review_suggestions_header)
         {
             Self::append_markdown_lines(
                 lines,
@@ -891,7 +918,7 @@ impl<'a> SessionOutput<'a> {
 
         Self::append_markdown_lines(
             lines,
-            &layout::session_output_summary_markdown(summary_text),
+            &session_format::session_output_summary_markdown(summary_text),
             inner_width,
             markdown_render_cache,
         );
@@ -1141,7 +1168,7 @@ impl Component for SessionOutput<'_> {
         );
         let final_scroll = bottom_pinned_scroll_offset(
             output_area,
-            layout::session_output_panel_borders(),
+            session_format::session_output_panel_borders(),
             layout.lines.len(),
             self.scroll_offset,
         );
@@ -1160,8 +1187,8 @@ impl Component for SessionOutput<'_> {
         let paragraph = Paragraph::new(paint_lines)
             .block(
                 Block::default()
-                    .borders(layout::session_output_panel_borders())
-                    .border_style(layout::session_output_panel_border_style(status)),
+                    .borders(session_format::session_output_panel_borders())
+                    .border_style(session_format::session_output_panel_border_style(status)),
             )
             .scroll((final_scroll, 0));
 

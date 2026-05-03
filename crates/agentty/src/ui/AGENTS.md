@@ -9,8 +9,9 @@ When working within `crates/agentty/src/ui/`:
   (`session_list.rs`, `session_chat.rs`, etc.).
 - **Helper Functions**: Keep render functions focused. Move reusable or complex layout
   and text-processing helpers to the narrowest shared module that fits the behavior (for
-  example, `layout.rs`, `text_util.rs`, or `util.rs`) and cover that helper with a unit
-  test when practical.
+  example, `layout.rs`, `input_layout.rs`, `prompt_format.rs`, `question_format.rs`,
+  `session_format.rs`, or `text_util.rs`) and cover that helper with a unit test when
+  practical.
 - **Component Reuse**: Check the `component/` directory before building a new common
   widget. All components must implement the `Component` trait.
 - **Palette Usage**: Use semantic color tokens from `style.rs` (`palette::*`) for UI
@@ -62,4 +63,10 @@ When working within `crates/agentty/src/ui/`:
 - `page.rs` and `page/` own full-screen pages.
 - `component.rs` and `component/` own reusable widgets and overlays.
 - `state.rs` and `state/` own UI mode and prompt state.
-- `style.rs`, `layout.rs`, `markdown.rs`, and `util.rs` own shared presentation helpers.
+- `layout.rs` owns pure area and panel geometry.
+- `input_layout.rs` owns chat-input wrapping, cursor geometry, dropdown sizing, and
+  table-column geometry.
+- `prompt_format.rs`, `question_format.rs`, and `session_format.rs` own prompt,
+  clarification-question, and session display formatting.
+- `style.rs`, `markdown.rs`, `text_util.rs`, `diff_util.rs`, and `activity_heatmap.rs`
+  own focused shared presentation helpers.

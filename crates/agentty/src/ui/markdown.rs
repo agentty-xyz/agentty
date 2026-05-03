@@ -9,7 +9,7 @@ use rustc_hash::FxHasher;
 use unicode_width::UnicodeWidthChar;
 
 use crate::ui::style;
-use crate::ui::util::wrap_styled_line;
+use crate::ui::text_util::wrap_styled_line;
 
 const USER_PROMPT_PREFIX: &str = " › ";
 const CLARIFICATION_HEADER: &str = "Clarifications:";

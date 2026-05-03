@@ -4,8 +4,8 @@ use ratatui::layout::Rect;
 use crate::app::App;
 use crate::runtime::EventResult;
 use crate::ui::component::file_explorer::FileExplorer;
+use crate::ui::diff_util::{parse_diff_lines, selected_diff_lines};
 use crate::ui::state::app_mode::{AppMode, DiffScrollCache, HelpContext};
-use crate::ui::util::{parse_diff_lines, selected_diff_lines};
 use crate::ui::{markdown, page};
 
 /// Handles key input while the app is in `AppMode::Diff`.

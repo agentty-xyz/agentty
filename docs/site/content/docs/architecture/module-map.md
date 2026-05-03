@@ -282,12 +282,21 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
 - `crates/agentty/src/ui/router.rs`: Mode-to-page routing for content rendering.
 - `crates/agentty/src/ui/component.rs`: Router-only component module exposing reusable
   widgets and overlays.
-- `crates/agentty/src/ui/layout.rs`: Layout helper utilities.
+- `crates/agentty/src/ui/layout.rs`: Pure area, panel, and reserved-height geometry
+  helpers.
 - `crates/agentty/src/ui/overlay.rs`: Overlay rendering dispatch for help, info, and
   confirmation flows.
 - `crates/agentty/src/ui/markdown.rs`: Markdown rendering utilities.
 - `crates/agentty/src/ui/diff_util.rs`: Diff parsing and rendering helpers.
+- `crates/agentty/src/ui/input_layout.rs`: Chat-input wrapping, cursor geometry,
+  dropdown sizing, and table-column geometry helpers.
 - `crates/agentty/src/ui/icon.rs`: Icon constants and helpers.
+- `crates/agentty/src/ui/prompt_format.rs`: Prompt footer text and slash or `@`-mention
+  suggestion formatting.
+- `crates/agentty/src/ui/question_format.rs`: Clarification-question panel text, option
+  rows, and focus-aware footer formatting.
+- `crates/agentty/src/ui/session_format.rs`: Session header, footer, status, summary,
+  review, and transcript-spacing display formatting.
 - `crates/agentty/src/ui/page.rs`: Router-only page module exposing full-screen pages.
 - `crates/agentty/src/ui/state.rs`: Router-only UI-state module exposing mode, help, and
   prompt state.
@@ -295,7 +304,6 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
   status styling helpers.
 - `crates/agentty/src/ui/text_util.rs`: Text manipulation helpers.
 - `crates/agentty/src/ui/activity_heatmap.rs`: Activity heatmap visualization.
-- `crates/agentty/src/ui/util.rs`: General UI utilities.
 - `crates/agentty/src/ui/page/diff.rs`: Diff view page.
 - `crates/agentty/src/ui/page/project_list.rs`: Project list page with activity heatmap.
 - `crates/agentty/src/ui/page/review_list.rs`: Requested PR/MR review list page.

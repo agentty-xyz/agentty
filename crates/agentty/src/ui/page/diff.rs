@@ -13,13 +13,13 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::domain::session::{ReviewRequest, Session};
 use crate::ui::component::file_explorer::FileExplorer;
+use crate::ui::diff_util::{
+    DiffLine, DiffLineKind, diff_header_new_path, diff_header_old_path, parse_diff_lines,
+    selected_diff_lines,
+};
 use crate::ui::state::app_mode::DiffRightPanel;
 use crate::ui::state::help_action;
-use crate::ui::text_util::wrap_lines_to_rows;
-use crate::ui::util::{
-    DiffLine, DiffLineKind, diff_header_new_path, diff_header_old_path, inline_text,
-    parse_diff_lines, selected_diff_lines,
-};
+use crate::ui::text_util::{inline_text, wrap_lines_to_rows};
 use crate::ui::{Component, Page, diff_util, markdown, style};
 
 const SCROLL_X_OFFSET: u16 = 0;
@@ -930,7 +930,7 @@ mod tests {
     use crate::domain::session::tests::SessionFixtureBuilder;
     use crate::domain::session::{ForgeKind, ReviewRequestSummary};
     use crate::domain::theme::ColorTheme;
-    use crate::ui::util::parse_diff_lines;
+    use crate::ui::diff_util::parse_diff_lines;
 
     const SAMPLE_DIFF: &str = concat!(
         "diff --git a/src/main.rs b/src/main.rs\n",

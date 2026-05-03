@@ -5,7 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
 use crate::ui::state::help_action;
-use crate::ui::{Page, layout, style, util};
+use crate::ui::{Page, layout, style, task_roadmap};
 
 /// Tasks page showing the selected project's roadmap queues and cards.
 pub struct TasksPage<'a> {
@@ -39,11 +39,11 @@ impl Page for TasksPage<'_> {
     fn render(&mut self, f: &mut Frame, area: Rect) {
         let areas = layout::tab_page_areas(area);
         let content = match (self.roadmap, self.roadmap_error) {
-            (Some(roadmap), _) => util::roadmap_task_lines(roadmap),
+            (Some(roadmap), _) => task_roadmap::roadmap_task_lines(roadmap),
             (None, Some(error)) => roadmap_error_lines(error),
             (None, None) => roadmap_missing_lines(),
         };
-        let max_scroll_offset = util::roadmap_task_max_scroll_offset(
+        let max_scroll_offset = task_roadmap::roadmap_task_max_scroll_offset(
             &content,
             areas.main_area.width.saturating_sub(2),
             areas.main_area.height.saturating_sub(2),

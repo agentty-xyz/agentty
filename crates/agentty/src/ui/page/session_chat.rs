@@ -11,13 +11,14 @@ use crate::ui::component::chat_input::{ChatInput, SuggestionList};
 use crate::ui::component::session_output::{
     SessionOutput, SessionOutputLayoutCache, SessionOutputLineContext,
 };
+use crate::ui::input_layout::{
+    calculate_input_height, overlay_area_above, suggestion_dropdown_height,
+};
 use crate::ui::state::app_mode::{AppMode, QuestionFocus};
 use crate::ui::state::prompt::PromptAtMentionState;
-use crate::ui::util::{
-    calculate_input_height, overlay_area_above, question_panel_areas,
-    question_panel_reserved_height, suggestion_dropdown_height,
+use crate::ui::{
+    Component, Page, layout, markdown, prompt_format, question_format, session_format,
 };
-use crate::ui::{Component, Page, layout, markdown};
 
 /// Maximum rendered height of the prompt input panel, including borders.
 const CHAT_INPUT_MAX_PANEL_HEIGHT: u16 = 10;
@@ -226,7 +227,7 @@ impl<'a> SessionChatPage<'a> {
         let suggestion_list = if suppress_slash_dropdown && input.text().starts_with('/') {
             None
         } else {
-            layout::prompt_suggestion_list(
+            prompt_format::prompt_suggestion_list(
                 input,
                 slash_state,
                 at_mention_state.as_ref(),
@@ -234,7 +235,8 @@ impl<'a> SessionChatPage<'a> {
                 allow_apply_command,
             )
         };
-        let dropdown_row_count = layout::prompt_suggestion_dropdown_rows(suggestion_list.as_ref());
+        let dropdown_row_count =
+            prompt_format::prompt_suggestion_dropdown_rows(suggestion_list.as_ref());
         let input_height = calculate_input_height(area.width.saturating_sub(2), input.text())
             .min(CHAT_INPUT_MAX_PANEL_HEIGHT);
         let desired_bottom_height = input_height
@@ -243,7 +245,10 @@ impl<'a> SessionChatPage<'a> {
         let max_bottom_height = area.height.saturating_sub(1);
 
         Some(PreparedPromptPanel {
-            footer_text: layout::prompt_footer_line(session, attachment_state.attachments.len()),
+            footer_text: prompt_format::prompt_footer_line(
+                session,
+                attachment_state.attachments.len(),
+            ),
             suggestion_list,
             title: format!(" [{}] ", session.model.as_str()),
             total_height: desired_bottom_height.min(max_bottom_height),
@@ -285,7 +290,7 @@ impl<'a> SessionChatPage<'a> {
 
     /// Renders a standalone two-line header above the output panel border.
     fn render_session_header(&self, f: &mut Frame, header_area: Rect, session: &Session) {
-        let header = Paragraph::new(layout::session_header_lines(
+        let header = Paragraph::new(session_format::session_header_lines(
             session,
             header_area.width,
             self.default_reasoning_level,
@@ -329,7 +334,7 @@ impl<'a> SessionChatPage<'a> {
                 .unwrap_or_default();
             let is_free_text_mode = selected_option_index.is_none();
             let input_text = if is_free_text_mode { input.text() } else { "" };
-            return question_panel_reserved_height(
+            return layout::question_panel_reserved_height(
                 area.width,
                 area.height.saturating_sub(1),
                 question,
@@ -406,7 +411,7 @@ impl<'a> SessionChatPage<'a> {
             return;
         }
 
-        let help_message = Paragraph::new(layout::session_view_footer_line(
+        let help_message = Paragraph::new(session_format::session_view_footer_line(
             session,
             self.can_open_worktree,
         ));
@@ -443,7 +448,7 @@ fn render_question_panel(f: &mut Frame, bottom_area: Rect, state: &QuestionPanel
         .unwrap_or_default();
     let is_free_text_mode = selected_option_index.is_none();
     let input_text = if is_free_text_mode { input.text() } else { "" };
-    let panel_areas = question_panel_areas(
+    let panel_areas = layout::question_panel_areas(
         bottom_area,
         question,
         input_text,
@@ -454,7 +459,7 @@ fn render_question_panel(f: &mut Frame, bottom_area: Rect, state: &QuestionPanel
     let is_chat_focused = focus == QuestionFocus::Chat;
     let question_title = format!("Question {}/{}", current_index + 1, questions.len());
     if panel_areas.question_area.height > 0 {
-        let question_para = Paragraph::new(layout::question_panel_lines(
+        let question_para = Paragraph::new(question_format::question_panel_lines(
             &question_title,
             question,
             is_chat_focused,
@@ -465,7 +470,7 @@ fn render_question_panel(f: &mut Frame, bottom_area: Rect, state: &QuestionPanel
 
     if panel_areas.options_area.height > 0 {
         f.render_widget(
-            Paragraph::new(layout::question_option_lines(
+            Paragraph::new(question_format::question_option_lines(
                 options,
                 selected_option_index,
                 is_chat_focused,
@@ -487,7 +492,7 @@ fn render_question_panel(f: &mut Frame, bottom_area: Rect, state: &QuestionPanel
         layout::question_at_mention_max_visible(bottom_area, panel_areas.input_area, 10);
     let at_mention_menu = if is_free_text_mode {
         at_mention_state.and_then(|state| {
-            layout::file_lookup_suggestion_list(
+            prompt_format::file_lookup_suggestion_list(
                 display_text,
                 display_cursor,
                 state,
@@ -536,7 +541,7 @@ fn render_question_help_footer(
         return;
     }
 
-    let help_para = Paragraph::new(layout::question_help_footer_line(
+    let help_para = Paragraph::new(question_format::question_help_footer_line(
         focus,
         is_navigating_options,
         is_at_mention_open,
@@ -870,7 +875,7 @@ mod tests {
         let area = Rect::new(0, 0, width, height);
         let bottom_height = page.bottom_height(area);
         let bottom_top = 1 + height.saturating_sub(2).saturating_sub(bottom_height);
-        let panel_areas = question_panel_areas(
+        let panel_areas = layout::question_panel_areas(
             Rect::new(1, bottom_top, width.saturating_sub(2), bottom_height),
             &question,
             "typed answer",

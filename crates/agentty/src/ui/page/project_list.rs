@@ -7,12 +7,12 @@ use time::OffsetDateTime;
 
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::DailyActivity;
-use crate::ui::state::help_action;
-use crate::ui::util::{
+use crate::ui::activity_heatmap::{
     RecentActivityStats, build_activity_heatmap_grid, build_recent_activity_stats,
     build_visible_heatmap_month_row, current_day_key_local, heatmap_intensity_level,
     heatmap_max_count, visible_heatmap_week_count,
 };
+use crate::ui::state::help_action;
 use crate::ui::{Page, layout, style};
 
 const DAY_LABELS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];

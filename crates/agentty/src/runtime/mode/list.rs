@@ -13,7 +13,7 @@ use crate::ui::state::help_action::{
     HelpAction, project_list_actions, session_list_actions, settings_actions, task_actions,
 };
 use crate::ui::state::prompt::{PromptAttachmentState, PromptHistoryState};
-use crate::ui::util::inline_text;
+use crate::ui::text_util::inline_text;
 
 /// Handles key input while the app is in list mode.
 ///

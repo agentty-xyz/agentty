@@ -13,13 +13,13 @@ use crate::domain::input::InputState;
 use crate::domain::session::SessionId;
 use crate::runtime::mode::{at_mention, input_key};
 use crate::runtime::{EventResult, clipboard_image};
+use crate::ui::input_layout::{move_input_cursor_down, move_input_cursor_up};
 use crate::ui::state::app_mode::AppMode;
 use crate::ui::state::prompt::{
     PromptAtMentionState, apply_prompt_delete_range as apply_prompt_delete_range_components,
     current_line_delete_range as prompt_current_line_delete_range, insert_prompt_character,
     insert_prompt_local_image, insert_prompt_text, prompt_slash_option_count,
 };
-use crate::ui::util::{move_input_cursor_down, move_input_cursor_up};
 
 /// Captures prompt-mode routing flags derived from the current session.
 ///

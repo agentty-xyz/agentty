@@ -11,8 +11,8 @@ concerns** design pattern, splitting rendering logic by page and component type.
 
 - **Pages** represent complete UI views (session list, chat view, new session prompt)
 - **Components** are reusable widgets shared across pages (status bar, input box)
-- **Utilities** contain pure layout and text processing functions with extensive unit
-  tests
+- **Focused helpers** keep pure geometry, input layout, text processing, and
+  domain-aware display formatting in separate modules with extensive unit tests
 - All pages implement the `Page` trait
 - All components implement the `Component` trait
 
@@ -26,7 +26,12 @@ concerns** design pattern, splitting rendering logic by page and component type.
 - **`component/`**: Reusable widgets implementing the `Component` trait.
   - `status_bar.rs` - Top status bar with version and runtime scope hint
   - `chat_input.rs` - Chat input box with cursor positioning
-- **`util.rs`**: Pure helper functions for layout calculations, text wrapping, and input
-  handling. All complex logic that can be unit-tested goes here.
+- **`layout.rs`**: Pure area and panel geometry helpers.
+- **`input_layout.rs`**: Chat-input wrapping, cursor geometry, dropdown sizing, and
+  table-column geometry.
+- **`prompt_format.rs`**, **`question_format.rs`**, and **`session_format.rs`**:
+  Domain-aware display formatting for prompt, clarification, and session surfaces.
+- **`text_util.rs`**, **`diff_util.rs`**, and **`activity_heatmap.rs`**: Focused shared
+  presentation helpers.
 
 For maintenance procedures and development guidelines, see `AGENTS.md`.

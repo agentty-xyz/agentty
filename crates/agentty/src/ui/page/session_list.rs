@@ -5,10 +5,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 
 use crate::domain::session::{Session, SessionSize, Status};
+use crate::ui::input_layout::first_table_column_width;
 use crate::ui::state::help_action;
-use crate::ui::util::{
-    first_table_column_width, format_duration_compact, inline_text, truncate_spans_with_ellipsis,
-};
+use crate::ui::text_util::{format_duration_compact, inline_text, truncate_spans_with_ellipsis};
 use crate::ui::{Page, layout, markdown, style};
 
 /// Uses row-background highlighting without a textual cursor glyph.

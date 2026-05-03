@@ -843,8 +843,8 @@ mod tests {
     use crate::infra::db::AppRepositories;
     use crate::infra::fs::{self as fs, FsClient};
     use crate::infra::{app_server, git};
+    use crate::ui::activity_heatmap;
     use crate::ui::state::app_mode::AppMode;
-    use crate::ui::util;
 
     /// Returns a mock app-server client wrapped in `Arc` for test injection.
     fn mock_app_server() -> Arc<dyn app_server::AppServerClient> {
@@ -3252,7 +3252,7 @@ mod tests {
             day_key_one * seconds_per_day + 600,
             day_key_two * seconds_per_day + 50,
         ] {
-            let day_key = util::activity_day_key_local(timestamp_seconds);
+            let day_key = activity_heatmap::activity_day_key_local(timestamp_seconds);
             let day_count = expected_activity_by_day.entry(day_key).or_insert(0);
             *day_count = day_count.saturating_add(1);
         }
