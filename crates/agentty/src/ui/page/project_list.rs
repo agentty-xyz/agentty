@@ -100,7 +100,7 @@ impl Page for ProjectListPage<'_> {
             .wrap(Wrap { trim: true });
 
         let selected_style = Style::default().bg(style::palette::surface());
-        let header = Row::new(["Project", "Sessions", "Last Opened"])
+        let header = Row::new(["Project", "Branch", "Sessions", "Last Opened", "Path"])
             .style(
                 Style::default()
                     .bg(style::palette::surface())
@@ -114,24 +114,17 @@ impl Page for ProjectListPage<'_> {
             .projects
             .iter()
             .map(|project_item| render_project_row(project_item, active_project_id));
-        let table = Table::new(
-            rows,
-            [
-                Constraint::Percentage(50),
-                Constraint::Length(8),
-                Constraint::Percentage(50),
-            ],
-        )
-        .column_spacing(TABLE_COLUMN_SPACING)
-        .header(header)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Projects")
-                .border_style(style::border_style()),
-        )
-        .row_highlight_style(selected_style)
-        .highlight_symbol(ROW_HIGHLIGHT_SYMBOL);
+        let table = Table::new(rows, project_table_column_constraints())
+            .column_spacing(TABLE_COLUMN_SPACING)
+            .header(header)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Projects")
+                    .border_style(style::border_style()),
+            )
+            .row_highlight_style(selected_style)
+            .highlight_symbol(ROW_HIGHLIGHT_SYMBOL);
 
         f.render_stateful_widget(table, project_area, self.table_state);
         f.render_widget(heatmap_panel, heatmap_area);
@@ -272,17 +265,30 @@ impl ActiveProjectStats {
 
 /// Renders one project metadata row.
 fn render_project_row(project_item: &ProjectListItem, active_project_id: i64) -> Row<'static> {
-    let (title, last_opened) = project_row_values(project_item, active_project_id);
+    let (title, branch, last_opened, path) = project_row_values(project_item, active_project_id);
 
     Row::new(vec![
         Cell::from(title),
+        Cell::from(branch),
         Cell::from(session_count_line(
             project_item.session_count,
             project_item.active_session_count,
         )),
         Cell::from(last_opened),
+        Cell::from(path),
     ])
     .style(project_row_style(project_item, active_project_id))
+}
+
+/// Returns responsive column widths for the Projects metadata table.
+fn project_table_column_constraints() -> [Constraint; 5] {
+    [
+        Constraint::Fill(2),
+        Constraint::Fill(2),
+        Constraint::Length(8),
+        Constraint::Length(12),
+        Constraint::Fill(3),
+    ]
 }
 
 /// Builds styled summary lines for work-performance metrics shown beneath
@@ -337,12 +343,17 @@ fn project_list_footer_line() -> Line<'static> {
 }
 
 /// Returns project row display values for reuse and testing.
-fn project_row_values(project_item: &ProjectListItem, active_project_id: i64) -> (String, String) {
+fn project_row_values(
+    project_item: &ProjectListItem,
+    active_project_id: i64,
+) -> (String, String, String, String) {
     let project = &project_item.project;
     let title = project_title(project_item, active_project_id);
+    let branch = project.git_branch.as_deref().unwrap_or("-");
     let last_opened = format_last_opened(project.last_opened_at);
+    let path = project.path.to_string_lossy().to_string();
 
-    (title, last_opened)
+    (title, branch.to_string(), last_opened, path)
 }
 
 /// Returns style for one project row, emphasizing the active project.
@@ -426,6 +437,24 @@ mod tests {
 
         // Assert
         assert_eq!(spacing, expected_spacing);
+    }
+
+    #[test]
+    fn test_project_table_descriptive_columns_use_flexible_widths() {
+        // Arrange
+        let expected_constraints = [
+            Constraint::Fill(2),
+            Constraint::Fill(2),
+            Constraint::Length(8),
+            Constraint::Length(12),
+            Constraint::Fill(3),
+        ];
+
+        // Act
+        let constraints = project_table_column_constraints();
+
+        // Assert
+        assert_eq!(constraints, expected_constraints);
     }
 
     #[test]
@@ -541,11 +570,13 @@ mod tests {
 
         // Assert
         assert_eq!(values.0, "agentty");
-        assert_eq!(values.1, "2023-11-14");
+        assert_eq!(values.1, "main");
+        assert_eq!(values.2, "2023-11-14");
+        assert_eq!(values.3, "/tmp/agentty");
     }
 
     #[test]
-    fn test_project_row_values_use_fallback_for_missing_timestamp() {
+    fn test_project_row_values_use_fallbacks_for_missing_branch_and_timestamp() {
         // Arrange
         let project_item = ProjectListItem {
             active_session_count: 0,
@@ -568,7 +599,9 @@ mod tests {
 
         // Assert
         assert_eq!(values.0, "agentty");
-        assert_eq!(values.1, "Never");
+        assert_eq!(values.1, "-");
+        assert_eq!(values.2, "Never");
+        assert_eq!(values.3, "/tmp/agentty");
     }
 
     #[test]
