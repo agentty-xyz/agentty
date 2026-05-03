@@ -9,6 +9,7 @@ mod core;
 mod error;
 mod merge_queue;
 mod project;
+pub(crate) mod prompt_intent;
 mod reducer;
 mod requested_review;
 mod review;

@@ -3,26 +3,23 @@ use std::io;
 use crossterm::event::{self, KeyCode, KeyEvent};
 use ratatui::Terminal;
 use ratatui::backend::Backend;
-use tracing::warn;
 
-use crate::app::{App, ReviewCacheEntry, SessionStatsUsage, diff_content_hash};
-use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
+use crate::app::App;
+use crate::app::prompt_intent::{
+    PromptIntentContext, PromptIntentInputMode, PromptIntentSessionMode,
+};
+use crate::domain::agent::AgentKind;
 use crate::domain::input::InputState;
-use crate::domain::review;
 use crate::domain::session::SessionId;
-use crate::domain::transcript_notice::TranscriptNotice;
-use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
 use crate::runtime::mode::{at_mention, input_key};
 use crate::runtime::{EventResult, clipboard_image};
 use crate::ui::state::app_mode::AppMode;
 use crate::ui::state::prompt::{
-    PromptAtMentionState, PromptSlashStage, PromptSuggestionSelection,
-    apply_prompt_delete_range as apply_prompt_delete_range_components,
-    current_line_delete_range as prompt_current_line_delete_range, drain_prompt_submission,
-    insert_prompt_character, insert_prompt_local_image, insert_prompt_text,
-    prompt_slash_option_count, resolve_prompt_slash_selection,
+    PromptAtMentionState, apply_prompt_delete_range as apply_prompt_delete_range_components,
+    current_line_delete_range as prompt_current_line_delete_range, insert_prompt_character,
+    insert_prompt_local_image, insert_prompt_text, prompt_slash_option_count,
 };
-use crate::ui::util::{format_token_count, move_input_cursor_down, move_input_cursor_up};
+use crate::ui::util::{move_input_cursor_down, move_input_cursor_up};
 
 /// Captures prompt-mode routing flags derived from the current session.
 ///
@@ -38,27 +35,29 @@ struct PromptContext {
 }
 
 impl PromptContext {
-    /// Returns whether `Esc` should delete the blank session backing this
-    /// prompt instead of restoring session view.
-    fn can_delete_on_cancel(&self) -> bool {
-        self.session_mode == PromptSessionMode::NewDeletable
+    /// Converts runtime prompt routing state into an app-layer execution
+    /// intent context.
+    fn to_intent_context(&self) -> PromptIntentContext {
+        PromptIntentContext {
+            input_mode: match self.input_mode {
+                PromptInputMode::SlashCommand => PromptIntentInputMode::SlashCommand,
+                PromptInputMode::AtMention | PromptInputMode::Text => PromptIntentInputMode::Text,
+            },
+            scroll_offset: self.scroll_offset,
+            session_id: self.session_id.clone(),
+            session_index: self.session_index,
+            session_mode: match self.session_mode {
+                PromptSessionMode::Existing => PromptIntentSessionMode::Existing,
+                PromptSessionMode::NewDeletable => PromptIntentSessionMode::NewDeletable,
+                PromptSessionMode::NewDraft => PromptIntentSessionMode::NewDraft,
+                PromptSessionMode::NewRegular => PromptIntentSessionMode::NewRegular,
+            },
+        }
     }
 
     /// Returns whether the prompt is currently editing an active `@` mention.
     fn is_at_mention(&self) -> bool {
         self.input_mode == PromptInputMode::AtMention
-    }
-
-    /// Returns whether the prompt belongs to a draft session that only stages
-    /// messages while still in `Status::Draft`.
-    fn is_draft_session(&self) -> bool {
-        self.session_mode == PromptSessionMode::NewDraft
-    }
-
-    /// Returns whether the prompt belongs to a session that has not started
-    /// its first turn.
-    fn is_new_session(&self) -> bool {
-        self.session_mode != PromptSessionMode::Existing
     }
 
     /// Returns whether the prompt is currently editing a slash command.
@@ -506,7 +505,7 @@ fn navigate_prompt_history_down(app: &mut App) {
 }
 
 fn advance_prompt_slash_selection(app: &mut App) {
-    let allow_apply_command = prompt_apply_command_is_available(app);
+    let allow_apply_command = app.prompt_apply_command_is_available();
     let (
         available_agent_kinds,
         input_text,
@@ -547,17 +546,6 @@ fn advance_prompt_slash_selection(app: &mut App) {
     }
 }
 
-/// Returns whether the targeted session is currently `InProgress`, used to
-/// route non-slash submissions into the in-memory message queue instead of
-/// the live reply path.
-fn session_is_in_progress(app: &App, session_id: &str) -> bool {
-    app.sessions
-        .sessions()
-        .iter()
-        .find(|session| session.id == session_id)
-        .is_some_and(|session| session.status == crate::domain::session::Status::InProgress)
-}
-
 /// Submits the active prompt when it passes prompt-mode validation.
 ///
 /// A submitted prompt clears any cached focused-review output for the session
@@ -566,57 +554,8 @@ fn session_is_in_progress(app: &App, session_id: &str) -> bool {
 /// [`prompt_context`], so any leading `/` falls through to the queue path
 /// instead of executing a slash command against the running turn.
 async fn handle_prompt_submit_key(app: &mut App, prompt_context: &PromptContext) {
-    if prompt_context.is_slash_command() {
-        handle_prompt_slash_submit(app, prompt_context).await;
-
-        return;
-    }
-
-    let prompt = take_submitted_turn_prompt(app);
-    if prompt.is_empty() {
-        return;
-    }
-
-    if prompt_context.is_draft_session() {
-        if let Err(error) = app
-            .stage_draft_message(&prompt_context.session_id, prompt)
-            .await
-        {
-            append_output_for_session(
-                app,
-                &prompt_context.session_id,
-                &TranscriptNotice::Error.format(error),
-            )
-            .await;
-        }
-    } else if prompt_context.is_new_session() {
-        if let Err(error) = app.start_session(&prompt_context.session_id, prompt).await {
-            append_output_for_session(
-                app,
-                &prompt_context.session_id,
-                &TranscriptNotice::Error.format(error),
-            )
-            .await;
-        }
-    } else if session_is_in_progress(app, &prompt_context.session_id) {
-        if let Err(error) = app.enqueue_message(&prompt_context.session_id, prompt) {
-            append_output_for_session(
-                app,
-                &prompt_context.session_id,
-                &TranscriptNotice::QueueError.format(error),
-            )
-            .await;
-        }
-    } else {
-        app.reply(&prompt_context.session_id, prompt).await;
-    }
-
-    app.mode = AppMode::View {
-        review_status_message: None,
-        review_text: None,
-        session_id: prompt_context.session_id.clone(),
-        scroll_offset: None,
-    };
+    app.handle_prompt_submit_intent(&prompt_context.to_intent_context())
+        .await;
 }
 
 /// Pastes one clipboard image into the prompt composer as an inline
@@ -674,554 +613,23 @@ fn insert_pasted_image_placeholder(app: &mut App, local_image_path: std::path::P
     sync_prompt_at_mention_state(app);
 }
 
-/// Drains the prompt composer into the structured turn payload sent to the
-/// session workflow.
-///
-/// Attachments are filtered against the submitted text so manually deleted
-/// `[Image #n]` placeholders do not leave orphaned image inputs in the final
-/// turn payload.
-fn take_submitted_turn_prompt(app: &mut App) -> TurnPrompt {
-    match &mut app.mode {
-        AppMode::Prompt {
-            attachment_state,
-            input,
-            ..
-        } => {
-            let submission = drain_prompt_submission(attachment_state, input);
-            let attachments = submission
-                .attachments
-                .into_iter()
-                .map(|attachment| TurnPromptAttachment {
-                    placeholder: attachment.placeholder,
-                    local_image_path: attachment.local_image_path,
-                })
-                .collect();
-
-            TurnPrompt {
-                attachments,
-                text: submission.text,
-                text_source: TurnPromptTextSource::UserPrompt,
-            }
-        }
-        _ => TurnPrompt::from_text(String::new()),
-    }
-}
-
-async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContext) {
-    let session_agent_kind = app
-        .session_at(prompt_context.session_index)
-        .map_or(AgentKind::Codex, |session| session.model.kind());
-    let selection = match &app.mode {
-        AppMode::Prompt {
-            input, slash_state, ..
-        } => resolve_prompt_slash_selection(
-            input.text(),
-            slash_state,
-            session_agent_kind,
-            apply_command_has_actionable_review_suggestions(app, prompt_context),
-        ),
-        _ => None,
-    };
-
-    match selection {
-        Some(PromptSuggestionSelection::Command("/apply")) => {
-            reset_prompt_slash_input(app);
-            handle_apply_command(app, prompt_context).await;
-        }
-        Some(PromptSuggestionSelection::Command("/stats")) => {
-            reset_prompt_slash_input(app);
-            handle_stats_command(app, prompt_context).await;
-        }
-        Some(PromptSuggestionSelection::Command("/reasoning")) => {
-            let selected_reasoning_level = app
-                .session_at(prompt_context.session_index)
-                .map_or(app.settings.reasoning_level, |session| {
-                    session.effective_reasoning_level(app.settings.reasoning_level)
-                });
-            let selected_index = ReasoningLevel::ALL
-                .iter()
-                .position(|level| *level == selected_reasoning_level)
-                .unwrap_or(0);
-
-            if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
-                slash_state.stage = PromptSlashStage::Reasoning;
-                slash_state.selected_agent = None;
-                slash_state.selected_index = selected_index;
-            }
-        }
-        Some(PromptSuggestionSelection::Command(_)) => {
-            if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
-                slash_state.stage = PromptSlashStage::Agent;
-                slash_state.selected_agent = None;
-                slash_state.selected_index = 0;
-            }
-        }
-        Some(PromptSuggestionSelection::Agent(selected_agent)) => {
-            if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
-                slash_state.selected_agent = Some(selected_agent);
-                slash_state.stage = PromptSlashStage::Model;
-                slash_state.selected_index = 0;
-            }
-        }
-        Some(PromptSuggestionSelection::Model(selected_model)) => {
-            reset_prompt_slash_input(app);
-            update_prompt_session_model(app, prompt_context, selected_model).await;
-        }
-        Some(PromptSuggestionSelection::Reasoning(reasoning_level)) => {
-            reset_prompt_slash_input(app);
-            update_prompt_session_reasoning_level(app, prompt_context, reasoning_level).await;
-        }
-        None => {}
-    }
-}
-
-/// Clears the slash-command buffer after one prompt slash action is accepted.
-fn reset_prompt_slash_input(app: &mut App) {
-    if let AppMode::Prompt {
-        input, slash_state, ..
-    } = &mut app.mode
-    {
-        input.take_text();
-        slash_state.reset();
-    }
-}
-
-/// Persists one slash-selected model change and logs any failure with session
-/// context.
-async fn update_prompt_session_model(
-    app: &mut App,
-    prompt_context: &PromptContext,
-    selected_model: AgentModel,
-) {
-    if let Err(error) = app
-        .set_session_model(&prompt_context.session_id, selected_model)
-        .await
-    {
-        warn!(
-            session_id = %prompt_context.session_id,
-            model = %selected_model.as_str(),
-            error = %error,
-            "failed to switch session model from prompt slash command"
-        );
-    }
-}
-
-/// Persists one slash-selected reasoning override and logs any failure with
-/// session context.
-async fn update_prompt_session_reasoning_level(
-    app: &mut App,
-    prompt_context: &PromptContext,
-    reasoning_level: ReasoningLevel,
-) {
-    if let Err(error) = app
-        .set_session_reasoning_level(&prompt_context.session_id, Some(reasoning_level))
-        .await
-    {
-        warn!(
-            session_id = %prompt_context.session_id,
-            reasoning_level = ?reasoning_level,
-            error = %error,
-            "failed to update session reasoning level from prompt slash command"
-        );
-    }
-}
-
 /// Cancels the active prompt and drops any composer-owned attachment files.
 ///
 /// Existing focused-review output is restored into session view because no new
 /// prompt was submitted.
 async fn handle_prompt_cancel_key(app: &mut App, prompt_context: &PromptContext) {
-    if prompt_context.is_slash_command() {
-        if let AppMode::Prompt {
-            input, slash_state, ..
-        } = &mut app.mode
-        {
-            input.take_text();
-            slash_state.reset();
-        }
-
-        return;
-    }
-
-    cleanup_prompt_attachment_state(app).await;
-
-    if prompt_context.can_delete_on_cancel() {
-        app.delete_selected_session_deferred_cleanup().await;
-        app.mode = AppMode::List;
-
-        return;
-    }
-
-    app.mode = AppMode::View {
-        review_status_message: prompt_review_status_message(app),
-        review_text: prompt_review_text(app),
-        session_id: prompt_context.session_id.clone(),
-        scroll_offset: prompt_context.scroll_offset,
-    };
-}
-
-/// Returns the preserved focused-review status text stored in prompt mode.
-fn prompt_review_status_message(app: &App) -> Option<String> {
-    match &app.mode {
-        AppMode::Prompt {
-            review_status_message,
-            ..
-        } => review_status_message.clone(),
-        _ => None,
-    }
-}
-
-/// Returns the preserved focused-review output stored in prompt mode.
-fn prompt_review_text(app: &App) -> Option<String> {
-    match &app.mode {
-        AppMode::Prompt { review_text, .. } => review_text.clone(),
-        _ => None,
-    }
-}
-
-/// Drops the preserved focused-review text and status message held in prompt
-/// mode so a subsequent cancel cannot restore invalidated review content.
-fn clear_prompt_review_state(app: &mut App) {
-    if let AppMode::Prompt {
-        review_status_message,
-        review_text,
-        ..
-    } = &mut app.mode
-    {
-        *review_status_message = None;
-        *review_text = None;
-    }
+    app.handle_prompt_cancel_intent(&prompt_context.to_intent_context())
+        .await;
 }
 
 async fn append_output_for_session(app: &App, session_id: &str, output: &str) {
     app.append_output_for_session(session_id, output).await;
 }
 
-/// Returns whether the selected session has cached focused-review suggestions
-/// that make `/apply` executable from the slash menu.
-fn apply_command_has_actionable_review_suggestions(
-    app: &App,
-    prompt_context: &PromptContext,
-) -> bool {
-    review_cache_has_actionable_suggestions(app, &prompt_context.session_id)
-}
-
-/// Returns whether the active prompt session has cached focused-review
-/// suggestions that make `/apply` selectable.
-fn prompt_apply_command_is_available(app: &App) -> bool {
-    let Some(session_id) = prompt_session_id(app) else {
-        return false;
-    };
-
-    review_cache_has_actionable_suggestions(app, &session_id)
-}
-
-/// Returns the active prompt session id without mutating prompt state.
-fn prompt_session_id(app: &App) -> Option<SessionId> {
-    match &app.mode {
-        AppMode::Prompt { session_id, .. } => Some(session_id.clone()),
-        _ => None,
-    }
-}
-
-/// Returns whether cached focused-review text contains actionable
-/// suggestions for one session.
-fn review_cache_has_actionable_suggestions(app: &App, session_id: &str) -> bool {
-    let Some(ReviewCacheEntry::Ready { text, .. }) = app.review_cache.get(session_id) else {
-        return false;
-    };
-
-    review::has_actionable_review_suggestions(Some(text))
-}
-
 /// Appends one prompt-mode status line to the session transcript shown above
 /// the composer.
 async fn append_prompt_status_line(app: &App, session_id: &str, label: &str, message: &str) {
     append_output_for_session(app, session_id, &format!("\n[{label}] {message}\n")).await;
-}
-
-/// Removes any prompt attachment files still owned by the active composer and
-/// resets attachment state before leaving prompt mode.
-async fn cleanup_prompt_attachment_state(app: &mut App) {
-    let prompt = match &mut app.mode {
-        AppMode::Prompt {
-            attachment_state, ..
-        } => {
-            let attachments = attachment_state
-                .attachments
-                .iter()
-                .map(|attachment| TurnPromptAttachment {
-                    placeholder: attachment.placeholder.clone(),
-                    local_image_path: attachment.local_image_path.clone(),
-                })
-                .collect::<Vec<_>>();
-            attachment_state.reset();
-
-            TurnPrompt {
-                attachments,
-                text: String::new(),
-                text_source: TurnPromptTextSource::UserPrompt,
-            }
-        }
-        _ => return,
-    };
-
-    app.cleanup_prompt_attachment_files(&prompt).await;
-}
-
-/// Handles `/apply` by extracting suggestions from the focused review and
-/// submitting them as a verification-gated prompt to the agent.
-///
-/// Only runs when the session is in `Status::Review` and a `Ready` review is
-/// cached for it so stale or in-flight reviews are not applied. The cached
-/// review's diff hash is revalidated against the live worktree diff so a
-/// review that no longer matches the current files is rejected instead of
-/// submitted as stale instructions.
-///
-/// Composer attachments are preserved across all early-return validation
-/// paths and only cleaned up at the submission boundary, so a rejected
-/// attempt leaves the user's pasted images intact for the next action.
-///
-/// When the cached review fails the stale-hash guard, the preserved
-/// `review_text` and `review_status_message` held in `AppMode::Prompt` are
-/// cleared so a subsequent cancel cannot restore the invalidated review back
-/// into the session view.
-async fn handle_apply_command(app: &mut App, prompt_context: &PromptContext) {
-    let Some((session_status, session_folder, base_branch)) =
-        app.session_at(prompt_context.session_index).map(|session| {
-            (
-                session.status,
-                session.folder.clone(),
-                session.base_branch.clone(),
-            )
-        })
-    else {
-        return;
-    };
-
-    if session_status != crate::domain::session::Status::Review {
-        append_prompt_status_line(
-            app,
-            &prompt_context.session_id,
-            "Apply",
-            "Apply is only available after a focused review completes (session status must be \
-             Review).",
-        )
-        .await;
-
-        return;
-    }
-
-    let (cached_hash, cached_text) = if let Some(ReviewCacheEntry::Ready { diff_hash, text }) =
-        app.review_cache.get(prompt_context.session_id.as_str())
-    {
-        (*diff_hash, text.clone())
-    } else {
-        append_prompt_status_line(
-            app,
-            &prompt_context.session_id,
-            "Apply",
-            "No actionable suggestions available. Run a focused review first (f key).",
-        )
-        .await;
-
-        return;
-    };
-
-    let current_diff = match app
-        .services
-        .git_client()
-        .diff(session_folder, base_branch)
-        .await
-    {
-        Ok(diff) => diff,
-        Err(err) => {
-            append_prompt_status_line(
-                app,
-                &prompt_context.session_id,
-                "Apply",
-                &format!(
-                    "Failed to read worktree diff: {err}. Review cache preserved; try /apply \
-                     again."
-                ),
-            )
-            .await;
-
-            return;
-        }
-    };
-    let current_hash = diff_content_hash(&current_diff);
-
-    if current_hash != cached_hash {
-        app.review_cache.remove(prompt_context.session_id.as_str());
-        clear_prompt_review_state(app);
-        append_prompt_status_line(
-            app,
-            &prompt_context.session_id,
-            "Apply",
-            "Review is stale; the worktree changed since it was generated. Run focused review \
-             again (f key).",
-        )
-        .await;
-
-        return;
-    }
-
-    let Some(suggestions) = review::review_suggestions(&cached_text) else {
-        append_prompt_status_line(
-            app,
-            &prompt_context.session_id,
-            "Apply",
-            "No actionable suggestions found in the current review.",
-        )
-        .await;
-
-        return;
-    };
-
-    let prompt = build_apply_review_prompt(&suggestions);
-
-    cleanup_prompt_attachment_state(app).await;
-    app.review_cache.remove(prompt_context.session_id.as_str());
-    app.reply(&prompt_context.session_id, prompt).await;
-
-    app.mode = AppMode::View {
-        review_status_message: None,
-        review_text: None,
-        session_id: prompt_context.session_id.clone(),
-        scroll_offset: None,
-    };
-}
-
-/// Builds the agent-facing `/apply` prompt from focused-review suggestions.
-///
-/// The prompt explicitly asks the agent to verify each suggestion against the
-/// current code before making changes, then apply only suggestions that remain
-/// correct and relevant.
-fn build_apply_review_prompt(suggestions: &str) -> TurnPrompt {
-    TurnPrompt::from_text(format!(
-        "Verify the following focused-review suggestions against the current code before changing \
-         anything. Apply only the suggestions that are still correct and relevant; explain any \
-         suggestions you leave unapplied.\n\n{suggestions}"
-    ))
-}
-
-/// Handles `/stats` by loading stats through the app layer and appending the
-/// rendered output to the session transcript.
-async fn handle_stats_command(app: &App, prompt_context: &PromptContext) {
-    let session_stats = app.stats_for_session(&prompt_context.session_id).await;
-    let session_time = session_stats
-        .session_duration_seconds
-        .map_or_else(|| "Unavailable".to_string(), format_duration);
-    let usage_rows_result = build_token_usage_rows(session_stats.usage_rows_result);
-    let stats_output =
-        build_stats_markdown(&prompt_context.session_id, &session_time, usage_rows_result);
-
-    append_output_for_session(app, &prompt_context.session_id, &stats_output).await;
-}
-
-struct TokenUsageRow {
-    in_tokens: String,
-    model: String,
-    out_tokens: String,
-}
-
-fn build_token_usage_rows(
-    usage_rows_result: Result<Vec<SessionStatsUsage>, String>,
-) -> Result<Vec<TokenUsageRow>, String> {
-    match usage_rows_result {
-        Ok(usage_rows) => {
-            let rows = usage_rows
-                .into_iter()
-                .map(|row| TokenUsageRow {
-                    in_tokens: format_token_count(row.input_tokens),
-                    model: row.model,
-                    out_tokens: format_token_count(row.output_tokens),
-                })
-                .collect();
-
-            Ok(rows)
-        }
-        Err(error) => Err(error),
-    }
-}
-
-fn build_stats_markdown(
-    session_id: &str,
-    session_time: &str,
-    usage_rows_result: Result<Vec<TokenUsageRow>, String>,
-) -> String {
-    let mut lines = vec![
-        format_stats_metric_line("Session ID", session_id),
-        format_stats_metric_line("Session Time", session_time),
-        String::new(),
-        "Tokens Usage".to_string(),
-    ];
-
-    lines.extend(build_token_usage_lines(usage_rows_result));
-
-    format!(
-        "\n## Session Stats\n\n```stats\n{}\n```\n",
-        lines.join("\n")
-    )
-}
-
-fn format_stats_metric_line(metric: &str, value: &str) -> String {
-    format!("{metric}\t{value}")
-}
-
-fn build_token_usage_lines(usage_rows_result: Result<Vec<TokenUsageRow>, String>) -> Vec<String> {
-    match usage_rows_result {
-        Ok(usage_rows) if usage_rows.is_empty() => vec!["No token usage recorded.".to_string()],
-        Ok(usage_rows) => render_token_usage_table_lines(&usage_rows),
-        Err(error) => vec![
-            "Usage unavailable.".to_string(),
-            format_stats_metric_line("Error", &error),
-        ],
-    }
-}
-
-fn render_token_usage_table_lines(usage_rows: &[TokenUsageRow]) -> Vec<String> {
-    let model_width = usage_rows
-        .iter()
-        .map(|row| row.model.chars().count())
-        .max()
-        .unwrap_or_default()
-        .max("Model".chars().count());
-    let in_width = usage_rows
-        .iter()
-        .map(|row| row.in_tokens.chars().count())
-        .max()
-        .unwrap_or_default()
-        .max("In".chars().count());
-    let out_width = usage_rows
-        .iter()
-        .map(|row| row.out_tokens.chars().count())
-        .max()
-        .unwrap_or_default()
-        .max("Out".chars().count());
-
-    let mut lines = vec![format!(
-        "{:<model_width$}  {:>in_width$}  {:>out_width$}",
-        "Model", "In", "Out"
-    )];
-
-    lines.extend(usage_rows.iter().map(|row| {
-        format!(
-            "{:<model_width$}  {:>in_width$}  {:>out_width$}",
-            row.model, row.in_tokens, row.out_tokens
-        )
-    }));
-
-    lines
-}
-
-fn format_duration(total_seconds: i64) -> String {
-    let hours = total_seconds / 3600;
-    let minutes = (total_seconds % 3600) / 60;
-    let seconds = total_seconds % 60;
-
-    format!("{hours:02}:{minutes:02}:{seconds:02}")
 }
 
 fn prompt_input_width<B: Backend>(terminal: &Terminal<B>) -> io::Result<u16>
@@ -1506,10 +914,16 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::app::prompt_intent::{
+        TokenUsageRow, build_apply_review_prompt, build_stats_markdown, format_duration,
+        format_stats_metric_line,
+    };
+    use crate::domain::agent::ReasoningLevel;
     use crate::domain::file_entry::FileEntry;
     use crate::infra::db::Database;
     use crate::ui::state::prompt::{
-        PromptAtMentionState, PromptAttachmentState, PromptHistoryState, PromptSlashState,
+        PromptAtMentionState, PromptAttachmentState, PromptHistoryState, PromptSlashStage,
+        PromptSlashState,
     };
 
     /// Builds one client bundle with deterministic agent availability for
@@ -1828,7 +1242,7 @@ mod tests {
         insert_pasted_image_placeholder(&mut app, std::path::PathBuf::from("/tmp/image-1.png"));
 
         // Act
-        let prompt = take_submitted_turn_prompt(&mut app);
+        let prompt = app.take_submitted_turn_prompt();
 
         // Assert
         assert_eq!(prompt.text, "Review [Image #1]");
@@ -1861,7 +1275,7 @@ mod tests {
         }
 
         // Act
-        let prompt = take_submitted_turn_prompt(&mut app);
+        let prompt = app.take_submitted_turn_prompt();
 
         // Assert
         assert_eq!(prompt.text, "Review [Image #2]");
@@ -1894,7 +1308,7 @@ mod tests {
         }
 
         // Act
-        let prompt = take_submitted_turn_prompt(&mut app);
+        let prompt = app.take_submitted_turn_prompt();
 
         // Assert
         assert_eq!(prompt.attachments.len(), 2);
@@ -2155,7 +1569,8 @@ mod tests {
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
+            .await;
 
         // Assert
         if let AppMode::Prompt {
@@ -2176,7 +1591,8 @@ mod tests {
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
+            .await;
 
         // Assert
         if let AppMode::Prompt { slash_state, .. } = &app.mode {
@@ -2201,7 +1617,8 @@ mod tests {
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
+            .await;
 
         // Assert
         if let AppMode::Prompt { slash_state, .. } = &app.mode {
@@ -2224,7 +1641,8 @@ mod tests {
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
+            .await;
         app.process_pending_app_events().await;
 
         // Assert
@@ -2245,7 +1663,8 @@ mod tests {
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
+            .await;
 
         // Assert
         app.sessions.sync_from_handles();
@@ -2271,7 +1690,8 @@ mod tests {
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
+            .await;
 
         // Assert
         if let AppMode::Prompt { slash_state, .. } = &app.mode {
@@ -2289,7 +1709,8 @@ mod tests {
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
+            .await;
 
         // Assert
         if let AppMode::Prompt { slash_state, .. } = &app.mode {
@@ -2309,7 +1730,8 @@ mod tests {
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
+            .await;
 
         // Assert
         app.sessions.sync_from_handles();
@@ -2336,7 +1758,8 @@ mod tests {
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
+            .await;
 
         // Assert
         if let AppMode::Prompt {
@@ -2990,7 +2413,7 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("", None).await;
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
-        assert!(prompt_context.is_new_session());
+        assert!(prompt_context.session_mode != PromptSessionMode::Existing);
         assert_eq!(app.sessions.sessions().len(), 1);
 
         // Act
@@ -3006,8 +2429,8 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_draft_prompt_app("", None).await;
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
-        assert!(prompt_context.is_new_session());
-        assert!(!prompt_context.can_delete_on_cancel());
+        assert!(prompt_context.session_mode != PromptSessionMode::Existing);
+        assert!(prompt_context.session_mode != PromptSessionMode::NewDeletable);
         assert_eq!(app.sessions.sessions().len(), 1);
 
         // Act
@@ -3133,7 +2556,7 @@ mod tests {
         handle_prompt_submit_key(&mut app, &prompt_context).await;
 
         // Assert
-        assert!(!prompt_context.is_draft_session());
+        assert!(prompt_context.session_mode != PromptSessionMode::NewDraft);
         assert!(matches!(app.mode, AppMode::View { .. }));
         assert!(
             !app.sessions.sessions()[0]
@@ -3333,7 +2756,8 @@ mod tests {
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        handle_apply_command(&mut app, &prompt_context).await;
+        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
+            .await;
 
         // Assert
         assert!(matches!(app.mode, AppMode::Prompt { .. }));
@@ -3348,7 +2772,8 @@ mod tests {
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        handle_apply_command(&mut app, &prompt_context).await;
+        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
+            .await;
 
         // Assert
         assert!(matches!(app.mode, AppMode::Prompt { .. }));
@@ -3379,7 +2804,8 @@ mod tests {
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        handle_apply_command(&mut app, &prompt_context).await;
+        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
+            .await;
 
         // Assert
         assert!(!app.review_cache.contains_key(session_id.as_str()));
@@ -3426,7 +2852,8 @@ mod tests {
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        handle_apply_command(&mut app, &prompt_context).await;
+        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
+            .await;
 
         // Assert
         assert!(!app.review_cache.contains_key(session_id.as_str()));
@@ -3460,7 +2887,8 @@ mod tests {
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        handle_apply_command(&mut app, &prompt_context).await;
+        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
+            .await;
 
         // Assert
         assert!(matches!(app.mode, AppMode::Prompt { .. }));
@@ -3575,7 +3003,8 @@ mod tests {
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
+            .await;
 
         // Assert
         let AppMode::Prompt {
@@ -3607,7 +3036,8 @@ mod tests {
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
+            .await;
 
         // Assert
         let AppMode::Prompt {

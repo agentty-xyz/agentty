@@ -426,14 +426,17 @@ narrow screens.
 
 <a id="architecture-runtime-flow-turn"></a> From prompt submit to persisted result:
 
-1. Prompt mode submits:
+1. Prompt mode converts a submit key into an app-layer prompt intent.
+1. `App::handle_prompt_submit_intent()` drains normal prompt submissions or dispatches
+   slash-command selections through app-owned intent handlers such as `/apply` and
+   `/stats`.
 1. `start_session()` for first prompt (`AgentRequestKind::SessionStart`) or `reply()`
    for follow-up (`AgentRequestKind::SessionResume`).
 1. Shared prompt-composer helpers in `crates/agentty/src/domain/composer.rs` derive
-   slash-menu options, attachment-aware deletion ranges, and the drained prompt
-   submission payload before runtime hands the turn to the app layer. The transcript
-   keeps raw `@path` lookups, while the later agent-facing prompt text quotes the
-   repository-relative path without adding transport sentinels.
+   slash-menu options and attachment-aware deletion ranges. App-layer prompt intent
+   handlers drain the final prompt submission payload. The transcript keeps raw `@path`
+   lookups, while the later agent-facing prompt text quotes the repository-relative path
+   without adding transport sentinels.
 1. Session command is persisted in `session_operation` before enqueue.
 1. `SessionWorkerService` lazily creates or reuses a per-session worker queue.
 1. Worker marks operation `running`, checks cancel flags, then runs channel turn.

@@ -68,6 +68,9 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
   `Merging` progression rules.
 - `crates/agentty/src/app/project.rs`: `ProjectManager` for project CRUD and selection
   orchestration.
+- `crates/agentty/src/app/prompt_intent.rs`: App-layer prompt intents for prompt
+  submission routing, slash-command execution, `/apply`, `/stats`, and prompt cancel
+  cleanup.
 - `crates/agentty/src/app/service.rs`: `AppServices` dependency container for
   `AppRepositories`, `FsClient`, `GitClient`, `ReviewRequestClient`, the optional
   app-server test override, and the event sender.
@@ -255,7 +258,8 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
 - `crates/agentty/src/runtime/timing.rs`: Shared runtime frame-timing constants.
 - `crates/agentty/src/runtime/mode/list.rs`: Session list mode.
 - `crates/agentty/src/runtime/mode/session_view.rs`: Session view mode navigation.
-- `crates/agentty/src/runtime/mode/prompt.rs`: Prompt mode editing and submit.
+- `crates/agentty/src/runtime/mode/prompt.rs`: Prompt mode editing, slash-menu
+  navigation, and key-to-app-intent dispatch.
 - `crates/agentty/src/runtime/mode/question.rs`: Clarification question input mode
   handling and follow-up reply submission.
 - `crates/agentty/src/runtime/mode/input_key.rs`: Shared input-key utilities for
