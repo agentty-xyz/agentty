@@ -7,6 +7,22 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.9.1] - 2026-05-02
+
+### Changed
+
+- agentty: enable the `arboard` `wayland-data-control` backend so clipboard image
+  capture works on Wayland compositors such as Hyprland, and update runtime-flow,
+  keybinding, and workflow docs to describe X11 and Wayland clipboard sources.
+- Clarify workspace crate names, validation guidance, UI helper guidance, and
+  constructor guidance in agent instructions while removing obsolete nested instruction
+  files from stale example/proof directories.
+- Bump workspace crate metadata and lockfile package versions to `0.9.1`.
+
+### Contributors
+
+- @minev-dev
+
 ## [v0.9.0] - 2026-05-02
 
 ### Added
