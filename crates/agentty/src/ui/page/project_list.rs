@@ -136,8 +136,9 @@ impl Page for ProjectListPage<'_> {
 }
 
 impl ProjectListPage<'_> {
-    /// Builds the project-list activity heatmap lines and trims week columns
-    /// to the visible panel width.
+    /// Builds project-list activity heatmap content lines without a duplicate
+    /// heading because the surrounding panel block supplies the `Activity`
+    /// title, then trims week columns to the visible panel width.
     fn build_heatmap_lines(&self, available_width: u16) -> Vec<Line<'static>> {
         let content_width = usize::from(available_width);
         let end_day_key = current_day_key_local();
@@ -145,13 +146,6 @@ impl ProjectListPage<'_> {
         let max_count = heatmap_max_count(&grid);
         let visible_week_count = Self::visible_heatmap_week_count(available_width);
         let mut lines: Vec<Line<'static>> = Vec::new();
-
-        lines.push(Line::from(Span::styled(
-            format!("Activity Heatmap (Last {visible_week_count} Weeks)"),
-            Style::default()
-                .fg(style::palette::text())
-                .add_modifier(Modifier::BOLD),
-        )));
 
         let month_row = build_visible_heatmap_month_row(
             end_day_key,
@@ -754,7 +748,6 @@ mod tests {
         // Assert
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("┐┌"));
-        assert!(text.contains("Activity Heatmap"));
         assert!(text.contains("Less"));
         assert!(text.contains("More"));
         assert!(text.contains("Work Pace"));
@@ -799,7 +792,7 @@ mod tests {
 
         // Act
         let heatmap_lines = page.build_heatmap_lines(28);
-        let monday_row = &heatmap_lines[2];
+        let monday_row = &heatmap_lines[1];
 
         // Assert
         assert_eq!(monday_row.spans.len(), 13);

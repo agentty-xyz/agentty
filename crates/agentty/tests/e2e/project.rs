@@ -31,7 +31,7 @@ fn projects_page_shows_cwd() {
             },
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Activity Heatmap", &full);
+                assertion::assert_text_in_region(frame, "Activity", &full);
                 assertion::assert_text_in_region(frame, "Branch", &full);
                 assertion::assert_text_in_region(frame, "Sessions", &full);
                 assertion::assert_text_in_region(frame, "Last Opened", &full);
