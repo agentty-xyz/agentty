@@ -2,7 +2,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 
@@ -10,98 +10,52 @@ use crate::domain::agent::AgentKind;
 use crate::domain::agent_usage::{
     AgentRateLimit, AgentUsageDetails, AgentUsageSnapshot, AgentUsageStatus,
 };
-use crate::domain::session::{DailyActivity, Session};
+use crate::domain::session::Session;
 use crate::ui::page::session_list::{model_column_width, project_column_width};
 use crate::ui::state::help_action;
-use crate::ui::util::{
-    build_activity_heatmap_grid, build_visible_heatmap_month_row, current_day_key_local,
-    format_token_count, heatmap_intensity_level, heatmap_max_count, inline_text,
-    visible_heatmap_week_count,
-};
+use crate::ui::util::{format_token_count, inline_text};
 use crate::ui::{Page, layout, style};
 
-const DAY_LABELS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-const HEATMAP_CELL_WIDTH: usize = 2;
-const HEATMAP_DAY_LABEL_WIDTH: usize = 4;
-const HEATMAP_SECTION_HEIGHT: u16 = 11;
-const USAGE_PANEL_VISIBLE_WIDTH: u16 = 96;
-const TOP_PANEL_WIDTH_PERCENT: u16 = 50;
+/// Fixed height reserved for provider usage on the Stats page.
+const USAGE_PANEL_HEIGHT: u16 = 11;
 /// Horizontal spacing between token-stat table columns.
 const TABLE_COLUMN_SPACING: u16 = 2;
 
-/// Stats dashboard showing activity heatmap and per-session token statistics.
+/// Stats dashboard showing provider usage and per-session token statistics.
 pub struct StatsPage<'a> {
     agent_usage_snapshot: &'a AgentUsageSnapshot,
     sessions: &'a [Session],
-    stats_activity: &'a [DailyActivity],
 }
 
 impl<'a> StatsPage<'a> {
-    /// Creates a stats page renderer from live sessions and persisted
-    /// activity aggregates.
-    pub fn new(
-        sessions: &'a [Session],
-        stats_activity: &'a [DailyActivity],
-        agent_usage_snapshot: &'a AgentUsageSnapshot,
-    ) -> Self {
+    /// Creates a stats page renderer from live sessions and provider usage
+    /// state.
+    pub fn new(sessions: &'a [Session], agent_usage_snapshot: &'a AgentUsageSnapshot) -> Self {
         Self {
             agent_usage_snapshot,
             sessions,
-            stats_activity,
         }
     }
 }
 
 impl Page for StatsPage<'_> {
-    /// Renders the dashboard with activity heatmap, token table, footer, and
+    /// Renders the dashboard with provider usage, token table, footer, and
     /// compact tab-page spacing.
     fn render(&mut self, f: &mut Frame, area: Rect) {
         let areas = layout::tab_page_areas(area);
         let main_chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(HEATMAP_SECTION_HEIGHT),
-                Constraint::Min(0),
-            ])
+            .constraints([Constraint::Length(USAGE_PANEL_HEIGHT), Constraint::Min(0)])
             .split(areas.main_area);
 
-        if main_chunks[0].width < USAGE_PANEL_VISIBLE_WIDTH {
-            self.render_heatmap(f, main_chunks[0]);
-        } else {
-            let top_chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Percentage(TOP_PANEL_WIDTH_PERCENT),
-                    Constraint::Percentage(TOP_PANEL_WIDTH_PERCENT),
-                ])
-                .split(main_chunks[0]);
-
-            self.render_heatmap(f, top_chunks[0]);
-            self.render_agent_usage(f, top_chunks[1]);
-        }
-
+        self.render_agent_usage(f, main_chunks[0]);
         self.render_table(f, main_chunks[1]);
         self.render_footer(f, areas.footer_area);
     }
 }
 
 impl StatsPage<'_> {
-    /// Renders the activity heatmap with a width-aware week count.
-    fn render_heatmap(&self, f: &mut Frame, area: Rect) {
-        let visible_week_count = Self::visible_heatmap_week_count(area.width);
-        let heatmap = Paragraph::new(self.build_heatmap_lines(area.width)).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(
-                    "Activity Heatmap (Last {visible_week_count} Weeks)"
-                ))
-                .border_style(style::border_style()),
-        );
-
-        f.render_widget(heatmap, area);
-    }
-
-    /// Renders provider subscription and quota usage beside the heatmap.
+    /// Renders provider subscription and quota usage above token totals.
     fn render_agent_usage(&self, f: &mut Frame, area: Rect) {
         let usage = Paragraph::new(self.build_agent_usage_lines()).block(
             Block::default()
@@ -199,89 +153,6 @@ impl StatsPage<'_> {
         f.render_widget(stats, footer_chunks[1]);
     }
 
-    /// Builds heatmap lines and trims visible week columns for narrow widths.
-    fn build_heatmap_lines(&self, available_width: u16) -> Vec<Line<'static>> {
-        let content_width = usize::from(available_width.saturating_sub(2));
-        let end_day_key = current_day_key_local();
-        let activity = self.build_local_activity();
-        let grid = build_activity_heatmap_grid(&activity, end_day_key);
-        let max_count = heatmap_max_count(&grid);
-        let visible_week_count = Self::visible_heatmap_week_count(available_width);
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        let month_row = build_visible_heatmap_month_row(
-            end_day_key,
-            HEATMAP_DAY_LABEL_WIDTH,
-            HEATMAP_CELL_WIDTH,
-            visible_week_count,
-        );
-        lines.push(Line::from(Span::styled(
-            month_row,
-            Style::default().fg(style::palette::text_muted()),
-        )));
-
-        for (day_index, day_label) in DAY_LABELS.iter().enumerate() {
-            let mut spans = vec![Span::styled(
-                format!("{day_label} "),
-                Style::default().fg(style::palette::text_muted()),
-            )];
-
-            let first_visible_week = grid[day_index].len().saturating_sub(visible_week_count);
-            for cell_count in &grid[day_index][first_visible_week..] {
-                let intensity = heatmap_intensity_level(*cell_count, max_count);
-                spans.push(Span::styled(
-                    "  ",
-                    Style::default().bg(Self::heatmap_color(intensity)),
-                ));
-            }
-
-            lines.push(Line::from(spans));
-        }
-
-        if content_width < 24 {
-            lines.push(Line::from(Span::styled(
-                format!("Max/day: {max_count}"),
-                Style::default().fg(style::palette::text_muted()),
-            )));
-
-            return lines;
-        }
-
-        let mut legend = vec![Span::styled(
-            "Less ",
-            Style::default().fg(style::palette::text_muted()),
-        )];
-        for intensity in 0_u8..=4 {
-            legend.push(Span::styled(
-                "  ",
-                Style::default().bg(Self::heatmap_color(intensity)),
-            ));
-            legend.push(Span::raw(" "));
-        }
-        legend.push(Span::styled(
-            "More",
-            Style::default().fg(style::palette::text_muted()),
-        ));
-        if content_width >= 36 {
-            legend.push(Span::raw(format!(" | Max/day: {max_count}")));
-        }
-        lines.push(Line::from(legend));
-
-        lines
-    }
-
-    /// Returns the number of heatmap week columns visible inside a panel of
-    /// `available_width`.
-    fn visible_heatmap_week_count(available_width: u16) -> usize {
-        let content_width = usize::from(available_width.saturating_sub(2));
-
-        visible_heatmap_week_count(content_width, HEATMAP_DAY_LABEL_WIDTH, HEATMAP_CELL_WIDTH)
-    }
-
-    /// Returns persisted local-day activity aggregates for heatmap rendering.
-    fn build_local_activity(&self) -> Vec<DailyActivity> {
-        self.stats_activity.to_vec()
-    }
-
     /// Builds provider usage lines for the subscription panel.
     fn build_agent_usage_lines(&self) -> Vec<Line<'static>> {
         if self.agent_usage_snapshot.rows.is_empty() {
@@ -307,16 +178,6 @@ impl StatsPage<'_> {
         }
 
         lines
-    }
-
-    fn heatmap_color(intensity: u8) -> Color {
-        match intensity {
-            1 => Color::Rgb(14, 68, 41),
-            2 => Color::Rgb(0, 109, 50),
-            3 => Color::Rgb(38, 166, 65),
-            4 => Color::Rgb(57, 211, 83),
-            _ => Color::Rgb(33, 38, 45),
-        }
     }
 }
 
@@ -467,9 +328,8 @@ mod tests {
         // Arrange
         let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
         let sessions = vec![session_fixture()];
-        let activity: Vec<DailyActivity> = Vec::new();
         let usage_snapshot = AgentUsageSnapshot::default();
-        let mut page = StatsPage::new(&sessions, &activity, &usage_snapshot);
+        let mut page = StatsPage::new(&sessions, &usage_snapshot);
         let backend = ratatui::backend::TestBackend::new(160, 30);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 
@@ -485,7 +345,7 @@ mod tests {
         let border_cell_count = foreground_symbol_cell_count(terminal.backend().buffer(), "┌");
         assert!(
             border_cell_count >= 2,
-            "expected heatmap and token table panels to use palette border color"
+            "expected subscription usage and token table panels to use palette border color"
         );
     }
 
@@ -586,38 +446,9 @@ mod tests {
     }
 
     #[test]
-    fn test_render_shows_activity_heatmap_legend() {
+    fn test_render_shows_subscription_usage_above_tokens() {
         // Arrange
         let sessions = vec![session_fixture()];
-        let activity = vec![DailyActivity {
-            day_key: current_day_key_local(),
-            session_count: 3,
-        }];
-        let usage_snapshot = AgentUsageSnapshot::default();
-        let mut page = StatsPage::new(&sessions, &activity, &usage_snapshot);
-        let backend = ratatui::backend::TestBackend::new(160, 30);
-        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-
-        // Act
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                Page::render(&mut page, frame, area);
-            })
-            .expect("failed to draw stats page");
-
-        // Assert
-        let text = buffer_text(terminal.backend().buffer());
-        assert!(text.contains("Activity Heatmap"));
-        assert!(text.contains("Less"));
-        assert!(text.contains("More"));
-    }
-
-    #[test]
-    fn test_render_shows_subscription_usage_next_to_heatmap() {
-        // Arrange
-        let sessions = vec![session_fixture()];
-        let activity: Vec<DailyActivity> = Vec::new();
         let usage_snapshot = AgentUsageSnapshot::new(vec![
             crate::domain::agent_usage::AgentUsageRow::new(
                 AgentKind::Codex,
@@ -639,7 +470,7 @@ mod tests {
                 },
             ),
         ]);
-        let mut page = StatsPage::new(&sessions, &activity, &usage_snapshot);
+        let mut page = StatsPage::new(&sessions, &usage_snapshot);
         let backend = ratatui::backend::TestBackend::new(180, 30);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 
@@ -663,80 +494,6 @@ mod tests {
     }
 
     #[test]
-    fn test_render_splits_heatmap_and_subscription_usage_evenly() {
-        // Arrange
-        let sessions = vec![session_fixture()];
-        let activity: Vec<DailyActivity> = Vec::new();
-        let usage_snapshot =
-            AgentUsageSnapshot::new(vec![crate::domain::agent_usage::AgentUsageRow::new(
-                AgentKind::Codex,
-                AgentUsageStatus::Available(AgentUsageDetails {
-                    plan: Some("pro".to_string()),
-                    rate_limits: Vec::new(),
-                    reached_type: None,
-                }),
-            )]);
-        let mut page = StatsPage::new(&sessions, &activity, &usage_snapshot);
-        let backend = ratatui::backend::TestBackend::new(180, 30);
-        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-
-        // Act
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                Page::render(&mut page, frame, area);
-            })
-            .expect("failed to draw stats page");
-
-        // Assert
-        let buffer = terminal.backend().buffer();
-        let heatmap_position = find_text_start_position(buffer, "Activity Heatmap")
-            .expect("heatmap title should render");
-        let usage_position = find_text_start_position(buffer, "Subscription Usage")
-            .expect("usage title should render");
-        let expected_panel_width = 89;
-        let expected_visible_weeks = StatsPage::visible_heatmap_week_count(expected_panel_width);
-        let text = buffer_text(buffer);
-
-        assert_eq!(usage_position.1 - heatmap_position.1, expected_panel_width);
-        assert!(text.contains(&format!(
-            "Activity Heatmap (Last {expected_visible_weeks} Weeks)"
-        )));
-    }
-
-    #[test]
-    fn test_render_hides_subscription_usage_on_narrow_width() {
-        // Arrange
-        let sessions = vec![session_fixture()];
-        let activity: Vec<DailyActivity> = Vec::new();
-        let usage_snapshot =
-            AgentUsageSnapshot::new(vec![crate::domain::agent_usage::AgentUsageRow::new(
-                AgentKind::Codex,
-                AgentUsageStatus::Available(AgentUsageDetails {
-                    plan: Some("pro".to_string()),
-                    rate_limits: Vec::new(),
-                    reached_type: None,
-                }),
-            )]);
-        let mut page = StatsPage::new(&sessions, &activity, &usage_snapshot);
-        let backend = ratatui::backend::TestBackend::new(80, 30);
-        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-
-        // Act
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                Page::render(&mut page, frame, area);
-            })
-            .expect("failed to draw stats page");
-
-        // Assert
-        let text = buffer_text(terminal.backend().buffer());
-        assert!(text.contains("Activity Heatmap"));
-        assert!(!text.contains("Subscription Usage"));
-    }
-
-    #[test]
     fn test_format_reset_deadline_uses_relative_duration() {
         // Arrange
         let now = 1_000;
@@ -747,56 +504,6 @@ mod tests {
 
         // Assert
         assert_eq!(reset, "resets in 1h 5m");
-    }
-
-    #[test]
-    fn test_build_heatmap_lines_uses_persisted_activity_for_max_count() {
-        // Arrange
-        let sessions = vec![session_fixture_with(
-            "session-1",
-            "Active Session",
-            AgentModel::Gpt54,
-            10,
-            10,
-            0,
-            0,
-        )];
-        let activity = vec![DailyActivity {
-            day_key: current_day_key_local(),
-            session_count: 50,
-        }];
-        let usage_snapshot = AgentUsageSnapshot::default();
-        let page = StatsPage::new(&sessions, &activity, &usage_snapshot);
-
-        // Act
-        let heatmap_lines = page.build_heatmap_lines(160);
-        let rendered_text = heatmap_lines
-            .into_iter()
-            .map(|line| line.to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Assert
-        assert!(rendered_text.contains("Max/day: 50"));
-    }
-
-    #[test]
-    fn test_build_heatmap_lines_trims_visible_weeks_on_narrow_width() {
-        // Arrange
-        let sessions = vec![session_fixture()];
-        let activity = vec![DailyActivity {
-            day_key: current_day_key_local(),
-            session_count: 1,
-        }];
-        let usage_snapshot = AgentUsageSnapshot::default();
-        let page = StatsPage::new(&sessions, &activity, &usage_snapshot);
-
-        // Act
-        let heatmap_lines = page.build_heatmap_lines(28);
-        let monday_row = &heatmap_lines[1];
-
-        // Assert
-        assert_eq!(monday_row.spans.len(), 12);
     }
 
     #[test]
@@ -831,9 +538,8 @@ mod tests {
                 90,
             ),
         ];
-        let activity: Vec<DailyActivity> = Vec::new();
         let usage_snapshot = AgentUsageSnapshot::default();
-        let mut page = StatsPage::new(&sessions, &activity, &usage_snapshot);
+        let mut page = StatsPage::new(&sessions, &usage_snapshot);
         let backend = ratatui::backend::TestBackend::new(220, 30);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 
@@ -860,9 +566,8 @@ mod tests {
     fn test_render_does_not_show_session_summary_panel() {
         // Arrange
         let sessions = vec![session_fixture()];
-        let activity: Vec<DailyActivity> = Vec::new();
         let usage_snapshot = AgentUsageSnapshot::default();
-        let mut page = StatsPage::new(&sessions, &activity, &usage_snapshot);
+        let mut page = StatsPage::new(&sessions, &usage_snapshot);
         let backend = ratatui::backend::TestBackend::new(220, 30);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 
@@ -876,7 +581,6 @@ mod tests {
 
         // Assert
         let text = buffer_text(terminal.backend().buffer());
-        assert!(text.contains("Activity Heatmap"));
         assert!(!text.contains("Session Stats"));
         assert!(!text.contains("Favorite model:"));
         assert!(!text.contains("Longest Agentty session:"));

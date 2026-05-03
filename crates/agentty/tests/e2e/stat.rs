@@ -1,4 +1,4 @@
-//! Stats page E2E tests: heatmap and token table rendering.
+//! Stats page E2E tests: provider usage and token table rendering.
 
 use testty::assertion;
 use testty::region::Region;
@@ -6,20 +6,20 @@ use testty::region::Region;
 use crate::common;
 use crate::common::FeatureTest;
 
-/// Verify that the Stats tab renders the activity heatmap and token stats
-/// table, plus the provider subscription usage panel.
+/// Verify that the Stats tab renders the token stats table and provider
+/// subscription usage panel.
 ///
-/// Navigates to the Stats tab and asserts that both the heatmap title
-/// and token stats table title are visible in the rendered frame.
+/// Navigates to the Stats tab and asserts that both the provider usage and
+/// token stats table titles are visible in the rendered frame.
 #[test]
-fn stats_tab_shows_heatmap_and_tokens() {
+fn stats_tab_shows_usage_and_tokens() {
     // Arrange, Act, Assert
     FeatureTest::new("stats_content")
         .with_stub_path_only()
         .with_terminal_size(160, 24)
         .zola(
             "Stats tab",
-            "View activity heatmap and per-session token usage statistics.",
+            "View provider usage and per-session token usage statistics.",
             160,
         )
         .run(
@@ -35,12 +35,11 @@ fn stats_tab_shows_heatmap_and_tokens() {
                     .viewing_pause_ms(3000)
                     .capture_labeled(
                         "stats_tab",
-                        "Stats tab with heatmap, subscription usage, and token table",
+                        "Stats tab with subscription usage and token table",
                     )
             },
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Activity Heatmap", &full);
                 assertion::assert_text_in_region(frame, "Subscription Usage", &full);
                 assertion::assert_text_in_region(frame, "Token Stats", &full);
             },

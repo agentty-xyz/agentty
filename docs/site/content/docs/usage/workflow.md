@@ -18,20 +18,20 @@ tabs, with one conditional `Tasks` tab also accessible with `Tab` when the activ
 project has a roadmap:
 
 | Tab | Purpose | |-----|---------| | **Projects** | Select between projects (git
-repositories) in a split view: Agentty info (ASCII art, version, short description) on
-top, project table below. Agentty skips stale entries whose project directories no
-longer exist. | | **Sessions** | List, create, and manage agent sessions. When a project
-is active, this tab appears as `Sessions (<project-name>)`. | | **Review** | List open
-GitHub pull requests or GitLab merge requests in the active project that request the
-current forge user's review, including drafts marked with a `Draft` status. The tab is a
-read-only forge list; press `s` to refresh and open reviews from the forge UI or CLI. If
-the list reaches the provider cap, the footer shows that Agentty is displaying the first
-matching requests. | | **Tasks** | Shown only when the active project contains
-`docs/plan/roadmap.md`, summarizing the roadmap's `Ready Now`, `Queued Next`, and
-`Parked` task queues. | | **Stats** | View usage statistics, including the activity
-heatmap, provider subscription or quota snapshot, and per-session token totals. Provider
-usage refreshes when the Stats tab receives focus after the cached snapshot becomes
-stale. | | **Settings** | Configure the color theme, default reasoning level,
+repositories) in a split view: activity heatmap and Agentty info (version, short
+description) on top, project table below. Agentty skips stale entries whose project
+directories no longer exist. | | **Sessions** | List, create, and manage agent sessions.
+When a project is active, this tab appears as `Sessions (<project-name>)`. | |
+**Review** | List open GitHub pull requests or GitLab merge requests in the active
+project that request the current forge user's review, including drafts marked with a
+`Draft` status. The tab is a read-only forge list; press `s` to refresh and open reviews
+from the forge UI or CLI. If the list reaches the provider cap, the footer shows that
+Agentty is displaying the first matching requests. | | **Tasks** | Shown only when the
+active project contains `docs/plan/roadmap.md`, summarizing the roadmap's `Ready Now`,
+`Queued Next`, and `Parked` task queues. | | **Stats** | View usage statistics,
+including the provider subscription or quota snapshot and per-session token totals.
+Provider usage refreshes when the Stats tab receives focus after the cached snapshot
+becomes stale. | | **Settings** | Configure the color theme, default reasoning level,
 smart/fast/review model defaults, the optional `Last used model as default` smart-model
 mode, the session commit coauthor trailer, and `Open Commands` for the active project. |
 

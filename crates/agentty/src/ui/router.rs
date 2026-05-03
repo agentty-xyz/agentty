@@ -797,6 +797,7 @@ pub(crate) fn render_list_background(
         Tab::Projects => {
             page::project_list::ProjectListPage::new(
                 projects,
+                stats_activity,
                 project_table_state,
                 active_project_id,
             )
@@ -822,8 +823,7 @@ pub(crate) fn render_list_background(
             page.render(f, chunks[1]);
         }
         Tab::Stats => {
-            page::stat::StatsPage::new(sessions, stats_activity, agent_usage_snapshot)
-                .render(f, chunks[1]);
+            page::stat::StatsPage::new(sessions, agent_usage_snapshot).render(f, chunks[1]);
         }
         Tab::Settings => {
             let active_project_name = active_project_name(active_project_id, projects);

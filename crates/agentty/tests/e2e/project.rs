@@ -1,4 +1,4 @@
-//! Projects page E2E tests: project listing with current working directory.
+//! Projects page E2E tests: project activity and current working directory.
 
 use testty::assertion;
 use testty::region::Region;
@@ -7,7 +7,7 @@ use crate::common;
 use crate::common::FeatureTest;
 
 /// Verify that the Projects tab lists the registered project name from
-/// the temp workdir.
+/// the temp workdir and shows the activity heatmap.
 ///
 /// Agentty auto-registers the current working directory as a project on
 /// startup. The test creates a `test-project` working directory and asserts
@@ -18,7 +18,7 @@ fn projects_page_shows_cwd() {
     FeatureTest::new("projects_cwd")
         .zola(
             "Project directory",
-            "See and switch the active project directory.",
+            "See activity and switch the active project directory.",
             90,
         )
         .run(
@@ -31,6 +31,7 @@ fn projects_page_shows_cwd() {
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Agentty", &full);
+                assertion::assert_text_in_region(frame, "Activity Heatmap", &full);
                 assertion::assert_text_in_region(frame, "test-project", &full);
             },
         )
