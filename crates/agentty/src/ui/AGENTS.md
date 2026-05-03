@@ -7,9 +7,10 @@ When working within `crates/agentty/src/ui/`:
 - **Modularization**: Always respect the module boundaries. Do not put page-specific
   rendering logic in the UI module root file. Use the dedicated files in `page/`
   (`session_list.rs`, `session_chat.rs`, etc.).
-- **Helper Functions**: If you write a helper function that calculates layout or
-  processes text, **IMMEDIATELY** move it to `util.rs` and write a unit test for it. Do
-  not leave complex logic inline within render functions.
+- **Helper Functions**: Keep render functions focused. Move reusable or complex layout
+  and text-processing helpers to the narrowest shared module that fits the behavior (for
+  example, `layout.rs`, `text_util.rs`, or `util.rs`) and cover that helper with a unit
+  test when practical.
 - **Component Reuse**: Check the `component/` directory before building a new common
   widget. All components must implement the `Component` trait.
 - **Palette Usage**: Use semantic color tokens from `style.rs` (`palette::*`) for UI
@@ -24,7 +25,7 @@ When working within `crates/agentty/src/ui/`:
 1. Create a new module in `page/` (e.g., `page/my_page.rs`)
 1. Define a struct (e.g., `MyPage`) that holds necessary references
 1. Implement the `Page` trait for your struct with a
-   `render(&mut self, f: &mut Frame, area: Rect)` method
+   `render(&mut self, frame: &mut Frame, area: Rect)` method
 1. Expose the module in `page.rs`
 1. Update the match expression in the UI module root file to instantiate and render your
    page
@@ -33,25 +34,27 @@ When working within `crates/agentty/src/ui/`:
 
 1. Create a new module in `component/` (e.g., `component/my_widget.rs`)
 1. Define a struct that holds the rendering data needed
-1. Implement the `Component` trait with a `render(&self, f: &mut Frame, area: Rect)`
+1. Implement the `Component` trait with a `render(&self, frame: &mut Frame, area: Rect)`
    method
-1. Add a `new()` constructor to initialize the struct
+1. Add a `new()` constructor only when initialization logic or meaningful defaults make
+   direct struct construction unclear
 1. Expose the module in `component.rs`
-1. Usage pattern: `MyWidget::new(...).render(f, area)`
+1. Usage pattern: construct the widget and call `render(frame, area)`
 
 ### Modifying Layouts
 
-- Use `util.rs` for complex layout logic (like splitting areas or calculating heights)
-- Ensure extensive unit tests in `util.rs` for any layout calculations
+- Use the narrowest shared helper module for complex layout logic (like splitting areas
+  or calculating heights)
+- Ensure unit tests cover any nontrivial layout calculations
 - Do not leave layout calculations inline within render functions
 
 ### Testing Requirements
 
-- **Unit Tests**: Focus heavily on `util.rs`. Test layout logic, string manipulation,
-  and input height calculations.
+- **Unit Tests**: Test layout logic, string manipulation, and input height calculations
+  in the module that owns the helper.
 - **Integration**: Verifying actual `render` output is difficult. Rely on visual
-  verification for broad changes, but ensure the underlying logic in `util` is
-  rock-solid with comprehensive tests.
+  verification for broad changes, but ensure the underlying shared logic has focused
+  tests.
 
 ## Entry Points
 

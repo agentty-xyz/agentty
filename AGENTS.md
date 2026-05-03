@@ -51,8 +51,10 @@ TUI tool to manage agents.
 
 - Project is a Rust workspace.
 - The `crates/` directory contains all workspace members.
-- All workspace crates use the `ag-` prefix (e.g., `ag-xtask`).
+- Workspace crate package names are `agentty`, `testty`, and any shared support crates
+  that use the `ag-` prefix (for example, `ag-xtask`).
 - `agentty`: A binary crate providing the CLI interface using Ratatui.
+- `testty`: A library crate providing the Rust-native TUI end-to-end testing framework.
 - **Workflow**: Agents are run in isolated git worktrees.
 - **Review**: Users review changes using the Diff view (`d` key in chat) which shows the
   output of `git diff` in the session's worktree.
@@ -304,25 +306,26 @@ dependents. Use the dependency graph from workspace manifests or `cargo metadata
 deciding which crates and tests are affected. If you cannot confidently prove the
 targeted checks cover the full impact, run the full repository suite instead.
 
-| Touched area | Required validation | | --- | --- | | Markdown and docs | Run
-`prek run mdformat --files <paths>` and `prek run --files <paths>`. | | `docs/site/`
-content | Run markdown/docs checks and
-`prek run zola-check --all-files --hook-stage manual`. | | Rust sources | Run
-`prek run rustfmt-fix --files <paths> --hook-stage manual` while iterating, then
-`prek run cargo-check --files <paths>`. Add focused tests for the changed crate and
-affected dependents. | | Workspace crate source tests | Use the narrowest matching hook
-when one exists: `test-ag-forge-src`, `test-agentty-src`, `test-ag-xtask-src`, or
-`test-testty-src`. | | Cargo manifests and lockfile | Run
-`prek run cargo-check --files <paths>`, `prek run clippy --files <paths>`, and tests for
-affected workspace crates plus dependents. Use
-`prek run test-workspace --all-files --hook-stage manual` when dependency impact is
-broad or uncertain. | | SQL migrations | Run `prek run check-migrations --files <paths>`
-plus Rust checks and tests for crates that embed or query those migrations. | | Planning
-docs | Run `prek run check-roadmap --all-files`. | | Hook catalog | Run
-`prek run validate-prek-config --files .pre-commit-config.yaml`. | | User-visible UI
-behavior | Add or update required `FeatureTest` coverage. Do not run the E2E feature
-suite locally; `.github/workflows/postsubmit.yml` runs `test-agentty-e2e` on GitHub
-after merge to `main`. |
+- **Markdown and docs:** Run `prek run mdformat --files <paths>` and
+  `prek run --files <paths>`.
+- **`docs/site/` content:** Run markdown/docs checks and
+  `prek run zola-check --all-files --hook-stage manual`.
+- **Rust sources:** Run `prek run rustfmt-fix --files <paths> --hook-stage manual` while
+  iterating, then `prek run cargo-check --files <paths>`. Add focused tests for the
+  changed crate and affected dependents.
+- **Workspace crate source tests:** Use the narrowest matching hook when one exists:
+  `test-ag-forge-src`, `test-agentty-src`, `test-ag-xtask-src`, or `test-testty-src`.
+- **Cargo manifests and lockfile:** Run `prek run cargo-check --files <paths>`,
+  `prek run clippy --files <paths>`, and tests for affected workspace crates plus
+  dependents. Use `prek run test-workspace --all-files --hook-stage manual` when
+  dependency impact is broad or uncertain.
+- **SQL migrations:** Run `prek run check-migrations --files <paths>` plus Rust checks
+  and tests for crates that embed or query those migrations.
+- **Planning docs:** Run `prek run check-roadmap --all-files`.
+- **Hook catalog:** Run `prek run validate-prek-config --files .pre-commit-config.yaml`.
+- **User-visible UI behavior:** Add or update required `FeatureTest` coverage. Do not
+  run the E2E feature suite locally; `.github/workflows/postsubmit.yml` runs
+  `test-agentty-e2e` on GitHub after merge to `main`.
 
 ### Autofix Discipline
 
@@ -418,21 +421,23 @@ keybindings, session states, UI pages), update the corresponding documentation p
 `docs/site/content/docs/`. Source-side `AGENTS.md` files indicate which doc pages track
 their area.
 
-| Doc Page | Covers | |----------|--------| |
-`docs/site/content/docs/agents/backends.md` | Agent backends and models. | |
-`docs/site/content/docs/usage/workflow.md` | Session lifecycle, workflow, slash
-commands, and data location. | | `docs/site/content/docs/usage/keybindings.md` |
-Keybindings across lists, session view, diff mode, and prompt input. | |
-`docs/site/content/docs/getting-started/overview.md` | High-level concepts and worktree
-isolation. | | `docs/site/content/docs/architecture/runtime-flow.md` | Architecture
-goals, workspace map, runtime flow, and channel transport model. | |
-`docs/site/content/docs/architecture/module-map.md` | Module boundaries and path
-ownership across layers. | | `docs/site/content/docs/architecture/change-recipes.md` |
-Change-path recipes and architecture-safe contributor checklist. | |
-`docs/site/content/docs/architecture/testability-boundaries.md` | Trait boundaries and
-testability guidance for external integrations. | |
-`docs/site/content/docs/contributing/managing-docs-with-zola.md` | Conventions for
-maintaining docs with Zola. |
+- `docs/site/content/docs/agents/backends.md` covers agent backends and models.
+- `docs/site/content/docs/usage/workflow.md` covers session lifecycle, workflow, slash
+  commands, and data location.
+- `docs/site/content/docs/usage/keybindings.md` covers keybindings across lists, session
+  view, diff mode, and prompt input.
+- `docs/site/content/docs/getting-started/overview.md` covers high-level concepts and
+  worktree isolation.
+- `docs/site/content/docs/architecture/runtime-flow.md` covers architecture goals,
+  workspace map, runtime flow, and channel transport model.
+- `docs/site/content/docs/architecture/module-map.md` covers module boundaries and path
+  ownership across layers.
+- `docs/site/content/docs/architecture/change-recipes.md` covers change-path recipes and
+  the architecture-safe contributor checklist.
+- `docs/site/content/docs/architecture/testability-boundaries.md` covers trait
+  boundaries and testability guidance for external integrations.
+- `docs/site/content/docs/contributing/managing-docs-with-zola.md` covers conventions
+  for maintaining docs with Zola.
 
 Update architecture docs whenever you change:
 
