@@ -13,6 +13,19 @@ const HEATMAP_MONTH_LABELS: [&str; 12] = [
 ];
 const SECONDS_PER_DAY: i64 = 86_400;
 
+/// Recent activity metrics used by compact dashboard widgets.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecentActivityStats {
+    /// Best active-day streak in the trailing 30-day window.
+    pub best_streak_days: u32,
+    /// Active-day streak ending on `end_day_key`.
+    pub current_streak_days: u32,
+    /// Sessions created in the trailing 30 days, including `end_day_key`.
+    pub sessions_last_30_days: u32,
+    /// Sessions created in the trailing 7 days, including `end_day_key`.
+    pub sessions_last_7_days: u32,
+}
+
 /// Returns the current UTC day key as days since Unix epoch.
 pub fn current_day_key_utc() -> i64 {
     let now_seconds = current_unix_timestamp_seconds();
@@ -72,6 +85,19 @@ pub fn build_activity_heatmap_grid(activity: &[DailyActivity], end_day_key: i64)
     }
 
     grid
+}
+
+/// Builds recent activity metrics for the projects-page work dashboard.
+pub fn build_recent_activity_stats(
+    activity: &[DailyActivity],
+    end_day_key: i64,
+) -> RecentActivityStats {
+    RecentActivityStats {
+        best_streak_days: best_active_streak_days(activity, end_day_key, 30),
+        current_streak_days: current_active_streak_days(activity, end_day_key),
+        sessions_last_30_days: trailing_session_count(activity, end_day_key, 30),
+        sessions_last_7_days: trailing_session_count(activity, end_day_key, 7),
+    }
 }
 
 /// Returns month label anchor points for each visible heatmap week.
@@ -233,6 +259,65 @@ fn heatmap_start_week_day_key(end_day_key: i64) -> i64 {
     end_week_start - ((HEATMAP_WEEK_COUNT_I64 - 1) * HEATMAP_DAY_COUNT_I64)
 }
 
+fn trailing_session_count(
+    activity: &[DailyActivity],
+    end_day_key: i64,
+    trailing_day_count: i64,
+) -> u32 {
+    let start_day_key = end_day_key - trailing_day_count.saturating_sub(1);
+
+    activity
+        .iter()
+        .filter(|daily_activity| {
+            daily_activity.day_key >= start_day_key && daily_activity.day_key <= end_day_key
+        })
+        .fold(0_u32, |total, daily_activity| {
+            total.saturating_add(daily_activity.session_count)
+        })
+}
+
+fn current_active_streak_days(activity: &[DailyActivity], end_day_key: i64) -> u32 {
+    let mut streak_days = 0_u32;
+    let mut day_key = end_day_key;
+
+    while daily_session_count(activity, day_key) > 0 {
+        streak_days = streak_days.saturating_add(1);
+        day_key = day_key.saturating_sub(1);
+    }
+
+    streak_days
+}
+
+fn best_active_streak_days(
+    activity: &[DailyActivity],
+    end_day_key: i64,
+    trailing_day_count: i64,
+) -> u32 {
+    let start_day_key = end_day_key - trailing_day_count.saturating_sub(1);
+    let mut best_streak_days = 0_u32;
+    let mut current_streak_days = 0_u32;
+
+    for day_key in start_day_key..=end_day_key {
+        if daily_session_count(activity, day_key) > 0 {
+            current_streak_days = current_streak_days.saturating_add(1);
+            best_streak_days = best_streak_days.max(current_streak_days);
+        } else {
+            current_streak_days = 0;
+        }
+    }
+
+    best_streak_days
+}
+
+fn daily_session_count(activity: &[DailyActivity], day_key: i64) -> u32 {
+    activity
+        .iter()
+        .filter(|daily_activity| daily_activity.day_key == day_key)
+        .fold(0_u32, |total, daily_activity| {
+            total.saturating_add(daily_activity.session_count)
+        })
+}
+
 fn weekday_index_monday(day_key: i64) -> usize {
     let weekday_value = (day_key + 3).rem_euclid(HEATMAP_DAY_COUNT_I64);
 
@@ -332,6 +417,59 @@ mod tests {
         // Assert
         assert_eq!(grid[3][52], 2);
         assert_eq!(grid[0][52], 1);
+    }
+
+    #[test]
+    fn test_build_recent_activity_stats_counts_trailing_windows_and_streaks() {
+        // Arrange
+        let end_day_key = 100_i64;
+        let activity = vec![
+            DailyActivity {
+                day_key: 71,
+                session_count: 5,
+            },
+            DailyActivity {
+                day_key: 97,
+                session_count: 1,
+            },
+            DailyActivity {
+                day_key: 98,
+                session_count: 2,
+            },
+            DailyActivity {
+                day_key: 99,
+                session_count: 3,
+            },
+            DailyActivity {
+                day_key: 100,
+                session_count: 4,
+            },
+        ];
+
+        // Act
+        let stats = build_recent_activity_stats(&activity, end_day_key);
+
+        // Assert
+        assert_eq!(stats.sessions_last_7_days, 10);
+        assert_eq!(stats.sessions_last_30_days, 15);
+        assert_eq!(stats.current_streak_days, 4);
+        assert_eq!(stats.best_streak_days, 4);
+    }
+
+    #[test]
+    fn test_build_recent_activity_stats_handles_no_activity() {
+        // Arrange
+        let activity = Vec::new();
+        let end_day_key = 100_i64;
+
+        // Act
+        let stats = build_recent_activity_stats(&activity, end_day_key);
+
+        // Assert
+        assert_eq!(stats.sessions_last_7_days, 0);
+        assert_eq!(stats.sessions_last_30_days, 0);
+        assert_eq!(stats.current_streak_days, 0);
+        assert_eq!(stats.best_streak_days, 0);
     }
 
     #[test]

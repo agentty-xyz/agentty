@@ -7,7 +7,7 @@ use crate::common;
 use crate::common::FeatureTest;
 
 /// Verify that the Projects tab lists the registered git project name from
-/// the temp workdir and shows dashboard-level activity.
+/// the temp workdir and shows dashboard activity plus work stats.
 ///
 /// Agentty auto-registers the current git working directory as a project on
 /// startup. The test creates a `test-project` repository and asserts that
@@ -35,6 +35,8 @@ fn projects_page_shows_cwd() {
                 assertion::assert_text_in_region(frame, "Activity Heatmap", &full);
                 assertion::assert_text_in_region(frame, "Sessions", &full);
                 assertion::assert_text_in_region(frame, "Last Opened", &full);
+                assertion::assert_text_in_region(frame, "Work Pace", &full);
+                assertion::assert_text_in_region(frame, "Active", &full);
                 assertion::assert_text_in_region(frame, "test-project", &full);
                 assertion::assert_not_visible(frame, "Branch");
             },

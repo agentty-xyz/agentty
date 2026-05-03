@@ -9,8 +9,9 @@ use crate::domain::project::ProjectListItem;
 use crate::domain::session::DailyActivity;
 use crate::ui::state::help_action;
 use crate::ui::util::{
-    build_activity_heatmap_grid, build_visible_heatmap_month_row, current_day_key_local,
-    heatmap_intensity_level, heatmap_max_count, visible_heatmap_week_count,
+    RecentActivityStats, build_activity_heatmap_grid, build_recent_activity_stats,
+    build_visible_heatmap_month_row, current_day_key_local, heatmap_intensity_level,
+    heatmap_max_count, visible_heatmap_week_count,
 };
 use crate::ui::{Page, layout, style};
 
@@ -34,8 +35,8 @@ const AGENTTY_SHORT_DESCRIPTION: &str = "Agentty is an ADE (Agentic Development 
                                          structured, controllable AI-assisted software \
                                          development.";
 
-/// Projects tab renderer showing saved repository dashboard data, activity,
-/// and quick Agentty metadata.
+/// Projects tab renderer showing saved repositories, activity, compact
+/// work-performance stats, and quick Agentty metadata.
 pub struct ProjectListPage<'a> {
     /// Identifier for the currently active project.
     pub active_project_id: i64,
@@ -66,8 +67,8 @@ impl<'a> ProjectListPage<'a> {
 }
 
 impl Page for ProjectListPage<'_> {
-    /// Renders the projects page with separate activity and metadata panels,
-    /// project rows, and compact tab-page spacing.
+    /// Renders the projects page with separate activity and Agentty dashboard
+    /// panels, project rows, and compact tab-page spacing.
     fn render(&mut self, f: &mut Frame, area: Rect) {
         let areas = layout::tab_page_areas(area);
         let content_chunks = Layout::vertical([
@@ -97,7 +98,10 @@ impl Page for ProjectListPage<'_> {
             .style(Style::default().fg(style::palette::text()))
             .block(heatmap_block)
             .wrap(Wrap { trim: false });
-        let details_panel = Paragraph::new(agentty_info_details_text())
+        let activity_stats =
+            build_recent_activity_stats(self.stats_activity, current_day_key_local());
+        let active_stats = ActiveProjectStats::from_projects(self.projects);
+        let details_panel = Paragraph::new(agentty_dashboard_lines(&activity_stats, active_stats))
             .style(Style::default().fg(style::palette::text()))
             .block(details_block)
             .wrap(Wrap { trim: true });
@@ -244,6 +248,55 @@ impl ProjectListPage<'_> {
     }
 }
 
+/// Aggregated active-session load shown in the compact work stats panel.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ActiveProjectStats {
+    /// Number of projects with at least one active session.
+    project_count: u32,
+    /// Number of currently active sessions across all projects.
+    session_count: u32,
+}
+
+impl ActiveProjectStats {
+    /// Builds active-session load metrics from project-list rows.
+    fn from_projects(projects: &[ProjectListItem]) -> Self {
+        let project_count = projects
+            .iter()
+            .filter(|project_item| project_item.active_session_count > 0)
+            .count()
+            .try_into()
+            .unwrap_or(u32::MAX);
+        let session_count = projects.iter().fold(0_u32, |total, project_item| {
+            total.saturating_add(project_item.active_session_count)
+        });
+
+        Self {
+            project_count,
+            session_count,
+        }
+    }
+}
+
+/// Builds the right-side Agentty dashboard lines with work stats and product
+/// metadata.
+fn agentty_dashboard_lines(
+    activity_stats: &RecentActivityStats,
+    active_stats: ActiveProjectStats,
+) -> Vec<Line<'static>> {
+    let mut lines = work_stats_summary_lines(activity_stats, active_stats);
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        stat_label_span("Version "),
+        stat_value_span(AGENTTY_VERSION),
+    ]));
+    lines.push(Line::from(Span::styled(
+        AGENTTY_SHORT_DESCRIPTION,
+        Style::default().fg(style::palette::text_muted()),
+    )));
+
+    lines
+}
+
 /// Renders one project metadata row.
 fn render_project_row(project_item: &ProjectListItem, active_project_id: i64) -> Row<'static> {
     let (title, last_opened) = project_row_values(project_item, active_project_id);
@@ -259,10 +312,54 @@ fn render_project_row(project_item: &ProjectListItem, active_project_id: i64) ->
     .style(project_row_style(project_item, active_project_id))
 }
 
-/// Builds top-panel Agentty metadata text shown to the right of the heatmap.
-fn agentty_info_details_text() -> String {
-    format!(
-        "Version: {AGENTTY_VERSION}\n\n{AGENTTY_SHORT_DESCRIPTION}\n\nDocs: https://agentty.xyz/docs"
+/// Builds styled summary lines for work-performance metrics.
+fn work_stats_summary_lines(
+    activity_stats: &RecentActivityStats,
+    active_stats: ActiveProjectStats,
+) -> Vec<Line<'static>> {
+    vec![
+        Line::from(Span::styled(
+            "Work Pace",
+            Style::default()
+                .fg(style::palette::text())
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(vec![
+            stat_label_span("7d "),
+            stat_value_span(activity_stats.sessions_last_7_days.to_string()),
+            stat_label_span("   30d "),
+            stat_value_span(activity_stats.sessions_last_30_days.to_string()),
+        ]),
+        Line::from(vec![
+            stat_label_span("Streak "),
+            stat_value_span(format!("{}d", activity_stats.current_streak_days)),
+            stat_label_span("   Best "),
+            stat_value_span(format!("{}d", activity_stats.best_streak_days)),
+        ]),
+        Line::from(vec![
+            stat_label_span("Active Sessions "),
+            stat_value_span(active_stats.session_count.to_string()),
+        ]),
+        Line::from(vec![
+            stat_label_span("Active Projects "),
+            stat_value_span(active_stats.project_count.to_string()),
+        ]),
+    ]
+}
+
+/// Returns a muted label span for the work-stats summary.
+fn stat_label_span(text: impl Into<String>) -> Span<'static> {
+    Span::styled(
+        text.into(),
+        Style::default().fg(style::palette::text_muted()),
+    )
+}
+
+/// Returns an emphasized value span for the work-stats summary.
+fn stat_value_span(text: impl Into<String>) -> Span<'static> {
+    Span::styled(
+        text.into(),
+        Style::default().fg(style::palette::accent_soft()),
     )
 }
 
@@ -619,17 +716,33 @@ mod tests {
     }
 
     #[test]
-    fn test_agentty_info_details_text_includes_version_and_description() {
+    fn test_agentty_dashboard_lines_include_version_description_and_stats() {
         // Arrange
         let expected_version = AGENTTY_VERSION;
         let expected_description = AGENTTY_SHORT_DESCRIPTION;
+        let activity_stats = RecentActivityStats {
+            best_streak_days: 5,
+            current_streak_days: 3,
+            sessions_last_30_days: 22,
+            sessions_last_7_days: 8,
+        };
+        let active_stats = ActiveProjectStats {
+            project_count: 2,
+            session_count: 4,
+        };
 
         // Act
-        let info_text = agentty_info_details_text();
+        let info_text = agentty_dashboard_lines(&activity_stats, active_stats)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
 
         // Assert
         assert!(info_text.contains(expected_version));
         assert!(info_text.contains(expected_description));
+        assert!(info_text.contains("Work Pace"));
+        assert!(info_text.contains("Active Sessions 4"));
     }
 
     #[test]
@@ -674,6 +787,10 @@ mod tests {
         assert!(text.contains("Activity Heatmap"));
         assert!(text.contains("Less"));
         assert!(text.contains("More"));
+        assert!(text.contains("Work Pace"));
+        assert!(text.contains("Active Sessions 0"));
+        assert!(text.contains("Active Projects 0"));
+        assert!(!text.contains("Daily Pace"));
     }
 
     #[test]
@@ -714,6 +831,96 @@ mod tests {
 
         // Assert
         assert_eq!(monday_row.spans.len(), 13);
+    }
+
+    #[test]
+    fn test_work_stats_summary_lines_show_recent_activity_counts() {
+        // Arrange
+        let activity_stats = RecentActivityStats {
+            best_streak_days: 5,
+            current_streak_days: 3,
+            sessions_last_30_days: 22,
+            sessions_last_7_days: 8,
+        };
+        let active_stats = ActiveProjectStats {
+            project_count: 2,
+            session_count: 4,
+        };
+
+        // Act
+        let rendered_text = work_stats_summary_lines(&activity_stats, active_stats)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(rendered_text.contains("Work Pace"));
+        assert!(rendered_text.contains("7d 8"));
+        assert!(rendered_text.contains("30d 22"));
+        assert!(rendered_text.contains("Streak 3d"));
+        assert!(rendered_text.contains("Best 5d"));
+        assert!(rendered_text.contains("Active Sessions 4"));
+        assert!(rendered_text.contains("Active Projects 2"));
+    }
+
+    #[test]
+    fn test_active_project_stats_counts_active_sessions_and_projects() {
+        // Arrange
+        let projects = vec![
+            ProjectListItem {
+                active_session_count: 0,
+                last_session_updated_at: None,
+                project: Project {
+                    created_at: 1,
+                    display_name: Some("agentty".to_string()),
+                    git_branch: Some("main".to_string()),
+                    id: 1,
+                    is_favorite: false,
+                    last_opened_at: None,
+                    path: PathBuf::from("/tmp/agentty"),
+                    updated_at: 2,
+                },
+                session_count: 3,
+            },
+            ProjectListItem {
+                active_session_count: 2,
+                last_session_updated_at: None,
+                project: Project {
+                    created_at: 1,
+                    display_name: Some("other".to_string()),
+                    git_branch: Some("main".to_string()),
+                    id: 2,
+                    is_favorite: false,
+                    last_opened_at: None,
+                    path: PathBuf::from("/tmp/other"),
+                    updated_at: 2,
+                },
+                session_count: 5,
+            },
+            ProjectListItem {
+                active_session_count: 1,
+                last_session_updated_at: None,
+                project: Project {
+                    created_at: 1,
+                    display_name: Some("third".to_string()),
+                    git_branch: Some("main".to_string()),
+                    id: 3,
+                    is_favorite: false,
+                    last_opened_at: None,
+                    path: PathBuf::from("/tmp/third"),
+                    updated_at: 2,
+                },
+                session_count: 1,
+            },
+        ];
+
+        // Act
+        let stats = ActiveProjectStats::from_projects(&projects);
+
+        // Assert
+        assert_eq!(stats.project_count, 2);
+        assert_eq!(stats.session_count, 3);
     }
 
     fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
