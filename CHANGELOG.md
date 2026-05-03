@@ -17,6 +17,42 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `Journey::wait_for_startup(stable_ms, timeout_ms)` entry point keeps working and now
   routes through `StartupWait::Custom`.
 
+### Changed
+
+- testty: HTML proof report now renders structured `match_*` failures (those carried on
+  `AssertionResult::failure`) with a side-by-side context-and-frame block. The context
+  column surfaces the `Expected` variant, the optional `Region` coordinates, and the
+  matched-span list; the frame column shows `AssertionFailure::frame_excerpt` inside a
+  `<pre>` with a column ruler and per-row gutters whose labels are anchored to the
+  region's `(col, row)` so reported coordinates match the live frame. The ruler defaults
+  to the compact two-row tens-and-ones layout and adds a hundreds row above the tens row
+  whenever the excerpt extends past column 99, so absolute coordinates beyond column 99
+  can be recovered by stacking the digits at any tens-marked column instead of being
+  truncated by `(col / 10) % 10`. The column ruler is sized by terminal cell width (via
+  `unicode-width`) so wide glyphs in the excerpt do not desync the labels from real
+  terminal positions. Needle highlighting in the excerpt is scoped to what the
+  underlying matcher actually validated: every-match matchers (`TextInRegion`,
+  `NotVisible`, `MatchCount`) wrap every occurrence of the needle in a `needle-hit` span
+  using the same one-character advance as `TerminalFrame::find_text`, so overlapping
+  matches like `ana` in `banana` are no longer silently dropped, while first-match-only
+  matchers (`ForegroundColor`, `BackgroundColor`, `Highlighted`, `NotHighlighted`) only
+  highlight the first occurrence so the report does not imply that secondary occurrences
+  were checked. For every-match matchers, strictly overlapping byte ranges are merged
+  into a single span so the emitted HTML stays well-formed, while adjacent matches like
+  `ab` in `abab` keep their distinct spans so the report shows both hits. The
+  `needle-hit` style uses background color only with no horizontal padding so
+  highlighted cells stay aligned with the column ruler. The matched-span list now also
+  surfaces the actual `foreground`, `background`, and style flags (`bold`, `italic`,
+  `underline`, `inverse`, `dim`) carried on each `MatchedSpan`, so color- and
+  highlight-style failures expose the actual cell state next to the structured
+  `Expected` description instead of forcing readers back to the assertion-line summary.
+  The `Expected` description for color and highlight expectations is also reworded to
+  read as "first match of '<needle>' with foreground color ..." (and the equivalent for
+  background, highlight, and not-highlight) so the report makes it explicit that the
+  underlying matchers only validate the first matched span. Legacy entries pushed
+  through `ProofReport::add_assertion` keep the historical one-line `pass`/`fail` shape
+  unchanged.
+
 ## [v0.8.11] - 2026-05-02
 
 ### Added
