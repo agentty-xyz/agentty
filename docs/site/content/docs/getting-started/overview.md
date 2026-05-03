@@ -49,7 +49,8 @@ live session starts:
 - Before each turn, Agentty verifies that the session folder still exists, is on its
   expected `wt/<hash>` branch, and resolves to a linked worktree rather than the main
   checkout. It also compares the main checkout's tracked-file git status before and
-  after the turn and fails the turn if that checkout changed.
+  after the turn and adds a transcript warning if that checkout changed. Merge and sync
+  actions still require a clean main checkout before they start.
 - If worktree creation fails (e.g., git is not installed or permissions are
   insufficient), session creation fails atomically and displays an error.
 

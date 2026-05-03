@@ -152,11 +152,11 @@ section sourced from the final agent `summary.session` value and a `# Commit` se
 sourced from the canonical squash-merge commit message.
 
 When a session enters **Merging**, Agentty reuses the session branch `HEAD` commit
-message for the final squash commit on the base branch. Merge still stops and returns
-the session to **Review** if rebase or squash-merge git steps fail, but it no longer
-runs a separate merge-only commit-message prompt. Successful merge notices use the same
-transient session-output status row as commit notices, so the persisted transcript
-remains focused on agent output.
+message for the final squash commit on the base branch. Merge first requires the main
+checkout to be clean, then stops and returns the session to **Review** if rebase or
+squash-merge git steps fail. It no longer runs a separate merge-only commit-message
+prompt. Successful merge notices use the same transient session-output status row as
+commit notices, so the persisted transcript remains focused on agent output.
 
 When a published session enters **Rebasing**, Agentty fetches before rebasing and uses
 the remote base ref from the same remote as the published session branch. Unpublished

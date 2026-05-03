@@ -26,6 +26,8 @@ pub(crate) enum TranscriptNotice {
     Merge,
     /// Merge workflow failure.
     MergeError,
+    /// Main checkout changed during a provider turn.
+    MainCheckoutWarning,
     /// Queued prompt failure.
     QueueError,
     /// Rebase workflow progress.
@@ -57,6 +59,7 @@ impl TranscriptNotice {
             Self::FollowUpTaskError => "[Follow-Up Task Error]",
             Self::Merge => "[Merge]",
             Self::MergeError => "[Merge Error]",
+            Self::MainCheckoutWarning => "[Main Checkout Warning]",
             Self::QueueError => "[Queue Error]",
             Self::Rebase => "[Rebase]",
             Self::RebaseAssist => "[Rebase Assist]",
@@ -92,6 +95,7 @@ pub(crate) const TRAILING_TRANSCRIPT_NOTICE_PREFIXES: &[&str] = &[
     TranscriptNotice::FollowUpTaskError.prefix(),
     TranscriptNotice::Merge.prefix(),
     TranscriptNotice::MergeError.prefix(),
+    TranscriptNotice::MainCheckoutWarning.prefix(),
     TranscriptNotice::QueueError.prefix(),
     TranscriptNotice::Rebase.prefix(),
     TranscriptNotice::RebaseAssist.prefix(),
@@ -146,6 +150,7 @@ mod tests {
             TranscriptNotice::FollowUpTaskError,
             TranscriptNotice::Merge,
             TranscriptNotice::MergeError,
+            TranscriptNotice::MainCheckoutWarning,
             TranscriptNotice::QueueError,
             TranscriptNotice::Rebase,
             TranscriptNotice::RebaseAssist,

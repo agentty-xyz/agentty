@@ -551,8 +551,11 @@ by `infra/channel.rs`, with prompt payloads owned by `domain/turn_prompt.rs`):
   main checkout.
 - The worker captures `git status --porcelain=v1 --untracked-files=no` for that main
   checkout before provider execution and compares it again after a successful turn. A
-  changed tracked-file snapshot fails the turn before transcript persistence and
-  auto-commit, keeping reviewable output limited to the session worktree.
+  changed tracked-file snapshot appends a `[Main Checkout Warning]` transcript notice
+  while allowing the session turn to persist normally.
+- Merge and `sync main` workflows perform clean-check preflights on the target checkout
+  before changing base-branch state, so dirty main-checkout state blocks only the
+  workflows that actually depend on it.
 - Codex app-server approvals are scoped in `app_server/codex/policy.rs`: file-change
   approvals are accepted only for paths inside the session folder, while command
   approvals are rejected because they do not expose a reliable path-scoped write set.

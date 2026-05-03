@@ -496,6 +496,13 @@ impl SessionMergeService {
             &restore_context,
         )
         .await?;
+        Self::ensure_merge_target_clean(
+            git_client.as_ref(),
+            repo_root.clone(),
+            &base_branch,
+            &restore_context,
+        )
+        .await?;
 
         let merge_task_input = MergeTaskInput {
             app_event_tx,
@@ -592,6 +599,40 @@ impl SessionMergeService {
         Err(SessionError::Workflow(
             "Failed to find git repository root".to_string(),
         ))
+    }
+
+    /// Verifies the merge target checkout is clean before starting a squash
+    /// merge task, restoring the session to `Review` when merge cannot start.
+    ///
+    /// # Errors
+    /// Returns an error when git status cannot be inspected or when the target
+    /// checkout has local changes that would make the merge unsafe.
+    async fn ensure_merge_target_clean(
+        git_client: &dyn GitClient,
+        repo_root: PathBuf,
+        base_branch: &str,
+        context: &MergeStartRestoreContext<'_>,
+    ) -> Result<(), SessionError> {
+        let is_clean = match git_client.is_worktree_clean(repo_root).await {
+            Ok(is_clean) => is_clean,
+            Err(error) => {
+                Self::restore_review_status(context).await;
+
+                return Err(SessionError::Workflow(format!(
+                    "Failed to inspect `{base_branch}` before merge: {error}"
+                )));
+            }
+        };
+        if is_clean {
+            return Ok(());
+        }
+
+        Self::restore_review_status(context).await;
+
+        Err(SessionError::Workflow(format!(
+            "Merge cannot run while `{base_branch}` has uncommitted changes.\nCommit or stash \
+             changes in `{base_branch}`, then try again."
+        )))
     }
 
     /// Rebases a reviewed session branch onto its base branch.
@@ -3265,6 +3306,58 @@ mod tests {
             detail_message,
             "Sync cannot run while `main` has uncommitted changes.\nCommit or stash changes in \
              `main`, then try again."
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ensure_merge_target_clean_blocks_dirty_main_checkout() {
+        // Arrange
+        let db = AppRepositories::in_memory().await;
+        let project_id = db
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to insert project");
+        db.sessions()
+            .insert_session("session-123", "gpt-5.4", "main", "Merging", project_id)
+            .await
+            .expect("failed to insert merge session row");
+        let status = Arc::new(Mutex::new(Status::Merging));
+        let session_update_versions = Arc::default();
+        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_is_worktree_clean()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(false) }));
+        let restore_context = MergeStartRestoreContext {
+            app_event_tx: &app_event_tx,
+            clock: &crate::app::session::RealClock,
+            db: &db,
+            session_id: "session-123",
+            session_update_versions: &session_update_versions,
+            status: &status,
+        };
+
+        // Act
+        let result = SessionMergeService::ensure_merge_target_clean(
+            &mock_git_client,
+            PathBuf::from("/tmp/project"),
+            "main",
+            &restore_context,
+        )
+        .await;
+
+        // Assert
+        let error = result.expect_err("dirty merge target should block merge");
+        assert_eq!(
+            error.to_string(),
+            "Merge cannot run while `main` has uncommitted changes.\nCommit or stash changes in \
+             `main`, then try again."
+        );
+        assert_eq!(
+            *status.lock().expect("status lock poisoned"),
+            Status::Review
         );
     }
 

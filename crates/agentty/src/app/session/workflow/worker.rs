@@ -203,25 +203,29 @@ impl MainCheckoutSnapshot {
         })
     }
 
-    /// Verifies no provider turn changed tracked files in the main checkout.
+    /// Builds a warning when a provider turn changed tracked files in the main
+    /// checkout.
     ///
     /// # Errors
-    /// Returns a workflow error when the main-checkout tracked status changed
-    /// or cannot be read after the provider turn.
-    async fn verify_unchanged(&self, context: &SessionWorkerContext) -> Result<(), SessionError> {
+    /// Returns a workflow error when the main-checkout tracked status cannot
+    /// be read after the provider turn.
+    async fn changed_warning(
+        &self,
+        context: &SessionWorkerContext,
+    ) -> Result<Option<String>, SessionError> {
         let current_status = context
             .git_client
             .tracked_worktree_status(self.main_repo_root.clone())
             .await
             .map_err(|error| Self::status_error(&error))?;
         if current_status != self.tracked_status_output {
-            return Err(SessionError::Workflow(format!(
-                "Session isolation violation: main checkout `{}` changed during the session turn",
-                self.main_repo_root.display()
+            return Ok(Some(TranscriptNotice::MainCheckoutWarning.format(
+                "Tracked files in the main checkout changed during this turn. Continuing this \
+                 session; merge and sync actions still require a clean main checkout.",
             )));
         }
 
-        Ok(())
+        Ok(None)
     }
 
     /// Converts main-checkout tracked status failures into workflow errors.
@@ -689,13 +693,8 @@ impl SessionWorkerService {
 
         let _ = consumer.await;
 
-        let turn_result = match turn_result {
-            Ok(result) => match main_checkout_snapshot.verify_unchanged(context).await {
-                Ok(()) => Ok(result),
-                Err(error) => Err(AgentError::Backend(error.to_string())),
-            },
-            Err(error) => Err(error),
-        };
+        let turn_result =
+            add_main_checkout_warning(context, &main_checkout_snapshot, turn_result).await;
         let result = apply_turn_result(context, turn_metadata, turn_result).await;
         finalize_channel_turn(context, &result).await;
 
@@ -825,6 +824,25 @@ impl SessionManager {
             session_model: session.model,
             status: Arc::clone(&handles.status),
         })
+    }
+}
+
+/// Converts post-turn main-checkout changes into transcript warnings while
+/// preserving the successful provider result.
+async fn add_main_checkout_warning(
+    context: &SessionWorkerContext,
+    main_checkout_snapshot: &MainCheckoutSnapshot,
+    turn_result: Result<TurnResult, AgentError>,
+) -> Result<TurnResult, AgentError> {
+    let result = turn_result?;
+    match main_checkout_snapshot.changed_warning(context).await {
+        Ok(Some(warning)) => {
+            append_main_checkout_warning(context, warning).await;
+
+            Ok(result)
+        }
+        Ok(None) => Ok(result),
+        Err(error) => Err(AgentError::Backend(error.to_string())),
     }
 }
 
@@ -1106,6 +1124,19 @@ async fn append_turn_error(context: &SessionWorkerContext, error_text: &str) {
         &context.session_update_versions,
         &context.session_id,
         &message,
+    )
+    .await;
+}
+
+/// Appends one main-checkout warning to the live and persisted transcript.
+async fn append_main_checkout_warning(context: &SessionWorkerContext, warning: String) {
+    SessionTaskService::append_session_output(
+        &context.output,
+        &context.db,
+        &context.app_event_tx,
+        &context.session_update_versions,
+        &context.session_id,
+        &warning,
     )
     .await;
 }
@@ -2069,9 +2100,9 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies a turn that dirties the main checkout is converted into a
-    /// session isolation error before the successful agent response is applied.
-    async fn test_run_channel_turn_rejects_main_checkout_status_changes() {
+    /// Verifies a turn that dirties the main checkout records a warning while
+    /// preserving the successful agent response.
+    async fn test_run_channel_turn_warns_when_main_checkout_status_changes() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
         let db = AppRepositories::in_memory().await;
@@ -2133,6 +2164,9 @@ mod tests {
         mock_git_client
             .expect_diff()
             .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+        mock_git_client
+            .expect_is_worktree_clean()
+            .returning(|_| Box::pin(async { Ok(true) }));
 
         let output = Arc::new(Mutex::new(String::new()));
         let context = SessionWorkerContext {
@@ -2163,11 +2197,10 @@ mod tests {
         .await;
 
         // Assert
-        let error_message = result.expect_err("main checkout change should fail");
-        assert!(error_message.to_string().contains("main checkout"));
+        assert!(result.is_ok(), "main checkout changes should warn only");
         let output_text = output.lock().expect("output lock poisoned");
-        assert!(output_text.contains("Session isolation violation"));
-        assert!(!output_text.contains("done"));
+        assert!(output_text.contains("[Main Checkout Warning]"));
+        assert!(output_text.contains("done"));
     }
 
     /// Builds the default turn metadata used by session worker tests that
