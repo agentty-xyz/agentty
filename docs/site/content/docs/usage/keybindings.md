@@ -181,9 +181,9 @@ line, and diff side.
 | Key | Action | |-----|--------| | `Enter` | Submit the first prompt in a regular
 session that is still `Draft`, stage one prompt in a draft session that is still
 `Draft`, or submit reply/question text elsewhere | | `Alt+Enter` or `Shift+Enter` |
-Insert newline | | `Ctrl+V` or `Alt+V` | Paste one clipboard image as an inline
-`[Image #n]` placeholder | | `Cmd+Left` | Move to start of current line | | `Cmd+Right`
-| Move to end of current line | | `Option+Left` | Move to previous word | |
+Insert newline | | `Ctrl+V`, `Ctrl+Shift+V`, or `Alt+V` | Paste one clipboard image as
+an inline `[Image #n]` placeholder | | `Cmd+Left` | Move to start of current line | |
+`Cmd+Right` | Move to end of current line | | `Option+Left` | Move to previous word | |
 `Option+Right` | Move to next word | | `Option+Backspace` | Delete previous word | |
 `Cmd+Backspace` | Delete current line | | `Esc` | Cancel | | `@` | Open file picker | |
 `/` | Open slash commands |

@@ -23,7 +23,8 @@ pub(crate) enum ClipboardError {
         reason: String,
     },
 
-    /// Clipboard does not contain image data or a recognizable PNG path.
+    /// Clipboard does not contain image data, a copied PNG file, or a
+    /// recognizable PNG path.
     #[error("Clipboard does not contain an image")]
     NoImage,
 
@@ -182,6 +183,22 @@ fn session_temp_directory_name(session_id: &str) -> Result<&str, ClipboardError>
     Ok(session_id)
 }
 
+/// Copies a PNG file path exposed in the clipboard file list into the target
+/// image path.
+///
+/// # Errors
+/// Returns an error when clipboard file-list access fails or no copied PNG
+/// file is present.
+fn clipboard_png_path_from_file_list(clipboard: &mut Clipboard) -> Result<PathBuf, ClipboardError> {
+    clipboard
+        .get()
+        .file_list()
+        .map_err(|_| ClipboardError::NoImage)?
+        .into_iter()
+        .find(|path| is_png_path(path))
+        .ok_or(ClipboardError::NoImage)
+}
+
 /// Copies a PNG file path exposed as clipboard text into the target image
 /// path.
 ///
@@ -191,29 +208,35 @@ fn clipboard_png_path_from_text(clipboard: &mut Clipboard) -> Result<PathBuf, Cl
     let clipboard_text = clipboard.get_text().map_err(|_| ClipboardError::NoImage)?;
     let source_image_path = PathBuf::from(clipboard_text.trim());
 
-    if source_image_path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        != Some("png")
-    {
+    if !is_png_path(&source_image_path) {
         return Err(ClipboardError::NoImage);
     }
 
     Ok(source_image_path)
 }
 
+/// Returns whether a filesystem path names a PNG image.
+fn is_png_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
+}
+
 /// Reads one clipboard image payload on a blocking thread.
 ///
 /// # Errors
 /// Returns an error when clipboard access fails, image encoding fails, or the
-/// clipboard does not contain image data or a PNG file path.
+/// clipboard does not contain a copied PNG file, image data, or a PNG file
+/// path.
 async fn read_clipboard_payload() -> Result<ClipboardPayload, ClipboardError> {
     tokio::task::spawn_blocking(move || {
         let mut clipboard = Clipboard::new().map_err(|error| ClipboardError::Unavailable {
             reason: error.to_string(),
         })?;
 
-        if let Ok(image_data) = clipboard.get_image() {
+        if let Ok(source_image_path) = clipboard_png_path_from_file_list(&mut clipboard) {
+            Ok(ClipboardPayload::ExistingPngPath(source_image_path))
+        } else if let Ok(image_data) = clipboard.get_image() {
             let encoded_png = encode_clipboard_image_to_png(
                 image_data.bytes.as_ref(),
                 image_data.width,
@@ -419,6 +442,36 @@ mod tests {
 
         // Assert
         assert!(matches!(result, Err(ClipboardError::EmptySessionId)));
+    }
+
+    #[test]
+    fn test_is_png_path_accepts_png_extension_case_insensitively() {
+        // Arrange
+        let lowercase_path = PathBuf::from("/tmp/image.png");
+        let uppercase_path = PathBuf::from("/tmp/image.PNG");
+
+        // Act
+        let accepts_lowercase = is_png_path(&lowercase_path);
+        let accepts_uppercase = is_png_path(&uppercase_path);
+
+        // Assert
+        assert!(accepts_lowercase);
+        assert!(accepts_uppercase);
+    }
+
+    #[test]
+    fn test_is_png_path_rejects_non_png_paths() {
+        // Arrange
+        let jpeg_path = PathBuf::from("/tmp/image.jpeg");
+        let extensionless_path = PathBuf::from("/tmp/image");
+
+        // Act
+        let accepts_jpeg = is_png_path(&jpeg_path);
+        let accepts_extensionless = is_png_path(&extensionless_path);
+
+        // Assert
+        assert!(!accepts_jpeg);
+        assert!(!accepts_extensionless);
     }
 
     #[tokio::test]

@@ -736,12 +736,12 @@ paths and their trigger conditions:
 
 ### Clipboard image persistence
 
-- Trigger: Prompt input `Ctrl+V` or `Alt+V`
+- Trigger: Prompt input `Ctrl+V`, `Ctrl+Shift+V`, or `Alt+V`
 - Spawn site: `runtime/mode/prompt::handle_prompt_image_paste`
 - Emits or writes: Temporary PNG files under `AGENTTY_ROOT/tmp/<session-id>/images/`
   plus prompt attachment state
-- What it does: Reads a clipboard image or PNG path via `spawn_blocking`, persists it,
-  and inserts an inline `[Image #n]` placeholder.
+- What it does: Reads a copied PNG file, clipboard image, or PNG path via
+  `spawn_blocking`, persists it, and inserts an inline `[Image #n]` placeholder.
 
 ### Session title generation
 

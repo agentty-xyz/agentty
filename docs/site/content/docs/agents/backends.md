@@ -21,7 +21,8 @@ requires its respective CLI to be installed and available on your `PATH`.
 agent. | | Codex | `codex` | OpenAI Codex CLI agent. |
 
 All three session backends accept pasted local prompt images from the Agentty composer
-(`Ctrl+V` or `Alt+V` in prompt mode). Transport details differ by backend:
+(`Ctrl+V`, `Ctrl+Shift+V`, or `Alt+V` in prompt mode). Transport details differ by
+backend:
 
 - Codex app-server turns send `localImage` input items in placeholder order.
 - Gemini ACP turns send ordered `text` and `image` ACP content blocks.

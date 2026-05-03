@@ -166,15 +166,17 @@ sessions still rebase against the stored local base branch.
 When `Open Commands` in Settings contains multiple entries (one command per line),
 pressing `o` opens a selector popup (`j`/`k` to move, `Enter` to open, `Esc` to cancel).
 
-In prompt input, `Ctrl+V` and `Alt+V` paste one clipboard image into the current draft
-or reply. Agentty stores the image under `AGENTTY_ROOT/tmp/<session-id>/images/`,
-inserts a highlighted inline token such as `[Image #1]`, and submits the ordered local
-attachments with the prompt. Text paste remains unchanged on the normal terminal paste
-event path. Codex turns serialize the local image items directly through the app-server,
-Gemini turns send ordered ACP text-plus-image content blocks, and Claude turns rewrite
-the inline placeholders to local image paths before the prompt is streamed to `claude`.
-Draft image files are removed when you cancel the composer, after a submitted turn
-finishes using them, and when a session is deleted or canceled.
+In prompt input, `Ctrl+V`, `Ctrl+Shift+V`, and `Alt+V` paste one clipboard image into
+the current draft or reply. Agentty stores the image under
+`AGENTTY_ROOT/tmp/<session-id>/images/`, inserts a highlighted inline token such as
+`[Image #1]`, and submits the ordered local attachments with the prompt. The clipboard
+source can be a copied PNG file, raw image data, or PNG path text. Text paste remains
+unchanged on the normal terminal paste event path. Codex turns serialize the local image
+items directly through the app-server, Gemini turns send ordered ACP text-plus-image
+content blocks, and Claude turns rewrite the inline placeholders to local image paths
+before the prompt is streamed to `claude`. Draft image files are removed when you cancel
+the composer, after a submitted turn finishes using them, and when a session is deleted
+or canceled.
 
 When you use `@` file lookups in prompt or clarification input, Agentty keeps the raw
 `@path/to/file` text visible in the composer and transcript. The agent-facing transport

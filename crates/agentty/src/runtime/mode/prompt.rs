@@ -178,7 +178,7 @@ where
             }
         }
         KeyCode::Char('u') if input_key::is_control_key(key) => handle_prompt_line_delete(app),
-        KeyCode::Char('v') if is_prompt_image_paste_key(key) => {
+        KeyCode::Char('v' | 'V') if is_prompt_image_paste_key(key) => {
             handle_prompt_image_paste(app, prompt_context).await;
         }
         KeyCode::Char('a') if input_key::is_control_key(key) => {
@@ -381,8 +381,12 @@ fn is_plain_char_key(key: KeyEvent, character: char) -> bool {
 
 /// Returns true when the key event should paste one clipboard image into the
 /// prompt composer.
+///
+/// Accepts both lowercase and shifted uppercase `V` because Linux terminals
+/// commonly report `Ctrl+Shift+V` as `KeyCode::Char('V')` with `CONTROL` and
+/// `SHIFT` modifiers.
 fn is_prompt_image_paste_key(key: KeyEvent) -> bool {
-    key.code == KeyCode::Char('v')
+    matches!(key.code, KeyCode::Char('v' | 'V'))
         && key
             .modifiers
             .intersects(event::KeyModifiers::ALT | event::KeyModifiers::CONTROL)
@@ -1721,6 +1725,21 @@ mod tests {
     fn test_is_prompt_image_paste_key_accepts_ctrl_v() {
         // Arrange
         let key = KeyEvent::new(KeyCode::Char('v'), event::KeyModifiers::CONTROL);
+
+        // Act
+        let result = is_prompt_image_paste_key(key);
+
+        // Assert
+        assert!(result);
+    }
+
+    #[test]
+    fn test_is_prompt_image_paste_key_accepts_ctrl_shift_v() {
+        // Arrange
+        let key = KeyEvent::new(
+            KeyCode::Char('V'),
+            event::KeyModifiers::CONTROL | event::KeyModifiers::SHIFT,
+        );
 
         // Act
         let result = is_prompt_image_paste_key(key);

@@ -563,6 +563,7 @@ fn session_creation_opens_prompt_mode() -> E2eResult {
 
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Enter: submit", &full);
+                assertion::assert_text_in_region(frame, "Ctrl+V/Alt+V: paste image", &full);
                 assertion::assert_text_in_region(frame, "Esc: cancel", &full);
             },
         )?;
