@@ -45,7 +45,8 @@ TUI tool to manage agents.
   development. If retaining legacy code or behavior for any reason, obtain explicit user
   approval first.
 - **Per-Turn Validation:** Before finalizing every turn in this repository, run
-  `uv tool run prek run --all-files` and fix any failures.
+  `uv tool run prek run --all-files` and
+  `cargo build --locked --all-targets --all-features`; fix any failures.
 
 ## Project Facts
 

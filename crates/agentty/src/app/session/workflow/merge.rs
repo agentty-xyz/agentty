@@ -2348,6 +2348,8 @@ mod tests {
         assert!(prompt.contains("rebasing onto `main`"));
         assert!(prompt.contains("- src/lib.rs"));
         assert!(prompt.contains("- README.md"));
+        assert!(prompt.contains("repository-defined quality checks"));
+        assert!(prompt.contains("affected dependencies or dependents"));
     }
 
     #[test]
