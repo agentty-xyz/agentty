@@ -190,9 +190,11 @@ an inline `[Image #n]` placeholder | | `Cmd+Left` | Move to start of current lin
 
 Prompt input keeps regular text paste on terminal `Event::Paste`. The dedicated image
 paste shortcuts insert highlighted `[Image #n]` tokens directly in the composer and send
-the referenced local image for Codex, Gemini, and Claude session models. Codex and
-Gemini preserve the multimodal ordering at transport level, while Claude rewrites the
-placeholders to local image paths before streaming the prompt.
+the referenced local image for Codex, Gemini, and Claude session models. On Linux,
+clipboard image capture supports both X11 and Wayland data-control clipboard backends,
+including Wayland compositors such as Hyprland. Codex and Gemini preserve the multimodal
+ordering at transport level, while Claude rewrites the placeholders to local image paths
+before streaming the prompt.
 
 When the current session was created as `Draft`, pressing `Enter` stages the current
 composer contents into the draft bundle and returns to session view. Use `s` from

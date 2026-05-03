@@ -741,7 +741,8 @@ paths and their trigger conditions:
 - Emits or writes: Temporary PNG files under `AGENTTY_ROOT/tmp/<session-id>/images/`
   plus prompt attachment state
 - What it does: Reads a copied PNG file, clipboard image, or PNG path via
-  `spawn_blocking`, persists it, and inserts an inline `[Image #n]` placeholder.
+  `spawn_blocking` from X11 or Wayland data-control clipboard backends, persists it, and
+  inserts an inline `[Image #n]` placeholder.
 
 ### Session title generation
 
