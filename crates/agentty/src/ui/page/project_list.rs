@@ -61,19 +61,15 @@ impl<'a> ProjectListPage<'a> {
 }
 
 impl Page for ProjectListPage<'_> {
+    /// Renders the info panel, project table, and footer with compact
+    /// tab-page spacing.
     fn render(&mut self, f: &mut Frame, area: Rect) {
-        let chunks = Layout::default()
-            .constraints([Constraint::Min(0), Constraint::Length(1)])
-            .margin(1)
-            .split(area);
-
-        let main_area = chunks[0];
-        let footer_area = chunks[1];
+        let areas = layout::tab_page_areas(area);
         let content_chunks = Layout::vertical([
             Constraint::Length(AGENTTY_INFO_PANEL_HEIGHT),
             Constraint::Min(0),
         ])
-        .split(main_area);
+        .split(areas.main_area);
         let info_area = content_chunks[0];
         let project_area = content_chunks[1];
         let info_panel_block = Block::default()
@@ -142,7 +138,7 @@ impl Page for ProjectListPage<'_> {
         f.render_widget(details_panel, details_area);
 
         let help_message = Paragraph::new(project_list_footer_line());
-        f.render_widget(help_message, footer_area);
+        f.render_widget(help_message, areas.footer_area);
     }
 }
 

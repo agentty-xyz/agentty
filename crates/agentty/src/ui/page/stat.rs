@@ -18,7 +18,7 @@ use crate::ui::util::{
     format_token_count, heatmap_intensity_level, heatmap_max_count, inline_text,
     visible_heatmap_week_count,
 };
-use crate::ui::{Page, style};
+use crate::ui::{Page, layout, style};
 
 const DAY_LABELS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const HEATMAP_CELL_WIDTH: usize = 2;
@@ -53,22 +53,17 @@ impl<'a> StatsPage<'a> {
 }
 
 impl Page for StatsPage<'_> {
-    /// Renders the dashboard with activity heatmap, token table, and footer.
+    /// Renders the dashboard with activity heatmap, token table, footer, and
+    /// compact tab-page spacing.
     fn render(&mut self, f: &mut Frame, area: Rect) {
-        let chunks = Layout::default()
-            .constraints([Constraint::Min(0), Constraint::Length(1)])
-            .margin(1)
-            .split(area);
-
-        let main_area = chunks[0];
-        let footer_area = chunks[1];
+        let areas = layout::tab_page_areas(area);
         let main_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(HEATMAP_SECTION_HEIGHT),
                 Constraint::Min(0),
             ])
-            .split(main_area);
+            .split(areas.main_area);
 
         if main_chunks[0].width < USAGE_PANEL_VISIBLE_WIDTH {
             self.render_heatmap(f, main_chunks[0]);
@@ -86,7 +81,7 @@ impl Page for StatsPage<'_> {
         }
 
         self.render_table(f, main_chunks[1]);
-        self.render_footer(f, footer_area);
+        self.render_footer(f, areas.footer_area);
     }
 }
 

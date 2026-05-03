@@ -1,6 +1,6 @@
 use ag_forge::RequestedReview;
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
@@ -8,15 +8,12 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 use crate::app::RequestedReviewState;
 use crate::ui::state::help_action;
 use crate::ui::util::{first_table_column_width, inline_text, truncate_spans_with_ellipsis};
-use crate::ui::{Page, style};
+use crate::ui::{Page, layout, style};
 
 /// Horizontal spacing between requested-review table columns.
 const TABLE_COLUMN_SPACING: u16 = 2;
 /// Requested-review provider row cap surfaced by the footer when reached.
 const REQUESTED_REVIEW_DISPLAY_LIMIT: usize = 100;
-/// Shared page margin used by list-mode pages.
-const PAGE_MARGIN: u16 = 1;
-
 /// Page renderer for PRs and MRs requesting the current user's review.
 pub struct ReviewListPage<'a> {
     /// Current requested-review cache snapshot to render.
@@ -28,46 +25,40 @@ impl<'a> ReviewListPage<'a> {
     pub fn new(requested_reviews: &'a RequestedReviewState) -> Self {
         Self { requested_reviews }
     }
-
-    /// Splits the page into the requested-review content and footer areas.
-    fn content_chunks(area: Rect) -> (Rect, Rect) {
-        let chunks = Layout::default()
-            .constraints([Constraint::Min(0), Constraint::Length(1)])
-            .margin(PAGE_MARGIN)
-            .split(area);
-
-        (chunks[0], chunks[1])
-    }
 }
 
 impl Page for ReviewListPage<'_> {
     /// Renders the requested-review table plus loading, empty, and error
-    /// states.
+    /// states with compact tab-page spacing.
     fn render(&mut self, f: &mut Frame, area: Rect) {
-        let (main_area, footer_area) = Self::content_chunks(area);
+        let areas = layout::tab_page_areas(area);
         let show_limit_hint = is_at_display_limit(self.requested_reviews);
 
         match self.requested_reviews {
             RequestedReviewState::Loaded { items, .. } if !items.is_empty() => {
-                render_review_table(f, main_area, items);
+                render_review_table(f, areas.main_area, items);
             }
             RequestedReviewState::Loaded { .. } => {
-                render_message(f, main_area, "No PRs or MRs currently request your review.");
+                render_message(
+                    f,
+                    areas.main_area,
+                    "No PRs or MRs currently request your review.",
+                );
             }
             RequestedReviewState::Failed { message, .. } => {
                 render_message(
                     f,
-                    main_area,
+                    areas.main_area,
                     &format!("Failed to load requested reviews: {message}"),
                 );
             }
             RequestedReviewState::Idle | RequestedReviewState::Loading { .. } => {
-                render_message(f, main_area, "Loading requested reviews...");
+                render_message(f, areas.main_area, "Loading requested reviews...");
             }
         }
 
         let help = Paragraph::new(review_footer_line(show_limit_hint));
-        f.render_widget(help, footer_area);
+        f.render_widget(help, areas.footer_area);
     }
 }
 

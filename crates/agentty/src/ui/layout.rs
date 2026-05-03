@@ -38,6 +38,7 @@ const REVIEW_SUGGESTIONS_HEADER_WITH_HINT: &str =
 const SESSION_HEADER_HEIGHT: u16 = 2;
 const SESSION_OUTPUT_DEFAULT_SUMMARY_TEXT: &str = "No changes";
 const SLASH_MENU_BORDER_HEIGHT: u16 = 2;
+const TAB_PAGE_INSET: u16 = 1;
 const USER_PROMPT_PREFIX: &str = " › ";
 const USER_PROMPT_CONTINUATION_PREFIX: &str = "   ";
 const CLARIFICATION_HEADER_LINE: &str = " › Clarifications:";
@@ -104,6 +105,15 @@ pub struct PromptPanelAreas {
     pub input_area: Rect,
 }
 
+/// Content and footer areas used by top-level tab pages.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TabPageAreas {
+    /// Area used for the one-line footer below the tab page content.
+    pub footer_area: Rect,
+    /// Area used for the tab page's primary panels or tables.
+    pub main_area: Rect,
+}
+
 /// Split an area into a centered content column with side gutters.
 pub fn centered_horizontal_layout(area: Rect) -> std::rc::Rc<[Rect]> {
     Layout::default()
@@ -127,6 +137,29 @@ pub fn centered_content_rect(area: Rect, width: u16, height: u16) -> Rect {
     let origin_y = area.y + area.height.saturating_sub(height) / 2;
 
     Rect::new(origin_x, origin_y, width, height)
+}
+
+/// Splits a tab page area so content starts directly below the tab header.
+///
+/// The tab header already provides the vertical separation through its bottom
+/// border, so tab pages keep only side and bottom insets. This prevents a
+/// blank row between the header border and the first table or panel while
+/// preserving the one-line footer convention.
+pub fn tab_page_areas(area: Rect) -> TabPageAreas {
+    let horizontal_inset = TAB_PAGE_INSET.min(area.width / 2);
+    let content_x = area.x.saturating_add(horizontal_inset);
+    let content_width = area
+        .width
+        .saturating_sub(horizontal_inset.saturating_mul(2));
+    let footer_y = area
+        .y
+        .saturating_add(area.height.saturating_sub(TAB_PAGE_INSET + 1));
+    let main_height = area.height.saturating_sub(TAB_PAGE_INSET + 1);
+
+    TabPageAreas {
+        footer_area: Rect::new(content_x, footer_y, content_width, 1.min(area.height)),
+        main_area: Rect::new(content_x, area.y, content_width, main_height),
+    }
 }
 
 /// Splits one session chat page into header, transcript, and bottom panel.
@@ -2422,6 +2455,19 @@ mod tests {
 
         // Assert
         assert_eq!(centered_area, area);
+    }
+
+    #[test]
+    fn test_tab_page_areas_start_content_at_top_and_keep_footer_inset() {
+        // Arrange
+        let area = Rect::new(5, 3, 40, 10);
+
+        // Act
+        let areas = tab_page_areas(area);
+
+        // Assert
+        assert_eq!(areas.main_area, Rect::new(6, 3, 38, 8));
+        assert_eq!(areas.footer_area, Rect::new(6, 11, 38, 1));
     }
 
     #[test]

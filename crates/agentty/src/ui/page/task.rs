@@ -5,7 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
 use crate::ui::state::help_action;
-use crate::ui::{Page, style, util};
+use crate::ui::{Page, layout, style, util};
 
 /// Tasks page showing the selected project's roadmap queues and cards.
 pub struct TasksPage<'a> {
@@ -34,8 +34,10 @@ impl<'a> TasksPage<'a> {
 }
 
 impl Page for TasksPage<'_> {
-    /// Renders the active project's roadmap queue overview.
+    /// Renders the active project's roadmap queue overview with the shared
+    /// tab-page padding and footer layout.
     fn render(&mut self, f: &mut Frame, area: Rect) {
+        let areas = layout::tab_page_areas(area);
         let content = match (self.roadmap, self.roadmap_error) {
             (Some(roadmap), _) => util::roadmap_task_lines(roadmap),
             (None, Some(error)) => roadmap_error_lines(error),
@@ -43,8 +45,8 @@ impl Page for TasksPage<'_> {
         };
         let max_scroll_offset = util::roadmap_task_max_scroll_offset(
             &content,
-            area.width.saturating_sub(2),
-            area.height.saturating_sub(2),
+            areas.main_area.width.saturating_sub(2),
+            areas.main_area.height.saturating_sub(2),
         );
         let paragraph = Paragraph::new(content)
             .block(
@@ -55,8 +57,10 @@ impl Page for TasksPage<'_> {
             )
             .scroll((self.scroll_offset.min(max_scroll_offset), 0))
             .wrap(Wrap { trim: true });
+        let footer = Paragraph::new(task_footer_line());
 
-        f.render_widget(paragraph, area);
+        f.render_widget(paragraph, areas.main_area);
+        f.render_widget(footer, areas.footer_area);
     }
 }
 
@@ -69,8 +73,6 @@ fn roadmap_error_lines(error: &str) -> Vec<Line<'static>> {
         )),
         Line::default(),
         Line::from(error.to_string()),
-        Line::default(),
-        help_action::footer_line(&help_action::task_footer_actions()),
     ]
 }
 
@@ -83,9 +85,12 @@ fn roadmap_missing_lines() -> Vec<Line<'static>> {
         )),
         Line::default(),
         Line::from("Add `docs/plan/roadmap.md` to expose roadmap tasks here."),
-        Line::default(),
-        help_action::footer_line(&help_action::task_footer_actions()),
     ]
+}
+
+/// Returns the footer help content for tasks mode.
+fn task_footer_line() -> Line<'static> {
+    help_action::footer_line(&help_action::task_footer_actions())
 }
 
 #[cfg(test)]
@@ -173,6 +178,35 @@ Promote when maintainers want direct task management in Agentty.
     }
 
     #[test]
+    fn test_tasks_page_uses_shared_tab_page_padding_and_footer() {
+        // Arrange
+        let backend = TestBackend::new(60, 10);
+        let mut terminal = Terminal::new(backend).expect("failed to create terminal");
+        let mut page = TasksPage::new(None, None, 0);
+
+        // Act
+        terminal
+            .draw(|frame| page.render(frame, frame.area()))
+            .expect("failed to render tasks page");
+        let buffer = terminal.backend().buffer();
+        let footer_text: String = (0..buffer.area.width)
+            .map(|column| buffer[(column, 8)].symbol())
+            .collect();
+        let text: String = buffer
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect();
+
+        // Assert
+        assert_eq!(buffer[(0, 0)].symbol(), " ");
+        assert_eq!(buffer[(1, 0)].symbol(), "┌");
+        assert!(footer_text.contains("q: quit"));
+        assert!(footer_text.contains("j/k: scroll"));
+        assert!(text.contains("Roadmap Tasks"));
+    }
+
+    #[test]
     fn test_tasks_page_applies_scroll_offset_to_roadmap_content() {
         // Arrange
         let roadmap = r"
@@ -209,6 +243,7 @@ Let each project stored in Agentty choose its expected landing path.
 
         // Assert
         assert!(!rendered_text.contains("Source: docs/plan/roadmap.md"));
-        assert!(rendered_text.contains("Third long scrolling line"));
+        assert!(rendered_text.contains("Substeps: First long scrolling line"));
+        assert!(rendered_text.contains("Second long"));
     }
 }

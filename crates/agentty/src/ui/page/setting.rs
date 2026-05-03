@@ -6,7 +6,7 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 
 use crate::app::setting::SettingsManager;
 use crate::ui::state::help_action;
-use crate::ui::{Page, style};
+use crate::ui::{Page, layout, style};
 
 /// Uses row-background highlighting without a textual cursor glyph.
 const ROW_HIGHLIGHT_SYMBOL: &str = "";
@@ -35,15 +35,10 @@ impl<'a> SettingsPage<'a> {
 }
 
 impl Page for SettingsPage<'_> {
+    /// Renders the global and project settings tables with compact tab-page
+    /// spacing.
     fn render(&mut self, f: &mut Frame, area: Rect) {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(0), Constraint::Length(1)])
-            .margin(1)
-            .split(area);
-
-        let main_area = chunks[0];
-        let footer_area = chunks[1];
+        let areas = layout::tab_page_areas(area);
 
         let selected_style = Style::default().bg(style::palette::surface());
         let global_rows = settings_table_rows(self.manager.global_settings_rows());
@@ -67,7 +62,7 @@ impl Page for SettingsPage<'_> {
         let table_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints(section_heights)
-            .split(main_area);
+            .split(areas.main_area);
 
         let table_columns = [Constraint::Percentage(50), Constraint::Percentage(50)];
 
@@ -100,7 +95,7 @@ impl Page for SettingsPage<'_> {
 
         let footer = Paragraph::new(settings_footer_line(self.manager));
 
-        f.render_widget(footer, footer_area);
+        f.render_widget(footer, areas.footer_area);
     }
 }
 

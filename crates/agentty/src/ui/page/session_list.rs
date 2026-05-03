@@ -1,5 +1,5 @@
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
@@ -9,15 +9,12 @@ use crate::ui::state::help_action;
 use crate::ui::util::{
     first_table_column_width, format_duration_compact, inline_text, truncate_spans_with_ellipsis,
 };
-use crate::ui::{Page, markdown, style};
+use crate::ui::{Page, layout, markdown, style};
 
 /// Uses row-background highlighting without a textual cursor glyph.
 const ROW_HIGHLIGHT_SYMBOL: &str = "";
 /// Horizontal spacing between table columns in the session list.
 const TABLE_COLUMN_SPACING: u16 = 2;
-/// Shared page margin that keeps table and footer spacing aligned with other
-/// pages.
-const PAGE_MARGIN: u16 = 1;
 /// Placeholder text rendered under group headers with no sessions.
 const GROUP_EMPTY_PLACEHOLDER: &str = "No sessions...";
 
@@ -44,22 +41,13 @@ impl<'a> SessionListPage<'a> {
             wall_clock_unix_seconds,
         }
     }
-
-    /// Splits the available page area into main and footer regions using the
-    /// shared page margin convention.
-    fn content_chunks(area: Rect) -> (Rect, Rect) {
-        let chunks = Layout::default()
-            .constraints([Constraint::Min(0), Constraint::Length(1)])
-            .margin(PAGE_MARGIN)
-            .split(area);
-
-        (chunks[0], chunks[1])
-    }
 }
 
 impl Page for SessionListPage<'_> {
+    /// Renders the grouped session table directly below the tab header plus
+    /// the list footer.
     fn render(&mut self, f: &mut Frame, area: Rect) {
-        let (main_area, footer_area) = Self::content_chunks(area);
+        let areas = layout::tab_page_areas(area);
 
         let selected_style = Style::default().bg(style::palette::surface());
         let header_style = Style::default()
@@ -86,7 +74,7 @@ impl Page for SessionListPage<'_> {
             timer_column_width(self.sessions, self.wall_clock_unix_seconds),
         ];
         let title_column_width = first_table_column_width(
-            block.inner(main_area).width,
+            block.inner(areas.main_area).width,
             &column_constraints,
             TABLE_COLUMN_SPACING,
             0,
@@ -106,7 +94,7 @@ impl Page for SessionListPage<'_> {
 
         let previous_selection = self.table_state.selected();
         prepare_grouped_table_state(self.table_state, selected_row);
-        f.render_stateful_widget(table, main_area, self.table_state);
+        f.render_stateful_widget(table, areas.main_area, self.table_state);
         self.table_state.select(previous_selection);
 
         let selected_session = self
@@ -114,7 +102,7 @@ impl Page for SessionListPage<'_> {
             .selected()
             .and_then(|selected_index| self.sessions.get(selected_index));
         let help_message = Paragraph::new(session_list_help_line(selected_session));
-        f.render_widget(help_message, footer_area);
+        f.render_widget(help_message, areas.footer_area);
     }
 }
 
@@ -528,31 +516,6 @@ mod tests {
             .iter()
             .filter(|cell| cell.symbol() == symbol && cell.fg == style::palette::border())
             .count()
-    }
-
-    #[test]
-    fn test_content_chunks_use_shared_page_margin() {
-        // Arrange
-        let area = Rect::new(5, 3, 40, 10);
-
-        // Act
-        let (main_area, footer_area) = SessionListPage::content_chunks(area);
-
-        // Assert
-        assert_eq!(main_area.x, area.x + PAGE_MARGIN);
-        assert_eq!(main_area.y, area.y + PAGE_MARGIN);
-        assert_eq!(main_area.width, area.width - PAGE_MARGIN.saturating_mul(2));
-        assert_eq!(
-            main_area.height,
-            area.height - PAGE_MARGIN.saturating_mul(2) - 1
-        );
-        assert_eq!(footer_area.x, area.x + PAGE_MARGIN);
-        assert_eq!(footer_area.y, area.y + area.height - PAGE_MARGIN - 1);
-        assert_eq!(
-            footer_area.width,
-            area.width - PAGE_MARGIN.saturating_mul(2)
-        );
-        assert_eq!(footer_area.height, 1);
     }
 
     #[test]

@@ -24,6 +24,7 @@ pub use crate::ui::layout::{
     input_cursor_position, move_input_cursor_down, move_input_cursor_up, overlay_area_above,
     panel_inner_width, placeholder_cursor_position, question_options_height, question_panel_areas,
     question_panel_layout, question_panel_reserved_height, suggestion_dropdown_height,
+    tab_page_areas,
 };
 pub(crate) use crate::ui::task_roadmap::{roadmap_task_lines, roadmap_task_max_scroll_offset};
 pub use crate::ui::text_util::{
