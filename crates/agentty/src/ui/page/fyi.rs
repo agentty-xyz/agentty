@@ -8,7 +8,7 @@ use crate::ui::state::app_mode::{AppMode, HelpContext};
 const SESSION_LIST_FYI_MESSAGES: [&str; 4] = [
     "Press Enter to open the selected session.",
     "Go to Settings to specify commands that can open within a session.",
-    "Recommended: run Agentty in tmux to use session open commands.",
+    "Run Agentty in tmux to use session open commands.",
     "Agentty refreshes PR statuses every minute.",
 ];
 

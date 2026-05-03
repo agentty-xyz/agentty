@@ -547,7 +547,7 @@ mod tests {
         );
         assert_eq!(
             third_message,
-            Some("Recommended: run Agentty in tmux to use session open commands.")
+            Some("Run Agentty in tmux to use session open commands.")
         );
         assert_eq!(
             fourth_message,
