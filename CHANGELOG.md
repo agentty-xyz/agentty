@@ -7,8 +7,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.9.0] - 2026-05-02
+
 ### Added
 
+- agentty: accept image paste payloads from `Ctrl+Shift+V` and copied PNG files in the
+  prompt input flow.
+- agentty: add branch and path columns to the `Projects` table so repository identity is
+  visible without opening a project.
 - testty: add the named `StartupWait` preset enum (`Default`, `FastNative`, `SlowNode`,
   `Custom { stable_ms, timeout_ms }`) plus the `Journey::wait_for_startup_preset` and
   `Journey::wait_for_startup_default` constructors so test authors can pick a documented
@@ -16,9 +22,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   project. `StartupWait` is re-exported from `testty::prelude`. The historical
   `Journey::wait_for_startup(stable_ms, timeout_ms)` entry point keeps working and now
   routes through `StartupWait::Custom`.
+- testty: add `match_*` recipe siblings for composing reusable frame assertions.
 
 ### Changed
 
+- agentty: move the activity heatmap into the `Projects` tab, add aggregate work stats
+  to the `Projects` table, keep the `Stats` tab focused on global aggregates, and hide
+  non-repository workspaces from the project list.
+- agentty: tighten shared tab-page spacing and split project activity from project info
+  so the `Projects` tab has denser, clearer panels.
 - testty: HTML proof report now renders structured `match_*` failures (those carried on
   `AssertionResult::failure`) with a side-by-side context-and-frame block. The context
   column surfaces the `Expected` variant, the optional `Region` coordinates, and the
@@ -52,6 +64,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   underlying matchers only validate the first matched span. Legacy entries pushed
   through `ProofReport::add_assertion` keep the historical one-line `pass`/`fail` shape
   unchanged.
+- Bump workspace crate metadata and lockfile package versions to `0.9.0`.
+
+### Fixed
+
+- agentty: isolate E2E project discovery from the host home directory so tests only see
+  repositories created for the current scenario.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
 
 ## [v0.8.11] - 2026-05-02
 
