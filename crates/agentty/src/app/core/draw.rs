@@ -144,7 +144,6 @@ impl App {
             frame,
             ui::RenderContext {
                 active_project_id,
-                agent_usage_snapshot: &self.agent_usage_snapshot,
                 current_tab,
                 has_tasks_tab,
                 git_branch: git_branch.as_deref(),

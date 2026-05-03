@@ -1293,7 +1293,6 @@ mod tests {
         let db = app.services.db().clone();
         let event_sender = app.services.event_sender();
         let available_agent_kinds = app.services.available_agent_kinds();
-        let agent_usage_probe = app.services.agent_usage_probe();
         let app_server_client_override = app.services.app_server_client_override();
         let fs_client = app.services.fs_client();
         let review_request_client = app.services.review_request_client();
@@ -1303,7 +1302,6 @@ mod tests {
             app.services.clock(),
             event_sender,
             crate::app::service::AppServiceDeps {
-                agent_usage_probe,
                 app_server_client_override,
                 available_agent_kinds,
                 fs_client,
@@ -4276,8 +4274,6 @@ mod tests {
         app.next_tab();
         assert_eq!(app.tabs.current(), Tab::Review);
         app.next_tab();
-        assert_eq!(app.tabs.current(), Tab::Stats);
-        app.next_tab();
         assert_eq!(app.tabs.current(), Tab::Settings);
         app.next_tab();
         assert_eq!(app.tabs.current(), Tab::Projects);
@@ -4311,8 +4307,6 @@ mod tests {
         assert_eq!(app.tabs.current(), Tab::Review);
         app.next_tab();
         assert_eq!(app.tabs.current(), Tab::Tasks);
-        app.next_tab();
-        assert_eq!(app.tabs.current(), Tab::Stats);
         app.next_tab();
         assert_eq!(app.tabs.current(), Tab::Settings);
         app.next_tab();

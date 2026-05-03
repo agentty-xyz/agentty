@@ -19,7 +19,7 @@ use crate::app::session_state::SessionGitStatus;
 use crate::app::{AppEvent, UpdateStatus, session};
 use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
 use crate::domain::session::SessionId;
-use crate::infra::agent::{self, AgentUsageProbe, AgentUsageRequest};
+use crate::infra::agent;
 use crate::infra::git::GitClient;
 use crate::infra::review_comment_cache::ReviewCommentCache;
 use crate::version;
@@ -358,29 +358,6 @@ impl TaskService {
             {
                 Self::run_background_update(&app_event_tx, &newer_version).await;
             }
-        });
-    }
-
-    /// Spawns one background provider account-usage refresh for the Stats
-    /// page.
-    pub(super) fn spawn_agent_usage_task(
-        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
-        working_dir: &Path,
-        available_agent_kinds: Vec<AgentKind>,
-        agent_usage_probe: Arc<dyn AgentUsageProbe>,
-    ) {
-        let app_event_tx = app_event_tx.clone();
-        let working_dir = working_dir.to_path_buf();
-
-        tokio::spawn(async move {
-            let snapshot = agent_usage_probe
-                .load_usage(AgentUsageRequest {
-                    available_agent_kinds,
-                    working_dir,
-                })
-                .await;
-
-            let _ = app_event_tx.send(AppEvent::AgentUsageUpdated { snapshot });
         });
     }
 

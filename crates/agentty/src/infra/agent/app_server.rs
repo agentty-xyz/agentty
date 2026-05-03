@@ -7,5 +7,5 @@
 mod codex;
 mod gemini;
 
-pub(crate) use codex::{RealCodexAppServerClient, load_codex_account_usage};
+pub(crate) use codex::RealCodexAppServerClient;
 pub(crate) use gemini::RealGeminiAcpClient;

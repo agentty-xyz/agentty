@@ -18,41 +18,29 @@ pub enum Tab {
     Sessions,
     Review,
     Tasks,
-    Stats,
     Settings,
 }
 
 impl Tab {
     /// Tabs in the order they are rendered when the active project does not
     /// expose a roadmap-backed tasks page.
-    pub const ALL_WITHOUT_TASKS: [Self; 5] = [
-        Self::Projects,
-        Self::Sessions,
-        Self::Review,
-        Self::Stats,
-        Self::Settings,
-    ];
+    pub const ALL_WITHOUT_TASKS: [Self; 4] =
+        [Self::Projects, Self::Sessions, Self::Review, Self::Settings];
     /// Tabs in the order they are rendered when the active project exposes a
     /// roadmap-backed tasks page.
-    pub const ALL_WITH_TASKS: [Self; 6] = [
+    pub const ALL_WITH_TASKS: [Self; 5] = [
         Self::Projects,
         Self::Sessions,
         Self::Review,
         Self::Tasks,
-        Self::Stats,
         Self::Settings,
     ];
     /// Project-scoped tabs in display order when the tasks page is hidden.
-    pub const PROJECT_SCOPED_WITHOUT_TASKS: [Self; 4] =
-        [Self::Sessions, Self::Review, Self::Stats, Self::Settings];
+    pub const PROJECT_SCOPED_WITHOUT_TASKS: [Self; 3] =
+        [Self::Sessions, Self::Review, Self::Settings];
     /// Project-scoped tabs in display order when the tasks page is available.
-    pub const PROJECT_SCOPED_WITH_TASKS: [Self; 5] = [
-        Self::Sessions,
-        Self::Review,
-        Self::Tasks,
-        Self::Stats,
-        Self::Settings,
-    ];
+    pub const PROJECT_SCOPED_WITH_TASKS: [Self; 4] =
+        [Self::Sessions, Self::Review, Self::Tasks, Self::Settings];
 
     /// Returns the tabs available for the current project context.
     pub fn available_tabs(has_tasks_tab: bool) -> &'static [Self] {
@@ -80,7 +68,6 @@ impl Tab {
             Tab::Sessions => "Sessions",
             Tab::Review => "Review",
             Tab::Tasks => "Tasks",
-            Tab::Stats => "Stats",
             Tab::Settings => "Settings",
         }
     }
@@ -90,9 +77,7 @@ impl Tab {
     pub fn scope(self) -> TabScope {
         match self {
             Tab::Projects => TabScope::Global,
-            Tab::Sessions | Tab::Review | Tab::Tasks | Tab::Stats | Tab::Settings => {
-                TabScope::Project
-            }
+            Tab::Sessions | Tab::Review | Tab::Tasks | Tab::Settings => TabScope::Project,
         }
     }
 
@@ -184,9 +169,7 @@ mod tests {
         // Assert
         assert_eq!(
             titles,
-            [
-                "Projects", "Sessions", "Review", "Tasks", "Stats", "Settings"
-            ]
+            ["Projects", "Sessions", "Review", "Tasks", "Settings"]
         );
     }
 
@@ -202,7 +185,6 @@ mod tests {
             scopes,
             [
                 TabScope::Global,
-                TabScope::Project,
                 TabScope::Project,
                 TabScope::Project,
                 TabScope::Project,
@@ -225,7 +207,6 @@ mod tests {
                 Tab::Sessions,
                 Tab::Review,
                 Tab::Tasks,
-                Tab::Stats,
                 Tab::Settings,
                 Tab::Projects
             ]
@@ -242,13 +223,7 @@ mod tests {
         // Assert
         assert_eq!(
             next_tabs,
-            [
-                Tab::Sessions,
-                Tab::Review,
-                Tab::Stats,
-                Tab::Settings,
-                Tab::Projects
-            ]
+            [Tab::Sessions, Tab::Review, Tab::Settings, Tab::Projects]
         );
     }
 
@@ -267,8 +242,7 @@ mod tests {
                 Tab::Projects,
                 Tab::Sessions,
                 Tab::Review,
-                Tab::Tasks,
-                Tab::Stats
+                Tab::Tasks
             ]
         );
     }
@@ -283,13 +257,7 @@ mod tests {
         // Assert
         assert_eq!(
             previous_tabs,
-            [
-                Tab::Settings,
-                Tab::Projects,
-                Tab::Sessions,
-                Tab::Review,
-                Tab::Stats
-            ]
+            [Tab::Settings, Tab::Projects, Tab::Sessions, Tab::Review]
         );
     }
 
@@ -303,13 +271,7 @@ mod tests {
         // Assert
         assert_eq!(
             project_scoped_tabs,
-            &[
-                Tab::Sessions,
-                Tab::Review,
-                Tab::Tasks,
-                Tab::Stats,
-                Tab::Settings
-            ]
+            &[Tab::Sessions, Tab::Review, Tab::Tasks, Tab::Settings]
         );
     }
 
@@ -323,7 +285,7 @@ mod tests {
         // Assert
         assert_eq!(
             project_scoped_tabs,
-            &[Tab::Sessions, Tab::Review, Tab::Stats, Tab::Settings]
+            &[Tab::Sessions, Tab::Review, Tab::Settings]
         );
     }
 
@@ -356,8 +318,6 @@ mod tests {
         observed_tabs.push(manager.current());
         manager.next(true);
         observed_tabs.push(manager.current());
-        manager.next(true);
-        observed_tabs.push(manager.current());
 
         // Assert
         assert_eq!(
@@ -367,7 +327,6 @@ mod tests {
                 Tab::Sessions,
                 Tab::Review,
                 Tab::Tasks,
-                Tab::Stats,
                 Tab::Settings,
                 Tab::Projects
             ]
@@ -390,8 +349,6 @@ mod tests {
         observed_tabs.push(manager.current());
         manager.previous(false);
         observed_tabs.push(manager.current());
-        manager.previous(false);
-        observed_tabs.push(manager.current());
 
         // Assert
         assert_eq!(
@@ -399,7 +356,6 @@ mod tests {
             vec![
                 Tab::Projects,
                 Tab::Settings,
-                Tab::Stats,
                 Tab::Review,
                 Tab::Sessions,
                 Tab::Projects

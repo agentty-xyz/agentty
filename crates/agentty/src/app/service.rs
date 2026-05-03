@@ -12,7 +12,6 @@ use crate::app::session::Clock;
 use crate::db::AppRepositories;
 use crate::domain::agent::AgentKind;
 use crate::domain::session::SessionId;
-use crate::infra::agent::AgentUsageProbe;
 use crate::infra::app_server::AppServerClient;
 use crate::infra::fs::FsClient;
 use crate::infra::git::GitClient;
@@ -24,8 +23,6 @@ pub(crate) type SessionUpdateVersionMap = Arc<Mutex<HashMap<SessionId, u64>>>;
 /// External clients and cached machine-scoped availability injected into
 /// [`AppServices`].
 pub(crate) struct AppServiceDeps {
-    /// Shared provider usage collector for subscription and quota snapshots.
-    pub(crate) agent_usage_probe: Arc<dyn AgentUsageProbe>,
     /// Shared provider-owned app-server client override used by tests and
     /// injected environments.
     pub(crate) app_server_client_override: Option<Arc<dyn AppServerClient>>,
@@ -43,7 +40,6 @@ pub(crate) struct AppServiceDeps {
 
 /// Shared app dependencies used by managers and background workflows.
 pub struct AppServices {
-    agent_usage_probe: Arc<dyn AgentUsageProbe>,
     available_agent_kinds: Arc<[AgentKind]>,
     app_server_client_override: Option<Arc<dyn AppServerClient>>,
     base_path: PathBuf,
@@ -67,7 +63,6 @@ impl AppServices {
         deps: AppServiceDeps,
     ) -> Self {
         let AppServiceDeps {
-            agent_usage_probe,
             app_server_client_override,
             available_agent_kinds,
             fs_client,
@@ -77,7 +72,6 @@ impl AppServices {
         } = deps;
 
         Self {
-            agent_usage_probe,
             available_agent_kinds: Arc::<[AgentKind]>::from(available_agent_kinds),
             app_server_client_override,
             base_path,
@@ -100,11 +94,6 @@ impl AppServices {
     /// Returns the cached locally runnable agent kinds.
     pub(crate) fn available_agent_kinds(&self) -> Vec<AgentKind> {
         self.available_agent_kinds.as_ref().to_vec()
-    }
-
-    /// Returns the shared provider account-usage collector.
-    pub(crate) fn agent_usage_probe(&self) -> Arc<dyn AgentUsageProbe> {
-        Arc::clone(&self.agent_usage_probe)
     }
 
     /// Returns the application repository bundle.

@@ -18,7 +18,6 @@ mod provider;
 pub(crate) mod repair;
 mod response_parser;
 mod submission;
-mod usage;
 
 pub use availability::{
     AgentAvailabilityProbe, RealAgentAvailabilityProbe, StaticAgentAvailabilityProbe,
@@ -45,8 +44,6 @@ pub(crate) use submission::{
     OneShotRequest, OneShotSubmission, submit_one_shot, submit_one_shot_with_app_server_client,
     submit_one_shot_with_backend,
 };
-pub use usage::{AgentUsageProbe, AgentUsageRequest, RealAgentUsageProbe, StaticAgentUsageProbe};
-
 #[cfg(test)]
 pub(crate) mod tests {
     //! Test-only exports for agent backend mocks.

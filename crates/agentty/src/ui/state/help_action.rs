@@ -183,25 +183,6 @@ pub(crate) fn settings_footer_actions() -> Vec<HelpAction> {
     ]
 }
 
-/// Returns help actions for the stats page.
-/// These entries are used by the help overlay and include all available
-/// actions.
-pub(crate) fn stats_actions() -> Vec<HelpAction> {
-    let mut actions = list_base_actions();
-    actions.push(HelpAction::new("next tab", "Tab", "Switch tab"));
-    actions.push(HelpAction::new("help", "?", "Help"));
-
-    actions
-}
-
-/// Returns compact stats footer actions for the page-level hint line.
-pub(crate) fn stats_footer_actions() -> Vec<HelpAction> {
-    vec![
-        HelpAction::new("quit", "q", "Quit"),
-        HelpAction::new("help", "?", "Help"),
-    ]
-}
-
 /// Returns help actions for the requested-review page.
 pub(crate) fn review_actions() -> Vec<HelpAction> {
     let mut actions = vec![
@@ -578,16 +559,6 @@ mod tests {
         // Arrange
         // Act
         let actions = settings_actions();
-
-        // Assert
-        assert!(!actions.iter().any(|action| action.key == "a"));
-    }
-
-    #[test]
-    fn test_stats_actions_exclude_new_session_shortcut() {
-        // Arrange
-        // Act
-        let actions = stats_actions();
 
         // Assert
         assert!(!actions.iter().any(|action| action.key == "a"));

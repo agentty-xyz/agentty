@@ -13,7 +13,7 @@ For keyboard shortcuts by view, see [Keybindings](@/docs/usage/keybindings.md).
 
 ## Interface Layout
 
-<a id="usage-interface-layout"></a> Agentty organizes its interface into five primary
+<a id="usage-interface-layout"></a> Agentty organizes its interface into four primary
 tabs, with one conditional `Tasks` tab also accessible with `Tab` when the active
 project has a roadmap:
 
@@ -32,12 +32,9 @@ requests sent to a team the user belongs to. The tab is a read-only forge list; 
 provider cap, the footer shows that Agentty is displaying the first matching requests. |
 | **Tasks** | Shown only when the active project contains `docs/plan/roadmap.md`,
 summarizing the roadmap's `Ready Now`, `Queued Next`, and `Parked` task queues. | |
-**Stats** | View usage statistics, including the provider subscription or quota snapshot
-and aggregate session/token footer totals. Provider usage refreshes when the Stats tab
-receives focus after the cached snapshot becomes stale. | | **Settings** | Configure the
-color theme, default reasoning level, smart/fast/review model defaults, the optional
-`Last used model as default` smart-model mode, the session commit coauthor trailer, and
-`Open Commands` for the active project. |
+**Settings** | Configure the color theme, default reasoning level, smart/fast/review
+model defaults, the optional `Last used model as default` smart-model mode, the session
+commit coauthor trailer, and `Open Commands` for the active project. |
 
 In session chat view, the status-colored session title renders in a dedicated header row
 above the output panel. A second metadata row shows the persisted size bucket, current

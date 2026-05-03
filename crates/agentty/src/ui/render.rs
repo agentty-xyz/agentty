@@ -8,7 +8,6 @@ use ratatui::widgets::TableState;
 use crate::app::session::session_branch;
 use crate::app::session_state::SessionGitStatus;
 use crate::app::{RequestedReviewState, SettingsManager, Tab, UpdateStatus};
-use crate::domain::agent_usage::AgentUsageSnapshot;
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session, SessionId};
 use crate::infra::review_comment_cache::ReviewCommentCache;
@@ -33,8 +32,6 @@ pub struct RenderContext<'a> {
     pub active_prompt_outputs: &'a HashMap<SessionId, String>,
     /// Identifier of the currently active project.
     pub active_project_id: i64,
-    /// Provider account and subscription usage snapshot for the stats view.
-    pub agent_usage_snapshot: &'a AgentUsageSnapshot,
     /// Active top-level tab selection.
     pub current_tab: Tab,
     /// Whether the active project exposes the roadmap-backed `Tasks` tab.
@@ -77,7 +74,7 @@ pub struct RenderContext<'a> {
     pub session_worktree_availability: &'a HashMap<SessionId, bool>,
     /// Mutable project-scoped settings snapshot.
     pub settings: &'a mut SettingsManager,
-    /// Daily session activity series used by the stats view.
+    /// Daily session activity series used by dashboard activity summaries.
     pub stats_activity: &'a [DailyActivity],
     /// Loaded roadmap markdown for the active project, when available.
     pub task_roadmap: Option<&'a str>,

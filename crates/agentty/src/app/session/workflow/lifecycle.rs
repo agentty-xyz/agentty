@@ -2652,9 +2652,6 @@ mod tests {
             Arc::new(crate::app::session::RealClock),
             event_tx,
             crate::app::service::AppServiceDeps {
-                agent_usage_probe: Arc::new(crate::infra::agent::StaticAgentUsageProbe {
-                    snapshot: crate::domain::agent_usage::AgentUsageSnapshot::default(),
-                }),
                 app_server_client_override: Some(mock_app_server()),
                 fs_client,
                 available_agent_kinds: AgentKind::ALL.to_vec(),
@@ -2692,9 +2689,6 @@ mod tests {
             Arc::new(crate::app::session::RealClock),
             event_tx,
             crate::app::service::AppServiceDeps {
-                agent_usage_probe: Arc::new(crate::infra::agent::StaticAgentUsageProbe {
-                    snapshot: crate::domain::agent_usage::AgentUsageSnapshot::default(),
-                }),
                 app_server_client_override: Some(mock_app_server()),
                 fs_client: Arc::new(create_passthrough_mock_fs_client()),
                 available_agent_kinds: AgentKind::ALL.to_vec(),

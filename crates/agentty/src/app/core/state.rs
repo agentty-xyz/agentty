@@ -4,7 +4,6 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 #[cfg(test)]
 use ag_forge as forge;
@@ -39,7 +38,6 @@ use super::roadmap::TASKS_ROADMAP_PATH;
 use crate::app;
 use crate::app::{AppError, RequestedReviewState, session};
 use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
-use crate::domain::agent_usage::AgentUsageSnapshot;
 use crate::domain::input::InputState;
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, Session, SessionId, Status};
@@ -59,12 +57,6 @@ use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, QuestionFocus};
 /// Relative directory name used for session git worktrees within the
 /// `agentty` home directory.
 pub const AGENTTY_WT_DIR: &str = "wt";
-/// Freshness window for provider usage snapshots loaded for the Stats page.
-const AGENT_USAGE_REFRESH_TTL: Duration = Duration::from_mins(2);
-/// Maximum time to treat a provider usage load as in-flight before allowing a
-/// retry.
-const AGENT_USAGE_REFRESH_IN_FLIGHT_TIMEOUT: Duration = Duration::from_mins(5);
-
 /// Returns the resolved `agentty` home directory.
 ///
 /// The `AGENTTY_ROOT` environment variable takes precedence when set to a
@@ -187,7 +179,6 @@ impl SyncMainRunner for TokioSyncMainRunner {
 /// External clients used to compose [`App`] startup dependencies.
 pub(crate) struct AppClients {
     pub(super) agent_availability_probe: Arc<dyn agent::AgentAvailabilityProbe>,
-    pub(super) agent_usage_probe: Arc<dyn agent::AgentUsageProbe>,
     pub(super) app_server_client_override: Option<Arc<dyn app_server::AppServerClient>>,
     pub(super) fs_client: Arc<dyn FsClient>,
     pub(super) git_client: Arc<dyn GitClient>,
@@ -201,17 +192,8 @@ impl AppClients {
     /// Builds one client bundle with real implementations for each external
     /// boundary.
     pub(crate) fn new() -> Self {
-        #[cfg(test)]
-        let agent_usage_probe = Arc::new(agent::StaticAgentUsageProbe {
-            snapshot: AgentUsageSnapshot::default(),
-        }) as Arc<dyn agent::AgentUsageProbe>;
-        #[cfg(not(test))]
-        let agent_usage_probe =
-            Arc::new(agent::RealAgentUsageProbe) as Arc<dyn agent::AgentUsageProbe>;
-
         Self {
             agent_availability_probe: Arc::new(agent::RealAgentAvailabilityProbe),
-            agent_usage_probe,
             app_server_client_override: None,
             fs_client: Arc::new(RealFsClient),
             git_client: Arc::new(RealGitClient),
@@ -231,19 +213,6 @@ impl AppClients {
         agent_availability_probe: Arc<dyn agent::AgentAvailabilityProbe>,
     ) -> Self {
         self.agent_availability_probe = agent_availability_probe;
-
-        self
-    }
-
-    /// Replaces the provider usage boundary while preserving the remaining
-    /// clients.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn with_agent_usage_probe(
-        mut self,
-        agent_usage_probe: Arc<dyn agent::AgentUsageProbe>,
-    ) -> Self {
-        self.agent_usage_probe = agent_usage_probe;
 
         self
     }
@@ -292,13 +261,6 @@ pub struct App {
     /// Stores persisted and in-memory application settings for the active
     /// project.
     pub settings: SettingsManager,
-    /// Latest provider account and subscription usage snapshot for the Stats
-    /// page.
-    pub(crate) agent_usage_snapshot: AgentUsageSnapshot,
-    /// Monotonic timestamp of the latest provider usage refresh completion.
-    pub(crate) agent_usage_refresh_completed_at: Option<Instant>,
-    /// Monotonic timestamp of the latest provider usage refresh request.
-    pub(crate) agent_usage_refresh_requested_at: Option<Instant>,
     /// Manages the selected top-level list tab.
     pub tabs: TabManager,
     /// Caches generated focused review text per session so it survives mode
@@ -377,7 +339,6 @@ impl App {
     pub fn next_tab(&mut self) {
         self.tabs.next(self.active_project_has_tasks_tab());
         self.refresh_requested_reviews_if_review_tab(false);
-        self.refresh_agent_usage_if_stats_tab_is_focused();
     }
 
     /// Cycles the active list tab backward using the active project's
@@ -385,57 +346,11 @@ impl App {
     pub fn previous_tab(&mut self) {
         self.tabs.previous(self.active_project_has_tasks_tab());
         self.refresh_requested_reviews_if_review_tab(false);
-        self.refresh_agent_usage_if_stats_tab_is_focused();
     }
 
     /// Refreshes requested reviews when the `Review` tab is visible.
     pub fn refresh_requested_reviews_for_current_project(&mut self) {
         self.refresh_requested_reviews_if_review_tab(true);
-    }
-
-    /// Starts a fresh provider usage load whenever the Stats tab receives
-    /// focus and the current snapshot is stale.
-    fn refresh_agent_usage_if_stats_tab_is_focused(&mut self) {
-        if self.tabs.current() != crate::app::Tab::Stats {
-            return;
-        }
-
-        let now = self.services.clock().now_instant();
-        if !self.should_refresh_agent_usage(now) {
-            return;
-        }
-        self.agent_usage_refresh_requested_at = Some(now);
-
-        task::TaskService::spawn_agent_usage_task(
-            &self.services.event_sender(),
-            self.projects.working_dir(),
-            self.services.available_agent_kinds(),
-            self.services.agent_usage_probe(),
-        );
-    }
-
-    /// Returns whether provider usage should refresh at the given monotonic
-    /// instant.
-    fn should_refresh_agent_usage(&self, now: Instant) -> bool {
-        if let Some(completed_at) = self.agent_usage_refresh_completed_at
-            && now.saturating_duration_since(completed_at) < AGENT_USAGE_REFRESH_TTL
-        {
-            return false;
-        }
-
-        if let Some(requested_at) = self.agent_usage_refresh_requested_at {
-            let request_is_newer_than_completion = self
-                .agent_usage_refresh_completed_at
-                .is_none_or(|completed_at| requested_at > completed_at);
-            if request_is_newer_than_completion
-                && now.saturating_duration_since(requested_at)
-                    < AGENT_USAGE_REFRESH_IN_FLIGHT_TIMEOUT
-            {
-                return false;
-            }
-        }
-
-        true
     }
 
     /// Moves selection to the next session in the list.
@@ -1819,72 +1734,6 @@ mod tests {
     /// boundary.
     async fn new_test_app() -> App {
         new_test_app_with_tmux_client(Arc::new(MockTmuxClient::new())).await
-    }
-
-    #[tokio::test]
-    async fn should_refresh_agent_usage_blocks_startup_refresh_in_flight() {
-        // Arrange
-        let app = new_test_app().await;
-        let now = app
-            .agent_usage_refresh_requested_at
-            .expect("startup should request provider usage");
-
-        // Act
-        let should_refresh = app.should_refresh_agent_usage(now);
-
-        // Assert
-        assert!(!should_refresh);
-    }
-
-    #[tokio::test]
-    async fn should_refresh_agent_usage_blocks_fresh_snapshot() {
-        // Arrange
-        let mut app = new_test_app().await;
-        let now = Instant::now();
-        app.agent_usage_refresh_requested_at = Some(now);
-        app.agent_usage_refresh_completed_at = Some(now);
-
-        // Act
-        let should_refresh = app.should_refresh_agent_usage(now + AGENT_USAGE_REFRESH_TTL / 2);
-
-        // Assert
-        assert!(!should_refresh);
-    }
-
-    #[tokio::test]
-    async fn should_refresh_agent_usage_allows_stale_snapshot() {
-        // Arrange
-        let mut app = new_test_app().await;
-        let now = Instant::now();
-        let stale_at = now
-            .checked_sub(AGENT_USAGE_REFRESH_TTL + Duration::from_secs(1))
-            .expect("test instant should allow stale offset");
-        app.agent_usage_refresh_requested_at = Some(stale_at);
-        app.agent_usage_refresh_completed_at = Some(stale_at);
-
-        // Act
-        let should_refresh = app.should_refresh_agent_usage(now);
-
-        // Assert
-        assert!(should_refresh);
-    }
-
-    #[tokio::test]
-    async fn should_refresh_agent_usage_retries_expired_in_flight_refresh() {
-        // Arrange
-        let mut app = new_test_app().await;
-        let now = Instant::now();
-        let expired_request_at = now
-            .checked_sub(AGENT_USAGE_REFRESH_IN_FLIGHT_TIMEOUT + Duration::from_secs(1))
-            .expect("test instant should allow expired in-flight offset");
-        app.agent_usage_refresh_requested_at = Some(expired_request_at);
-        app.agent_usage_refresh_completed_at = None;
-
-        // Act
-        let should_refresh = app.should_refresh_agent_usage(now);
-
-        // Assert
-        assert!(should_refresh);
     }
 
     /// Builds a test app rooted at `working_dir` with one injected filesystem
@@ -4977,7 +4826,6 @@ mod tests {
         let db = app.services.db().clone();
         let event_sender = app.services.event_sender();
         let available_agent_kinds = app.services.available_agent_kinds();
-        let agent_usage_probe = app.services.agent_usage_probe();
         let app_server_client_override = app.services.app_server_client_override();
         let fs_client = app.services.fs_client();
         let review_request_client = app.services.review_request_client();
@@ -4987,7 +4835,6 @@ mod tests {
             app.services.clock(),
             event_sender,
             AppServiceDeps {
-                agent_usage_probe,
                 app_server_client_override,
                 available_agent_kinds,
                 fs_client,

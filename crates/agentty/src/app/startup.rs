@@ -232,7 +232,7 @@ impl AppStartup {
     }
 
     /// Spawns background pollers for git status, review-request status, and
-    /// provider usage/version checks.
+    /// version checks.
     pub(crate) fn spawn_background_tasks(
         auto_update: bool,
         event_tx: &mpsc::UnboundedSender<AppEvent>,
@@ -241,12 +241,6 @@ impl AppStartup {
         sessions: &SessionManager,
     ) {
         task::TaskService::spawn_version_check_task(event_tx, auto_update);
-        task::TaskService::spawn_agent_usage_task(
-            event_tx,
-            projects.working_dir(),
-            services.available_agent_kinds(),
-            services.agent_usage_probe(),
-        );
         if projects.has_git_branch() {
             task::TaskService::spawn_git_status_task(
                 projects.working_dir(),

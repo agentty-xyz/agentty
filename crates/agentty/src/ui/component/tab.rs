@@ -156,14 +156,14 @@ mod tests {
         // Assert
         assert_eq!(
             rendered_tabs,
-            " Projects | Project: None | Sessions | Review | Stats | Settings "
+            " Projects | Project: None | Sessions | Review | Settings "
         );
     }
 
     #[test]
     fn test_tab_spans_highlight_the_active_tab() {
         // Arrange
-        let current_tab = Tab::Stats;
+        let current_tab = Tab::Settings;
 
         // Act
         let spans = tab_spans(current_tab, 0, false, &[]);
@@ -175,7 +175,6 @@ mod tests {
         assert_eq!(spans[6].style.fg, Some(style::palette::text_muted()));
         assert_eq!(spans[8].style.fg, Some(style::palette::warning()));
         assert_eq!(spans[8].style.bg, Some(style::palette::surface()));
-        assert_eq!(spans[10].style.fg, Some(style::palette::text_muted()));
         assert!(spans[8].style.add_modifier.contains(Modifier::BOLD));
     }
 
@@ -199,7 +198,7 @@ mod tests {
         // Assert
         assert_eq!(
             rendered_tabs,
-            " Projects | Project: Primary | Sessions | Review | Stats | Settings "
+            " Projects | Project: Primary | Sessions | Review | Settings "
         );
         assert_eq!(spans[2].style.fg, Some(style::palette::accent_soft()));
         assert!(spans[2].style.add_modifier.contains(Modifier::BOLD));
@@ -220,18 +219,16 @@ mod tests {
         assert_eq!(spans[3].content.as_ref(), "|");
         assert_eq!(spans[5].content.as_ref(), "|");
         assert_eq!(spans[7].content.as_ref(), "|");
-        assert_eq!(spans[9].content.as_ref(), "|");
         assert_eq!(spans[1].style.fg, Some(style::palette::border()));
         assert_eq!(spans[3].style.fg, Some(style::palette::border()));
         assert_eq!(spans[5].style.fg, Some(style::palette::border()));
         assert_eq!(spans[7].style.fg, Some(style::palette::border()));
-        assert_eq!(spans[9].style.fg, Some(style::palette::border()));
     }
 
     #[test]
     fn test_tab_spans_dim_project_scope_when_no_project_is_selected() {
         // Arrange
-        let current_tab = Tab::Stats;
+        let current_tab = Tab::Settings;
 
         // Act
         let spans = tab_spans(current_tab, 0, false, &[]);
@@ -257,10 +254,11 @@ mod tests {
         // Assert
         assert_eq!(
             rendered_tabs,
-            " Projects | Project: None | Sessions | Review | Tasks | Stats | Settings "
+            " Projects | Project: None | Sessions | Review | Tasks | Settings "
         );
         assert_eq!(spans[8].style.fg, Some(style::palette::warning()));
         assert_eq!(spans[8].style.bg, Some(style::palette::surface()));
+        assert_eq!(spans[10].style.fg, Some(style::palette::text_muted()));
     }
 
     /// Creates a `ProjectListItem` for tab-label rendering tests.

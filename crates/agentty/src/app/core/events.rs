@@ -25,7 +25,6 @@ use crate::app::session::{
     SessionTaskService, SyncMainOutcome, SyncSessionStartError, TurnAppliedState,
 };
 use crate::app::session_state::SessionGitStatus;
-use crate::domain::agent_usage::AgentUsageSnapshot;
 use crate::domain::file_entry::FileEntry;
 use crate::domain::input::InputState;
 use crate::domain::session::{
@@ -57,8 +56,6 @@ pub(crate) enum AppEvent {
     VersionAvailabilityUpdated {
         latest_available_version: Option<String>,
     },
-    /// Indicates a provider account and subscription usage snapshot is ready.
-    AgentUsageUpdated { snapshot: AgentUsageSnapshot },
     /// Indicates progress of the background auto-update.
     UpdateStatusChanged { update_status: UpdateStatus },
     /// Indicates a session model selection has been persisted.
@@ -168,7 +165,6 @@ pub(super) struct AppEventBatch {
     pub(super) at_mention_entries_updates: HashMap<SessionId, Vec<FileEntry>>,
     pub(super) branch_publish_action_update: Option<BranchPublishActionUpdate>,
     pub(super) git_status_update: Option<GitStatusBatchUpdate>,
-    pub(super) agent_usage_snapshot: Option<AgentUsageSnapshot>,
     pub(super) latest_available_version_update: Option<LatestAvailableVersionUpdate>,
     pub(super) published_branch_sync_updates: Vec<(SessionId, PublishedBranchSyncUpdate)>,
     pub(super) review_updates: HashMap<SessionId, ReviewUpdate>,
@@ -242,9 +238,6 @@ impl AppEventBatch {
             AppEvent::VersionAvailabilityUpdated {
                 latest_available_version,
             } => self.collect_version_availability_updated(latest_available_version),
-            AppEvent::AgentUsageUpdated { snapshot } => {
-                self.collect_agent_usage_updated(snapshot);
-            }
             AppEvent::UpdateStatusChanged { update_status } => {
                 self.collect_update_status_changed(update_status);
             }
@@ -329,11 +322,6 @@ impl AppEventBatch {
                 self.collect_review_comments_updated(session_id);
             }
         }
-    }
-
-    /// Stores the latest provider usage snapshot for reducer application.
-    fn collect_agent_usage_updated(&mut self, snapshot: AgentUsageSnapshot) {
-        self.agent_usage_snapshot = Some(snapshot);
     }
 
     /// Keeps the freshest requested-review result when multiple refreshes
@@ -736,11 +724,6 @@ impl App {
             };
         }
 
-        if let Some(agent_usage_snapshot) = event_batch.agent_usage_snapshot.take() {
-            self.agent_usage_snapshot = agent_usage_snapshot;
-            self.agent_usage_refresh_completed_at = Some(self.services.clock().now_instant());
-        }
-
         self.apply_status_bar_updates(
             event_batch.latest_available_version_update.as_ref(),
             event_batch.update_status.take(),
@@ -796,7 +779,6 @@ impl App {
     fn app_event_batch_changes_observable_state(event_batch: &AppEventBatch) -> bool {
         event_batch.should_force_reload
             || event_batch.git_status_update.is_some()
-            || event_batch.agent_usage_snapshot.is_some()
             || event_batch.latest_available_version_update.is_some()
             || event_batch.update_status.is_some()
             || !event_batch.applied_turns.is_empty()

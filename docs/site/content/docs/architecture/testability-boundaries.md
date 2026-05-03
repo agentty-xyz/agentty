@@ -36,8 +36,6 @@ shutdown). | | `AgentBackend` | `infra/agent/backend.rs` | Per-provider setup an
 transport command construction. | | `AgentAvailabilityProbe` |
 `infra/agent/availability.rs` | Machine-scoped backend discovery used to filter settings
 defaults and `/model` without shelling out directly from app or runtime orchestration. |
-| `AgentUsageProbe` | `infra/agent/usage.rs` | Provider account, subscription, and quota
-usage collection for the Stats page without shelling out directly from app or UI code. |
 | `AppServerClient` | `infra/app_server/contract.rs` | Provider-specific app-server RPC
 execution and session runtime lifecycle. | | `EventSource` | `runtime/event.rs` |
 Terminal event polling for deterministic event-loop tests. | | `Clock` |

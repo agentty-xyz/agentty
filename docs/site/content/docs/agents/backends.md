@@ -89,12 +89,6 @@ template. The router delegates to `protocol/model.rs`, `protocol/schema.rs`, and
 `protocol/parse.rs`, while `crates/agentty/src/infra/agent/prompt.rs` owns the shared
 prompt-preparation path used by CLI and app-server turns.
 
-Provider account usage is collected through `AgentUsageProbe` in
-`crates/agentty/src/infra/agent/usage.rs`. Codex uses an `AccountRead` app-server
-request to load ChatGPT plan and rate-limit buckets for the Stats page. Gemini and
-Claude currently render explicit placeholder rows until their `/stats model` and
-`/usage` surfaces have stable structured collectors.
-
 Each request path now selects one canonical `AgentRequestKind` before the backend sees
 the prompt, and the backend derives the protocol-owned `ProtocolRequestProfile` from
 that request kind:

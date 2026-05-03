@@ -155,7 +155,7 @@ fn tab_key_switches_tabs() -> E2eResult {
 /// Verify that pressing Tab cycles through all primary tabs in order.
 ///
 /// Starts on Projects and asserts each successive tab becomes selected:
-/// Sessions, Review, Stats, Settings.
+/// Sessions, Review, Settings.
 #[test]
 fn tab_cycles_through_all_tabs() -> E2eResult {
     // Arrange, Act, Assert
@@ -177,9 +177,6 @@ fn tab_cycles_through_all_tabs() -> E2eResult {
                     .compose(&common::switch_to_tab("Review"))
                     .viewing_pause_ms(2000)
                     .capture_labeled("review", "Review tab selected")
-                    .compose(&common::switch_to_tab("Stats"))
-                    .viewing_pause_ms(2000)
-                    .capture_labeled("stats", "Stats tab selected")
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(2500)
                     .capture_labeled("settings", "Settings tab selected")
@@ -190,8 +187,8 @@ fn tab_cycles_through_all_tabs() -> E2eResult {
 
                 assert_eq!(
                     report.captures.len(),
-                    4,
-                    "Expected 4 captures (sessions, review, stats, settings)"
+                    3,
+                    "Expected 3 captures (sessions, review, settings)"
                 );
 
                 let sessions_frame = common::frame_from_capture(&report.captures[0]);
@@ -201,10 +198,6 @@ fn tab_cycles_through_all_tabs() -> E2eResult {
                 let review_frame = common::frame_from_capture(&report.captures[1]);
                 let review_full = Region::full(review_frame.cols(), review_frame.rows());
                 assertion::assert_text_in_region(&review_frame, "Review Requests", &review_full);
-
-                let stats_frame = common::frame_from_capture(&report.captures[2]);
-                let stats_full = Region::full(stats_frame.cols(), stats_frame.rows());
-                assertion::assert_text_in_region(&stats_frame, "Subscription Usage", &stats_full);
             },
         )?;
 
@@ -307,7 +300,7 @@ fn startup_shows_footer_hints() -> E2eResult {
 /// Verify that `BackTab` (Shift+Tab) cycles tabs in reverse order.
 ///
 /// Starts on Projects (first tab), navigates forward to Settings (last tab),
-/// then presses `BackTab` to cycle back through Stats, Review, Sessions, and
+/// then presses `BackTab` to cycle back through Review, Sessions, and
 /// Projects.
 #[test]
 fn backtab_cycles_tabs_reverse() -> E2eResult {
@@ -325,40 +318,32 @@ fn backtab_cycles_tabs_reverse() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .compose(&common::switch_to_tab("Review"))
-                    .compose(&common::switch_to_tab("Stats"))
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(2000)
                     .capture_labeled("at_settings", "Settings tab selected before reverse")
-                    .compose(&common::switch_to_tab_reverse("Stats"))
-                    .viewing_pause_ms(1500)
-                    .capture_labeled("back_to_stats", "Stats tab after first BackTab")
                     .compose(&common::switch_to_tab_reverse("Review"))
                     .viewing_pause_ms(1500)
-                    .capture_labeled("back_to_review", "Review tab after second BackTab")
+                    .capture_labeled("back_to_review", "Review tab after first BackTab")
                     .compose(&common::switch_to_tab_reverse("Sessions"))
                     .viewing_pause_ms(1500)
-                    .capture_labeled("back_to_sessions", "Sessions tab after third BackTab")
+                    .capture_labeled("back_to_sessions", "Sessions tab after second BackTab")
                     .compose(&common::switch_to_tab_reverse("Projects"))
                     .viewing_pause_ms(2000)
-                    .capture_labeled("back_to_projects", "Projects tab after fourth BackTab")
+                    .capture_labeled("back_to_projects", "Projects tab after third BackTab")
             },
             |frame, report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "test-project", &full);
 
-                let stats_frame = common::frame_from_capture(&report.captures[1]);
-                let stats_full = Region::full(stats_frame.cols(), stats_frame.rows());
-                assertion::assert_text_in_region(&stats_frame, "Subscription Usage", &stats_full);
-
-                let review_frame = common::frame_from_capture(&report.captures[2]);
+                let review_frame = common::frame_from_capture(&report.captures[1]);
                 let review_full = Region::full(review_frame.cols(), review_frame.rows());
                 assertion::assert_text_in_region(&review_frame, "Review Requests", &review_full);
 
-                let sessions_frame = common::frame_from_capture(&report.captures[3]);
+                let sessions_frame = common::frame_from_capture(&report.captures[2]);
                 let sessions_full = Region::full(sessions_frame.cols(), sessions_frame.rows());
                 assertion::assert_text_in_region(&sessions_frame, "No sessions", &sessions_full);
 
-                let projects_frame = common::frame_from_capture(&report.captures[4]);
+                let projects_frame = common::frame_from_capture(&report.captures[3]);
                 let projects_full = Region::full(projects_frame.cols(), projects_frame.rows());
                 assertion::assert_text_in_region(&projects_frame, "test-project", &projects_full);
             },

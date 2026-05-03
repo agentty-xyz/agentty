@@ -10,8 +10,7 @@ use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
 use crate::runtime::mode::question;
 use crate::ui::state::app_mode::{AppMode, ConfirmationIntent, HelpContext, QuestionFocus};
 use crate::ui::state::help_action::{
-    HelpAction, project_list_actions, session_list_actions, settings_actions, stats_actions,
-    task_actions,
+    HelpAction, project_list_actions, session_list_actions, settings_actions, task_actions,
 };
 use crate::ui::state::prompt::{PromptAttachmentState, PromptHistoryState};
 use crate::ui::util::inline_text;
@@ -59,14 +58,14 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
             Tab::Projects => app.next_project(),
             Tab::Sessions => app.next(),
             Tab::Tasks => app.scroll_task_roadmap_down(),
-            Tab::Review | Tab::Stats => {}
+            Tab::Review => {}
             Tab::Settings => app.settings.next(),
         },
         KeyCode::Char('k') | KeyCode::Up => match app.tabs.current() {
             Tab::Projects => app.previous_project(),
             Tab::Sessions => app.previous(),
             Tab::Tasks => app.scroll_task_roadmap_up(),
-            Tab::Review | Tab::Stats => {}
+            Tab::Review => {}
             Tab::Settings => app.settings.previous(),
         },
         KeyCode::Char('g') if app.tabs.current() == Tab::Tasks => {
@@ -157,7 +156,7 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
         Tab::Settings => {
             app.settings.handle_enter(&app.services).await;
         }
-        Tab::Review | Tab::Tasks | Tab::Stats => {}
+        Tab::Review | Tab::Tasks => {}
     }
 
     Ok(EventResult::Continue)
@@ -280,10 +279,6 @@ fn list_keybindings(app: &App) -> Vec<HelpAction> {
         return settings_actions();
     }
 
-    if app.tabs.current() == Tab::Stats {
-        return stats_actions();
-    }
-
     if app.tabs.current() == Tab::Review {
         return crate::ui::state::help_action::review_actions();
     }
@@ -322,13 +317,9 @@ pub(crate) fn open_session_prompt(app: &mut App, session_id: String) {
 
 #[cfg(test)]
 mod tests {
-    use std::future::Future;
     use std::path::Path;
-    use std::pin::Pin;
     use std::process::Command;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::Duration;
 
     use crossterm::event::KeyModifiers;
     use tempfile::tempdir;
@@ -336,27 +327,7 @@ mod tests {
     use super::*;
     use crate::app::{AppEvent, MockSyncMainRunner, SyncMainOutcome, SyncSessionStartError};
     use crate::db::Database;
-    use crate::domain::agent_usage::AgentUsageSnapshot;
     use crate::domain::question::QuestionItem;
-    use crate::infra::agent::{AgentUsageProbe, AgentUsageRequest};
-
-    /// Usage probe that records how many refreshes were requested.
-    struct CountingAgentUsageProbe {
-        calls: Arc<AtomicUsize>,
-        snapshot: AgentUsageSnapshot,
-    }
-
-    impl AgentUsageProbe for CountingAgentUsageProbe {
-        fn load_usage(
-            &self,
-            _request: AgentUsageRequest,
-        ) -> Pin<Box<dyn Future<Output = AgentUsageSnapshot> + Send>> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            let snapshot = self.snapshot.clone();
-
-            Box::pin(async move { snapshot })
-        }
-    }
 
     /// Builds one client bundle with deterministic agent availability for
     /// test app startup.
@@ -385,20 +356,6 @@ mod tests {
         .expect("failed to build app");
 
         (app, base_dir)
-    }
-
-    /// Waits for the next provider usage snapshot emitted by background
-    /// tasks.
-    async fn next_usage_snapshot(app: &mut App) -> crate::domain::agent_usage::AgentUsageSnapshot {
-        tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                if let Some(AppEvent::AgentUsageUpdated { snapshot }) = app.next_app_event().await {
-                    return snapshot;
-                }
-            }
-        })
-        .await
-        .expect("provider usage refresh event should arrive")
     }
 
     fn setup_test_git_repo(path: &Path) {
@@ -538,44 +495,6 @@ mod tests {
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
         assert_eq!(app.tabs.current(), Tab::Settings);
-    }
-
-    #[tokio::test]
-    async fn test_handle_tab_key_skips_agent_usage_refresh_while_startup_refresh_is_in_flight() {
-        // Arrange
-        let base_dir = tempdir().expect("failed to create temp dir");
-        let base_path = base_dir.path().to_path_buf();
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
-        let expected_snapshot = crate::domain::agent_usage::AgentUsageSnapshot::new(vec![
-            crate::domain::agent_usage::AgentUsageRow::new(
-                crate::domain::agent::AgentKind::Codex,
-                crate::domain::agent_usage::AgentUsageStatus::MissingCli,
-            ),
-        ]);
-        let usage_probe_calls = Arc::new(AtomicUsize::new(0));
-        let clients =
-            test_app_clients().with_agent_usage_probe(Arc::new(CountingAgentUsageProbe {
-                calls: Arc::clone(&usage_probe_calls),
-                snapshot: expected_snapshot.clone(),
-            }));
-        let mut app = App::new_with_clients(base_path.clone(), base_path, None, database, clients)
-            .await
-            .expect("failed to build app");
-        let startup_snapshot = next_usage_snapshot(&mut app).await;
-        app.tabs.set(Tab::Review);
-
-        // Act
-        let event_result = handle(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
-            .await
-            .expect("failed to handle key");
-
-        // Assert
-        assert!(matches!(event_result, EventResult::Continue));
-        assert_eq!(app.tabs.current(), Tab::Stats);
-        assert_eq!(startup_snapshot, expected_snapshot);
-        assert_eq!(usage_probe_calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

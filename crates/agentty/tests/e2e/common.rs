@@ -383,28 +383,6 @@ impl FeatureTest {
         self
     }
 
-    /// Restrict the spawned app `PATH` to deterministic test stubs only.
-    ///
-    /// Use this for feature captures that must not vary based on provider
-    /// CLIs installed on the developer or CI host. Tests that need `git` or
-    /// other system tools should keep the default inherited `PATH`.
-    pub(crate) fn with_stub_path_only(mut self) -> Self {
-        self.inherit_system_path = false;
-
-        self
-    }
-
-    /// Set the terminal size used by the PTY proof run.
-    ///
-    /// This is intended for responsive UI feature captures whose asserted
-    /// content only renders above a documented width threshold.
-    pub(crate) fn with_terminal_size(mut self, cols: u16, rows: u16) -> Self {
-        self.terminal_cols = cols;
-        self.terminal_rows = rows;
-
-        self
-    }
-
     /// Configure Zola feature page auto-generation.
     ///
     /// When set, the test runner writes a minimal `.md` frontmatter page

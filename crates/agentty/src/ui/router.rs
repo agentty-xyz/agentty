@@ -6,7 +6,6 @@ use ratatui::widgets::TableState;
 
 use crate::app::{RequestedReviewState, SettingsManager, Tab};
 use crate::domain::agent::ReasoningLevel;
-use crate::domain::agent_usage::AgentUsageSnapshot;
 use crate::domain::input::InputState;
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session, SessionId};
@@ -23,8 +22,6 @@ use crate::ui::{Component, Page, RenderContext, component, markdown, overlay, pa
 pub(crate) struct ListBackgroundRenderContext<'a> {
     /// Identifier for the currently active project in the project list tab.
     pub(crate) active_project_id: i64,
-    /// Provider account and subscription usage shown on the stats page.
-    pub(crate) agent_usage_snapshot: &'a AgentUsageSnapshot,
     pub(crate) current_tab: Tab,
     pub(crate) has_tasks_tab: bool,
     pub(crate) project_table_state: &'a mut TableState,
@@ -43,7 +40,6 @@ pub(crate) struct ListBackgroundRenderContext<'a> {
 struct RouteSharedContext<'a> {
     /// Identifier for the active project shared across list-mode renders.
     active_project_id: i64,
-    agent_usage_snapshot: &'a AgentUsageSnapshot,
     current_tab: Tab,
     has_tasks_tab: bool,
     project_table_state: &'a mut TableState,
@@ -64,7 +60,6 @@ impl RouteSharedContext<'_> {
     fn list_background(&mut self) -> ListBackgroundRenderContext<'_> {
         ListBackgroundRenderContext {
             active_project_id: self.active_project_id,
-            agent_usage_snapshot: self.agent_usage_snapshot,
             current_tab: self.current_tab,
             has_tasks_tab: self.has_tasks_tab,
             project_table_state: self.project_table_state,
@@ -134,7 +129,6 @@ struct RouteAuxContext<'a> {
 pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>) {
     let RenderContext {
         active_project_id,
-        agent_usage_snapshot,
         active_prompt_outputs,
         current_tab,
         has_tasks_tab,
@@ -161,7 +155,6 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
 
     let mut shared = RouteSharedContext {
         active_project_id,
-        agent_usage_snapshot,
         current_tab,
         has_tasks_tab,
         project_table_state,
@@ -771,7 +764,6 @@ pub(crate) fn render_list_background(
 ) {
     let ListBackgroundRenderContext {
         active_project_id,
-        agent_usage_snapshot,
         current_tab,
         has_tasks_tab,
         project_table_state,
@@ -821,9 +813,6 @@ pub(crate) fn render_list_background(
                 task_roadmap_scroll_offset,
             );
             page.render(f, chunks[1]);
-        }
-        Tab::Stats => {
-            page::stat::StatsPage::new(sessions, agent_usage_snapshot).render(f, chunks[1]);
         }
         Tab::Settings => {
             let active_project_name = active_project_name(active_project_id, projects);

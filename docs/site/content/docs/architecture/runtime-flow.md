@@ -694,16 +694,6 @@ paths and their trigger conditions:
 - Emits or writes: `AppEvent::VersionAvailabilityUpdated`
 - What it does: Checks the latest npm version tag and reports update availability.
 
-### Provider usage snapshot refresh
-
-- Trigger: App startup and Stats tab focus when the cached snapshot is stale and no
-  recent refresh is already in flight
-- Spawn site: `TaskService::spawn_agent_usage_task`
-- Emits or writes: `AppEvent::AgentUsageUpdated`
-- What it does: Uses `AgentUsageProbe` to load provider subscription or quota data for
-  the Stats page. Codex reads the app-server account methods; Gemini and Claude render
-  placeholder rows until structured collectors are added.
-
 ### Per-session worker loop
 
 - Trigger: First command enqueue for a session

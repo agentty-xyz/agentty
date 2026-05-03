@@ -297,7 +297,7 @@ Sleep 2s
 
 /// Generate a feature GIF cycling through all tabs.
 ///
-/// Shows each major view — Projects, Sessions, Stats, Settings — to give
+/// Shows each major view — Projects, Sessions, Review, and Settings — to give
 /// a complete overview of the agentty interface.
 #[tokio::test]
 #[ignore = "requires VHS and a renderable terminal — run explicitly with --ignored"]

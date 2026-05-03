@@ -915,33 +915,12 @@ pub(crate) mod tests {
             self
         }
 
-        /// Overrides the token/diff statistics block.
-        pub(crate) fn stats(mut self, stats: SessionStats) -> Self {
-            self.session.stats = stats;
-
-            self
-        }
-
         /// Overrides the session-scoped reasoning level override.
         pub(crate) fn reasoning_level_override(
             mut self,
             reasoning_level_override: Option<ReasoningLevel>,
         ) -> Self {
             self.session.reasoning_level_override = reasoning_level_override;
-
-            self
-        }
-
-        /// Overrides the creation timestamp (Unix seconds).
-        pub(crate) fn created_at(mut self, created_at: i64) -> Self {
-            self.session.created_at = created_at;
-
-            self
-        }
-
-        /// Overrides the last-update timestamp (Unix seconds).
-        pub(crate) fn updated_at(mut self, updated_at: i64) -> Self {
-            self.session.updated_at = updated_at;
 
             self
         }

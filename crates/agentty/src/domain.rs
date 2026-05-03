@@ -1,7 +1,6 @@
 //! Domain entities and pure business logic.
 
 pub mod agent;
-pub mod agent_usage;
 pub mod composer;
 pub mod file_entry;
 pub mod input;
