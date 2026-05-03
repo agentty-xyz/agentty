@@ -244,7 +244,7 @@ pub(crate) async fn auto_start_reviews(
 ) {
     for session_id in session_ids {
         let Some((current_status, session_folder, base_branch, session_summary)) = session_state
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == *session_id)
             .map(|session| {
@@ -382,7 +382,7 @@ fn update_transient_review_status(
     next_status: Status,
 ) {
     if let Some(session) = session_state
-        .sessions
+        .sessions_mut()
         .iter_mut()
         .find(|session| session.id == session_id)
         && session.status == current_status
@@ -390,7 +390,7 @@ fn update_transient_review_status(
         session.status = next_status;
     }
 
-    if let Some(handles) = session_state.handles.get(session_id)
+    if let Some(handles) = session_state.handles().get(session_id)
         && let Ok(mut handle_status) = handles.status.lock()
         && *handle_status == current_status
     {

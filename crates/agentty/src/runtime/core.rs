@@ -474,7 +474,7 @@ mod tests {
             .status(Status::InProgress)
             .build();
         app.sessions.push_session(session);
-        app.sessions.handles.insert(
+        app.sessions.session_handles_mut().insert(
             session_id.clone().into(),
             SessionHandles::new(String::new(), Status::InProgress),
         );
@@ -487,13 +487,13 @@ mod tests {
         };
         if let Some(session) = app
             .sessions
-            .sessions
+            .sessions_mut()
             .iter_mut()
             .find(|session| session.id == session_id)
         {
             session.status = Status::InProgress;
         }
-        if let Some(handles) = app.sessions.handles.get(session_id.as_str()) {
+        if let Some(handles) = app.sessions.session_handles().get(session_id.as_str()) {
             if let Ok(mut output) = handles.output.lock() {
                 output.push_str("synced output");
             }

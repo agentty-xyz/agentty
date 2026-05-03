@@ -71,8 +71,10 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
 - `crates/agentty/src/app/service.rs`: `AppServices` dependency container for
   `AppRepositories`, `FsClient`, `GitClient`, `ReviewRequestClient`, `AgentUsageProbe`,
   the optional app-server test override, and the event sender.
-- `crates/agentty/src/app/session_state.rs`: `SessionState`, the per-session runtime
-  state container.
+- `crates/agentty/src/app/session_state.rs`: Compatibility re-exports for session
+  snapshot state.
+- `crates/agentty/src/app/session/state.rs`: `SessionState`, the per-session runtime
+  state container owned by the session module.
 - `crates/agentty/src/app/session/workflow.rs`: Router-only session workflow module that
   re-exports shared workflow state and exposes child workflow modules.
 - `crates/agentty/src/app/setting.rs`: `SettingsManager` for settings management and

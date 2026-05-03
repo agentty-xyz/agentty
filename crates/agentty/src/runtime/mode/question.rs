@@ -208,7 +208,7 @@ fn question_view_metrics(app: &App, terminal_size: Rect) -> QuestionViewMetrics 
 
     let session_index = app
         .sessions
-        .sessions
+        .sessions()
         .iter()
         .position(|session| session.id == *session_id);
 
@@ -231,7 +231,7 @@ fn question_view_metrics(app: &App, terminal_size: Rect) -> QuestionViewMetrics 
         | AppMode::ViewInfoPopup { .. } => (None, None),
     };
     let total_lines = session_index
-        .and_then(|index| app.sessions.sessions.get(index))
+        .and_then(|index| app.sessions.session_at(index))
         .map_or(0, |session| {
             let active_progress = app.session_progress_message(session_id);
             let active_prompt_output = app
@@ -302,7 +302,7 @@ fn extract_question_session_id(app: &App) -> Option<SessionId> {
 async fn show_question_diff(app: &mut App, session_id: &str) {
     let session = app
         .sessions
-        .sessions
+        .sessions()
         .iter()
         .find(|session| session.id == session_id);
 
@@ -724,7 +724,7 @@ fn sync_question_at_mention_state(app: &mut App) {
 fn activate_question_at_mention(app: &mut App, session_id: &str) {
     let lookup_root = app
         .sessions
-        .sessions
+        .sessions()
         .iter()
         .find(|session| session.id == session_id)
         .map_or_else(
@@ -868,7 +868,7 @@ async fn end_turn_no_answer(app: &mut App) {
         return;
     }
 
-    if let Some(handles) = app.sessions.handles.get(session_id.as_str())
+    if let Some(handles) = app.sessions.session_handles().get(session_id.as_str())
         && let Ok(mut handle_status) = handles.status.lock()
     {
         *handle_status = Status::Review;
@@ -885,7 +885,7 @@ async fn end_turn_no_answer(app: &mut App) {
 
     if let Some(session) = app
         .sessions
-        .sessions
+        .sessions_mut()
         .iter_mut()
         .find(|session| session.id == session_id)
     {
@@ -1036,7 +1036,7 @@ mod tests {
         };
         let terminal_size = Rect::new(0, 0, 16, 24);
         let output_width = terminal_size.width.saturating_sub(2);
-        let session = &app.sessions.sessions[0];
+        let session = &app.sessions.sessions()[0];
         let expected = SessionChatPage::rendered_output_line_count(
             session,
             output_width,
@@ -1383,7 +1383,7 @@ mod tests {
         // Assert — session status updated to Review in memory.
         let session = app
             .sessions
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == session_id)
             .expect("session should exist");
@@ -1430,7 +1430,7 @@ mod tests {
             updated_at: 0,
             workflow_notice: None,
         });
-        app.sessions.handles.insert(
+        app.sessions.session_handles_mut().insert(
             session_id.to_string().into(),
             SessionHandles::new(String::new(), Status::Question),
         );
@@ -1462,7 +1462,7 @@ mod tests {
         // Assert — handle status updated so sync_from_handles preserves Review.
         let handles = app
             .sessions
-            .handles
+            .session_handles()
             .get(session_id)
             .expect("handle should exist");
         let handle_status = handles.status.lock().expect("lock should succeed");

@@ -35,9 +35,8 @@ pub(crate) use review::{
 #[cfg(test)]
 pub(crate) use service::AppServiceDeps;
 pub use service::AppServices;
-pub use session::{SessionError, SessionManager};
+pub use session::{SessionError, SessionManager, SessionState};
 #[cfg(test)]
 pub(crate) use session::{SyncMainOutcome, SyncSessionStartError};
-pub use session_state::SessionState;
 pub use setting::SettingsManager;
 pub use tab::{Tab, TabManager};

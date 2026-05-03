@@ -539,7 +539,7 @@ async fn handle_regenerate_review_confirmation(
 
     let session = app
         .sessions
-        .sessions
+        .sessions()
         .iter()
         .find(|session| session.id == session_id);
     let Some(session) = session else {
@@ -736,14 +736,14 @@ mod tests {
     ) {
         if let Some(session) = app
             .sessions
-            .sessions
+            .sessions_mut()
             .iter_mut()
             .find(|session| session.id == session_id)
         {
             session.status = status;
         }
 
-        if let Some(handles) = app.sessions.handles.get(session_id)
+        if let Some(handles) = app.sessions.session_handles().get(session_id)
             && let Ok(mut current_status) = handles.status.lock()
         {
             *current_status = status;
@@ -779,8 +779,8 @@ mod tests {
 
         // Assert
         assert!(matches!(result, Ok(EventResult::Continue)));
-        assert_eq!(app.sessions.sessions.len(), 1);
-        assert!(!app.sessions.sessions[0].is_draft_session());
+        assert_eq!(app.sessions.sessions().len(), 1);
+        assert!(!app.sessions.sessions()[0].is_draft_session());
         assert!(matches!(
             app.mode,
             AppMode::Prompt {
@@ -811,8 +811,8 @@ mod tests {
 
         // Assert
         assert!(matches!(result, Ok(EventResult::Continue)));
-        assert_eq!(app.sessions.sessions.len(), 1);
-        assert!(app.sessions.sessions[0].is_draft_session());
+        assert_eq!(app.sessions.sessions().len(), 1);
+        assert!(app.sessions.sessions()[0].is_draft_session());
         assert!(matches!(
             app.mode,
             AppMode::Prompt {
@@ -838,7 +838,7 @@ mod tests {
 
         // Assert
         assert!(matches!(result, Ok(EventResult::Continue)));
-        assert!(app.sessions.sessions.is_empty());
+        assert!(app.sessions.sessions().is_empty());
         assert!(matches!(app.mode, AppMode::List));
     }
 
@@ -950,7 +950,7 @@ mod tests {
         assert!(matches!(app.mode, AppMode::List));
         app.sessions.sync_from_handles();
         assert!(matches!(
-            app.sessions.sessions.first(),
+            app.sessions.sessions().first(),
             Some(session) if session.id == session_id
                 && session.status == crate::domain::session::Status::Canceled
         ));
@@ -971,7 +971,7 @@ mod tests {
             .expect("failed to persist merged commit hash");
         let source_session = app
             .sessions
-            .sessions
+            .sessions_mut()
             .iter_mut()
             .find(|session| session.id == source_session_id)
             .expect("expected source session");
@@ -1147,7 +1147,7 @@ mod tests {
         };
         let continued_session = app
             .sessions
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == continued_session_id)
             .expect("expected created continuation draft");
@@ -1198,7 +1198,7 @@ mod tests {
             } if session_id_in_mode == &session_id
         ));
         app.sessions.sync_from_handles();
-        let output = app.sessions.sessions[0].output.clone();
+        let output = app.sessions.sessions()[0].output.clone();
         assert!(output.contains("[Merge Error]"));
     }
 
@@ -1737,7 +1737,7 @@ mod tests {
             .create_session()
             .await
             .expect("failed to create session");
-        let session_folder = app.sessions.sessions[0].folder.clone();
+        let session_folder = app.sessions.sessions()[0].folder.clone();
         std::fs::write(session_folder.join("README.md"), "regenerate test\n")
             .expect("failed to write");
         app.review_cache.insert(

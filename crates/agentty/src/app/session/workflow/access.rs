@@ -15,10 +15,7 @@ impl SessionManager {
     pub(crate) fn session_or_err(&self, session_id: &str) -> Result<&Session, SessionError> {
         let session_index = self.session_index_or_err(session_id)?;
 
-        self.state()
-            .sessions
-            .get(session_index)
-            .ok_or(SessionError::NotFound)
+        self.session_at(session_index).ok_or(SessionError::NotFound)
     }
 
     /// Resolves runtime handles for a session identifier.
@@ -26,8 +23,7 @@ impl SessionManager {
         &self,
         session_id: &str,
     ) -> Result<&SessionHandles, SessionError> {
-        self.state()
-            .handles
+        self.session_handles()
             .get(session_id)
             .ok_or(SessionError::HandlesNotFound)
     }

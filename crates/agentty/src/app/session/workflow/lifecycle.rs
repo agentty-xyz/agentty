@@ -570,8 +570,7 @@ impl SessionManager {
             title_to_save,
         ) = {
             let session = self
-                .sessions
-                .get(session_index)
+                .session_at(session_index)
                 .ok_or(SessionError::NotFound)?;
             if !session.is_draft_session() {
                 return Err(SessionError::Workflow(
@@ -633,7 +632,7 @@ impl SessionManager {
 
         let title_generation_prompt = staged_prompt.clone();
 
-        if let Some(session) = self.sessions.get_mut(session_index) {
+        if let Some(session) = self.session_at_mut(session_index) {
             session.prompt = staged_prompt;
             session.draft_attachments = staged_attachments;
             if let Some(title_to_save) = title_to_save {
@@ -708,7 +707,7 @@ impl SessionManager {
         self.start_session(services, session_id, prompt).await?;
 
         if let Ok(session_index) = self.session_index_or_err(session_id)
-            && let Some(session) = self.sessions.get_mut(session_index)
+            && let Some(session) = self.session_at_mut(session_index)
         {
             session.draft_attachments.clear();
         }
@@ -753,8 +752,7 @@ impl SessionManager {
         let session_index = self.session_index_or_err(session_id)?;
         let (persisted_session_id, session_model, title) = {
             let session = self
-                .sessions
-                .get_mut(session_index)
+                .session_at_mut(session_index)
                 .ok_or(SessionError::NotFound)?;
 
             session.prompt.clone_from(&prompt.text);
@@ -915,8 +913,7 @@ impl SessionManager {
     ) -> Result<(), SessionError> {
         let session_index = self.session_index_or_err(session_id)?;
         let model_changed = self
-            .sessions
-            .get(session_index)
+            .session_at(session_index)
             .is_some_and(|session| session.model != session_model);
 
         services
@@ -3022,8 +3019,8 @@ mod tests {
         // Assert
         assert!(matches!(error, SessionError::Fs(_)));
         assert!(persisted_session.prompt.is_empty());
-        assert!(session_manager.sessions[0].prompt.is_empty());
-        assert!(session_manager.sessions[0].draft_attachments.is_empty());
+        assert!(session_manager.sessions()[0].prompt.is_empty());
+        assert!(session_manager.sessions()[0].draft_attachments.is_empty());
     }
 
     #[tokio::test]
@@ -3590,8 +3587,11 @@ mod tests {
         assert!(context.1);
         assert_eq!(context.2, "session-id");
         assert_eq!(context.3, Some(prompt.to_string()));
-        assert_eq!(session_manager.sessions[0].prompt, prompt);
-        assert_eq!(session_manager.sessions[0].title, Some(prompt.to_string()));
+        assert_eq!(session_manager.sessions()[0].prompt, prompt);
+        assert_eq!(
+            session_manager.sessions()[0].title,
+            Some(prompt.to_string())
+        );
     }
 
     #[test]
@@ -3618,9 +3618,9 @@ mod tests {
         assert!(!context.1);
         assert_eq!(context.2, "session-id");
         assert_eq!(context.3, None);
-        assert_eq!(session_manager.sessions[0].prompt, "Initial prompt");
+        assert_eq!(session_manager.sessions()[0].prompt, "Initial prompt");
         assert_eq!(
-            session_manager.sessions[0].title,
+            session_manager.sessions()[0].title,
             Some("Initial prompt".to_string())
         );
     }

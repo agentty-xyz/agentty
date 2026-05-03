@@ -278,7 +278,7 @@ fn prompt_context(app: &mut App) -> Option<PromptContext> {
         return None;
     };
 
-    let session = app.sessions.sessions.get(session_index);
+    let session = app.sessions.session_at(session_index);
     let session_mode = session.map_or(PromptSessionMode::Existing, |session| {
         let is_new_session = session.status == crate::domain::session::Status::Draft;
 
@@ -552,7 +552,7 @@ fn advance_prompt_slash_selection(app: &mut App) {
 /// the live reply path.
 fn session_is_in_progress(app: &App, session_id: &str) -> bool {
     app.sessions
-        .sessions
+        .sessions()
         .iter()
         .find(|session| session.id == session_id)
         .is_some_and(|session| session.status == crate::domain::session::Status::InProgress)
@@ -1412,8 +1412,7 @@ fn handle_prompt_char(app: &mut App, character: char) {
 fn activate_at_mention(app: &mut App, prompt_context: &PromptContext) {
     let lookup_root = app
         .sessions
-        .sessions
-        .get(prompt_context.session_index)
+        .session_at(prompt_context.session_index)
         .map_or_else(
             || app.working_dir().to_path_buf(),
             |session| {
@@ -2238,7 +2237,7 @@ mod tests {
             assert_eq!(input.text(), "");
             assert_eq!(*slash_state, PromptSlashState::default());
         }
-        assert_eq!(app.sessions.sessions[0].model, expected_model);
+        assert_eq!(app.sessions.sessions()[0].model, expected_model);
     }
 
     #[tokio::test]
@@ -2259,7 +2258,11 @@ mod tests {
             assert_eq!(input.text(), "");
             assert_eq!(*slash_state, PromptSlashState::default());
         }
-        assert!(app.sessions.sessions[0].output.contains("## Session Stats"));
+        assert!(
+            app.sessions.sessions()[0]
+                .output
+                .contains("## Session Stats")
+        );
     }
 
     #[tokio::test]
@@ -2284,7 +2287,7 @@ mod tests {
     async fn test_handle_prompt_slash_submit_prefills_reasoning_selection_from_session_override() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("/reasoning", None).await;
-        app.sessions.sessions[0].reasoning_level_override = Some(ReasoningLevel::High);
+        app.sessions.sessions_mut()[0].reasoning_level_override = Some(ReasoningLevel::High);
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
@@ -2319,7 +2322,11 @@ mod tests {
             assert_eq!(input.text(), "");
             assert_eq!(*slash_state, PromptSlashState::default());
         }
-        assert!(app.sessions.sessions[0].output.contains("## Session Stats"));
+        assert!(
+            app.sessions.sessions()[0]
+                .output
+                .contains("## Session Stats")
+        );
     }
 
     /// Verifies slash submit ignores unmatched commands and preserves the
@@ -2931,7 +2938,7 @@ mod tests {
         let expected_path = "draft_lookup_target.txt";
         std::fs::write(base_dir.path().join(expected_path), "draft")
             .expect("failed to write project file");
-        assert!(!app.sessions.sessions[0].folder.exists());
+        assert!(!app.sessions.sessions()[0].folder.exists());
 
         // Act
         handle_prompt_char(&mut app, '@');
@@ -2943,7 +2950,7 @@ mod tests {
                 entries,
                 session_id,
             } => {
-                assert_eq!(session_id, app.sessions.sessions[0].id.as_str());
+                assert_eq!(session_id, app.sessions.sessions()[0].id.as_str());
                 assert!(entries.contains(&FileEntry {
                     is_dir: false,
                     path: expected_path.to_string(),
@@ -2986,14 +2993,14 @@ mod tests {
         let (mut app, _base_dir) = new_test_prompt_app("", None).await;
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
         assert!(prompt_context.is_new_session());
-        assert_eq!(app.sessions.sessions.len(), 1);
+        assert_eq!(app.sessions.sessions().len(), 1);
 
         // Act
         handle_prompt_cancel_key(&mut app, &prompt_context).await;
 
         // Assert
         assert!(matches!(app.mode, AppMode::List));
-        assert!(app.sessions.sessions.is_empty());
+        assert!(app.sessions.sessions().is_empty());
     }
 
     #[tokio::test]
@@ -3003,19 +3010,19 @@ mod tests {
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
         assert!(prompt_context.is_new_session());
         assert!(!prompt_context.can_delete_on_cancel());
-        assert_eq!(app.sessions.sessions.len(), 1);
+        assert_eq!(app.sessions.sessions().len(), 1);
 
         // Act
         handle_prompt_cancel_key(&mut app, &prompt_context).await;
 
         // Assert
         assert!(matches!(app.mode, AppMode::View { .. }));
-        assert_eq!(app.sessions.sessions.len(), 1);
+        assert_eq!(app.sessions.sessions().len(), 1);
         assert_eq!(
-            app.sessions.sessions[0].status,
+            app.sessions.sessions()[0].status,
             crate::domain::session::Status::Draft
         );
-        assert!(app.sessions.sessions[0].prompt.is_empty());
+        assert!(app.sessions.sessions()[0].prompt.is_empty());
     }
 
     #[tokio::test]
@@ -3029,15 +3036,15 @@ mod tests {
 
         // Assert
         assert!(matches!(app.mode, AppMode::Prompt { .. }));
-        assert_eq!(app.sessions.sessions.len(), 1);
-        assert_eq!(app.sessions.sessions[0].prompt, "");
+        assert_eq!(app.sessions.sessions().len(), 1);
+        assert_eq!(app.sessions.sessions()[0].prompt, "");
     }
 
     #[tokio::test]
     async fn test_handle_prompt_submit_key_drains_supported_image_turn() {
         // Arrange
         let (mut app, _base_dir) = new_test_draft_prompt_app("Review ", None).await;
-        app.sessions.sessions[0].model = crate::domain::agent::AgentModel::ClaudeSonnet46;
+        app.sessions.sessions_mut()[0].model = crate::domain::agent::AgentModel::ClaudeSonnet46;
         insert_pasted_image_placeholder(&mut app, std::path::PathBuf::from("/tmp/image-1.png"));
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
@@ -3046,14 +3053,14 @@ mod tests {
 
         // Assert
         assert!(matches!(app.mode, AppMode::View { .. }));
-        assert_eq!(app.sessions.sessions[0].prompt, "Review [Image #1]");
+        assert_eq!(app.sessions.sessions()[0].prompt, "Review [Image #1]");
         assert_eq!(
-            app.sessions.sessions[0].status,
+            app.sessions.sessions()[0].status,
             crate::domain::session::Status::Draft
         );
-        assert_eq!(app.sessions.sessions[0].draft_attachments.len(), 1);
+        assert_eq!(app.sessions.sessions()[0].draft_attachments.len(), 1);
         assert_eq!(
-            app.sessions.sessions[0].draft_attachments[0].placeholder,
+            app.sessions.sessions()[0].draft_attachments[0].placeholder,
             "[Image #1]"
         );
     }
@@ -3062,7 +3069,7 @@ mod tests {
     async fn test_handle_prompt_submit_key_starts_regular_session_with_image_turn() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
-        app.sessions.sessions[0].model = crate::domain::agent::AgentModel::ClaudeSonnet46;
+        app.sessions.sessions_mut()[0].model = crate::domain::agent::AgentModel::ClaudeSonnet46;
         insert_pasted_image_placeholder(&mut app, std::path::PathBuf::from("/tmp/image-1.png"));
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
@@ -3071,19 +3078,19 @@ mod tests {
 
         // Assert
         assert!(matches!(app.mode, AppMode::View { .. }));
-        assert_eq!(app.sessions.sessions[0].prompt, "Review [Image #1]");
+        assert_eq!(app.sessions.sessions()[0].prompt, "Review [Image #1]");
         assert_eq!(
-            app.sessions.sessions[0].title.as_deref(),
+            app.sessions.sessions()[0].title.as_deref(),
             Some("Review [Image #1]")
         );
-        assert!(app.sessions.sessions[0].draft_attachments.is_empty());
+        assert!(app.sessions.sessions()[0].draft_attachments.is_empty());
     }
 
     #[tokio::test]
     async fn test_handle_prompt_submit_key_clears_cached_review_output() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("follow up", None).await;
-        let session_id = app.sessions.sessions[0].id.clone();
+        let session_id = app.sessions.sessions()[0].id.clone();
         app.review_cache.insert(
             session_id.clone(),
             crate::app::ReviewCacheEntry::Ready {
@@ -3121,7 +3128,7 @@ mod tests {
     async fn test_handle_prompt_submit_key_replies_after_started_draft_session_reaches_review() {
         // Arrange
         let (mut app, _base_dir) = new_test_draft_prompt_app("follow up", None).await;
-        app.sessions.sessions[0].status = crate::domain::session::Status::Review;
+        app.sessions.sessions_mut()[0].status = crate::domain::session::Status::Review;
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
@@ -3131,7 +3138,7 @@ mod tests {
         assert!(!prompt_context.is_draft_session());
         assert!(matches!(app.mode, AppMode::View { .. }));
         assert!(
-            !app.sessions.sessions[0]
+            !app.sessions.sessions()[0]
                 .output
                 .contains("Only `Draft` sessions can stage drafts")
         );
@@ -3141,7 +3148,7 @@ mod tests {
     async fn test_handle_prompt_cancel_key_keeps_new_session_with_staged_drafts() {
         // Arrange
         let (mut app, _base_dir) = new_test_draft_prompt_app("Another draft", None).await;
-        app.sessions.sessions[0].prompt = "First draft".to_string();
+        app.sessions.sessions_mut()[0].prompt = "First draft".to_string();
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
@@ -3149,14 +3156,14 @@ mod tests {
 
         // Assert
         assert!(matches!(app.mode, AppMode::View { .. }));
-        assert_eq!(app.sessions.sessions.len(), 1);
+        assert_eq!(app.sessions.sessions().len(), 1);
     }
 
     #[tokio::test]
     async fn test_handle_prompt_cancel_key_restores_review_output() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("follow up", None).await;
-        app.sessions.sessions[0].status = crate::domain::session::Status::Review;
+        app.sessions.sessions_mut()[0].status = crate::domain::session::Status::Review;
         if let AppMode::Prompt {
             review_status_message,
             review_text,
@@ -3186,8 +3193,8 @@ mod tests {
     async fn test_handle_prompt_cancel_key_resets_existing_session_draft_attachments() {
         // Arrange
         let (mut app, base_dir) = new_test_prompt_app("Review ", None).await;
-        app.sessions.sessions[0].prompt = "Earlier prompt".to_string();
-        app.sessions.sessions[0].status = crate::domain::session::Status::Review;
+        app.sessions.sessions_mut()[0].prompt = "Earlier prompt".to_string();
+        app.sessions.sessions_mut()[0].status = crate::domain::session::Status::Review;
         let image_directory = base_dir.path().join("images");
         std::fs::create_dir_all(&image_directory).expect("image directory should exist");
         let image_path = image_directory.join("image-1.png");
@@ -3317,7 +3324,7 @@ mod tests {
     async fn test_handle_apply_command_rejects_when_session_not_in_review_status() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("/apply", None).await;
-        let session_id = app.sessions.sessions[0].id.clone();
+        let session_id = app.sessions.sessions()[0].id.clone();
         app.review_cache.insert(
             session_id.clone(),
             crate::app::ReviewCacheEntry::Ready {
@@ -3339,7 +3346,7 @@ mod tests {
     async fn test_handle_apply_command_rejects_without_cached_review() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("/apply", None).await;
-        app.sessions.sessions[0].status = crate::domain::session::Status::Review;
+        app.sessions.sessions_mut()[0].status = crate::domain::session::Status::Review;
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
@@ -3353,8 +3360,8 @@ mod tests {
     async fn test_handle_apply_command_invalidates_cache_when_diff_hash_mismatches() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("/apply", None).await;
-        app.sessions.sessions[0].status = crate::domain::session::Status::Review;
-        let session_id = app.sessions.sessions[0].id.clone();
+        app.sessions.sessions_mut()[0].status = crate::domain::session::Status::Review;
+        let session_id = app.sessions.sessions()[0].id.clone();
         app.review_cache.insert(
             session_id.clone(),
             crate::app::ReviewCacheEntry::Ready {
@@ -3400,10 +3407,10 @@ mod tests {
     async fn test_handle_apply_command_submits_suggestions_when_diff_hash_matches() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("/apply", None).await;
-        app.sessions.sessions[0].status = crate::domain::session::Status::Review;
-        let session_id = app.sessions.sessions[0].id.clone();
-        let folder = app.sessions.sessions[0].folder.clone();
-        let base_branch = app.sessions.sessions[0].base_branch.clone();
+        app.sessions.sessions_mut()[0].status = crate::domain::session::Status::Review;
+        let session_id = app.sessions.sessions()[0].id.clone();
+        let folder = app.sessions.sessions()[0].folder.clone();
+        let base_branch = app.sessions.sessions()[0].base_branch.clone();
         let current_diff = app
             .services
             .git_client()
@@ -3432,8 +3439,8 @@ mod tests {
     async fn test_handle_apply_command_preserves_cache_on_git_diff_error() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("/apply", None).await;
-        app.sessions.sessions[0].status = crate::domain::session::Status::Review;
-        let session_id = app.sessions.sessions[0].id.clone();
+        app.sessions.sessions_mut()[0].status = crate::domain::session::Status::Review;
+        let session_id = app.sessions.sessions()[0].id.clone();
         app.review_cache.insert(
             session_id.clone(),
             crate::app::ReviewCacheEntry::Ready {
@@ -3476,7 +3483,7 @@ mod tests {
     async fn test_prompt_context_demotes_slash_command_to_text_when_session_is_in_progress() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
-        app.sessions.sessions[0].status = crate::domain::session::Status::InProgress;
+        app.sessions.sessions_mut()[0].status = crate::domain::session::Status::InProgress;
 
         // Act
         let context = prompt_context(&mut app).expect("expected prompt context");
@@ -3496,7 +3503,7 @@ mod tests {
     async fn test_prompt_context_keeps_slash_command_when_session_is_review() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
-        app.sessions.sessions[0].status = crate::domain::session::Status::Review;
+        app.sessions.sessions_mut()[0].status = crate::domain::session::Status::Review;
 
         // Act
         let context = prompt_context(&mut app).expect("expected prompt context");
@@ -3516,15 +3523,15 @@ mod tests {
     async fn test_handle_prompt_submit_key_queues_slash_text_when_session_is_in_progress() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("/model gpt-5", None).await;
-        let session_id = app.sessions.sessions[0].id.clone();
-        app.sessions.handles.insert(
+        let session_id = app.sessions.sessions()[0].id.clone();
+        app.sessions.session_handles_mut().insert(
             session_id.clone(),
             crate::domain::session::SessionHandles::new(
                 String::new(),
                 crate::domain::session::Status::InProgress,
             ),
         );
-        app.sessions.sessions[0].status = crate::domain::session::Status::InProgress;
+        app.sessions.sessions_mut()[0].status = crate::domain::session::Status::InProgress;
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
@@ -3533,7 +3540,7 @@ mod tests {
         // Assert
         let queued_len = app
             .sessions
-            .handles
+            .session_handles()
             .get(session_id.as_str())
             .expect("handles for in-progress session")
             .queued_messages
@@ -3544,9 +3551,10 @@ mod tests {
             queued_len, 1,
             "slash-prefixed input must be queued as plain text while turn runs"
         );
-        assert_eq!(app.sessions.sessions[0].queued_messages.len(), 1);
+        assert_eq!(app.sessions.sessions()[0].queued_messages.len(), 1);
         assert_eq!(
-            app.sessions.sessions[0].queued_messages[0], "/model gpt-5",
+            app.sessions.sessions()[0].queued_messages[0],
+            "/model gpt-5",
             "queued message preserves the original slash-prefixed text"
         );
     }
@@ -3589,8 +3597,8 @@ mod tests {
     async fn test_handle_prompt_slash_submit_ignores_apply_when_suggestions_are_empty() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("/apply", None).await;
-        app.sessions.sessions[0].status = crate::domain::session::Status::Review;
-        let session_id = app.sessions.sessions[0].id.clone();
+        app.sessions.sessions_mut()[0].status = crate::domain::session::Status::Review;
+        let session_id = app.sessions.sessions()[0].id.clone();
         app.review_cache.insert(
             session_id.clone(),
             crate::app::ReviewCacheEntry::Ready {

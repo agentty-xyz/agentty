@@ -770,7 +770,7 @@ impl SessionManager {
         let terminal_session_ids = updated_session_ids
             .iter()
             .filter_map(|session_id| {
-                self.sessions
+                self.sessions()
                     .iter()
                     .find(|session| session.id == *session_id)
                     .and_then(|session| {

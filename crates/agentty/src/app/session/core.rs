@@ -2,7 +2,6 @@
 //! history management, merge, and cleanup.
 
 use std::collections::{HashMap, HashSet};
-use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -265,6 +264,86 @@ impl SessionManager {
         )
     }
 
+    /// Returns all loaded session snapshots in current list order.
+    pub(crate) fn sessions(&self) -> &[Session] {
+        &self.state.sessions
+    }
+
+    /// Returns mutable access to all loaded session snapshots for focused
+    /// reducers and tests that need to stage state directly.
+    pub(crate) fn sessions_mut(&mut self) -> &mut [Session] {
+        &mut self.state.sessions
+    }
+
+    /// Appends one loaded session snapshot and updates stable id lookups.
+    #[cfg(test)]
+    pub(crate) fn push_session(&mut self, session: Session) {
+        self.state.push_session(session);
+    }
+
+    /// Removes one loaded session snapshot by list index.
+    pub(crate) fn remove_session_at(&mut self, session_index: usize) -> Option<Session> {
+        self.state.remove_session_at(session_index)
+    }
+
+    /// Returns the selected session-list index.
+    pub(crate) fn selected_session_index(&self) -> Option<usize> {
+        self.state.table_state.selected()
+    }
+
+    /// Replaces the selected session-list index.
+    pub(crate) fn select_session_index(&mut self, session_index: Option<usize>) {
+        self.state.table_state.select(session_index);
+    }
+
+    /// Returns one mutable session snapshot by current list index.
+    pub(crate) fn session_at_mut(&mut self, session_index: usize) -> Option<&mut Session> {
+        self.state.sessions.get_mut(session_index)
+    }
+
+    /// Returns one immutable session snapshot by stable identifier.
+    pub(crate) fn session_for_id(&self, session_id: &str) -> Option<&Session> {
+        self.state.session_for_id(session_id)
+    }
+
+    /// Synchronizes all loaded session snapshots from live runtime handles.
+    #[cfg(test)]
+    pub(crate) fn sync_from_handles(&mut self) {
+        self.state.sync_from_handles();
+    }
+
+    /// Synchronizes one loaded session snapshot from its live runtime handle.
+    pub(crate) fn sync_session_from_handle(&mut self, session_id: &str) {
+        self.state.sync_session_from_handle(session_id);
+    }
+
+    /// Applies a recomputed diff-size snapshot to one loaded session.
+    pub(crate) fn apply_session_size_updated(
+        &mut self,
+        session_id: &str,
+        added_lines: u64,
+        deleted_lines: u64,
+        session_size: crate::domain::session::SessionSize,
+    ) {
+        self.state
+            .apply_session_size_updated(session_id, added_lines, deleted_lines, session_size);
+    }
+
+    /// Returns runtime handles keyed by stable session id.
+    pub(crate) fn session_handles(
+        &self,
+    ) -> &HashMap<SessionId, crate::domain::session::SessionHandles> {
+        &self.state.handles
+    }
+
+    /// Returns mutable runtime handles keyed by stable session id.
+    #[cfg(test)]
+    pub(crate) fn session_handles_mut(
+        &mut self,
+    ) -> &mut HashMap<SessionId, crate::domain::session::SessionHandles> {
+        &mut self.state.handles
+    }
+
     /// Returns the active prompt transcript block cached for sessions that are
     /// currently running a turn.
     pub(crate) fn active_prompt_outputs(&self) -> &HashMap<SessionId, String> {
@@ -274,6 +353,12 @@ impl SessionManager {
     /// Returns shared immutable access to session render and refresh state.
     pub(crate) fn state(&self) -> &SessionState {
         &self.state
+    }
+
+    /// Returns shared mutable access to session render and refresh state for
+    /// reducers that still operate on [`SessionState`] directly.
+    pub(crate) fn state_mut(&mut self) -> &mut SessionState {
+        &mut self.state
     }
 
     /// Applies reducer updates after session agent/model changes are
@@ -692,23 +777,6 @@ impl SessionManager {
             position,
             launched_session_id,
         );
-    }
-}
-
-/// Backward-compatible state-field access shim while call sites migrate to
-/// explicit `state()` APIs.
-impl Deref for SessionManager {
-    type Target = SessionState;
-
-    fn deref(&self) -> &Self::Target {
-        &self.state
-    }
-}
-
-/// Backward-compatible mutable state access shim for legacy call sites.
-impl DerefMut for SessionManager {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.state
     }
 }
 
@@ -1330,7 +1398,7 @@ mod tests {
         let folder = session_folder(base_path, id);
         let data_dir = folder.join(SESSION_DATA_DIR);
         std::fs::create_dir_all(&data_dir).expect("failed to create data dir");
-        app.sessions.handles.insert(
+        app.sessions.session_handles_mut().insert(
             id.to_string().into(),
             SessionHandles::new(String::new(), status),
         );
@@ -1362,8 +1430,8 @@ mod tests {
             updated_at: 0,
             workflow_notice: None,
         });
-        if app.sessions.table_state.selected().is_none() {
-            app.sessions.table_state.select(Some(0));
+        if app.sessions.selected_session_index().is_none() {
+            app.sessions.select_session_index(Some(0));
         }
     }
 
@@ -1668,7 +1736,7 @@ mod tests {
             app.sessions.sync_from_handles();
             let Some(session) = app
                 .sessions
-                .sessions
+                .sessions()
                 .iter()
                 .find(|session| session.id == session_id)
             else {
@@ -1684,7 +1752,7 @@ mod tests {
         app.sessions.sync_from_handles();
         let session = app
             .sessions
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == session_id)
             .expect("missing session while waiting for status");
@@ -1699,14 +1767,14 @@ mod tests {
     fn set_session_status_for_test(app: &mut App, session_id: &str, status: Status) {
         if let Some(session) = app
             .sessions
-            .sessions
+            .sessions_mut()
             .iter_mut()
             .find(|session| session.id == session_id)
         {
             session.status = status;
         }
 
-        if let Some(handles) = app.sessions.handles.get(session_id)
+        if let Some(handles) = app.sessions.session_handles().get(session_id)
             && let Ok(mut current_status) = handles.status.lock()
         {
             *current_status = status;
@@ -1723,7 +1791,7 @@ mod tests {
             app.sessions.sync_from_handles();
             let Some(session) = app
                 .sessions
-                .sessions
+                .sessions()
                 .iter()
                 .find(|session| session.id == session_id)
             else {
@@ -1738,7 +1806,7 @@ mod tests {
         app.sessions.sync_from_handles();
         let session = app
             .sessions
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == session_id)
             .expect("missing session while waiting for output");
@@ -1752,7 +1820,7 @@ mod tests {
     /// Returns the current session status or `Done` when session is missing.
     fn session_status_or_done(app: &App, session_id: &str) -> Status {
         app.sessions
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == session_id)
             .map_or(Status::Done, |session| session.status)
@@ -1761,7 +1829,7 @@ mod tests {
     /// Returns whether a session currently has `Done` status.
     fn is_session_done(app: &App, session_id: &str) -> bool {
         app.sessions
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == session_id)
             .is_some_and(|session| session.status == Status::Done)
@@ -1866,8 +1934,8 @@ mod tests {
         let app = new_test_app(dir.path().to_path_buf()).await;
 
         // Assert
-        assert!(app.sessions.sessions.is_empty());
-        assert_eq!(app.sessions.table_state.selected(), None);
+        assert!(app.sessions.sessions().is_empty());
+        assert_eq!(app.sessions.selected_session_index(), None);
     }
 
     #[tokio::test]
@@ -1926,17 +1994,17 @@ mod tests {
         create_and_start_session(&mut app, "B").await;
 
         // Act & Assert (Next)
-        app.sessions.table_state.select(Some(0));
+        app.sessions.select_session_index(Some(0));
         app.next();
-        assert_eq!(app.sessions.table_state.selected(), Some(1));
+        assert_eq!(app.sessions.selected_session_index(), Some(1));
         app.next();
-        assert_eq!(app.sessions.table_state.selected(), Some(0)); // Loop back
+        assert_eq!(app.sessions.selected_session_index(), Some(0)); // Loop back
 
         // Act & Assert (Previous)
         app.previous();
-        assert_eq!(app.sessions.table_state.selected(), Some(1)); // Loop back
+        assert_eq!(app.sessions.selected_session_index(), Some(1)); // Loop back
         app.previous();
-        assert_eq!(app.sessions.table_state.selected(), Some(0));
+        assert_eq!(app.sessions.selected_session_index(), Some(0));
     }
 
     #[tokio::test]
@@ -1974,7 +2042,7 @@ mod tests {
         );
         add_manual_session_with_status(&mut app, dir.path(), "merge-1", "Merge 1", Status::Merging);
         add_manual_session_with_status(&mut app, dir.path(), "active-2", "Active 2", Status::Draft);
-        app.sessions.table_state.select(Some(3));
+        app.sessions.select_session_index(Some(3));
 
         // Act & Assert
         app.next();
@@ -2028,10 +2096,10 @@ mod tests {
 
         // Act & Assert
         app.next();
-        assert_eq!(app.sessions.table_state.selected(), None);
+        assert_eq!(app.sessions.selected_session_index(), None);
 
         app.previous();
-        assert_eq!(app.sessions.table_state.selected(), None);
+        assert_eq!(app.sessions.selected_session_index(), None);
     }
 
     #[tokio::test]
@@ -2042,14 +2110,14 @@ mod tests {
         create_and_start_session(&mut app, "A").await;
 
         // Act & Assert — next recovers from None
-        app.sessions.table_state.select(None);
+        app.sessions.select_session_index(None);
         app.next();
-        assert_eq!(app.sessions.table_state.selected(), Some(0));
+        assert_eq!(app.sessions.selected_session_index(), Some(0));
 
         // Act & Assert — previous recovers from None
-        app.sessions.table_state.select(None);
+        app.sessions.select_session_index(None);
         app.previous();
-        assert_eq!(app.sessions.table_state.selected(), Some(0));
+        assert_eq!(app.sessions.selected_session_index(), Some(0));
     }
 
     #[tokio::test]
@@ -2065,21 +2133,21 @@ mod tests {
             .expect("failed to create session");
 
         // Assert — blank session
-        assert_eq!(app.sessions.sessions.len(), 1);
-        assert_eq!(app.sessions.sessions[0].id, session_id);
-        assert!(app.sessions.sessions[0].prompt.is_empty());
-        assert_eq!(app.sessions.sessions[0].title, None);
-        assert_eq!(app.sessions.sessions[0].display_title(), "No title");
-        assert!(!app.sessions.sessions[0].is_draft_session());
-        assert_eq!(app.sessions.sessions[0].status, Status::Draft);
-        assert_eq!(app.sessions.table_state.selected(), Some(0));
+        assert_eq!(app.sessions.sessions().len(), 1);
+        assert_eq!(app.sessions.sessions()[0].id, session_id);
+        assert!(app.sessions.sessions()[0].prompt.is_empty());
+        assert_eq!(app.sessions.sessions()[0].title, None);
+        assert_eq!(app.sessions.sessions()[0].display_title(), "No title");
+        assert!(!app.sessions.sessions()[0].is_draft_session());
+        assert_eq!(app.sessions.sessions()[0].status, Status::Draft);
+        assert_eq!(app.sessions.selected_session_index(), Some(0));
         assert_eq!(
-            app.sessions.sessions[0].model,
+            app.sessions.sessions()[0].model,
             AgentKind::Gemini.default_model()
         );
 
         // Check filesystem
-        let session_dir = &app.sessions.sessions[0].folder;
+        let session_dir = &app.sessions.sessions()[0].folder;
         let data_dir = session_dir.join(SESSION_DATA_DIR);
         assert!(session_dir.exists());
         assert!(data_dir.is_dir());
@@ -2121,11 +2189,11 @@ mod tests {
             .expect("failed to create draft session");
 
         // Assert
-        assert_eq!(app.sessions.sessions.len(), 1);
-        assert_eq!(app.sessions.sessions[0].id, session_id);
-        assert!(app.sessions.sessions[0].is_draft_session());
-        assert_eq!(app.sessions.sessions[0].status, Status::Draft);
-        assert!(!app.sessions.sessions[0].folder.exists());
+        assert_eq!(app.sessions.sessions().len(), 1);
+        assert_eq!(app.sessions.sessions()[0].id, session_id);
+        assert!(app.sessions.sessions()[0].is_draft_session());
+        assert_eq!(app.sessions.sessions()[0].status, Status::Draft);
+        assert!(!app.sessions.sessions()[0].folder.exists());
 
         let db_sessions = app
             .services
@@ -2165,7 +2233,7 @@ mod tests {
         // Assert
         let second_session = app
             .sessions
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == second_session_id)
             .expect("missing second session");
@@ -2234,7 +2302,7 @@ mod tests {
         );
         let second_session = restarted_app
             .sessions
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == second_session_id)
             .expect("missing second session");
@@ -2266,7 +2334,7 @@ mod tests {
         // Assert
         let created_session = app
             .sessions
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == session_id)
             .expect("missing created session");
@@ -2289,10 +2357,10 @@ mod tests {
             .expect("failed to start session");
 
         // Assert
-        assert_eq!(app.sessions.sessions[0].prompt, "Hello");
-        assert_eq!(app.sessions.sessions[0].title, Some("Hello".to_string()));
+        assert_eq!(app.sessions.sessions()[0].prompt, "Hello");
+        assert_eq!(app.sessions.sessions()[0].title, Some("Hello".to_string()));
         app.sessions.sync_from_handles();
-        let output = app.sessions.sessions[0].output.clone();
+        let output = app.sessions.sessions()[0].output.clone();
         assert!(output.contains("Hello"));
         let db_sessions = app
             .services
@@ -2343,16 +2411,16 @@ mod tests {
         };
 
         // Assert
-        assert_eq!(app.sessions.sessions[0].status, Status::Draft);
+        assert_eq!(app.sessions.sessions()[0].status, Status::Draft);
         assert_eq!(
-            app.sessions.sessions[0].prompt,
+            app.sessions.sessions()[0].prompt,
             "First draft\n\nSecond draft"
         );
         assert_eq!(
-            app.sessions.sessions[0].title,
+            app.sessions.sessions()[0].title,
             Some("First draft".to_string())
         );
-        assert!(app.sessions.sessions[0].draft_attachments.is_empty());
+        assert!(app.sessions.sessions()[0].draft_attachments.is_empty());
         let db_sessions = app
             .services
             .db()
@@ -2381,7 +2449,7 @@ mod tests {
             .update_session_title(&session_id, "Generated draft title")
             .await
             .expect("failed to persist generated draft title");
-        app.sessions.sessions[0].title = Some("Generated draft title".to_string());
+        app.sessions.sessions_mut()[0].title = Some("Generated draft title".to_string());
 
         // Act
         app.stage_draft_message(&session_id, "Second draft")
@@ -2390,11 +2458,11 @@ mod tests {
 
         // Assert
         assert_eq!(
-            app.sessions.sessions[0].prompt,
+            app.sessions.sessions()[0].prompt,
             "First draft\n\nSecond draft"
         );
         assert_eq!(
-            app.sessions.sessions[0].title,
+            app.sessions.sessions()[0].title,
             Some("Generated draft title".to_string())
         );
         let db_sessions = app
@@ -2554,13 +2622,13 @@ mod tests {
 
         // Assert
         assert_eq!(
-            app.sessions.sessions[0].prompt,
+            app.sessions.sessions()[0].prompt,
             "First draft\n\nSecond draft"
         );
-        assert!(app.sessions.sessions[0].draft_attachments.is_empty());
-        assert!(app.sessions.sessions[0].folder.exists());
+        assert!(app.sessions.sessions()[0].draft_attachments.is_empty());
+        assert!(app.sessions.sessions()[0].folder.exists());
         assert!(
-            app.sessions.sessions[0]
+            app.sessions.sessions()[0]
                 .folder
                 .join(SESSION_DATA_DIR)
                 .is_dir()
@@ -2623,7 +2691,7 @@ mod tests {
             .expect("failed to start session");
 
         // Assert
-        assert_eq!(app.sessions.sessions[0].title, Some(prompt.to_string()));
+        assert_eq!(app.sessions.sessions()[0].title, Some(prompt.to_string()));
         let db_sessions = app
             .services
             .db()
@@ -2657,7 +2725,7 @@ mod tests {
             .await;
 
         // Assert
-        assert_eq!(app.sessions.sessions[0].title, Some(prompt.to_string()));
+        assert_eq!(app.sessions.sessions()[0].title, Some(prompt.to_string()));
         let db_sessions = app
             .services
             .db()
@@ -2679,14 +2747,14 @@ mod tests {
         let session_index = app
             .session_index_for_id(&session_id)
             .expect("missing session index");
-        let session_folder = app.sessions.sessions[session_index].folder.clone();
+        let session_folder = app.sessions.sessions()[session_index].folder.clone();
         assert!(session_folder.exists());
 
         // Act — simulate Esc: delete the blank session
         app.delete_selected_session().await;
 
         // Assert
-        assert!(app.sessions.sessions.is_empty());
+        assert!(app.sessions.sessions().is_empty());
         assert!(!session_folder.exists());
         let db_sessions = app
             .services
@@ -2703,7 +2771,7 @@ mod tests {
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
         create_and_start_session(&mut app, "Initial").await;
-        let session_id = app.sessions.sessions[0].id.clone();
+        let session_id = app.sessions.sessions()[0].id.clone();
         wait_for_status(&mut app, &session_id, Status::Review).await;
 
         // Act
@@ -2711,7 +2779,7 @@ mod tests {
 
         // Assert
         app.sessions.sync_from_handles();
-        let session = &app.sessions.sessions[0];
+        let session = &app.sessions.sessions()[0];
         let output = &session.output;
         let activity_timestamps = app
             .services
@@ -2733,7 +2801,7 @@ mod tests {
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
         create_and_start_session(&mut app, "Initial").await;
-        let session_id = app.sessions.sessions[0].id.clone();
+        let session_id = app.sessions.sessions()[0].id.clone();
         wait_for_status(&mut app, &session_id, Status::Review).await;
         set_session_status_for_test(&mut app, &session_id, Status::InProgress);
 
@@ -2744,14 +2812,14 @@ mod tests {
         // Assert
         let session = app
             .sessions
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == session_id)
             .expect("session present");
         assert_eq!(session.queued_messages, vec!["queued reply".to_string()]);
         let handles = app
             .sessions
-            .handles
+            .session_handles()
             .get(session_id.as_str())
             .expect("handles present");
         let queued_len = handles.queued_messages.lock().expect("queue lock").len();
@@ -2772,7 +2840,7 @@ mod tests {
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
         create_and_start_session(&mut app, "Initial").await;
-        let session_id = app.sessions.sessions[0].id.clone();
+        let session_id = app.sessions.sessions()[0].id.clone();
         wait_for_status(&mut app, &session_id, Status::Review).await;
         set_session_status_for_test(&mut app, &session_id, Status::InProgress);
         app.enqueue_message(&session_id, "queued reply")
@@ -2784,7 +2852,7 @@ mod tests {
         // Assert
         let session = app
             .sessions
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == session_id)
             .expect("session present");
@@ -2805,7 +2873,7 @@ mod tests {
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
         create_and_start_session(&mut app, "Initial").await;
-        let session_id = app.sessions.sessions[0].id.clone();
+        let session_id = app.sessions.sessions()[0].id.clone();
         wait_for_status(&mut app, &session_id, Status::Review).await;
         set_session_status_for_test(&mut app, &session_id, Status::InProgress);
 
@@ -2820,7 +2888,7 @@ mod tests {
         ));
         let session = app
             .sessions
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == session_id)
             .expect("session present");
@@ -2837,7 +2905,7 @@ mod tests {
         // Act & Assert
         assert!(app.selected_session().is_some());
 
-        app.sessions.table_state.select(None);
+        app.sessions.select_session_index(None);
         assert!(app.selected_session().is_none());
     }
 
@@ -2847,8 +2915,8 @@ mod tests {
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
         create_and_start_session(&mut app, "A").await;
-        let session_id = app.sessions.sessions[0].id.clone();
-        let session_folder = app.sessions.sessions[0].folder.clone();
+        let session_id = app.sessions.sessions()[0].id.clone();
+        let session_folder = app.sessions.sessions()[0].folder.clone();
         app.sessions.set_at_mention_index_for_root(
             session_folder.clone(),
             vec![FileEntry {
@@ -2875,8 +2943,8 @@ mod tests {
         );
 
         // Assert
-        assert!(app.sessions.sessions.is_empty());
-        assert_eq!(app.sessions.table_state.selected(), None);
+        assert!(app.sessions.sessions().is_empty());
+        assert_eq!(app.sessions.selected_session_index(), None);
         assert!(!session_folder.exists());
         let db_sessions = app
             .services
@@ -2907,14 +2975,14 @@ mod tests {
         create_and_start_session(&mut app, "2").await;
 
         // Act & Assert — index out of bounds
-        app.sessions.table_state.select(Some(99));
+        app.sessions.select_session_index(Some(99));
         app.delete_selected_session().await;
-        assert_eq!(app.sessions.sessions.len(), 2);
+        assert_eq!(app.sessions.sessions().len(), 2);
 
         // Act & Assert — None selected
-        app.sessions.table_state.select(None);
+        app.sessions.select_session_index(None);
         app.delete_selected_session().await;
-        assert_eq!(app.sessions.sessions.len(), 2);
+        assert_eq!(app.sessions.sessions().len(), 2);
     }
 
     #[tokio::test]
@@ -2926,15 +2994,15 @@ mod tests {
         create_and_start_session(&mut app, "2").await;
 
         // Act & Assert — delete last item
-        app.sessions.table_state.select(Some(1));
+        app.sessions.select_session_index(Some(1));
         app.delete_selected_session().await;
-        assert_eq!(app.sessions.sessions.len(), 1);
-        assert_eq!(app.sessions.table_state.selected(), Some(0));
+        assert_eq!(app.sessions.sessions().len(), 1);
+        assert_eq!(app.sessions.selected_session_index(), Some(0));
 
         // Act & Assert — delete remaining item
         app.delete_selected_session().await;
-        assert!(app.sessions.sessions.is_empty());
-        assert_eq!(app.sessions.table_state.selected(), None);
+        assert!(app.sessions.sessions().is_empty());
+        assert_eq!(app.sessions.selected_session_index(), None);
     }
 
     #[tokio::test]
@@ -2971,13 +3039,13 @@ mod tests {
         .await;
 
         // Assert
-        assert_eq!(app.sessions.sessions.len(), 1);
-        assert_eq!(app.sessions.sessions[0].id, "12345678");
-        assert_eq!(app.sessions.sessions[0].model, AgentModel::ClaudeOpus47);
-        assert_eq!(app.sessions.sessions[0].prompt, "Existing");
-        let output = app.sessions.sessions[0].output.clone();
+        assert_eq!(app.sessions.sessions().len(), 1);
+        assert_eq!(app.sessions.sessions()[0].id, "12345678");
+        assert_eq!(app.sessions.sessions()[0].model, AgentModel::ClaudeOpus47);
+        assert_eq!(app.sessions.sessions()[0].prompt, "Existing");
+        let output = app.sessions.sessions()[0].output.clone();
         assert_eq!(output, "Output");
-        assert_eq!(app.sessions.table_state.selected(), Some(0));
+        assert_eq!(app.sessions.selected_session_index(), Some(0));
     }
 
     #[tokio::test]
@@ -3037,7 +3105,7 @@ mod tests {
         // Assert
         let created_session = app
             .sessions
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == created_session_id)
             .expect("missing created session");
@@ -3091,7 +3159,7 @@ mod tests {
         // Assert
         let session_names: Vec<&str> = app
             .sessions
-            .sessions
+            .sessions()
             .iter()
             .map(|session| session.id.as_str())
             .collect();
@@ -3261,7 +3329,7 @@ mod tests {
             db,
         )
         .await;
-        app.sessions.table_state.select(Some(1));
+        app.sessions.select_session_index(Some(1));
 
         // Act
         app.services
@@ -3272,13 +3340,12 @@ mod tests {
         app.refresh_sessions_now().await;
 
         // Assert
-        assert_eq!(app.sessions.sessions[0].id, "alpha000");
+        assert_eq!(app.sessions.sessions()[0].id, "alpha000");
         let selected_index = app
             .sessions
-            .table_state
-            .selected()
+            .selected_session_index()
             .expect("missing selection");
-        assert_eq!(app.sessions.sessions[selected_index].id, "alpha000");
+        assert_eq!(app.sessions.sessions()[selected_index].id, "alpha000");
     }
 
     #[tokio::test]
@@ -3320,7 +3387,7 @@ mod tests {
             db,
         )
         .await;
-        let selected_session_id = app.sessions.sessions[1].id.clone();
+        let selected_session_id = app.sessions.sessions()[1].id.clone();
         app.mode = AppMode::View {
             review_status_message: None,
             review_text: None,
@@ -3337,7 +3404,7 @@ mod tests {
         app.refresh_sessions_now().await;
 
         // Assert
-        assert_eq!(app.sessions.sessions[0].id, "alpha000");
+        assert_eq!(app.sessions.sessions()[0].id, "alpha000");
         assert!(matches!(app.mode, AppMode::View { .. }));
         if let AppMode::View { session_id, .. } = app.mode {
             assert_eq!(session_id, selected_session_id);
@@ -3353,7 +3420,7 @@ mod tests {
         let app = new_test_app(path).await;
 
         // Assert
-        assert!(app.sessions.sessions.is_empty());
+        assert!(app.sessions.sessions().is_empty());
     }
 
     #[tokio::test]
@@ -3385,9 +3452,9 @@ mod tests {
         .await;
 
         // Assert — terminal session is kept even after folder cleanup
-        assert_eq!(app.sessions.sessions.len(), 1);
-        assert_eq!(app.sessions.sessions[0].id, "missing01");
-        assert_eq!(app.sessions.sessions[0].status, Status::Done);
+        assert_eq!(app.sessions.sessions().len(), 1);
+        assert_eq!(app.sessions.sessions()[0].id, "missing01");
+        assert_eq!(app.sessions.sessions()[0].status, Status::Done);
     }
 
     #[tokio::test]
@@ -3419,7 +3486,7 @@ mod tests {
         .await;
 
         // Assert — non-terminal session is skipped because folder doesn't exist
-        assert!(app.sessions.sessions.is_empty());
+        assert!(app.sessions.sessions().is_empty());
     }
 
     #[tokio::test]
@@ -3439,7 +3506,7 @@ mod tests {
         let session_index = app
             .session_index_for_id(&session_id)
             .expect("missing created session");
-        let session_folder = app.sessions.sessions[session_index].folder.clone();
+        let session_folder = app.sessions.sessions()[session_index].folder.clone();
         let changed_lines = "line\n".repeat(700);
         std::fs::write(session_folder.join("size-test.txt"), changed_lines)
             .expect("failed to write test file");
@@ -3451,7 +3518,7 @@ mod tests {
             app.services.db(),
             app.projects.active_project_id(),
             app.projects.working_dir(),
-            &mut app.sessions.handles,
+            app.sessions.session_handles_mut(),
             &fs_client,
             None,
         )
@@ -3526,7 +3593,7 @@ mod tests {
         // Assert
         let session = app
             .sessions
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == session_id)
             .expect("missing in-memory session");
@@ -3564,7 +3631,7 @@ mod tests {
         let session_index = app
             .session_index_for_id(&session_id)
             .expect("missing created session");
-        let session_folder = app.sessions.sessions[session_index].folder.clone();
+        let session_folder = app.sessions.sessions()[session_index].folder.clone();
         let changed_lines = "line\n".repeat(700);
         std::fs::write(session_folder.join("done-size-test.txt"), changed_lines)
             .expect("failed to write test file");
@@ -3576,7 +3643,7 @@ mod tests {
             app.services.db(),
             app.projects.active_project_id(),
             app.projects.working_dir(),
-            &mut app.sessions.handles,
+            app.sessions.session_handles_mut(),
             &fs_client,
             None,
         )
@@ -3683,7 +3750,7 @@ mod tests {
         // Assert
         {
             app.sessions.sync_from_handles();
-            let session = &app.sessions.sessions[0];
+            let session = &app.sessions.sessions()[0];
             let output = session.output.clone();
             assert!(output.contains("--prompt"));
             assert!(output.contains("SpawnInit"));
@@ -3692,7 +3759,7 @@ mod tests {
         }
 
         // Act — reply (resume command)
-        let session_id = app.sessions.sessions[0].id.clone();
+        let session_id = app.sessions.sessions()[0].id.clone();
         app.sessions
             .reply(&app.services, &session_id, "SpawnReply")
             .await;
@@ -3703,7 +3770,7 @@ mod tests {
         // Assert
         {
             app.sessions.sync_from_handles();
-            let session = &app.sessions.sessions[0];
+            let session = &app.sessions.sessions()[0];
             let output = session.output.clone();
             assert!(output.contains("SpawnReply"));
             assert!(output.contains("--resume"));
@@ -3736,7 +3803,7 @@ mod tests {
         let initial_output = " › Initial prompt\n\nmock-start\n".to_string();
         if let Some(session) = app
             .sessions
-            .sessions
+            .sessions_mut()
             .iter_mut()
             .find(|session| session.id == session_id)
         {
@@ -3744,7 +3811,7 @@ mod tests {
             session.prompt = "Initial prompt".to_string();
             session.status = Status::Review;
         }
-        if let Some(handles) = app.sessions.handles.get(session_id.as_str()) {
+        if let Some(handles) = app.sessions.session_handles().get(session_id.as_str()) {
             if let Ok(mut output) = handles.output.lock() {
                 output.clone_from(&initial_output);
             }
@@ -3868,7 +3935,7 @@ mod tests {
         first_app.sessions.sync_from_handles();
         let first_run_output = first_app
             .sessions
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == session_id)
             .map(|session| session.output.clone())
@@ -3880,7 +3947,7 @@ mod tests {
         let mut resumed_app = new_test_app_with_git_and_db(dir.path(), db).await;
         let resumed_session = resumed_app
             .sessions
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == session_id)
             .expect("missing resumed session");
@@ -4022,7 +4089,7 @@ mod tests {
 
         // Assert — commit completion details are transient workflow notice
         // state, not persisted transcript output.
-        let session = &app.sessions.sessions[0];
+        let session = &app.sessions.sessions()[0];
         let output = session.output.clone();
         let workflow_notice = session.workflow_notice.as_deref();
         assert!(
@@ -4182,7 +4249,7 @@ mod tests {
         wait_for_status(&mut app, &session_id, Status::Review).await;
 
         // Assert — no-op commit output is visible as transient workflow state.
-        let session = &app.sessions.sessions[0];
+        let session = &app.sessions.sessions()[0];
         let output = session.output.clone();
         let workflow_notice = session.workflow_notice.as_deref();
         assert!(
@@ -4269,7 +4336,7 @@ mod tests {
                 .to_string()
                 .contains("Git branch is required")
         );
-        assert!(app.sessions.sessions.is_empty());
+        assert!(app.sessions.sessions().is_empty());
     }
 
     #[tokio::test]
@@ -4343,7 +4410,7 @@ mod tests {
 
         // Assert - session should not be created
         assert!(result.is_err());
-        assert_eq!(app.sessions.sessions.len(), 0);
+        assert_eq!(app.sessions.sessions().len(), 0);
 
         // Verify no session folder was left behind
         let entries = std::fs::read_dir(dir.path())
@@ -4363,7 +4430,7 @@ mod tests {
         app.delete_selected_session().await;
 
         // Assert
-        assert_eq!(app.sessions.sessions.len(), 0);
+        assert_eq!(app.sessions.sessions().len(), 0);
     }
 
     #[tokio::test]
@@ -4417,7 +4484,7 @@ mod tests {
         set_session_status_for_test(&mut app, &session_id, Status::Review);
         let session_folder = app
             .sessions
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == session_id)
             .expect("missing created session")
@@ -4437,7 +4504,7 @@ mod tests {
         app.sessions.sync_from_handles();
         let merged_session = app
             .sessions
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == session_id)
             .expect("missing merged session");
@@ -4469,7 +4536,7 @@ mod tests {
         app.sessions.sync_from_handles();
         let session = app
             .sessions
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == session_id)
             .expect("missing session after merge");
@@ -4654,8 +4721,8 @@ mod tests {
             .create_session()
             .await
             .expect("failed to create session");
-        app.sessions.sessions[0].status = Status::Review;
-        if let Some(handles) = app.sessions.handles.get(session_id.as_str())
+        app.sessions.sessions_mut()[0].status = Status::Review;
+        if let Some(handles) = app.sessions.session_handles().get(session_id.as_str())
             && let Ok(mut session_status) = handles.status.lock()
         {
             *session_status = Status::Review;
@@ -4745,9 +4812,9 @@ mod tests {
             .create_session()
             .await
             .expect("failed to create session");
-        let session_folder = app.sessions.sessions[0].folder.clone();
-        app.sessions.sessions[0].status = Status::Review;
-        if let Some(handles) = app.sessions.handles.get(session_id.as_str())
+        let session_folder = app.sessions.sessions()[0].folder.clone();
+        app.sessions.sessions_mut()[0].status = Status::Review;
+        if let Some(handles) = app.sessions.session_handles().get(session_id.as_str())
             && let Ok(mut session_status) = handles.status.lock()
         {
             *session_status = Status::Review;
@@ -4949,7 +5016,7 @@ mod tests {
             .expect("failed to create session");
         let session_folder = app
             .sessions
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == session_id)
             .expect("missing session")
@@ -4967,7 +5034,7 @@ mod tests {
         app.sessions.sync_from_handles();
         let session = app
             .sessions
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == session_id)
             .expect("missing session");
@@ -5002,7 +5069,7 @@ mod tests {
             .expect("failed to create draft session");
         let session_folder = app
             .sessions
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == session_id)
             .expect("missing session")
@@ -5019,7 +5086,7 @@ mod tests {
         app.sessions.sync_from_handles();
         let session = app
             .sessions
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == session_id)
             .expect("missing session");
@@ -5073,7 +5140,7 @@ mod tests {
         app.sessions.sync_from_handles();
         let session = app
             .sessions
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == session_id)
             .expect("missing session");

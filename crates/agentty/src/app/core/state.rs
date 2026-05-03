@@ -667,11 +667,11 @@ impl App {
 
         let index = self
             .sessions
-            .sessions
+            .sessions()
             .iter()
             .position(|session| session.id == session_id)
             .unwrap_or(0);
-        self.sessions.table_state.select(Some(index));
+        self.sessions.select_session_index(Some(index));
     }
 
     /// Returns the persisted continuation draft context for one terminal
@@ -687,7 +687,7 @@ impl App {
     ) -> Result<TerminalContinuationDraft, AppError> {
         let source_session = self
             .sessions
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == source_session_id)
             .ok_or_else(|| AppError::Workflow("Session not found".to_string()))?;
@@ -1271,7 +1271,7 @@ impl App {
         review_diff: &str,
         session_summary: Option<&str>,
     ) {
-        mark_session_agent_review(&mut self.sessions, session_id);
+        mark_session_agent_review(self.sessions.state_mut(), session_id);
 
         spawn_review_assist(
             self.services.event_sender(),
@@ -1342,7 +1342,7 @@ impl App {
     ) -> Vec<task::SessionGitStatusTarget> {
         sessions
             .state()
-            .sessions
+            .sessions()
             .iter()
             .filter(|session| !matches!(session.status, Status::Canceled | Status::Done))
             .map(|session| task::SessionGitStatusTarget {
@@ -1362,7 +1362,7 @@ impl App {
     ) -> Vec<task::ReviewRequestSyncTarget> {
         sessions
             .state()
-            .sessions
+            .sessions()
             .iter()
             .filter(|session| session.can_sync_review_request())
             .map(|session| task::ReviewRequestSyncTarget {
@@ -1382,7 +1382,7 @@ impl App {
         let position = self.sessions.selected_follow_up_task_position(session_id)?;
         let session = self
             .sessions
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == session_id)?;
         let follow_up_task = session.follow_up_task(position)?;
@@ -1446,9 +1446,9 @@ impl App {
     /// Opens one session by list index and preserves question mode for
     /// clarification sessions.
     fn open_session_by_index(&mut self, target_session_id: &str, session_index: usize) {
-        self.sessions.table_state.select(Some(session_index));
+        self.sessions.select_session_index(Some(session_index));
 
-        let Some(session) = self.sessions.sessions.get(session_index) else {
+        let Some(session) = self.sessions.session_at(session_index) else {
             return;
         };
         if session.status == Status::Question {
@@ -1611,7 +1611,7 @@ impl App {
             .active_session_id()
             .and_then(|active_session_id| {
                 self.sessions
-                    .sessions
+                    .sessions()
                     .iter()
                     .find(|session| session.id == active_session_id)
                     .map(|session| session.status)
@@ -1631,7 +1631,7 @@ impl App {
     pub(super) fn retain_valid_session_progress_messages(&mut self) {
         self.session_progress_messages.retain(|session_id, _| {
             self.sessions
-                .sessions
+                .sessions()
                 .iter()
                 .find(|session| session.id == *session_id)
                 .is_some_and(|session| matches!(session.status, Status::InProgress))
@@ -1641,7 +1641,7 @@ impl App {
     /// Builds one background-task snapshot for a branch-publish action.
     fn branch_publish_task_session(&self, session_id: &str) -> Option<BranchPublishTaskSession> {
         self.sessions
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == session_id)
             .map(BranchPublishTaskSession::from_session)
@@ -2349,8 +2349,8 @@ mod tests {
             app.selected_session().map(|session| session.id.as_str()),
             Some(current_session_id)
         );
-        assert_eq!(app.sessions.sessions.len(), 1);
-        assert_eq!(app.sessions.sessions[0].id, current_session_id);
+        assert_eq!(app.sessions.sessions().len(), 1);
+        assert_eq!(app.sessions.sessions()[0].id, current_session_id);
         assert!(
             app.projects
                 .project_items()
@@ -2381,7 +2381,7 @@ mod tests {
         // Act
         app.settings.open_command = open_command.to_string();
         app.sessions.push_session(test_session(session_folder));
-        app.sessions.table_state.select(Some(0));
+        app.sessions.select_session_index(Some(0));
 
         // Assert
         app
@@ -2820,7 +2820,7 @@ mod tests {
         assert_eq!(
             app.sessions
                 .state()
-                .sessions
+                .sessions()
                 .first()
                 .and_then(|session| session.published_upstream_ref.as_deref()),
             Some("origin/wt/session-1")
@@ -2880,7 +2880,7 @@ mod tests {
         assert_eq!(
             app.sessions
                 .state()
-                .sessions
+                .sessions()
                 .first()
                 .and_then(|session| session.review_request.clone()),
             Some(review_request)
@@ -3089,7 +3089,7 @@ mod tests {
         app.settings.open_command = "npm run dev".to_string();
         app.sessions
             .push_session(test_session(missing_session_folder));
-        app.sessions.table_state.select(Some(0));
+        app.sessions.select_session_index(Some(0));
 
         // Act
         app.open_session_worktree_in_tmux().await;
@@ -3652,7 +3652,7 @@ mod tests {
         // Assert
         let session = app
             .sessions
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == "session-1")
             .expect("session should exist");
@@ -3916,7 +3916,7 @@ mod tests {
 
         // Assert
         assert_eq!(
-            app.sessions.sessions[0].summary.as_deref(),
+            app.sessions.sessions()[0].summary.as_deref(),
             Some(expected_summary.as_str())
         );
     }
@@ -3947,7 +3947,7 @@ mod tests {
 
         // Assert
         assert_eq!(
-            app.sessions.sessions[0]
+            app.sessions.sessions()[0]
                 .follow_up_tasks
                 .iter()
                 .map(|task| task.text.clone())
@@ -3989,7 +3989,7 @@ mod tests {
 
         // Assert
         assert_eq!(
-            app.sessions.sessions[0].published_branch_sync_status,
+            app.sessions.sessions()[0].published_branch_sync_status,
             PublishedBranchSyncStatus::InProgress
         );
     }
@@ -4023,7 +4023,7 @@ mod tests {
 
         // Assert
         assert_eq!(
-            app.sessions.sessions[0].published_branch_sync_status,
+            app.sessions.sessions()[0].published_branch_sync_status,
             PublishedBranchSyncStatus::Succeeded
         );
     }
@@ -4058,9 +4058,9 @@ mod tests {
         .await;
 
         // Assert
-        assert!(app.sessions.sessions[0].questions.is_empty());
-        assert_eq!(app.sessions.sessions[0].stats.input_tokens, 18);
-        assert_eq!(app.sessions.sessions[0].stats.output_tokens, 29);
+        assert!(app.sessions.sessions()[0].questions.is_empty());
+        assert_eq!(app.sessions.sessions()[0].stats.input_tokens, 18);
+        assert_eq!(app.sessions.sessions()[0].stats.output_tokens, 29);
     }
 
     #[tokio::test]
@@ -4076,13 +4076,13 @@ mod tests {
 
         app.sessions
             .push_session(test_session(PathBuf::from("/tmp/session-auto-review-sync")));
-        app.sessions.sessions[0].status = Status::InProgress;
-        app.sessions.handles.insert(
+        app.sessions.sessions_mut()[0].status = Status::InProgress;
+        app.sessions.session_handles_mut().insert(
             session_id.to_string().into(),
             SessionHandles::new(String::new(), Status::InProgress),
         );
         *app.sessions
-            .handles
+            .session_handles()
             .get(session_id)
             .expect("expected session handles")
             .status
@@ -4112,10 +4112,10 @@ mod tests {
             app.review_cache.get(session_id),
             Some(ReviewCacheEntry::Loading { diff_hash }) if *diff_hash == expected_hash
         ));
-        assert_eq!(app.sessions.sessions[0].status, Status::AgentReview);
+        assert_eq!(app.sessions.sessions()[0].status, Status::AgentReview);
         assert_eq!(
             *app.sessions
-                .handles
+                .session_handles()
                 .get(session_id)
                 .expect("expected session handles")
                 .status
@@ -4142,8 +4142,8 @@ mod tests {
             .push_session(test_session(PathBuf::from("/tmp/session-already-review")));
         // Simulate sync_from_handles() having already updated the snapshot
         // to `Review` in a prior render tick.
-        app.sessions.sessions[0].status = Status::Review;
-        app.sessions.handles.insert(
+        app.sessions.sessions_mut()[0].status = Status::Review;
+        app.sessions.session_handles_mut().insert(
             session_id.to_string().into(),
             SessionHandles::new(String::new(), Status::Review),
         );
@@ -4177,7 +4177,7 @@ mod tests {
             app.review_cache.get(session_id),
             Some(ReviewCacheEntry::Loading { diff_hash }) if *diff_hash == expected_hash
         ));
-        assert_eq!(app.sessions.sessions[0].status, Status::AgentReview);
+        assert_eq!(app.sessions.sessions()[0].status, Status::AgentReview);
         assert!(matches!(
             app.mode,
             AppMode::View {
@@ -4239,13 +4239,13 @@ mod tests {
 
         // Assert
         assert_eq!(
-            app.sessions.sessions[0].questions,
+            app.sessions.sessions()[0].questions,
             vec![QuestionItem::new("Latest question?")]
         );
-        assert_eq!(app.sessions.sessions[0].stats.input_tokens, 7);
-        assert_eq!(app.sessions.sessions[0].stats.output_tokens, 11);
+        assert_eq!(app.sessions.sessions()[0].stats.input_tokens, 7);
+        assert_eq!(app.sessions.sessions()[0].stats.output_tokens, 11);
         assert_eq!(
-            app.sessions.sessions[0]
+            app.sessions.sessions()[0]
                 .follow_up_tasks
                 .iter()
                 .map(|task| task.text.clone())
@@ -4279,7 +4279,7 @@ mod tests {
             .expect("follow-up task should open the linked sibling session");
 
         // Assert
-        assert_eq!(app.sessions.table_state.selected(), Some(1));
+        assert_eq!(app.sessions.selected_session_index(), Some(1));
         assert!(matches!(
             app.mode,
             AppMode::View {
@@ -4316,9 +4316,9 @@ mod tests {
             Err(AppError::Session(crate::app::SessionError::Workflow(message)))
                 if message == "Git branch is required to create a session"
         ));
-        assert_eq!(app.sessions.sessions.len(), 1);
+        assert_eq!(app.sessions.sessions().len(), 1);
         assert_eq!(
-            app.sessions.sessions[0].follow_up_tasks[0].launched_session_id,
+            app.sessions.sessions()[0].follow_up_tasks[0].launched_session_id,
             None
         );
     }
@@ -4331,7 +4331,7 @@ mod tests {
         let mut app = new_test_app().await;
         app.sessions
             .push_session(test_session(PathBuf::from("/tmp/session-done-view")));
-        app.sessions.handles.insert(
+        app.sessions.session_handles_mut().insert(
             "session-1".into(),
             SessionHandles::new("Merge finished".to_string(), Status::Done),
         );
@@ -4395,7 +4395,7 @@ mod tests {
         let mut viewed_session = test_session(session_folder);
         viewed_session.status = Status::Merging;
         app.sessions.push_session(viewed_session);
-        app.sessions.handles.insert(
+        app.sessions.session_handles_mut().insert(
             "session-1".into(),
             SessionHandles::new("Merging".to_string(), Status::Merging),
         );
@@ -4412,7 +4412,7 @@ mod tests {
         // Assert
         assert!(
             app.sessions
-                .sessions
+                .sessions()
                 .iter()
                 .any(|session| session.id == "session-1" && session.status == Status::Merging)
         );
@@ -5080,7 +5080,7 @@ mod tests {
         ));
         let continued_session = app
             .sessions
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == continued_session_id)
             .expect("expected created continuation draft");
@@ -5167,7 +5167,7 @@ mod tests {
         ));
         let continued_session = app
             .sessions
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == continued_session_id)
             .expect("expected created continuation draft");
@@ -5234,7 +5234,7 @@ mod tests {
         session.id = session_id.to_string().into();
         session.status = Status::AgentReview;
         app.sessions.push_session(session);
-        app.sessions.handles.insert(
+        app.sessions.session_handles_mut().insert(
             session_id.to_string().into(),
             SessionHandles::new(String::new(), Status::AgentReview),
         );
@@ -5257,10 +5257,10 @@ mod tests {
             app.review_cache.get(session_id),
             Some(ReviewCacheEntry::Ready { text, diff_hash }) if text == review_text && *diff_hash == 123
         ));
-        assert_eq!(app.sessions.sessions[0].status, Status::Review);
+        assert_eq!(app.sessions.sessions()[0].status, Status::Review);
         assert_eq!(
             *app.sessions
-                .handles
+                .session_handles()
                 .get(session_id)
                 .expect("expected session handles")
                 .status
@@ -5332,7 +5332,7 @@ mod tests {
         session.id = session_id.to_string().into();
         session.status = Status::InProgress;
         app.sessions.push_session(session);
-        app.sessions.handles.insert(
+        app.sessions.session_handles_mut().insert(
             session_id.to_string().into(),
             SessionHandles::new(String::new(), Status::InProgress),
         );
@@ -5351,10 +5351,10 @@ mod tests {
         );
 
         // Assert
-        assert_eq!(app.sessions.sessions[0].status, Status::InProgress);
+        assert_eq!(app.sessions.sessions()[0].status, Status::InProgress);
         assert_eq!(
             *app.sessions
-                .handles
+                .session_handles()
                 .get(session_id)
                 .expect("expected session handles")
                 .status
@@ -5371,7 +5371,7 @@ mod tests {
         let session_id = "session-1";
         app.sessions
             .push_session(test_session(PathBuf::from("/tmp/session-cache-clear")));
-        app.sessions.sessions[0].status = Status::InProgress;
+        app.sessions.sessions_mut()[0].status = Status::InProgress;
         app.review_cache.insert(
             session_id.to_string().into(),
             ReviewCacheEntry::Ready {
@@ -5395,7 +5395,7 @@ mod tests {
         let session_id = "session-1";
         app.sessions
             .push_session(test_session(PathBuf::from("/tmp/session-hash-skip")));
-        app.sessions.sessions[0].status = Status::Review;
+        app.sessions.sessions_mut()[0].status = Status::Review;
 
         let diff_text = "diff --git a/file.rs b/file.rs\n+new line";
         let hash = diff_content_hash(diff_text);
@@ -5433,7 +5433,7 @@ mod tests {
         let session_id = "session-1";
         app.sessions
             .push_session(test_session(PathBuf::from("/tmp/session-loading-skip")));
-        app.sessions.sessions[0].status = Status::Review;
+        app.sessions.sessions_mut()[0].status = Status::Review;
 
         let diff_text = "diff --git a/file.rs b/file.rs\n+new line";
         let hash = diff_content_hash(diff_text);
@@ -5458,7 +5458,7 @@ mod tests {
             Some(ReviewCacheEntry::Loading { diff_hash }) if *diff_hash == hash
         ));
         // Status remains Review because mark_session_agent_review was not called.
-        assert_eq!(app.sessions.sessions[0].status, Status::Review);
+        assert_eq!(app.sessions.sessions()[0].status, Status::Review);
     }
 
     #[tokio::test]
@@ -5468,7 +5468,7 @@ mod tests {
         let session_id = "session-1";
         app.sessions
             .push_session(test_session(PathBuf::from("/tmp/session-suppressed-skip")));
-        app.sessions.sessions[0].status = Status::Review;
+        app.sessions.sessions_mut()[0].status = Status::Review;
 
         let diff_text = "diff --git a/file.rs b/file.rs\n+stopped turn";
         let hash = diff_content_hash(diff_text);
@@ -5492,7 +5492,7 @@ mod tests {
             app.review_cache.get(session_id),
             Some(ReviewCacheEntry::Suppressed { diff_hash }) if *diff_hash == hash
         ));
-        assert_eq!(app.sessions.sessions[0].status, Status::Review);
+        assert_eq!(app.sessions.sessions()[0].status, Status::Review);
     }
 
     #[tokio::test]
@@ -5502,7 +5502,7 @@ mod tests {
         let session_id = "session-1";
         app.sessions
             .push_session(test_session(PathBuf::from("/tmp/session-hash-start")));
-        app.sessions.sessions[0].status = Status::Review;
+        app.sessions.sessions_mut()[0].status = Status::Review;
 
         let diff_text = "diff --git a/file.rs b/file.rs\n+new line";
         let expected_hash = diff_content_hash(diff_text);
@@ -5522,7 +5522,7 @@ mod tests {
             app.review_cache.get(session_id),
             Some(ReviewCacheEntry::Loading { diff_hash }) if *diff_hash == expected_hash
         ));
-        assert_eq!(app.sessions.sessions[0].status, Status::AgentReview);
+        assert_eq!(app.sessions.sessions()[0].status, Status::AgentReview);
     }
 
     #[tokio::test]
@@ -5531,8 +5531,8 @@ mod tests {
         let mut app = new_test_app().await;
         app.sessions
             .push_session(test_session(PathBuf::from("/tmp/session-delete-cache")));
-        app.sessions.table_state.select(Some(0));
-        let session_id = app.sessions.sessions[0].id.clone();
+        app.sessions.select_session_index(Some(0));
+        let session_id = app.sessions.sessions()[0].id.clone();
         app.review_cache.insert(
             session_id.clone(),
             ReviewCacheEntry::Ready {
@@ -5627,8 +5627,8 @@ mod tests {
         app.apply_review_request_status_update(update).await;
 
         // Assert
-        assert_eq!(app.sessions.sessions.len(), 1);
-        let session = &app.sessions.sessions[0];
+        assert_eq!(app.sessions.sessions().len(), 1);
+        let session = &app.sessions.sessions()[0];
         let review_request = session
             .review_request
             .as_ref()

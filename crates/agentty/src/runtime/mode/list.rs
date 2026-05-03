@@ -111,11 +111,10 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
             }
         }
         Tab::Sessions => {
-            if let Some(session_index) = app.sessions.table_state.selected() {
+            if let Some(session_index) = app.sessions.selected_session_index() {
                 let Some(session_id) = app
                     .sessions
-                    .sessions
-                    .get(session_index)
+                    .session_at(session_index)
                     .map(|session| session.id.clone())
                 else {
                     return Ok(EventResult::Continue);
@@ -125,7 +124,7 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
                     .load_session_detail_into_state(app.services.db(), session_id.as_str())
                     .await;
 
-                if let Some(session) = app.sessions.sessions.get(session_index)
+                if let Some(session) = app.sessions.session_at(session_index)
                     && session.status == Status::Question
                 {
                     let questions = session.questions.clone();
@@ -300,9 +299,8 @@ fn list_keybindings(app: &App) -> Vec<HelpAction> {
     let can_open_selected_session = is_sessions_tab
         && app
             .sessions
-            .table_state
-            .selected()
-            .and_then(|selected_index| app.sessions.sessions.get(selected_index))
+            .selected_session_index()
+            .and_then(|selected_index| app.sessions.session_at(selected_index))
             .is_some();
     session_list_actions(can_cancel_selected_session, can_open_selected_session)
 }
@@ -596,7 +594,7 @@ mod tests {
 
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
-        assert!(app.sessions.sessions.is_empty());
+        assert!(app.sessions.sessions().is_empty());
         assert!(matches!(
             app.mode,
             AppMode::SessionCreation {
@@ -621,7 +619,7 @@ mod tests {
 
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
-        assert!(app.sessions.sessions.is_empty());
+        assert!(app.sessions.sessions().is_empty());
         assert!(matches!(app.mode, AppMode::List));
     }
 
@@ -641,7 +639,7 @@ mod tests {
 
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
-        assert!(app.sessions.sessions.is_empty());
+        assert!(app.sessions.sessions().is_empty());
         assert!(matches!(app.mode, AppMode::List));
     }
 
@@ -654,7 +652,7 @@ mod tests {
             .await
             .expect("failed to create session");
         app.tabs.set(Tab::Sessions);
-        app.sessions.table_state.select(Some(0));
+        app.sessions.select_session_index(Some(0));
         app.mode = AppMode::List;
 
         // Act
@@ -690,7 +688,7 @@ mod tests {
             },
         );
         app.tabs.set(Tab::Sessions);
-        app.sessions.table_state.select(Some(0));
+        app.sessions.select_session_index(Some(0));
         app.mode = AppMode::List;
 
         // Act
@@ -730,7 +728,7 @@ mod tests {
                 text: "Need migration notes?".to_string(),
             },
         ];
-        if let Some(session) = app.sessions.sessions.first_mut() {
+        if let Some(session) = app.sessions.sessions_mut().first_mut() {
             session.status = Status::Question;
             session.questions = expected_questions.clone();
         }
@@ -742,7 +740,7 @@ mod tests {
             },
         );
         app.tabs.set(Tab::Sessions);
-        app.sessions.table_state.select(Some(0));
+        app.sessions.select_session_index(Some(0));
         app.mode = AppMode::List;
 
         // Act
@@ -788,12 +786,12 @@ mod tests {
         let session_index = app
             .session_index_for_id(&expected_session_id)
             .expect("missing created session");
-        let session_folder = app.sessions.sessions[session_index].folder.clone();
+        let session_folder = app.sessions.sessions()[session_index].folder.clone();
         let changed_lines = "line\n".repeat(40);
         std::fs::write(session_folder.join("open-size-test.txt"), changed_lines)
             .expect("failed to write test file");
         app.tabs.set(Tab::Sessions);
-        app.sessions.table_state.select(Some(0));
+        app.sessions.select_session_index(Some(0));
         app.mode = AppMode::List;
 
         // Act
@@ -833,11 +831,11 @@ mod tests {
             .create_session()
             .await
             .expect("failed to create session");
-        if let Some(session) = app.sessions.sessions.first_mut() {
+        if let Some(session) = app.sessions.sessions_mut().first_mut() {
             session.status = Status::Done;
         }
         app.tabs.set(Tab::Sessions);
-        app.sessions.table_state.select(Some(0));
+        app.sessions.select_session_index(Some(0));
         app.mode = AppMode::List;
 
         // Act
@@ -866,11 +864,11 @@ mod tests {
             .create_session()
             .await
             .expect("failed to create session");
-        if let Some(session) = app.sessions.sessions.first_mut() {
+        if let Some(session) = app.sessions.sessions_mut().first_mut() {
             session.status = Status::Canceled;
         }
         app.tabs.set(Tab::Sessions);
-        app.sessions.table_state.select(Some(0));
+        app.sessions.select_session_index(Some(0));
         app.mode = AppMode::List;
 
         // Act
@@ -942,7 +940,7 @@ mod tests {
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
         assert_eq!(app.settings.open_command, "a");
-        assert_eq!(app.sessions.sessions.len(), 1);
+        assert_eq!(app.sessions.sessions().len(), 1);
     }
 
     #[tokio::test]
@@ -1176,7 +1174,7 @@ mod tests {
 
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
-        assert!(app.sessions.sessions.is_empty());
+        assert!(app.sessions.sessions().is_empty());
         assert!(matches!(app.mode, AppMode::List));
     }
 
@@ -1278,10 +1276,10 @@ mod tests {
             .create_session()
             .await
             .expect("failed to create session");
-        app.sessions.sessions[0].status = Status::Review;
-        let expected_session_title = app.sessions.sessions[0].display_title().to_string();
+        app.sessions.sessions_mut()[0].status = Status::Review;
+        let expected_session_title = app.sessions.sessions()[0].display_title().to_string();
         app.tabs.set(Tab::Sessions);
-        app.sessions.table_state.select(Some(0));
+        app.sessions.select_session_index(Some(0));
 
         // Act
         let event_result = handle(
@@ -1316,9 +1314,9 @@ mod tests {
             .create_draft_session()
             .await
             .expect("failed to create draft session");
-        let expected_session_title = app.sessions.sessions[0].display_title().to_string();
+        let expected_session_title = app.sessions.sessions()[0].display_title().to_string();
         app.tabs.set(Tab::Sessions);
-        app.sessions.table_state.select(Some(0));
+        app.sessions.select_session_index(Some(0));
 
         // Act
         let event_result = handle(
@@ -1353,10 +1351,10 @@ mod tests {
             .create_session()
             .await
             .expect("failed to create session");
-        app.sessions.sessions[0].status = Status::InProgress;
-        let expected_session_title = app.sessions.sessions[0].display_title().to_string();
+        app.sessions.sessions_mut()[0].status = Status::InProgress;
+        let expected_session_title = app.sessions.sessions()[0].display_title().to_string();
         app.tabs.set(Tab::Sessions);
-        app.sessions.table_state.select(Some(0));
+        app.sessions.select_session_index(Some(0));
 
         // Act
         let event_result = handle(
@@ -1392,7 +1390,7 @@ mod tests {
             .await
             .expect("failed to create session");
         app.tabs.set(Tab::Sessions);
-        app.sessions.table_state.select(Some(0));
+        app.sessions.select_session_index(Some(0));
 
         // Act
         let event_result = handle(

@@ -5,6 +5,7 @@
 
 mod core;
 mod error;
+mod state;
 mod workflow;
 
 pub use core::SessionManager;
@@ -16,4 +17,6 @@ pub(crate) use core::{
 };
 
 pub use error::SessionError;
+pub(crate) use state::SessionGitStatus;
+pub use state::SessionState;
 pub(crate) use workflow::refresh::SyncReviewRequestOutcome;

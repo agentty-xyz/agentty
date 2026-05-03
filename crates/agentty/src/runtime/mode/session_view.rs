@@ -224,7 +224,7 @@ async fn handle_primary_view_key(
                 app,
                 view_context,
                 PromptHistoryState::new(session_prompt_history_entries(
-                    &app.sessions.sessions[view_context.session_index],
+                    app.sessions.session_at(view_context.session_index)?,
                 )),
                 InputState::default(),
                 pending_update.scroll_offset,
@@ -238,7 +238,7 @@ async fn handle_primary_view_key(
                 app,
                 view_context,
                 PromptHistoryState::new(session_prompt_history_entries(
-                    &app.sessions.sessions[view_context.session_index],
+                    app.sessions.session_at(view_context.session_index)?,
                 )),
                 InputState::with_text("/".to_string()),
                 pending_update.scroll_offset,
@@ -457,7 +457,7 @@ async fn open_or_regenerate_review(
 /// Collects session-specific values used by `handle()` from the active view
 /// row.
 fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSessionSnapshot> {
-    let session = app.sessions.sessions.get(view_context.session_index)?;
+    let session = app.sessions.session_at(view_context.session_index)?;
     let session_status = session.status;
     let can_open_worktree = is_view_worktree_open_allowed(session_status)
         && *app
@@ -596,7 +596,7 @@ async fn end_in_progress_turn(app: &mut App, session_id: &str) {
 async fn pop_last_queued_chat_message_if_any(app: &mut App, session_id: &str) -> bool {
     let popped_prompt = app
         .sessions
-        .handles
+        .session_handles()
         .get(session_id)
         .and_then(|handles| handles.queued_messages.lock().ok()?.pop_back());
 
@@ -650,7 +650,7 @@ async fn cancel_in_progress_turn(app: &mut App, session_id: &str) {
         );
     }
 
-    if let Some(handles) = app.sessions.handles.get(session_id) {
+    if let Some(handles) = app.sessions.session_handles().get(session_id) {
         // Cancel the current turn's token so the worker's `select!`
         // branch fires and triggers graceful channel shutdown. The
         // worker sends SIGTERM to CLI child processes inside the
@@ -686,7 +686,7 @@ async fn cancel_in_progress_turn(app: &mut App, session_id: &str) {
         return;
     }
 
-    if let Some(handles) = app.sessions.handles.get(session_id)
+    if let Some(handles) = app.sessions.session_handles().get(session_id)
         && let Ok(mut handle_status) = handles.status.lock()
     {
         *handle_status = Status::Review;
@@ -694,7 +694,7 @@ async fn cancel_in_progress_turn(app: &mut App, session_id: &str) {
 
     if let Some(session) = app
         .sessions
-        .sessions
+        .sessions_mut()
         .iter_mut()
         .find(|session| session.id == session_id)
     {
@@ -724,7 +724,7 @@ async fn cancel_in_progress_turn(app: &mut App, session_id: &str) {
 async fn suppress_auto_review_for_stopped_turn(app: &mut App, session_id: &str) {
     let Some(session) = app
         .sessions
-        .sessions
+        .sessions()
         .iter()
         .find(|session| session.id == session_id)
     else {
@@ -816,7 +816,9 @@ fn open_publish_branch_input(
     view_context: &ViewContext,
     publish_branch_action: PublishBranchAction,
 ) {
-    let session = &app.sessions.sessions[view_context.session_index];
+    let Some(session) = app.sessions.session_at(view_context.session_index) else {
+        return;
+    };
     let default_branch_name = crate::app::session::session_branch(&session.id);
     let locked_upstream_ref = session.published_upstream_ref.clone();
     let input = locked_upstream_ref
@@ -906,25 +908,22 @@ fn view_total_lines(
         .get(session_id)
         .map(std::string::String::as_str);
 
-    app.sessions
-        .sessions
-        .get(session_index)
-        .map_or(0, |session| {
-            SessionChatPage::rendered_output_line_count(
-                session,
-                output_width,
-                SessionOutputLineContext {
-                    active_prompt_output,
-                    active_progress,
-                    review_model: app.settings.default_review_model,
-                    review_status_message,
-                    review_text,
-                    session_update_version: app.session_update_version(session_id),
-                },
-                app.markdown_render_cache(),
-                app.session_output_layout_cache(),
-            )
-        })
+    app.sessions.session_at(session_index).map_or(0, |session| {
+        SessionChatPage::rendered_output_line_count(
+            session,
+            output_width,
+            SessionOutputLineContext {
+                active_prompt_output,
+                active_progress,
+                review_model: app.settings.default_review_model,
+                review_status_message,
+                review_text,
+                session_update_version: app.session_update_version(session_id),
+            },
+            app.markdown_render_cache(),
+            app.session_output_layout_cache(),
+        )
+    })
 }
 
 /// Extracts user prompt history entries from persisted session output text.
@@ -1051,7 +1050,7 @@ async fn open_review_output_mode(
         }
     }
 
-    let Some(session) = app.sessions.sessions.get(view_context.session_index) else {
+    let Some(session) = app.sessions.session_at(view_context.session_index) else {
         *review_status_message = None;
         *review_text = Some(String::new());
 
@@ -1127,7 +1126,7 @@ fn review_assist_model(app: &App) -> AgentModel {
 
 /// Loads the session worktree diff against its base branch.
 async fn load_view_session_diff(app: &App, view_context: &ViewContext) -> String {
-    let Some(session) = app.sessions.sessions.get(view_context.session_index) else {
+    let Some(session) = app.sessions.session_at(view_context.session_index) else {
         return String::new();
     };
 
@@ -1490,7 +1489,7 @@ mod tests {
     async fn test_view_session_snapshot_disables_actions_for_done_session() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-        app.sessions.sessions[0].status = Status::Done;
+        app.sessions.sessions_mut()[0].status = Status::Done;
         app.mode = AppMode::View {
             review_status_message: None,
             review_text: None,
@@ -1513,7 +1512,7 @@ mod tests {
     async fn test_view_session_snapshot_enables_continue_for_canceled_session() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-        app.sessions.sessions[0].status = Status::Canceled;
+        app.sessions.sessions_mut()[0].status = Status::Canceled;
         app.mode = AppMode::View {
             review_status_message: None,
             review_text: None,
@@ -1602,9 +1601,9 @@ mod tests {
     async fn test_view_total_lines_counts_wrapped_output_lines() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-        app.sessions.sessions[0].output = "word ".repeat(40);
+        app.sessions.sessions_mut()[0].output = "word ".repeat(40);
         let raw_line_count =
-            u16::try_from(app.sessions.sessions[0].output.lines().count()).unwrap_or(u16::MAX);
+            u16::try_from(app.sessions.sessions()[0].output.lines().count()).unwrap_or(u16::MAX);
 
         // Act
         let total_lines = view_total_lines(&app, &session_id, 0, None, None, 20);
@@ -1665,7 +1664,7 @@ mod tests {
     async fn test_scroll_offset_down_does_not_jump_to_bottom_for_wrapped_output() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-        app.sessions.sessions[0].output = "word ".repeat(60);
+        app.sessions.sessions_mut()[0].output = "word ".repeat(60);
         let metrics = ViewMetrics {
             total_lines: view_total_lines(&app, &session_id, 0, None, None, 20),
             view_height: 5,
@@ -1783,10 +1782,10 @@ mod tests {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.settings.default_review_model = AgentModel::ClaudeHaiku4520251001;
-        app.sessions.sessions[0].model = AgentModel::Gpt54;
-        app.sessions.sessions[0].status = Status::AgentReview;
+        app.sessions.sessions_mut()[0].model = AgentModel::Gpt54;
+        app.sessions.sessions_mut()[0].status = Status::AgentReview;
         let output_width = 14;
-        let session = &app.sessions.sessions[0];
+        let session = &app.sessions.sessions()[0];
         let expected = SessionChatPage::rendered_output_line_count(
             session,
             output_width,
@@ -1842,8 +1841,8 @@ mod tests {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.settings.default_review_model = AgentModel::ClaudeOpus47;
-        app.sessions.sessions[0].status = Status::Review;
-        let session_folder = app.sessions.sessions[0].folder.clone();
+        app.sessions.sessions_mut()[0].status = Status::Review;
+        let session_folder = app.sessions.sessions()[0].folder.clone();
         std::fs::write(session_folder.join("README.md"), "review test content\n")
             .expect("failed to update readme");
         let view_context = ViewContext {
@@ -1871,7 +1870,7 @@ mod tests {
             Some(review_loading_message(AgentModel::ClaudeOpus47))
         );
         assert_eq!(next_review_text, None);
-        assert_eq!(app.sessions.sessions[0].status, Status::AgentReview);
+        assert_eq!(app.sessions.sessions()[0].status, Status::AgentReview);
         assert!(matches!(
             app.review_cache.get(&view_context.session_id),
             Some(ReviewCacheEntry::Loading { .. })
@@ -1940,7 +1939,7 @@ mod tests {
     async fn test_show_diff_for_view_session_switches_mode_to_diff() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-        let session_folder = app.sessions.sessions[0].folder.clone();
+        let session_folder = app.sessions.sessions()[0].folder.clone();
         std::fs::write(session_folder.join("README.md"), "updated content")
             .expect("failed to write diff fixture");
         let context = ViewContext {
@@ -2004,7 +2003,7 @@ mod tests {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         let non_git_dir = tempdir().expect("failed to create non-git dir");
-        app.sessions.sessions[0].folder = non_git_dir.path().to_path_buf();
+        app.sessions.sessions_mut()[0].folder = non_git_dir.path().to_path_buf();
         let context = ViewContext {
             review_status_message: None,
             review_text: None,
@@ -2061,7 +2060,7 @@ mod tests {
 
         // Assert
         app.sessions.sync_from_handles();
-        let output = app.sessions.sessions[0].output.clone();
+        let output = app.sessions.sessions()[0].output.clone();
         assert_eq!(output, "line one");
     }
 
@@ -2190,7 +2189,7 @@ mod tests {
 
         // Assert
         app.sessions.sync_from_handles();
-        let output = app.sessions.sessions[0].output.clone();
+        let output = app.sessions.sessions()[0].output.clone();
         assert!(output.contains("[Rebase Error]"));
     }
 
@@ -2286,7 +2285,8 @@ mod tests {
     async fn test_open_publish_branch_input_locks_existing_upstream_branch_name() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-        app.sessions.sessions[0].published_upstream_ref = Some("origin/review/custom".to_string());
+        app.sessions.sessions_mut()[0].published_upstream_ref =
+            Some("origin/review/custom".to_string());
         let view_context = ViewContext {
             review_status_message: None,
             review_text: None,
@@ -2624,7 +2624,7 @@ mod tests {
             .expect("failed to create sibling session");
         let source_session = app
             .sessions
-            .sessions
+            .sessions_mut()
             .iter_mut()
             .find(|session| session.id == session_id)
             .expect("expected source session in session list");
@@ -2673,7 +2673,7 @@ mod tests {
         let (mut app, _base_dir, source_session_id) = new_test_app_with_session().await;
         let source_session = app
             .sessions
-            .sessions
+            .sessions_mut()
             .iter_mut()
             .find(|session| session.id == source_session_id)
             .expect("expected source session in session list");
@@ -2963,13 +2963,13 @@ mod tests {
     async fn test_end_in_progress_turn_transitions_session_to_review() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-        app.sessions.sessions[0].status = Status::InProgress;
+        app.sessions.sessions_mut()[0].status = Status::InProgress;
         let _ = app
             .services
             .db()
             .update_session_status_with_timing_at(&session_id, &Status::InProgress.to_string(), 0)
             .await;
-        app.sessions.handles.insert(
+        app.sessions.session_handles_mut().insert(
             session_id.clone().into(),
             crate::domain::session::SessionHandles::new(String::new(), Status::InProgress),
         );
@@ -2978,10 +2978,10 @@ mod tests {
         end_in_progress_turn(&mut app, &session_id).await;
 
         // Assert
-        assert_eq!(app.sessions.sessions[0].status, Status::Review);
+        assert_eq!(app.sessions.sessions()[0].status, Status::Review);
         let handle_status = *app
             .sessions
-            .handles
+            .session_handles()
             .get(session_id.as_str())
             .expect("handles missing")
             .status
@@ -3002,7 +3002,7 @@ mod tests {
         let child_pid = child.id().expect("child has no pid");
 
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-        app.sessions.sessions[0].status = Status::InProgress;
+        app.sessions.sessions_mut()[0].status = Status::InProgress;
         let _ = app
             .services
             .db()
@@ -3014,7 +3014,7 @@ mod tests {
             *guard = Some(child_pid);
         }
         app.sessions
-            .handles
+            .session_handles_mut()
             .insert(session_id.clone().into(), handles);
 
         // Act
@@ -3035,7 +3035,7 @@ mod tests {
     async fn test_end_in_progress_turn_cancels_token() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-        app.sessions.sessions[0].status = Status::InProgress;
+        app.sessions.sessions_mut()[0].status = Status::InProgress;
         let _ = app
             .services
             .db()
@@ -3045,7 +3045,7 @@ mod tests {
             crate::domain::session::SessionHandles::new(String::new(), Status::InProgress);
         let cancel_token = std::sync::Arc::clone(&handles.cancel_token);
         app.sessions
-            .handles
+            .session_handles_mut()
             .insert(session_id.clone().into(), handles);
 
         // Act
@@ -3067,13 +3067,13 @@ mod tests {
     async fn test_end_in_progress_turn_keeps_review_session_review_ready() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-        app.sessions.sessions[0].status = Status::Review;
+        app.sessions.sessions_mut()[0].status = Status::Review;
         let _ = app
             .services
             .db()
             .update_session_status_with_timing_at(&session_id, &Status::Review.to_string(), 0)
             .await;
-        app.sessions.handles.insert(
+        app.sessions.session_handles_mut().insert(
             session_id.clone().into(),
             crate::domain::session::SessionHandles::new(String::new(), Status::Review),
         );
@@ -3082,10 +3082,10 @@ mod tests {
         end_in_progress_turn(&mut app, &session_id).await;
 
         // Assert
-        assert_eq!(app.sessions.sessions[0].status, Status::Review);
+        assert_eq!(app.sessions.sessions()[0].status, Status::Review);
         let handle_status = *app
             .sessions
-            .handles
+            .session_handles()
             .get(session_id.as_str())
             .expect("handles missing")
             .status
@@ -3099,7 +3099,7 @@ mod tests {
         // Arrange — seed an InProgress session with two queued chat messages
         // so the LIFO pop is observable (the older entry must remain).
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-        app.sessions.sessions[0].status = Status::InProgress;
+        app.sessions.sessions_mut()[0].status = Status::InProgress;
         let _ = app
             .services
             .db()
@@ -3117,9 +3117,9 @@ mod tests {
             ));
         }
         app.sessions
-            .handles
+            .session_handles_mut()
             .insert(session_id.clone().into(), handles);
-        app.sessions.sessions[0].queued_messages =
+        app.sessions.sessions_mut()[0].queued_messages =
             vec!["first queued".to_string(), "second queued".to_string()];
 
         // Act — first Ctrl+C while the queue is non-empty.
@@ -3140,18 +3140,18 @@ mod tests {
             "only the most recently queued chat message should be popped on first Ctrl+C"
         );
         assert_eq!(
-            app.sessions.sessions[0].queued_messages,
+            app.sessions.sessions()[0].queued_messages,
             vec!["first queued".to_string()],
             "snapshot queued_messages should mirror the handle after LIFO pop"
         );
         assert_eq!(
-            app.sessions.sessions[0].status,
+            app.sessions.sessions()[0].status,
             Status::InProgress,
             "status should stay InProgress while only a queued message is popped"
         );
         let handle_status = *app
             .sessions
-            .handles
+            .session_handles()
             .get(session_id.as_str())
             .expect("handles missing")
             .status
@@ -3173,7 +3173,7 @@ mod tests {
         // can observe LIFO drain across consecutive presses before falling
         // through to the cancel path.
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-        app.sessions.sessions[0].status = Status::InProgress;
+        app.sessions.sessions_mut()[0].status = Status::InProgress;
         let _ = app
             .services
             .db()
@@ -3191,9 +3191,9 @@ mod tests {
             ));
         }
         app.sessions
-            .handles
+            .session_handles_mut()
             .insert(session_id.clone().into(), handles);
-        app.sessions.sessions[0].queued_messages =
+        app.sessions.sessions_mut()[0].queued_messages =
             vec!["first queued".to_string(), "second queued".to_string()];
 
         // Act — first press pops "second queued".
@@ -3211,10 +3211,10 @@ mod tests {
             "queue should be drained after one press per queued message"
         );
         assert!(
-            app.sessions.sessions[0].queued_messages.is_empty(),
+            app.sessions.sessions()[0].queued_messages.is_empty(),
             "snapshot queued_messages should be empty after LIFO drain"
         );
-        assert_eq!(app.sessions.sessions[0].status, Status::InProgress);
+        assert_eq!(app.sessions.sessions()[0].status, Status::InProgress);
         assert!(
             !cancel_token
                 .lock()
@@ -3234,7 +3234,7 @@ mod tests {
                 .is_cancelled(),
             "cancel_token must be cancelled once the queue is drained"
         );
-        assert_eq!(app.sessions.sessions[0].status, Status::Review);
+        assert_eq!(app.sessions.sessions()[0].status, Status::Review);
     }
 
     #[tokio::test]
@@ -3242,7 +3242,7 @@ mod tests {
         // Arrange — InProgress session with an empty queue, mirroring the
         // state after the first press has already drained queued messages.
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-        app.sessions.sessions[0].status = Status::InProgress;
+        app.sessions.sessions_mut()[0].status = Status::InProgress;
         let _ = app
             .services
             .db()
@@ -3252,7 +3252,7 @@ mod tests {
             crate::domain::session::SessionHandles::new(String::new(), Status::InProgress);
         let cancel_token = std::sync::Arc::clone(&handles.cancel_token);
         app.sessions
-            .handles
+            .session_handles_mut()
             .insert(session_id.clone().into(), handles);
 
         // Act — second Ctrl+C now that the queue is empty.
@@ -3267,10 +3267,10 @@ mod tests {
                 .is_cancelled(),
             "cancel_token must be cancelled when the queue is empty"
         );
-        assert_eq!(app.sessions.sessions[0].status, Status::Review);
+        assert_eq!(app.sessions.sessions()[0].status, Status::Review);
         let handle_status = *app
             .sessions
-            .handles
+            .session_handles()
             .get(session_id.as_str())
             .expect("handles missing")
             .status
@@ -3289,7 +3289,7 @@ mod tests {
         // Arrange — two prompts queued; simulate the worker popping the
         // oldest entry off the handle without yet refreshing the snapshot.
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-        app.sessions.sessions[0].status = Status::InProgress;
+        app.sessions.sessions_mut()[0].status = Status::InProgress;
         let _ = app
             .services
             .db()
@@ -3306,9 +3306,9 @@ mod tests {
             ));
         }
         app.sessions
-            .handles
+            .session_handles_mut()
             .insert(session_id.clone().into(), handles);
-        app.sessions.sessions[0].queued_messages =
+        app.sessions.sessions_mut()[0].queued_messages =
             vec!["first queued".to_string(), "second queued".to_string()];
 
         // Simulate the worker `pop_front` draining the oldest entry before
@@ -3335,7 +3335,7 @@ mod tests {
             "handle queue should be empty after retracting the only remaining entry"
         );
         assert!(
-            app.sessions.sessions[0].queued_messages.is_empty(),
+            app.sessions.sessions()[0].queued_messages.is_empty(),
             "snapshot must rebuild from the handle state and not show a phantom row for a prompt \
              the worker is already executing"
         );

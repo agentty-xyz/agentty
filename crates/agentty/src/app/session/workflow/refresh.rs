@@ -128,7 +128,7 @@ impl SessionManager {
         self.ensure_mode_session_exists(mode);
 
         let active_session_ids: HashSet<SessionId> = self
-            .sessions
+            .sessions()
             .iter()
             .map(|session| session.id.clone())
             .collect();
@@ -219,7 +219,7 @@ impl SessionManager {
 
         if let Some(session_id) = selected_session_id
             && let Some(index) = self
-                .sessions
+                .sessions()
                 .iter()
                 .position(|session| session.id == session_id)
         {

@@ -129,7 +129,7 @@ impl App {
         let session_progress_messages = self.session_progress_messages.clone();
         let update_status = self.update_status().cloned();
         let wall_clock_unix_seconds =
-            session::unix_timestamp_from_system_time(self.sessions.state().clock.now_system_time());
+            session::unix_timestamp_from_system_time(self.sessions.state().now_system_time());
         let status_bar_fyi_rotation_index =
             u64::try_from(wall_clock_unix_seconds.div_euclid(60)).unwrap_or_default();
         let projects = self.projects.project_items().to_vec();
@@ -187,7 +187,7 @@ impl App {
             && self
                 .sessions
                 .state()
-                .sessions
+                .sessions()
                 .iter()
                 .any(Self::session_tick_driven_ui_active)
     }

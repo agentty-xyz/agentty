@@ -612,7 +612,7 @@ impl App {
         let focused_review_persistence = apply_review_updates(
             &mut self.review_cache,
             &mut self.mode,
-            &mut self.sessions,
+            self.sessions.state_mut(),
             event_batch.review_updates,
         );
         self.persist_focused_review_updates(focused_review_persistence)
@@ -654,7 +654,7 @@ impl App {
         auto_start_reviews(
             &mut self.review_cache,
             &event_batch.session_ids,
-            &mut self.sessions,
+            self.sessions.state_mut(),
             &mut self.mode,
             self.services.git_client(),
             self.services.event_sender(),
@@ -783,7 +783,7 @@ impl App {
             .iter()
             .filter_map(|session_id| {
                 self.sessions
-                    .sessions
+                    .sessions()
                     .iter()
                     .find(|session| session.id == *session_id)
                     .map(|session| (session_id.clone(), session.status))
@@ -909,7 +909,7 @@ impl App {
     ) {
         if !self
             .sessions
-            .sessions
+            .sessions()
             .iter()
             .any(|session| session.id == session_id)
         {
@@ -1130,7 +1130,7 @@ impl App {
         apply_review_updates(
             &mut self.review_cache,
             &mut self.mode,
-            &mut self.sessions,
+            self.sessions.state_mut(),
             review_updates,
         );
     }
@@ -1164,7 +1164,7 @@ impl App {
         auto_start_reviews(
             &mut self.review_cache,
             session_ids,
-            &mut self.sessions,
+            self.sessions.state_mut(),
             &mut self.mode,
             self.services.git_client(),
             self.services.event_sender(),
