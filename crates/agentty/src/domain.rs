@@ -6,6 +6,7 @@ pub mod file_entry;
 pub mod input;
 pub mod permission;
 pub mod project;
+pub mod qe;
 pub mod question;
 pub mod review;
 pub mod session;

@@ -79,6 +79,9 @@ E2E session-creation journeys now wait on those predicates instead of fixed
   decides each round whether to continue, switch the reviewer backend, escalate to the
   user, or finish and squash the result; loop termination is driven by orchestrator
   judgment plus user interrupt, not a static iteration cap.
+- `Quality`: in-session quality enforcement that audits the active session worktree
+  against agentty's hardcoded standard for agentic-development readiness and surfaces
+  recommendations users can act on through the existing roadmap-driven session flow.
 
 ## Planning Model
 
@@ -252,6 +255,67 @@ reasoning) renders inline in the session transcript without yet auto-looping.
   invocation, the structured `Continue`/`Done` verdict, and the orchestrator-backend
   separation requirement without claiming auto-looping exists yet.
 
+### [c7d1f4a2-9e3b-4a8f-b1c7-2d5e8f0a9b4c] Quality: /qe:check audits agentic readiness
+
+#### Assignee
+
+`@andagaev`
+
+#### Why now
+
+Agentty is about to be developed via itself against new repositories such as the planned
+standalone `testty` checkout. Without an in-session diagnostic that names the agentic
+practices agentty expects, every new project must rediscover the conventions through
+trial and error. Shipping a thin first slash command anchored on an audit engine and a
+hardcoded recommendations registry lets the broader onboarding flow build on a stable
+diagnostic surface.
+
+#### Usable outcome
+
+Users can run `/qe:check` in any session to receive a markdown report appended to the
+session transcript that names which agentic-readiness recommendations the active
+worktree currently satisfies, why each one matters, and three copy-paste prompts for
+acting on the findings (roadmap-seeded multi-session, single-session focused fix, or
+single-session bulk fix).
+
+#### Substeps
+
+- [x] **Add the QE check engine, recommendations registry, and probe trait.** Introduced
+  `crates/agentty/src/domain/qe.rs` plus `crates/agentty/src/domain/qe/` with `types`,
+  `registry`, `engine`, and `report` modules covering the initial recommendation set
+  (root `AGENTS.md`, `CLAUDE.md`/`GEMINI.md` symlinks, `.gitignore` excludes for
+  `.agentty/`, `README.md` present, `docs/plan/roadmap.md` standard headings, and
+  `.pre-commit-config.yaml` present). Added `crates/agentty/src/infra/qe.rs` with the
+  `QeProbe` trait gated by `#[cfg_attr(test, mockall::automock)]` plus a `RealQeProbe`
+  production impl, and wired the new modules into `crates/agentty/src/domain.rs` and
+  `crates/agentty/src/infra.rs`.
+- [ ] **Wire the `/qe:check` slash command to render the report inline.** Register
+  `/qe:check` in `crates/agentty/src/domain/composer.rs` (`prompt_slash_commands`,
+  `command_description`) and dispatch it in `crates/agentty/src/runtime/mode/prompt.rs`
+  by resolving the session worktree path and project name, running the engine through a
+  `RealQeProbe`, formatting the report (verdict header showing the project name plus
+  recommendations table plus three-path footer), and appending it through
+  `app.append_output_for_session()` like `/stats` does.
+
+#### Tests
+
+- [x] Unit tests under `crates/agentty/src/domain/qe/` cover each recommendation with
+  both `Pass` and `Warn` outcomes via `MockQeProbe`, plus engine-level coverage of
+  verdict aggregation and report shape (healthy short-form, recommendations table,
+  three-path footer).
+- [ ] Add one integration test under `crates/agentty/tests/e2e/` driving `/qe:check`
+  end-to-end against a fixture worktree and snapshotting the appended report content.
+
+#### Docs
+
+- [ ] Update `docs/site/content/docs/usage/workflow.md` to list `/qe:check` in the
+  slash-command catalog, add a new feature page under
+  `docs/site/content/features/qe-check/` with the `FeatureTest`-generated GIF per the
+  Feature Test Gate, refresh `crates/agentty/src/domain/AGENTS.md` and
+  `crates/agentty/src/infra/AGENTS.md` to point new checks at `domain/qe/` and the
+  `QeProbe` boundary, and append a `CHANGELOG.md` entry under `Added` for the new
+  command.
+
 ## Ready Now Execution Order
 
 ```mermaid
@@ -276,6 +340,12 @@ flowchart TD
         AR3 -. queued follow-up .-> AR4
     end
 
+    subgraph QualityLane["Quality - @andagaev"]
+        Q1["[c7d1f4a2] /qe:check audits agentic readiness"]
+        Q2["[2b9d6e07] Expand /qe:check recommendation coverage"]
+        Q1 -. queued follow-up .-> Q2
+    end
+
     subgraph LaterLanes["Queued independent streams"]
         P1["[84aa58cc] Compact reset memory"]
         P2["[a1b75e5c] Route provider restarts through compact memory"]
@@ -284,6 +354,25 @@ flowchart TD
 ```
 
 ## Queued Next
+
+### [2b9d6e07-6f4a-4d8e-9a2b-3c4d5e6f7081] Quality: Expand /qe:check recommendation coverage
+
+#### Outcome
+
+`/qe:check` reports the full agentic-readiness standard from the design discussion,
+including pre-commit autofix/validation hook balance, per-turn validation documentation
+in root `AGENTS.md`, `skills/AGENTS.md` catalog, an `architecture/` doc folder, and
+per-directory `AGENTS.md` coverage on top-level source dirs.
+
+#### Promote when
+
+`[c7d1f4a2-9e3b-4a8f-b1c7-2d5e8f0a9b4c] Quality: /qe:check audits agentic readiness`
+lands and the engine, registry, and report formatter surfaces are stable enough to
+absorb new recommendations without a registry-shape change.
+
+#### Depends on
+
+- `[c7d1f4a2-9e3b-4a8f-b1c7-2d5e8f0a9b4c] Quality: /qe:check audits agentic readiness`
 
 ### [b8c92f4d-3a1e-4d7c-9f2a-5b6e8c1d2a3f] Workflow: Persist queued chat messages across restarts
 
