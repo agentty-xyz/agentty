@@ -19,7 +19,7 @@ homepage = "https://github.com/agentty-xyz/agentty"
 ag-forge = { path = "crates/ag-forge", version = "0.9.1" }
 testty = { path = "crates/testty", version = "0.9.1" }
 async-trait = "0.1"
-agent-client-protocol = "0.11.1"
+agent-client-protocol = "0.12.1"
 assert_cmd = "2"
 arboard = { version = "3", features = ["image-data", "wayland-data-control"] }
 askama = "0.16.0"
