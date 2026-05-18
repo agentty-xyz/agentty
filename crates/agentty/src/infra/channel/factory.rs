@@ -42,7 +42,7 @@ mod tests {
         let channel = create_agent_channel(AgentKind::Claude, None);
 
         // Assert
-        assert!(Arc::strong_count(&channel) == 1);
+        assert_eq!(Arc::strong_count(&channel), 1);
     }
 
     #[test]
@@ -51,7 +51,7 @@ mod tests {
         let channel = create_agent_channel(AgentKind::Gemini, None);
 
         // Assert
-        assert!(Arc::strong_count(&channel) == 1);
+        assert_eq!(Arc::strong_count(&channel), 1);
     }
 
     #[test]
@@ -60,6 +60,6 @@ mod tests {
         let channel = create_agent_channel(AgentKind::Codex, None);
 
         // Assert
-        assert!(Arc::strong_count(&channel) == 1);
+        assert_eq!(Arc::strong_count(&channel), 1);
     }
 }
