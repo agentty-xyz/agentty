@@ -1,15 +1,16 @@
 # testty
 
-Rust-native end-to-end testing for terminal apps. Drive a real binary in a PTY, capture
-location-aware terminal state, and assert on text, style, color, and regions.
+End-to-end testing for terminal apps. Launch your app the way a real user would, then
+check what shows up on screen — text, colors, and highlights.
 
 ## Why
 
-- **Real PTY, real frames.** No mocks. `vt100` parses the same bytes the user would see.
-- **Semantic assertions.** Match text, colors, styles, and regions — or use recipe
-  helpers for tabs, dialogs, footers.
-- **Proof artifacts.** Render captured journeys to text, PNG strips, animated GIFs, or
-  self-contained HTML.
+- **Tests what users actually see.** Runs your real app, not a mock, and checks the
+  rendered screen.
+- **Readable checks.** Assert on visible text, colors, and highlighted items, with
+  ready-made helpers for tabs, dialogs, and footers.
+- **Shareable proof.** Save what each test saw as plain text, a screenshot, an animated
+  GIF, or an HTML report.
 
 ## Install
 
@@ -19,7 +20,7 @@ testty = "0.9"
 tempfile = "3"
 ```
 
-## Quick start
+## Write a test
 
 ```rust
 use testty::prelude::*;
@@ -50,14 +51,15 @@ cargo test -p my-app --test e2e
 
 ## Documentation
 
-- [Getting started](docs/getting-started.md) — install, first test, run it
-- [Scenarios](docs/scenarios.md) — steps, waits, PTY sessions, frames, regions
-- [Assertions](docs/assertions.md) — `assert_*` / `match_*`, `SoftAssertions`, recipes
-- [Snapshots](docs/snapshots.md) — frame-text and visual baselines
-- [Proof pipeline](docs/proof-pipeline.md) — labeled captures, four output backends
-- [Journeys](docs/journeys.md) — reusable scenario building blocks
-- [Frame diffing](docs/frame-diffing.md) — cell-level diffs between frames
-- [Examples](docs/examples.md) — runnable showcase examples
+- [Getting started](docs/getting-started.md) — install, write your first test, run it
+- [Scenarios](docs/scenarios.md) — describe a sequence of actions and waits
+- [Assertions](docs/assertions.md) — check text, colors, and highlights on screen
+- [Snapshots](docs/snapshots.md) — compare a test against a saved baseline
+- [Proof pipeline](docs/proof-pipeline.md) — save what a test saw as text, image, GIF,
+  or HTML
+- [Journeys](docs/journeys.md) — reusable building blocks for tests
+- [Frame diffing](docs/frame-diffing.md) — see what changed between two screens
+- [Examples](docs/examples.md) — runnable example programs
 - [Upgrading](docs/upgrading.md) — version migration notes
 
 Full API reference: [docs.rs/testty](https://docs.rs/testty).
