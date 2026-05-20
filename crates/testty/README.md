@@ -1,18 +1,16 @@
 # testty
 
-End-to-end testing for terminal apps. Launch your app the way a real user would, then
-check what shows up on screen — text, colors, and highlights.
+[![crates.io](https://img.shields.io/crates/v/testty.svg)](https://crates.io/crates/testty)
+[![docs.rs](https://img.shields.io/docsrs/testty)](https://docs.rs/testty)
+[![license](https://img.shields.io/crates/l/testty.svg)](../../LICENSE)
 
-## Why
+[Documentation](docs/README.md) | [API reference](https://docs.rs/testty)
 
-- **Tests what users actually see.** Runs your real app, not a mock, and checks the
-  rendered screen.
-- **Readable checks.** Assert on visible text, colors, and highlighted items, with
-  ready-made helpers for tabs, dialogs, and footers.
-- **Shareable proof.** Save what each test saw as plain text, a screenshot, an animated
-  GIF, or an HTML report.
+testty is a framework for end-to-end testing of terminal apps. It launches your real app
+and checks what shows up on screen — text, colors, and highlights — with a single Rust
+API.
 
-## Install
+## Installation
 
 ```toml
 [dev-dependencies]
@@ -20,7 +18,26 @@ testty = "0.9"
 tempfile = "3"
 ```
 
-## Write a test
+## Capabilities
+
+### Reliable • No flaky tests
+
+- **Auto-wait.** `wait_for_stable_frame` and `eventually` wait for the screen to settle
+  before asserting, so you never hard-code sleeps.
+- **Screen-first assertions.** Check visible text, colors, and highlighted items, with
+  ready-made helpers for tabs, dialogs, and footers.
+- **Full isolation.** Each test runs your real binary in its own workspace, so tests
+  never bleed into one another.
+
+### Proof you can share
+
+- **Snapshots.** Compare a run against a saved baseline — screen text or pixels.
+- **Reports.** Save what each test saw as plain text, a screenshot, an animated GIF, or
+  a self-contained HTML report.
+
+## Examples
+
+#### Write a test
 
 ```rust
 use testty::prelude::*;
@@ -49,7 +66,44 @@ fn tab_switches_view() {
 cargo test -p my-app --test e2e
 ```
 
-## Documentation
+#### Wait for something to appear
+
+```rust
+use std::time::Duration;
+use testty::prelude::*;
+
+let scenario = Scenario::new("counter")
+    .write_text("+++")
+    .eventually(
+        Duration::from_secs(5),
+        Duration::from_millis(50),
+        |frame| assertion::match_text_in_region(frame, "Counter: 3", &Region::full(80, 24)),
+    )
+    .capture();
+```
+
+#### Compare against a saved baseline
+
+```rust
+use testty::snapshot::{self, SnapshotConfig};
+
+let config = SnapshotConfig::new("tests/baselines", "tests/artifacts");
+snapshot::assert_frame_snapshot_matches(&config, "startup", &frame.all_text())
+    .expect("snapshot should match");
+```
+
+#### Save a shareable report
+
+```rust
+use std::path::Path;
+use testty::prelude::*;
+use testty::proof::html::HtmlBackend;
+
+let (_frame, report) = scenario.run_with_proof(builder).expect("failed");
+report.save(&HtmlBackend, Path::new("proof.html")).unwrap();
+```
+
+## Resources
 
 - [Getting started](docs/getting-started.md) — install, write your first test, run it
 - [Scenarios](docs/scenarios.md) — describe a sequence of actions and waits
@@ -61,8 +115,7 @@ cargo test -p my-app --test e2e
 - [Frame diffing](docs/frame-diffing.md) — see what changed between two screens
 - [Examples](docs/examples.md) — runnable example programs
 - [Upgrading](docs/upgrading.md) — version migration notes
-
-Full API reference: [docs.rs/testty](https://docs.rs/testty).
+- [API reference](https://docs.rs/testty) — full generated docs
 
 ## License
 
