@@ -7,10 +7,39 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.9.2] - 2026-05-20
+
 ### Added
 
 - agentty: add `/qe:check` as a prompt slash command that sends a checked-in
   quality-enforcement audit prompt instead of running an in-process audit engine.
+- Add reusable GitHub Actions OIDC publishing workflow support for npm release jobs.
+- testty: split the README into a quick-start landing page plus focused docs for
+  assertions, frame diffing, journeys, proof reports, scenarios, snapshots, and
+  upgrades.
+
+### Changed
+
+- agentty: switch Gemini prompt delivery from standard input to argument transport.
+- agentty: warn on main-checkout drift and require clean preflight state before merge
+  workflows continue.
+- agentty: split requested reviews into personal and group sections.
+- agentty: refactor session state, prompt routing, UI formatting, and database access
+  into more focused modules.
+- Update workspace guidance, docs, roadmap slices, and validation expectations.
+- Bump workspace crate metadata and lockfile package versions to `0.9.2`.
+- Bump dependency versions, including `askama` to `0.16.0` and `pulldown-cmark` to
+  `0.13.4`.
+
+### Removed
+
+- agentty: remove the `Stats` tab and provider usage polling.
+
+### Contributors
+
+- @andagaev
+- @dependabot
+- @minev-dev
 
 ## [v0.9.1] - 2026-05-02
 
