@@ -2,7 +2,6 @@ use std::path::Path;
 use std::process::Command;
 
 use super::backend::{AgentBackend, AgentBackendError, BuildCommandRequest};
-use super::prompt::{PromptPreparationRequest, prepare_prompt_text};
 
 /// Backend implementation for the Gemini ACP runtime.
 pub(super) struct GeminiBackend;
@@ -44,27 +43,6 @@ fn build_app_server_command(request: BuildCommandRequest<'_>) -> Command {
     command
 }
 
-/// Renders the full Gemini prompt text that Agentty streams through stdin.
-///
-/// # Errors
-/// Returns an error when resume or protocol prompt rendering fails.
-pub(super) fn build_prompt_stdin_payload(
-    request: BuildCommandRequest<'_>,
-) -> Result<Vec<u8>, AgentBackendError> {
-    let prompt = prepare_prompt_text(PromptPreparationRequest {
-        instruction_delivery_mode: if request.request_kind.is_resume() {
-            super::instruction::InstructionDeliveryMode::BootstrapWithReplay
-        } else {
-            super::instruction::InstructionDeliveryMode::BootstrapFull
-        },
-        prompt: request.prompt,
-        protocol_profile: request.request_kind.protocol_profile(),
-        replay_session_output: request.request_kind.session_output(),
-    })?;
-
-    Ok(prompt.into_bytes())
-}
-
 #[cfg(test)]
 mod tests {
     use tempfile::tempdir;
@@ -72,10 +50,6 @@ mod tests {
     use super::*;
     use crate::domain::agent::ReasoningLevel;
     use crate::infra::channel::AgentRequestKind;
-
-    fn session_start_request_kind() -> AgentRequestKind {
-        AgentRequestKind::SessionStart
-    }
 
     fn utility_request_kind() -> AgentRequestKind {
         AgentRequestKind::UtilityPrompt
@@ -97,32 +71,6 @@ mod tests {
                 .count(),
             0
         );
-    }
-
-    #[test]
-    /// Verifies Gemini prompts include repo-root-relative path guidance.
-    fn test_gemini_prompt_stdin_payload_includes_repo_root_path_instructions() {
-        // Arrange
-        let temp_directory = tempdir().expect("failed to create temp dir");
-
-        // Act
-        let prompt = String::from_utf8(
-            build_prompt_stdin_payload(BuildCommandRequest {
-                attachments: &[],
-                folder: temp_directory.path(),
-                prompt: "Plan prompt",
-                request_kind: &session_start_request_kind(),
-                model: "gemini-3-flash-preview",
-                reasoning_level: ReasoningLevel::default(),
-            })
-            .expect("prompt payload should build"),
-        )
-        .expect("prompt payload should be utf-8");
-
-        // Assert
-        assert!(prompt.contains("repository-root-relative POSIX paths"));
-        assert!(prompt.contains("Paths must be relative to the repository root."));
-        assert!(prompt.contains("summary"));
     }
 
     #[test]

@@ -111,9 +111,8 @@ pub(crate) fn build_command_stdin_payload(
     match prompt_transport(kind) {
         AgentPromptTransport::Argv => Ok(None),
         AgentPromptTransport::Stdin => match kind {
-            AgentKind::Gemini => super::gemini::build_prompt_stdin_payload(request).map(Some),
             AgentKind::Claude => super::claude::build_prompt_stdin_payload(request).map(Some),
-            AgentKind::Codex => Ok(None),
+            AgentKind::Codex | AgentKind::Gemini => Ok(None),
         },
     }
 }
@@ -153,7 +152,7 @@ fn provider_descriptor(kind: AgentKind) -> AgentProviderDescriptor {
             backend_factory: || Box::new(super::gemini::GeminiBackend),
             parse_response: super::response_parser::parse_gemini_response_with_fallback,
             parse_stream_output_line: super::response_parser::parse_gemini_stream_output_line,
-            prompt_transport: AgentPromptTransport::Stdin,
+            prompt_transport: AgentPromptTransport::Argv,
             transport: AgentTransport::AppServer,
         },
         AgentKind::Claude => AgentProviderDescriptor {
@@ -236,7 +235,7 @@ mod tests {
         // Assert
         assert_eq!(claude_transport, AgentPromptTransport::Stdin);
         assert_eq!(codex_transport, AgentPromptTransport::Argv);
-        assert_eq!(gemini_transport, AgentPromptTransport::Stdin);
+        assert_eq!(gemini_transport, AgentPromptTransport::Argv);
     }
 
     #[test]
