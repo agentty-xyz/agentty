@@ -7,6 +7,20 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.9.3] - 2026-05-20
+
+### Added
+
+- agentty: add Gemini 3.5 Flash as a selectable Gemini model.
+
+### Changed
+
+- Bump workspace crate metadata and lockfile package versions to `0.9.3`.
+
+### Contributors
+
+- @minev-dev
+
 ## [v0.9.2] - 2026-05-20
 
 ### Added
