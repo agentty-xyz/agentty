@@ -88,7 +88,7 @@ mod tests {
                 folder: temp_directory.path(),
                 prompt: "Generate title",
                 request_kind: &utility_request_kind(),
-                model: "gemini-3-flash-preview",
+                model: "gemini-3.5-flash",
                 reasoning_level: ReasoningLevel::default(),
             },
         )
@@ -99,7 +99,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(args, vec!["--acp", "--model", "gemini-3-flash-preview"]);
+        assert_eq!(args, vec!["--acp", "--model", "gemini-3.5-flash"]);
         assert_eq!(command.get_current_dir(), Some(temp_directory.path()));
     }
 }

@@ -614,12 +614,12 @@ fn session_creation_opens_prompt_mode() -> E2eResult {
     Ok(())
 }
 
-/// Verify that the prompt `/model` picker exposes the Gemini Flash Lite
-/// preview model when the Gemini CLI is locally available.
+/// Verify that the prompt `/model` picker exposes the current Gemini Flash
+/// model when the Gemini CLI is locally available.
 #[test]
-fn gemini_model_picker_includes_flash_lite_preview() -> E2eResult {
+fn gemini_model_picker_includes_current_flash() -> E2eResult {
     // Arrange, Act, Assert
-    FeatureTest::new("gemini_model_picker_includes_flash_lite_preview")
+    FeatureTest::new("gemini_model_picker_includes_current_flash")
         .with_git()
         .setup(seed_failing_gemini_cli_stub)
         .run(
@@ -637,15 +637,15 @@ fn gemini_model_picker_includes_flash_lite_preview() -> E2eResult {
                     .press_key("Enter")
                     .wait_for_text("/model Agent", 3000)
                     .press_key("Enter")
-                    .wait_for_text("gemini-3.1-flash-lite-preview", 3000)
+                    .wait_for_text("gemini-3.5-flash", 3000)
                     .capture_labeled(
                         "gemini_model_picker",
-                        "Gemini model picker includes Flash Lite preview",
+                        "Gemini model picker includes current Flash",
                     )
             },
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "gemini-3.1-flash-lite-preview", &full);
+                assertion::assert_text_in_region(frame, "gemini-3.5-flash", &full);
             },
         )?;
 

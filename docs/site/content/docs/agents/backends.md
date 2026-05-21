@@ -263,6 +263,7 @@ different trade-offs between speed, quality, and cost.
 ### Gemini Models
 
 - `gemini-3.1-pro-preview` (default): Higher-quality Gemini model for deeper reasoning.
+- `gemini-3.5-flash`: Fast Gemini model for current Flash workloads.
 - `gemini-3.1-flash-lite-preview`: Lightweight Gemini model for fast, cost-conscious
   iterations.
 - `gemini-3-flash-preview`: Fast Gemini model for quick iterations.

@@ -19,6 +19,8 @@ pub enum AgentModel {
     Gpt55,
     /// Fast Gemini preview model backed by `gemini-3-flash-preview`.
     Gemini3FlashPreview,
+    /// Fast Gemini model backed by `gemini-3.5-flash`.
+    Gemini35Flash,
     /// Lightweight Gemini preview model backed by
     /// `gemini-3.1-flash-lite-preview`.
     Gemini31FlashLitePreview,
@@ -68,6 +70,7 @@ impl AgentModel {
         match self {
             Self::Gpt55 => "gpt-5.5",
             Self::Gemini3FlashPreview => "gemini-3-flash-preview",
+            Self::Gemini35Flash => "gemini-3.5-flash",
             Self::Gemini31FlashLitePreview => "gemini-3.1-flash-lite-preview",
             Self::Gemini31ProPreview => "gemini-3.1-pro-preview",
             Self::Gpt54 => "gpt-5.4",
@@ -95,6 +98,7 @@ impl AgentModel {
     pub fn kind(self) -> AgentKind {
         match self {
             Self::Gemini3FlashPreview
+            | Self::Gemini35Flash
             | Self::Gemini31FlashLitePreview
             | Self::Gemini31ProPreview => AgentKind::Gemini,
             Self::Gpt55 | Self::Gpt54 | Self::Gpt54Mini | Self::Gpt53CodexSpark => AgentKind::Codex,
@@ -231,6 +235,7 @@ impl FromStr for AgentModel {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "gemini-3-flash-preview" => Ok(Self::Gemini3FlashPreview),
+            "gemini-3.5-flash" => Ok(Self::Gemini35Flash),
             "gemini-3.1-flash-lite-preview" => Ok(Self::Gemini31FlashLitePreview),
             "gemini-3.1-pro-preview" => Ok(Self::Gemini31ProPreview),
             "gpt-5.5" => Ok(Self::Gpt55),
@@ -254,6 +259,7 @@ impl AgentSelectionMetadata for AgentModel {
         match self {
             Self::Gpt55 => "Newer Codex model with stronger coding performance when available.",
             Self::Gemini3FlashPreview => "Fast Gemini model for quick iterations.",
+            Self::Gemini35Flash => "Fast Gemini model for current Flash workloads.",
             Self::Gemini31FlashLitePreview => {
                 "Lightweight Gemini model for fast, cost-conscious iterations."
             }
@@ -294,6 +300,7 @@ impl AgentKind {
     pub fn models(self) -> &'static [AgentModel] {
         const GEMINI_MODELS: &[AgentModel] = &[
             AgentModel::Gemini31ProPreview,
+            AgentModel::Gemini35Flash,
             AgentModel::Gemini31FlashLitePreview,
             AgentModel::Gemini3FlashPreview,
         ];
@@ -445,6 +452,19 @@ mod tests {
     }
 
     #[test]
+    /// Ensures `gemini-3.5-flash` parses as a Gemini model.
+    fn test_parse_model_parses_gemini_35_flash() {
+        // Arrange
+        let gemini_kind = AgentKind::Gemini;
+
+        // Act
+        let parsed_model = gemini_kind.parse_model("gemini-3.5-flash");
+
+        // Assert
+        assert_eq!(parsed_model, Some(AgentModel::Gemini35Flash));
+    }
+
+    #[test]
     /// Ensures retired Claude models no longer parse as selectable models.
     fn test_parse_model_rejects_retired_claude_opus_46() {
         // Arrange
@@ -537,6 +557,7 @@ mod tests {
         // Arrange
         let models = [
             AgentModel::Gemini31ProPreview,
+            AgentModel::Gemini35Flash,
             AgentModel::Gemini31FlashLitePreview,
             AgentModel::Gemini3FlashPreview,
         ];
@@ -545,7 +566,7 @@ mod tests {
         let kinds = models.map(AgentModel::kind);
 
         // Assert
-        assert_eq!(kinds, [AgentKind::Gemini; 3]);
+        assert_eq!(kinds, [AgentKind::Gemini; 4]);
     }
 
     #[test]
@@ -588,6 +609,7 @@ mod tests {
                 AgentModel::Gpt55,
                 AgentModel::Gpt53CodexSpark,
                 AgentModel::Gemini31ProPreview,
+                AgentModel::Gemini35Flash,
                 AgentModel::Gemini31FlashLitePreview,
                 AgentModel::Gemini3FlashPreview,
             ]
