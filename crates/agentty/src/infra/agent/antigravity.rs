@@ -9,11 +9,11 @@ use crate::domain::turn_prompt::{
     TurnPromptAttachment, TurnPromptContentPart, split_turn_prompt_content,
 };
 
-/// Wall-clock limit passed to `agy --print` for one Agentty turn.
+/// Wall-clock limit passed before `agy --print` for one Agentty turn.
 ///
 /// Antigravity CLI defaults print mode to five minutes, which is too short
-/// for repository edits. Agentty still owns cancellation by dropping/killing
-/// the subprocess when the user stops a turn.
+/// for repository edits. The timeout flag must appear before `--print`
+/// because arguments after `--print` are interpreted as prompt text.
 const ANTIGRAVITY_PRINT_TIMEOUT: &str = "1h";
 /// Git exclude pattern for Antigravity workspace project state.
 const ANTIGRAVITY_PROJECT_STATE_PATTERN: &str = ".antigravitycli/";
@@ -51,9 +51,9 @@ impl AgentBackend for AntigravityBackend {
         command
             .arg("--sandbox")
             .arg("--dangerously-skip-permissions")
-            .arg("--print")
             .arg("--print-timeout")
             .arg(ANTIGRAVITY_PRINT_TIMEOUT)
+            .arg("--print")
             .current_dir(folder)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -424,9 +424,9 @@ mod tests {
                 session_folder,
                 "--sandbox".to_string(),
                 "--dangerously-skip-permissions".to_string(),
-                "--print".to_string(),
                 "--print-timeout".to_string(),
                 ANTIGRAVITY_PRINT_TIMEOUT.to_string(),
+                "--print".to_string(),
             ]
         );
         assert_eq!(command.get_current_dir(), Some(temp_directory.path()));

@@ -243,8 +243,8 @@ bootstrap so restored contexts can keep using the compact reminder path.
 
 <a id="backends-app-server-turn-timeout"></a> App-server-backed turns can run for a long
 time. Agentty waits up to 4 hours for turn completion by default for both Codex
-app-server and Gemini ACP. Antigravity is CLI-backed and passes `--print-timeout 1h` to
-avoid the default five-minute `agy --print` limit during repository edits.
+app-server and Gemini ACP. Antigravity is CLI-backed and passes `--print-timeout 1h`
+before `--print` so the timeout flag is parsed as an option instead of prompt text.
 
 ## Selecting a Backend
 
