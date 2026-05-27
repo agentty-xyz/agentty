@@ -387,6 +387,8 @@ mod tests {
         assert!(rendered_prompt.contains("Authoritative JSON Schema:"));
         assert!(rendered_prompt.contains("---"));
         assert!(rendered_prompt.contains("For this session turn"));
+        assert!(normalized_rendered_prompt.contains("Do not create commits"));
+        assert!(normalized_rendered_prompt.contains("suggest creating commits"));
         assert!(rendered_prompt.contains("summary"));
         assert!(rendered_prompt.contains("turn"));
         assert!(rendered_prompt.contains("session"));
