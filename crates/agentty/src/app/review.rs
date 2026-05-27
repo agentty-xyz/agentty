@@ -232,7 +232,10 @@ pub(crate) fn apply_review_updates(
 /// unreliable.
 ///
 /// Sessions returning to `InProgress` clear their cached review immediately so
-/// the next completed diff triggers a fresh assist run.
+/// the next completed diff triggers a fresh assist run. Sessions with a
+/// [`ReviewCacheEntry::Suppressed`] marker skip diff loading entirely; stopped
+/// turns set that marker synchronously so cancellation does not block on `git
+/// diff` just to prevent automatic review startup.
 pub(crate) async fn auto_start_reviews(
     review_cache: &mut HashMap<SessionId, ReviewCacheEntry>,
     session_ids: &HashSet<SessionId>,
@@ -266,6 +269,13 @@ pub(crate) async fn auto_start_reviews(
         }
 
         if current_status != Status::Review {
+            continue;
+        }
+
+        if matches!(
+            review_cache.get(session_id),
+            Some(ReviewCacheEntry::Suppressed { .. })
+        ) {
             continue;
         }
 

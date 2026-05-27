@@ -941,6 +941,11 @@ impl App {
             .await?)
     }
 
+    /// Waits for tracked background cleanup tasks before process shutdown.
+    pub(crate) async fn wait_for_background_cleanup_tasks(&self) {
+        self.services.wait_for_cleanup_tasks().await;
+    }
+
     /// Opens the selected session worktree in tmux and optionally runs the
     /// first configured open command.
     pub async fn open_session_worktree_in_tmux(&self) {

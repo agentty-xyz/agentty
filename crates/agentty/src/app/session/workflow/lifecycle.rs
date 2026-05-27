@@ -2213,29 +2213,53 @@ impl SessionManager {
         .await;
 
         if status_updated {
-            if has_worktree {
-                let repo_root = services
-                    .git_client()
-                    .main_repo_root(folder.clone())
-                    .await
-                    .ok();
+            Self::spawn_canceled_session_cleanup(
+                services,
+                folder,
+                branch_name,
+                has_worktree,
+                session_id.to_string(),
+            );
+        }
 
+        Ok(())
+    }
+
+    /// Defers terminal cancellation cleanup so foreground key handling returns
+    /// after persisted status changes instead of waiting on git and filesystem
+    /// removal.
+    ///
+    /// The background task resolves the shared repository root only when a
+    /// worktree exists, removes git worktree/branch resources, then clears the
+    /// session-scoped prompt temp directory. Cleanup remains best-effort and
+    /// reports failures through debug-visible warnings.
+    fn spawn_canceled_session_cleanup(
+        services: &AppServices,
+        folder: PathBuf,
+        branch_name: String,
+        has_worktree: bool,
+        session_id: String,
+    ) {
+        let fs_client = services.fs_client();
+        let git_client = services.git_client();
+        let cleanup_task_handle = tokio::spawn(async move {
+            if has_worktree {
+                let repo_root = git_client.main_repo_root(folder.clone()).await.ok();
                 let cleanup_errors = Self::cleanup_session_worktree_resources(
-                    services.fs_client().clone(),
-                    services.git_client(),
+                    Arc::clone(&fs_client),
+                    Arc::clone(&git_client),
                     folder,
                     branch_name,
                     repo_root,
                     true,
                 )
                 .await;
-                Self::warn_cleanup_errors(session_id, &cleanup_errors);
+                Self::warn_cleanup_errors(&session_id, &cleanup_errors);
             }
 
-            Self::cleanup_session_temp_directory(services.fs_client(), session_id).await;
-        }
-
-        Ok(())
+            Self::cleanup_session_temp_directory(fs_client, &session_id).await;
+        });
+        services.track_cleanup_task(cleanup_task_handle);
     }
 
     /// Requests cancellation for queued operations and signals the active

@@ -1781,6 +1781,19 @@ mod tests {
         }
     }
 
+    /// Waits until background cleanup removes `path`.
+    async fn wait_for_path_absent(path: &Path) {
+        for _ in 0..500 {
+            if !path.exists() {
+                return;
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        assert!(!path.exists(), "timed out waiting for path cleanup");
+    }
+
     async fn wait_for_output_contains(
         app: &mut App,
         session_id: &str,
@@ -5064,7 +5077,7 @@ mod tests {
 
     #[tokio::test]
     /// Ensures canceling a review session persists `Canceled` status and
-    /// removes its dedicated worktree checkout.
+    /// defers removal of its dedicated worktree checkout.
     async fn test_cancel_session() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
@@ -5110,10 +5123,7 @@ mod tests {
             .find(|session| session.id == session_id)
             .expect("missing persisted session");
         assert_eq!(db_session.status, "Canceled");
-        assert!(
-            !session_folder.exists(),
-            "session worktree should be removed after cancellation"
-        );
+        wait_for_path_absent(&session_folder).await;
     }
 
     #[tokio::test]
@@ -5163,10 +5173,7 @@ mod tests {
             .find(|session| session.id == session_id)
             .expect("missing persisted session");
         assert_eq!(db_session.status, "Canceled");
-        assert!(
-            !session_folder.exists(),
-            "draft session should remain without a worktree after cancellation"
-        );
+        wait_for_path_absent(&session_folder).await;
     }
 
     #[tokio::test]

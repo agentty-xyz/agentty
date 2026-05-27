@@ -703,7 +703,7 @@ async fn cancel_in_progress_turn(app: &mut App, session_id: &str) {
         session.status = Status::Review;
     }
 
-    suppress_auto_review_for_stopped_turn(app, session_id).await;
+    suppress_auto_review_for_stopped_turn(app, session_id);
 
     app.services.emit_app_event(AppEvent::SessionUpdated {
         session_id: session_id.into(),
@@ -715,53 +715,19 @@ async fn cancel_in_progress_turn(app: &mut App, session_id: &str) {
     app.services.emit_app_event(AppEvent::RefreshSessions);
 }
 
-/// Records the current diff hash as auto-review-suppressed after a user stops
-/// one active turn.
+/// Marks automatic focused review as suppressed after a user stops one active
+/// turn.
 ///
 /// The session remains review-ready, but the reducer's automatic focused
 /// review pass should not immediately start an agent review for the partially
-/// stopped turn. Pressing `f` later still starts manual focused review because
-/// the suppressed cache entry is treated as absent by view-mode review
-/// handling.
-async fn suppress_auto_review_for_stopped_turn(app: &mut App, session_id: &str) {
-    let Some(session) = app
-        .sessions
-        .sessions()
-        .iter()
-        .find(|session| session.id == session_id)
-    else {
-        return;
-    };
-    let session_folder = session.folder.clone();
-    let base_branch = session.base_branch.clone();
-
-    let diff = match app
-        .services
-        .git_client()
-        .diff(session_folder, base_branch)
-        .await
-    {
-        Ok(diff) => diff,
-        Err(error) => {
-            warn!(
-                session_id = session_id,
-                error = %error,
-                "failed to load stopped-turn diff for auto-review suppression"
-            );
-
-            return;
-        }
-    };
-
-    if diff.trim().is_empty() {
-        return;
-    }
-
+/// stopped turn. The marker is intentionally inserted without loading a diff so
+/// `Ctrl+C` returns to the event loop quickly; the next submitted turn clears
+/// the cache, and pressing `f` still starts manual focused review because
+/// view-mode review handling replaces suppressed entries.
+fn suppress_auto_review_for_stopped_turn(app: &mut App, session_id: &str) {
     app.review_cache.insert(
         SessionId::from(session_id),
-        ReviewCacheEntry::Suppressed {
-            diff_hash: diff_content_hash(&diff),
-        },
+        ReviewCacheEntry::Suppressed { diff_hash: 0 },
     );
 }
 

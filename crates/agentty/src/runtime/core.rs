@@ -55,12 +55,12 @@ pub async fn run(app: &mut App) -> io::Result<()> {
     let mut tick = tokio::time::interval(FRAME_INTERVAL);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    run_main_loop(app, &mut terminal, &mut event_rx, &mut tick).await?;
-
+    let run_result = run_main_loop(app, &mut terminal, &mut event_rx, &mut tick).await;
     shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+    app.wait_for_background_cleanup_tasks().await;
     terminal.show_cursor()?;
 
-    Ok(())
+    run_result
 }
 
 /// Runs the TUI event/render loop with an externally provided backend and
@@ -83,7 +83,10 @@ where
     let mut tick = tokio::time::interval(FRAME_INTERVAL);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    run_main_loop(app, terminal, event_rx, &mut tick).await
+    let run_result = run_main_loop(app, terminal, event_rx, &mut tick).await;
+    app.wait_for_background_cleanup_tasks().await;
+
+    run_result
 }
 
 /// Drives the main render/event loop until quit or error.
@@ -408,6 +411,56 @@ mod tests {
             result.is_ok(),
             "run_with_backend should exit cleanly on quit"
         );
+    }
+
+    #[tokio::test]
+    async fn run_with_backend_waits_for_cleanup_tasks_after_quit() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app().await;
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("failed to create test terminal");
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let (release_tx, mut release_rx) = mpsc::unbounded_channel::<()>();
+        let (done_tx, mut done_rx) = mpsc::unbounded_channel::<()>();
+        app.services.track_cleanup_task(tokio::spawn(async move {
+            let _ = release_rx.recv().await;
+            let _ = done_tx.send(());
+        }));
+
+        event_tx
+            .send(Event::Key(KeyEvent::new(
+                KeyCode::Char('q'),
+                KeyModifiers::NONE,
+            )))
+            .expect("failed to send quit key");
+        event_tx
+            .send(Event::Key(KeyEvent::new(
+                KeyCode::Char('y'),
+                KeyModifiers::NONE,
+            )))
+            .expect("failed to send confirm key");
+        let run_future = run_with_backend(&mut app, &mut terminal, &mut event_rx);
+        tokio::pin!(run_future);
+
+        // Act / Assert — the runtime should not complete while the tracked
+        // cleanup task is still pending.
+        tokio::select! {
+            result = &mut run_future => {
+                unreachable!("runtime exited before cleanup task finished: {result:?}");
+            }
+            () = tokio::time::sleep(Duration::from_millis(50)) => {}
+        }
+
+        // Act
+        release_tx.send(()).expect("failed to release cleanup task");
+        let result = run_future.await;
+
+        // Assert
+        assert!(
+            result.is_ok(),
+            "run_with_backend should exit cleanly after cleanup"
+        );
+        assert!(done_rx.try_recv().is_ok());
     }
 
     #[tokio::test]

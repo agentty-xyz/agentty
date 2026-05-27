@@ -6,6 +6,8 @@ use std::sync::{Arc, Mutex};
 
 use ag_forge::ReviewRequestClient;
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+use tracing::warn;
 
 use crate::app::AppEvent;
 use crate::app::session::Clock;
@@ -43,6 +45,7 @@ pub struct AppServices {
     available_agent_kinds: Arc<[AgentKind]>,
     app_server_client_override: Option<Arc<dyn AppServerClient>>,
     base_path: PathBuf,
+    cleanup_task_handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
     clock: Arc<dyn Clock>,
     event_tx: mpsc::UnboundedSender<AppEvent>,
     fs_client: Arc<dyn FsClient>,
@@ -75,6 +78,7 @@ impl AppServices {
             available_agent_kinds: Arc::<[AgentKind]>::from(available_agent_kinds),
             app_server_client_override,
             base_path,
+            cleanup_task_handles: Arc::default(),
             clock,
             event_tx,
             fs_client,
@@ -110,6 +114,42 @@ impl AppServices {
     pub(crate) fn emit_app_event(&self, event: AppEvent) {
         // Fire-and-forget: receiver may be dropped during shutdown.
         let _ = self.event_tx.send(event);
+    }
+
+    /// Tracks one best-effort cleanup task that should complete before the app
+    /// finishes graceful shutdown.
+    pub(crate) fn track_cleanup_task(&self, join_handle: JoinHandle<()>) {
+        if let Ok(mut cleanup_task_handles) = self.cleanup_task_handles.lock() {
+            cleanup_task_handles.push(join_handle);
+        }
+    }
+
+    /// Waits for all tracked cleanup tasks to finish.
+    ///
+    /// The task list is drained before awaiting so the synchronous mutex guard
+    /// is never held across an `.await`. The loop repeats in case a cleanup
+    /// task registers additional cleanup work before it exits.
+    pub(crate) async fn wait_for_cleanup_tasks(&self) {
+        loop {
+            let cleanup_task_handles = self
+                .cleanup_task_handles
+                .lock()
+                .map(|mut task_handles| task_handles.drain(..).collect::<Vec<_>>())
+                .unwrap_or_default();
+
+            if cleanup_task_handles.is_empty() {
+                break;
+            }
+
+            for cleanup_task_handle in cleanup_task_handles {
+                if let Err(error) = cleanup_task_handle.await {
+                    warn!(
+                        error = %error,
+                        "background cleanup task failed during shutdown"
+                    );
+                }
+            }
+        }
     }
 
     /// Returns a clone of the app event sender.

@@ -739,8 +739,8 @@ impl SessionTaskService {
     ///
     /// # Errors
     /// Returns an error when prompt rendering fails, the one-shot agent call
-    /// fails, the returned `answer` text is blank, or fallback retry with a
-    /// truncated diff fails after a context-window error.
+    /// fails, or fallback retry with a truncated diff fails after a
+    /// context-window error.
     async fn generate_session_commit_message_with_backend(
         folder: &Path,
         session_model: AgentModel,
@@ -790,15 +790,15 @@ impl SessionTaskService {
         };
         let answer_text = submission.response.to_answer_display_text();
         let trimmed_answer_text = answer_text.trim();
-        if trimmed_answer_text.is_empty() {
-            return Err(SessionError::Workflow(
-                "Session commit message model returned blank answer text".to_string(),
-            ));
-        }
-        validate_generated_commit_message(trimmed_answer_text)?;
+        let validated_message = if trimmed_answer_text.is_empty() {
+            fallback_session_commit_message(current_commit_message)
+        } else {
+            trimmed_answer_text.to_string()
+        };
+        validate_generated_commit_message(&validated_message)?;
 
         Ok(append_agentty_coauthor_trailer(
-            trimmed_answer_text,
+            validated_message.as_str(),
             include_coauthored_by_agentty,
         ))
     }
@@ -1073,6 +1073,27 @@ fn strip_agentty_coauthor_trailer(commit_message: &str) -> String {
         .filter(|line| line.trim() != SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER)
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Returns a deterministic fallback commit message when protocol `answer` text
+/// is blank.
+///
+/// Prefers the first non-empty continuity line (without trailer noise) when
+/// available and otherwise falls back to a generic session-update title.
+fn fallback_session_commit_message(current_commit_message: Option<&str>) -> String {
+    let stripped_current_commit_message = current_commit_message
+        .map(strip_agentty_coauthor_trailer)
+        .unwrap_or_default();
+    if stripped_current_commit_message.trim().is_empty() {
+        return "Apply session updates".to_string();
+    }
+
+    stripped_current_commit_message
+        .lines()
+        .map(|line| line.trim())
+        .find(|line| !line.is_empty())
+        .unwrap_or("Apply session updates")
+        .to_string()
 }
 
 /// Validates generated commit-message output before git commit creation.
@@ -1532,6 +1553,45 @@ mod tests {
                 .to_string()
                 .contains("response:\nRefactor agent prompt and protocol handling")
         );
+    }
+
+    #[tokio::test]
+    /// Verifies blank commit-message protocol output falls back to the
+    /// continuity title and keeps auto-commit progressing.
+    async fn test_generate_session_commit_message_with_backend_falls_back_for_blank_answer() {
+        // Arrange
+        let temp_directory = tempfile::tempdir().expect("failed to create temp dir");
+        let mut backend = MockAgentBackend::new();
+        backend
+            .expect_build_command()
+            .times(1)
+            .returning(|request| {
+                assert!(matches!(
+                    request.request_kind,
+                    AgentRequestKind::UtilityPrompt
+                ));
+
+                Ok(mock_shell_command(
+                    r#"{"answer":"","questions":[],"summary":null}"#,
+                    "",
+                    0,
+                ))
+            });
+
+        // Act
+        let generated_message = SessionTaskService::generate_session_commit_message_with_backend(
+            temp_directory.path(),
+            AgentModel::ClaudeSonnet46,
+            "diff --git a/a.rs b/a.rs",
+            Some("Keep session commit accurate\n\n- Preserve existing behavior"),
+            &backend,
+            false,
+        )
+        .await
+        .expect("blank answer should fall back to continuity title");
+
+        // Assert
+        assert_eq!(generated_message, "Keep session commit accurate");
     }
 
     #[tokio::test]

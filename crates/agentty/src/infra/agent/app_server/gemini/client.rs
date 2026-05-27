@@ -99,6 +99,8 @@ impl AppServerClient for RealGeminiAcpClient {
         let sessions = self.sessions.clone();
 
         Box::pin(async move {
+            let _ = sessions.cancel_active_turn(&session_id);
+
             let Ok(Some(mut session_runtime)) = sessions.take_session(&session_id) else {
                 return;
             };

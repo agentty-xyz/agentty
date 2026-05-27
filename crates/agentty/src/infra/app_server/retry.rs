@@ -7,7 +7,7 @@ use super::error::AppServerError;
 use super::prompt::{
     instruction_delivery_mode_for_runtime, read_latest_session_output, turn_prompt_for_runtime,
 };
-use super::registry::AppServerSessionRegistry;
+use super::registry::{ActiveAppServerTurn, AppServerSessionRegistry};
 use crate::domain::turn_prompt::TurnPrompt;
 
 /// Callbacks for inspecting runtime state during turn execution.
@@ -59,18 +59,10 @@ where
     ShutdownRuntime: for<'scope> FnMut(&'scope mut Runtime) -> BorrowedAppServerFuture<'scope, ()>,
 {
     let session_id = request.session_id.clone();
-    let mut session_runtime = sessions.take_session(&session_id)?;
-
-    if session_runtime
-        .as_ref()
-        .is_some_and(|runtime| !(inspector.matches_request)(runtime, &request))
-    {
-        if let Some(runtime) = session_runtime.as_mut() {
-            shutdown_runtime(runtime).await;
-        }
-
-        session_runtime = None;
-    }
+    let active_turn = sessions.register_active_turn(&session_id)?;
+    let session_runtime =
+        take_compatible_session_runtime(sessions, &request, &inspector, &mut shutdown_runtime)
+            .await?;
 
     let had_existing_runtime = session_runtime.is_some();
     let mut session_runtime = match session_runtime {
@@ -79,81 +71,80 @@ where
     };
     let first_replays = needs_replay(had_existing_runtime, &request, &inspector, &session_runtime);
     let first_provider_conversation_id = (inspector.provider_conversation_id)(&session_runtime);
-    let first_prompt = match build_attempt_prompt(
+    let first_prompt = build_attempt_prompt(
         &request,
         first_replays,
         first_provider_conversation_id.as_deref(),
         &mut shutdown_runtime,
         &mut session_runtime,
     )
-    .await
-    {
-        Ok(prompt) => prompt,
-        Err(error) => return Err(error),
-    };
-    let first_attempt = run_turn_with_runtime(&mut session_runtime, &first_prompt).await;
+    .await?;
+    let first_attempt = run_cancellable_turn_attempt(
+        &active_turn,
+        &mut session_runtime,
+        &first_prompt,
+        &mut run_turn_with_runtime,
+        &mut shutdown_runtime,
+    )
+    .await;
     if let Ok((assistant_message, input_tokens, output_tokens)) = first_attempt {
-        let pid = (inspector.pid)(&session_runtime);
-        let provider_conversation_id = (inspector.provider_conversation_id)(&session_runtime);
-        if let Err((error, mut leaked)) =
-            sessions.store_session_or_recover(session_id, session_runtime)
-        {
-            shutdown_runtime(&mut leaked).await;
-
-            return Err(error);
-        }
-
-        return Ok(AppServerTurnResponse {
-            assistant_message,
-            context_reset: first_replays,
-            input_tokens,
-            output_tokens,
-            pid,
-            provider_conversation_id,
-        });
+        return store_successful_runtime_response(
+            sessions,
+            session_id,
+            session_runtime,
+            first_replays,
+            (assistant_message, input_tokens, output_tokens),
+            &inspector,
+            &mut shutdown_runtime,
+        )
+        .await;
     }
 
     let first_error = first_attempt
         .err()
         .unwrap_or_else(|| AppServerError::Provider("App-server turn failed".to_string()));
+    if matches!(first_error, AppServerError::InterruptedByUser(_)) {
+        return Err(first_error);
+    }
+
     shutdown_runtime(&mut session_runtime).await;
     let mut restarted = start_runtime(&request).await?;
     let retry_replays = needs_replay(false, &request, &inspector, &restarted);
     let retry_provider_conversation_id = (inspector.provider_conversation_id)(&restarted);
-    let retry_prompt = match build_attempt_prompt(
+    let retry_prompt = build_attempt_prompt(
         &request,
         retry_replays,
         retry_provider_conversation_id.as_deref(),
         &mut shutdown_runtime,
         &mut restarted,
     )
+    .await?;
+    match run_cancellable_turn_attempt(
+        &active_turn,
+        &mut restarted,
+        &retry_prompt,
+        &mut run_turn_with_runtime,
+        &mut shutdown_runtime,
+    )
     .await
     {
-        Ok(prompt) => prompt,
-        Err(error) => return Err(error),
-    };
-    match run_turn_with_runtime(&mut restarted, &retry_prompt).await {
-        Ok((assistant_message, input_tokens, output_tokens)) => {
-            let pid = (inspector.pid)(&restarted);
-            let provider_conversation_id = (inspector.provider_conversation_id)(&restarted);
-            if let Err((error, mut leaked)) =
-                sessions.store_session_or_recover(session_id, restarted)
-            {
-                shutdown_runtime(&mut leaked).await;
-
-                return Err(error);
-            }
-
-            Ok(AppServerTurnResponse {
-                assistant_message,
-                context_reset: retry_replays,
-                input_tokens,
-                output_tokens,
-                pid,
-                provider_conversation_id,
-            })
+        Ok(attempt_output) => {
+            store_successful_runtime_response(
+                sessions,
+                session_id,
+                restarted,
+                retry_replays,
+                attempt_output,
+                &inspector,
+                &mut shutdown_runtime,
+            )
+            .await
         }
         Err(retry_error) => {
+            if matches!(retry_error, AppServerError::InterruptedByUser(_)) {
+                return Err(retry_error);
+            }
+
             shutdown_runtime(&mut restarted).await;
 
             Err(AppServerError::RetryExhausted {
@@ -163,6 +154,136 @@ where
             })
         }
     }
+}
+
+/// Takes the idle runtime for a request and shuts it down when it no longer
+/// matches the requested model or provider context.
+async fn take_compatible_session_runtime<Runtime, ShutdownRuntime>(
+    sessions: &AppServerSessionRegistry<Runtime>,
+    request: &AppServerTurnRequest,
+    inspector: &RuntimeInspector<Runtime>,
+    shutdown_runtime: &mut ShutdownRuntime,
+) -> Result<Option<Runtime>, AppServerError>
+where
+    ShutdownRuntime: for<'scope> FnMut(&'scope mut Runtime) -> BorrowedAppServerFuture<'scope, ()>,
+{
+    let mut session_runtime = sessions.take_session(&request.session_id)?;
+
+    if session_runtime
+        .as_ref()
+        .is_some_and(|runtime| !(inspector.matches_request)(runtime, request))
+    {
+        if let Some(runtime) = session_runtime.as_mut() {
+            shutdown_runtime(runtime).await;
+        }
+
+        session_runtime = None;
+    }
+
+    Ok(session_runtime)
+}
+
+/// Stores a successful runtime back into the idle registry and builds the
+/// normalized app-server response.
+///
+/// If the registry cannot accept the runtime, this shuts the runtime down
+/// before returning the lock error so app-server child processes do not leak.
+async fn store_successful_runtime_response<Runtime, ShutdownRuntime>(
+    sessions: &AppServerSessionRegistry<Runtime>,
+    session_id: String,
+    session_runtime: Runtime,
+    context_reset: bool,
+    attempt_output: (String, u64, u64),
+    inspector: &RuntimeInspector<Runtime>,
+    shutdown_runtime: &mut ShutdownRuntime,
+) -> Result<AppServerTurnResponse, AppServerError>
+where
+    ShutdownRuntime: for<'scope> FnMut(&'scope mut Runtime) -> BorrowedAppServerFuture<'scope, ()>,
+{
+    let (assistant_message, input_tokens, output_tokens) = attempt_output;
+    let pid = (inspector.pid)(&session_runtime);
+    let provider_conversation_id = (inspector.provider_conversation_id)(&session_runtime);
+
+    if let Err((error, mut leaked)) = sessions.store_session_or_recover(session_id, session_runtime)
+    {
+        shutdown_runtime(&mut leaked).await;
+
+        return Err(error);
+    }
+
+    Ok(AppServerTurnResponse {
+        assistant_message,
+        context_reset,
+        input_tokens,
+        output_tokens,
+        pid,
+        provider_conversation_id,
+    })
+}
+
+/// Runs one provider runtime attempt while watching the session-scoped
+/// app-server cancellation token.
+///
+/// `run_turn_with_restart_retry()` temporarily owns the runtime while a turn is
+/// in flight, so provider `shutdown_session()` cannot remove it from the idle
+/// registry. This helper gives that shutdown path a token to fire; when it
+/// fires, the running turn future is dropped, the runtime is shut down through
+/// the provider lifecycle hook, and the attempt returns a user-interruption
+/// error instead of retrying.
+async fn run_cancellable_turn_attempt<Runtime, RunTurn, ShutdownRuntime>(
+    active_turn: &ActiveAppServerTurn,
+    runtime: &mut Runtime,
+    prompt: &TurnPrompt,
+    run_turn_with_runtime: &mut RunTurn,
+    shutdown_runtime: &mut ShutdownRuntime,
+) -> Result<(String, u64, u64), AppServerError>
+where
+    RunTurn: for<'scope> FnMut(
+        &'scope mut Runtime,
+        &'scope TurnPrompt,
+    ) -> BorrowedAppServerFuture<
+        'scope,
+        Result<(String, u64, u64), AppServerError>,
+    >,
+    ShutdownRuntime: for<'scope> FnMut(&'scope mut Runtime) -> BorrowedAppServerFuture<'scope, ()>,
+{
+    let cancellation_token = active_turn.token();
+    if cancellation_token.is_cancelled() {
+        shutdown_runtime(runtime).await;
+
+        return Err(interrupted_by_user_error());
+    }
+
+    let turn_outcome = {
+        let turn_future = run_turn_with_runtime(runtime, prompt);
+        tokio::pin!(turn_future);
+        tokio::select! {
+            result = &mut turn_future => TurnAttemptOutcome::Completed(result),
+            () = cancellation_token.cancelled() => TurnAttemptOutcome::Interrupted,
+        }
+    };
+
+    match turn_outcome {
+        TurnAttemptOutcome::Completed(result) => result,
+        TurnAttemptOutcome::Interrupted => {
+            shutdown_runtime(runtime).await;
+
+            Err(interrupted_by_user_error())
+        }
+    }
+}
+
+/// Result of racing one app-server turn against cancellation.
+enum TurnAttemptOutcome {
+    /// The provider turn completed before cancellation fired.
+    Completed(Result<(String, u64, u64), AppServerError>),
+    /// The session cancellation token fired first.
+    Interrupted,
+}
+
+/// Builds the app-server interruption error shared by initial and retry turns.
+fn interrupted_by_user_error() -> AppServerError {
+    AppServerError::InterruptedByUser("[Stopped] Session interrupted by user.".to_string())
 }
 
 /// Returns `true` when the attempt should replay prior session output as
@@ -569,6 +690,74 @@ mod tests {
         assert_eq!(response.provider_conversation_id, None);
         assert_eq!(start_count.load(Ordering::SeqCst), 2);
         assert_eq!(run_count.load(Ordering::SeqCst), 2);
+        assert_eq!(shutdown_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn run_turn_with_restart_retry_shutdown_signal_interrupts_in_flight_runtime() {
+        // Arrange
+        let sessions = AppServerSessionRegistry::new("Test");
+        let request = AppServerTurnRequest {
+            folder: PathBuf::from("/tmp"),
+            live_session_output: None,
+            model: "model-a".to_string(),
+            prompt: "Do work".into(),
+            request_kind: session_resume_request_kind(Some("previous output")),
+            provider_conversation_id: None,
+            persisted_instruction_conversation_id: None,
+            reasoning_level: ReasoningLevel::default(),
+            session_id: "session-1".to_string(),
+        };
+        let run_count = Arc::new(AtomicUsize::new(0));
+        let shutdown_count = Arc::new(AtomicUsize::new(0));
+
+        // Act
+        let result = run_turn_with_restart_retry(
+            &sessions,
+            request,
+            RuntimeInspector {
+                matches_request: |runtime: &TestRuntime, request| runtime.model == request.model,
+                pid: |_runtime| Some(42),
+                provider_conversation_id: |_runtime| None,
+                restored_context: |_runtime| false,
+            },
+            |request: &AppServerTurnRequest| {
+                let model = request.model.clone();
+
+                Box::pin(async move { Ok(TestRuntime { model }) })
+            },
+            {
+                let run_count = Arc::clone(&run_count);
+                let sessions = sessions.clone();
+                move |_runtime, _prompt| {
+                    let run_count = Arc::clone(&run_count);
+                    let sessions = sessions.clone();
+
+                    Box::pin(async move {
+                        run_count.fetch_add(1, Ordering::SeqCst);
+                        sessions
+                            .cancel_active_turn("session-1")
+                            .expect("cancel should signal active turn");
+                        std::future::pending::<Result<(String, u64, u64), AppServerError>>().await
+                    })
+                }
+            },
+            {
+                let shutdown_count = Arc::clone(&shutdown_count);
+                move |_runtime| {
+                    let shutdown_count = Arc::clone(&shutdown_count);
+
+                    Box::pin(async move {
+                        shutdown_count.fetch_add(1, Ordering::SeqCst);
+                    })
+                }
+            },
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(result, Err(AppServerError::InterruptedByUser(_))));
+        assert_eq!(run_count.load(Ordering::SeqCst), 1);
         assert_eq!(shutdown_count.load(Ordering::SeqCst), 1);
     }
 

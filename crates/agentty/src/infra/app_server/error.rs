@@ -7,6 +7,10 @@ use crate::infra::app_server_transport::AppServerTransportError;
 /// without parsing opaque strings.
 #[derive(Debug, thiserror::Error)]
 pub enum AppServerError {
+    /// The user interrupted an in-flight app-server turn.
+    #[error("{0}")]
+    InterruptedByUser(String),
+
     /// The session registry mutex is poisoned.
     #[error("Failed to lock {provider} app-server session map")]
     LockPoisoned {
@@ -55,6 +59,15 @@ mod tests {
 
         // Assert
         assert_eq!(display, "Failed to lock Codex app-server session map");
+    }
+
+    #[test]
+    fn interrupted_by_user_display_shows_message() {
+        // Arrange
+        let error = AppServerError::InterruptedByUser("[Stopped]".to_string());
+
+        // Act / Assert
+        assert_eq!(error.to_string(), "[Stopped]");
     }
 
     #[test]
