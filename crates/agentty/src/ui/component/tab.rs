@@ -12,23 +12,16 @@ use crate::ui::{Component, style};
 pub struct Tabs<'a> {
     active_project_id: i64,
     current_tab: Tab,
-    has_tasks_tab: bool,
     projects: &'a [ProjectListItem],
 }
 
 impl Tabs<'_> {
     /// Creates a tabs component with the provided active tab and project
     /// context used to label the project-scoped tab group.
-    pub fn new(
-        current_tab: Tab,
-        active_project_id: i64,
-        has_tasks_tab: bool,
-        projects: &[ProjectListItem],
-    ) -> Tabs<'_> {
+    pub fn new(current_tab: Tab, active_project_id: i64, projects: &[ProjectListItem]) -> Tabs<'_> {
         Tabs {
             active_project_id,
             current_tab,
-            has_tasks_tab,
             projects,
         }
     }
@@ -39,7 +32,6 @@ impl Component for Tabs<'_> {
         let line = Line::from(tab_spans(
             self.current_tab,
             self.active_project_id,
-            self.has_tasks_tab,
             self.projects,
         ));
         let paragraph = Paragraph::new(line).block(
@@ -56,17 +48,16 @@ impl Component for Tabs<'_> {
 fn tab_spans(
     current_tab: Tab,
     active_project_id: i64,
-    has_tasks_tab: bool,
     projects: &[ProjectListItem],
 ) -> Vec<Span<'static>> {
-    let tab_count = Tab::project_scoped_tabs(has_tasks_tab).len();
+    let tab_count = Tab::project_scoped_tabs().len();
     let mut spans = Vec::with_capacity(2 * tab_count + 3);
 
     spans.push(tab_span(Tab::Projects, current_tab));
     spans.push(tab_separator_span());
     spans.push(project_context_span(active_project_id, projects));
 
-    for tab in Tab::project_scoped_tabs(has_tasks_tab) {
+    for tab in Tab::project_scoped_tabs() {
         spans.push(tab_separator_span());
         spans.push(tab_span(*tab, current_tab));
     }
@@ -146,7 +137,7 @@ mod tests {
         let current_tab = Tab::Projects;
 
         // Act
-        let spans = tab_spans(current_tab, 0, false, &[]);
+        let spans = tab_spans(current_tab, 0, &[]);
         let rendered_tabs: String = spans
             .iter()
             .map(|span| span.content.as_ref())
@@ -166,7 +157,7 @@ mod tests {
         let current_tab = Tab::Settings;
 
         // Act
-        let spans = tab_spans(current_tab, 0, false, &[]);
+        let spans = tab_spans(current_tab, 0, &[]);
 
         // Assert
         assert_eq!(spans[0].style.fg, Some(style::palette::text_muted()));
@@ -188,7 +179,7 @@ mod tests {
         ];
 
         // Act
-        let spans = tab_spans(current_tab, 7, false, &projects);
+        let spans = tab_spans(current_tab, 7, &projects);
         let rendered_tabs: String = spans
             .iter()
             .map(|span| span.content.as_ref())
@@ -212,7 +203,7 @@ mod tests {
         let current_tab = Tab::Projects;
 
         // Act
-        let spans = tab_spans(current_tab, 0, false, &[]);
+        let spans = tab_spans(current_tab, 0, &[]);
 
         // Assert
         assert_eq!(spans[1].content.as_ref(), "|");
@@ -231,34 +222,11 @@ mod tests {
         let current_tab = Tab::Settings;
 
         // Act
-        let spans = tab_spans(current_tab, 0, false, &[]);
+        let spans = tab_spans(current_tab, 0, &[]);
 
         // Assert
         assert_eq!(spans[2].content.as_ref(), " Project: None ");
         assert_eq!(spans[2].style.fg, Some(style::palette::text_subtle()));
-    }
-
-    #[test]
-    fn test_tab_spans_include_tasks_tab_when_project_has_roadmap() {
-        // Arrange
-        let current_tab = Tab::Tasks;
-
-        // Act
-        let spans = tab_spans(current_tab, 0, true, &[]);
-        let rendered_tabs: String = spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect::<Vec<_>>()
-            .join("");
-
-        // Assert
-        assert_eq!(
-            rendered_tabs,
-            " Projects | Project: None | Sessions | Review | Tasks | Settings "
-        );
-        assert_eq!(spans[8].style.fg, Some(style::palette::warning()));
-        assert_eq!(spans[8].style.bg, Some(style::palette::surface()));
-        assert_eq!(spans[10].style.fg, Some(style::palette::text_muted()));
     }
 
     /// Creates a `ProjectListItem` for tab-label rendering tests.

@@ -195,29 +195,6 @@ pub(crate) fn review_actions() -> Vec<HelpAction> {
     actions
 }
 
-/// Returns help actions for the tasks page.
-/// These entries are used by the help overlay and include all available
-/// actions.
-pub(crate) fn task_actions() -> Vec<HelpAction> {
-    let mut actions = list_base_actions();
-    actions.push(HelpAction::new("scroll", "j/k", "Scroll roadmap"));
-    actions.push(HelpAction::new("top", "g", "Scroll to top"));
-    actions.push(HelpAction::new("next tab", "Tab", "Switch tab"));
-    actions.push(HelpAction::new("help", "?", "Help"));
-
-    actions
-}
-
-/// Returns compact tasks footer actions for the page-level hint line.
-pub(crate) fn task_footer_actions() -> Vec<HelpAction> {
-    vec![
-        HelpAction::new("quit", "q", "Quit"),
-        HelpAction::new("scroll", "j/k", "Scroll roadmap"),
-        HelpAction::new("top", "g", "Scroll to top"),
-        HelpAction::new("help", "?", "Help"),
-    ]
-}
-
 /// Projects currently available view-mode actions into help entries.
 /// These entries are used by the help overlay and include all available
 /// actions.
@@ -562,17 +539,6 @@ mod tests {
 
         // Assert
         assert!(!actions.iter().any(|action| action.key == "a"));
-    }
-
-    #[test]
-    fn test_task_actions_include_scroll_shortcuts() {
-        // Arrange
-        // Act
-        let actions = task_actions();
-
-        // Assert
-        assert!(actions.iter().any(|action| action.key == "j/k"));
-        assert!(actions.iter().any(|action| action.key == "g"));
     }
 
     #[test]

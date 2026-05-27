@@ -34,8 +34,6 @@ pub struct RenderContext<'a> {
     pub active_project_id: i64,
     /// Active top-level tab selection.
     pub current_tab: Tab,
-    /// Whether the active project exposes the roadmap-backed `Tasks` tab.
-    pub has_tasks_tab: bool,
     /// Current local branch name for the active project.
     pub git_branch: Option<&'a str>,
     /// Current upstream reference tracked by the active project branch.
@@ -76,12 +74,6 @@ pub struct RenderContext<'a> {
     pub settings: &'a mut SettingsManager,
     /// Daily session activity series used by dashboard activity summaries.
     pub stats_activity: &'a [DailyActivity],
-    /// Loaded roadmap markdown for the active project, when available.
-    pub task_roadmap: Option<&'a str>,
-    /// User-visible roadmap load failure for the active project, when present.
-    pub task_roadmap_error: Option<&'a str>,
-    /// Current vertical scroll offset for the roadmap-backed `Tasks` page.
-    pub task_roadmap_scroll_offset: u16,
     /// Session rows available for rendering.
     pub sessions: &'a [Session],
     /// Table selection state for the session list.

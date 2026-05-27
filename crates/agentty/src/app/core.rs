@@ -1,13 +1,12 @@
 //! App core module router.
 //!
 //! This parent module intentionally stays router-only and re-exports the
-//! `App` facade plus focused child modules for state, startup, draw, reducer,
-//! and roadmap behavior.
+//! `App` facade plus focused child modules for state, startup, draw, and
+//! reducer behavior.
 
 mod draw;
 mod events;
 mod new;
-mod roadmap;
 mod state;
 
 pub(crate) use events::AppEvent;

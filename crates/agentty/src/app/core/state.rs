@@ -32,9 +32,6 @@ use tokio::sync::mpsc;
 use super::events::AppEvent;
 #[cfg(test)]
 use super::events::{AppEventBatch, ReviewRequestStatusUpdate};
-use super::roadmap::ActiveProjectRoadmap;
-#[cfg(test)]
-use super::roadmap::TASKS_ROADMAP_PATH;
 use crate::app;
 use crate::app::{AppError, RequestedReviewState, session};
 use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
@@ -238,16 +235,6 @@ impl AppClients {
 
         self
     }
-
-    /// Replaces the filesystem boundary while preserving the remaining
-    /// clients.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn with_fs_client(mut self, fs_client: Arc<dyn FsClient>) -> Self {
-        self.fs_client = fs_client;
-
-        self
-    }
 }
 
 // SessionState definition moved to session_state.rs
@@ -276,20 +263,11 @@ pub struct App {
     pub(crate) sessions: SessionManager,
     /// Runs sync-to-main workflows behind an injectable boundary.
     pub(crate) sync_main_runner: Arc<dyn SyncMainRunner>,
-    /// Caches whether the active project exposes `docs/plan/roadmap.md`,
-    /// avoiding a filesystem probe on every render tick.
-    pub(super) active_project_has_tasks_tab: bool,
-    /// Caches the active project's roadmap content or load failure for the
-    /// `Tasks` page.
-    pub(super) active_project_roadmap: Option<ActiveProjectRoadmap>,
     /// Monotonic requested-review refresh generation for rejecting stale task
     /// results.
     pub(super) requested_review_generation: u64,
     /// Caches requested PR/MR reviews for the active project's `Review` tab.
     pub(super) requested_reviews: RequestedReviewState,
-    /// Stores the current vertical scroll offset for the active project's
-    /// `Tasks` page.
-    pub(super) task_roadmap_scroll_offset: u16,
     /// Receives app events emitted by background tasks and workflows.
     pub(super) event_rx: mpsc::UnboundedReceiver<AppEvent>,
     /// Stores the latest available stable `agentty` version when one is
@@ -334,17 +312,15 @@ impl App {
         self.needs_redraw = false;
     }
 
-    /// Cycles the active list tab forward using the active project's available
-    /// tab set.
+    /// Cycles the active list tab forward.
     pub fn next_tab(&mut self) {
-        self.tabs.next(self.active_project_has_tasks_tab());
+        self.tabs.next();
         self.refresh_requested_reviews_if_review_tab(false);
     }
 
-    /// Cycles the active list tab backward using the active project's
-    /// available tab set.
+    /// Cycles the active list tab backward.
     pub fn previous_tab(&mut self) {
-        self.tabs.previous(self.active_project_has_tasks_tab());
+        self.tabs.previous();
         self.refresh_requested_reviews_if_review_tab(false);
     }
 
@@ -443,8 +419,6 @@ impl App {
             git_upstream_ref,
             project.path,
         );
-        self.refresh_active_project_roadmap().await;
-        self.tabs.normalize(self.active_project_has_tasks_tab());
         self.refresh_requested_reviews_if_review_tab(true);
         self.settings = SettingsManager::new(&self.services, project.id).await;
         let default_session_model = SessionManager::load_default_session_model(
@@ -1604,10 +1578,9 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
     use std::fs;
     use std::path::PathBuf;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
     use std::time::Duration;
 
     use mockall::predicate::eq;
@@ -1756,28 +1729,6 @@ mod tests {
         new_test_app_with_tmux_client(Arc::new(MockTmuxClient::new())).await
     }
 
-    /// Builds a test app rooted at `working_dir` with one injected filesystem
-    /// boundary.
-    async fn app_with_fs_client(working_dir: PathBuf, fs_client: Arc<dyn FsClient>) -> App {
-        let database = AppRepositories::in_memory().await;
-        let clients = test_app_clients()
-            .with_app_server_client_override(mock_app_server())
-            .with_tmux_client(Arc::new(MockTmuxClient::new()))
-            .with_fs_client(fs_client);
-
-        App::new_with_clients(working_dir.clone(), working_dir, None, database, clients)
-            .await
-            .expect("failed to build test app")
-    }
-
-    /// Returns whether a path is the direct git metadata marker used by
-    /// project-list repository filtering tests.
-    fn is_git_marker_path(path: &Path) -> bool {
-        path.file_name()
-            .and_then(|file_name| file_name.to_str())
-            .is_some_and(|file_name| file_name == ".git")
-    }
-
     #[tokio::test]
     async fn test_new_with_clients_fails_when_no_backend_cli_is_available() {
         // Arrange
@@ -1919,61 +1870,6 @@ mod tests {
         // Assert
         assert_eq!(app.settings.default_smart_model, AgentModel::Gpt54);
         assert_eq!(app.settings.open_command, "cargo test");
-    }
-
-    #[tokio::test]
-    async fn test_switch_project_refreshes_tasks_tab_cache() {
-        // Arrange
-        let base_dir = tempdir().expect("failed to create temp dir");
-        let second_project_dir = tempdir().expect("failed to create second temp dir");
-        let roadmap_dir = second_project_dir.path().join("docs/plan");
-        tokio::fs::create_dir_all(&roadmap_dir)
-            .await
-            .expect("failed to create roadmap dir");
-        tokio::fs::write(roadmap_dir.join("roadmap.md"), "# roadmap")
-            .await
-            .expect("failed to create roadmap file");
-        let base_path = base_dir.path().to_path_buf();
-        let database = AppRepositories::in_memory().await;
-        let first_project_id = database
-            .projects()
-            .upsert_project(&base_path.to_string_lossy(), None)
-            .await
-            .expect("failed to insert first project");
-        let second_project_id = database
-            .projects()
-            .upsert_project(&second_project_dir.path().to_string_lossy(), None)
-            .await
-            .expect("failed to insert second project");
-        database
-            .settings()
-            .set_active_project_id(first_project_id)
-            .await
-            .expect("failed to persist initial active project");
-        let mut app = App::new_with_clients(
-            base_path.clone(),
-            base_path,
-            None,
-            database,
-            test_app_clients(),
-        )
-        .await
-        .expect("failed to build app");
-        app.scroll_task_roadmap_down();
-        app.scroll_task_roadmap_down();
-
-        // Act
-        let before_switch = app.active_project_has_tasks_tab();
-        app.switch_project(second_project_id)
-            .await
-            .expect("failed to switch project");
-        let after_switch = app.active_project_has_tasks_tab();
-        let task_scroll_offset = app.task_roadmap_scroll_offset();
-
-        // Assert
-        assert!(!before_switch);
-        assert!(after_switch);
-        assert_eq!(task_scroll_offset, 0);
     }
 
     #[tokio::test]
@@ -4464,175 +4360,6 @@ mod tests {
 
         // Assert
         assert!(project_exists);
-    }
-
-    #[tokio::test]
-    async fn active_project_has_tasks_tab_returns_true_when_roadmap_file_exists() {
-        // Arrange
-        let project_path = PathBuf::from("/home/test/src/agentty");
-        let roadmap_path = project_path.join(TASKS_ROADMAP_PATH);
-        let mut fs_client = crate::infra::fs::MockFsClient::new();
-        fs_client.expect_is_dir().returning(|_| true);
-        fs_client
-            .expect_exists()
-            .returning(|path| is_git_marker_path(path.as_path()));
-        fs_client
-            .expect_is_file()
-            .once()
-            .withf(move |path| path == &roadmap_path)
-            .return_const(true);
-        let roadmap_path = project_path.join(TASKS_ROADMAP_PATH);
-        fs_client
-            .expect_read_file()
-            .once()
-            .withf(move |path| path == &roadmap_path)
-            .return_once(|_| Box::pin(async { Ok(b"# roadmap".to_vec()) }));
-        let app = app_with_fs_client(project_path, Arc::new(fs_client)).await;
-
-        // Act
-        let has_tasks_tab = app.active_project_has_tasks_tab();
-        let cached_has_tasks_tab = app.active_project_has_tasks_tab();
-
-        // Assert
-        assert!(has_tasks_tab);
-        assert!(cached_has_tasks_tab);
-    }
-
-    #[tokio::test]
-    async fn active_project_has_tasks_tab_returns_false_when_roadmap_file_is_missing() {
-        // Arrange
-        let project_path = PathBuf::from("/home/test/src/agentty");
-        let roadmap_path = project_path.join(TASKS_ROADMAP_PATH);
-        let mut fs_client = crate::infra::fs::MockFsClient::new();
-        fs_client.expect_is_dir().returning(|_| true);
-        fs_client
-            .expect_exists()
-            .returning(|path| is_git_marker_path(path.as_path()));
-        fs_client
-            .expect_is_file()
-            .once()
-            .withf(move |path| path == &roadmap_path)
-            .return_const(false);
-        let app = app_with_fs_client(project_path, Arc::new(fs_client)).await;
-
-        // Act
-        let has_tasks_tab = app.active_project_has_tasks_tab();
-        let cached_has_tasks_tab = app.active_project_has_tasks_tab();
-
-        // Assert
-        assert!(!has_tasks_tab);
-        assert!(!cached_has_tasks_tab);
-    }
-
-    #[tokio::test]
-    async fn apply_app_events_refreshes_roadmap_after_successful_sync_main() {
-        // Arrange
-        let project_path = PathBuf::from("/home/test/src/agentty");
-        let roadmap_path = project_path.join(TASKS_ROADMAP_PATH);
-        let roadmap_path_for_file_check = roadmap_path.clone();
-        let roadmap_path_for_read = roadmap_path.clone();
-        let roadmap_snapshots = Arc::new(Mutex::new(VecDeque::from([
-            b"# roadmap before sync".to_vec(),
-            b"# roadmap after sync".to_vec(),
-        ])));
-        let mut fs_client = crate::infra::fs::MockFsClient::new();
-        fs_client.expect_is_dir().returning(|_| true);
-        fs_client
-            .expect_exists()
-            .returning(|path| is_git_marker_path(path.as_path()));
-        fs_client
-            .expect_is_file()
-            .times(2)
-            .withf(move |path| path == &roadmap_path_for_file_check)
-            .return_const(true);
-        fs_client
-            .expect_read_file()
-            .times(2)
-            .withf(move |path| path == &roadmap_path_for_read)
-            .returning(move |_| {
-                let roadmap_snapshots = Arc::clone(&roadmap_snapshots);
-                Box::pin(async move {
-                    let mut roadmap_snapshots = roadmap_snapshots
-                        .lock()
-                        .expect("roadmap snapshot lock should not be poisoned");
-                    Ok(roadmap_snapshots
-                        .pop_front()
-                        .expect("expected a queued roadmap snapshot"))
-                })
-            });
-        let mut app = app_with_fs_client(project_path, Arc::new(fs_client)).await;
-
-        // Act
-        app.apply_app_events(AppEvent::SyncMainCompleted {
-            result: Ok(SyncMainOutcome {
-                pulled_commit_titles: vec!["Refresh roadmap".to_string()],
-                pulled_commits: Some(1),
-                pushed_commit_titles: Vec::new(),
-                pushed_commits: Some(0),
-                resolved_conflict_files: Vec::new(),
-            }),
-        })
-        .await;
-
-        // Assert
-        assert_eq!(
-            app.active_project_roadmap,
-            Some(ActiveProjectRoadmap::Loaded(
-                "# roadmap after sync".to_string()
-            ))
-        );
-        assert!(app.active_project_has_tasks_tab());
-    }
-
-    #[tokio::test]
-    async fn apply_app_events_refreshes_roadmap_after_full_session_refresh() {
-        // Arrange
-        let project_path = PathBuf::from("/home/test/src/agentty");
-        let roadmap_path = project_path.join(TASKS_ROADMAP_PATH);
-        let roadmap_path_for_file_check = roadmap_path.clone();
-        let roadmap_path_for_read = roadmap_path.clone();
-        let roadmap_snapshots = Arc::new(Mutex::new(VecDeque::from([
-            b"# roadmap before merge".to_vec(),
-            b"# roadmap after merge".to_vec(),
-        ])));
-        let mut fs_client = crate::infra::fs::MockFsClient::new();
-        fs_client.expect_is_dir().returning(|_| true);
-        fs_client
-            .expect_exists()
-            .returning(|path| is_git_marker_path(path.as_path()));
-        fs_client
-            .expect_is_file()
-            .times(2)
-            .withf(move |path| path == &roadmap_path_for_file_check)
-            .return_const(true);
-        fs_client
-            .expect_read_file()
-            .times(2)
-            .withf(move |path| path == &roadmap_path_for_read)
-            .returning(move |_| {
-                let roadmap_snapshots = Arc::clone(&roadmap_snapshots);
-                Box::pin(async move {
-                    let mut roadmap_snapshots = roadmap_snapshots
-                        .lock()
-                        .expect("roadmap snapshot lock should not be poisoned");
-                    Ok(roadmap_snapshots
-                        .pop_front()
-                        .expect("expected a queued roadmap snapshot"))
-                })
-            });
-        let mut app = app_with_fs_client(project_path, Arc::new(fs_client)).await;
-
-        // Act
-        app.apply_app_events(AppEvent::RefreshSessions).await;
-
-        // Assert
-        assert_eq!(
-            app.active_project_roadmap,
-            Some(ActiveProjectRoadmap::Loaded(
-                "# roadmap after merge".to_string()
-            ))
-        );
-        assert!(app.active_project_has_tasks_tab());
     }
 
     #[test]

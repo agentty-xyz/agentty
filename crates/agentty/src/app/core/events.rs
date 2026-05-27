@@ -651,13 +651,9 @@ impl App {
         .await;
 
         if let Some(sync_main_result) = event_batch.sync_main_result {
-            let should_refresh_active_project_roadmap = sync_main_result.is_ok();
             let sync_popup_context = self.sync_popup_context();
 
             self.mode = Self::sync_main_popup_mode(sync_main_result, &sync_popup_context);
-            if should_refresh_active_project_roadmap {
-                self.refresh_active_project_roadmap_and_tabs().await;
-            }
         }
 
         self.handle_merge_queue_progress(&event_batch.session_ids, &previous_session_states)
@@ -696,7 +692,6 @@ impl App {
         if event_batch.should_force_reload {
             self.refresh_sessions_now().await;
             self.reload_projects().await;
-            self.refresh_active_project_roadmap_and_tabs().await;
         }
 
         if event_batch.should_refresh_git_status {

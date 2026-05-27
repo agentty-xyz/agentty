@@ -7,6 +7,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Removed
+
+- agentty: remove the roadmap-backed `Tasks` tab.
+
 ## [v0.9.3] - 2026-05-20
 
 ### Added

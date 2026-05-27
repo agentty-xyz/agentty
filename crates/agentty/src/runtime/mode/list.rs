@@ -10,7 +10,7 @@ use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
 use crate::runtime::mode::question;
 use crate::ui::state::app_mode::{AppMode, ConfirmationIntent, HelpContext, QuestionFocus};
 use crate::ui::state::help_action::{
-    HelpAction, project_list_actions, session_list_actions, settings_actions, task_actions,
+    HelpAction, project_list_actions, session_list_actions, settings_actions,
 };
 use crate::ui::state::prompt::{PromptAttachmentState, PromptHistoryState};
 use crate::ui::text_util::inline_text;
@@ -57,20 +57,15 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
         KeyCode::Char('j') | KeyCode::Down => match app.tabs.current() {
             Tab::Projects => app.next_project(),
             Tab::Sessions => app.next(),
-            Tab::Tasks => app.scroll_task_roadmap_down(),
             Tab::Review => {}
             Tab::Settings => app.settings.next(),
         },
         KeyCode::Char('k') | KeyCode::Up => match app.tabs.current() {
             Tab::Projects => app.previous_project(),
             Tab::Sessions => app.previous(),
-            Tab::Tasks => app.scroll_task_roadmap_up(),
             Tab::Review => {}
             Tab::Settings => app.settings.previous(),
         },
-        KeyCode::Char('g') if app.tabs.current() == Tab::Tasks => {
-            app.reset_task_roadmap_scroll();
-        }
         KeyCode::Enter => return handle_enter_key(app).await,
         KeyCode::Char('c') if app.tabs.current() == Tab::Sessions => {
             let selected_session = app.selected_session().and_then(|session| {
@@ -156,7 +151,7 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
         Tab::Settings => {
             app.settings.handle_enter(&app.services).await;
         }
-        Tab::Review | Tab::Tasks => {}
+        Tab::Review => {}
     }
 
     Ok(EventResult::Continue)
@@ -281,10 +276,6 @@ fn list_keybindings(app: &App) -> Vec<HelpAction> {
 
     if app.tabs.current() == Tab::Review {
         return crate::ui::state::help_action::review_actions();
-    }
-
-    if app.tabs.current() == Tab::Tasks {
-        return task_actions();
     }
 
     let is_sessions_tab = app.tabs.current() == Tab::Sessions;
@@ -1097,96 +1088,6 @@ mod tests {
         assert!(matches!(event_result, EventResult::Continue));
         assert!(app.sessions.sessions().is_empty());
         assert!(matches!(app.mode, AppMode::List));
-    }
-
-    #[tokio::test]
-    async fn test_handle_task_scroll_keys_update_roadmap_offset() {
-        // Arrange
-        let roadmap_dir = tempdir().expect("failed to create roadmap dir");
-        std::fs::create_dir_all(roadmap_dir.path().join("docs/plan"))
-            .expect("failed to create roadmap path");
-        std::fs::write(
-            roadmap_dir.path().join("docs/plan/roadmap.md"),
-            "## Ready Now\n### [12345678-1234-1234-1234-1234567890ab] Stream: Task\n#### \
-             Outcome\nTask",
-        )
-        .expect("failed to write roadmap");
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
-        let mut app = App::new_with_clients(
-            roadmap_dir.path().to_path_buf(),
-            roadmap_dir.path().to_path_buf(),
-            None,
-            database,
-            test_app_clients(),
-        )
-        .await
-        .expect("failed to build app");
-        app.tabs.set(Tab::Tasks);
-
-        // Act
-        handle(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
-        )
-        .await
-        .expect("failed to scroll down");
-        handle(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
-        )
-        .await
-        .expect("failed to scroll down again");
-        handle(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
-        )
-        .await
-        .expect("failed to scroll up");
-
-        // Assert
-        assert_eq!(app.task_roadmap_scroll_offset(), 1);
-    }
-
-    #[tokio::test]
-    async fn test_handle_task_top_key_resets_roadmap_offset() {
-        // Arrange
-        let roadmap_dir = tempdir().expect("failed to create roadmap dir");
-        std::fs::create_dir_all(roadmap_dir.path().join("docs/plan"))
-            .expect("failed to create roadmap path");
-        std::fs::write(
-            roadmap_dir.path().join("docs/plan/roadmap.md"),
-            "## Ready Now\n### [12345678-1234-1234-1234-1234567890ab] Stream: Task\n#### \
-             Outcome\nTask",
-        )
-        .expect("failed to write roadmap");
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
-        let mut app = App::new_with_clients(
-            roadmap_dir.path().to_path_buf(),
-            roadmap_dir.path().to_path_buf(),
-            None,
-            database,
-            test_app_clients(),
-        )
-        .await
-        .expect("failed to build app");
-        app.tabs.set(Tab::Tasks);
-        app.scroll_task_roadmap_down();
-        app.scroll_task_roadmap_down();
-
-        // Act
-        handle(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
-        )
-        .await
-        .expect("failed to reset task scroll");
-
-        // Assert
-        assert_eq!(app.task_roadmap_scroll_offset(), 0);
     }
 
     #[tokio::test]

@@ -15,7 +15,6 @@ pub mod session_format;
 pub mod state;
 /// Shared theme-aware UI styling helpers and status-display helpers.
 pub mod style;
-pub(crate) mod task_roadmap;
 pub mod text_util;
 
 /// A trait for UI components that enforces a standard rendering interface.

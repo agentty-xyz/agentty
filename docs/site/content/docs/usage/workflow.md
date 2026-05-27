@@ -14,8 +14,7 @@ For keyboard shortcuts by view, see [Keybindings](@/docs/usage/keybindings.md).
 ## Interface Layout
 
 <a id="usage-interface-layout"></a> Agentty organizes its interface into four primary
-tabs, with one conditional `Tasks` tab also accessible with `Tab` when the active
-project has a roadmap:
+tabs, all accessible with `Tab`:
 
 | Tab | Purpose | |-----|---------| | **Projects** | Select between projects (git
 repositories) in a dashboard view: equal-width activity heatmap and `Work Pace` panels
@@ -30,9 +29,7 @@ project that request the current forge user's review, including drafts marked wi
 requests sent to a team the user belongs to. The tab is a read-only forge list; press
 `s` to refresh and open reviews from the forge UI or CLI. If the list reaches the
 provider cap, the footer shows that Agentty is displaying the first matching requests. |
-| **Tasks** | Shown only when the active project contains `docs/plan/roadmap.md`,
-summarizing the roadmap's `Ready Now`, `Queued Next`, and `Parked` task queues. | |
-**Settings** | Configure the color theme, default reasoning level, smart/fast/review
+| **Settings** | Configure the color theme, default reasoning level, smart/fast/review
 model defaults, the optional `Last used model as default` smart-model mode, the session
 commit coauthor trailer, and `Open Commands` for the active project. |
 

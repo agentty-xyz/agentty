@@ -4357,13 +4357,6 @@ mod tests {
     async fn test_next_tab_includes_tasks_when_active_project_has_roadmap() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
-        let roadmap_dir = dir.path().join("docs/plan");
-        tokio::fs::create_dir_all(&roadmap_dir)
-            .await
-            .expect("failed to create roadmap dir");
-        tokio::fs::write(roadmap_dir.join("roadmap.md"), "# roadmap")
-            .await
-            .expect("failed to create roadmap file");
         let database = AppRepositories::in_memory().await;
         let mut app = new_test_app_with_db(
             dir.path().to_path_buf(),
@@ -4379,8 +4372,6 @@ mod tests {
         assert_eq!(app.tabs.current(), Tab::Sessions);
         app.next_tab();
         assert_eq!(app.tabs.current(), Tab::Review);
-        app.next_tab();
-        assert_eq!(app.tabs.current(), Tab::Tasks);
         app.next_tab();
         assert_eq!(app.tabs.current(), Tab::Settings);
         app.next_tab();

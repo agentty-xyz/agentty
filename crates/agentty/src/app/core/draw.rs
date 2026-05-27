@@ -2,7 +2,6 @@
 
 use ratatui::Frame;
 
-use super::roadmap::ActiveProjectRoadmap;
 use super::state::{App, UpdateStatus};
 use crate::app::session;
 use crate::app::tab::Tab;
@@ -98,8 +97,6 @@ impl App {
     /// assembling a [`ui::RenderContext`] from current app state, and
     /// dispatching to the UI render pipeline.
     pub fn draw(&mut self, frame: &mut Frame) {
-        let has_tasks_tab = self.active_project_has_tasks_tab();
-        self.tabs.normalize(has_tasks_tab);
         let active_project_id = self.projects.active_project_id();
         let current_tab = self.tabs.current();
         let working_dir = self.projects.working_dir().to_path_buf();
@@ -107,20 +104,6 @@ impl App {
         let git_upstream_ref = self.projects.git_upstream_ref().map(str::to_string);
         let git_status = self.projects.git_status();
         let latest_available_version = self.latest_available_version.as_deref().map(str::to_string);
-        let task_roadmap = self.active_project_roadmap.as_ref().and_then(|roadmap| {
-            if let ActiveProjectRoadmap::Loaded(content) = roadmap {
-                return Some(content.clone());
-            }
-
-            None
-        });
-        let task_roadmap_error = self.active_project_roadmap.as_ref().and_then(|roadmap| {
-            if let ActiveProjectRoadmap::LoadError(message) = roadmap {
-                return Some(message.clone());
-            }
-
-            None
-        });
         let session_git_statuses = self.sessions.session_git_statuses().clone();
         let session_branch_names = self.sessions.session_branch_names().clone();
         let session_index_by_id = self.sessions.state().session_index_by_id().clone();
@@ -145,7 +128,6 @@ impl App {
             ui::RenderContext {
                 active_project_id,
                 current_tab,
-                has_tasks_tab,
                 git_branch: git_branch.as_deref(),
                 git_upstream_ref: git_upstream_ref.as_deref(),
                 git_status,
@@ -158,9 +140,6 @@ impl App {
                 projects: &projects,
                 review_comment_cache: &review_comment_cache,
                 requested_reviews: &self.requested_reviews,
-                task_roadmap: task_roadmap.as_deref(),
-                task_roadmap_error: task_roadmap_error.as_deref(),
-                task_roadmap_scroll_offset: self.task_roadmap_scroll_offset,
                 active_prompt_outputs: &active_prompt_outputs,
                 session_branch_names: &session_branch_names,
                 session_git_statuses: &session_git_statuses,

@@ -23,16 +23,12 @@ pub(crate) struct ListBackgroundRenderContext<'a> {
     /// Identifier for the currently active project in the project list tab.
     pub(crate) active_project_id: i64,
     pub(crate) current_tab: Tab,
-    pub(crate) has_tasks_tab: bool,
     pub(crate) project_table_state: &'a mut TableState,
     pub(crate) projects: &'a [ProjectListItem],
     pub(crate) requested_reviews: &'a RequestedReviewState,
     pub(crate) sessions: &'a [Session],
     pub(crate) settings: &'a mut SettingsManager,
     pub(crate) stats_activity: &'a [DailyActivity],
-    pub(crate) task_roadmap: Option<&'a str>,
-    pub(crate) task_roadmap_error: Option<&'a str>,
-    pub(crate) task_roadmap_scroll_offset: u16,
     pub(crate) table_state: &'a mut TableState,
 }
 
@@ -41,16 +37,12 @@ struct RouteSharedContext<'a> {
     /// Identifier for the active project shared across list-mode renders.
     active_project_id: i64,
     current_tab: Tab,
-    has_tasks_tab: bool,
     project_table_state: &'a mut TableState,
     projects: &'a [ProjectListItem],
     requested_reviews: &'a RequestedReviewState,
     sessions: &'a [Session],
     settings: &'a mut SettingsManager,
     stats_activity: &'a [DailyActivity],
-    task_roadmap: Option<&'a str>,
-    task_roadmap_error: Option<&'a str>,
-    task_roadmap_scroll_offset: u16,
     table_state: &'a mut TableState,
 }
 
@@ -61,16 +53,12 @@ impl RouteSharedContext<'_> {
         ListBackgroundRenderContext {
             active_project_id: self.active_project_id,
             current_tab: self.current_tab,
-            has_tasks_tab: self.has_tasks_tab,
             project_table_state: self.project_table_state,
             projects: self.projects,
             requested_reviews: self.requested_reviews,
             sessions: self.sessions,
             settings: self.settings,
             stats_activity: self.stats_activity,
-            task_roadmap: self.task_roadmap,
-            task_roadmap_error: self.task_roadmap_error,
-            task_roadmap_scroll_offset: self.task_roadmap_scroll_offset,
             table_state: self.table_state,
         }
     }
@@ -131,7 +119,6 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         active_project_id,
         active_prompt_outputs,
         current_tab,
-        has_tasks_tab,
         markdown_render_cache,
         mode,
         output_layout_cache,
@@ -144,9 +131,6 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         session_worktree_availability,
         settings,
         stats_activity,
-        task_roadmap,
-        task_roadmap_error,
-        task_roadmap_scroll_offset,
         sessions,
         table_state,
         wall_clock_unix_seconds,
@@ -156,16 +140,12 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
     let mut shared = RouteSharedContext {
         active_project_id,
         current_tab,
-        has_tasks_tab,
         project_table_state,
         projects,
         requested_reviews,
         sessions,
         settings,
         stats_activity,
-        task_roadmap,
-        task_roadmap_error,
-        task_roadmap_scroll_offset,
         table_state,
     };
 
@@ -765,16 +745,12 @@ pub(crate) fn render_list_background(
     let ListBackgroundRenderContext {
         active_project_id,
         current_tab,
-        has_tasks_tab,
         project_table_state,
         projects,
         requested_reviews,
         sessions,
         settings,
         stats_activity,
-        task_roadmap,
-        task_roadmap_error,
-        task_roadmap_scroll_offset,
         table_state,
     } = context;
 
@@ -782,8 +758,7 @@ pub(crate) fn render_list_background(
         .constraints([Constraint::Length(3), Constraint::Min(0)])
         .split(content_area);
 
-    component::tab::Tabs::new(current_tab, active_project_id, has_tasks_tab, projects)
-        .render(f, chunks[0]);
+    component::tab::Tabs::new(current_tab, active_project_id, projects).render(f, chunks[0]);
 
     match current_tab {
         Tab::Projects => {
@@ -805,14 +780,6 @@ pub(crate) fn render_list_background(
         }
         Tab::Review => {
             page::review_list::ReviewListPage::new(requested_reviews).render(f, chunks[1]);
-        }
-        Tab::Tasks => {
-            let mut page = page::task::TasksPage::new(
-                task_roadmap,
-                task_roadmap_error,
-                task_roadmap_scroll_offset,
-            );
-            page.render(f, chunks[1]);
         }
         Tab::Settings => {
             let active_project_name = active_project_name(active_project_id, projects);

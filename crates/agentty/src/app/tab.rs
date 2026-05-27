@@ -17,48 +17,23 @@ pub enum Tab {
     Projects,
     Sessions,
     Review,
-    Tasks,
     Settings,
 }
 
 impl Tab {
-    /// Tabs in the order they are rendered when the active project does not
-    /// expose a roadmap-backed tasks page.
-    pub const ALL_WITHOUT_TASKS: [Self; 4] =
-        [Self::Projects, Self::Sessions, Self::Review, Self::Settings];
-    /// Tabs in the order they are rendered when the active project exposes a
-    /// roadmap-backed tasks page.
-    pub const ALL_WITH_TASKS: [Self; 5] = [
-        Self::Projects,
-        Self::Sessions,
-        Self::Review,
-        Self::Tasks,
-        Self::Settings,
-    ];
-    /// Project-scoped tabs in display order when the tasks page is hidden.
-    pub const PROJECT_SCOPED_WITHOUT_TASKS: [Self; 3] =
-        [Self::Sessions, Self::Review, Self::Settings];
-    /// Project-scoped tabs in display order when the tasks page is available.
-    pub const PROJECT_SCOPED_WITH_TASKS: [Self; 4] =
-        [Self::Sessions, Self::Review, Self::Tasks, Self::Settings];
+    /// Tabs in the order they are rendered.
+    pub const ALL: [Self; 4] = [Self::Projects, Self::Sessions, Self::Review, Self::Settings];
+    /// Project-scoped tabs in display order.
+    pub const PROJECT_SCOPED: [Self; 3] = [Self::Sessions, Self::Review, Self::Settings];
 
-    /// Returns the tabs available for the current project context.
-    pub fn available_tabs(has_tasks_tab: bool) -> &'static [Self] {
-        if has_tasks_tab {
-            return &Self::ALL_WITH_TASKS;
-        }
-
-        &Self::ALL_WITHOUT_TASKS
+    /// Returns the available top-level tabs.
+    pub fn available_tabs() -> &'static [Self] {
+        &Self::ALL
     }
 
-    /// Returns the project-scoped tabs available for the current project
-    /// context.
-    pub fn project_scoped_tabs(has_tasks_tab: bool) -> &'static [Self] {
-        if has_tasks_tab {
-            return &Self::PROJECT_SCOPED_WITH_TASKS;
-        }
-
-        &Self::PROJECT_SCOPED_WITHOUT_TASKS
+    /// Returns the project-scoped tabs available for the current project.
+    pub fn project_scoped_tabs() -> &'static [Self] {
+        &Self::PROJECT_SCOPED
     }
 
     /// Returns the display label used in the tabs header.
@@ -67,7 +42,6 @@ impl Tab {
             Tab::Projects => "Projects",
             Tab::Sessions => "Sessions",
             Tab::Review => "Review",
-            Tab::Tasks => "Tasks",
             Tab::Settings => "Settings",
         }
     }
@@ -77,15 +51,15 @@ impl Tab {
     pub fn scope(self) -> TabScope {
         match self {
             Tab::Projects => TabScope::Global,
-            Tab::Sessions | Tab::Review | Tab::Tasks | Tab::Settings => TabScope::Project,
+            Tab::Sessions | Tab::Review | Tab::Settings => TabScope::Project,
         }
     }
 
     /// Cycles to the next tab in display order.
     #[must_use]
-    fn next(self, has_tasks_tab: bool) -> Self {
-        let tabs = Self::available_tabs(has_tasks_tab);
-        let tab_index = self.index(has_tasks_tab);
+    fn next(self) -> Self {
+        let tabs = Self::available_tabs();
+        let tab_index = self.index();
         let next_index = (tab_index + 1) % tabs.len();
 
         tabs[next_index]
@@ -93,20 +67,17 @@ impl Tab {
 
     /// Cycles to the previous tab in display order.
     #[must_use]
-    fn previous(self, has_tasks_tab: bool) -> Self {
-        let tabs = Self::available_tabs(has_tasks_tab);
-        let tab_index = self.index(has_tasks_tab);
+    fn previous(self) -> Self {
+        let tabs = Self::available_tabs();
+        let tab_index = self.index();
         let previous_index = (tab_index + tabs.len() - 1) % tabs.len();
 
         tabs[previous_index]
     }
 
     /// Returns the display-order index for the tab.
-    fn index(self, has_tasks_tab: bool) -> usize {
-        match Self::available_tabs(has_tasks_tab)
-            .iter()
-            .position(|tab| *tab == self)
-        {
+    fn index(self) -> usize {
+        match Self::available_tabs().iter().position(|tab| *tab == self) {
             Some(tab_index) => tab_index,
             None => unreachable!("tab must exist in the display order"),
         }
@@ -130,28 +101,18 @@ impl TabManager {
     }
 
     /// Cycles selection to the next tab.
-    pub fn next(&mut self, has_tasks_tab: bool) {
-        self.normalize(has_tasks_tab);
-        self.current = self.current.next(has_tasks_tab);
+    pub fn next(&mut self) {
+        self.current = self.current.next();
     }
 
     /// Cycles selection to the previous tab.
-    pub fn previous(&mut self, has_tasks_tab: bool) {
-        self.normalize(has_tasks_tab);
-        self.current = self.current.previous(has_tasks_tab);
+    pub fn previous(&mut self) {
+        self.current = self.current.previous();
     }
 
     /// Sets the currently selected tab.
     pub fn set(&mut self, tab: Tab) {
         self.current = tab;
-    }
-
-    /// Falls back to `Tab::Sessions` when the current tab is no longer
-    /// available for the active project.
-    pub fn normalize(&mut self, has_tasks_tab: bool) {
-        if self.current == Tab::Tasks && !has_tasks_tab {
-            self.current = Tab::Sessions;
-        }
     }
 }
 
@@ -164,13 +125,10 @@ mod tests {
         // Arrange
 
         // Act
-        let titles = Tab::ALL_WITH_TASKS.map(Tab::title);
+        let titles = Tab::ALL.map(Tab::title);
 
         // Assert
-        assert_eq!(
-            titles,
-            ["Projects", "Sessions", "Review", "Tasks", "Settings"]
-        );
+        assert_eq!(titles, ["Projects", "Sessions", "Review", "Settings"]);
     }
 
     #[test]
@@ -178,7 +136,7 @@ mod tests {
         // Arrange
 
         // Act
-        let scopes = Tab::ALL_WITH_TASKS.map(Tab::scope);
+        let scopes = Tab::ALL.map(Tab::scope);
 
         // Assert
         assert_eq!(
@@ -187,38 +145,17 @@ mod tests {
                 TabScope::Global,
                 TabScope::Project,
                 TabScope::Project,
-                TabScope::Project,
                 TabScope::Project
             ]
         );
     }
 
     #[test]
-    fn test_tab_next_with_tasks() {
+    fn test_tab_next_cycles_in_display_order() {
         // Arrange
 
         // Act
-        let next_tabs = Tab::ALL_WITH_TASKS.map(|tab| tab.next(true));
-
-        // Assert
-        assert_eq!(
-            next_tabs,
-            [
-                Tab::Sessions,
-                Tab::Review,
-                Tab::Tasks,
-                Tab::Settings,
-                Tab::Projects
-            ]
-        );
-    }
-
-    #[test]
-    fn test_tab_next_without_tasks_skips_tasks_tab() {
-        // Arrange
-
-        // Act
-        let next_tabs = Tab::ALL_WITHOUT_TASKS.map(|tab| tab.next(false));
+        let next_tabs = Tab::ALL.map(Tab::next);
 
         // Assert
         assert_eq!(
@@ -228,31 +165,11 @@ mod tests {
     }
 
     #[test]
-    fn test_tab_previous_with_tasks() {
+    fn test_tab_previous_cycles_in_display_order() {
         // Arrange
 
         // Act
-        let previous_tabs = Tab::ALL_WITH_TASKS.map(|tab| tab.previous(true));
-
-        // Assert
-        assert_eq!(
-            previous_tabs,
-            [
-                Tab::Settings,
-                Tab::Projects,
-                Tab::Sessions,
-                Tab::Review,
-                Tab::Tasks
-            ]
-        );
-    }
-
-    #[test]
-    fn test_tab_previous_without_tasks_skips_tasks_tab() {
-        // Arrange
-
-        // Act
-        let previous_tabs = Tab::ALL_WITHOUT_TASKS.map(|tab| tab.previous(false));
+        let previous_tabs = Tab::ALL.map(Tab::previous);
 
         // Assert
         assert_eq!(
@@ -262,25 +179,11 @@ mod tests {
     }
 
     #[test]
-    fn test_tab_project_scoped_order_with_tasks_keeps_project_pages_grouped() {
+    fn test_tab_project_scoped_order_keeps_project_pages_grouped() {
         // Arrange
 
         // Act
-        let project_scoped_tabs = Tab::project_scoped_tabs(true);
-
-        // Assert
-        assert_eq!(
-            project_scoped_tabs,
-            &[Tab::Sessions, Tab::Review, Tab::Tasks, Tab::Settings]
-        );
-    }
-
-    #[test]
-    fn test_tab_project_scoped_order_without_tasks_keeps_project_pages_grouped() {
-        // Arrange
-
-        // Act
-        let project_scoped_tabs = Tab::project_scoped_tabs(false);
+        let project_scoped_tabs = Tab::project_scoped_tabs();
 
         // Assert
         assert_eq!(
@@ -308,15 +211,13 @@ mod tests {
 
         // Act
         observed_tabs.push(manager.current());
-        manager.next(true);
+        manager.next();
         observed_tabs.push(manager.current());
-        manager.next(true);
+        manager.next();
         observed_tabs.push(manager.current());
-        manager.next(true);
+        manager.next();
         observed_tabs.push(manager.current());
-        manager.next(true);
-        observed_tabs.push(manager.current());
-        manager.next(true);
+        manager.next();
         observed_tabs.push(manager.current());
 
         // Assert
@@ -326,7 +227,6 @@ mod tests {
                 Tab::Projects,
                 Tab::Sessions,
                 Tab::Review,
-                Tab::Tasks,
                 Tab::Settings,
                 Tab::Projects
             ]
@@ -341,13 +241,13 @@ mod tests {
 
         // Act
         observed_tabs.push(manager.current());
-        manager.previous(false);
+        manager.previous();
         observed_tabs.push(manager.current());
-        manager.previous(false);
+        manager.previous();
         observed_tabs.push(manager.current());
-        manager.previous(false);
+        manager.previous();
         observed_tabs.push(manager.current());
-        manager.previous(false);
+        manager.previous();
         observed_tabs.push(manager.current());
 
         // Assert
@@ -361,19 +261,6 @@ mod tests {
                 Tab::Projects
             ]
         );
-    }
-
-    #[test]
-    fn test_tab_manager_normalize_falls_back_from_hidden_tasks_tab() {
-        // Arrange
-        let mut manager = TabManager::default();
-        manager.set(Tab::Tasks);
-
-        // Act
-        manager.normalize(false);
-
-        // Assert
-        assert_eq!(manager.current(), Tab::Sessions);
     }
 
     #[test]

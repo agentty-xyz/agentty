@@ -70,14 +70,6 @@ requests, including drafts marked with `Draft`, but does not select rows or open
 links. GitHub rows are separated into direct review requests and team-sourced review
 requests. Open a listed review from the forge UI or CLI.
 
-## Tasks
-
-| Key | Action | |-----|--------| | `q` | Quit | | `j` / `k` | Scroll roadmap | | `g` |
-Scroll to top | | `Tab` | Switch tab | | `?` | Help |
-
-The Tasks tab appears only when the active project contains `docs/plan/roadmap.md`, and
-it renders the roadmap's `Ready Now`, `Queued Next`, and `Parked` cards.
-
 ## Session View
 
 <a id="usage-session-view-actions"></a> Available actions depend on the session state.

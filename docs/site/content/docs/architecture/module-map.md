@@ -40,16 +40,14 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
 - `crates/agentty/src/app/core.rs`: Router-only `App` core module that re-exports the
   facade and focused child modules under `app/core/`.
 - `crates/agentty/src/app/core/state.rs`: `App`, `AppClients`, `SyncMainRunner`, shared
-  state structs, and remaining workflow glue that does not belong to startup, draw,
-  reducer, or roadmap slices.
+  state structs, and remaining workflow glue that does not belong to startup, draw, or
+  reducer slices.
 - `crates/agentty/src/app/core/new.rs`: `App` construction, startup project loading,
   service wiring, and startup-only app helpers.
 - `crates/agentty/src/app/core/draw.rs`: Frame rendering plus render-facing app
   accessors used to assemble `ui::RenderContext`.
 - `crates/agentty/src/app/core/events.rs`: `AppEvent`, reducer batch coalescing,
   app-event application, and sync or branch-publish popup helpers.
-- `crates/agentty/src/app/core/roadmap.rs`: Active-project roadmap cache state, `Tasks`
-  tab availability, and roadmap loading or scrolling helpers.
 - `crates/agentty/src/app/startup.rs`: `AppStartup` for startup project resolution,
   initial session hydration, and project catalog refresh helpers.
 - `crates/agentty/src/app/reducer.rs`: `AppEventReducer` and `AppEventBatch` for
@@ -311,10 +309,6 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
   replies.
 - `crates/agentty/src/ui/page/session_list.rs`: Session list page.
 - `crates/agentty/src/ui/page/setting.rs`: Settings page.
-- `crates/agentty/src/ui/page/task.rs`: Tasks page that renders roadmap queue summaries
-  for projects with `docs/plan/roadmap.md`.
-- `crates/agentty/src/ui/task_roadmap.rs`: Roadmap parsing and formatting helpers used
-  by the Tasks page.
 - `crates/agentty/src/ui/component/chat_input.rs`: Chat input widget.
 - `crates/agentty/src/ui/component/confirmation_overlay.rs`: Confirmation dialog
   overlay.

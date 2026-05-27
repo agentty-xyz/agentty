@@ -131,10 +131,6 @@ impl App {
             project_items,
             startup_working_dir.clone(),
         );
-        let active_project_roadmap =
-            Self::load_project_roadmap(clients.fs_client.as_ref(), startup_working_dir.as_path())
-                .await;
-        let active_project_has_tasks_tab = active_project_roadmap.is_some();
         let settings = SettingsManager::new(&services, active_project_id).await;
         let default_session_model = SessionManager::load_default_session_model(
             &services,
@@ -169,11 +165,8 @@ impl App {
             projects,
             services,
             sessions,
-            active_project_has_tasks_tab,
-            active_project_roadmap,
             requested_review_generation: 0,
             requested_reviews: crate::app::RequestedReviewState::default(),
-            task_roadmap_scroll_offset: 0,
             event_rx,
             review_cache,
             latest_available_version: None,
