@@ -7,7 +7,7 @@ use crate::domain::session::ReviewRequest;
 use crate::infra::db::DbError;
 
 /// Row returned when loading one `session_review_request`.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
 pub struct SessionReviewRequestRow {
     pub display_id: String,
     pub forge_kind: String,
@@ -24,6 +24,12 @@ pub struct SessionReviewRequestRow {
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait ReviewRepository: Send + Sync {
+    /// Loads the persisted forge review-request linkage for a session.
+    async fn load_session_review_request(
+        &self,
+        id: &str,
+    ) -> Result<Option<SessionReviewRequestRow>, DbError>;
+
     /// Updates the persisted forge review-request linkage for a session.
     async fn update_session_review_request(
         &self,
@@ -45,6 +51,32 @@ impl SqliteReviewRepository {
 
 #[async_trait]
 impl ReviewRepository for SqliteReviewRepository {
+    async fn load_session_review_request(
+        &self,
+        id: &str,
+    ) -> Result<Option<SessionReviewRequestRow>, DbError> {
+        let review_request = sqlx::query_as::<_, SessionReviewRequestRow>(
+            r"
+SELECT display_id,
+       forge_kind,
+       last_refreshed_at,
+       source_branch,
+       state,
+       status_summary,
+       target_branch,
+       title,
+       web_url
+FROM session_review_request
+WHERE session_id = ?
+",
+        )
+        .bind(id)
+        .fetch_optional(&self.0)
+        .await?;
+
+        Ok(review_request)
+    }
+
     async fn update_session_review_request(
         &self,
         id: &str,

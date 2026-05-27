@@ -207,14 +207,16 @@ impl SessionTaskService {
     /// also request an immediate git-status refresh so footer ahead/behind
     /// counts do not wait for the background poller. The active loader shows a
     /// dedicated committing label for the full auto-commit phase.
-    pub(in crate::app) async fn handle_auto_commit(context: AssistContext) {
+    pub(in crate::app) async fn handle_auto_commit(
+        context: AssistContext,
+    ) -> Option<SessionCommitOutcome> {
         Self::set_session_progress(
             &context.app_event_tx,
             &context.id,
             Some(COMMITTING_PROGRESS_LABEL.to_string()),
         );
 
-        match Self::commit_changes_with_assist(&context).await {
+        let outcome = match Self::commit_changes_with_assist(&context).await {
             Ok(Some(outcome)) => {
                 SessionManager::update_session_title_from_commit_message(
                     &context.db,
@@ -228,10 +230,14 @@ impl SessionTaskService {
                     .format_line(format!("committed with hash `{}`", outcome.commit_hash));
                 Self::emit_session_workflow_notice(&context.app_event_tx, &context.id, message);
                 Self::request_git_status_refresh(&context.app_event_tx);
+
+                Some(outcome)
             }
             Ok(None) => {
                 let message = TranscriptNotice::Commit.format_line("No changes to commit.");
                 Self::emit_session_workflow_notice(&context.app_event_tx, &context.id, message);
+
+                None
             }
             Err(commit_error) => {
                 let message = TranscriptNotice::CommitError.format(&commit_error);
@@ -244,10 +250,14 @@ impl SessionTaskService {
                     &message,
                 )
                 .await;
+
+                None
             }
-        }
+        };
 
         Self::clear_session_progress(&context.app_event_tx, &context.id);
+
+        outcome
     }
 
     /// Requests one immediate reducer-driven git-status refresh.
@@ -1090,7 +1100,7 @@ fn fallback_session_commit_message(current_commit_message: Option<&str>) -> Stri
 
     stripped_current_commit_message
         .lines()
-        .map(|line| line.trim())
+        .map(str::trim)
         .find(|line| !line.is_empty())
         .unwrap_or("Apply session updates")
         .to_string()

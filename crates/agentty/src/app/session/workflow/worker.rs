@@ -2,9 +2,11 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use ag_forge as forge;
 use serde_json;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -20,8 +22,8 @@ use crate::app::session::{
 use crate::app::{AppEvent, AppServices, SessionManager, branch_publish};
 use crate::domain::agent::{AgentModel, ReasoningLevel};
 use crate::domain::session::{
-    PublishBranchAction, PublishedBranchSyncStatus, SessionFollowUpTask, SessionId, SessionStats,
-    Status,
+    PublishBranchAction, PublishedBranchSyncStatus, ReviewRequest, ReviewRequestState,
+    SessionFollowUpTask, SessionId, SessionStats, Status,
 };
 use crate::domain::setting::SettingName;
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -127,6 +129,7 @@ struct SessionWorkerContext {
     /// this queue between turns; the lifecycle pushes new entries when a
     /// user submits a chat message during a running turn.
     queued_messages: Arc<Mutex<VecDeque<TurnPrompt>>>,
+    review_request_client: Arc<dyn forge::ReviewRequestClient>,
     /// Per-app session update versions shared with the main runtime.
     session_update_versions: SessionUpdateVersionMap,
     session_id: SessionId,
@@ -243,6 +246,7 @@ pub(super) struct SessionWorkerRuntime {
     folder: PathBuf,
     output: Arc<Mutex<String>>,
     queued_messages: Arc<Mutex<VecDeque<TurnPrompt>>>,
+    review_request_client: Arc<dyn forge::ReviewRequestClient>,
     /// Per-app session update versions shared with the main runtime.
     session_update_versions: SessionUpdateVersionMap,
     session_id: SessionId,
@@ -386,6 +390,7 @@ impl SessionWorkerService {
             git_client: services.git_client(),
             output: Arc::clone(&runtime.output),
             queued_messages: Arc::clone(&runtime.queued_messages),
+            review_request_client: Arc::clone(&runtime.review_request_client),
             session_update_versions: Arc::clone(&runtime.session_update_versions),
             session_id: runtime.session_id.clone(),
             session_model: runtime.session_model,
@@ -819,6 +824,7 @@ impl SessionManager {
             folder: session.folder.clone(),
             output: Arc::clone(&handles.output),
             queued_messages: Arc::clone(&handles.queued_messages),
+            review_request_client: services.review_request_client(),
             session_update_versions: services.session_update_versions(),
             session_id: session.id.clone(),
             session_model: session.model,
@@ -1204,7 +1210,7 @@ async fn apply_successful_turn_result(
     )
     .await;
 
-    SessionTaskService::handle_auto_commit(AssistContext {
+    let commit_outcome = SessionTaskService::handle_auto_commit(AssistContext {
         app_event_tx: context.app_event_tx.clone(),
         child_pid: Arc::clone(&context.child_pid),
         db: context.db.clone(),
@@ -1216,7 +1222,12 @@ async fn apply_successful_turn_result(
         session_update_versions: context.session_update_versions.clone(),
     })
     .await;
-    start_published_branch_auto_push(context, turn_metadata.published_upstream_ref);
+    let review_request_commit_message = commit_outcome.map(|outcome| outcome.commit_message);
+    start_published_branch_auto_push(
+        context,
+        turn_metadata.published_upstream_ref,
+        review_request_commit_message,
+    );
 
     Ok(target_status)
 }
@@ -1226,6 +1237,7 @@ async fn apply_successful_turn_result(
 fn start_published_branch_auto_push(
     context: &SessionWorkerContext,
     published_upstream_ref: Option<String>,
+    review_request_commit_message: Option<String>,
 ) {
     let Some(published_upstream_ref) = published_upstream_ref else {
         return;
@@ -1238,6 +1250,12 @@ fn start_published_branch_auto_push(
     let folder = context.folder.clone();
     let git_client = Arc::clone(&context.git_client);
     let output = Arc::clone(&context.output);
+    let review_request_metadata_sync =
+        review_request_commit_message.map(|commit_message| ReviewRequestMetadataSyncInput {
+            clock: Arc::clone(&context.clock),
+            commit_message,
+            review_request_client: Arc::clone(&context.review_request_client),
+        });
     let session_update_versions = context.session_update_versions.clone();
 
     let _ = app_event_tx.send(AppEvent::PublishedBranchSyncUpdated {
@@ -1253,6 +1271,7 @@ fn start_published_branch_auto_push(
         git_client,
         output,
         published_upstream_ref,
+        review_request_metadata_sync,
         session_id,
         session_update_versions,
         sync_operation_id,
@@ -1277,12 +1296,24 @@ pub(super) struct PublishedBranchAutoPushInput {
     pub(super) output: Arc<Mutex<String>>,
     /// Published upstream reference that provides the remote branch target.
     pub(super) published_upstream_ref: String,
+    /// Optional metadata sync payload used after a successful post-turn push.
+    pub(super) review_request_metadata_sync: Option<ReviewRequestMetadataSyncInput>,
     /// Session id whose branch is being pushed.
     pub(super) session_id: SessionId,
     /// Per-app session update versions shared with the main runtime.
     pub(super) session_update_versions: SessionUpdateVersionMap,
     /// Auto-push operation id used to ignore stale completion updates.
     pub(super) sync_operation_id: String,
+}
+
+/// Owned dependencies for one optional linked PR/MR metadata sync after push.
+pub(super) struct ReviewRequestMetadataSyncInput {
+    /// Clock used to timestamp the refreshed review-request summary.
+    pub(super) clock: Arc<dyn Clock>,
+    /// Latest auto-commit message used to update linked PR/MR metadata.
+    pub(super) commit_message: String,
+    /// Forge boundary used to refresh linked PR/MR metadata after a push.
+    pub(super) review_request_client: Arc<dyn forge::ReviewRequestClient>,
 }
 
 /// Runs one detached auto-push for a previously published session branch and
@@ -1293,57 +1324,215 @@ pub(super) async fn run_published_branch_auto_push(input: PublishedBranchAutoPus
 
 /// Executes one detached published-branch auto-push from owned task inputs.
 async fn run_published_branch_auto_push_task(input: PublishedBranchAutoPushInput) {
-    let PublishedBranchAutoPushInput {
-        app_event_tx,
-        db,
-        folder,
-        git_client,
-        output,
-        session_id,
-        session_update_versions,
-        sync_operation_id,
-        published_upstream_ref,
-    } = input;
-
-    let remote_branch_name = remote_branch_name_from_upstream_ref(&published_upstream_ref);
+    let remote_branch_name = remote_branch_name_from_upstream_ref(&input.published_upstream_ref);
     let push_result = branch_publish::push_session_branch_to_remote(
-        &db,
-        folder,
-        git_client,
+        &input.db,
+        input.folder.clone(),
+        Arc::clone(&input.git_client),
         PublishBranchAction::Push,
-        &session_id,
+        &input.session_id,
         Some(remote_branch_name.as_str()),
-        Some(&published_upstream_ref),
+        Some(&input.published_upstream_ref),
     )
     .await;
 
     match push_result {
         Ok(_) => {
-            let _ = app_event_tx.send(AppEvent::PublishedBranchSyncUpdated {
-                session_id,
-                sync_operation_id,
-                sync_status: PublishedBranchSyncStatus::Succeeded,
-            });
+            if let Some(metadata_sync_input) = input.review_request_metadata_sync.as_ref() {
+                sync_linked_review_request_metadata_after_push(&input, metadata_sync_input).await;
+            }
+
+            let _ = input
+                .app_event_tx
+                .send(AppEvent::PublishedBranchSyncUpdated {
+                    session_id: input.session_id,
+                    sync_operation_id: input.sync_operation_id,
+                    sync_status: PublishedBranchSyncStatus::Succeeded,
+                });
         }
         Err(failure) => {
             let message = TranscriptNotice::BranchPushError.format(failure.message);
             SessionTaskService::append_session_output(
-                &output,
-                &db,
-                &app_event_tx,
-                &session_update_versions,
-                &session_id,
+                &input.output,
+                &input.db,
+                &input.app_event_tx,
+                &input.session_update_versions,
+                &input.session_id,
                 &message,
             )
             .await;
 
-            let _ = app_event_tx.send(AppEvent::PublishedBranchSyncUpdated {
-                session_id,
-                sync_operation_id,
-                sync_status: PublishedBranchSyncStatus::Failed,
-            });
+            let _ = input
+                .app_event_tx
+                .send(AppEvent::PublishedBranchSyncUpdated {
+                    session_id: input.session_id,
+                    sync_operation_id: input.sync_operation_id,
+                    sync_status: PublishedBranchSyncStatus::Failed,
+                });
         }
     }
+}
+
+/// Syncs linked open review-request metadata after the new commit has reached
+/// the already-published remote branch.
+async fn sync_linked_review_request_metadata_after_push(
+    input: &PublishedBranchAutoPushInput,
+    metadata_sync_input: &ReviewRequestMetadataSyncInput,
+) {
+    let Some(update_input) = review_request_update_input(&metadata_sync_input.commit_message)
+    else {
+        return;
+    };
+    let Some(linked_review_request) = load_open_review_request(input).await else {
+        return;
+    };
+
+    let result = sync_review_request_metadata(
+        input,
+        metadata_sync_input,
+        &linked_review_request,
+        update_input,
+    )
+    .await;
+    if let Err(error) = result {
+        append_review_request_sync_warning(input, error).await;
+    }
+}
+
+/// Builds an update payload from one canonical session commit message.
+fn review_request_update_input(commit_message: &str) -> Option<forge::UpdateReviewRequestInput> {
+    let review_request_commit_message =
+        crate::app::review_request::parse_review_request_commit_message(commit_message)?;
+
+    Some(forge::UpdateReviewRequestInput {
+        body: review_request_commit_message.body,
+        title: review_request_commit_message.title,
+    })
+}
+
+/// Loads the linked review request when it is still open.
+async fn load_open_review_request(input: &PublishedBranchAutoPushInput) -> Option<ReviewRequest> {
+    let review_request = match input
+        .db
+        .reviews()
+        .load_session_review_request(&input.session_id)
+        .await
+    {
+        Ok(Some(row)) => review_request_from_row(row),
+        Ok(None) => None,
+        Err(error) => {
+            warn_review_request_metadata_sync(
+                input,
+                &format!("failed to load linked review request: {error}"),
+            );
+
+            None
+        }
+    }?;
+
+    (review_request.summary.state == ReviewRequestState::Open).then_some(review_request)
+}
+
+/// Converts one persisted review-request row into the domain model used by
+/// session workflows.
+fn review_request_from_row(
+    row: crate::infra::db::SessionReviewRequestRow,
+) -> Option<ReviewRequest> {
+    Some(ReviewRequest {
+        last_refreshed_at: row.last_refreshed_at,
+        summary: forge::ReviewRequestSummary {
+            display_id: row.display_id,
+            forge_kind: forge::ForgeKind::from_str(&row.forge_kind).ok()?,
+            source_branch: row.source_branch,
+            state: ReviewRequestState::from_str(&row.state).ok()?,
+            status_summary: row.status_summary,
+            target_branch: row.target_branch,
+            title: row.title,
+            web_url: row.web_url,
+        },
+    })
+}
+
+/// Runs the forge metadata sync and persists the refreshed review-request
+/// summary when the provider call succeeds.
+async fn sync_review_request_metadata(
+    input: &PublishedBranchAutoPushInput,
+    metadata_sync_input: &ReviewRequestMetadataSyncInput,
+    linked_review_request: &ReviewRequest,
+    update_input: forge::UpdateReviewRequestInput,
+) -> Result<(), SessionError> {
+    let repo_url = input
+        .git_client
+        .repo_url(input.folder.clone())
+        .await
+        .map_err(|error| {
+            SessionError::Workflow(format!(
+                "Failed to resolve repository remote for review-request metadata sync: {error}"
+            ))
+        })?;
+    let remote = metadata_sync_input
+        .review_request_client
+        .detect_remote(repo_url)
+        .map(|remote| remote.with_command_working_directory(input.folder.clone()))
+        .map_err(|error| SessionError::Workflow(error.detail_message()))?;
+    let summary = metadata_sync_input
+        .review_request_client
+        .sync_review_request_metadata(
+            remote,
+            linked_review_request.summary.display_id.clone(),
+            update_input,
+        )
+        .await
+        .map_err(|error| SessionError::Workflow(error.detail_message()))?;
+    let review_request = ReviewRequest {
+        last_refreshed_at: unix_timestamp_from_system_time(
+            metadata_sync_input.clock.now_system_time(),
+        ),
+        summary,
+    };
+
+    input
+        .db
+        .reviews()
+        .update_session_review_request(&input.session_id, Some(review_request))
+        .await?;
+    SessionTaskService::emit_session_updated(
+        &input.app_event_tx,
+        &input.session_update_versions,
+        &input.session_id,
+    );
+    let _ = input.app_event_tx.send(AppEvent::RefreshSessions);
+
+    Ok(())
+}
+
+/// Appends one metadata-sync warning to the session transcript.
+async fn append_review_request_sync_warning(
+    input: &PublishedBranchAutoPushInput,
+    error: SessionError,
+) {
+    warn_review_request_metadata_sync(input, &error.to_string());
+    let message = TranscriptNotice::ReviewRequestSyncWarning.format(format!(
+        "Failed to update linked review-request metadata: {error}"
+    ));
+    SessionTaskService::append_session_output(
+        &input.output,
+        &input.db,
+        &input.app_event_tx,
+        &input.session_update_versions,
+        &input.session_id,
+        &message,
+    )
+    .await;
+}
+
+/// Logs a best-effort review-request metadata sync warning.
+fn warn_review_request_metadata_sync(input: &PublishedBranchAutoPushInput, error: &str) {
+    tracing::warn!(
+        session_id = %input.session_id,
+        error,
+        "failed to sync linked review-request metadata"
+    );
 }
 
 /// Reconciles a failed turn-metadata write by surfacing the error and forcing
@@ -1600,6 +1789,7 @@ fn normalize_thinking_stream_text(text: &str) -> Option<String> {
 mod tests {
     use std::sync::Arc;
 
+    use mockall::Sequence;
     use tempfile::tempdir;
 
     use super::*;
@@ -1939,6 +2129,7 @@ mod tests {
             git_client: Arc::new(mock_git_client),
             output: Arc::clone(&output),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
             session_model: AgentModel::Gemini3FlashPreview,
@@ -2075,6 +2266,7 @@ mod tests {
             git_client: Arc::new(mock_git_client),
             output: Arc::new(Mutex::new(String::new())),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
@@ -2181,6 +2373,7 @@ mod tests {
             git_client: Arc::new(mock_git_client),
             output: Arc::clone(&output),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
             session_model: AgentModel::Gemini3FlashPreview,
@@ -2245,6 +2438,7 @@ mod tests {
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
             session_update_versions: Arc::default(),
             session_id: "sess-preturn".into(),
@@ -2313,6 +2507,7 @@ mod tests {
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
             session_update_versions: Arc::default(),
             session_id: "sess-timeout".into(),
@@ -2378,6 +2573,7 @@ mod tests {
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
             session_update_versions: Arc::default(),
             session_id: "sess-term".into(),
@@ -2418,6 +2614,7 @@ mod tests {
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
             session_update_versions: Arc::default(),
             session_id: "sess-nopid".into(),
@@ -2510,6 +2707,7 @@ mod tests {
             git_client: Arc::new(mock_git_client),
             output: Arc::new(Mutex::new(String::new())),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
@@ -2566,6 +2764,367 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Verifies completed turns keep a linked open PR/MR title and
+    /// description aligned with the latest session commit message.
+    async fn test_apply_turn_result_syncs_linked_review_request_metadata_after_commit() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let db = AppRepositories::in_memory().await;
+        insert_in_progress_session_with_review_request(&db).await;
+        let folder = base_dir.path().join("sess1");
+        let commit_message =
+            "Refine review metadata sync\n\n- Update the linked review request body.";
+        let mut sequence = Sequence::new();
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let context = SessionWorkerContext {
+            app_event_tx,
+            cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+            channel: Arc::new(MockAgentChannel::new()),
+            child_pid: Arc::new(Mutex::new(None)),
+            clock: Arc::new(crate::app::session::RealClock),
+            db: db.clone(),
+            folder,
+            fs_client: Arc::new(fs::MockFsClient::new()),
+            git_client: Arc::new(auto_commit_git_client(commit_message, &mut sequence)),
+            output: Arc::new(Mutex::new(String::new())),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(review_metadata_sync_client(
+                base_dir.path(),
+                &mut sequence,
+            )),
+            session_update_versions: Arc::default(),
+            session_id: "sess1".into(),
+            session_model: AgentModel::Gemini3FlashPreview,
+            status: Arc::new(Mutex::new(Status::InProgress)),
+        };
+
+        // Act
+        let status = apply_turn_result(
+            &context,
+            TurnMetadata {
+                published_upstream_ref: Some("origin/wt/session-id".to_string()),
+                session_model: AgentModel::Gemini3FlashPreview,
+            },
+            Ok(successful_turn_result("Implemented the change.")),
+        )
+        .await
+        .expect("turn result should succeed");
+        let sync_events = tokio::time::timeout(Duration::from_secs(1), async {
+            let mut sync_events = Vec::new();
+            while sync_events.len() < 2 {
+                let event = app_event_rx.recv().await.expect("missing app event");
+                if let AppEvent::PublishedBranchSyncUpdated { sync_status, .. } = event {
+                    sync_events.push(sync_status);
+                }
+            }
+
+            sync_events
+        })
+        .await
+        .expect("timed out waiting for sync events");
+        let review_request = db
+            .reviews()
+            .load_session_review_request("sess1")
+            .await
+            .expect("failed to load review request")
+            .expect("review request should remain linked");
+
+        // Assert
+        assert_eq!(status, Status::Review);
+        assert_eq!(
+            sync_events,
+            vec![
+                PublishedBranchSyncStatus::InProgress,
+                PublishedBranchSyncStatus::Succeeded,
+            ]
+        );
+        assert_eq!(review_request.title, "Refine review metadata sync");
+    }
+
+    #[tokio::test]
+    /// Verifies failed post-turn auto-push skips linked PR/MR metadata sync.
+    async fn test_apply_turn_result_skips_review_request_metadata_sync_when_auto_push_fails() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let db = AppRepositories::in_memory().await;
+        insert_in_progress_session_with_review_request(&db).await;
+        let commit_message =
+            "Refine review metadata sync\n\n- Update the linked review request body.";
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let context = SessionWorkerContext {
+            app_event_tx,
+            cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+            channel: Arc::new(MockAgentChannel::new()),
+            child_pid: Arc::new(Mutex::new(None)),
+            clock: Arc::new(crate::app::session::RealClock),
+            db: db.clone(),
+            folder: base_dir.path().join("sess1"),
+            fs_client: Arc::new(fs::MockFsClient::new()),
+            git_client: Arc::new(auto_commit_git_client_with_push_failure(commit_message)),
+            output: Arc::new(Mutex::new(String::new())),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
+            session_update_versions: Arc::default(),
+            session_id: "sess1".into(),
+            session_model: AgentModel::Gemini3FlashPreview,
+            status: Arc::new(Mutex::new(Status::InProgress)),
+        };
+
+        // Act
+        let status = apply_turn_result(
+            &context,
+            TurnMetadata {
+                published_upstream_ref: Some("origin/wt/session-id".to_string()),
+                session_model: AgentModel::Gemini3FlashPreview,
+            },
+            Ok(successful_turn_result("Implemented the change.")),
+        )
+        .await
+        .expect("turn result should succeed");
+        let sync_events = tokio::time::timeout(Duration::from_secs(1), async {
+            let mut sync_events = Vec::new();
+            while sync_events.len() < 2 {
+                let event = app_event_rx.recv().await.expect("missing app event");
+                if let AppEvent::PublishedBranchSyncUpdated { sync_status, .. } = event {
+                    sync_events.push(sync_status);
+                }
+            }
+
+            sync_events
+        })
+        .await
+        .expect("timed out waiting for sync events");
+        let review_request = db
+            .reviews()
+            .load_session_review_request("sess1")
+            .await
+            .expect("failed to load review request")
+            .expect("review request should remain linked");
+
+        // Assert
+        assert_eq!(status, Status::Review);
+        assert_eq!(
+            sync_events,
+            vec![
+                PublishedBranchSyncStatus::InProgress,
+                PublishedBranchSyncStatus::Failed,
+            ]
+        );
+        assert_eq!(review_request.title, "Old title");
+    }
+
+    /// Inserts an in-progress session linked to an open GitHub review request.
+    async fn insert_in_progress_session_with_review_request(db: &AppRepositories) {
+        let project_id = db
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to upsert project");
+        db.sessions()
+            .insert_session(
+                "sess1",
+                "gemini-3-flash-preview",
+                "main",
+                "InProgress",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        db.reviews()
+            .update_session_review_request("sess1", Some(linked_github_review_request()))
+            .await
+            .expect("failed to persist review request");
+    }
+
+    /// Returns one linked GitHub review request fixture for metadata sync
+    /// tests.
+    fn linked_github_review_request() -> ReviewRequest {
+        ReviewRequest {
+            last_refreshed_at: 100,
+            summary: forge::ReviewRequestSummary {
+                display_id: "#42".to_string(),
+                forge_kind: forge::ForgeKind::GitHub,
+                source_branch: "wt/session-id".to_string(),
+                state: ReviewRequestState::Open,
+                status_summary: Some("Draft".to_string()),
+                target_branch: "main".to_string(),
+                title: "Old title".to_string(),
+                web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
+            },
+        }
+    }
+
+    /// Returns one git client mock that produces a successful auto-commit
+    /// outcome.
+    fn auto_commit_git_client(commit_message: &str, sequence: &mut Sequence) -> MockGitClient {
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client
+            .expect_is_worktree_clean()
+            .once()
+            .returning(|_| Box::pin(async { Ok(false) }));
+        mock_git_client
+            .expect_has_commits_since()
+            .once()
+            .returning(|_, _| Box::pin(async { Ok(true) }));
+        mock_git_client
+            .expect_head_commit_message()
+            .once()
+            .returning({
+                let commit_message = commit_message.to_string();
+
+                move |_| {
+                    let commit_message = commit_message.clone();
+
+                    Box::pin(async move { Ok(Some(commit_message)) })
+                }
+            });
+        mock_git_client
+            .expect_commit_all_preserving_single_commit()
+            .once()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok(()) }));
+        mock_git_client
+            .expect_head_short_hash()
+            .once()
+            .returning(|_| Box::pin(async { Ok("abc1234".to_string()) }));
+        mock_git_client
+            .expect_push_current_branch_to_remote_branch()
+            .once()
+            .withf(|folder, remote_branch_name| {
+                folder.ends_with("sess1") && remote_branch_name == "wt/session-id"
+            })
+            .in_sequence(sequence)
+            .returning(|_, _| Box::pin(async { Ok("origin/wt/session-id".to_string()) }));
+        mock_git_client
+            .expect_repo_url()
+            .once()
+            .in_sequence(sequence)
+            .returning(|_| {
+                Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
+            });
+
+        mock_git_client
+    }
+
+    /// Returns one git client mock that commits successfully but fails the
+    /// follow-up auto-push.
+    fn auto_commit_git_client_with_push_failure(commit_message: &str) -> MockGitClient {
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client
+            .expect_is_worktree_clean()
+            .once()
+            .returning(|_| Box::pin(async { Ok(false) }));
+        mock_git_client
+            .expect_has_commits_since()
+            .once()
+            .returning(|_, _| Box::pin(async { Ok(true) }));
+        mock_git_client
+            .expect_head_commit_message()
+            .once()
+            .returning({
+                let commit_message = commit_message.to_string();
+
+                move |_| {
+                    let commit_message = commit_message.clone();
+
+                    Box::pin(async move { Ok(Some(commit_message)) })
+                }
+            });
+        mock_git_client
+            .expect_commit_all_preserving_single_commit()
+            .once()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok(()) }));
+        mock_git_client
+            .expect_head_short_hash()
+            .once()
+            .returning(|_| Box::pin(async { Ok("abc1234".to_string()) }));
+        mock_git_client
+            .expect_push_current_branch_to_remote_branch()
+            .once()
+            .withf(|folder, remote_branch_name| {
+                folder.ends_with("sess1") && remote_branch_name == "wt/session-id"
+            })
+            .returning(|_, _| {
+                Box::pin(async {
+                    Err(crate::infra::git::GitError::CommandFailed {
+                        command: "git push origin wt/session-id".to_string(),
+                        stderr: "fatal: remote rejected the push".to_string(),
+                    })
+                })
+            });
+
+        mock_git_client
+    }
+
+    /// Returns one review-request client mock that expects the latest commit
+    /// message metadata.
+    fn review_metadata_sync_client(
+        base_dir: &std::path::Path,
+        sequence: &mut Sequence,
+    ) -> forge::MockReviewRequestClient {
+        let folder = base_dir.join("sess1");
+        let mut mock_review_request_client = forge::MockReviewRequestClient::new();
+        mock_review_request_client
+            .expect_detect_remote()
+            .once()
+            .in_sequence(sequence)
+            .returning(|_| Ok(github_forge_remote()));
+        mock_review_request_client
+            .expect_sync_review_request_metadata()
+            .once()
+            .in_sequence(sequence)
+            .withf(move |remote, display_id, input| {
+                remote.command_working_directory.as_deref() == Some(folder.as_path())
+                    && display_id == "#42"
+                    && input.title == "Refine review metadata sync"
+                    && input.body.as_deref() == Some("- Update the linked review request body.")
+            })
+            .returning(|_, _, input| {
+                Box::pin(async move {
+                    Ok(forge::ReviewRequestSummary {
+                        display_id: "#42".to_string(),
+                        forge_kind: forge::ForgeKind::GitHub,
+                        source_branch: "wt/session-id".to_string(),
+                        state: ReviewRequestState::Open,
+                        status_summary: Some("Draft".to_string()),
+                        target_branch: "main".to_string(),
+                        title: input.title,
+                        web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
+                    })
+                })
+            });
+
+        mock_review_request_client
+    }
+
+    /// Returns one GitHub forge remote fixture for worker metadata sync tests.
+    fn github_forge_remote() -> forge::ForgeRemote {
+        forge::ForgeRemote {
+            command_working_directory: None,
+            forge_kind: forge::ForgeKind::GitHub,
+            host: "github.com".to_string(),
+            namespace: "agentty-xyz".to_string(),
+            project: "agentty".to_string(),
+            repo_url: "https://github.com/agentty-xyz/agentty.git".to_string(),
+            web_url: "https://github.com/agentty-xyz/agentty".to_string(),
+        }
+    }
+
+    /// Returns one successful turn result with the provided answer text.
+    fn successful_turn_result(answer: &str) -> TurnResult {
+        TurnResult {
+            assistant_message: AgentResponse {
+                answer: answer.to_string(),
+                questions: Vec::new(),
+                summary: None,
+            },
+            context_reset: false,
+            input_tokens: 0,
+            output_tokens: 0,
+            provider_conversation_id: None,
+        }
+    }
+
+    #[tokio::test]
     /// Verifies completed turns auto-push already-published session branches
     /// in the background and report sync progress through app events.
     async fn test_apply_turn_result_starts_background_push_for_published_branch() {
@@ -2612,6 +3171,7 @@ mod tests {
             git_client: Arc::new(mock_git_client),
             output: Arc::new(Mutex::new(String::new())),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
@@ -2720,6 +3280,7 @@ mod tests {
             git_client: Arc::new(mock_git_client),
             output: Arc::clone(&output),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
             session_model: AgentModel::Gemini3FlashPreview,
@@ -2812,6 +3373,7 @@ mod tests {
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
@@ -2907,6 +3469,7 @@ mod tests {
             git_client: Arc::new(mock_git_client),
             output: Arc::clone(&output),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
             session_model: AgentModel::Gemini3FlashPreview,
@@ -2980,6 +3543,7 @@ mod tests {
             git_client: Arc::new(mock_git_client),
             output: Arc::new(Mutex::new(String::new())),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
@@ -3115,6 +3679,7 @@ mod tests {
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
@@ -3183,6 +3748,7 @@ mod tests {
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
@@ -3265,6 +3831,7 @@ mod tests {
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
@@ -3354,6 +3921,7 @@ mod tests {
             git_client: Arc::new(mock_git_client),
             output: Arc::new(Mutex::new(String::new())),
             queued_messages: Arc::clone(&queue_handle),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
             session_model: AgentModel::Gemini3FlashPreview,
@@ -3379,6 +3947,7 @@ mod tests {
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
             queued_messages: queue,
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
             session_id: "sess".into(),
             session_model: AgentModel::Gemini3FlashPreview,

@@ -325,6 +325,24 @@ lands and the Delivery stream is ready for the session-action adoption slice.
 
 `[17a9e2ba-0b7d-407d-9cd4-72807ef7bc1f] Delivery: Edit project landing strategy in settings`
 
+### [f4095dc8-54fb-47fc-8e5e-33ad9173ba60] Delivery: Add mock-forge review-request feature coverage
+
+#### Outcome
+
+The E2E feature-test harness can exercise review-request publishing and post-turn
+metadata sync through deterministic mock `gh` and `glab` commands, covering PR/MR title
+and description updates without requiring live forge authentication.
+
+#### Promote when
+
+Promote when the Delivery stream next touches review-request publishing or post-turn
+review-request behavior, so the harness work lands with a user-facing review workflow
+slice instead of as standalone test plumbing.
+
+#### Depends on
+
+`[d9d93e21-2d9a-45af-9d44-61eb68e64ea7] Delivery: Apply landing strategy to session actions`
+
 ### [8e074c6d-64ad-427f-9262-0769e68a8a2b] Delivery: Chain sessions for stacked review requests
 
 #### Outcome

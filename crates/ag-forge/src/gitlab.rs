@@ -9,9 +9,9 @@ use super::{
     CreateReviewRequestInput, ForgeCommand, ForgeCommandOutput, ForgeCommandRunner, ForgeKind,
     ForgeRemote, RequestedReview, RequestedReviewAudience, ReviewComment, ReviewCommentAnchorSide,
     ReviewCommentSnapshot, ReviewCommentThread, ReviewRequestError, ReviewRequestState,
-    ReviewRequestSummary, command_output_detail, is_gitlab_host, looks_like_authentication_failure,
-    looks_like_host_resolution_failure, map_spawn_error, normalize_provider_label,
-    parse_remote_url, status_summary_parts, strip_port,
+    ReviewRequestSummary, UpdateReviewRequestInput, command_output_detail, is_gitlab_host,
+    looks_like_authentication_failure, looks_like_host_resolution_failure, map_spawn_error,
+    normalize_provider_label, parse_remote_url, status_summary_parts, strip_port,
 };
 
 /// Maximum requested-review rows loaded from `glab` for one refresh.
@@ -70,6 +70,20 @@ impl GitLabReviewRequestAdapter {
         self.ensure_authenticated(&remote).await?;
 
         self.refresh_review_request_after_auth(remote, display_id)
+            .await
+    }
+
+    /// Checks the current merge-request title/description and updates them
+    /// when they differ from `input`.
+    pub(crate) async fn sync_review_request_metadata(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+        input: UpdateReviewRequestInput,
+    ) -> Result<ReviewRequestSummary, ReviewRequestError> {
+        self.ensure_authenticated(&remote).await?;
+
+        self.sync_review_request_metadata_after_auth(remote, display_id, input)
             .await
     }
 
@@ -198,6 +212,41 @@ impl GitLabReviewRequestAdapter {
             forge_kind: ForgeKind::GitLab,
             message,
         })
+    }
+
+    /// Syncs merge-request metadata after authentication has been verified.
+    async fn sync_review_request_metadata_after_auth(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+        input: UpdateReviewRequestInput,
+    ) -> Result<ReviewRequestSummary, ReviewRequestError> {
+        let merge_request_iid = parse_display_id(&display_id)?;
+        let output = self
+            .run_review_command(
+                &remote,
+                view_command(&remote, &merge_request_iid),
+                "view merge-request metadata",
+            )
+            .await?;
+        let metadata = parse_metadata_response(&output.stdout).map_err(|message| {
+            ReviewRequestError::OperationFailed {
+                forge_kind: ForgeKind::GitLab,
+                message,
+            }
+        })?;
+
+        if metadata.requires_update(&input) {
+            self.run_review_command(
+                &remote,
+                update_metadata_command(&remote, &merge_request_iid, &input),
+                "update merge-request metadata",
+            )
+            .await?;
+        }
+
+        self.refresh_review_request_after_auth(remote, display_id)
+            .await
     }
 
     /// Verifies that `glab` is installed and authenticated for `remote.host`.
@@ -347,6 +396,31 @@ fn view_command(remote: &ForgeRemote, merge_request_iid: &str) -> ForgeCommand {
     )
 }
 
+/// Builds the `glab mr update` command for updating one merge-request
+/// title/description.
+fn update_metadata_command(
+    remote: &ForgeRemote,
+    merge_request_iid: &str,
+    input: &UpdateReviewRequestInput,
+) -> ForgeCommand {
+    gitlab_command(
+        remote,
+        "glab",
+        vec![
+            "mr".to_string(),
+            "update".to_string(),
+            merge_request_iid.to_string(),
+            "--repo".to_string(),
+            remote.web_url.clone(),
+            "--title".to_string(),
+            input.title.clone(),
+            "--description".to_string(),
+            input.body.clone().unwrap_or_default(),
+            "--yes".to_string(),
+        ],
+    )
+}
+
 /// Builds the `glab mr list` command for MRs requesting the current user's
 /// review in the selected repository.
 fn requested_reviews_command(remote: &ForgeRemote) -> ForgeCommand {
@@ -461,6 +535,13 @@ fn parse_view_response(stdout: &str) -> Result<ReviewRequestSummary, String> {
         title: merge_request.title,
         web_url: merge_request.web_url,
     })
+}
+
+/// Parses current merge-request title/description metadata from `glab mr view`
+/// JSON.
+fn parse_metadata_response(stdout: &str) -> Result<GitLabMetadataResponse, String> {
+    serde_json::from_str(stdout)
+        .map_err(|error| format!("invalid GitLab merge-request metadata response: {error}"))
 }
 
 /// Parses GitLab list rows into normalized requested-review rows.
@@ -677,6 +758,22 @@ struct GitLabViewResponse {
     title: String,
     #[serde(rename = "web_url")]
     web_url: String,
+}
+
+/// GitLab merge-request title/description payload returned by
+/// `glab mr view --output json`.
+#[derive(Deserialize)]
+struct GitLabMetadataResponse {
+    #[serde(default)]
+    description: String,
+    title: String,
+}
+
+impl GitLabMetadataResponse {
+    /// Returns whether the remote metadata differs from the desired input.
+    fn requires_update(&self, input: &UpdateReviewRequestInput) -> bool {
+        self.title != input.title || self.description != input.body.clone().unwrap_or_default()
+    }
 }
 
 /// GitLab merge-request discussion returned by the discussions API.
@@ -941,6 +1038,121 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sync_review_request_metadata_updates_changed_merge_request() {
+        // Arrange
+        let remote = gitlab_remote();
+        let input = UpdateReviewRequestInput {
+            body: Some("Updated description.".to_string()),
+            title: "Refine forge review support".to_string(),
+        };
+        let mut sequence = Sequence::new();
+        let mut command_runner = MockForgeCommandRunner::new();
+        command_runner
+            .expect_run()
+            .once()
+            .in_sequence(&mut sequence)
+            .withf({
+                let remote = remote.clone();
+
+                move |command| command == &auth_status_command(&remote)
+            })
+            .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
+        command_runner
+            .expect_run()
+            .once()
+            .in_sequence(&mut sequence)
+            .withf({
+                let remote = remote.clone();
+
+                move |command| command == &view_command(&remote, "42")
+            })
+            .returning(|_| Box::pin(async { Ok(success_output(gitlab_view_json())) }));
+        command_runner
+            .expect_run()
+            .once()
+            .in_sequence(&mut sequence)
+            .withf({
+                let remote = remote.clone();
+                let input = input.clone();
+
+                move |command| command == &update_metadata_command(&remote, "42", &input)
+            })
+            .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
+        command_runner
+            .expect_run()
+            .once()
+            .in_sequence(&mut sequence)
+            .withf({
+                let remote = remote.clone();
+
+                move |command| command == &view_command(&remote, "42")
+            })
+            .returning(|_| Box::pin(async { Ok(success_output(gitlab_view_json())) }));
+        let adapter = GitLabReviewRequestAdapter::new(Arc::new(command_runner));
+
+        // Act
+        let review_request = adapter
+            .sync_review_request_metadata(remote, "!42".to_string(), input)
+            .await
+            .expect("GitLab metadata sync should succeed");
+
+        // Assert
+        assert_eq!(review_request.display_id, "!42");
+    }
+
+    #[tokio::test]
+    async fn sync_review_request_metadata_skips_update_when_unchanged() {
+        // Arrange
+        let remote = gitlab_remote();
+        let input = UpdateReviewRequestInput {
+            body: Some("Current description.".to_string()),
+            title: "Add forge review support".to_string(),
+        };
+        let mut sequence = Sequence::new();
+        let mut command_runner = MockForgeCommandRunner::new();
+        command_runner
+            .expect_run()
+            .once()
+            .in_sequence(&mut sequence)
+            .withf({
+                let remote = remote.clone();
+
+                move |command| command == &auth_status_command(&remote)
+            })
+            .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
+        command_runner
+            .expect_run()
+            .once()
+            .in_sequence(&mut sequence)
+            .withf({
+                let remote = remote.clone();
+
+                move |command| command == &view_command(&remote, "42")
+            })
+            .returning(|_| Box::pin(async { Ok(success_output(gitlab_view_json())) }));
+        command_runner
+            .expect_run()
+            .once()
+            .in_sequence(&mut sequence)
+            .withf({
+                let remote = remote.clone();
+
+                move |command| command == &view_command(&remote, "42")
+            })
+            .returning(|_| Box::pin(async { Ok(success_output(gitlab_view_json())) }));
+        let adapter = GitLabReviewRequestAdapter::new(Arc::new(command_runner));
+
+        // Act
+        let review_request = adapter
+            .sync_review_request_metadata(remote, "!42".to_string(), input)
+            .await
+            .expect("GitLab metadata sync should succeed");
+
+        // Assert
+        assert_eq!(review_request.display_id, "!42");
+    }
+
+    #[tokio::test]
     async fn list_requested_reviews_builds_list_command_and_returns_rows() {
         // Arrange
         let remote = gitlab_remote();
@@ -1166,6 +1378,7 @@ mod tests {
             "state": "opened",
             "target_branch": "main",
             "title": "Add forge review support",
+            "description": "Current description.",
             "web_url": "https://gitlab.com/agentty-xyz/agentty/-/merge_requests/42"
         }"#
         .to_string()

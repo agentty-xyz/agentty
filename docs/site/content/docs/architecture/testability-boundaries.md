@@ -18,56 +18,57 @@ as `ag-forge` also expose test mocks through crate features for downstream tests
 | Trait | Module | Boundary | |-------|--------|----------| | `SyncMainRunner` |
 `app/core.rs` | App-level async sync orchestration trigger used by list-mode sync flows.
 | | `ReviewRequestClient` | `crates/ag-forge/src/client.rs` | GitHub/GitLab
-review-request detection plus `gh`/`glab` orchestration boundary. | |
-`ForgeCommandRunner` | `crates/ag-forge/src/command.rs` | Provider CLI command execution
-boundary used to unit-test forge adapters without live `gh` or `glab` binaries. | |
-`GitClient` | `infra/git/client.rs` | Git/process operations (worktree, merge, rebase,
-diff, push, pull, upstream-ref resolution, porcelain status snapshots for isolation
-checks, and ahead/behind comparisons for both upstream-tracking and
-session-vs-base-branch status). | | `FsClient` | `infra/fs.rs` | Async filesystem
-operations and path probes used by app or runtime orchestration, including non-blocking
-file reads, existence checks, canonicalization, session worktree cleanup, and
-prompt-image temp file or directory removal. | | `TmuxClient` | `infra/tmux.rs` | Tmux
-subprocess operations for opening session worktrees and dispatching open commands. | |
-`TmuxCommandRunner` | `infra/tmux.rs` | Internal tmux command boundary that keeps
-multi-command `send-keys` flows deterministic in unit tests. | | `AgentChannel` |
-`infra/channel.rs` | Provider-agnostic turn execution (session init, run turn,
-shutdown). | | `AgentBackend` | `infra/agent/backend.rs` | Per-provider setup and
-transport command construction. | | `AgentAvailabilityProbe` |
-`infra/agent/availability.rs` | Machine-scoped backend discovery used to filter settings
-defaults and `/model` without shelling out directly from app or runtime orchestration. |
-| `AppServerClient` | `infra/app_server/contract.rs` | Provider-specific app-server RPC
-execution and session runtime lifecycle. | | `EventSource` | `runtime/event.rs` |
-Terminal event polling for deterministic event-loop tests. | | `Clock` |
-`app/session/core.rs` | Shared wall-clock and monotonic time boundary used by session
-orchestration and runtime helpers such as pasted-image file naming. | | `Backend`
-(generic) | `runtime/core.rs` | Runtime accepts `Terminal<B: Backend>` via
-`run_with_backend`, enabling in-process TUI tests with `TestBackend` without a real
-terminal. | | `TerminalOperation` | `runtime/terminal.rs` | Terminal raw-mode and
-alternate-screen transitions for deterministic setup and restore failure-path tests. | |
-`Sleeper` | `lib.rs` | Wall-clock sleep boundary used by retry/polling flows such as git
-rebase assistance. | | `UpdateRunner` | `infra/version.rs` | npm install command
-execution for background auto-updates. | | `VersionCommandRunner` | `infra/version.rs` |
-npm/curl command execution for update checks. | | `ProjectDiscoveryClient` |
-`infra/project_discovery.rs` | Home-directory repository discovery used by startup
-catalog refresh without walking the real filesystem from `app/`. | | `GitCommandRunner`
-| `infra/git/rebase.rs` | Rebase command invocation boundary for conflict/retry tests. |
-| `SyncAssistClient` | `app/session/workflow/merge.rs` | Sync-rebase assistance
-execution boundary. | | `SessionRepository` | `infra/db/session.rs` | Session row
-persistence, turn metadata storage, and session list queries without binding app
-workflows to the full `Database` surface. | | `ProjectRepository` |
-`infra/db/project.rs` | Project persistence and project-list aggregation behind a narrow
-mockable boundary. | | `ReviewRepository` | `infra/db/review.rs` | Session
-review-request linkage persistence used by branch publish and refresh flows. | |
-`UsageRepository` | `infra/db/usage.rs` | Per-session model usage aggregation used by
-turn persistence and usage views. | | `ActivityRepository` | `infra/db/activity.rs` |
-Session-activity history queries and backfill helpers used by startup and session list
-refresh. | | `OperationRepository` | `infra/db/operation.rs` | Persisted
-session-operation lifecycle tracking used by worker restart recovery and cancellation. |
-| `SettingRepository` | `infra/db/setting.rs` | Global and project-scoped setting
-persistence used by startup and settings orchestration. | | `AppServerClient` retry
-helpers | `infra/app_server/retry.rs` | Shared restart-and-replay orchestration for
-provider runtimes without duplicating lifecycle policy in each provider. | |
+review-request detection plus `gh`/`glab` orchestration boundary, including title and
+description sync for linked PRs/MRs after completed turns. | | `ForgeCommandRunner` |
+`crates/ag-forge/src/command.rs` | Provider CLI command execution boundary used to
+unit-test forge adapters without live `gh` or `glab` binaries. | | `GitClient` |
+`infra/git/client.rs` | Git/process operations (worktree, merge, rebase, diff, push,
+pull, upstream-ref resolution, porcelain status snapshots for isolation checks, and
+ahead/behind comparisons for both upstream-tracking and session-vs-base-branch status).
+| | `FsClient` | `infra/fs.rs` | Async filesystem operations and path probes used by app
+or runtime orchestration, including non-blocking file reads, existence checks,
+canonicalization, session worktree cleanup, and prompt-image temp file or directory
+removal. | | `TmuxClient` | `infra/tmux.rs` | Tmux subprocess operations for opening
+session worktrees and dispatching open commands. | | `TmuxCommandRunner` |
+`infra/tmux.rs` | Internal tmux command boundary that keeps multi-command `send-keys`
+flows deterministic in unit tests. | | `AgentChannel` | `infra/channel.rs` |
+Provider-agnostic turn execution (session init, run turn, shutdown). | | `AgentBackend`
+| `infra/agent/backend.rs` | Per-provider setup and transport command construction. | |
+`AgentAvailabilityProbe` | `infra/agent/availability.rs` | Machine-scoped backend
+discovery used to filter settings defaults and `/model` without shelling out directly
+from app or runtime orchestration. | | `AppServerClient` |
+`infra/app_server/contract.rs` | Provider-specific app-server RPC execution and session
+runtime lifecycle. | | `EventSource` | `runtime/event.rs` | Terminal event polling for
+deterministic event-loop tests. | | `Clock` | `app/session/core.rs` | Shared wall-clock
+and monotonic time boundary used by session orchestration and runtime helpers such as
+pasted-image file naming. | | `Backend` (generic) | `runtime/core.rs` | Runtime accepts
+`Terminal<B: Backend>` via `run_with_backend`, enabling in-process TUI tests with
+`TestBackend` without a real terminal. | | `TerminalOperation` | `runtime/terminal.rs` |
+Terminal raw-mode and alternate-screen transitions for deterministic setup and restore
+failure-path tests. | | `Sleeper` | `lib.rs` | Wall-clock sleep boundary used by
+retry/polling flows such as git rebase assistance. | | `UpdateRunner` |
+`infra/version.rs` | npm install command execution for background auto-updates. | |
+`VersionCommandRunner` | `infra/version.rs` | npm/curl command execution for update
+checks. | | `ProjectDiscoveryClient` | `infra/project_discovery.rs` | Home-directory
+repository discovery used by startup catalog refresh without walking the real filesystem
+from `app/`. | | `GitCommandRunner` | `infra/git/rebase.rs` | Rebase command invocation
+boundary for conflict/retry tests. | | `SyncAssistClient` |
+`app/session/workflow/merge.rs` | Sync-rebase assistance execution boundary. | |
+`SessionRepository` | `infra/db/session.rs` | Session row persistence, turn metadata
+storage, and session list queries without binding app workflows to the full `Database`
+surface. | | `ProjectRepository` | `infra/db/project.rs` | Project persistence and
+project-list aggregation behind a narrow mockable boundary. | | `ReviewRepository` |
+`infra/db/review.rs` | Session review-request linkage persistence used by branch
+publish, refresh flows, and post-turn metadata sync. | | `UsageRepository` |
+`infra/db/usage.rs` | Per-session model usage aggregation used by turn persistence and
+usage views. | | `ActivityRepository` | `infra/db/activity.rs` | Session-activity
+history queries and backfill helpers used by startup and session list refresh. | |
+`OperationRepository` | `infra/db/operation.rs` | Persisted session-operation lifecycle
+tracking used by worker restart recovery and cancellation. | | `SettingRepository` |
+`infra/db/setting.rs` | Global and project-scoped setting persistence used by startup
+and settings orchestration. | | `AppServerClient` retry helpers |
+`infra/app_server/retry.rs` | Shared restart-and-replay orchestration for provider
+runtimes without duplicating lifecycle policy in each provider. | |
 `CodexRuntimeTransport` | `infra/agent/app_server/codex/transport.rs` | Codex stdio
 transport boundary for lifecycle, account usage, compaction, and turn-stream tests
 without scripted shell runtimes. | | `GeminiRuntimeTransport` |

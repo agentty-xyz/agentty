@@ -347,6 +347,16 @@ pub struct CreateReviewRequestInput {
     pub title: String,
 }
 
+/// Input required to keep an existing review request aligned with the latest
+/// session commit message.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UpdateReviewRequestInput {
+    /// Optional body or description submitted with the review request.
+    pub body: Option<String>,
+    /// Title shown in the forge review-request UI.
+    pub title: String,
+}
+
 /// Review-request failures normalized for actionable UI messaging.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ReviewRequestError {

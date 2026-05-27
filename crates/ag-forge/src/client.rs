@@ -6,7 +6,7 @@ use super::{
     CreateReviewRequestInput, ForgeCommandRunner, ForgeFuture, ForgeRemote,
     GitHubReviewRequestAdapter, GitLabReviewRequestAdapter, RealForgeCommandRunner,
     RequestedReview, ReviewCommentSnapshot, ReviewRequestError, ReviewRequestSummary,
-    detect_remote,
+    UpdateReviewRequestInput, detect_remote,
 };
 
 /// Async boundary used by app orchestration for forge review requests.
@@ -51,6 +51,19 @@ pub trait ReviewRequestClient: Send + Sync {
         &self,
         remote: ForgeRemote,
         display_id: String,
+    ) -> ForgeFuture<Result<ReviewRequestSummary, ReviewRequestError>>;
+
+    /// Syncs an existing review request title/body to `input` after checking
+    /// the current remote metadata.
+    ///
+    /// # Errors
+    /// Returns a provider-specific review-request error when metadata lookup,
+    /// update, or refresh fails.
+    fn sync_review_request_metadata(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+        input: UpdateReviewRequestInput,
     ) -> ForgeFuture<Result<ReviewRequestSummary, ReviewRequestError>>;
 
     /// Returns the browser-openable URL for one review request.
@@ -166,6 +179,34 @@ impl ReviewRequestClient for RealReviewRequestClient {
                 let adapter = GitLabReviewRequestAdapter::new(Arc::clone(&self.command_runner));
 
                 Box::pin(async move { adapter.refresh_review_request(remote, display_id).await })
+            }
+        }
+    }
+
+    fn sync_review_request_metadata(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+        input: UpdateReviewRequestInput,
+    ) -> ForgeFuture<Result<ReviewRequestSummary, ReviewRequestError>> {
+        match remote.forge_kind {
+            super::ForgeKind::GitHub => {
+                let adapter = GitHubReviewRequestAdapter::new(Arc::clone(&self.command_runner));
+
+                Box::pin(async move {
+                    adapter
+                        .sync_review_request_metadata(remote, display_id, input)
+                        .await
+                })
+            }
+            super::ForgeKind::GitLab => {
+                let adapter = GitLabReviewRequestAdapter::new(Arc::clone(&self.command_runner));
+
+                Box::pin(async move {
+                    adapter
+                        .sync_review_request_metadata(remote, display_id, input)
+                        .await
+                })
             }
         }
     }

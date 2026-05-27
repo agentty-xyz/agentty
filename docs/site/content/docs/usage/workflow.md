@@ -137,16 +137,19 @@ After each successful turn with file changes, Agentty keeps the session branch a
 evolving commit. It regenerates that commit message from the cumulative session diff
 using the active project's `Default Fast Model`, applies the active project's
 `Coauthored by Agentty` setting to the final commit trailer, amends `HEAD`, and
-refreshes the session title from the same commit text before merge begins. Successful
-commit and no-change notices appear as transient session-output status rows rather than
-persisted transcript messages. If a later turn reverts every file change from the
-session commit, Agentty drops the now-empty session commit and reports the same
-no-change notice instead of sending Git's empty-amend diagnostic through commit
-assistance. If the auto-commit needs agent assistance to recover from a git failure,
-that recovery prompt also uses the `Default Fast Model`. Once the session reaches
-**Done**, Agentty rewrites the persisted summary into markdown with a `# Summary`
-section sourced from the final agent `summary.session` value and a `# Commit` section
-sourced from the canonical squash-merge commit message.
+refreshes the session title from the same commit text before merge begins. If the
+session already has a linked open review request, Agentty also checks the remote title
+and description after the updated branch is pushed, then updates them from the latest
+commit message only when they differ. Successful commit and no-change notices appear as
+transient session-output status rows rather than persisted transcript messages. If a
+later turn reverts every file change from the session commit, Agentty drops the
+now-empty session commit and reports the same no-change notice instead of sending Git's
+empty-amend diagnostic through commit assistance. If the auto-commit needs agent
+assistance to recover from a git failure, that recovery prompt also uses the
+`Default Fast Model`. Once the session reaches **Done**, Agentty rewrites the persisted
+summary into markdown with a `# Summary` section sourced from the final agent
+`summary.session` value and a `# Commit` section sourced from the canonical squash-merge
+commit message.
 
 When a session enters **Merging**, Agentty reuses the session branch `HEAD` commit
 message for the final squash commit on the base branch. Merge first requires the main
@@ -204,10 +207,13 @@ model.
   push that same remote branch in the background so linked review requests stay current
   without reopening the publish popup. The session output shows when that post-turn
   auto-push starts and when it completes or fails.
+- Completed turns with file changes also compare the linked open review request's
+  current title and body/description with the latest session commit message, then update
+  the review request metadata after the post-turn auto-push succeeds.
 - Automatic pushes reuse the locked upstream branch name from the first publish. If a
   background push fails, Agentty keeps the stored upstream reference, adds the failure
-  details to the session output, and leaves the manual `p` publish flow available for
-  retry.
+  details to the session output, leaves the linked review request metadata untouched,
+  and leaves the manual `p` publish flow available for retry.
 
 Review-request publishing stays inside session view by using a publish input popup on
 `p`, followed by informational popups for loading, success, and blocked states.

@@ -1639,6 +1639,7 @@ impl SessionManager {
             git_client,
             output,
             published_upstream_ref,
+            review_request_metadata_sync: None,
             session_id,
             session_update_versions: session_update_versions.clone(),
             sync_operation_id,

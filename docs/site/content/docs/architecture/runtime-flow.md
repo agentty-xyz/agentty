@@ -462,6 +462,13 @@ narrow screens.
    reports a no-change notice, auto-commit recovery prompts use that same fast-model
    selection, and the session `title` is synced from the rewritten commit after success
    while the structured response `summary` payload remains unchanged.
+1. When the auto-commit produces a new commit and the session already tracks a published
+   upstream branch, start the detached auto-push task. After that push succeeds, linked
+   open review requests load the current remote title/body metadata through
+   `ReviewRequestClient`, update the PR/MR only if the latest commit message differs,
+   and persist the refreshed review-request summary. If the push fails, the linked
+   review request is left unchanged so its stored summary still matches the remote
+   branch state.
 1. Refresh persisted session size.
 1. Update final status (`Review` or `Question`; on failure -> `Review`).
 

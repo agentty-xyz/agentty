@@ -25,7 +25,7 @@ pub use model::{
     CreateReviewRequestInput, ForgeFuture, ForgeKind, ForgeRemote, RequestedReview,
     RequestedReviewAudience, ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot,
     ReviewCommentThread, ReviewRequestError, ReviewRequestState, ReviewRequestSummary,
-    is_gitlab_host,
+    UpdateReviewRequestInput, is_gitlab_host,
 };
 pub use remote::detect_remote;
 pub(crate) use remote::{parse_remote_url, strip_port};
