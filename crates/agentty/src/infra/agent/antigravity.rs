@@ -22,8 +22,8 @@ const ANTIGRAVITY_PROJECT_STATE_PATTERN: &str = ".antigravitycli/";
 ///
 /// Antigravity does not currently expose an ACP/app-server flag in `agy
 /// --help`, so Agentty runs it as a stateless CLI provider through
-/// `agy --print`. Prompts are streamed through stdin to avoid argv length
-/// limits for transcript replay, large diffs, and one-shot utility prompts.
+/// `agy --print`. The CLI requires the prompt as the `--print` flag value, so
+/// command construction renders the full protocol prompt before spawning.
 pub(super) struct AntigravityBackend;
 
 impl AgentBackend for AntigravityBackend {
@@ -35,6 +35,7 @@ impl AgentBackend for AntigravityBackend {
         &'request self,
         request: BuildCommandRequest<'request>,
     ) -> Result<Command, AgentBackendError> {
+        let prompt_argument = build_prompt_argument(request)?;
         let BuildCommandRequest {
             attachments,
             folder,
@@ -54,6 +55,7 @@ impl AgentBackend for AntigravityBackend {
             .arg("--print-timeout")
             .arg(ANTIGRAVITY_PRINT_TIMEOUT)
             .arg("--print")
+            .arg(prompt_argument)
             .current_dir(folder)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -236,15 +238,12 @@ fn append_git_exclude_pattern(exclude_path: &Path, pattern: &str) -> Result<(), 
     })
 }
 
-/// Renders the full Antigravity prompt text that Agentty streams through
-/// stdin.
+/// Renders the full Antigravity prompt text passed as the `--print` value.
 ///
 /// # Errors
 /// Returns an error when image placeholder rendering or protocol prompt
 /// rendering fails.
-pub(super) fn build_prompt_stdin_payload(
-    request: BuildCommandRequest<'_>,
-) -> Result<Vec<u8>, AgentBackendError> {
+fn build_prompt_argument(request: BuildCommandRequest<'_>) -> Result<String, AgentBackendError> {
     let prompt = render_prompt_with_local_images(request.prompt, request.attachments)?;
     let prompt = prepare_prompt_text(PromptPreparationRequest {
         instruction_delivery_mode: if request.request_kind.is_resume() {
@@ -257,7 +256,7 @@ pub(super) fn build_prompt_stdin_payload(
         replay_session_output: request.request_kind.session_output(),
     })?;
 
-    Ok(prompt.into_bytes())
+    Ok(prompt)
 }
 
 /// Adds Antigravity workspace roots for the session folder and prompt
@@ -339,7 +338,7 @@ fn render_prompt_with_local_images(
     Ok(rendered_prompt)
 }
 
-/// Returns one prompt attachment path as strict UTF-8 for Antigravity stdin
+/// Returns one prompt attachment path as strict UTF-8 for Antigravity argv
 /// rendering.
 fn attachment_path_for_prompt(
     attachment: &TurnPromptAttachment,
@@ -390,7 +389,7 @@ mod tests {
 
     #[test]
     /// Verifies Antigravity starts in unattended print mode with sandbox
-    /// restrictions enabled.
+    /// restrictions enabled and a prompt value for `--print`.
     fn test_antigravity_build_command_uses_print_mode_with_sandbox() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
@@ -415,10 +414,11 @@ mod tests {
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
         let session_folder = temp_directory.path().to_string_lossy().into_owned();
+        let prompt_argument = args.last().expect("prompt argument should be present");
 
         // Assert
         assert_eq!(
-            args,
+            &args[..7],
             vec![
                 "--add-dir".to_string(),
                 session_folder,
@@ -429,6 +429,8 @@ mod tests {
                 "--print".to_string(),
             ]
         );
+        assert!(prompt_argument.contains("Structured response protocol:"));
+        assert!(prompt_argument.contains("Write tests"));
         assert_eq!(command.get_current_dir(), Some(temp_directory.path()));
         assert!(
             read_standard_git_exclude(temp_directory.path())
@@ -555,15 +557,15 @@ mod tests {
     }
 
     #[test]
-    /// Verifies Antigravity stdin prompts include protocol instructions and
+    /// Verifies Antigravity prompt arguments include protocol instructions and
     /// replayed transcript output for resume turns.
-    fn test_antigravity_stdin_payload_replays_session_output_on_resume() {
+    fn test_antigravity_prompt_argument_replays_session_output_on_resume() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
         let request_kind = session_resume_request_kind(Some("previous answer"));
 
         // Act
-        let payload = build_prompt_stdin_payload(BuildCommandRequest {
+        let prompt = build_prompt_argument(BuildCommandRequest {
             attachments: &[],
             folder: temp_directory.path(),
             prompt: "continue work",
@@ -571,8 +573,7 @@ mod tests {
             model: "antigravity",
             reasoning_level: ReasoningLevel::default(),
         })
-        .expect("stdin payload should build");
-        let prompt = String::from_utf8(payload).expect("prompt should be utf8");
+        .expect("prompt argument should build");
 
         // Assert
         assert!(prompt.contains("Structured response protocol:"));

@@ -573,7 +573,8 @@ by `infra/channel.rs`, with prompt payloads owned by `domain/turn_prompt.rs`):
   directory and rely on the main-checkout tracked-file guard for isolation.
 - Antigravity command construction passes the session worktree through `agy --add-dir`,
   because Antigravity print mode uses explicit workspace roots for file tools instead of
-  treating the process directory as an editable workspace.
+  treating the process directory as an editable workspace. The rendered protocol prompt
+  is passed as the `agy --print` value because the CLI requires that flag argument.
 - Antigravity setup and command construction add `.antigravitycli/` to the
   repository-local git exclude file before `agy` starts, keeping Antigravity's project
   configuration symlink out of session diffs without changing tracked ignore files.
