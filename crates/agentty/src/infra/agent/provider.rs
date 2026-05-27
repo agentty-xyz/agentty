@@ -111,6 +111,9 @@ pub(crate) fn build_command_stdin_payload(
     match prompt_transport(kind) {
         AgentPromptTransport::Argv => Ok(None),
         AgentPromptTransport::Stdin => match kind {
+            AgentKind::Antigravity => {
+                super::antigravity::build_prompt_stdin_payload(request).map(Some)
+            }
             AgentKind::Claude => super::claude::build_prompt_stdin_payload(request).map(Some),
             AgentKind::Codex | AgentKind::Gemini => Ok(None),
         },
@@ -141,6 +144,15 @@ struct AgentProviderDescriptor {
 
 fn provider_descriptor(kind: AgentKind) -> AgentProviderDescriptor {
     match kind {
+        AgentKind::Antigravity => AgentProviderDescriptor {
+            app_server_client_factory: |_default_client| None,
+            app_server_thought_policy: AppServerThoughtPolicy::None,
+            backend_factory: || Box::new(super::antigravity::AntigravityBackend),
+            parse_response: super::response_parser::parse_antigravity_response_with_fallback,
+            parse_stream_output_line: super::response_parser::parse_antigravity_stream_output_line,
+            prompt_transport: AgentPromptTransport::Stdin,
+            transport: AgentTransport::Cli,
+        },
         AgentKind::Gemini => AgentProviderDescriptor {
             app_server_client_factory: |default_client| {
                 Some(default_client.unwrap_or_else(|| {
@@ -203,16 +215,19 @@ mod tests {
     /// not domain enums.
     fn test_transport_mode_reports_expected_transport_by_provider() {
         // Arrange
+        let antigravity_kind = AgentKind::Antigravity;
         let claude_kind = AgentKind::Claude;
         let codex_kind = AgentKind::Codex;
         let gemini_kind = AgentKind::Gemini;
 
         // Act
+        let antigravity_transport = transport_mode(antigravity_kind);
         let claude_transport = transport_mode(claude_kind);
         let codex_transport = transport_mode(codex_kind);
         let gemini_transport = transport_mode(gemini_kind);
 
         // Assert
+        assert_eq!(antigravity_transport, AgentTransport::Cli);
         assert_eq!(claude_transport, AgentTransport::Cli);
         assert_eq!(codex_transport, AgentTransport::AppServer);
         assert_eq!(gemini_transport, AgentTransport::AppServer);
@@ -223,16 +238,19 @@ mod tests {
     /// descriptor.
     fn test_prompt_transport_reports_expected_mode_by_provider() {
         // Arrange
+        let antigravity_kind = AgentKind::Antigravity;
         let claude_kind = AgentKind::Claude;
         let codex_kind = AgentKind::Codex;
         let gemini_kind = AgentKind::Gemini;
 
         // Act
+        let antigravity_transport = prompt_transport(antigravity_kind);
         let claude_transport = prompt_transport(claude_kind);
         let codex_transport = prompt_transport(codex_kind);
         let gemini_transport = prompt_transport(gemini_kind);
 
         // Assert
+        assert_eq!(antigravity_transport, AgentPromptTransport::Stdin);
         assert_eq!(claude_transport, AgentPromptTransport::Stdin);
         assert_eq!(codex_transport, AgentPromptTransport::Argv);
         assert_eq!(gemini_transport, AgentPromptTransport::Argv);
@@ -244,7 +262,12 @@ mod tests {
         // Arrange
         let raw_response = "plain response";
 
-        for kind in [AgentKind::Claude, AgentKind::Codex, AgentKind::Gemini] {
+        for kind in [
+            AgentKind::Antigravity,
+            AgentKind::Claude,
+            AgentKind::Codex,
+            AgentKind::Gemini,
+        ] {
             // Act
             let error = parse_turn_response(
                 kind,
@@ -307,6 +330,10 @@ mod tests {
     /// Ensures model strings resolve through the shared provider registry.
     fn test_provider_kind_for_model_reports_owner() {
         // Arrange / Act / Assert
+        assert_eq!(
+            provider_kind_for_model(AgentModel::Antigravity.as_str()).expect("known model"),
+            AgentKind::Antigravity
+        );
         assert_eq!(
             provider_kind_for_model(AgentModel::Gpt54.as_str()).expect("known model"),
             AgentKind::Codex

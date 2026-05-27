@@ -169,10 +169,11 @@ the current draft or reply. Agentty stores the image under
 source can be a copied PNG file, raw image data, or PNG path text from X11 or Wayland
 data-control clipboard backends. Text paste remains unchanged on the normal terminal
 paste event path. Codex turns serialize the local image items directly through the
-app-server, Gemini turns send ordered ACP text-plus-image content blocks, and Claude
-turns rewrite the inline placeholders to local image paths before the prompt is streamed
-to `claude`. Draft image files are removed when you cancel the composer, after a
-submitted turn finishes using them, and when a session is deleted or canceled.
+app-server, Gemini turns send ordered ACP text-plus-image content blocks, and
+Antigravity and Claude turns rewrite the inline placeholders to local image paths before
+the prompt is streamed to `agy` or `claude`. Draft image files are removed when you
+cancel the composer, after a submitted turn finishes using them, and when a session is
+deleted or canceled.
 
 When you use `@` file lookups in prompt or clarification input, Agentty keeps the raw
 `@path/to/file` text visible in the composer and transcript. The agent-facing transport
@@ -408,11 +409,12 @@ to inspect repository readiness rules and report recommendations without changin
 current effective level preselected from settings or any existing session override. | |
 `/stats` | Show token usage statistics for the session. |
 
-Agentty requires at least one supported backend CLI (`codex`, `claude`, or `gemini`) on
-`PATH` at startup. Once launched, `/model` only offers runnable backends, and stored
-default-model settings still fall back to the first available backend default when the
-saved backend is missing locally. Retired stored model ids such as `claude-opus-4-6` are
-upgraded to the current supported replacement when projects and sessions load.
+Agentty requires at least one supported backend CLI (`agy`, `codex`, `claude`, or
+`gemini`) on `PATH` at startup. Once launched, `/model` only offers runnable backends,
+and stored default-model settings still fall back to the first available backend default
+when the saved backend is missing locally. Retired stored model ids such as
+`claude-opus-4-6` are upgraded to the current supported replacement when projects and
+sessions load.
 
 ## Auto-Update
 

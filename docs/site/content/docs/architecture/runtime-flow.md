@@ -502,7 +502,7 @@ flowchart TD
   factory["create_agent_channel(kind, override)"]
   provider["Provider registry<br/>infra/agent/provider.rs"]
   cli_mode["transport_mode() -> Cli"]
-  cli_channel["CliAgentChannel<br/>Claude; subprocess per turn"]
+  cli_channel["CliAgentChannel<br/>Antigravity/Claude; subprocess per turn"]
   app_server_mode["transport_mode() -> AppServer"]
   app_server_client["create_app_server_client()"]
   app_server_channel["AppServerAgentChannel<br/>Codex/Gemini; persistent runtime per session"]
@@ -562,8 +562,14 @@ by `infra/channel.rs`, with prompt payloads owned by `domain/turn_prompt.rs`):
 - Gemini ACP permission requests prefer explicit one-shot allow options in
   `app_server/gemini/policy.rs` when Gemini offers them, allowing file-changing tools to
   proceed inside the session worktree without granting durable session-wide approval.
-  Claude subprocess turns keep `Bash` available while relying on the session worktree
-  process directory and main-checkout tracked-file guard for isolation.
+  Antigravity and Claude subprocess turns run from the session worktree process
+  directory and rely on the main-checkout tracked-file guard for isolation.
+- Antigravity command construction passes the session worktree through `agy --add-dir`,
+  because Antigravity print mode uses explicit workspace roots for file tools instead of
+  treating the process directory as an editable workspace.
+- Antigravity setup and command construction add `.antigravitycli/` to the
+  repository-local git exclude file before `agy` starts, keeping Antigravity's project
+  configuration symlink out of session diffs without changing tracked ignore files.
 
 ## Agent Interaction Protocol Flow
 
@@ -611,8 +617,10 @@ transport/provider:
 
 - CLI channel (`CliAgentChannel`): parses stdout lines into loader-only `ThoughtDelta`
   updates for non-response progress/thought text and keeps raw output for final parse.
-  Claude now uses its documented `stream-json` output path here so compaction/tool-use
-  progress can surface without waiting for a single final JSON payload.
+  Claude uses its documented `stream-json` output path here so compaction/tool-use
+  progress can surface without waiting for a single final JSON payload. Antigravity uses
+  `agy --print` and waits for the complete stdout payload because it does not currently
+  expose a documented streaming output format.
 - CLI prompt submission can stream the fully rendered prompt through stdin for providers
   that would otherwise exceed argv limits on large diffs or one-shot utility prompts.
 - Shared CLI subprocess helpers under `crates/agentty/src/infra/agent/cli/` now own
@@ -622,8 +630,8 @@ transport/provider:
   progress updates to transient loader text, while withholding assistant transcript
   chunks until the completed turn result is parsed.
 - One-shot prompt submission asks the concrete backend for its transport path, so
-  app-server providers (Codex and Gemini) resolve their own runtime client and Claude
-  stays on direct CLI subprocess execution.
+  app-server providers (Codex and Gemini) resolve their own runtime client while
+  Antigravity and Claude stay on direct CLI subprocess execution.
 - Provider capabilities in `crates/agentty/src/infra/agent/provider.rs` centralize
   strict final protocol validation, CLI stream classification, app-server thought-phase
   handling, and provider app-server client construction.
@@ -635,8 +643,8 @@ transport/provider:
 
 <a id="architecture-agent-interaction-validation"></a> Final-output validation:
 
-- Claude, Gemini, and Codex use strict protocol parsing and return an error immediately
-  when invalid.
+- Claude, Antigravity, Gemini, and Codex use strict protocol parsing and return an error
+  immediately when invalid.
 - One-shot agent submissions still surface schema errors directly to the caller whenever
   the shared parser rejects the final output, including plain text, blank utility
   responses, non-utility prompts that miss the schema, or any output that leaves

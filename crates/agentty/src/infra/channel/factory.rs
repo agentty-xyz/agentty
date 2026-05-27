@@ -11,8 +11,8 @@ use crate::infra::channel::contract::AgentChannel;
 
 /// Creates the provider-specific channel for the given agent kind.
 ///
-/// CLI providers (Claude) use [`CliAgentChannel`]; app-server providers
-/// (Gemini, Codex) use [`AppServerAgentChannel`].
+/// CLI providers (Antigravity, Claude) use [`CliAgentChannel`];
+/// app-server providers (Gemini, Codex) use [`AppServerAgentChannel`].
 pub fn create_agent_channel(
     kind: AgentKind,
     app_server_client_override: Option<Arc<dyn AppServerClient>>,
@@ -40,6 +40,15 @@ mod tests {
     fn create_agent_channel_returns_cli_channel_for_claude() {
         // Arrange / Act
         let channel = create_agent_channel(AgentKind::Claude, None);
+
+        // Assert
+        assert_eq!(Arc::strong_count(&channel), 1);
+    }
+
+    #[test]
+    fn create_agent_channel_returns_cli_channel_for_antigravity() {
+        // Arrange / Act
+        let channel = create_agent_channel(AgentKind::Antigravity, None);
 
         // Assert
         assert_eq!(Arc::strong_count(&channel), 1);

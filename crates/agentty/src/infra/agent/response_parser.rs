@@ -118,6 +118,26 @@ pub(super) fn parse_codex_response_with_fallback(stdout: &str, stderr: &str) -> 
     })
 }
 
+/// Parses Antigravity output as plain print-mode stdout.
+pub(super) fn parse_antigravity_response_with_fallback(
+    stdout: &str,
+    stderr: &str,
+) -> ParsedResponse {
+    ParsedResponse {
+        content: fallback_response(stdout, stderr),
+        stats: SessionStats::default(),
+    }
+}
+
+/// Parses one Antigravity stream line.
+///
+/// Antigravity print mode currently writes final response text to stdout
+/// without a documented structured stream format, so Agentty suppresses
+/// partial stdout rendering and parses the complete output after exit.
+pub(super) fn parse_antigravity_stream_output_line(_stdout_line: &str) -> Option<(String, bool)> {
+    None
+}
+
 /// Parses one full Claude turn payload from stream-json stdout.
 ///
 /// Prefers the final non-empty `result` field when present. When Claude emits
@@ -803,6 +823,36 @@ mod tests {
         assert_eq!(parsed.content, "Planned response");
         assert_eq!(parsed.stats.input_tokens, 11);
         assert_eq!(parsed.stats.output_tokens, 7);
+    }
+
+    #[test]
+    /// Ensures Antigravity print-mode responses are parsed from stdout as
+    /// complete final content.
+    fn test_antigravity_parse_response_reads_plain_stdout() {
+        // Arrange
+        let stdout = r#"{"answer":"Antigravity ok","questions":[],"summary":null}"#;
+        let stderr = "diagnostics";
+
+        // Act
+        let parsed = parse_antigravity_response_with_fallback(stdout, stderr);
+
+        // Assert
+        assert_eq!(parsed.content, stdout);
+        assert_eq!(parsed.stats, SessionStats::default());
+    }
+
+    #[test]
+    /// Ensures Antigravity stream parsing waits for the final print-mode
+    /// output instead of treating stdout lines as incremental transcript.
+    fn test_antigravity_stream_output_line_is_not_incremental() {
+        // Arrange
+        let stdout_line = "partial output";
+
+        // Act
+        let parsed_line = parse_antigravity_stream_output_line(stdout_line);
+
+        // Assert
+        assert_eq!(parsed_line, None);
     }
 
     #[test]

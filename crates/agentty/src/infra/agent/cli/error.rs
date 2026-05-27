@@ -29,11 +29,22 @@ fn known_agent_cli_exit_guidance(
     stderr: &str,
 ) -> Option<String> {
     match agent_kind {
+        AgentKind::Antigravity if is_antigravity_authentication_error(stdout, stderr) => {
+            Some(antigravity_authentication_error_message(command_label))
+        }
         AgentKind::Claude if is_claude_authentication_error(stdout, stderr) => {
             Some(claude_authentication_error_message(command_label))
         }
-        AgentKind::Claude | AgentKind::Codex | AgentKind::Gemini => None,
+        AgentKind::Antigravity | AgentKind::Claude | AgentKind::Codex | AgentKind::Gemini => None,
     }
+}
+
+/// Builds actionable Antigravity authentication refresh guidance.
+fn antigravity_authentication_error_message(command_label: &str) -> String {
+    format!(
+        "{command_label} failed because Antigravity authentication is missing.\nRun `agy` in a \
+         terminal to complete Google sign-in, then retry."
+    )
 }
 
 /// Builds the actionable Claude authentication refresh guidance message.
@@ -43,6 +54,16 @@ fn claude_authentication_error_message(command_label: &str) -> String {
          auth login` to refresh your Anthropic session, verify with `claude auth status`, then \
          retry."
     )
+}
+
+/// Detects Antigravity CLI authentication failures surfaced through
+/// stdout/stderr.
+fn is_antigravity_authentication_error(stdout: &str, stderr: &str) -> bool {
+    let combined_output = format!("{stdout}\n{stderr}").to_ascii_lowercase();
+
+    combined_output.contains("you are not logged into antigravity")
+        || combined_output.contains("failed to get oauth token")
+        || combined_output.contains("error getting token source")
 }
 
 /// Detects Claude CLI authentication failures surfaced through stdout/stderr.
@@ -137,6 +158,22 @@ mod tests {
         // Assert
         assert!(result.contains("authentication expired or is missing"));
         assert!(result.contains("claude auth login"));
+    }
+
+    #[test]
+    fn test_antigravity_auth_error_from_not_logged_in_message() {
+        // Arrange / Act
+        let result = format_agent_cli_exit_error(
+            AgentKind::Antigravity,
+            "agy",
+            Some(1),
+            "",
+            "You are not logged into Antigravity.",
+        );
+
+        // Assert
+        assert!(result.contains("Antigravity authentication is missing"));
+        assert!(result.contains("Run `agy`"));
     }
 
     #[test]

@@ -78,6 +78,32 @@ async fn gemini_flash_protocol_compliance_e2e() {
     }
 }
 
+/// Verifies real Antigravity CLI turn execution through
+/// `create_agent_channel()` yields a non-empty protocol `answer`.
+#[tokio::test]
+#[ignore = "requires real Antigravity CLI credentials and network"]
+async fn antigravity_protocol_compliance_e2e() {
+    // Arrange
+    let model = AgentModel::Antigravity;
+    if provider_preflight_skip_reason(AgentKind::Antigravity)
+        .await
+        .is_some()
+    {
+        return;
+    }
+
+    // Act
+    let result = assert_provider_protocol_compliance(AgentKind::Antigravity, model).await;
+
+    // Assert
+    if let Err(error) = result {
+        if is_skippable_provider_environment_failure(&error) {
+            return;
+        }
+        assert!(error.is_empty(), "{error}");
+    }
+}
+
 /// Verifies real Claude Sonnet (`claude-sonnet-4-6`) turn execution through
 /// `create_agent_channel()` yields a non-empty protocol `answer`.
 #[tokio::test]
@@ -107,6 +133,7 @@ async fn claude_sonnet_protocol_compliance_e2e() {
 /// Returns a skip reason when the provider CLI is unavailable or unhealthy.
 async fn provider_preflight_skip_reason(kind: AgentKind) -> Option<String> {
     let (provider_name, executable_name) = match kind {
+        AgentKind::Antigravity => ("Antigravity", "agy"),
         AgentKind::Codex => ("Codex", "codex"),
         AgentKind::Gemini => ("Gemini", "gemini"),
         AgentKind::Claude => ("Claude", "claude"),
@@ -227,6 +254,7 @@ fn is_skippable_provider_environment_failure(error: &str) -> bool {
         || error.contains("Failed to authenticate")
         || error.contains("authentication_error")
         || error.contains("OAuth token has expired")
+        || error.contains("You are not logged into Antigravity")
 }
 
 /// Resolves the workspace folder used to execute real provider turns.

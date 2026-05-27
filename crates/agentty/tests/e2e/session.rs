@@ -88,6 +88,29 @@ fn seed_failing_gemini_cli_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::err
     Ok(())
 }
 
+/// Adds an Antigravity CLI stub that intentionally exits with failure.
+///
+/// Picker tests only need the executable to exist on `PATH`; using a failing
+/// stub keeps accidental provider execution from looking successful.
+fn seed_failing_antigravity_cli_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    let stub_agent_path = env.stub_bin.join("agy");
+    std::fs::write(&stub_agent_path, "#!/bin/sh\nexit 1\n")?;
+
+    #[cfg(unix)]
+    std::fs::set_permissions(&stub_agent_path, std::fs::Permissions::from_mode(0o755))?;
+
+    Ok(())
+}
+
+/// Adds Gemini and Antigravity CLI stubs so Antigravity appears in a stable
+/// `/model` picker position.
+fn seed_model_picker_cli_stubs(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_failing_gemini_cli_stub(env)?;
+    seed_failing_antigravity_cli_stub(env)?;
+
+    Ok(())
+}
+
 /// Seeds one review-ready session with a focused review already persisted as
 /// if Agentty had been restarted after review generation completed.
 fn seed_review_ready_session_with_persisted_focused_review(
@@ -646,6 +669,45 @@ fn gemini_model_picker_includes_current_flash() -> E2eResult {
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "gemini-3.5-flash", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that the prompt `/model` picker exposes the Antigravity CLI model
+/// marker when `agy` is locally available.
+#[test]
+fn antigravity_model_picker_includes_cli_marker() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("antigravity_model_picker_includes_cli_marker")
+        .with_git()
+        .setup(seed_model_picker_cli_stubs)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Regular", 5000)
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .press_key("/")
+                    .write_text("model")
+                    .wait_for_text("Slash Command", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("/model Agent", 3000)
+                    .press_key("Down")
+                    .press_key("Enter")
+                    .wait_for_text("antigravity", 3000)
+                    .capture_labeled(
+                        "antigravity_model_picker",
+                        "Antigravity model picker includes CLI marker",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "antigravity", &full);
             },
         )?;
 

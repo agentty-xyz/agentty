@@ -4,6 +4,7 @@
 //! and response parsing to focused files under `infra/agent/` using the
 //! standard `agent.rs` + `agent/` module layout.
 
+mod antigravity;
 pub(crate) mod app_server;
 mod availability;
 mod backend;

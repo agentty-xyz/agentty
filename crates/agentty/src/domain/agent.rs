@@ -4,6 +4,8 @@ use std::str::FromStr;
 /// Supported agent provider families.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentKind {
+    /// Google Antigravity CLI/backend.
+    Antigravity,
     /// Google Gemini CLI/backend.
     Gemini,
     /// Anthropic Claude Code CLI/backend.
@@ -15,6 +17,8 @@ pub enum AgentKind {
 /// Supported agent model names across all providers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentModel {
+    /// Antigravity CLI model selected by `agy` settings.
+    Antigravity,
     /// Codex model backed by `gpt-5.5`.
     Gpt55,
     /// Fast Gemini preview model backed by `gemini-3-flash-preview`.
@@ -68,6 +72,7 @@ impl AgentModel {
     /// invocations.
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Antigravity => "antigravity",
             Self::Gpt55 => "gpt-5.5",
             Self::Gemini3FlashPreview => "gemini-3-flash-preview",
             Self::Gemini35Flash => "gemini-3.5-flash",
@@ -97,6 +102,7 @@ impl AgentModel {
     /// Returns the owning provider family for this model.
     pub fn kind(self) -> AgentKind {
         match self {
+            Self::Antigravity => AgentKind::Antigravity,
             Self::Gemini3FlashPreview
             | Self::Gemini35Flash
             | Self::Gemini31FlashLitePreview
@@ -235,6 +241,7 @@ impl FromStr for AgentModel {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "gemini-3-flash-preview" => Ok(Self::Gemini3FlashPreview),
+            "antigravity" => Ok(Self::Antigravity),
             "gemini-3.5-flash" => Ok(Self::Gemini35Flash),
             "gemini-3.1-flash-lite-preview" => Ok(Self::Gemini31FlashLitePreview),
             "gemini-3.1-pro-preview" => Ok(Self::Gemini31ProPreview),
@@ -257,6 +264,7 @@ impl AgentSelectionMetadata for AgentModel {
 
     fn description(&self) -> &'static str {
         match self {
+            Self::Antigravity => "Uses the model configured in Antigravity CLI settings.",
             Self::Gpt55 => "Newer Codex model with stronger coding performance when available.",
             Self::Gemini3FlashPreview => "Fast Gemini model for quick iterations.",
             Self::Gemini35Flash => "Fast Gemini model for current Flash workloads.",
@@ -276,11 +284,17 @@ impl AgentSelectionMetadata for AgentModel {
 
 impl AgentKind {
     /// All available agent kinds, in display order.
-    pub const ALL: &[AgentKind] = &[AgentKind::Gemini, AgentKind::Claude, AgentKind::Codex];
+    pub const ALL: &[AgentKind] = &[
+        AgentKind::Gemini,
+        AgentKind::Antigravity,
+        AgentKind::Claude,
+        AgentKind::Codex,
+    ];
 
     /// Returns the default model for this agent kind.
     pub fn default_model(self) -> AgentModel {
         match self {
+            Self::Antigravity => AgentModel::Antigravity,
             Self::Gemini => AgentModel::Gemini31ProPreview,
             Self::Claude => AgentModel::ClaudeOpus47,
             Self::Codex => AgentModel::Gpt54,
@@ -304,6 +318,7 @@ impl AgentKind {
             AgentModel::Gemini31FlashLitePreview,
             AgentModel::Gemini3FlashPreview,
         ];
+        const ANTIGRAVITY_MODELS: &[AgentModel] = &[AgentModel::Antigravity];
         const CLAUDE_MODELS: &[AgentModel] = &[
             AgentModel::ClaudeOpus47,
             AgentModel::ClaudeSonnet46,
@@ -317,6 +332,7 @@ impl AgentKind {
         ];
 
         match self {
+            Self::Antigravity => ANTIGRAVITY_MODELS,
             Self::Gemini => GEMINI_MODELS,
             Self::Claude => CLAUDE_MODELS,
             Self::Codex => CODEX_MODELS,
@@ -337,6 +353,7 @@ impl AgentKind {
 impl AgentSelectionMetadata for AgentKind {
     fn name(&self) -> &'static str {
         match self {
+            Self::Antigravity => "antigravity",
             Self::Gemini => "gemini",
             Self::Claude => "claude",
             Self::Codex => "codex",
@@ -345,6 +362,7 @@ impl AgentSelectionMetadata for AgentKind {
 
     fn description(&self) -> &'static str {
         match self {
+            Self::Antigravity => "Google Antigravity CLI agent.",
             Self::Gemini => "Google Gemini CLI agent.",
             Self::Claude => "Anthropic Claude Code agent.",
             Self::Codex => "OpenAI Codex CLI agent.",
@@ -373,6 +391,7 @@ impl FromStr for AgentKind {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
+            "antigravity" | "agy" => Ok(Self::Antigravity),
             "gemini" => Ok(Self::Gemini),
             "claude" => Ok(Self::Claude),
             "codex" => Ok(Self::Codex),
@@ -410,6 +429,19 @@ mod tests {
 
         // Assert
         assert_eq!(parsed_model, Some(AgentModel::Gpt55));
+    }
+
+    #[test]
+    /// Ensures `antigravity` parses as the Antigravity CLI model marker.
+    fn test_parse_model_parses_antigravity() {
+        // Arrange
+        let antigravity_kind = AgentKind::Antigravity;
+
+        // Act
+        let parsed_model = antigravity_kind.parse_model("antigravity");
+
+        // Assert
+        assert_eq!(parsed_model, Some(AgentModel::Antigravity));
     }
 
     #[test]
@@ -567,6 +599,20 @@ mod tests {
 
         // Assert
         assert_eq!(kinds, [AgentKind::Gemini; 4]);
+    }
+
+    #[test]
+    /// Ensures the Antigravity model marker resolves to the Antigravity
+    /// provider.
+    fn test_antigravity_model_kind_is_antigravity() {
+        // Arrange
+        let model = AgentModel::Antigravity;
+
+        // Act
+        let kind = model.kind();
+
+        // Assert
+        assert_eq!(kind, AgentKind::Antigravity);
     }
 
     #[test]

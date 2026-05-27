@@ -13,21 +13,26 @@ options.
 
 ## Supported Backends
 
-<a id="backends-supported-backends"></a> Agentty supports three agent backends. Each
+<a id="backends-supported-backends"></a> Agentty supports four agent backends. Each
 requires its respective CLI to be installed and available on your `PATH`.
 
 | Backend | CLI command | Description | |---------|-------------|-------------| | Gemini
-| `gemini` | Google Gemini CLI agent. | | Claude | `claude` | Anthropic Claude Code
-agent. | | Codex | `codex` | OpenAI Codex CLI agent. |
+| `gemini` | Google Gemini CLI agent. | | Antigravity | `agy` | Google Antigravity CLI
+agent. | | Claude | `claude` | Anthropic Claude Code agent. | | Codex | `codex` | OpenAI
+Codex CLI agent. |
 
-All three session backends accept pasted local prompt images from the Agentty composer
-(`Ctrl+V`, `Ctrl+Shift+V`, or `Alt+V` in prompt mode). Transport details differ by
-backend:
+All supported session backends accept pasted local prompt images from the Agentty
+composer (`Ctrl+V`, `Ctrl+Shift+V`, or `Alt+V` in prompt mode). Transport details differ
+by backend:
 
 - Codex app-server turns send `localImage` input items in placeholder order.
 - Gemini ACP turns send ordered `text` and `image` ACP content blocks.
 - Claude Code turns receive the prompt over stdin with `[Image #n]` placeholders
   rewritten to local image paths that Claude can inspect.
+- Antigravity CLI turns receive the prompt over stdin with `[Image #n]` placeholders
+  rewritten to local image paths. Agentty passes the session worktree and any local
+  image parent directories through `agy --add-dir` so Antigravity tools operate on the
+  expected workspace roots.
 
 Codex now always runs through `codex app-server`, including isolated utility prompts
 such as title generation, review assist, commit-message generation, auto-commit
@@ -42,10 +47,11 @@ project-instruction discovery instead of inlining repository guidance into promp
 - Codex loads `AGENTS.md`.
 - Claude Code loads `CLAUDE.md`.
 - Gemini CLI loads `GEMINI.md`.
+- Antigravity CLI loads `AGENTS.md` and `GEMINI.md` from the active workspace.
 
 This repository keeps `CLAUDE.md` and `GEMINI.md` as symlinks to the canonical root
 `AGENTS.md`, and keeps additional `AGENTS.md` files only at major module boundaries.
-This gives all three backends shared repo-wide instructions plus a small amount of
+This gives all backends shared repo-wide instructions plus a small amount of
 higher-signal local guidance without maintaining per-directory file inventories.
 
 ## Claude Authentication
@@ -152,8 +158,8 @@ session summary panel instead of being parsed back out of answer markdown.
 <a id="backends-protocol-validation-repair"></a> Agentty validates final agent output
 against the structured response protocol.
 
-- Claude, Gemini, and Codex session turns use strict parsing and fail closed when output
-  does not match the protocol schema.
+- Claude, Antigravity, Gemini, and Codex session turns use strict parsing and fail
+  closed when output does not match the protocol schema.
 - Strict parsing accepts summary-only protocol payloads because the parser now relies on
   the shared protocol wire type instead of extra top-level field checks.
 - One-shot utility prompts use the same strict final validation across both CLI and
@@ -173,14 +179,21 @@ against the structured response protocol.
 - Claude turns use native schema validation via `claude --json-schema` and
   `--output-format stream-json`, so tool/progress events can stream live while the final
   response remains schema-validated.
+- Antigravity turns use `agy --print` because the CLI does not currently expose an
+  ACP/app-server flag. Agentty streams the full prompt through stdin, runs with
+  `--sandbox`, uses `--dangerously-skip-permissions` so non-interactive worktree edits
+  can proceed, passes the session worktree through `--add-dir`, and relies on the shared
+  strict protocol parser for final validation. Before each Antigravity launch, Agentty
+  adds `.antigravitycli/` to the repository-local git exclude file so Antigravity's
+  project configuration state does not appear in session diffs.
 - Prompt-side protocol instructions rely on the raw self-descriptive `schemars` metadata
   (`title`, `description`, and related annotations), while transport `outputSchema`
   payloads are normalized separately for provider compatibility. The same prompt
   instructions also restrict any git usage during session turns to read-only commands
   such as `git diff` and `git show`, and explicitly forbid mutating operations such as
   `git commit` or `git push`.
-- Claude and Gemini stream the rendered prompt body through stdin for CLI one-shot flows
-  so large diffs and review prompts do not hit OS argv length limits.
+- Antigravity and Claude stream the rendered prompt body through stdin for CLI one-shot
+  flows so large diffs and review prompts do not hit OS argv length limits.
 - Claude turns pass `--strict-mcp-config`, so only MCP servers explicitly provided by
   Agentty are allowed (none by default).
 - Claude turns allow shell execution (`Bash`), file-modifying tools (`Edit`,
@@ -222,12 +235,16 @@ bootstrap so restored contexts can keep using the compact reminder path.
 - Gemini ACP: currently creates a fresh ACP `session/new` on runtime restart, so Agentty
   treats the new `sessionId` as a fresh context, resends the full bootstrap, and falls
   back to transcript replay when needed.
+- Antigravity CLI: runs each turn through stateless `agy --print`, so Agentty replays
+  prior session output in the prompt for follow-up turns instead of using
+  `agy --continue`, which resumes the most recent Antigravity conversation globally.
 
 ## App-Server Turn Timeout
 
 <a id="backends-app-server-turn-timeout"></a> App-server-backed turns can run for a long
 time. Agentty waits up to 4 hours for turn completion by default for both Codex
-app-server and Gemini ACP.
+app-server and Gemini ACP. Antigravity is CLI-backed and passes `--print-timeout 1h` to
+avoid the default five-minute `agy --print` limit during repository edits.
 
 ## Selecting a Backend
 
@@ -239,9 +256,9 @@ app-server and Gemini ACP.
 ```
 
 Agentty now filters that picker to the backend CLIs currently available on the machine.
-If only `codex` is installed, `/model` shows only Codex and its models. If none of
-`codex`, `claude`, or `gemini` are installed, Agentty now fails at startup with an error
-telling you to install a supported CLI on `PATH`.
+If only `agy` is installed, `/model` shows only Antigravity and its model marker. If
+none of `agy`, `codex`, `claude`, or `gemini` are installed, Agentty now fails at
+startup with an error telling you to install a supported CLI on `PATH`.
 
 <a id="backends-persistent-defaults"></a> For persistent defaults, choose a default
 model in the **Settings** tab (`Tab` to navigate, `Enter` to edit). The selected model
@@ -257,8 +274,14 @@ supported by `claude-opus-4-7`.
 
 ## Available Models
 
-<a id="backends-available-models"></a> Each backend offers multiple models with
-different trade-offs between speed, quality, and cost.
+<a id="backends-available-models"></a> Each backend exposes one or more selectable model
+entries with different trade-offs between speed, quality, and cost.
+
+### Antigravity Models
+
+- `antigravity` (default): Uses whichever model is selected in Antigravity CLI settings.
+  Agentty exposes one model marker because `agy --help` does not currently expose a
+  model-selection flag.
 
 ### Gemini Models
 

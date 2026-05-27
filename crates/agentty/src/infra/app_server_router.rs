@@ -63,6 +63,9 @@ impl AppServerClient for RoutingAppServerClient {
             match provider_kind {
                 AgentKind::Codex => codex_client.run_turn(request, stream_tx).await,
                 AgentKind::Gemini => gemini_client.run_turn(request, stream_tx).await,
+                AgentKind::Antigravity => Err(AppServerError::Provider(
+                    "Antigravity does not support app-server session execution".to_string(),
+                )),
                 AgentKind::Claude => Err(AppServerError::Provider(
                     "Claude does not support app-server session execution".to_string(),
                 )),
