@@ -6,19 +6,16 @@ on:
       plan:
         required: true
         type: string
-    secrets:
-      CARGO_REGISTRY_TOKEN:
-        required: false
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     env:
       PLAN: ${{ inputs.plan }}
-      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -28,11 +25,15 @@ jobs:
         with:
           toolchain: nightly
 
+      - name: Authenticate with crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@bbd81622f20ce9e2dd9622e3218b975523e45bbe # v1.0.4
+
       - name: Publish `ag-forge` to crates.io
-        run: cargo publish -p ag-forge
+        run: cargo publish -p ag-forge --token "${{ steps.auth.outputs.token }}"
 
       - name: Publish `testty` to crates.io
-        run: cargo publish -p testty
+        run: cargo publish -p testty --token "${{ steps.auth.outputs.token }}"
 
       - name: Publish `agentty` to crates.io
-        run: cargo publish -p agentty
+        run: cargo publish -p agentty --token "${{ steps.auth.outputs.token }}"
