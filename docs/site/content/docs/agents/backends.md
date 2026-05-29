@@ -29,10 +29,10 @@ by backend:
 - Gemini ACP turns send ordered `text` and `image` ACP content blocks.
 - Claude Code turns receive the prompt over stdin with `[Image #n]` placeholders
   rewritten to local image paths that Claude can inspect.
-- Antigravity CLI turns receive the prompt as the `agy --print` value with `[Image #n]`
-  placeholders rewritten to local image paths. Agentty passes the session worktree and
-  any local image parent directories through `agy --add-dir` so Antigravity tools
-  operate on the expected workspace roots.
+- Antigravity CLI turns receive the prompt over stdin with `[Image #n]` placeholders
+  rewritten to local image paths. Agentty passes the session worktree and any local
+  image parent directories through `agy --add-dir` so Antigravity tools operate on the
+  expected workspace roots.
 
 Codex now always runs through `codex app-server`, including isolated utility prompts
 such as title generation, review assist, commit-message generation, auto-commit
@@ -180,22 +180,20 @@ against the structured response protocol.
   `--output-format stream-json`, so tool/progress events can stream live while the final
   response remains schema-validated.
 - Antigravity turns use `agy --print` because the CLI does not currently expose an
-  ACP/app-server flag. Agentty passes the full rendered prompt as the `--print` value,
-  runs with `--sandbox`, uses `--dangerously-skip-permissions` so non-interactive
-  worktree edits can proceed, passes the session worktree through `--add-dir`, and
-  relies on the shared strict protocol parser for final validation. Before each
-  Antigravity launch, Agentty adds `.antigravitycli/` to the repository-local git
-  exclude file so Antigravity's project configuration state does not appear in session
-  diffs.
+  ACP/app-server flag. Agentty streams the full prompt through stdin, runs with
+  `--sandbox`, uses `--dangerously-skip-permissions` so non-interactive worktree edits
+  can proceed, passes the session worktree through `--add-dir`, and relies on the shared
+  strict protocol parser for final validation. Before each Antigravity launch, Agentty
+  adds `.antigravitycli/` to the repository-local git exclude file so Antigravity's
+  project configuration state does not appear in session diffs.
 - Prompt-side protocol instructions rely on the raw self-descriptive `schemars` metadata
   (`title`, `description`, and related annotations), while transport `outputSchema`
   payloads are normalized separately for provider compatibility. The same prompt
   instructions also restrict any git usage during session turns to read-only commands
   such as `git diff` and `git show`, and explicitly forbid mutating operations such as
   `git commit` or `git push`.
-- Claude streams the rendered prompt body through stdin for CLI one-shot flows so large
-  diffs and review prompts do not hit OS argv length limits. Antigravity receives the
-  rendered prompt as the `--print` value because the CLI requires that flag argument.
+- Antigravity and Claude stream the rendered prompt body through stdin for CLI one-shot
+  flows so large diffs and review prompts do not hit OS argv length limits.
 - Claude turns pass `--strict-mcp-config`, so only MCP servers explicitly provided by
   Agentty are allowed (none by default).
 - Claude turns allow shell execution (`Bash`), file-modifying tools (`Edit`,
@@ -245,8 +243,8 @@ bootstrap so restored contexts can keep using the compact reminder path.
 
 <a id="backends-app-server-turn-timeout"></a> App-server-backed turns can run for a long
 time. Agentty waits up to 4 hours for turn completion by default for both Codex
-app-server and Gemini ACP. Antigravity is CLI-backed and passes `--print-timeout 1h`
-before `--print` so the timeout flag is parsed as an option instead of prompt text.
+app-server and Gemini ACP. Antigravity is CLI-backed and passes `--print` before
+`--print-timeout 1h` while the prompt body streams through stdin.
 
 ## Selecting a Backend
 

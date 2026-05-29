@@ -50,7 +50,7 @@ pub fn transport_mode(kind: AgentKind) -> AgentTransport {
     provider_descriptor(kind).transport
 }
 
-/// Returns how the provider expects per-turn prompts to be delivered.
+/// Returns whether the provider expects prompts through stdin.
 pub(crate) fn prompt_transport(kind: AgentKind) -> AgentPromptTransport {
     provider_descriptor(kind).prompt_transport
 }
@@ -111,8 +111,11 @@ pub(crate) fn build_command_stdin_payload(
     match prompt_transport(kind) {
         AgentPromptTransport::Argv => Ok(None),
         AgentPromptTransport::Stdin => match kind {
+            AgentKind::Antigravity => {
+                super::antigravity::build_prompt_stdin_payload(request).map(Some)
+            }
             AgentKind::Claude => super::claude::build_prompt_stdin_payload(request).map(Some),
-            AgentKind::Antigravity | AgentKind::Codex | AgentKind::Gemini => Ok(None),
+            AgentKind::Codex | AgentKind::Gemini => Ok(None),
         },
     }
 }
@@ -147,7 +150,7 @@ fn provider_descriptor(kind: AgentKind) -> AgentProviderDescriptor {
             backend_factory: || Box::new(super::antigravity::AntigravityBackend),
             parse_response: super::response_parser::parse_antigravity_response_with_fallback,
             parse_stream_output_line: super::response_parser::parse_antigravity_stream_output_line,
-            prompt_transport: AgentPromptTransport::Argv,
+            prompt_transport: AgentPromptTransport::Stdin,
             transport: AgentTransport::Cli,
         },
         AgentKind::Gemini => AgentProviderDescriptor {
@@ -247,7 +250,7 @@ mod tests {
         let gemini_transport = prompt_transport(gemini_kind);
 
         // Assert
-        assert_eq!(antigravity_transport, AgentPromptTransport::Argv);
+        assert_eq!(antigravity_transport, AgentPromptTransport::Stdin);
         assert_eq!(claude_transport, AgentPromptTransport::Stdin);
         assert_eq!(codex_transport, AgentPromptTransport::Argv);
         assert_eq!(gemini_transport, AgentPromptTransport::Argv);
