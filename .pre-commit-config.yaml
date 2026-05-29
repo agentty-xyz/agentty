@@ -148,6 +148,14 @@ repos:
         types: [rust]
         pass_filenames: false
         stages: [manual]
+      - id: cargo-audit
+        name: cargo audit
+        description: Audit `Cargo.lock` against the RustSec advisory database.
+        entry: cargo audit
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [manual]
       - id: zola-check
         name: zola check
         description: Verify the Zola docs site builds without broken links.

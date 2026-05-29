@@ -2,6 +2,10 @@ name: Setup Rust Prek Workspace
 description: Install the shared Rust and `prek` CI tooling after checkout.
 
 inputs:
+  cargo-audit:
+    description: Install `cargo-audit` for dependency advisory checks.
+    required: false
+    default: "false"
   cargo-llvm-cov:
     description: Install `cargo-llvm-cov` for coverage-producing jobs.
     required: false
@@ -44,6 +48,12 @@ runs:
       uses: taiki-e/install-action@787505cde8a44ea468a00478fe52baf23b15bccd # v2.75.21
       with:
         tool: cargo-llvm-cov
+
+    - name: Install `cargo-audit`
+      if: ${{ inputs.cargo-audit == 'true' }}
+      uses: taiki-e/install-action@787505cde8a44ea468a00478fe52baf23b15bccd # v2.75.21
+      with:
+        tool: cargo-audit
 
     - name: Install `cargo-nextest`
       uses: taiki-e/install-action@787505cde8a44ea468a00478fe52baf23b15bccd # v2.75.21

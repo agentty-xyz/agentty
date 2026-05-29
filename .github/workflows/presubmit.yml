@@ -19,9 +19,14 @@ jobs:
 
       - name: Setup Rust and `prek`
         uses: ./.github/actions/setup-rust-prek
+        with:
+          cargo-audit: "true"
 
       - name: Default validation hooks
         run: uv tool run prek run --all-files
+
+      - name: Dependency advisory audit
+        run: uv tool run prek run cargo-audit --all-files --hook-stage manual
 
       - name: Full test suite
         run: uv tool run prek run test-workspace --all-files --hook-stage manual
