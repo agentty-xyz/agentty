@@ -7,6 +7,9 @@ members = ["cargo:crates/agentty"]
 cargo-dist-version = "0.31.0"
 # CI backends to support
 ci = "github"
+# Keep release CI marked as intentionally customized because the checked-in
+# workflow avoids blanket secret forwarding on custom jobs that do not need it.
+allow-dirty = ["ci"]
 # The installers to generate for each app
 installers = ["shell", "npm"]
 # Target platforms to build apps for (Rust target-triple syntax)
