@@ -27,8 +27,11 @@ runs:
 
     - name: Install `prek`
       shell: bash
-      # Pin `prek` and require wheels so CI does not run package build hooks.
-      run: uv tool install --no-build prek==0.4.3
+      # Pin `prek`, require wheels so CI does not run package build hooks, and
+      # expose the installed executable to the workflow steps that run hooks.
+      run: |
+        uv tool install --no-build prek==0.4.3
+        echo "$(uv tool dir --bin)" >> "$GITHUB_PATH"
 
     - name: Install Rust nightly toolchain
       if: ${{ inputs['llvm-tools-preview'] != 'true' }}
