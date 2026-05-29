@@ -4,7 +4,7 @@ A `Scenario` is an ordered sequence of `Step`s describing a user journey. Build 
 fluently, then run it in a PTY.
 
 ```rust
-use testty::prelude::*;
+use testty::scenario::Scenario;
 
 let scenario = Scenario::new("tab_switch")
     .wait_for_stable_frame(500, 5_000)
@@ -37,7 +37,10 @@ frame and surfaces the last `AssertionFailure` on timeout:
 
 ```rust
 use std::time::Duration;
-use testty::prelude::*;
+
+use testty::assertion;
+use testty::region::Region;
+use testty::scenario::Scenario;
 
 let scenario = Scenario::new("counter")
     .write_text("+++")
@@ -54,7 +57,7 @@ let scenario = Scenario::new("counter")
 `PtySession` spawns the binary in a real PTY via `portable-pty`.
 
 ```rust
-use testty::prelude::*;
+use testty::session::PtySessionBuilder;
 
 let builder = PtySessionBuilder::new("/path/to/binary")
     .size(120, 40)

@@ -4,7 +4,8 @@
 repeating low-level steps.
 
 ```rust
-use testty::prelude::*;
+use testty::journey::Journey;
+use testty::scenario::Scenario;
 
 let startup  = Journey::wait_for_startup_default();
 let navigate = Journey::navigate_with_key("Tab", "Settings", 3_000);
@@ -38,6 +39,8 @@ let scenario = Scenario::new("settings_search")
   else.
 
 ```rust
+use testty::journey::{Journey, StartupWait};
+
 Journey::wait_for_startup_preset(StartupWait::FastNative);
 Journey::wait_for_startup_preset(StartupWait::Custom {
     stable_ms: 250,

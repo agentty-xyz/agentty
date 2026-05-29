@@ -11,7 +11,8 @@ tempfile = "3"
 ## First test
 
 ```rust
-use testty::prelude::*;
+use testty::scenario::Scenario;
+use testty::session::PtySessionBuilder;
 
 #[test]
 fn startup_shows_welcome() {

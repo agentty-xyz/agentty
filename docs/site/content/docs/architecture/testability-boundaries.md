@@ -157,5 +157,9 @@ workflow: visual PNG + semantic frame sidecar with environment-driven update mod
 `proof` | Proof pipeline: report collection plus pluggable backends (`frame_text`,
 feature-gated `gif`, `html`, `strip`). | | `journey` | Composable journey building
 blocks for declarative test authoring. | | `feature` | `FeatureDemo` builder for
-scenario execution with hash-cached VHS GIF generation. | | `prelude` | Curated
-`use testty::prelude::*;` re-export set covering the common workflow. |
+scenario execution with hash-cached VHS GIF generation. |
+
+testty has no crate-root re-export module: every public item is addressable only through
+its owning module path (for example, `use testty::scenario::Scenario;` and
+`use testty::session::PtySessionBuilder;`). The `tests/public_api.rs` tripwire pins
+those per-module items as the documented stable surface.

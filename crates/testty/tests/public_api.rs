@@ -1,7 +1,7 @@
-//! Public-API compatibility tripwire for the `testty::prelude` surface.
+//! Public-API compatibility tripwire for testty's documented stable surface.
 //!
 //! This test exists so that any accidental rename, removal, or signature
-//! break of a curated stable item fails the build before publication.
+//! break of a documented stable item fails the build before publication.
 //! Update it deliberately whenever an intentional breaking change is made
 //! to the published surface, and bump the testty major version in lockstep.
 //!
@@ -22,12 +22,24 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use testty::feature::{self, compute_frame_hash, hash_sidecar_path};
-use testty::prelude::*;
+use testty::assertion::{self, AssertionFailure, Expected, MatchResult, SoftAssertions};
+use testty::feature::{
+    self, FeatureDemo, FeatureMeta, FeatureResult, GifMode, GifStatus, compute_frame_hash,
+    hash_sidecar_path,
+};
+use testty::frame::{CellColor, CellStyle, TerminalFrame};
+use testty::journey::{Journey, StartupWait};
+use testty::locator::MatchedSpan;
+use testty::proof::backend::ProofBackend;
+use testty::proof::report::{AssertionResult, ProofCapture, ProofError, ProofReport};
+use testty::region::Region;
+use testty::scenario::Scenario;
+use testty::session::{PtySession, PtySessionBuilder, PtySessionError};
 use testty::snapshot::{SnapshotConfig, SnapshotError};
+use testty::step::{FramePredicate, Step};
 
-/// Minimal `ProofBackend` impl used to exercise the trait through the
-/// prelude alias without instantiating a real backend.
+/// Minimal `ProofBackend` impl used to exercise the trait through its
+/// owning module path without instantiating a real backend.
 struct NoopBackend;
 
 impl ProofBackend for NoopBackend {
@@ -38,12 +50,12 @@ impl ProofBackend for NoopBackend {
 
 fn accept_backend<B: ProofBackend>(_backend: &B) {}
 
-/// Reference every prelude type so the build breaks if a name is removed
-/// or renamed in a backwards-incompatible way.
+/// Reference every documented stable type so the build breaks if a name
+/// is removed or renamed in a backwards-incompatible way.
 #[test]
-fn prelude_surface_is_stable() {
-    // Arrange, Act, Assert: compile-time references exercise the curated prelude
-    // API.
+fn public_surface_is_stable() {
+    // Arrange, Act, Assert: compile-time references exercise the documented
+    // per-module public API.
     let _: Region = Region::new(0, 0, 1, 1);
     let _: CellColor = CellColor::new(0, 0, 0);
     let _: CellStyle = CellStyle::default();
@@ -122,7 +134,7 @@ fn prelude_surface_is_stable() {
     // closure with the documented signature. Pinning the call shape here
     // breaks the build before publication if the constructor signature
     // drifts. The bound predicate can also be referenced through the
-    // `FramePredicate` alias re-exported from the prelude.
+    // `FramePredicate` alias exported from `testty::step`.
     let _ = Step::eventually(
         Duration::from_secs(1),
         Duration::from_millis(50),
@@ -131,8 +143,8 @@ fn prelude_surface_is_stable() {
     let _: FramePredicate = Arc::new(|_frame: &TerminalFrame| Ok(()));
 }
 
-/// Reference always-available stable items that live outside the prelude
-/// but are documented as part of the public contract.
+/// Reference always-available stable items that sit alongside the core
+/// public surface and are documented as part of the public contract.
 #[test]
 fn auxiliary_surface_is_stable() {
     // Arrange, Act, Assert: compile-time references exercise documented auxiliary
@@ -244,9 +256,9 @@ fn step_eventually_destructuring_is_stable(step: &Step) -> &'static str {
     }
 }
 
-/// Lock in struct-literal construction for prelude types whose public
-/// field names are part of the stable contract. Renaming or removing any
-/// of these fields will fail this test before publication.
+/// Lock in struct-literal construction for public types whose field names
+/// are part of the stable contract. Renaming or removing any of these
+/// fields will fail this test before publication.
 #[test]
 fn public_struct_literals_are_stable() {
     // Arrange: construct public structs through their stable field names.

@@ -40,7 +40,8 @@ tempfile = "3"
 #### Write a test
 
 ```rust
-use testty::prelude::*;
+use testty::scenario::Scenario;
+use testty::session::PtySessionBuilder;
 
 #[test]
 fn tab_switches_view() {
@@ -70,7 +71,10 @@ cargo test -p my-app --test e2e
 
 ```rust
 use std::time::Duration;
-use testty::prelude::*;
+
+use testty::assertion;
+use testty::region::Region;
+use testty::scenario::Scenario;
 
 let scenario = Scenario::new("counter")
     .write_text("+++")
@@ -96,7 +100,7 @@ snapshot::assert_frame_snapshot_matches(&config, "startup", &frame.all_text())
 
 ```rust
 use std::path::Path;
-use testty::prelude::*;
+
 use testty::proof::html::HtmlBackend;
 
 let (_frame, report) = scenario.run_with_proof(builder).expect("failed");

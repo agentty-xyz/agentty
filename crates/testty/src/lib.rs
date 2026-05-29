@@ -4,10 +4,13 @@
 //! with `vt100`, generates VHS tapes for visual screenshots, and provides
 //! an assertion API for text, style, color, and region checks.
 //!
-//! Most users only need the curated [`prelude`]:
+//! Public items are addressable only through their owning module — there is
+//! no crate-root re-export set. Import the specific items each test needs,
+//! for example:
 //!
 //! ```no_run
-//! use testty::prelude::*;
+//! use testty::scenario::Scenario;
+//! use testty::session::PtySessionBuilder;
 //! ```
 
 pub mod assertion;
@@ -16,7 +19,6 @@ pub mod feature;
 pub mod frame;
 pub mod journey;
 pub mod locator;
-pub mod prelude;
 pub mod proof;
 pub mod recipe;
 pub mod region;

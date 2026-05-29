@@ -5,11 +5,13 @@ backends.
 
 ```rust
 use std::path::Path;
-use testty::prelude::*;
+
 use testty::proof::frame_text::FrameTextBackend;
-use testty::proof::strip::ScreenshotStripBackend;
 use testty::proof::gif::GifBackend;
 use testty::proof::html::HtmlBackend;
+use testty::proof::strip::ScreenshotStripBackend;
+use testty::scenario::Scenario;
+use testty::session::PtySessionBuilder;
 
 let scenario = Scenario::new("startup_proof")
     .wait_for_stable_frame(300, 5_000)

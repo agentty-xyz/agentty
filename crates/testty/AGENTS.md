@@ -8,7 +8,6 @@ expect a stable curated API surface.
 ## Entry Points
 
 - `src/lib.rs` is the public crate root and lists the user-facing modules.
-- `src/prelude.rs` is the curated `use testty::prelude::*;` re-export set.
 - `src/session.rs` owns PTY execution and runtime driving.
 - `src/scenario.rs`, `src/step.rs`, and `src/assertion.rs` own the user-facing test API.
 - `src/journey.rs` provides composable journey building blocks for declarative test
@@ -26,14 +25,16 @@ expect a stable curated API surface.
 - Anything new that is purely plumbing for backends (cell→pixel geometry, glyph
   blitting, etc.) belongs inside `pub(crate) mod`s — do not re-add external `pub mod`
   exports for internal helpers.
-- Whenever a new user-facing type is added, re-export it from `prelude.rs` so the
-  canonical first import remains complete.
-- `tests/public_api.rs` is the compile-time tripwire that locks down the `prelude` items
-  plus the documented auxiliary stable items (`testty::recipe`,
-  `testty::snapshot::DEFAULT_UPDATE_ENV_VAR`, `SnapshotConfig::with_update_env_var`,
-  `SnapshotConfig::with_update_mode`, `SnapshotConfig::is_update_mode`). Update it
-  deliberately whenever the published surface changes and bump the testty major version
-  in lockstep with the upgrade note in the testty `README.md`.
+- Public items are addressable only via their owning module — do not add crate-root
+  re-exports. New user-facing types should live in (or be re-exported from) the module
+  that owns their domain, and downstream code must import them through that module path.
+- `tests/public_api.rs` is the compile-time tripwire for the documented stable surface.
+  It pins the per-module public items plus the documented auxiliary stable items
+  (`testty::recipe`, `testty::snapshot::DEFAULT_UPDATE_ENV_VAR`,
+  `SnapshotConfig::with_update_env_var`, `SnapshotConfig::with_update_mode`,
+  `SnapshotConfig::is_update_mode`). Update it deliberately whenever the published
+  surface changes and bump the testty major version in lockstep with the upgrade note in
+  the testty `README.md`.
 
 ## Layered Assertion API
 

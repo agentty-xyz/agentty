@@ -66,6 +66,11 @@ This release supersedes `v0.9.4`, whose release workflow did not complete succes
 ### Removed
 
 - agentty: remove the roadmap-backed `Tasks` tab.
+- testty: remove the `testty::prelude` wildcard re-export module. Public items are now
+  reached only through their owning module paths (for example,
+  `use testty::scenario::Scenario;`); see
+  [`crates/testty/docs/upgrading.md`](crates/testty/docs/upgrading.md) for the migration
+  note.
 
 ### Contributors
 
