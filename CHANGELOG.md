@@ -7,9 +7,36 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.9.4] - 2026-05-28
+
+### Added
+
+- agentty: add Antigravity CLI backend support.
+- Add SonarCloud, SonarQube, cargo-audit, Dependabot GitHub Actions update checks, and
+  rust-toolchain update checks to repository automation.
+
+### Changed
+
+- agentty: adopt Claude Opus 4.8 as the active Opus model.
+- agentty: deliver Antigravity prompts with `--print`, fix print-timeout flag ordering,
+  defer cancellation cleanup, support turn interruption, and sync linked review-request
+  metadata after auto-push.
+- agentty: disallow commit creation guidance in session-turn protocol responses.
+- Migrate release and crates.io workflows to scoped OIDC credentials and add reusable
+  GitHub Actions OIDC publishing workflow support for npm release jobs.
+- Pin shared CI `prek` installs and hook calls to explicit `prek` v0.4.3 no-build mode,
+  normalize hyphenated GitHub Action inputs, and keep the security scan workflow on
+  read-only contents permissions.
+- Bump workspace crate metadata and lockfile package versions to `0.9.4`.
+
 ### Removed
 
 - agentty: remove the roadmap-backed `Tasks` tab.
+
+### Contributors
+
+- @dependabot
+- @minev-dev
 
 ## [v0.9.3] - 2026-05-20
 
