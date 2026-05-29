@@ -24,3 +24,15 @@ updates:
         update-types:
           - "patch"
           - "minor"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    assignees:
+      - "minev-dev"
+      - "andagaev"
+    groups:
+      github-actions:
+        applies-to: version-updates
+        patterns:
+          - "*"
