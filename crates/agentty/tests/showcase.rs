@@ -180,7 +180,7 @@ async fn seed_database(agentty_root: &Path, workdir: &Path) -> ShowcaseResult {
     let sessions = [
         (
             "a1b2c3d4-0001",
-            "claude-opus-4-7",
+            "claude-opus-4-8",
             "Review",
             "Fix auth token refresh on session expiry",
             "M",
@@ -201,7 +201,7 @@ async fn seed_database(agentty_root: &Path, workdir: &Path) -> ShowcaseResult {
         ),
         (
             "a1b2c3d4-0004",
-            "claude-opus-4-7",
+            "claude-opus-4-8",
             "Question",
             "Refactor API error handling",
             "M",
@@ -222,7 +222,7 @@ async fn seed_database(agentty_root: &Path, workdir: &Path) -> ShowcaseResult {
         ),
         (
             "a1b2c3d4-0007",
-            "claude-opus-4-7",
+            "claude-opus-4-8",
             "Queued",
             "Migrate config to TOML format",
             "L",

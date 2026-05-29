@@ -1716,7 +1716,7 @@ mod tests {
                 &session_id,
                 prompt,
                 Arc::new(start_backend),
-                AgentModel::ClaudeOpus47,
+                AgentModel::ClaudeOpus48,
             )
             .await;
     }
@@ -3077,7 +3077,7 @@ mod tests {
         // Assert
         assert_eq!(app.sessions.sessions().len(), 1);
         assert_eq!(app.sessions.sessions()[0].id, "12345678");
-        assert_eq!(app.sessions.sessions()[0].model, AgentModel::ClaudeOpus47);
+        assert_eq!(app.sessions.sessions()[0].model, AgentModel::ClaudeOpus48);
         assert_eq!(app.sessions.sessions()[0].prompt, "Existing");
         let output = app.sessions.sessions()[0].output.clone();
         assert_eq!(output, "Output");
@@ -3165,7 +3165,7 @@ mod tests {
             .await
             .expect("failed to upsert project");
         db.sessions()
-            .insert_session("alpha000", "claude-opus-4-7", "main", "Done", project_id)
+            .insert_session("alpha000", "claude-opus-4-8", "main", "Done", project_id)
             .await
             .expect("failed to insert alpha000");
         db.sessions()
@@ -3224,15 +3224,15 @@ mod tests {
             .await
             .expect("failed to upsert project");
         db.sessions()
-            .insert_session("alpha000", "claude-opus-4-7", "main", "Done", project_id)
+            .insert_session("alpha000", "claude-opus-4-8", "main", "Done", project_id)
             .await
             .expect("failed to insert alpha000");
         db.sessions()
-            .insert_session("beta0000", "claude-opus-4-7", "main", "Done", project_id)
+            .insert_session("beta0000", "claude-opus-4-8", "main", "Done", project_id)
             .await
             .expect("failed to insert beta0000");
         db.sessions()
-            .insert_session("gamma000", "claude-opus-4-7", "main", "Done", project_id)
+            .insert_session("gamma000", "claude-opus-4-8", "main", "Done", project_id)
             .await
             .expect("failed to insert gamma000");
         let seconds_per_day = 86_400_i64;
@@ -3308,11 +3308,11 @@ mod tests {
             .await
             .expect("failed to upsert project");
         db.sessions()
-            .insert_session("alpha000", "claude-opus-4-7", "main", "Done", project_id)
+            .insert_session("alpha000", "claude-opus-4-8", "main", "Done", project_id)
             .await
             .expect("failed to insert alpha000");
         db.sessions()
-            .insert_session("beta0000", "claude-opus-4-7", "main", "Done", project_id)
+            .insert_session("beta0000", "claude-opus-4-8", "main", "Done", project_id)
             .await
             .expect("failed to insert beta0000");
         db.activity()
@@ -3373,7 +3373,7 @@ mod tests {
             .await
             .expect("failed to insert alpha000");
         db.sessions()
-            .insert_session("beta0000", "claude-opus-4-7", "main", "Done", project_id)
+            .insert_session("beta0000", "claude-opus-4-8", "main", "Done", project_id)
             .await
             .expect("failed to insert beta0000");
         db.sessions()
@@ -3437,7 +3437,7 @@ mod tests {
             .await
             .expect("failed to insert alpha000");
         db.sessions()
-            .insert_session("beta0000", "claude-opus-4-7", "main", "Done", project_id)
+            .insert_session("beta0000", "claude-opus-4-8", "main", "Done", project_id)
             .await
             .expect("failed to insert beta0000");
         db.sessions()
@@ -3658,7 +3658,7 @@ mod tests {
                 &session_id,
                 "compute size after turn",
                 Arc::new(backend),
-                AgentModel::ClaudeOpus47,
+                AgentModel::ClaudeOpus48,
             )
             .await;
         wait_for_status(&mut app, &session_id, Status::AgentReview).await;
@@ -4326,7 +4326,7 @@ mod tests {
                 &session_id,
                 "NoChanges",
                 Arc::new(mock),
-                AgentModel::ClaudeOpus47,
+                AgentModel::ClaudeOpus48,
             )
             .await;
 

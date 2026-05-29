@@ -1202,7 +1202,7 @@ mod tests {
             Status::InProgress,
             Some(COMMITTING_PROGRESS_LABEL),
             None,
-            AgentModel::ClaudeOpus47,
+            AgentModel::ClaudeOpus48,
         )
         .expect("in-progress sessions should render a status line");
 
@@ -1242,14 +1242,14 @@ mod tests {
 
         // Act
         let status_line =
-            session_output_status_line(Status::AgentReview, None, None, AgentModel::ClaudeOpus47)
+            session_output_status_line(Status::AgentReview, None, None, AgentModel::ClaudeOpus48)
                 .expect("agent-review sessions should render a status line");
 
         // Assert
         assert!(
             status_line
                 .to_string()
-                .contains("Reviewing changes with claude-opus-4-7")
+                .contains("Reviewing changes with claude-opus-4-8")
         );
     }
 

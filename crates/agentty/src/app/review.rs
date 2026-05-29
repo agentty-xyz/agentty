@@ -561,7 +561,7 @@ mod tests {
     #[test]
     fn is_review_loading_status_message_matches_model_aware_copy() {
         // Arrange
-        let status_message = review_loading_message(AgentModel::ClaudeOpus47);
+        let status_message = review_loading_message(AgentModel::ClaudeOpus48);
 
         // Act
         let is_loading = is_review_loading_status_message(&status_message);

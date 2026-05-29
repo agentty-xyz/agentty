@@ -186,6 +186,7 @@ fn attachment_path_for_prompt(
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsStr;
     use std::path::PathBuf;
 
     use tempfile::tempdir;
@@ -240,6 +241,37 @@ mod tests {
         assert!(debug_command.contains("stream-json"));
         assert!(!debug_command.contains("--permission-mode"));
         assert!(!args.iter().any(String::is_empty));
+    }
+
+    #[test]
+    /// Verifies Claude commands pass the selected Opus 4.8 model through the
+    /// Claude Code model environment variable.
+    fn test_claude_command_sets_anthropic_model_to_claude_opus_48() {
+        // Arrange
+        let temp_directory = tempdir().expect("failed to create temp dir");
+        let backend = ClaudeBackend;
+
+        // Act
+        let command = AgentBackend::build_command(
+            &backend,
+            BuildCommandRequest {
+                attachments: &[],
+                folder: temp_directory.path(),
+                prompt: "Use Opus",
+                request_kind: &session_start_request_kind(),
+                model: "claude-opus-4-8",
+                reasoning_level: ReasoningLevel::default(),
+            },
+        )
+        .expect("command should build");
+        let anthropic_model = command
+            .get_envs()
+            .find(|(key, _value)| *key == OsStr::new("ANTHROPIC_MODEL"))
+            .and_then(|(_key, value)| value)
+            .map(|value| value.to_string_lossy().into_owned());
+
+        // Assert
+        assert_eq!(anthropic_model, Some("claude-opus-4-8".to_string()));
     }
 
     #[test]

@@ -1166,7 +1166,7 @@ mod tests {
         .await;
 
         // Assert
-        assert_eq!(fallback_fast_model, AgentModel::ClaudeOpus47);
+        assert_eq!(fallback_fast_model, AgentModel::ClaudeOpus48);
 
         // Arrange
         services
@@ -1263,7 +1263,7 @@ mod tests {
         // Assert
         assert_eq!(manager.default_smart_model, AgentModel::Gpt54);
         assert_eq!(manager.default_fast_model, AgentModel::Gpt53CodexSpark);
-        assert_eq!(manager.default_review_model, AgentModel::ClaudeOpus47);
+        assert_eq!(manager.default_review_model, AgentModel::ClaudeOpus48);
         assert_eq!(manager.open_command, "nvim .");
         assert_eq!(manager.reasoning_level, ReasoningLevel::Low);
         assert_eq!(manager.theme, ColorTheme::Hacker);
@@ -1558,13 +1558,13 @@ mod tests {
     fn settings_rows_show_default_review_model_value() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.default_review_model = AgentModel::ClaudeOpus47;
+        manager.default_review_model = AgentModel::ClaudeOpus48;
 
         // Act
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[4].1, AgentModel::ClaudeOpus47.as_str());
+        assert_eq!(rows[4].1, AgentModel::ClaudeOpus48.as_str());
     }
 
     #[test]

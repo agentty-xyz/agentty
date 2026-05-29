@@ -1212,7 +1212,7 @@ WHERE model = ?
             .settings()
             .upsert_setting(
                 SettingName::DefaultReviewModel,
-                AgentModel::ClaudeOpus47.as_str(),
+                AgentModel::ClaudeOpus48.as_str(),
             )
             .await
             .expect("failed to persist default review model");
@@ -1245,7 +1245,7 @@ WHERE model = ?
         );
         assert_eq!(
             default_review_model,
-            Some(AgentModel::ClaudeOpus47.as_str().to_string())
+            Some(AgentModel::ClaudeOpus48.as_str().to_string())
         );
     }
 

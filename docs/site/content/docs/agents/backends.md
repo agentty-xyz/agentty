@@ -270,7 +270,7 @@ instead of leaving the selector on a hidden choice.
 tab also exposes `Default Reasoning Level` (`low`, `medium`, `high`, `xhigh`). The
 selected level is persisted per project and is sent with turns unless a session-specific
 override is active. For Claude, `xhigh` maps to `--effort max`, which is currently only
-supported by `claude-opus-4-7`.
+supported by `claude-opus-4-8`.
 
 ## Available Models
 
@@ -293,12 +293,12 @@ entries with different trade-offs between speed, quality, and cost.
 
 ### Claude Models
 
-- `claude-opus-4-7` (default): Latest Claude Opus model for complex tasks.
+- `claude-opus-4-8` (default): Latest Claude Opus model for complex tasks.
 - `claude-sonnet-4-6`: Balanced Claude model for quality and latency.
 - `claude-haiku-4-5-20251001`: Fast Claude model for lighter tasks.
 
-Stored project defaults or session rows that still reference `claude-opus-4-6` are
-upgraded to `claude-opus-4-7` when Agentty loads them.
+Stored project defaults or session rows that still reference `claude-opus-4-6` or
+`claude-opus-4-7` are upgraded to `claude-opus-4-8` when Agentty loads them.
 
 ### Codex Models
 

@@ -1712,7 +1712,7 @@ mod tests {
     #[test]
     fn test_is_review_loading_status_message_matches_model_aware_message() {
         // Arrange
-        let status_message = review_loading_message(AgentModel::ClaudeOpus47);
+        let status_message = review_loading_message(AgentModel::ClaudeOpus48);
 
         // Act
         let is_loading = is_review_loading_status_message(&status_message);
@@ -1737,13 +1737,13 @@ mod tests {
     async fn test_review_assist_model_returns_default_review_model_setting() {
         // Arrange
         let (mut app, _base_dir, _session_id) = new_test_app_with_session().await;
-        app.settings.default_review_model = AgentModel::ClaudeOpus47;
+        app.settings.default_review_model = AgentModel::ClaudeOpus48;
 
         // Act
         let review_model = review_assist_model(&app);
 
         // Assert
-        assert_eq!(review_model, AgentModel::ClaudeOpus47);
+        assert_eq!(review_model, AgentModel::ClaudeOpus48);
     }
 
     #[tokio::test]
@@ -1809,7 +1809,7 @@ mod tests {
     async fn test_open_review_output_mode_starts_loading_when_diff_exists() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-        app.settings.default_review_model = AgentModel::ClaudeOpus47;
+        app.settings.default_review_model = AgentModel::ClaudeOpus48;
         app.sessions.sessions_mut()[0].status = Status::Review;
         let session_folder = app.sessions.sessions()[0].folder.clone();
         std::fs::write(session_folder.join("README.md"), "review test content\n")
@@ -1836,7 +1836,7 @@ mod tests {
         // Assert
         assert_eq!(
             next_review_status_message,
-            Some(review_loading_message(AgentModel::ClaudeOpus47))
+            Some(review_loading_message(AgentModel::ClaudeOpus48))
         );
         assert_eq!(next_review_text, None);
         assert_eq!(app.sessions.sessions()[0].status, Status::AgentReview);
@@ -2415,7 +2415,7 @@ mod tests {
     async fn test_open_review_output_mode_shows_loading_for_cache_loading_entry() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-        app.settings.default_review_model = AgentModel::ClaudeOpus47;
+        app.settings.default_review_model = AgentModel::ClaudeOpus48;
         app.review_cache.insert(
             session_id.clone().into(),
             ReviewCacheEntry::Loading { diff_hash: 456 },
@@ -2442,7 +2442,7 @@ mod tests {
         // Assert
         assert_eq!(
             next_review_status_message,
-            Some(review_loading_message(AgentModel::ClaudeOpus47))
+            Some(review_loading_message(AgentModel::ClaudeOpus48))
         );
         assert_eq!(next_review_text, None);
     }

@@ -10,7 +10,7 @@ use crate::common::{BuilderEnv, FeatureTest};
 /// Seeds deterministic selector values for the settings navigation test.
 ///
 /// Persists the three model selectors to `claude-opus-4-6` so the test can
-/// verify Agentty upgrades retired stored model ids to `claude-opus-4-7`
+/// verify Agentty upgrades retired stored model ids to `claude-opus-4-8`
 /// before row navigation changes the visible selector values.
 fn seed_settings_navigation_models(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     let canonical_workdir = env.workdir.canonicalize()?;
@@ -151,17 +151,17 @@ fn settings_jk_navigation() {
 
                 let initial_frame = common::frame_from_capture(&report.captures[0]);
                 assertion::assert_match_count(&initial_frame, "claude-opus-4-6", 0);
-                assertion::assert_match_count(&initial_frame, "claude-opus-4-7", 3);
+                assertion::assert_match_count(&initial_frame, "claude-opus-4-8", 3);
                 assertion::assert_match_count(&initial_frame, "claude-sonnet-4-6", 0);
 
                 let moved_down_frame = common::frame_from_capture(&report.captures[1]);
                 assertion::assert_match_count(&moved_down_frame, "claude-opus-4-6", 0);
-                assertion::assert_match_count(&moved_down_frame, "claude-opus-4-7", 2);
+                assertion::assert_match_count(&moved_down_frame, "claude-opus-4-8", 2);
                 assertion::assert_match_count(&moved_down_frame, "claude-sonnet-4-6", 1);
 
                 let moved_up_frame = common::frame_from_capture(&report.captures[2]);
                 assertion::assert_match_count(&moved_up_frame, "claude-opus-4-6", 0);
-                assertion::assert_match_count(&moved_up_frame, "claude-opus-4-7", 1);
+                assertion::assert_match_count(&moved_up_frame, "claude-opus-4-8", 1);
                 assertion::assert_match_count(&moved_up_frame, "claude-sonnet-4-6", 2);
             },
         )

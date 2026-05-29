@@ -2122,7 +2122,7 @@ mod tests {
     async fn test_run_agent_assist_task_unwraps_one_shot_answer_without_raw_json() {
         // Arrange
         let database = AppRepositories::in_memory().await;
-        insert_review_session(&database, AgentModel::ClaudeOpus47.as_str()).await;
+        insert_review_session(&database, AgentModel::ClaudeOpus48.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let output = Arc::new(Mutex::new(String::new()));
         let child_pid = Arc::new(Mutex::new(None));
@@ -2152,7 +2152,7 @@ mod tests {
                 id: "session-id".to_string(),
                 output: Arc::clone(&output),
                 prompt: "Resolve conflict".to_string(),
-                session_model: AgentModel::ClaudeOpus47,
+                session_model: AgentModel::ClaudeOpus48,
                 session_update_versions: Arc::default(),
             },
             &backend,
@@ -2184,7 +2184,7 @@ mod tests {
     async fn test_run_agent_assist_task_rejects_plain_text_output() {
         // Arrange
         let database = AppRepositories::in_memory().await;
-        insert_review_session(&database, AgentModel::ClaudeOpus47.as_str()).await;
+        insert_review_session(&database, AgentModel::ClaudeOpus48.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let output = Arc::new(Mutex::new(String::new()));
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
@@ -2215,7 +2215,7 @@ mod tests {
                 id: "session-id".to_string(),
                 output: Arc::clone(&output),
                 prompt: "Resolve conflict".to_string(),
-                session_model: AgentModel::ClaudeOpus47,
+                session_model: AgentModel::ClaudeOpus48,
                 session_update_versions: Arc::default(),
             },
             &backend,
@@ -2247,7 +2247,7 @@ mod tests {
     async fn test_run_agent_assist_task_returns_error_for_non_zero_exit_status() {
         // Arrange
         let database = AppRepositories::in_memory().await;
-        insert_review_session(&database, AgentModel::ClaudeOpus47.as_str()).await;
+        insert_review_session(&database, AgentModel::ClaudeOpus48.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
         let mut backend = MockAgentBackend::new();
@@ -2266,7 +2266,7 @@ mod tests {
                 id: "session-id".to_string(),
                 output: Arc::new(Mutex::new(String::new())),
                 prompt: "Resolve conflict".to_string(),
-                session_model: AgentModel::ClaudeOpus47,
+                session_model: AgentModel::ClaudeOpus48,
                 session_update_versions: Arc::default(),
             },
             &backend,
