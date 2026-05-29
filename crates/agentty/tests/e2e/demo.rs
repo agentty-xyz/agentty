@@ -52,6 +52,7 @@ fn generate_marketing_demo_gif() -> DemoResult {
     let env = make_demo_env(&demo_root)?;
 
     install_scripted_claude_stub(&env)?;
+    install_agent_availability_stubs(&env)?;
     symlink_agentty_into_stub_bin(&env)?;
 
     let fake_project_paths = create_fake_project_dirs(&demo_root)?;
@@ -164,9 +165,13 @@ fn install_scripted_claude_stub(env: &BuilderEnv) -> std::io::Result<()> {
         r#"#!/bin/sh
 # Consume stdin so the parent's writer does not block.
 cat > /dev/null 2>&1
-# Long "thinking" pause so the Sessions list shows InProgress long enough
-# for the viewer to notice the timer ticking.
-sleep 8
+# "Thinking" pause: long enough for the viewer to see InProgress and the
+# timer tick, but short enough that session 1 reaches Review (~6s total
+# with the two trailing sleeps) several seconds before session 2 is
+# submitted. That keeps their `updated_at` (whole-second) values distinct
+# so the list sort (`updated_at DESC, id`) is deterministic: session 2
+# stays the newer top row, with session 1 directly below it.
+sleep 4
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
 sleep 1
 printf '%s\n' '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{reply}"}}]}}}}'
@@ -179,6 +184,30 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{r
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+    }
+
+    Ok(())
+}
+
+/// Installs do-nothing executable stubs for the non-Claude agent CLIs
+/// (`gemini`, `agy`, `codex`) into `stub_bin`.
+///
+/// Agent availability is probed purely by looking for each backend's
+/// executable on `PATH` (`RealAgentAvailabilityProbe`), so placing these
+/// stubs makes every agent kind — Gemini, Antigravity, Claude, and Codex —
+/// appear in the `/model` agent picker. The stubs are never executed by the
+/// demo because both live sessions resolve to Claude (the explicit
+/// `claude-opus-4-8` pick and the default `claude-haiku-4-5-20251001`); they
+/// only need to exist as executable files for the probe to detect them.
+fn install_agent_availability_stubs(env: &BuilderEnv) -> std::io::Result<()> {
+    for executable_name in ["gemini", "agy", "codex"] {
+        let stub_path = env.stub_bin.join(executable_name);
+        std::fs::write(&stub_path, "#!/bin/sh\nexit 0\n")?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&stub_path, std::fs::Permissions::from_mode(0o755))?;
+        }
     }
 
     Ok(())
@@ -202,13 +231,14 @@ fn symlink_agentty_into_stub_bin(env: &BuilderEnv) -> std::io::Result<()> {
 }
 
 /// Seeds fake projects, pre-existing sessions in mixed statuses (`Done`,
-/// `Review`) backed by different agent models, and forces a Gemini default
-/// model on the cwd project so the launch footer shows a non-Claude model.
+/// `Review`) backed by different agent models, and pins a
+/// `claude-haiku-4-5-20251001` default model on the cwd project.
 ///
-/// The tape uses `/model` to switch each live-created session to Claude
-/// before submission so it can reach the scripted `claude` stub; the
-/// pre-seeded rows never run, so their non-Claude models are only ever read
-/// by the list renderer to decide the per-row agent badge.
+/// The first live session uses `/model` to switch explicitly to
+/// `claude-opus-4-8`, while the second keeps the haiku default; both resolve
+/// to the Claude backend so they reach the scripted `claude` stub. The
+/// pre-seeded rows never run, so their models are only ever read by the list
+/// renderer to decide the per-row agent badge.
 fn seed_database(
     env: &BuilderEnv,
     fake_project_paths: &[PathBuf],
@@ -306,7 +336,7 @@ async fn seed_pre_existing_sessions(
         (
             "aaaa1111-aaaa-1111-aaaa-111111111111",
             "Refactor request handlers",
-            "gemini-3.1-pro-preview",
+            "gemini-3.5-flash",
             "Review",
             "main",
             89,
@@ -384,8 +414,15 @@ fn repo_demo_dir() -> PathBuf {
 
 /// Hand-crafts a VHS tape that shows the user typing `agentty`, landing on
 /// a Sessions list pre-seeded with a mixed-agent fleet, then spinning up
-/// two new Claude-backed sessions via the `/model` picker, returning to the
-/// list, and opening the first session once it transitions to `Review`.
+/// two new Claude-backed sessions, returning to the list, and opening the
+/// first session once it transitions to `Review`.
+///
+/// Each session starts from the `New Session` type picker (confirming
+/// `Regular`). The first session walks the `/model` picker's agent stage —
+/// which lists every available agent (Gemini, Antigravity, Claude, Codex) —
+/// down to Claude and selects `claude-opus-4-8`; the second keeps the
+/// project default (`claude-haiku-4-5-20251001`) so two distinct Claude
+/// models appear in flight at once.
 fn build_demo_tape(env: &BuilderEnv, gif_path: &Path) -> String {
     let agentty_root = env.agentty_root.display().to_string();
     let path_env = {
@@ -435,17 +472,25 @@ Sleep 400ms
 Enter
 Sleep 1500ms
 
+# Projects tab lands first; switch to the Sessions fleet.
 Tab
 Sleep 2200ms
 
+# Session 1: New Session picker -> Regular.
 Type "a"
 Sleep 900ms
+Enter
+Sleep 500ms
 
+# Open /model and walk the agent stage (Gemini, Antigravity, Claude,
+# Codex) down to Claude, then pick claude-opus-4-8.
 Type "/model"
 Sleep 500ms
 Enter
 Sleep 700ms
 
+Down
+Sleep 400ms
 Down
 Sleep 400ms
 Enter
@@ -462,8 +507,11 @@ Sleep 2500ms
 Type "q"
 Sleep 2500ms
 
+# Session 2: New Session picker -> Regular, keep the haiku default.
 Type "a"
 Sleep 900ms
+Enter
+Sleep 500ms
 
 Type "Add pagination to the users list endpoint"
 Sleep 900ms
@@ -473,7 +521,9 @@ Sleep 2500ms
 Type "q"
 Sleep 1500ms
 
-Up
+# Session 2 (the newer row) sits at the top with the cursor on it; step
+# down onto session 1 and open it once it reaches Review.
+Down
 Sleep 400ms
 Enter
 Sleep 3500ms
