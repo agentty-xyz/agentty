@@ -36,3 +36,16 @@ updates:
         applies-to: version-updates
         patterns:
           - "*"
+  - package-ecosystem: "rust-toolchain"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    assignees:
+      - "minev-dev"
+      - "andagaev"
+    groups:
+      version-updates:
+        applies-to: version-updates
+        update-types:
+          - "patch"
+          - "minor"
