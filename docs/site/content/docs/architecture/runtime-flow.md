@@ -761,7 +761,8 @@ paths and their trigger conditions:
 - Spawn site: `spawn_start_turn_title_generation`
 - Emits or writes: Database title update plus `AppEvent::RefreshSessions`
 - What it does: Runs a one-shot title prompt in the background and persists the
-  generated title when valid.
+  generated title when it is a concise title rather than overlong prose, first-person
+  narration, or provider progress/status text.
 
 ### At-mention file indexing
 

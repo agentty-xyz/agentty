@@ -7,6 +7,8 @@ Rules:
 - Phrase it as requested work, not as an observation or evaluation.
 - Keep it high-level and intent-focused.
 - Do not include long file names, file paths, or symbol names.
+- Do not describe your own progress, checks, reasoning, or next steps.
+- Do not use first-person phrasing like "I have", "I'm", or "I'll".
 - Do not use Conventional Commit prefixes like `feat:` or `fix:`.
 - Keep it under 72 characters.
 - Return only the title text.

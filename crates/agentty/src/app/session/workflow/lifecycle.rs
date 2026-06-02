@@ -30,8 +30,23 @@ use crate::infra::fs::{FsClient, FsError};
 use crate::infra::{agent, db, git};
 use crate::ui::page::session_list::grouped_session_indexes;
 
-/// Maximum stored length for generated session titles.
+/// Maximum accepted length for generated session titles.
+///
+/// Longer candidates are treated as likely non-title prose instead of being
+/// truncated into misleading session labels.
 const GENERATED_SESSION_TITLE_MAX_CHARACTERS: usize = 72;
+/// Progress/status prefixes that indicate the model returned process prose
+/// instead of a requested-work title.
+const GENERATED_SESSION_TITLE_PROGRESS_PREFIXES: &[&str] = &[
+    "checking ",
+    "confirming ",
+    "gathering ",
+    "inspecting ",
+    "investigating ",
+    "reviewing ",
+    "validating ",
+    "working ",
+];
 const USER_PROMPT_PREFIX: &str = " › ";
 const USER_PROMPT_CONTINUATION_PREFIX: &str = "   ";
 
@@ -2009,7 +2024,11 @@ impl SessionManager {
         })
     }
 
-    /// Normalizes one candidate title and applies storage-safe constraints.
+    /// Normalizes one candidate title and rejects status-like model output.
+    ///
+    /// Title generation runs through a general utility prompt, so providers can
+    /// occasionally return first-person progress prose. Those candidates are
+    /// rejected instead of overwriting the user-prompt fallback title.
     fn normalize_generated_session_title(candidate: &str) -> Option<String> {
         let mut title = candidate.trim().to_string();
         if let Some((prefix, remainder)) = title.split_once(':')
@@ -2027,12 +2046,48 @@ impl SessionManager {
             return None;
         }
 
-        let truncated = title
-            .chars()
-            .take(GENERATED_SESSION_TITLE_MAX_CHARACTERS)
-            .collect::<String>();
+        if !Self::is_generated_session_title_candidate(&title) {
+            return None;
+        }
 
-        Some(truncated)
+        Some(title)
+    }
+
+    /// Returns whether a normalized generated title looks like requested work
+    /// rather than model progress, narration, or other non-title prose.
+    fn is_generated_session_title_candidate(title: &str) -> bool {
+        if title.chars().count() > GENERATED_SESSION_TITLE_MAX_CHARACTERS {
+            return false;
+        }
+
+        if Self::starts_with_first_person_pronoun(title) {
+            return false;
+        }
+
+        if Self::starts_with_progress_prefix(title) {
+            return false;
+        }
+
+        true
+    }
+
+    /// Returns whether the title begins with a first-person pronoun shape.
+    fn starts_with_first_person_pronoun(title: &str) -> bool {
+        let mut characters = title.chars();
+        if !matches!(characters.next(), Some('I' | 'i')) {
+            return false;
+        }
+
+        matches!(characters.next(), Some(' ' | '\'' | '\u{2019}'))
+    }
+
+    /// Returns whether the title begins with a progress/status gerund.
+    fn starts_with_progress_prefix(title: &str) -> bool {
+        let lower_title = title.to_ascii_lowercase();
+
+        GENERATED_SESSION_TITLE_PROGRESS_PREFIXES
+            .iter()
+            .any(|prefix| lower_title.starts_with(prefix))
     }
 
     async fn resolve_default_session_model(
@@ -3717,6 +3772,8 @@ mod tests {
         assert!(title_prompt.contains("Describe what the user wants to do"));
         assert!(title_prompt.contains("Keep it high-level and intent-focused."));
         assert!(title_prompt.contains("Do not include long file names"));
+        assert!(title_prompt.contains("Do not describe your own progress"));
+        assert!(title_prompt.contains("Do not use first-person phrasing"));
         assert!(title_prompt.contains("Return only the title text."));
         assert!(title_prompt.contains(request_prompt));
     }
@@ -3799,6 +3856,48 @@ mod tests {
             parsed_title,
             Some("Polish merge queue behavior".to_string())
         );
+    }
+
+    #[test]
+    /// Ensures first-person progress output cannot overwrite fallback
+    /// titles.
+    fn test_parse_generated_session_title_rejects_first_person_progress_output() {
+        // Arrange
+        let response_content = r#"{"answer":"I am checking the exact commit-message constraints.","questions":[],"summary":null}"#;
+
+        // Act
+        let parsed_title = SessionManager::parse_generated_session_title(response_content);
+
+        // Assert
+        assert_eq!(parsed_title, None);
+    }
+
+    #[test]
+    /// Ensures progress-gerund output is rejected as status prose.
+    fn test_parse_generated_session_title_rejects_progress_prefix() {
+        // Arrange
+        let response_content = "Checking commit-message constraints";
+
+        // Act
+        let parsed_title = SessionManager::parse_generated_session_title(response_content);
+
+        // Assert
+        assert_eq!(parsed_title, None);
+    }
+
+    #[test]
+    /// Ensures overlong model prose is rejected instead of being truncated
+    /// into a misleading generated title.
+    fn test_parse_generated_session_title_rejects_overlong_candidate() {
+        // Arrange
+        let response_content =
+            "Refine session title generation for utility outputs that are unexpectedly verbose";
+
+        // Act
+        let parsed_title = SessionManager::parse_generated_session_title(response_content);
+
+        // Assert
+        assert_eq!(parsed_title, None);
     }
 
     /// Builds a session manager containing the supplied sessions with no
