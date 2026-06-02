@@ -286,6 +286,9 @@ pub(crate) enum SyncReviewRequestOutcome {
     Merged {
         /// Short display identifier (for example `#42`).
         display_id: String,
+        /// Optional session branch `HEAD` hash observed during sync for
+        /// continuation context.
+        session_head_hash: Option<String>,
     },
     /// The linked review request was closed without merge.
     Closed {

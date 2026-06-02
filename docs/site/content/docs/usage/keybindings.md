@@ -126,7 +126,8 @@ until the background focused-review generation finishes and the session returns 
   exits to the sessions list with `q`.
 - **Done**: `c` opens a yes/no confirmation, then creates a new draft composer with the
   continuation text already staged as the first draft message. When Agentty has the
-  merged hash, that staged message is
+  merged hash, including the session branch `HEAD` hash captured when a synced GitHub PR
+  or GitLab MR is already merged, that staged message is
   `Summarize changes from <full-hash> to use it as an initial context for this session`;
   otherwise it falls back to the saved summary/transcript.
 - **Canceled**: `c` opens a yes/no confirmation, stages the saved summary or transcript

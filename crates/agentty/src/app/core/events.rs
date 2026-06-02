@@ -1230,8 +1230,13 @@ impl App {
         }
 
         match task_result.outcome {
-            crate::app::session::SyncReviewRequestOutcome::Merged { .. } => {
-                if let Some(warning) = self.complete_externally_merged_session(&session_id).await {
+            crate::app::session::SyncReviewRequestOutcome::Merged {
+                session_head_hash, ..
+            } => {
+                if let Some(warning) = self
+                    .complete_externally_merged_session(&session_id, session_head_hash)
+                    .await
+                {
                     self.append_output_for_session(
                         &session_id,
                         &TranscriptNotice::ReviewRequestSyncWarning.format(warning),
@@ -1247,13 +1252,18 @@ impl App {
         }
     }
 
-    /// Transitions one externally merged session to `Done` with best-effort
-    /// worktree and branch cleanup.
+    /// Marks one externally merged session `Done`, persists continuation
+    /// commit-hash metadata when available, and returns any warning from
+    /// worktree cleanup.
     ///
-    /// Returns an optional warning message when worktree cleanup fails. The
-    /// session is still moved to `Done` because the merge already happened
-    /// upstream, but the caller should surface the warning to the user.
-    async fn complete_externally_merged_session(&self, session_id: &str) -> Option<String> {
+    /// The session is still moved to `Done` when cleanup fails because the
+    /// merge already happened upstream, but the caller should surface the
+    /// warning to the user.
+    async fn complete_externally_merged_session(
+        &self,
+        session_id: &str,
+        session_head_hash: Option<String>,
+    ) -> Option<String> {
         let Ok(session) = self.sessions.session_or_err(session_id) else {
             return None;
         };
@@ -1261,10 +1271,26 @@ impl App {
             return None;
         };
 
+        let mut warnings = Vec::new();
+
+        let commit_hash_persistence_error = if let Some(session_head_hash) = session_head_hash {
+            self.services
+                .db()
+                .sessions()
+                .update_session_merged_commit_hash(session_id, Some(session_head_hash))
+                .await
+                .err()
+        } else {
+            None
+        };
+        if let Some(error) = commit_hash_persistence_error {
+            warnings.push(format!("Merged commit hash persistence failed: {error}"));
+        }
+
         let folder = session.folder.clone();
         let source_branch = crate::app::session::session_branch(session_id);
 
-        let cleanup_warning = crate::app::session::SessionManager::cleanup_merged_session_worktree(
+        if let Err(error) = crate::app::session::SessionManager::cleanup_merged_session_worktree(
             folder,
             self.services.fs_client(),
             self.services.git_client(),
@@ -1272,8 +1298,9 @@ impl App {
             None,
         )
         .await
-        .err()
-        .map(|error| format!("Worktree cleanup failed: {error}"));
+        {
+            warnings.push(format!("Worktree cleanup failed: {error}"));
+        }
 
         let app_event_tx = self.services.event_sender();
 
@@ -1288,7 +1315,7 @@ impl App {
         )
         .await;
 
-        cleanup_warning
+        (!warnings.is_empty()).then(|| warnings.join("\n"))
     }
 
     /// Transitions one externally closed review session to `Canceled`.

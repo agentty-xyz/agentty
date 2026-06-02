@@ -738,7 +738,7 @@ async fn sync_review_request_status(
         .map_err(|error| format!("Failed to resolve repository remote: {error}"))?;
     let remote = review_request_client
         .detect_remote(repo_url)
-        .map(|remote| remote.with_command_working_directory(folder))
+        .map(|remote| remote.with_command_working_directory(folder.clone()))
         .map_err(|error| error.detail_message())?;
 
     if let Some(review_request) = linked_review_request {
@@ -746,8 +746,13 @@ async fn sync_review_request_status(
             .refresh_review_request(remote, review_request.summary.display_id)
             .await
             .map_err(|error| error.detail_message())?;
+        let session_head_hash =
+            session_head_hash_for_summary(git_client, &folder, &refreshed_summary).await;
 
-        return Ok(sync_task_result_from_summary(refreshed_summary));
+        return Ok(sync_task_result_from_summary(
+            refreshed_summary,
+            session_head_hash,
+        ));
     }
 
     let upstream_ref = published_upstream_ref
@@ -759,7 +764,11 @@ async fn sync_review_request_status(
         .map_err(|error| error.detail_message())?;
 
     match found_summary {
-        Some(summary) => Ok(sync_task_result_from_summary(summary)),
+        Some(summary) => {
+            let session_head_hash =
+                session_head_hash_for_summary(git_client, &folder, &summary).await;
+            Ok(sync_task_result_from_summary(summary, session_head_hash))
+        }
         None => Ok(SyncReviewRequestTaskResult {
             outcome: session::SyncReviewRequestOutcome::NoReviewRequest,
             summary: None,
@@ -767,9 +776,25 @@ async fn sync_review_request_status(
     }
 }
 
+/// Captures the local session branch `HEAD` hash only when the review request
+/// is merged upstream so continuation can seed future work with a specific
+/// commit.
+async fn session_head_hash_for_summary(
+    git_client: &dyn GitClient,
+    folder: &Path,
+    summary: &crate::domain::session::ReviewRequestSummary,
+) -> Option<String> {
+    if summary.state != crate::domain::session::ReviewRequestState::Merged {
+        return None;
+    }
+
+    git_client.head_hash(folder.to_path_buf()).await.ok()
+}
+
 /// Builds one sync result from a normalized review-request summary.
 fn sync_task_result_from_summary(
     summary: crate::domain::session::ReviewRequestSummary,
+    session_head_hash: Option<String>,
 ) -> SyncReviewRequestTaskResult {
     let display_id = summary.display_id.clone();
     let outcome = match summary.state {
@@ -780,7 +805,10 @@ fn sync_task_result_from_summary(
             }
         }
         crate::domain::session::ReviewRequestState::Merged => {
-            session::SyncReviewRequestOutcome::Merged { display_id }
+            session::SyncReviewRequestOutcome::Merged {
+                display_id,
+                session_head_hash,
+            }
         }
         crate::domain::session::ReviewRequestState::Closed => {
             session::SyncReviewRequestOutcome::Closed { display_id }
@@ -1056,7 +1084,7 @@ mod tests {
         summary.status_summary = Some("Checks passing".to_string());
 
         // Act
-        let result = sync_task_result_from_summary(summary);
+        let result = sync_task_result_from_summary(summary, None);
 
         // Assert
         assert_eq!(
@@ -1100,6 +1128,10 @@ mod tests {
             .returning(|_| {
                 Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
             });
+        mock_git_client
+            .expect_head_hash()
+            .once()
+            .returning(|_| Box::pin(async { Ok("abc1234def5678".to_string()) }));
         let mut mock_review_request_client = MockReviewRequestClient::new();
         mock_review_request_client
             .expect_detect_remote()
@@ -1150,6 +1182,7 @@ mod tests {
             result.outcome,
             session::SyncReviewRequestOutcome::Merged {
                 display_id: "#42".to_string(),
+                session_head_hash: Some("abc1234def5678".to_string()),
             }
         );
     }
@@ -1159,15 +1192,17 @@ mod tests {
     fn sync_task_result_from_merged_summary_maps_merged_outcome() {
         // Arrange
         let summary = test_review_request_summary("#99", ReviewRequestState::Merged);
+        let session_head_hash = Some("9f00d1".to_string());
 
         // Act
-        let result = sync_task_result_from_summary(summary);
+        let result = sync_task_result_from_summary(summary, session_head_hash.clone());
 
         // Assert
         assert_eq!(
             result.outcome,
             session::SyncReviewRequestOutcome::Merged {
                 display_id: "#99".to_string(),
+                session_head_hash
             }
         );
         assert!(result.summary.is_some());
@@ -1180,7 +1215,7 @@ mod tests {
         let summary = test_review_request_summary("#7", ReviewRequestState::Closed);
 
         // Act
-        let result = sync_task_result_from_summary(summary);
+        let result = sync_task_result_from_summary(summary, None);
 
         // Assert
         assert_eq!(
@@ -1415,6 +1450,7 @@ mod tests {
         let sync_result = SyncReviewRequestTaskResult {
             outcome: session::SyncReviewRequestOutcome::Merged {
                 display_id: "#7".to_string(),
+                session_head_hash: None,
             },
             summary: None,
         };

@@ -5369,6 +5369,7 @@ mod tests {
         let task_result = SyncReviewRequestTaskResult {
             outcome: session::SyncReviewRequestOutcome::Merged {
                 display_id: "#9".to_string(),
+                session_head_hash: Some("abc1234".to_string()),
             },
             summary: Some(test_review_request_summary(
                 "#9",
@@ -5391,5 +5392,14 @@ mod tests {
             .session_or_err(session_id)
             .expect("expected session to remain loaded");
         assert_eq!(session.status, Status::Done);
+        let merged_commit_hash = app
+            .services
+            .db()
+            .sessions()
+            .load_session_merged_commit_hash(session_id)
+            .await
+            .expect("failed to load merged commit hash")
+            .expect("expected persisted merged commit hash");
+        assert_eq!(merged_commit_hash, "abc1234");
     }
 }
