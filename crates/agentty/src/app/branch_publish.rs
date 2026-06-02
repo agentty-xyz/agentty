@@ -5,9 +5,10 @@ use std::sync::Arc;
 
 use ag_forge as forge;
 
-use super::session::{self, Clock, unix_timestamp_from_system_time};
+use super::session::{self, unix_timestamp_from_system_time};
 use crate::app::review_request;
 use crate::domain::session::{PublishBranchAction, ReviewRequest, Session, SessionId, Status};
+use crate::infra::clock::Clock;
 use crate::infra::db;
 use crate::infra::git::GitClient;
 use crate::ui::state::app_mode::ConfirmationViewMode;

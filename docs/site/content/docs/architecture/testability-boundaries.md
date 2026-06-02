@@ -39,41 +39,42 @@ discovery used to filter settings defaults and `/model` without shelling out dir
 from app or runtime orchestration. | | `AppServerClient` |
 `infra/app_server/contract.rs` | Provider-specific app-server RPC execution and session
 runtime lifecycle. | | `EventSource` | `runtime/event.rs` | Terminal event polling for
-deterministic event-loop tests. | | `Clock` | `app/session/core.rs` | Shared wall-clock
-and monotonic time boundary used by session orchestration and runtime helpers such as
-pasted-image file naming. | | `Backend` (generic) | `runtime/core.rs` | Runtime accepts
-`Terminal<B: Backend>` via `run_with_backend`, enabling in-process TUI tests with
-`TestBackend` without a real terminal. | | `TerminalOperation` | `runtime/terminal.rs` |
-Terminal raw-mode and alternate-screen transitions for deterministic setup and restore
-failure-path tests. | | `Sleeper` | `lib.rs` | Wall-clock sleep boundary used by
-retry/polling flows such as git rebase assistance. | | `UpdateRunner` |
-`infra/version.rs` | npm install command execution for background auto-updates. | |
-`VersionCommandRunner` | `infra/version.rs` | npm/curl command execution for update
-checks. | | `ProjectDiscoveryClient` | `infra/project_discovery.rs` | Home-directory
-repository discovery used by startup catalog refresh without walking the real filesystem
-from `app/`. | | `GitCommandRunner` | `infra/git/rebase.rs` | Rebase command invocation
-boundary for conflict/retry tests. | | `SyncAssistClient` |
-`app/session/workflow/merge.rs` | Sync-rebase assistance execution boundary. | |
-`SessionRepository` | `infra/db/session.rs` | Session row persistence, turn metadata
-storage, and session list queries without binding app workflows to the full `Database`
-surface. | | `ProjectRepository` | `infra/db/project.rs` | Project persistence and
-project-list aggregation behind a narrow mockable boundary. | | `ReviewRepository` |
-`infra/db/review.rs` | Session review-request linkage persistence used by branch
-publish, refresh flows, and post-turn metadata sync. | | `UsageRepository` |
-`infra/db/usage.rs` | Per-session model usage aggregation used by turn persistence and
-usage views. | | `ActivityRepository` | `infra/db/activity.rs` | Session-activity
-history queries and backfill helpers used by startup and session list refresh. | |
-`OperationRepository` | `infra/db/operation.rs` | Persisted session-operation lifecycle
-tracking used by worker restart recovery and cancellation. | | `SettingRepository` |
-`infra/db/setting.rs` | Global and project-scoped setting persistence used by startup
-and settings orchestration. | | `AppServerClient` retry helpers |
-`infra/app_server/retry.rs` | Shared restart-and-replay orchestration for provider
-runtimes without duplicating lifecycle policy in each provider. | |
-`CodexRuntimeTransport` | `infra/agent/app_server/codex/transport.rs` | Codex stdio
-transport boundary for lifecycle, account usage, compaction, and turn-stream tests
-without scripted shell runtimes. | | `GeminiRuntimeTransport` |
-`infra/agent/app_server/gemini/transport.rs` | ACP stdio transport boundary for Gemini
-runtime protocol tests. |
+deterministic event-loop tests. | | `Clock` | `infra/clock.rs` | Shared wall-clock and
+monotonic time boundary used by session orchestration, runtime render-throttle
+accounting, and helpers such as pasted-image file naming. The `RealClock` production
+adapter lives alongside the trait in `infra/`. | | `Backend` (generic) |
+`runtime/core.rs` | Runtime accepts `Terminal<B: Backend>` via `run_with_backend`,
+enabling in-process TUI tests with `TestBackend` without a real terminal. | |
+`TerminalOperation` | `runtime/terminal.rs` | Terminal raw-mode and alternate-screen
+transitions for deterministic setup and restore failure-path tests. | | `Sleeper` |
+`lib.rs` | Wall-clock sleep boundary used by retry/polling flows such as git rebase
+assistance. | | `UpdateRunner` | `infra/version.rs` | npm install command execution for
+background auto-updates. | | `VersionCommandRunner` | `infra/version.rs` | npm/curl
+command execution for update checks. | | `ProjectDiscoveryClient` |
+`infra/project_discovery.rs` | Home-directory repository discovery used by startup
+catalog refresh without walking the real filesystem from `app/`. | | `GitCommandRunner`
+| `infra/git/rebase.rs` | Rebase command invocation boundary for conflict/retry tests. |
+| `SyncAssistClient` | `app/session/workflow/merge.rs` | Sync-rebase assistance
+execution boundary. | | `SessionRepository` | `infra/db/session.rs` | Session row
+persistence, turn metadata storage, and session list queries without binding app
+workflows to the full `Database` surface. | | `ProjectRepository` |
+`infra/db/project.rs` | Project persistence and project-list aggregation behind a narrow
+mockable boundary. | | `ReviewRepository` | `infra/db/review.rs` | Session
+review-request linkage persistence used by branch publish, refresh flows, and post-turn
+metadata sync. | | `UsageRepository` | `infra/db/usage.rs` | Per-session model usage
+aggregation used by turn persistence and usage views. | | `ActivityRepository` |
+`infra/db/activity.rs` | Session-activity history queries and backfill helpers used by
+startup and session list refresh. | | `OperationRepository` | `infra/db/operation.rs` |
+Persisted session-operation lifecycle tracking used by worker restart recovery and
+cancellation. | | `SettingRepository` | `infra/db/setting.rs` | Global and
+project-scoped setting persistence used by startup and settings orchestration. | |
+`AppServerClient` retry helpers | `infra/app_server/retry.rs` | Shared
+restart-and-replay orchestration for provider runtimes without duplicating lifecycle
+policy in each provider. | | `CodexRuntimeTransport` |
+`infra/agent/app_server/codex/transport.rs` | Codex stdio transport boundary for
+lifecycle, account usage, compaction, and turn-stream tests without scripted shell
+runtimes. | | `GeminiRuntimeTransport` | `infra/agent/app_server/gemini/transport.rs` |
+ACP stdio transport boundary for Gemini runtime protocol tests. |
 
 ### Typed Error Enums at Infra Boundaries
 

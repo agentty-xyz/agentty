@@ -2587,7 +2587,7 @@ mod tests {
     use tokio::sync::mpsc;
 
     use super::*;
-    use crate::app::session::{RealClock, SessionDefaults};
+    use crate::app::session::SessionDefaults;
     use crate::app::{AppEvent, AppServices, SessionState};
     use crate::domain::agent::{AgentKind, ReasoningLevel};
     use crate::domain::session::{
@@ -2595,6 +2595,7 @@ mod tests {
         SessionStats,
     };
     use crate::domain::turn_prompt::{TurnPromptAttachment, TurnPromptTextSource};
+    use crate::infra::clock::RealClock;
     use crate::infra::db::{self, AppRepositories};
     use crate::infra::{app_server, fs};
 
@@ -2764,7 +2765,7 @@ mod tests {
 
         AppServices::new(
             PathBuf::from("/tmp/agentty-tests"),
-            Arc::new(crate::app::session::RealClock),
+            Arc::new(crate::infra::clock::RealClock),
             event_tx,
             crate::app::service::AppServiceDeps {
                 app_server_client_override: Some(mock_app_server()),
@@ -2801,7 +2802,7 @@ mod tests {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let services = AppServices::new(
             PathBuf::from("/tmp/agentty-tests"),
-            Arc::new(crate::app::session::RealClock),
+            Arc::new(crate::infra::clock::RealClock),
             event_tx,
             crate::app::service::AppServiceDeps {
                 app_server_client_override: Some(mock_app_server()),

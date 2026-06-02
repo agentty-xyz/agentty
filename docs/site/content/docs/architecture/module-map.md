@@ -169,6 +169,8 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
   production adapter, and git client integration tests.
 - `crates/agentty/src/infra/channel.rs` and `crates/agentty/src/infra/channel/`:
   `AgentChannel` trait and provider-agnostic turn execution.
+- `crates/agentty/src/infra/clock.rs`: `Clock` trait and `RealClock` production adapter
+  used by session orchestration and the runtime render-throttle loop.
 - `crates/agentty/src/infra/channel/contract.rs`: Shared `AgentChannel` trait plus turn
   request, event, and result types that carry domain-owned prompt payloads across the
   provider boundary.

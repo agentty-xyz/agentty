@@ -11,8 +11,9 @@ use crate::app::service::{AppServiceDeps, AppServices};
 use crate::app::session::SessionManager;
 use crate::app::setting::SettingsManager;
 use crate::app::startup::{AppStartup, StartupProjectContext, StartupSessionLoadContext};
-use crate::app::{AppError, review, session, task};
+use crate::app::{AppError, review, task};
 use crate::domain::agent::AgentKind;
+use crate::infra::clock::{Clock, RealClock};
 use crate::infra::db;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs::FsClient;
@@ -107,7 +108,7 @@ impl App {
             startup_working_dir,
         } = startup_project_context;
 
-        let clock: Arc<dyn session::Clock> = Arc::new(session::RealClock);
+        let clock: Arc<dyn Clock> = Arc::new(RealClock);
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let services = Self::build_services(
             base_path.clone(),
@@ -218,7 +219,7 @@ impl App {
     /// Returns an error when no supported agent backend is available.
     async fn build_services(
         base_path: PathBuf,
-        clock: Arc<dyn session::Clock>,
+        clock: Arc<dyn Clock>,
         event_tx: mpsc::UnboundedSender<AppEvent>,
         repositories: AppRepositories,
         clients: &AppClients,

@@ -2303,7 +2303,7 @@ mod tests {
                 app_event_tx,
                 base_branch: "main".to_string(),
                 child_pid: Arc::new(Mutex::new(None)),
-                clock: Arc::new(crate::app::session::RealClock),
+                clock: Arc::new(crate::infra::clock::RealClock),
                 db,
                 folder,
                 fs_client: test_fs_client(),
@@ -3333,7 +3333,7 @@ mod tests {
             .returning(|_| Box::pin(async { Ok(false) }));
         let restore_context = MergeStartRestoreContext {
             app_event_tx: &app_event_tx,
-            clock: &crate::app::session::RealClock,
+            clock: &crate::infra::clock::RealClock,
             db: &db,
             session_id: "session-123",
             session_update_versions: &session_update_versions,
@@ -3885,7 +3885,7 @@ mod tests {
         // Act
         SessionManager::finalize_rebase_task(FinalizeRebaseInput {
             app_event_tx: &app_event_tx,
-            clock: &crate::app::session::RealClock,
+            clock: &crate::infra::clock::RealClock,
             db: &db,
             folder: &folder,
             git_client: &git_client,
@@ -3959,7 +3959,7 @@ mod tests {
         // Act
         SessionManager::finalize_rebase_task(FinalizeRebaseInput {
             app_event_tx: &app_event_tx,
-            clock: &crate::app::session::RealClock,
+            clock: &crate::infra::clock::RealClock,
             db: &db,
             folder: &folder,
             git_client: &git_client,

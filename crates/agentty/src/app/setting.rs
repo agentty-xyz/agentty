@@ -959,7 +959,7 @@ mod tests {
         let (event_tx, _event_rx) = mpsc::unbounded_channel();
         let services = AppServices::new(
             PathBuf::from("/tmp/agentty-settings-tests"),
-            Arc::new(crate::app::session::RealClock),
+            Arc::new(crate::infra::clock::RealClock),
             event_tx,
             crate::app::service::AppServiceDeps {
                 app_server_client_override: Some(Arc::new(app_server::MockAppServerClient::new())),

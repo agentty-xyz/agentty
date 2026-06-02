@@ -7,7 +7,8 @@ use arboard::Clipboard;
 use image::codecs::png::PngEncoder;
 use image::{ExtendedColorType, ImageEncoder};
 
-use crate::app::{self, session};
+use crate::app;
+use crate::infra::clock::{Clock, RealClock};
 use crate::infra::fs::{self, FsClient};
 
 /// Typed error returned by clipboard image capture and persistence operations.
@@ -145,7 +146,7 @@ pub(crate) fn build_clipboard_image_path(
     session_id: &str,
     attachment_number: usize,
 ) -> Result<PathBuf, ClipboardError> {
-    let clock = session::RealClock;
+    let clock = RealClock;
 
     build_clipboard_image_path_with_clock(session_id, attachment_number, &clock)
 }
@@ -159,7 +160,7 @@ pub(crate) fn build_clipboard_image_path(
 fn build_clipboard_image_path_with_clock(
     session_id: &str,
     attachment_number: usize,
-    clock: &dyn session::Clock,
+    clock: &dyn Clock,
 ) -> Result<PathBuf, ClipboardError> {
     let timestamp_millis = clock
         .now_system_time()
@@ -365,7 +366,7 @@ mod tests {
         system_time: std::time::SystemTime,
     }
 
-    impl session::Clock for FixedClock {
+    impl Clock for FixedClock {
         fn now_instant(&self) -> std::time::Instant {
             std::time::Instant::now()
         }

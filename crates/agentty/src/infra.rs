@@ -9,6 +9,8 @@ pub mod app_server_router;
 pub mod app_server_transport;
 /// Provider-agnostic agent channel abstraction for session turn execution.
 pub mod channel;
+/// Wall-clock boundary used by app, runtime, and session orchestration.
+pub mod clock;
 pub mod db;
 /// Gitignore-aware file indexing and fuzzy path filtering.
 pub mod file_index;

@@ -260,9 +260,10 @@ mod tests {
 
     use super::*;
     use crate::app::SessionState;
-    use crate::app::session::{RealClock, SessionDefaults};
+    use crate::app::session::SessionDefaults;
     use crate::domain::agent::AgentModel;
     use crate::domain::session::{Session, SessionHandles, SessionSize, SessionStats, Status};
+    use crate::infra::clock::RealClock;
     use crate::infra::git;
 
     #[test]

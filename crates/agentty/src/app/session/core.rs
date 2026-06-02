@@ -78,27 +78,7 @@ impl TurnAppliedState {
     }
 }
 
-/// Provides wall-clock values for session refresh decision logic.
-pub(crate) trait Clock: Send + Sync {
-    /// Returns the current monotonic instant.
-    fn now_instant(&self) -> Instant;
-
-    /// Returns the current wall-clock system time.
-    fn now_system_time(&self) -> SystemTime;
-}
-
-/// Production clock backed by `std::time`.
-pub(crate) struct RealClock;
-
-impl Clock for RealClock {
-    fn now_instant(&self) -> Instant {
-        Instant::now()
-    }
-
-    fn now_system_time(&self) -> SystemTime {
-        SystemTime::now()
-    }
-}
+pub(crate) use crate::infra::clock::Clock;
 
 /// Session domain state and worker orchestration state.
 pub struct SessionManager {
@@ -840,6 +820,7 @@ mod tests {
         AgentRequestKind, MockAgentChannel, TurnPrompt, TurnPromptAttachment, TurnPromptTextSource,
         TurnResult,
     };
+    use crate::infra::clock::RealClock;
     use crate::infra::db::AppRepositories;
     use crate::infra::fs::{self as fs, FsClient};
     use crate::infra::{app_server, git};

@@ -397,7 +397,7 @@ mod tests {
 
         AppServices::new(
             PathBuf::from("/tmp/agentty-tests"),
-            Arc::new(crate::app::session::RealClock),
+            Arc::new(crate::infra::clock::RealClock),
             event_tx,
             crate::app::service::AppServiceDeps {
                 app_server_client_override: Some(mock_app_server()),

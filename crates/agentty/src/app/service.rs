@@ -10,11 +10,11 @@ use tokio::task::JoinHandle;
 use tracing::warn;
 
 use crate::app::AppEvent;
-use crate::app::session::Clock;
 use crate::db::AppRepositories;
 use crate::domain::agent::AgentKind;
 use crate::domain::session::SessionId;
 use crate::infra::app_server::AppServerClient;
+use crate::infra::clock::Clock;
 use crate::infra::fs::FsClient;
 use crate::infra::git::GitClient;
 use crate::infra::review_comment_cache::ReviewCommentCache;

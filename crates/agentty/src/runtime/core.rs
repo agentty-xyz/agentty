@@ -12,6 +12,7 @@ use ratatui::backend::{Backend, CrosstermBackend};
 use tokio::sync::mpsc;
 
 use crate::app::App;
+use crate::infra::clock::Clock;
 use crate::runtime::{FRAME_INTERVAL, event, terminal};
 
 /// Fallback redraw cadence for visible spinner and timer UI when no new
@@ -90,6 +91,10 @@ where
 }
 
 /// Drives the main render/event loop until quit or error.
+///
+/// Reads the runtime clock from `app.services.clock()` so render-throttle
+/// timing is sourced through the same `Clock` trait used by session refresh
+/// logic, keeping `runtime` free of direct `Instant::now()` calls.
 async fn run_main_loop<B: Backend>(
     app: &mut App,
     terminal: &mut Terminal<B>,
@@ -99,10 +104,13 @@ async fn run_main_loop<B: Backend>(
 where
     B::Error: std::error::Error + Send + Sync + 'static,
 {
+    let clock = app.services.clock();
+    let last_draw_at = clock.now_instant();
     let mut main_loop_state = MainLoopState {
         app,
+        clock,
         event_rx,
-        last_draw_at: Instant::now(),
+        last_draw_at,
         terminal,
         tick,
     };
@@ -113,6 +121,7 @@ where
 /// Borrowed runtime state required to process one main-loop cycle.
 struct MainLoopState<'a, B: Backend> {
     app: &'a mut App,
+    clock: Arc<dyn Clock>,
     event_rx: &'a mut mpsc::UnboundedReceiver<crossterm::event::Event>,
     last_draw_at: Instant,
     terminal: &'a mut Terminal<B>,
@@ -129,7 +138,12 @@ where
     /// from their live handles without a full per-frame session sweep.
     async fn run_cycle(&mut self) -> io::Result<EventResult> {
         self.app.process_pending_app_events().await;
-        render_frame(self.app, self.terminal, &mut self.last_draw_at)?;
+        render_frame(
+            self.app,
+            self.terminal,
+            self.clock.as_ref(),
+            &mut self.last_draw_at,
+        )?;
 
         event::process_events(self.app, self.terminal, self.event_rx, self.tick).await
     }
@@ -155,17 +169,21 @@ where
 /// Renders one frame of the TUI application into the terminal buffer.
 ///
 /// Idle redraws are skipped unless the app explicitly requested a fresh frame
-/// or one visible spinner/timer has reached the forced redraw cadence.
+/// or one visible spinner/timer has reached the forced redraw cadence. Both
+/// the elapsed-time comparison and the `last_draw_at` stamp read through the
+/// injected `Clock` so test runs can virtualize the render-throttle clock
+/// without mutating production timing behavior.
 fn render_frame<B: Backend>(
     app: &mut App,
     terminal: &mut Terminal<B>,
+    clock: &dyn Clock,
     last_draw_at: &mut Instant,
 ) -> io::Result<()>
 where
     B::Error: std::error::Error + Send + Sync + 'static,
 {
     let forced_redraw_due =
-        app.has_visible_tick_driven_ui() && last_draw_at.elapsed() >= FORCED_REDRAW_INTERVAL;
+        app.has_visible_tick_driven_ui() && forced_redraw_elapsed(clock, *last_draw_at);
     if !app.needs_redraw() && !forced_redraw_due {
         return Ok(());
     }
@@ -174,9 +192,15 @@ where
         .draw(|frame| app.draw(frame))
         .map_err(backend_err)?;
     app.clear_redraw();
-    *last_draw_at = Instant::now();
+    *last_draw_at = clock.now_instant();
 
     Ok(())
+}
+
+/// Returns whether the injected clock has advanced past `last_draw_at` by at
+/// least `FORCED_REDRAW_INTERVAL`.
+fn forced_redraw_elapsed(clock: &dyn Clock, last_draw_at: Instant) -> bool {
+    clock.now_instant().saturating_duration_since(last_draw_at) >= FORCED_REDRAW_INTERVAL
 }
 
 #[cfg(test)]
@@ -559,10 +583,13 @@ mod tests {
             version: 1,
         });
 
+        let clock: Arc<dyn Clock> = Arc::new(crate::infra::clock::RealClock);
+        let last_draw_at = clock.now_instant();
         let mut main_loop_state = MainLoopState {
             app: &mut app,
+            clock,
             event_rx: &mut event_rx,
-            last_draw_at: Instant::now(),
+            last_draw_at,
             terminal: &mut terminal,
             tick: &mut tick,
         };
@@ -576,6 +603,70 @@ mod tests {
         assert!(
             rendered_text.contains("synced output"),
             "expected rendered session output to contain synced handle text: {rendered_text}"
+        );
+    }
+
+    /// Stationary clock whose `now_instant()` value never advances.
+    ///
+    /// Used to verify that `forced_redraw_elapsed` reads elapsed time through
+    /// the injected `Clock` rather than the host wall clock.
+    struct FrozenInstantClock {
+        instant: std::time::Instant,
+    }
+
+    impl Clock for FrozenInstantClock {
+        fn now_instant(&self) -> std::time::Instant {
+            self.instant
+        }
+
+        fn now_system_time(&self) -> std::time::SystemTime {
+            std::time::SystemTime::now()
+        }
+    }
+
+    /// Verifies the forced-redraw cadence reads elapsed time through the
+    /// injected `Clock`. The frozen clock and `last_draw_at` are anchored to
+    /// the same host instant, while host wall time has already drifted past
+    /// `FORCED_REDRAW_INTERVAL` since the anchor instant. A correct
+    /// implementation reports zero virtual elapsed time and skips the draw.
+    #[test]
+    fn forced_redraw_elapsed_uses_injected_clock_not_host_time() {
+        // Arrange
+        let anchor = std::time::Instant::now()
+            .checked_sub(FORCED_REDRAW_INTERVAL * 10)
+            .expect("anchor instant should fit before host now");
+        let frozen = FrozenInstantClock { instant: anchor };
+
+        // Act
+        let elapsed = forced_redraw_elapsed(&frozen, anchor);
+
+        // Assert
+        assert!(
+            !elapsed,
+            "forced-redraw cadence must read elapsed time through the injected clock, not the \
+             host wall clock"
+        );
+    }
+
+    /// Verifies the forced-redraw cadence fires once the injected clock has
+    /// advanced past `FORCED_REDRAW_INTERVAL`.
+    #[test]
+    fn forced_redraw_elapsed_fires_after_injected_clock_advances() {
+        // Arrange
+        let now = std::time::Instant::now();
+        let last_draw_at = now
+            .checked_sub(FORCED_REDRAW_INTERVAL)
+            .expect("last_draw_at should fit before now");
+        let frozen = FrozenInstantClock { instant: now };
+
+        // Act
+        let elapsed = forced_redraw_elapsed(&frozen, last_draw_at);
+
+        // Assert
+        assert!(
+            elapsed,
+            "forced-redraw cadence should trigger once the injected clock has advanced past \
+             FORCED_REDRAW_INTERVAL"
         );
     }
 }

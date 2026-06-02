@@ -503,10 +503,10 @@ mod tests {
     use ratatui::widgets::TableState;
 
     use super::*;
-    use crate::app::session::RealClock;
     use crate::app::session_state::SessionState;
     use crate::domain::input::InputState;
     use crate::domain::question::QuestionItem;
+    use crate::infra::clock::RealClock;
     use crate::ui::state::app_mode::QuestionFocus;
     use crate::ui::state::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
 
