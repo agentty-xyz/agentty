@@ -259,11 +259,18 @@ impl<'a> SessionChatPage<'a> {
     /// panel.
     fn render_session(&self, f: &mut Frame, area: Rect, session: &Session) {
         let prepared_prompt_panel = self.prepare_prompt_panel(area, session);
+        let header_lines = session_format::session_header_lines(
+            session,
+            area.width.saturating_sub(2),
+            self.default_reasoning_level,
+            self.wall_clock_unix_seconds,
+        );
+        let header_height = u16::try_from(header_lines.len()).unwrap_or(2);
         let bottom_height = prepared_prompt_panel.as_ref().map_or_else(
             || self.bottom_height(area),
             PreparedPromptPanel::panel_height,
         );
-        let session_areas = layout::session_chat_areas(area, bottom_height);
+        let session_areas = layout::session_chat_areas(area, bottom_height, header_height);
 
         let mut output = SessionOutput::new(session)
             .markdown_render_cache(self.markdown_render_cache)
@@ -278,7 +285,7 @@ impl<'a> SessionChatPage<'a> {
         if let Some(active_progress) = self.active_progress {
             output = output.active_progress(active_progress);
         }
-        self.render_session_header(f, session_areas.header_area, session);
+        Self::render_session_header(f, session_areas.header_area, header_lines);
         output.render(f, session_areas.output_area);
         self.render_bottom_panel(
             f,
@@ -288,14 +295,9 @@ impl<'a> SessionChatPage<'a> {
         );
     }
 
-    /// Renders a standalone two-line header above the output panel border.
-    fn render_session_header(&self, f: &mut Frame, header_area: Rect, session: &Session) {
-        let header = Paragraph::new(session_format::session_header_lines(
-            session,
-            header_area.width,
-            self.default_reasoning_level,
-            self.wall_clock_unix_seconds,
-        ));
+    /// Renders the header above the output panel border.
+    fn render_session_header(f: &mut Frame, header_area: Rect, header_lines: Vec<Line<'static>>) {
+        let header = Paragraph::new(header_lines);
 
         f.render_widget(header, header_area);
     }

@@ -36,11 +36,13 @@ commit coauthor trailer, and `Open Commands` for the active project. |
 In session chat view, the status-colored session title renders in a dedicated header row
 above the output panel. A second metadata row shows the persisted size bucket, current
 `+added` / `-deleted` line totals, the cumulative active-work timer, the current model,
-the effective reasoning level, and token usage. When a session already tracks a
-published upstream branch, the output panel also shows a short branch-sync status row
-while Agentty is auto-pushing the latest completed turn or when the most recent
-automatic push failed. The timer keeps ticking only while the session is actively
-working and freezes between turns.
+the effective reasoning level, and token usage. When a session has a linked pull request
+or merge request, the linked review-request URL appears at the right edge of the
+metadata row when it fits, or on the next header row on narrow terminals. When a session
+already tracks a published upstream branch, the output panel also shows a short
+branch-sync status row while Agentty is auto-pushing the latest completed turn or when
+the most recent automatic push failed. The timer keeps ticking only while the session is
+actively working and freezes between turns.
 
 The grouped **Sessions** tab also shows that same cumulative active-work timer in its
 own `Timer` column, so in-progress rows keep ticking live there while completed sessions

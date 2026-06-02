@@ -1060,6 +1060,41 @@ fn review_request_sync_runs_in_background() -> E2eResult {
     Ok(())
 }
 
+/// Verify that linked review requests expose their browser URL in the session
+/// header.
+#[test]
+fn review_request_url_appears_in_session_header() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("review_request_url_header")
+        .with_git()
+        .setup(seed_review_ready_session_with_review_request)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_text("https://github.com/agentty-xyz/agentty/pull/42", 5000)
+                    .wait_for_stable_frame(300, 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "review_request_url_header",
+                        "Linked review-request URL visible in the session header",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(
+                    frame,
+                    "https://github.com/agentty-xyz/agentty/pull/42",
+                    &full,
+                );
+            },
+        )?;
+
+    Ok(())
+}
+
 /// Verify that opening the diff page from a review-ready session shows cached
 /// review-request comments inline below matching diff lines.
 #[test]

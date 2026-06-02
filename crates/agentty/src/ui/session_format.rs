@@ -25,6 +25,10 @@ const USER_PROMPT_CONTINUATION_PREFIX: &str = "   ";
 
 /// Formats the session title and metadata lines rendered above the output
 /// panel.
+///
+/// When a linked review-request URL is available, the URL shares the metadata
+/// row when the full row fits and otherwise wraps to the row directly above
+/// the transcript border.
 pub fn session_header_lines(
     session: &Session,
     header_width: u16,
@@ -38,27 +42,106 @@ pub fn session_header_lines(
         .add_modifier(Modifier::BOLD);
     let title_spans = markdown::parse_inline_spans(&title_text, base_style);
     let title_spans = text_util::truncate_spans_with_ellipsis(title_spans, title_width);
-    let metadata_text = session_metadata_text(
+    let metadata_lines = session_header_metadata_lines(
         session,
         header_width,
         default_reasoning_level,
         wall_clock_unix_seconds,
     );
 
-    vec![
-        Line::from(title_spans),
-        Line::from(Span::styled(
+    let mut lines = Vec::with_capacity(1 + metadata_lines.len());
+    lines.push(Line::from(title_spans));
+
+    for metadata_text in metadata_lines {
+        lines.push(Line::from(Span::styled(
             metadata_text,
             Style::default().fg(style::palette::text_muted()),
-        )),
-    ]
+        )));
+    }
+
+    lines
 }
 
 /// Formats the size, timer, token usage, model, and reasoning row shown in
-/// the session header.
+/// single-line metadata contexts without any chat-header-only URL suffix.
 pub fn session_metadata_text(
     session: &Session,
     header_width: u16,
+    default_reasoning_level: ReasoningLevel,
+    wall_clock_unix_seconds: i64,
+) -> String {
+    let metadata =
+        session_metadata_base_text(session, default_reasoning_level, wall_clock_unix_seconds);
+
+    text_util::truncate_with_ellipsis(&metadata, usize::from(header_width))
+}
+
+/// Formats the chat header metadata rows, including the linked review-request
+/// URL when one is available.
+///
+/// When a PR/MR URL is available, it is placed on the same row as the
+/// left-side metadata when space allows; otherwise it is moved to the next
+/// metadata row.
+fn session_header_metadata_lines(
+    session: &Session,
+    header_width: u16,
+    default_reasoning_level: ReasoningLevel,
+    wall_clock_unix_seconds: i64,
+) -> Vec<String> {
+    let metadata =
+        session_metadata_base_text(session, default_reasoning_level, wall_clock_unix_seconds);
+    let available_width = usize::from(header_width);
+
+    let review_request_url = session
+        .review_request
+        .as_ref()
+        .map(|request| request.summary.web_url.as_str())
+        .filter(|url| !url.is_empty())
+        .map(str::trim)
+        .filter(|url| !url.is_empty());
+
+    let Some(review_request_url) = review_request_url else {
+        return vec![text_util::truncate_with_ellipsis(
+            &metadata,
+            available_width,
+        )];
+    };
+
+    let metadata_width = metadata.chars().count();
+    let url_width = review_request_url.chars().count();
+    let separator_width = 2;
+    let total_required_width = metadata_width
+        .saturating_add(separator_width)
+        .saturating_add(url_width);
+    let mut metadata_lines = Vec::with_capacity(2);
+
+    if total_required_width <= available_width {
+        let separator = " ".repeat(
+            available_width
+                .saturating_sub(metadata_width)
+                .saturating_sub(url_width),
+        );
+        metadata_lines.push(format!("{metadata}{separator}{review_request_url}"));
+
+        return metadata_lines;
+    }
+
+    metadata_lines.push(text_util::truncate_with_ellipsis(
+        &metadata,
+        available_width,
+    ));
+    metadata_lines.push(text_util::truncate_with_ellipsis(
+        review_request_url,
+        available_width,
+    ));
+
+    metadata_lines
+}
+
+/// Builds the untruncated left-side metadata text shared by session header and
+/// single-line metadata renderers.
+fn session_metadata_base_text(
+    session: &Session,
     default_reasoning_level: ReasoningLevel,
     wall_clock_unix_seconds: i64,
 ) -> String {
@@ -70,16 +153,13 @@ pub fn session_metadata_text(
     let reasoning_level = session.effective_reasoning_level(default_reasoning_level);
     let input_tokens = text_util::format_token_count(session.stats.input_tokens);
     let output_tokens = text_util::format_token_count(session.stats.output_tokens);
-    let metadata = format!(
+    format!(
         "Size: {}  Lines: +{added_lines} / -{deleted_lines}  Timer: {timer}  Model: {}  \
          Reasoning: {}  Tokens: {input_tokens}/{output_tokens}",
         session.size,
         session.model.as_str(),
         reasoning_level.as_str(),
-    );
-    let metadata_width = usize::from(header_width);
-
-    text_util::truncate_with_ellipsis(&metadata, metadata_width)
+    )
 }
 
 /// Builds the footer help line shown in session view mode.
@@ -412,5 +492,79 @@ fn session_output_published_branch_sync_color(
             style::palette::warning()
         }
         PublishedBranchSyncStatus::Succeeded => style::palette::success(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::session::tests::SessionFixtureBuilder;
+    use crate::domain::session::{
+        ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
+    };
+
+    fn session_with_review_request(url: &str) -> Session {
+        let mut session = SessionFixtureBuilder::new().build();
+        session.review_request = Some(ReviewRequest {
+            last_refreshed_at: 1,
+            summary: ReviewRequestSummary {
+                display_id: "#42".to_string(),
+                forge_kind: ForgeKind::GitHub,
+                source_branch: "main".to_string(),
+                state: ReviewRequestState::Open,
+                status_summary: None,
+                target_branch: "main".to_string(),
+                title: "Update workflow".to_string(),
+                web_url: url.to_string(),
+            },
+        });
+
+        session
+    }
+
+    #[test]
+    fn test_session_header_lines_keeps_review_request_url_on_same_line_if_it_fits() {
+        // Arrange
+        let session = session_with_review_request("https://github.com/agentty-xyz/agentty/pull/42");
+
+        // Act
+        let header_lines = session_header_lines(&session, 160, ReasoningLevel::default(), 0);
+        let metadata_line = header_lines[1].to_string();
+
+        // Assert
+        assert_eq!(header_lines.len(), 2);
+        assert_eq!(metadata_line.chars().count(), 160);
+        assert!(metadata_line.contains("Tokens: 0/0"));
+        assert!(metadata_line.ends_with("https://github.com/agentty-xyz/agentty/pull/42"));
+    }
+
+    #[test]
+    fn test_session_header_lines_wraps_review_request_url_to_second_line_when_too_narrow() {
+        // Arrange
+        let session = session_with_review_request("https://example.test/pull/42");
+
+        // Act
+        let header_lines = session_header_lines(&session, 60, ReasoningLevel::default(), 0);
+        let metadata_line = header_lines[1].to_string();
+        let review_url_line = header_lines[2].to_string();
+
+        // Assert
+        assert_eq!(header_lines.len(), 3);
+        assert!(metadata_line.contains("Size: XS"));
+        assert!(review_url_line.starts_with("https://"));
+        assert!(review_url_line.ends_with("https://example.test/pull/42"));
+    }
+
+    #[test]
+    fn test_session_metadata_text_omits_review_request_url() {
+        // Arrange
+        let session = session_with_review_request("https://example.test/pull/42");
+
+        // Act
+        let metadata_text = session_metadata_text(&session, 160, ReasoningLevel::default(), 0);
+
+        // Assert
+        assert!(metadata_text.contains("Tokens: 0/0"));
+        assert!(!metadata_text.contains("https://example.test/pull/42"));
     }
 }

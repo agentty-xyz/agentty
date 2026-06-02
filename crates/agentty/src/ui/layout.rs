@@ -6,7 +6,7 @@ const CHAT_INPUT_MIN_PANEL_HEIGHT: u16 = CHAT_INPUT_BORDER_HEIGHT + 1;
 const CHAT_INPUT_BORDER_HEIGHT: u16 = 2;
 const QUESTION_PANEL_HELP_HEIGHT: u16 = 1;
 const QUESTION_PANEL_SPACER_HEIGHT: u16 = 1;
-const SESSION_HEADER_HEIGHT: u16 = 2;
+const SESSION_HEADER_HEIGHT_MIN: u16 = 2;
 const TAB_PAGE_INSET: u16 = 1;
 const SINGLE_LINE_FOOTER_HEIGHT: u16 = 1;
 
@@ -43,7 +43,7 @@ pub struct QuestionPanelAreas {
 pub struct SessionChatAreas {
     /// Area used for the footer/help row below the session transcript.
     pub bottom_area: Rect,
-    /// Area used for the two-line title and metadata header.
+    /// Area used for the title and metadata header.
     pub header_area: Rect,
     /// Area used for the bordered transcript/output panel.
     pub output_area: Rect,
@@ -118,18 +118,16 @@ pub fn tab_page_areas(area: Rect) -> TabPageAreas {
 /// Splits one session chat page into header, transcript, and bottom panel.
 ///
 /// The outer frame keeps a one-cell margin, reserves `bottom_height` for the
-/// prompt/help region, and then dedicates a fixed two-row header above the
+/// prompt/help region, and then dedicates the requested header rows above the
 /// bordered session output panel.
-pub fn session_chat_areas(area: Rect, bottom_height: u16) -> SessionChatAreas {
+pub fn session_chat_areas(area: Rect, bottom_height: u16, header_height: u16) -> SessionChatAreas {
+    let header_height = header_height.max(SESSION_HEADER_HEIGHT_MIN);
     let vertical_chunks = Layout::default()
         .constraints([Constraint::Min(0), Constraint::Length(bottom_height)])
         .margin(1)
         .split(area);
     let output_chunks = Layout::default()
-        .constraints([
-            Constraint::Length(SESSION_HEADER_HEIGHT),
-            Constraint::Min(0),
-        ])
+        .constraints([Constraint::Length(header_height), Constraint::Min(0)])
         .split(vertical_chunks[0]);
 
     SessionChatAreas {
@@ -397,11 +395,25 @@ mod tests {
         let area = Rect::new(0, 0, 80, 24);
 
         // Act
-        let chat_areas = session_chat_areas(area, 5);
+        let chat_areas = session_chat_areas(area, 5, 2);
 
         // Assert
         assert_eq!(chat_areas.header_area, Rect::new(1, 1, 78, 2));
         assert_eq!(chat_areas.output_area, Rect::new(1, 3, 78, 15));
+        assert_eq!(chat_areas.bottom_area, Rect::new(1, 18, 78, 5));
+    }
+
+    #[test]
+    fn test_session_chat_areas_expand_for_three_line_header() {
+        // Arrange
+        let area = Rect::new(0, 0, 80, 24);
+
+        // Act
+        let chat_areas = session_chat_areas(area, 5, 3);
+
+        // Assert
+        assert_eq!(chat_areas.header_area, Rect::new(1, 1, 78, 3));
+        assert_eq!(chat_areas.output_area, Rect::new(1, 4, 78, 14));
         assert_eq!(chat_areas.bottom_area, Rect::new(1, 18, 78, 5));
     }
 
