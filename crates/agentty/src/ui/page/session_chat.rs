@@ -646,6 +646,66 @@ mod tests {
             .collect()
     }
 
+    /// Verifies the chat footer advertises continuation only for completed
+    /// sessions.
+    #[test]
+    fn test_render_done_session_shows_continue_footer_action() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::Done;
+        let mode = AppMode::View {
+            review_status_message: None,
+            review_text: None,
+            session_id: "session-id".into(),
+            scroll_offset: None,
+        };
+        let mut page = test_session_chat_page(&session, &mode);
+        let backend = ratatui::backend::TestBackend::new(80, 12);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                Page::render(&mut page, frame, area);
+            })
+            .expect("failed to draw done session");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("c: continue"));
+    }
+
+    /// Verifies canceled terminal sessions render without a continuation
+    /// shortcut in the chat footer.
+    #[test]
+    fn test_render_canceled_session_hides_continue_footer_action() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::Canceled;
+        let mode = AppMode::View {
+            review_status_message: None,
+            review_text: None,
+            session_id: "session-id".into(),
+            scroll_offset: None,
+        };
+        let mut page = test_session_chat_page(&session, &mode);
+        let backend = ratatui::backend::TestBackend::new(80, 12);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                Page::render(&mut page, frame, area);
+            })
+            .expect("failed to draw canceled session");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(!text.contains("c: continue"));
+    }
+
     #[test]
     fn test_status_bar_fyi_rotates_between_session_chat_messages() {
         // Arrange

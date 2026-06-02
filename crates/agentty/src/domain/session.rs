@@ -184,7 +184,7 @@ impl Status {
 
     /// Returns whether this status can seed a follow-on continuation session.
     pub fn allows_terminal_continuation(self) -> bool {
-        matches!(self, Status::Done | Status::Canceled)
+        matches!(self, Status::Done)
     }
 
     /// Returns whether a transition to `next` is valid.
@@ -1079,7 +1079,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_status_allows_terminal_continuation_only_for_terminal_statuses() {
+    fn test_status_allows_terminal_continuation_only_for_done() {
         // Arrange
         let done_status = Status::Done;
         let canceled_status = Status::Canceled;
@@ -1092,7 +1092,7 @@ pub(crate) mod tests {
 
         // Assert
         assert!(done_allows_continuation);
-        assert!(canceled_allows_continuation);
+        assert!(!canceled_allows_continuation);
         assert!(!review_allows_continuation);
     }
 
@@ -1247,25 +1247,18 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
     }
 
     #[test]
-    fn test_session_continuation_prompt_seed_falls_back_to_transcript_when_summary_is_missing() {
+    fn test_session_continuation_prompt_seed_disabled_for_canceled_session() {
         // Arrange
         let session = SessionFixtureBuilder::new()
             .status(Status::Canceled)
             .project_name("project-beta")
-            .output("  recent transcript  ")
-            .title(Some("Canceled session".to_string()))
             .build();
 
         // Act
-        let continuation_prompt_seed = session
-            .continuation_prompt_seed()
-            .expect("expected continuation prompt seed");
+        let continuation_prompt_seed = session.continuation_prompt_seed();
 
         // Assert
-        assert!(
-            continuation_prompt_seed.contains("Previous session transcript:\nrecent transcript")
-        );
-        assert!(continuation_prompt_seed.contains("Status: Canceled"));
+        assert_eq!(continuation_prompt_seed, None);
     }
 
     #[test]

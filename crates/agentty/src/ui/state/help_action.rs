@@ -33,8 +33,7 @@ impl HelpAction {
 pub enum ViewSessionState {
     /// Session is completed; a seeded continuation prompt can be opened.
     Done,
-    /// Session was canceled locally; a seeded continuation prompt can be
-    /// opened while the rest of the view stays read-only.
+    /// Session was canceled locally; view mode stays read-only.
     Canceled,
     /// Session is currently running; queued replies and stop remain available
     /// while worktree-open and diff shortcuts are hidden.
@@ -222,10 +221,7 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
         state.session_state,
         ViewSessionState::Review | ViewSessionState::AgentReview
     );
-    let can_continue_terminal_session = matches!(
-        state.session_state,
-        ViewSessionState::Done | ViewSessionState::Canceled
-    );
+    let can_continue_terminal_session = matches!(state.session_state, ViewSessionState::Done);
     let can_stop_session = state.session_state == ViewSessionState::InProgress;
     let mut actions = vec![HelpAction::new("back", "q", "Back to list")];
 
@@ -312,10 +308,7 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
         state.session_state,
         ViewSessionState::Review | ViewSessionState::AgentReview
     );
-    let can_continue_terminal_session = matches!(
-        state.session_state,
-        ViewSessionState::Done | ViewSessionState::Canceled
-    );
+    let can_continue_terminal_session = matches!(state.session_state, ViewSessionState::Done);
     let can_stop_session = state.session_state == ViewSessionState::InProgress;
 
     let mut actions = vec![HelpAction::new("back", "q", "Back to list")];
@@ -897,7 +890,7 @@ mod tests {
         let actions = view_actions(state);
 
         // Assert
-        assert!(actions.iter().any(|action| action.key == "c"));
+        assert!(!actions.iter().any(|action| action.key == "c"));
         assert!(!actions.iter().any(|action| action.key == "p"));
         assert!(!actions.iter().any(|action| action.key == "Enter"));
         assert!(!actions.iter().any(|action| action.key == "o"));
@@ -922,7 +915,7 @@ mod tests {
     }
 
     #[test]
-    fn test_view_footer_actions_canceled_shows_continue_without_toggle() {
+    fn test_view_footer_actions_canceled_hides_continue() {
         // Arrange
         let state = ViewHelpState {
             can_open_worktree: true,
@@ -935,7 +928,7 @@ mod tests {
         let ordered_keys = actions.iter().map(|action| action.key).collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(&ordered_keys[..4], ["q", "c", "j/k", "?"]);
+        assert_eq!(&ordered_keys[..3], ["q", "j/k", "?"]);
     }
 
     #[test]

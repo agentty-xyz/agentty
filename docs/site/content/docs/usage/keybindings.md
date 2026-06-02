@@ -130,8 +130,8 @@ until the background focused-review generation finishes and the session returns 
   or GitLab MR is already merged, that staged message is
   `Summarize changes from <full-hash> to use it as an initial context for this session`;
   otherwise it falls back to the saved summary/transcript.
-- **Canceled**: `c` opens a yes/no confirmation, stages the saved summary or transcript
-  as the first draft message, and focuses an empty composer for follow-up notes.
+- **Canceled**: continuation is unavailable; use `q`, scroll, or help from the read-only
+  session view.
 - **Review**: Runs in read-only review mode. It can use internet lookup and non-editing
   verification commands, but it should not edit files or mutate git/workspace state.
 

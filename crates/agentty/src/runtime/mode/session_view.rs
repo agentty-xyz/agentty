@@ -1478,7 +1478,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_view_session_snapshot_enables_continue_for_canceled_session() {
+    async fn test_view_session_snapshot_disables_continue_for_canceled_session() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.sessions.sessions_mut()[0].status = Status::Canceled;
@@ -1494,7 +1494,7 @@ mod tests {
         let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
 
         // Assert
-        assert!(snapshot.can_continue_terminal_session);
+        assert!(!snapshot.can_continue_terminal_session);
         assert!(!snapshot.can_open_worktree);
         assert_eq!(snapshot.session_state, ViewSessionState::Canceled);
         assert_eq!(snapshot.session_status, Status::Canceled);
@@ -2683,6 +2683,45 @@ mod tests {
                     == "Create a new draft session with initial context from this session?"
                 && matches!(restore_view, Some(restore_view) if restore_view.session_id == source_session_id)
                 && matches!(session_id, Some(session_id) if session_id.as_str() == source_session_id)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_continue_key_does_not_open_confirmation_for_canceled_session() {
+        // Arrange
+        let (mut app, _base_dir, source_session_id) = new_test_app_with_session().await;
+        app.sessions
+            .sessions_mut()
+            .iter_mut()
+            .find(|session| session.id == source_session_id)
+            .expect("expected source session")
+            .status = Status::Canceled;
+        app.mode = AppMode::View {
+            review_status_message: None,
+            review_text: None,
+            session_id: source_session_id.clone().into(),
+            scroll_offset: Some(0),
+        };
+        let backend = ratatui::backend::TestBackend::new(120, 30);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        let result = handle(
+            &mut app,
+            &mut terminal,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("c key should be handled");
+
+        // Assert
+        assert!(matches!(result, EventResult::Continue));
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                ref session_id,
+                ..
+            } if session_id.as_str() == source_session_id
         ));
     }
 

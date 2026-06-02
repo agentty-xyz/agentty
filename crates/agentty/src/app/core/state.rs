@@ -590,7 +590,7 @@ impl App {
             .ok_or_else(|| AppError::Workflow("Session not found".to_string()))?;
         if !source_session.allows_terminal_continuation() {
             return Err(AppError::Workflow(
-                "Only `Done` or `Canceled` sessions can be continued".to_string(),
+                "Only `Done` sessions can be continued".to_string(),
             ));
         }
 
@@ -4769,14 +4769,14 @@ mod tests {
         app.services
             .db()
             .sessions()
-            .insert_session("canceled-source", "gpt-5.4", "main", "Canceled", project_id)
+            .insert_session("done-source", "gpt-5.4", "main", "Done", project_id)
             .await
             .expect("failed to insert source session row");
         let source_session = crate::domain::session::tests::SessionFixtureBuilder::new()
-            .id("canceled-source")
-            .status(Status::Canceled)
+            .id("done-source")
+            .status(Status::Done)
             .summary(Some("# Summary\n\nUse the saved context.".to_string()))
-            .title(Some("Canceled source".to_string()))
+            .title(Some("Done source".to_string()))
             .build();
         app.sessions.push_session(source_session);
         let mut mock_git_client = crate::infra::git::MockGitClient::new();
@@ -4800,9 +4800,9 @@ mod tests {
 
         // Act
         let continued_session_id = app
-            .continue_terminal_session("canceled-source")
+            .continue_terminal_session("done-source")
             .await
-            .expect("expected canceled continuation to succeed");
+            .expect("expected done continuation to succeed");
 
         // Assert
         assert!(matches!(
@@ -4821,8 +4821,8 @@ mod tests {
             .expect("expected created continuation draft");
         assert_eq!(
             continued_session.prompt,
-            "Continue the work from this previous Agentty session.\n\nPrevious session: Canceled \
-             source\nProject: project\nStatus: Canceled\n\nPrevious session summary:\n# \
+            "Continue the work from this previous Agentty session.\n\nPrevious session: Done \
+             source\nProject: project\nStatus: Done\n\nPrevious session summary:\n# \
              Summary\n\nUse the saved context.\n"
         );
     }
@@ -4845,7 +4845,29 @@ mod tests {
         assert!(matches!(
             result,
             Err(AppError::Workflow(message))
-                if message == "Only `Done` or `Canceled` sessions can be continued"
+                if message == "Only `Done` sessions can be continued"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_continue_terminal_session_rejects_canceled_source_session() {
+        // Arrange
+        let mut app = new_test_app().await;
+        let source_session = crate::domain::session::tests::SessionFixtureBuilder::new()
+            .id("canceled-source")
+            .status(Status::Canceled)
+            .summary(Some("summary".to_string()))
+            .build();
+        app.sessions.push_session(source_session);
+
+        // Act
+        let result = app.continue_terminal_session("canceled-source").await;
+
+        // Assert
+        assert!(matches!(
+            result,
+            Err(AppError::Workflow(message))
+                if message == "Only `Done` sessions can be continued"
         ));
     }
 
@@ -4855,7 +4877,7 @@ mod tests {
         let mut app = new_test_app().await;
         let source_session = crate::domain::session::tests::SessionFixtureBuilder::new()
             .id("legacy-source")
-            .status(Status::Canceled)
+            .status(Status::Done)
             .summary(Some("summary".to_string()))
             .build();
         app.sessions.push_session(source_session);
