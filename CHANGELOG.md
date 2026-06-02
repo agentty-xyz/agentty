@@ -7,6 +7,29 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.9.6] - 2026-06-01
+
+### Added
+
+- agentty: show linked review request URLs in session headers.
+- agentty: persist merged review hashes so continuation can keep review context.
+
+### Changed
+
+- agentty: reject progress-style generated session titles and tighten the title
+  generation prompt.
+- agentty: restrict continuation to completed sessions; canceled sessions remain
+  terminal read-only.
+- Refresh the README demo GIF for the current interface.
+- testty: complete the explicit-import migration across docs, tests, and upgrade
+  guidance.
+- Bump workspace crate metadata and lockfile package versions to `0.9.6`.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
+
 ## [v0.9.5] - 2026-05-28
 
 This release supersedes `v0.9.4`, whose release workflow did not complete successfully.
