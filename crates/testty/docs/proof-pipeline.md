@@ -47,3 +47,20 @@ test-case names gain a stable ` #N` suffix.
 
 Diffs between consecutive captures are computed automatically — see
 [Frame diffing](frame-diffing.md).
+
+## Gallery
+
+After a run writes several artifacts into one directory, `proof::gallery::write_gallery`
+scans that directory and writes an aggregated `index.html` that links or embeds each
+`.txt`, `.png`, `.gif`, and `.html` artifact. Artifacts are sorted by file name, so
+prefix each with a zero-padded step number (for example, `01_launched.txt`) to make the
+gallery reflect run order. The result is a single entry point for browsing every proof a
+run produced.
+
+```rust
+use std::path::Path;
+
+use testty::proof::gallery;
+
+gallery::write_gallery(Path::new("proof-output")).unwrap();
+```

@@ -694,7 +694,7 @@ fn render_capture_to_base64(capture: &ProofCapture) -> Result<String, ProofError
 }
 
 /// Escape special HTML characters.
-fn escape_html(text: &str) -> String {
+pub(super) fn escape_html(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")

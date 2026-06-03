@@ -7,6 +7,7 @@
 
 pub mod backend;
 pub mod frame_text;
+pub mod gallery;
 pub mod gif;
 pub mod html;
 pub mod junit;
