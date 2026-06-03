@@ -1182,47 +1182,69 @@ mod tests {
     /// This helper counts lines in non-metadata files so mocked git clients
     /// can still drive size-related assertions without invoking shell `git`.
     async fn synthetic_diff_from_session_folder(folder: &Path) -> String {
-        /// Counts lines across one worktree using the async filesystem boundary
-        /// for file reads while keeping directory traversal simple in tests.
-        async fn count_lines_recursively(fs_client: &dyn fs::FsClient, root: &Path) -> usize {
-            let mut pending_entries = vec![root.to_path_buf()];
-            let mut line_count = 0;
+        let fs_client = create_passthrough_mock_fs_client();
+        let line_count = count_non_metadata_lines(&fs_client, folder).await;
 
-            while let Some(entry) = pending_entries.pop() {
-                if !entry.is_dir() {
-                    if let Ok(content) = fs_client.read_file(entry).await {
-                        line_count += String::from_utf8_lossy(&content).lines().count();
-                    }
+        synthetic_added_line_diff(line_count)
+    }
 
-                    continue;
-                }
+    /// Counts lines across one worktree while ignoring session metadata.
+    async fn count_non_metadata_lines(fs_client: &dyn fs::FsClient, root: &Path) -> usize {
+        let mut pending_entries = vec![root.to_path_buf()];
+        let mut line_count = 0;
 
-                if entry
-                    .file_name()
-                    .is_some_and(|name| name == SESSION_DATA_DIR)
-                {
-                    continue;
-                }
+        while let Some(entry) = pending_entries.pop() {
+            if !fs_client.is_dir(entry.clone()) {
+                line_count += count_file_lines(fs_client, &entry).await;
 
-                if let Ok(entries) = std::fs::read_dir(entry) {
-                    pending_entries.extend(
-                        entries
-                            .filter_map(Result::ok)
-                            .map(|dir_entry| dir_entry.path()),
-                    );
-                }
+                continue;
             }
 
-            line_count
+            if is_session_metadata_dir(&entry) {
+                continue;
+            }
+
+            pending_entries.extend(child_paths(&entry));
         }
 
-        let fs_client = create_passthrough_mock_fs_client();
-        let line_count = count_lines_recursively(&fs_client, folder).await;
+        line_count
+    }
 
-        if line_count == 0 {
-            String::new()
-        } else {
-            "+\n".repeat(line_count)
+    /// Counts UTF-8-lossy text lines in one file, returning zero on read error.
+    async fn count_file_lines(fs_client: &dyn fs::FsClient, path: &Path) -> usize {
+        fs_client
+            .read_file(path.to_path_buf())
+            .await
+            .map_or(0, |content| {
+                String::from_utf8_lossy(&content).lines().count()
+            })
+    }
+
+    /// Returns whether `path` points at Agentty's session metadata directory.
+    fn is_session_metadata_dir(path: &Path) -> bool {
+        path.file_name()
+            .is_some_and(|name| name == SESSION_DATA_DIR)
+    }
+
+    /// Returns direct child paths for a directory, or an empty list if
+    /// unreadable.
+    fn child_paths(path: &Path) -> Vec<PathBuf> {
+        std::fs::read_dir(path).map_or_else(
+            |_| Vec::new(),
+            |entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .map(|dir_entry| dir_entry.path())
+                    .collect()
+            },
+        )
+    }
+
+    /// Builds a git-diff body with one added-line marker per counted line.
+    fn synthetic_added_line_diff(line_count: usize) -> String {
+        match line_count {
+            0 => String::new(),
+            _ => "+\n".repeat(line_count),
         }
     }
 
