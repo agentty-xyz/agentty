@@ -110,16 +110,13 @@ async fn handle_session_creation_key(app: &mut App, key: KeyEvent) -> io::Result
             update_session_creation_selection(app, 0);
         }
         KeyCode::Down | KeyCode::Char('j') => {
-            update_session_creation_selection(app, 1);
+            update_session_creation_selection(
+                app,
+                next_session_creation_selection(app).saturating_add(1),
+            );
         }
         KeyCode::Enter => {
-            let is_draft = matches!(
-                app.mode,
-                AppMode::SessionCreation {
-                    selected_option_index: 1,
-                }
-            );
-            create_selected_session(app, is_draft).await?;
+            create_selected_session(app).await?;
         }
         _ => {}
     }
@@ -129,24 +126,62 @@ async fn handle_session_creation_key(app: &mut App, key: KeyEvent) -> io::Result
 
 /// Updates the highlighted option in the session creation selector.
 fn update_session_creation_selection(app: &mut App, selected_option_index: usize) {
+    let max_option_index = if selected_stacked_parent_session_id(app).is_some() {
+        2
+    } else {
+        1
+    };
+
     if let AppMode::SessionCreation {
         selected_option_index: current_index,
     } = &mut app.mode
     {
-        *current_index = selected_option_index.min(1);
+        *current_index = selected_option_index.min(max_option_index);
     }
 }
 
 /// Creates the selected session type and opens its prompt composer.
-async fn create_selected_session(app: &mut App, is_draft: bool) -> io::Result<()> {
-    let session_id = if is_draft {
-        app.create_draft_session().await.map_err(io::Error::other)?
-    } else {
-        app.create_session().await.map_err(io::Error::other)?
+async fn create_selected_session(app: &mut App) -> io::Result<()> {
+    let selected_option_index = current_session_creation_selection(app);
+    let session_id = match selected_option_index {
+        0 => app.create_session().await.map_err(io::Error::other)?,
+        1 => app.create_draft_session().await.map_err(io::Error::other)?,
+        2 => {
+            let Some(parent_session_id) = selected_stacked_parent_session_id(app) else {
+                return Ok(());
+            };
+
+            app.create_stacked_draft_session(parent_session_id.as_str())
+                .await
+                .map_err(io::Error::other)?
+        }
+        _ => return Ok(()),
     };
     mode::list::open_session_prompt(app, session_id);
 
     Ok(())
+}
+
+/// Returns the current highlighted session-creation option.
+fn current_session_creation_selection(app: &App) -> usize {
+    match app.mode {
+        AppMode::SessionCreation {
+            selected_option_index,
+        } => selected_option_index,
+        _ => 0,
+    }
+}
+
+/// Returns the next selectable session-creation option for down navigation.
+fn next_session_creation_selection(app: &App) -> usize {
+    current_session_creation_selection(app)
+}
+
+/// Returns the selected session id when it can parent a stacked draft.
+fn selected_stacked_parent_session_id(app: &App) -> Option<SessionId> {
+    app.selected_session()
+        .filter(|session| session.allows_stacked_child_creation())
+        .map(|session| session.id.clone())
 }
 
 /// Handles key input while a session-scoped informational popup is visible.

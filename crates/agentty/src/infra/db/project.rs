@@ -165,7 +165,7 @@ SELECT stats.active_session_count,
        p.id AS "id!",
        p.is_favorite AS "is_favorite: _",
        p.last_opened_at,
-       stats.last_session_updated_at,
+       stats.last_session_updated_at AS "last_session_updated_at?: i64",
        p.path,
        stats.session_count,
        p.updated_at AS "updated_at!"

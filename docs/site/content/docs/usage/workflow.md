@@ -75,13 +75,15 @@ tracking branch.
 |--------|-------------|-------------------| | **Draft** | Session created but not yet
 started. Regular sessions submit their first prompt immediately; draft sessions can
 stage multiple prompts locally first and only create their worktree when the staged
-bundle starts. | `Enter` compose first prompt or add draft, `/` open slash-command
-composer, `s` start staged draft session, `m` add to merge queue, `r` rebase, `o` open
-worktree after the session has started, scroll, help | | **InProgress** | Agent is
-actively working. | `Enter` open the chat composer to queue the next message, `Ctrl+c`
-retracts the most recently queued chat message (LIFO) one press at a time without
-interrupting the running turn, then stops the current turn once the queue is empty, `c`
-from the session list stops and cancels the session after confirmation, scroll, help | |
+bundle starts. Stacked drafts remain linked to a parent session branch until that parent
+merges. | `Enter` compose first prompt or add draft, `/` open slash-command composer,
+`s` start staged draft session after any parent link is cleared, `m` add to merge queue,
+`r` rebase, `o` open worktree after the session has started; stacked drafts hide `s`,
+`m`, and `r` until restacked, scroll, help | | **InProgress** | Agent is actively
+working. | `Enter` open the chat composer to queue the next message, `Ctrl+c` retracts
+the most recently queued chat message (LIFO) one press at a time without interrupting
+the running turn, then stops the current turn once the queue is empty, `c` from the
+session list stops and cancels the session after confirmation, scroll, help | |
 **Review** | Agent finished; changes are ready for review. Linked pull requests / merge
 requests refresh in the background; merged requests move the session to `Done` and save
 the synced session branch `HEAD` hash for `c` continuation, and closed requests move it
@@ -258,7 +260,8 @@ GitLab `!42`. | | `✓ <id>` | Review request `<id>` was merged. | | `✗ <id>` 
 request `<id>` was closed. |
 
 When a sync detects that the review request was merged, Agentty transitions the session
-straight to **Done**.
+straight to **Done**. Any stacked draft linked to that parent is restacked onto the
+parent's base branch so it can be started as a normal draft.
 
 <a id="usage-review-comments-preview"></a> While in **Review** or **AgentReview**, press
 `d` to open the diff page. Its right panel starts on the git diff and renders cached
@@ -272,18 +275,28 @@ the annotated diff and comments overview. Threads are fetched by the same backgr
 sync that refreshes review-request status. The panel is read-only — replies still happen
 on the forge web UI.
 
-From the **Sessions** tab, press `a` to choose between `Regular` and `Draft` session
-creation. `Regular` sessions keep the fast path: type the first prompt and press `Enter`
-to start the agent immediately. `Draft` sessions stage each `Enter` as one ordered draft
-message, immediately show a `Draft Session` guidance block in session view, keep the `o`
-shortcut hidden until a worktree exists, and start only after you press `s`. Once drafts
-are staged, the same panel previews the staged bundle before launch. The draft worktree
-is created at that start step so the branch is based on the local base branch at launch
-time, instead of the moment the draft session was first created. Until that deferred
-worktree exists, prompt `@` lookup suggestions index the active project root so file
-search still works while you stage the draft bundle. If you decide not to start that
-staged bundle, return to the **Sessions** list and press `c` to cancel the
-still-unstarted draft session directly.
+From the **Sessions** tab, press `a` to choose between `Regular`, `Draft`, and `Stacked`
+session creation. `Regular` sessions keep the fast path: type the first prompt and press
+`Enter` to start the agent immediately. `Draft` sessions stage each `Enter` as one
+ordered draft message, immediately show a `Draft Session` guidance block in session
+view, keep the `o` shortcut hidden until a worktree exists, and start only after you
+press `s`. Once drafts are staged, the same panel previews the staged bundle before
+launch. The draft worktree is created at that start step so the branch is based on the
+local base branch at launch time, instead of the moment the draft session was first
+created. Until that deferred worktree exists, prompt `@` lookup suggestions index the
+active project root so file search still works while you stage the draft bundle.
+
+`Stacked` creates a draft below the selected parent session and records the parent link
+in the session table. The stacked draft's future branch is based on the parent session
+branch, but the child remains a draft and cannot start while the parent link exists.
+Only one stacking level is available in this version, so a stacked child cannot itself
+create another stacked draft. When the parent merges, Agentty clears the child parent
+link and retargets the draft to the parent's base branch; after that, the child behaves
+like a normal draft and `s` can start it. Until that restack happens, the stacked
+draft's action list hides `s` start, `m` merge queue, and `r` rebase. When the parent is
+canceled, its stacked child is canceled too. If you decide not to start a staged bundle,
+return to the **Sessions** list and press `c` to cancel the still-unstarted draft
+session directly.
 
 ### Typical Transitions
 
@@ -300,6 +313,7 @@ flowchart TB
     direction LR
     new_regular["Draft"]
     new_draft["Draft<br/>staging"]
+    stacked_draft["Stacked<br/>draft"]
   end
 
   subgraph active["Active Turn"]
@@ -323,6 +337,10 @@ flowchart TB
   new_draft -->|stage more drafts| new_draft
   new_draft -->|start staged bundle| in_progress
   new_draft -->|cancel from session list| canceled
+  stacked_draft -->|stage more drafts| stacked_draft
+  stacked_draft -->|parent merged| new_draft
+  stacked_draft -->|parent canceled| canceled
+  stacked_draft -->|cancel from session list| canceled
 
   in_progress -->|turn completes| review
   in_progress -->|needs clarification| question
@@ -332,6 +350,7 @@ flowchart TB
   question -->|Ctrl+C end turn| review
 
   review -->|generate focused review| agent_review
+  review -->|create stacked draft| stacked_draft
   agent_review -->|review ready| review
   review -->|rebase| rebasing
   rebasing -->|rebase complete| review

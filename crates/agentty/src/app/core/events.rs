@@ -1288,6 +1288,7 @@ impl App {
         }
 
         let folder = session.folder.clone();
+        let base_branch = session.base_branch.clone();
         let source_branch = crate::app::session::session_branch(session_id);
 
         if let Err(error) = crate::app::session::SessionManager::cleanup_merged_session_worktree(
@@ -1300,6 +1301,16 @@ impl App {
         .await
         {
             warnings.push(format!("Worktree cleanup failed: {error}"));
+        }
+        if let Err(error) =
+            crate::app::session::SessionManager::restack_child_sessions_after_parent_merge(
+                self.services.db(),
+                session_id,
+                &base_branch,
+            )
+            .await
+        {
+            warnings.push(format!("Stacked child restack failed: {error}"));
         }
 
         let app_event_tx = self.services.event_sender();
@@ -1335,6 +1346,9 @@ impl App {
             Status::Canceled,
         )
         .await;
+        self.sessions
+            .cancel_stacked_child_sessions(&self.services, session_id)
+            .await;
     }
 
     /// Builds a session-view info popup mode with explicit loading metadata.

@@ -6,7 +6,13 @@
       {
         "name": "session_id: _",
         "ordinal": 0,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_usage",
+            "name": "session_id"
+          }
+        }
       }
     ],
     "parameters": {

@@ -6,7 +6,13 @@
       {
         "name": "created_at",
         "ordinal": 0,
-        "type_info": "Integer"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_activity",
+            "name": "created_at"
+          }
+        }
       }
     ],
     "parameters": {

@@ -1395,6 +1395,7 @@ mod tests {
             is_draft: false,
             model: AgentModel::Gemini3FlashPreview,
             output: String::new(),
+            parent_session_id: None,
             project_name: String::new(),
             prompt: prompt.to_string(),
             queued_messages: Vec::new(),
@@ -1451,6 +1452,7 @@ mod tests {
                 is_draft: false,
                 model: AgentModel::Gpt54,
                 output: String::new(),
+                parent_session_id: None,
                 project_name: "project".to_string(),
                 prompt: String::new(),
                 queued_messages: Vec::new(),
@@ -2202,6 +2204,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_create_stacked_draft_session_persists_parent_and_base_branch() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        let parent_session_id = app.create_session().await.expect("failed to create parent");
+        let expected_base_branch = session_branch(&parent_session_id);
+
+        // Act
+        let child_session_id = app
+            .create_stacked_draft_session(&parent_session_id)
+            .await
+            .expect("failed to create stacked draft session");
+
+        // Assert
+        let child_session = app
+            .sessions
+            .sessions()
+            .iter()
+            .find(|session| session.id == child_session_id)
+            .expect("missing child session");
+        assert!(child_session.is_draft_session());
+        assert_eq!(child_session.status, Status::Draft);
+        assert_eq!(
+            child_session.parent_session_id.as_deref(),
+            Some(parent_session_id.as_str())
+        );
+        assert_eq!(child_session.base_branch, expected_base_branch);
+        assert!(!child_session.folder.exists());
+
+        let db_sessions = app
+            .services
+            .db()
+            .sessions()
+            .load_sessions()
+            .await
+            .expect("failed to load");
+        let db_child_session = db_sessions
+            .iter()
+            .find(|session| session.id == child_session_id)
+            .expect("missing persisted child session");
+        assert_eq!(
+            db_child_session.parent_session_id.as_deref(),
+            Some(parent_session_id.as_str())
+        );
+        assert_eq!(db_child_session.base_branch, expected_base_branch);
+    }
+
+    #[tokio::test]
+    async fn test_create_stacked_draft_session_rejects_nested_child() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        let parent_session_id = app.create_session().await.expect("failed to create parent");
+        let child_session_id = app
+            .create_stacked_draft_session(&parent_session_id)
+            .await
+            .expect("failed to create stacked draft session");
+
+        // Act
+        let result = app.create_stacked_draft_session(&child_session_id).await;
+
+        // Assert
+        let error = result.expect_err("nested stacked draft creation should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("Stacked sessions can only be created from root sessions")
+        );
+    }
+
+    #[tokio::test]
     async fn test_create_session_keeps_default_smart_model_setting_when_session_model_changes() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
@@ -2648,6 +2721,43 @@ mod tests {
             .await
             .expect("failed to load");
         assert_eq!(db_sessions[0].prompt, "First draft\n\nSecond draft");
+    }
+
+    #[tokio::test]
+    async fn test_start_staged_session_rejects_stacked_draft_child() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        let parent_session_id = app.create_session().await.expect("failed to create parent");
+        let child_session_id = app
+            .create_stacked_draft_session(&parent_session_id)
+            .await
+            .expect("failed to create stacked draft session");
+        app.stage_draft_message(&child_session_id, "Stacked draft")
+            .await
+            .expect("failed to stage stacked draft message");
+
+        // Act
+        let result = app.start_staged_session(&child_session_id).await;
+
+        // Assert
+        let error = result.expect_err("stacked draft should not start before restack");
+        assert!(
+            error.to_string().contains(
+                "Stacked draft sessions can only be started after their parent is merged"
+            )
+        );
+        let child_session = app
+            .sessions
+            .sessions()
+            .iter()
+            .find(|session| session.id == child_session_id)
+            .expect("missing child session");
+        assert_eq!(child_session.status, Status::Draft);
+        assert_eq!(
+            child_session.parent_session_id.as_deref(),
+            Some(parent_session_id.as_str())
+        );
     }
 
     #[tokio::test]
@@ -4566,6 +4676,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_merge_session_restacks_stacked_child_after_success() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        let parent_session_id = app
+            .create_session()
+            .await
+            .expect("failed to create merge session");
+        let child_session_id = app
+            .create_stacked_draft_session(&parent_session_id)
+            .await
+            .expect("failed to create stacked draft session");
+        app.stage_draft_message(&child_session_id, "Ready after parent merge")
+            .await
+            .expect("failed to stage child draft message");
+        set_session_status_for_test(&mut app, &parent_session_id, Status::Review);
+        let mock_git =
+            create_mock_git_client_for_successful_noop_merges(1, dir.path().to_path_buf());
+        app.sessions.git_client = Arc::new(mock_git);
+
+        // Act
+        let result = app.merge_session(&parent_session_id).await;
+
+        // Assert
+        assert!(result.is_ok(), "merge should enqueue successfully");
+        wait_for_status_with_retries(&mut app, &parent_session_id, Status::Done, 200).await;
+        let db_sessions = app
+            .services
+            .db()
+            .sessions()
+            .load_sessions()
+            .await
+            .expect("failed to load sessions");
+        let db_child_session = db_sessions
+            .iter()
+            .find(|session| session.id == child_session_id)
+            .expect("missing persisted child session");
+        assert_eq!(db_child_session.parent_session_id, None);
+        assert_eq!(db_child_session.base_branch, "main");
+    }
+
+    #[tokio::test]
     async fn test_merge_session_marks_done_when_changes_are_already_in_base() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
@@ -5155,6 +5307,61 @@ mod tests {
             .expect("missing persisted session");
         assert_eq!(db_session.status, "Canceled");
         wait_for_path_absent(&session_folder).await;
+    }
+
+    #[tokio::test]
+    /// Ensures canceling a parent session also cancels its stacked draft child.
+    async fn test_cancel_session_cascades_to_stacked_child() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        let parent_session_id = app.create_session().await.expect("failed to create parent");
+        let child_session_id = app
+            .create_stacked_draft_session(&parent_session_id)
+            .await
+            .expect("failed to create stacked draft session");
+        set_session_status_for_test(&mut app, &parent_session_id, Status::Review);
+
+        // Act
+        app.sessions
+            .cancel_session(&app.services, &parent_session_id)
+            .await
+            .expect("failed to cancel parent session");
+
+        // Assert
+        app.sessions.sync_from_handles();
+        let parent_session = app
+            .sessions
+            .sessions()
+            .iter()
+            .find(|session| session.id == parent_session_id)
+            .expect("missing parent session");
+        let child_session = app
+            .sessions
+            .sessions()
+            .iter()
+            .find(|session| session.id == child_session_id)
+            .expect("missing child session");
+        assert_eq!(parent_session.status, Status::Canceled);
+        assert_eq!(child_session.status, Status::Canceled);
+
+        let db_sessions = app
+            .services
+            .db()
+            .sessions()
+            .load_sessions()
+            .await
+            .expect("failed to load");
+        let db_parent_session = db_sessions
+            .iter()
+            .find(|session| session.id == parent_session_id)
+            .expect("missing persisted parent session");
+        let db_child_session = db_sessions
+            .iter()
+            .find(|session| session.id == child_session_id)
+            .expect("missing persisted child session");
+        assert_eq!(db_parent_session.status, "Canceled");
+        assert_eq!(db_child_session.status, "Canceled");
     }
 
     #[tokio::test]

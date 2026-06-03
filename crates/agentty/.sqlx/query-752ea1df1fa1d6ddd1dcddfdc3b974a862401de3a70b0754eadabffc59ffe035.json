@@ -6,32 +6,68 @@
       {
         "name": "session_id",
         "ordinal": 0,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_usage",
+            "name": "session_id"
+          }
+        }
       },
       {
         "name": "model",
         "ordinal": 1,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_usage",
+            "name": "model"
+          }
+        }
       },
       {
         "name": "created_at",
         "ordinal": 2,
-        "type_info": "Integer"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_usage",
+            "name": "created_at"
+          }
+        }
       },
       {
         "name": "input_tokens",
         "ordinal": 3,
-        "type_info": "Integer"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_usage",
+            "name": "input_tokens"
+          }
+        }
       },
       {
         "name": "invocation_count",
         "ordinal": 4,
-        "type_info": "Integer"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_usage",
+            "name": "invocation_count"
+          }
+        }
       },
       {
         "name": "output_tokens",
         "ordinal": 5,
-        "type_info": "Integer"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_usage",
+            "name": "output_tokens"
+          }
+        }
       }
     ],
     "parameters": {

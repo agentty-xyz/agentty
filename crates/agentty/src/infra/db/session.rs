@@ -44,6 +44,7 @@ pub struct SessionRow {
     pub model: String,
     pub output: String,
     pub output_tokens: i64,
+    pub parent_session_id: Option<String>,
     pub project_id: Option<i64>,
     pub prompt: String,
     pub reasoning_level_override: Option<String>,
@@ -85,6 +86,8 @@ pub struct SessionListRow {
     pub model: String,
     /// Total output tokens accumulated for the session.
     pub output_tokens: i64,
+    /// Parent session id when this row is a one-level stacked draft.
+    pub parent_session_id: Option<String>,
     /// Owning project identifier, when present.
     pub project_id: Option<i64>,
     /// Persisted session-specific reasoning override, when present.
@@ -194,6 +197,17 @@ pub trait SessionRepository: Send + Sync {
         project_id: i64,
     ) -> Result<(), DbError>;
 
+    /// Inserts a newly created stacked draft-session row.
+    async fn insert_stacked_draft_session(
+        &self,
+        id: &str,
+        model: &str,
+        base_branch: &str,
+        status: &str,
+        parent_session_id: &str,
+        project_id: i64,
+    ) -> Result<(), DbError>;
+
     /// Inserts a newly created session row.
     async fn insert_session(
         &self,
@@ -249,6 +263,14 @@ pub trait SessionRepository: Send + Sync {
         &self,
         session_id: &str,
     ) -> Result<Option<String>, DbError>;
+
+    /// Clears parent links for draft children after their parent session
+    /// merges into its base branch.
+    async fn restack_child_sessions_after_parent_merge(
+        &self,
+        parent_session_id: &str,
+        base_branch: &str,
+    ) -> Result<(), DbError>;
 
     /// Loads the persisted session-specific reasoning override, when present.
     async fn load_session_reasoning_level_override(
@@ -462,6 +484,7 @@ pub(crate) struct SessionJoinRow {
     model: String,
     output: String,
     output_tokens: i64,
+    parent_session_id: Option<String>,
     project_id: Option<i64>,
     prompt: String,
     reasoning_level_override: Option<String>,
@@ -500,6 +523,7 @@ impl SessionJoinRow {
             model,
             output,
             output_tokens,
+            parent_session_id,
             project_id,
             prompt,
             reasoning_level_override,
@@ -547,6 +571,7 @@ impl SessionJoinRow {
             model,
             output,
             output_tokens,
+            parent_session_id,
             project_id,
             prompt,
             reasoning_level_override,
@@ -577,6 +602,7 @@ impl SessionJoinRow {
             model: "gpt-5.4".to_string(),
             output: "Saved output".to_string(),
             output_tokens: 29,
+            parent_session_id: Some("parent-session".to_string()),
             project_id: Some(7),
             prompt: "Implement feature".to_string(),
             reasoning_level_override: None,
@@ -617,6 +643,7 @@ struct SessionListJoinRow {
     is_draft: bool,
     model: String,
     output_tokens: i64,
+    parent_session_id: Option<String>,
     project_id: Option<i64>,
     reasoning_level_override: Option<String>,
     published_upstream_ref: Option<String>,
@@ -651,6 +678,7 @@ impl SessionListJoinRow {
             is_draft,
             model,
             output_tokens,
+            parent_session_id,
             project_id,
             reasoning_level_override,
             published_upstream_ref,
@@ -694,6 +722,7 @@ impl SessionListJoinRow {
             is_draft,
             model,
             output_tokens,
+            parent_session_id,
             project_id,
             reasoning_level_override,
             published_upstream_ref,
@@ -854,8 +883,43 @@ WHERE id = ?
         status: &str,
         project_id: i64,
     ) -> Result<(), DbError> {
-        insert_session_with_draft_mode(&self.0, id, model, base_branch, status, true, project_id)
-            .await
+        insert_session_with_draft_mode(
+            &self.0,
+            InsertSessionRow {
+                base_branch,
+                id,
+                is_draft: true,
+                model,
+                parent_session_id: None,
+                project_id,
+                status,
+            },
+        )
+        .await
+    }
+
+    async fn insert_stacked_draft_session(
+        &self,
+        id: &str,
+        model: &str,
+        base_branch: &str,
+        status: &str,
+        parent_session_id: &str,
+        project_id: i64,
+    ) -> Result<(), DbError> {
+        insert_session_with_draft_mode(
+            &self.0,
+            InsertSessionRow {
+                base_branch,
+                id,
+                is_draft: true,
+                model,
+                parent_session_id: Some(parent_session_id),
+                project_id,
+                status,
+            },
+        )
+        .await
     }
 
     async fn insert_session(
@@ -866,8 +930,19 @@ WHERE id = ?
         status: &str,
         project_id: i64,
     ) -> Result<(), DbError> {
-        insert_session_with_draft_mode(&self.0, id, model, base_branch, status, false, project_id)
-            .await
+        insert_session_with_draft_mode(
+            &self.0,
+            InsertSessionRow {
+                base_branch,
+                id,
+                is_draft: false,
+                model,
+                parent_session_id: None,
+                project_id,
+                status,
+            },
+        )
+        .await
     }
 
     #[cfg(test)]
@@ -887,6 +962,7 @@ SELECT session.base_branch AS "base_branch!",
        session.model AS "model!",
        session.output AS "output!",
        session.output_tokens AS "output_tokens!",
+       session.parent_session_id,
        session.project_id,
        session.prompt AS "prompt!",
        session.reasoning_level AS "reasoning_level_override?",
@@ -939,6 +1015,7 @@ SELECT session.base_branch AS "base_branch!",
        session.is_draft AS "is_draft!: bool",
        session.model AS "model!",
        session.output_tokens AS "output_tokens!",
+       session.parent_session_id,
        session.project_id,
        session.reasoning_level AS "reasoning_level_override?",
        session.published_upstream_ref,
@@ -1125,6 +1202,28 @@ WHERE id = ?
         .flatten();
 
         Ok(value.and_then(|value| value.parse::<ReasoningLevel>().ok()))
+    }
+
+    async fn restack_child_sessions_after_parent_merge(
+        &self,
+        parent_session_id: &str,
+        base_branch: &str,
+    ) -> Result<(), DbError> {
+        sqlx::query(
+            r"
+UPDATE session
+SET parent_session_id = NULL,
+    base_branch = ?
+WHERE parent_session_id = ?
+  AND status <> 'Canceled'
+",
+        )
+        .bind(base_branch)
+        .bind(parent_session_id)
+        .execute(&self.0)
+        .await?;
+
+        Ok(())
     }
 
     async fn load_session_summary(&self, session_id: &str) -> Result<Option<String>, DbError> {
@@ -1671,21 +1770,54 @@ WHERE id = ?
     }
 }
 
+/// Borrowed values used to insert one newly created session row.
+struct InsertSessionRow<'a> {
+    /// Base branch or parent branch used for future worktree materialization.
+    base_branch: &'a str,
+    /// Stable session identifier.
+    id: &'a str,
+    /// Whether the row was created through explicit draft staging.
+    is_draft: bool,
+    /// Agent model identifier persisted for the session.
+    model: &'a str,
+    /// Optional parent session id for one-level stacked drafts.
+    parent_session_id: Option<&'a str>,
+    /// Owning project identifier.
+    project_id: i64,
+    /// Initial lifecycle status string.
+    status: &'a str,
+}
+
 /// Inserts one newly created session row with explicit draft-mode
 /// persistence.
 async fn insert_session_with_draft_mode(
     pool: &SqlitePool,
-    id: &str,
-    model: &str,
-    base_branch: &str,
-    status: &str,
-    is_draft: bool,
-    project_id: i64,
+    row: InsertSessionRow<'_>,
 ) -> Result<(), DbError> {
+    let InsertSessionRow {
+        base_branch,
+        id,
+        is_draft,
+        model,
+        parent_session_id,
+        project_id,
+        status,
+    } = row;
+
     sqlx::query(
         r"
-INSERT INTO session (id, model, base_branch, status, is_draft, project_id, prompt, output)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO session (
+    id,
+    model,
+    base_branch,
+    status,
+    is_draft,
+    parent_session_id,
+    project_id,
+    prompt,
+    output
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ",
     )
     .bind(id)
@@ -1693,6 +1825,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     .bind(base_branch)
     .bind(status)
     .bind(is_draft)
+    .bind(parent_session_id)
     .bind(project_id)
     .bind("")
     .bind("")

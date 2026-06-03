@@ -27,9 +27,10 @@ session | | `j` / `k` | Navigate sessions | | `Tab` | Switch tab | | `?` | Help 
 highlighted in the table with a `* ` prefix and accented row text, even while cursor
 selection moves to other rows.
 
-On the **Sessions** list, `a` opens a popup with `Regular`, `Draft`, and a disabled
-`Stacked` option. `Enter` chooses the highlighted option, `j` / `k` or `Up` / `Down`
-move between enabled options, and `Esc` / `q` closes the popup.
+On the **Sessions** list, `a` opens a popup with `Regular`, `Draft`, and `Stacked`.
+`Stacked` is enabled only when the selected session is a root session with an active
+branch. `Enter` chooses the highlighted option, `j` / `k` or `Up` / `Down` move between
+enabled options, and `Esc` / `q` closes the popup.
 
 On the **Sessions** list, `c` appears only when the selected row is cancelable: running
 sessions, review-ready sessions, and draft sessions that are still in `Draft` before
@@ -103,7 +104,9 @@ until the background focused-review generation finishes and the session returns 
   those commands are dispatched into tmux windows.
 - **Draft sessions**: sessions created through the `a` selector do not create a worktree
   until you press `s` to start the staged bundle, so `o` stays hidden before the first
-  live turn.
+  live turn. Stacked drafts can stage messages immediately, but `s` stays unavailable
+  until the parent session is merged and the draft is restacked onto the base branch.
+  Their action list also hides `m` and `r` while the parent link is still set.
 - **Forge review-request publish**: `p` is available in **Review** and **AgentReview**
   and opens a publish popup. Press `Enter` with an empty field to keep the default
   session branch target, or type a custom remote branch name first. Agentty pushes the
@@ -192,8 +195,9 @@ before streaming the prompt.
 
 When the current session was created as `Draft`, pressing `Enter` stages the current
 composer contents into the draft bundle and returns to session view. Use `s` from
-session view to launch the staged bundle as the first live turn. Sessions created as
-`Regular` start immediately on the first `Enter`.
+session view to launch the staged bundle as the first live turn. For a `Stacked` draft,
+that start action is blocked until its parent has merged. Sessions created as `Regular`
+start immediately on the first `Enter`.
 
 ## Question Input — Option Selection
 

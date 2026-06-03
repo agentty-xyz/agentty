@@ -6,22 +6,46 @@
       {
         "name": "output!",
         "ordinal": 0,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "output"
+          }
+        }
       },
       {
         "name": "prompt!",
         "ordinal": 1,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "prompt"
+          }
+        }
       },
       {
         "name": "questions",
         "ordinal": 2,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "questions"
+          }
+        }
       },
       {
         "name": "summary",
         "ordinal": 3,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "summary"
+          }
+        }
       }
     ],
     "parameters": {

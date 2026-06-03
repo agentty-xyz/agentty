@@ -77,6 +77,21 @@ struct ViewSessionSnapshot {
     session_status: Status,
 }
 
+impl ViewSessionSnapshot {
+    /// Returns whether the active session can enter the merge queue from view
+    /// mode.
+    fn can_merge_session(&self) -> bool {
+        is_view_action_allowed(self.session_status)
+            && self.session_state != ViewSessionState::StackedDraft
+    }
+
+    /// Returns whether the active session can start a rebase from view mode.
+    fn can_rebase_session(&self) -> bool {
+        is_view_rebase_allowed(self.session_status)
+            && self.session_state != ViewSessionState::StackedDraft
+    }
+}
+
 /// Fallback copy shown when a review-ready session has no diff to inspect.
 const REVIEW_NO_DIFF_MESSAGE: &str = "No diff changes found for review.";
 
@@ -323,10 +338,10 @@ async fn handle_workflow_view_key(
         {
             open_or_regenerate_review(app, view_context, pending_update).await;
         }
-        KeyCode::Char('m') if is_view_action_allowed(view_session_snapshot.session_status) => {
+        KeyCode::Char('m') if view_session_snapshot.can_merge_session() => {
             open_merge_confirmation(app, view_context);
         }
-        KeyCode::Char('r') if is_view_rebase_allowed(view_session_snapshot.session_status) => {
+        KeyCode::Char('r') if view_session_snapshot.can_rebase_session() => {
             rebase_view_session(app, &view_context.session_id).await;
         }
         KeyCode::Char('c')
@@ -469,9 +484,7 @@ fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSe
     Some(ViewSessionSnapshot {
         can_continue_terminal_session: session.allows_terminal_continuation(),
         can_open_worktree,
-        can_start_staged_session: session.is_draft_session()
-            && session.status == Status::Draft
-            && session.has_staged_drafts(),
+        can_start_staged_session: session.can_start_staged_session(),
         follow_up_task_action: app.selected_follow_up_task_action(&view_context.session_id),
         publish_pull_request_action: session.publish_pull_request_action(),
         session_state: help_action::session_view_state(session),
@@ -1526,6 +1539,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_view_session_snapshot_hides_workflow_actions_for_stacked_draft() {
+        // Arrange
+        let (mut app, _base_dir) =
+            new_test_app_with_git_and_tmux_client(Arc::new(MockTmuxClient::new())).await;
+        let session_id = app
+            .create_draft_session()
+            .await
+            .expect("failed to create draft session");
+        let session = app
+            .sessions
+            .sessions_mut()
+            .iter_mut()
+            .find(|session| session.id == session_id)
+            .expect("expected draft session");
+        session.parent_session_id = Some("parent-session".into());
+        session.prompt = "staged child draft".to_string();
+        app.mode = AppMode::View {
+            review_status_message: None,
+            review_text: None,
+            session_id: session_id.into(),
+            scroll_offset: Some(1),
+        };
+        let context = view_context(&mut app).expect("expected view context");
+
+        // Act
+        let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
+
+        // Assert
+        assert_eq!(snapshot.session_state, ViewSessionState::StackedDraft);
+        assert!(!snapshot.can_start_staged_session);
+        assert!(!snapshot.can_merge_session());
+        assert!(!snapshot.can_rebase_session());
+    }
+
+    #[tokio::test]
     async fn test_view_session_snapshot_reads_cached_worktree_availability() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
@@ -2361,6 +2409,24 @@ mod tests {
 
         // Assert
         assert_eq!(state, ViewSessionState::Rebasing);
+    }
+
+    #[test]
+    fn test_view_session_state_maps_stacked_draft_status() {
+        // Arrange
+        let session = crate::domain::session::tests::SessionFixtureBuilder::new()
+            .status(Status::Draft)
+            .draft(true)
+            .parent_session_id(Some("parent-session".into()))
+            .folder(std::env::temp_dir())
+            .project_name("")
+            .build();
+
+        // Act
+        let state = help_action::session_view_state(&session);
+
+        // Assert
+        assert_eq!(state, ViewSessionState::StackedDraft);
     }
 
     #[test]

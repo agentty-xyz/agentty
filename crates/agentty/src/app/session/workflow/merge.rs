@@ -851,6 +851,7 @@ impl SessionManager {
             &app_event_tx,
         )
         .await?;
+        Self::restack_child_sessions_after_parent_merge(&db, &id, &base_branch).await?;
 
         if !SessionTaskService::update_status(
             &status,
@@ -873,6 +874,25 @@ impl SessionManager {
             &base_branch,
             merge_outcome,
         ))
+    }
+
+    /// Clears stacked-child parent links after a parent branch merges.
+    ///
+    /// Children are retargeted to the merged parent's original base branch so
+    /// a staged draft child becomes a root draft that can start normally.
+    ///
+    /// # Errors
+    /// Returns an error when child metadata cannot be updated.
+    pub(crate) async fn restack_child_sessions_after_parent_merge(
+        db: &AppRepositories,
+        parent_session_id: &str,
+        base_branch: &str,
+    ) -> Result<(), SessionError> {
+        db.sessions()
+            .restack_child_sessions_after_parent_merge(parent_session_id, base_branch)
+            .await?;
+
+        Ok(())
     }
 
     /// Persists post-merge metadata derived from the authoritative session

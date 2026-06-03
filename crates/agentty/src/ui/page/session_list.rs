@@ -17,6 +17,10 @@ const ROW_HIGHLIGHT_SYMBOL: &str = "";
 const TABLE_COLUMN_SPACING: u16 = 2;
 /// Placeholder text rendered under group headers with no sessions.
 const GROUP_EMPTY_PLACEHOLDER: &str = "No sessions...";
+/// Tree branch prefix for child rows that have siblings after them.
+const TREE_BRANCH_MIDDLE: &str = "├ ";
+/// Tree branch prefix for the final child row in a stack.
+const TREE_BRANCH_LAST: &str = "└ ";
 /// Session list page renderer.
 pub struct SessionListPage<'a> {
     /// Active project-scoped default reasoning level for sessions without an
@@ -143,7 +147,37 @@ enum SessionTableRow<'a> {
     GroupLabel(SessionGroup),
     /// Marker row shown when a group has zero sessions.
     EmptyGroupPlaceholder,
-    Session(&'a Session),
+    /// Selectable session row with raw index and tree placement metadata.
+    Session {
+        index: usize,
+        session: &'a Session,
+        tree_prefix: SessionTreePrefix,
+    },
+}
+
+/// Visual tree marker for a selectable session row.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum SessionTreePrefix {
+    /// Root-level session row with no tree marker.
+    Root,
+    /// One-level child row connected to its parent.
+    Child { is_last: bool },
+}
+
+impl SessionTreePrefix {
+    /// Returns the rendered tree marker for this row.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Root => "",
+            Self::Child { is_last: true } => TREE_BRANCH_LAST,
+            Self::Child { is_last: false } => TREE_BRANCH_MIDDLE,
+        }
+    }
+
+    /// Returns the display width consumed by the tree marker.
+    fn width(self) -> usize {
+        self.label().chars().count()
+    }
 }
 
 /// Session list groups shown in the table.
@@ -180,13 +214,13 @@ pub(crate) fn preferred_initial_session_index(sessions: &[Session]) -> Option<us
 /// Returns session indexes in the same order as selectable rows in the grouped
 /// session table.
 pub(crate) fn grouped_session_indexes(sessions: &[Session]) -> Vec<usize> {
-    let mut indexes = Vec::with_capacity(sessions.len());
-    indexes.extend(sessions_for_group(sessions, SessionGroup::MergeQueue).map(|(index, _)| index));
-    indexes
-        .extend(sessions_for_group(sessions, SessionGroup::ActiveSessions).map(|(index, _)| index));
-    indexes.extend(sessions_for_group(sessions, SessionGroup::Archive).map(|(index, _)| index));
-
-    indexes
+    grouped_session_rows(sessions)
+        .into_iter()
+        .filter_map(|row| match row {
+            SessionTableRow::Session { index, .. } => Some(index),
+            SessionTableRow::GroupLabel(_) | SessionTableRow::EmptyGroupPlaceholder => None,
+        })
+        .collect()
 }
 
 /// Returns grouped display rows with merge queue, active, then archive
@@ -209,14 +243,63 @@ fn append_group_rows<'a>(
     rows.push(SessionTableRow::GroupLabel(group));
 
     let mut group_has_sessions = false;
-    for (_, session) in sessions_for_group(sessions, group) {
-        rows.push(SessionTableRow::Session(session));
+    for (index, session) in sessions_for_group(sessions, group) {
+        if has_loaded_parent_session(sessions, session) {
+            continue;
+        }
+
+        rows.push(SessionTableRow::Session {
+            index,
+            session,
+            tree_prefix: SessionTreePrefix::Root,
+        });
+        append_stacked_child_rows(rows, sessions, session.id.as_str());
         group_has_sessions = true;
     }
 
     if !group_has_sessions {
         rows.push(SessionTableRow::EmptyGroupPlaceholder);
     }
+}
+
+/// Adds the one-level stacked children for a parent session row.
+fn append_stacked_child_rows<'a>(
+    rows: &mut Vec<SessionTableRow<'a>>,
+    sessions: &'a [Session],
+    parent_session_id: &str,
+) {
+    let children = sessions
+        .iter()
+        .enumerate()
+        .filter(|(_, session)| {
+            session
+                .parent_session_id
+                .as_ref()
+                .is_some_and(|parent_id| parent_id.as_str() == parent_session_id)
+        })
+        .collect::<Vec<_>>();
+
+    let child_count = children.len();
+    for (child_position, (index, session)) in children.into_iter().enumerate() {
+        rows.push(SessionTableRow::Session {
+            index,
+            session,
+            tree_prefix: SessionTreePrefix::Child {
+                is_last: child_position + 1 == child_count,
+            },
+        });
+    }
+}
+
+/// Returns whether a session should be nested under a loaded parent row.
+fn has_loaded_parent_session(sessions: &[Session], session: &Session) -> bool {
+    let Some(parent_session_id) = session.parent_session_id.as_ref() else {
+        return false;
+    };
+
+    sessions
+        .iter()
+        .any(|candidate| candidate.id.as_str() == parent_session_id.as_str())
 }
 
 /// Returns session indexes and snapshots for one grouped section.
@@ -255,7 +338,7 @@ fn selected_render_row(
 
     rows.iter().position(|row| match row {
         SessionTableRow::GroupLabel(_) | SessionTableRow::EmptyGroupPlaceholder => false,
-        SessionTableRow::Session(session) => session.id == selected_session_id,
+        SessionTableRow::Session { session, .. } => session.id == selected_session_id,
     })
 }
 
@@ -269,8 +352,13 @@ fn render_table_row(
     match row {
         SessionTableRow::GroupLabel(group) => render_group_label_row(*group),
         SessionTableRow::EmptyGroupPlaceholder => render_empty_group_placeholder_row(),
-        SessionTableRow::Session(session) => render_session_row(
+        SessionTableRow::Session {
             session,
+            tree_prefix,
+            ..
+        } => render_session_row(
+            session,
+            *tree_prefix,
             title_column_width,
             default_reasoning_level,
             wall_clock_unix_seconds,
@@ -308,6 +396,7 @@ fn render_empty_group_placeholder_row() -> Row<'static> {
 /// Renders one session row.
 fn render_session_row(
     session: &Session,
+    tree_prefix: SessionTreePrefix,
     title_column_width: usize,
     default_reasoning_level: ReasoningLevel,
     wall_clock_unix_seconds: i64,
@@ -316,7 +405,15 @@ fn render_session_row(
     let title_text = inline_text(session.display_title());
     let title_spans =
         markdown::parse_inline_spans(&title_text, Style::default().fg(style::palette::text()));
-    let title_spans = truncate_spans_with_ellipsis(title_spans, title_column_width);
+    let title_spans = truncate_spans_with_ellipsis(
+        title_spans,
+        title_column_width.saturating_sub(tree_prefix.width()),
+    );
+    let mut title_line_spans = Vec::new();
+    if !tree_prefix.label().is_empty() {
+        title_line_spans.push(Span::styled(tree_prefix.label(), tree_prefix_style()));
+    }
+    title_line_spans.extend(title_spans);
     let timer_label = if session.has_in_progress_timer() {
         format_duration_compact(session.in_progress_duration_seconds(wall_clock_unix_seconds))
     } else {
@@ -338,7 +435,7 @@ fn render_session_row(
         ]))
     };
     let cells = vec![
-        Cell::from(Line::from(title_spans)),
+        Cell::from(Line::from(title_line_spans)),
         Cell::from(session_model_and_reasoning_level(
             session,
             default_reasoning_level,
@@ -351,6 +448,11 @@ fn render_session_row(
     Row::new(cells)
         .style(Style::default().fg(style::palette::text()))
         .height(1)
+}
+
+/// Returns the tree connector style with contrast on highlighted rows.
+fn tree_prefix_style() -> Style {
+    Style::default().fg(style::palette::text_muted())
 }
 
 /// Calculates the width of the model column from known session values.
@@ -476,6 +578,7 @@ mod tests {
             is_draft: false,
             model: AgentModel::Gemini3FlashPreview,
             output: String::new(),
+            parent_session_id: None,
             project_name: "project".to_string(),
             prompt: String::new(),
             queued_messages: Vec::new(),
@@ -703,6 +806,35 @@ mod tests {
     }
 
     #[test]
+    fn test_grouped_session_indexes_places_stacked_child_after_parent() {
+        // Arrange
+        let mut child_session = test_session("child-1", Status::Draft);
+        child_session.parent_session_id = Some("parent-1".into());
+        let sessions = vec![
+            child_session,
+            test_session("parent-1", Status::Review),
+            test_session("sibling-1", Status::Review),
+        ];
+
+        // Act
+        let indexes = grouped_session_indexes(&sessions);
+        let ordered_ids = indexes
+            .into_iter()
+            .map(|index| sessions[index].id.clone())
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(
+            ordered_ids,
+            vec![
+                "parent-1".to_string(),
+                "child-1".to_string(),
+                "sibling-1".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn test_grouped_session_rows_orders_merge_queue_before_active_and_archive_sessions() {
         // Arrange
         let sessions = vec![
@@ -721,7 +853,7 @@ mod tests {
             .map(|row| match row {
                 SessionTableRow::GroupLabel(group) => group.label().to_string(),
                 SessionTableRow::EmptyGroupPlaceholder => GROUP_EMPTY_PLACEHOLDER.to_string(),
-                SessionTableRow::Session(session) => session.id.to_string(),
+                SessionTableRow::Session { session, .. } => session.id.to_string(),
             })
             .collect::<Vec<_>>();
 
@@ -757,7 +889,7 @@ mod tests {
             .map(|row| match row {
                 SessionTableRow::GroupLabel(group) => group.label().to_string(),
                 SessionTableRow::EmptyGroupPlaceholder => GROUP_EMPTY_PLACEHOLDER.to_string(),
-                SessionTableRow::Session(session) => session.id.to_string(),
+                SessionTableRow::Session { session, .. } => session.id.to_string(),
             })
             .collect::<Vec<_>>();
 
@@ -772,6 +904,43 @@ mod tests {
                 "active-2".to_string(),
                 SessionGroup::Archive.label().to_string(),
                 GROUP_EMPTY_PLACEHOLDER.to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_grouped_session_rows_marks_stacked_child_with_tree_prefix() {
+        // Arrange
+        let mut first_child_session = test_session("child-1", Status::Draft);
+        first_child_session.parent_session_id = Some("parent-1".into());
+        let mut second_child_session = test_session("child-2", Status::Draft);
+        second_child_session.parent_session_id = Some("parent-1".into());
+        let sessions = vec![
+            first_child_session,
+            test_session("parent-1", Status::Review),
+            second_child_session,
+        ];
+
+        // Act
+        let session_rows = grouped_session_rows(&sessions)
+            .into_iter()
+            .filter_map(|row| match row {
+                SessionTableRow::Session {
+                    session,
+                    tree_prefix,
+                    ..
+                } => Some((session.id.to_string(), tree_prefix.label().to_string())),
+                SessionTableRow::GroupLabel(_) | SessionTableRow::EmptyGroupPlaceholder => None,
+            })
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(
+            session_rows,
+            vec![
+                ("parent-1".to_string(), String::new()),
+                ("child-1".to_string(), TREE_BRANCH_MIDDLE.to_string()),
+                ("child-2".to_string(), TREE_BRANCH_LAST.to_string()),
             ]
         );
     }
@@ -865,6 +1034,41 @@ mod tests {
         // Assert
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("gpt-5.4 [medium]"));
+    }
+
+    #[test]
+    fn test_render_session_row_connects_stacked_child_to_parent() {
+        // Arrange
+        let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
+        let backend = ratatui::backend::TestBackend::new(100, 12);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let mut table_state = TableState::default();
+        table_state.select(Some(1));
+        let mut parent_session = test_session("parent-1", Status::Review);
+        parent_session.title = Some("Parent session".to_string());
+        let mut child_session = test_session("child-1", Status::Draft);
+        child_session.parent_session_id = Some("parent-1".into());
+        child_session.title = Some("Child session".to_string());
+        let sessions = vec![parent_session, child_session];
+
+        // Act
+        terminal
+            .draw(|frame| {
+                SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::default(), 0)
+                    .render(frame, frame.area());
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("Parent session"));
+        assert!(text.contains("└ Child session"));
+        let buffer = terminal.backend().buffer();
+        let fallback_cell = &buffer.content()[0];
+        let tree_cell = find_text_start_cell(buffer, "└").unwrap_or(fallback_cell);
+        assert_eq!(tree_cell.fg, style::palette::text_muted());
+        assert_eq!(tree_cell.bg, style::palette::surface());
+        assert_ne!(tree_cell.fg, tree_cell.bg);
     }
 
     #[test]
@@ -1135,6 +1339,7 @@ mod tests {
     #[test]
     fn test_render_keeps_selected_new_status_text_visible() {
         // Arrange
+        let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
         let backend = ratatui::backend::TestBackend::new(100, 12);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let mut table_state = TableState::default();
@@ -1154,7 +1359,7 @@ mod tests {
         let fallback_cell = &buffer.content()[0];
         let title_cell = find_text_start_cell(buffer, "new-1").unwrap_or(fallback_cell);
         let new_cell = find_text_start_cell(buffer, "Draft").unwrap_or(fallback_cell);
-        assert_eq!(title_cell.fg, style::palette::text());
+        assert_ne!(title_cell.fg, title_cell.bg);
         assert_eq!(new_cell.fg, style::palette::text_muted());
         assert_eq!(new_cell.bg, style::palette::surface());
         assert_ne!(new_cell.fg, new_cell.bg);

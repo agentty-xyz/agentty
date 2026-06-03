@@ -13,9 +13,11 @@ const MIN_OVERLAY_HEIGHT: u16 = 11;
 /// Minimum popup width sized for the longest hint plus shared overlay chrome.
 const MIN_OVERLAY_WIDTH: u16 = 44;
 /// Fixed description width so option labels share one left edge.
-const OPTION_DETAIL_WIDTH: usize = 20;
+const OPTION_DETAIL_WIDTH: usize = 27;
 /// Fixed label width for `Regular`, `Draft`, and `Stacked`.
 const OPTION_LABEL_WIDTH: usize = 7;
+/// Detail text for the experimental stacked session creation path.
+const STACKED_SESSION_PREVIEW_DETAIL: &str = "[Preview] Stack on selected";
 /// Popup height as a percentage of the available render area on tall terminals.
 const OVERLAY_HEIGHT_PERCENT: u16 = 22;
 /// Popup width as a percentage of the available render area on wide terminals.
@@ -23,13 +25,17 @@ const OVERLAY_WIDTH_PERCENT: u16 = 30;
 
 /// Centered popup used to choose the type of session to create.
 pub struct SessionCreationOverlay {
+    /// Whether the highlighted list session can parent a new stacked draft.
+    can_create_stacked_session: bool,
+    /// Currently highlighted option row in the selector.
     selected_option_index: usize,
 }
 
 impl SessionCreationOverlay {
     /// Creates a session creation selector with the provided highlighted row.
-    pub fn new(selected_option_index: usize) -> Self {
+    pub fn new(selected_option_index: usize, can_create_stacked_session: bool) -> Self {
         Self {
+            can_create_stacked_session,
             selected_option_index,
         }
     }
@@ -62,7 +68,16 @@ impl SessionCreationOverlay {
             Line::from(""),
             self.option_line(0, "Regular", "Start immediately", false),
             self.option_line(1, "Draft", "Stage locally first", false),
-            self.option_line(2, "Stacked", "Coming soon...", true),
+            self.option_line(
+                2,
+                "Stacked",
+                if self.can_create_stacked_session {
+                    STACKED_SESSION_PREVIEW_DETAIL
+                } else {
+                    "Select parent first"
+                },
+                !self.can_create_stacked_session,
+            ),
             Line::from(""),
             Line::from(vec![Span::styled(
                 "j/k: move | Enter: select | q: close",
@@ -142,10 +157,11 @@ mod tests {
         let selected_option_index = 1;
 
         // Act
-        let overlay = SessionCreationOverlay::new(selected_option_index);
+        let overlay = SessionCreationOverlay::new(selected_option_index, true);
 
         // Assert
         assert_eq!(overlay.selected_option_index, selected_option_index);
+        assert!(overlay.can_create_stacked_session);
     }
 
     #[test]
@@ -183,7 +199,7 @@ mod tests {
         // Arrange
         let backend = ratatui::backend::TestBackend::new(80, 20);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-        let overlay = SessionCreationOverlay::new(0);
+        let overlay = SessionCreationOverlay::new(0, false);
 
         // Act
         terminal
@@ -203,7 +219,7 @@ mod tests {
         assert!(text.contains("Regular"));
         assert!(text.contains("Draft"));
         assert!(text.contains("Stacked"));
-        assert!(text.contains("Coming soon..."));
+        assert!(text.contains("Select parent first"));
         assert!(text.contains("j/k: move | Enter: select | q: close"));
     }
 
@@ -212,7 +228,7 @@ mod tests {
         // Arrange
         let backend = ratatui::backend::TestBackend::new(80, 20);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-        let overlay = SessionCreationOverlay::new(1);
+        let overlay = SessionCreationOverlay::new(1, false);
 
         // Act
         terminal
@@ -232,7 +248,7 @@ mod tests {
     #[test]
     fn test_session_creation_overlay_lines_center_header_and_help_text() {
         // Arrange
-        let overlay = SessionCreationOverlay::new(0);
+        let overlay = SessionCreationOverlay::new(0, false);
 
         // Act
         let lines = overlay.lines();
@@ -247,7 +263,7 @@ mod tests {
     #[test]
     fn test_session_creation_overlay_lines_disable_stacked_option() {
         // Arrange
-        let overlay = SessionCreationOverlay::new(2);
+        let overlay = SessionCreationOverlay::new(2, false);
 
         // Act
         let lines = overlay.lines();
@@ -264,7 +280,31 @@ mod tests {
             stacked_line
                 .spans
                 .iter()
-                .any(|span| span.content.contains("Coming soon..."))
+                .any(|span| span.content.contains("Select parent first"))
+        );
+    }
+
+    #[test]
+    fn test_session_creation_overlay_lines_enable_stacked_option() {
+        // Arrange
+        let overlay = SessionCreationOverlay::new(2, true);
+
+        // Act
+        let lines = overlay.lines();
+        let stacked_line = &lines[4];
+
+        // Assert
+        assert!(
+            stacked_line
+                .spans
+                .iter()
+                .any(|span| span.style.bg == Some(palette::accent()))
+        );
+        assert!(
+            stacked_line
+                .spans
+                .iter()
+                .any(|span| span.content.contains(STACKED_SESSION_PREVIEW_DETAIL))
         );
     }
 

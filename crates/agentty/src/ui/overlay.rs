@@ -6,6 +6,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use ratatui::widgets::{Block, BorderType, Borders, Padding};
 
+use crate::app::Tab;
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::session::{Session, SessionId};
 use crate::infra::review_comment_cache::ReviewCommentCache;
@@ -144,11 +145,21 @@ pub(crate) fn render_session_creation_overlay(
     selected_option_index: usize,
     wall_clock_unix_seconds: i64,
 ) {
+    let can_create_stacked_session = list_background.current_tab == Tab::Sessions
+        && list_background
+            .table_state
+            .selected()
+            .and_then(|selected_index| list_background.sessions.get(selected_index))
+            .is_some_and(Session::allows_stacked_child_creation);
+
     render_list_background(f, area, list_background, wall_clock_unix_seconds);
     render_overlay_backdrop(f, area);
 
-    component::session_creation_overlay::SessionCreationOverlay::new(selected_option_index)
-        .render(f, area);
+    component::session_creation_overlay::SessionCreationOverlay::new(
+        selected_option_index,
+        can_create_stacked_session,
+    )
+    .render(f, area);
 }
 
 /// Renders the list background and sync informational popup overlay.

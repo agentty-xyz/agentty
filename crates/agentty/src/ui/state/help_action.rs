@@ -47,6 +47,9 @@ pub enum ViewSessionState {
     /// Session is still collecting staged draft messages before its first
     /// live turn starts.
     NewSession,
+    /// Stacked draft is still blocked behind a parent branch; draft editing
+    /// remains available while start, merge, and rebase are hidden.
+    StackedDraft,
     /// Session is ready for review; reply, worktree-open, merge, rebase,
     /// review, and diff shortcuts are available.
     Review,
@@ -79,6 +82,9 @@ pub(crate) fn session_view_state(session: &Session) -> ViewSessionState {
         Status::Done => ViewSessionState::Done,
         Status::Canceled => ViewSessionState::Canceled,
         Status::InProgress => ViewSessionState::InProgress,
+        Status::Draft if session.is_draft_session() && session.is_stacked_child() => {
+            ViewSessionState::StackedDraft
+        }
         Status::Draft if session.is_draft_session() => ViewSessionState::NewSession,
         Status::Draft | Status::Question => ViewSessionState::Interactive,
         Status::Rebasing => ViewSessionState::Rebasing,
@@ -203,6 +209,7 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
             state.session_state,
             ViewSessionState::Interactive
                 | ViewSessionState::NewSession
+                | ViewSessionState::StackedDraft
                 | ViewSessionState::Review
                 | ViewSessionState::AgentReview
         );
@@ -210,6 +217,7 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
         state.session_state,
         ViewSessionState::Interactive
             | ViewSessionState::NewSession
+            | ViewSessionState::StackedDraft
             | ViewSessionState::Review
             | ViewSessionState::AgentReview
     );
@@ -257,7 +265,7 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
         ));
     }
 
-    if can_edit_session {
+    if can_edit_session && state.session_state != ViewSessionState::StackedDraft {
         actions.push(HelpAction::new(
             "add to merge queue",
             "m",
@@ -294,6 +302,7 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
             state.session_state,
             ViewSessionState::Interactive
                 | ViewSessionState::NewSession
+                | ViewSessionState::StackedDraft
                 | ViewSessionState::Review
                 | ViewSessionState::AgentReview
         );
@@ -301,6 +310,7 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
         state.session_state,
         ViewSessionState::Interactive
             | ViewSessionState::NewSession
+            | ViewSessionState::StackedDraft
             | ViewSessionState::Review
             | ViewSessionState::AgentReview
     );
@@ -352,9 +362,10 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
 ///
 /// The explicit draft-session start action stays grouped with the prompt,
 /// merge, and rebase controls so future edits do not accidentally apply a
-/// different guard to one of those related actions. `AgentReview` keeps the
-/// prompt and merge actions visible while suppressing `r` until background
-/// review generation finishes.
+/// different guard to one of those related actions. Stacked drafts keep only
+/// draft-editing actions until their parent link is cleared. `AgentReview`
+/// keeps the prompt and merge actions visible while suppressing `r` until
+/// background review generation finishes.
 fn append_view_footer_edit_actions(
     actions: &mut Vec<HelpAction>,
     session_state: ViewSessionState,
@@ -368,6 +379,10 @@ fn append_view_footer_edit_actions(
 
     if session_state == ViewSessionState::NewSession {
         actions.push(HelpAction::new("start", "s", "Start staged session"));
+    }
+
+    if session_state == ViewSessionState::StackedDraft {
+        return;
     }
 
     actions.push(HelpAction::new(
@@ -401,7 +416,10 @@ fn append_view_prompt_actions(
 /// Returns the `Enter` prompt-entry action label appropriate for the current
 /// session state.
 fn prompt_action_help_action(session_state: ViewSessionState) -> HelpAction {
-    if session_state == ViewSessionState::NewSession {
+    if matches!(
+        session_state,
+        ViewSessionState::NewSession | ViewSessionState::StackedDraft
+    ) {
         return HelpAction::new("add draft", "Enter", "Add draft");
     }
 
@@ -754,6 +772,30 @@ mod tests {
     }
 
     #[test]
+    fn test_view_actions_stacked_draft_hides_start_merge_and_rebase() {
+        // Arrange
+        let state = ViewHelpState {
+            can_open_worktree: true,
+            publish_pull_request_action: None,
+            session_state: ViewSessionState::StackedDraft,
+        };
+
+        // Act
+        let actions = view_actions(state);
+
+        // Assert
+        assert!(
+            actions
+                .iter()
+                .any(|action| action.key == "Enter" && action.footer_label == "add draft")
+        );
+        assert!(actions.iter().any(|action| action.key == "/"));
+        assert!(!actions.iter().any(|action| action.key == "s"));
+        assert!(!actions.iter().any(|action| action.key == "m"));
+        assert!(!actions.iter().any(|action| action.key == "r"));
+    }
+
+    #[test]
     fn test_view_actions_done_shows_continue_and_hides_edit_actions() {
         // Arrange
         let state = ViewHelpState {
@@ -855,6 +897,26 @@ mod tests {
 
         // Assert
         assert_eq!(&ordered_keys[..6], ["q", "Enter", "/", "s", "m", "r"]);
+    }
+
+    #[test]
+    fn test_view_footer_actions_stacked_draft_hides_start_merge_and_rebase() {
+        // Arrange
+        let state = ViewHelpState {
+            can_open_worktree: true,
+            publish_pull_request_action: None,
+            session_state: ViewSessionState::StackedDraft,
+        };
+
+        // Act
+        let actions = view_footer_actions(state);
+
+        // Assert
+        assert!(actions.iter().any(|action| action.key == "Enter"));
+        assert!(actions.iter().any(|action| action.key == "/"));
+        assert!(!actions.iter().any(|action| action.key == "s"));
+        assert!(!actions.iter().any(|action| action.key == "m"));
+        assert!(!actions.iter().any(|action| action.key == "r"));
     }
 
     #[test]

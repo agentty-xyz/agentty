@@ -498,6 +498,9 @@ pub struct Session {
     pub model: AgentModel,
     /// Captured output transcript.
     pub output: String,
+    /// Parent session this draft is stacked on, when this session is blocked
+    /// behind another session branch.
+    pub parent_session_id: Option<SessionId>,
     /// Human-readable project name associated with the session.
     pub project_name: String,
     /// Initial user prompt used to create the session.
@@ -555,6 +558,36 @@ impl Session {
     /// prompts waiting for an explicit start action.
     pub fn has_staged_drafts(&self) -> bool {
         self.is_draft_session() && self.status == Status::Draft && !self.prompt.is_empty()
+    }
+
+    /// Returns whether this session can create a one-level stacked draft
+    /// child.
+    ///
+    /// Only root sessions with materialized branches can be parents in the
+    /// first stacked-session version. Explicit draft sessions are excluded
+    /// because their worktree branch is deferred until start, and terminal
+    /// sessions no longer provide an active branch to stack on.
+    pub fn allows_stacked_child_creation(&self) -> bool {
+        self.parent_session_id.is_none()
+            && !self.is_draft_session()
+            && !matches!(self.status, Status::Done | Status::Canceled)
+    }
+
+    /// Returns whether this draft session is still blocked behind a parent
+    /// session branch.
+    pub fn is_stacked_child(&self) -> bool {
+        self.parent_session_id.is_some()
+    }
+
+    /// Returns whether the staged draft bundle can start its first live turn.
+    ///
+    /// Stacked draft children remain blocked until their parent is merged and
+    /// the persisted parent link is cleared.
+    pub fn can_start_staged_session(&self) -> bool {
+        self.is_draft_session()
+            && self.status == Status::Draft
+            && self.has_staged_drafts()
+            && !self.is_stacked_child()
     }
 
     /// Returns whether the session can be canceled by the user.
@@ -826,6 +859,7 @@ pub(crate) mod tests {
                     is_draft: false,
                     model: AgentModel::Gemini3FlashPreview,
                     output: String::new(),
+                    parent_session_id: None,
                     project_name: "project".to_string(),
                     prompt: String::new(),
                     queued_messages: Vec::new(),
@@ -901,6 +935,13 @@ pub(crate) mod tests {
             self
         }
 
+        /// Overrides the optional stacked-session parent identifier.
+        pub(crate) fn parent_session_id(mut self, parent_session_id: Option<SessionId>) -> Self {
+            self.session.parent_session_id = parent_session_id;
+
+            self
+        }
+
         /// Overrides the optional explicit session title.
         pub(crate) fn title(mut self, title: Option<String>) -> Self {
             self.session.title = title;
@@ -929,6 +970,74 @@ pub(crate) mod tests {
         pub(crate) fn build(self) -> Session {
             self.session
         }
+    }
+
+    #[test]
+    fn test_allows_stacked_child_creation_returns_true_for_root_active_session() {
+        // Arrange
+        let session = SessionFixtureBuilder::new()
+            .draft(false)
+            .status(Status::Review)
+            .build();
+
+        // Act
+        let allows_stacked_child = session.allows_stacked_child_creation();
+
+        // Assert
+        assert!(allows_stacked_child);
+    }
+
+    #[test]
+    fn test_allows_stacked_child_creation_rejects_drafts_children_and_terminal_sessions() {
+        // Arrange
+        let draft_session = SessionFixtureBuilder::new()
+            .draft(true)
+            .status(Status::Draft)
+            .build();
+        let child_session = SessionFixtureBuilder::new()
+            .parent_session_id(Some(SessionId::from("parent-session")))
+            .status(Status::Review)
+            .build();
+        let done_session = SessionFixtureBuilder::new().status(Status::Done).build();
+        let canceled_session = SessionFixtureBuilder::new()
+            .status(Status::Canceled)
+            .build();
+
+        // Act
+        let allows_draft_child = draft_session.allows_stacked_child_creation();
+        let allows_nested_child = child_session.allows_stacked_child_creation();
+        let allows_done_child = done_session.allows_stacked_child_creation();
+        let allows_canceled_child = canceled_session.allows_stacked_child_creation();
+
+        // Assert
+        assert!(!allows_draft_child);
+        assert!(!allows_nested_child);
+        assert!(!allows_done_child);
+        assert!(!allows_canceled_child);
+    }
+
+    #[test]
+    fn test_can_start_staged_session_blocks_stacked_child_until_restacked() {
+        // Arrange
+        let root_draft_session = SessionFixtureBuilder::new()
+            .draft(true)
+            .status(Status::Draft)
+            .prompt("Ready to start")
+            .build();
+        let stacked_draft_session = SessionFixtureBuilder::new()
+            .draft(true)
+            .status(Status::Draft)
+            .prompt("Waiting on parent")
+            .parent_session_id(Some(SessionId::from("parent-session")))
+            .build();
+
+        // Act
+        let can_start_root_draft = root_draft_session.can_start_staged_session();
+        let can_start_stacked_draft = stacked_draft_session.can_start_staged_session();
+
+        // Assert
+        assert!(can_start_root_draft);
+        assert!(!can_start_stacked_draft);
     }
 
     /// Builds a minimal session fixture for reasoning-level tests.
@@ -1331,6 +1440,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             is_draft: false,
             model: AgentModel::Gemini3FlashPreview,
             output: String::new(),
+            parent_session_id: None,
             project_name: "project".to_string(),
             prompt: String::new(),
             queued_messages: Vec::new(),
@@ -1370,6 +1480,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             is_draft: false,
             model: AgentModel::Gemini3FlashPreview,
             output: String::new(),
+            parent_session_id: None,
             project_name: "project".to_string(),
             prompt: String::new(),
             queued_messages: Vec::new(),
@@ -1409,6 +1520,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             is_draft: false,
             model: AgentModel::Gemini3FlashPreview,
             output: String::new(),
+            parent_session_id: None,
             project_name: "project".to_string(),
             prompt: String::new(),
             queued_messages: Vec::new(),
@@ -1448,6 +1560,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             is_draft: false,
             model: AgentModel::Gemini3FlashPreview,
             output: String::new(),
+            parent_session_id: None,
             project_name: "project".to_string(),
             prompt: String::new(),
             queued_messages: Vec::new(),
@@ -1487,6 +1600,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             is_draft: false,
             model: AgentModel::Gemini3FlashPreview,
             output: String::new(),
+            parent_session_id: None,
             project_name: "project".to_string(),
             prompt: String::new(),
             queued_messages: Vec::new(),
@@ -1526,6 +1640,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             is_draft: false,
             model: AgentModel::Gemini3FlashPreview,
             output: String::new(),
+            parent_session_id: None,
             project_name: "project".to_string(),
             prompt: String::new(),
             queued_messages: Vec::new(),

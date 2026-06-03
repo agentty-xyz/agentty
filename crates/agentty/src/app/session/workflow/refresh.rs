@@ -446,6 +446,7 @@ mod tests {
             is_draft: false,
             model: AgentModel::Gemini3FlashPreview,
             output: String::new(),
+            parent_session_id: None,
             project_name: "project".to_string(),
             prompt: "Implement forge review support".to_string(),
             queued_messages: Vec::new(),

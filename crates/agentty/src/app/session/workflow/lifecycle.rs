@@ -192,6 +192,58 @@ impl SessionManager {
             .await
     }
 
+    /// Creates a blank draft session stacked on top of a selected parent
+    /// session branch.
+    ///
+    /// The child remains an explicit draft and cannot start until the parent
+    /// reaches `Done`, which clears the child parent link and retargets it to
+    /// the parent's base branch.
+    ///
+    /// # Errors
+    /// Returns an error when the parent is missing, already stacked, terminal,
+    /// an unmaterialized draft, missing project metadata, or when draft
+    /// persistence fails.
+    pub async fn create_stacked_draft_session(
+        &mut self,
+        services: &AppServices,
+        parent_session_id: &str,
+    ) -> Result<String, SessionError> {
+        let (base_branch, parent_id) = {
+            let parent_session = self.session_or_err(parent_session_id)?;
+            if !parent_session.allows_stacked_child_creation() {
+                return Err(SessionError::Workflow(
+                    "Stacked sessions can only be created from root sessions with active branches"
+                        .to_string(),
+                ));
+            }
+
+            let parent_branch = self
+                .session_branch_name(&parent_session.id)
+                .map_or_else(|| session_branch(&parent_session.id), str::to_string);
+
+            (parent_branch, parent_session.id.clone())
+        };
+        let project_id = services
+            .db()
+            .sessions()
+            .load_session_project_id(parent_id.as_str())
+            .await?
+            .ok_or_else(|| {
+                SessionError::Workflow(
+                    "Parent session has no project association for stacked draft creation"
+                        .to_string(),
+                )
+            })?;
+
+        self.create_draft_session_for_project_with_parent(
+            services,
+            project_id,
+            &base_branch,
+            Some(parent_id.as_str()),
+        )
+        .await
+    }
+
     /// Creates one blank draft session for an explicit persisted project.
     ///
     /// Continuation flows use the source session project instead of the
@@ -209,6 +261,19 @@ impl SessionManager {
         project_id: i64,
         base_branch: &str,
     ) -> Result<String, SessionError> {
+        self.create_draft_session_for_project_with_parent(services, project_id, base_branch, None)
+            .await
+    }
+
+    /// Creates one blank draft session with an optional persisted parent
+    /// session id.
+    async fn create_draft_session_for_project_with_parent(
+        &mut self,
+        services: &AppServices,
+        project_id: i64,
+        base_branch: &str,
+        parent_session_id: Option<&str>,
+    ) -> Result<String, SessionError> {
         let session_model = self
             .resolve_default_session_model(services, project_id)
             .await;
@@ -222,20 +287,36 @@ impl SessionManager {
             )));
         }
 
-        services
-            .db()
-            .sessions()
-            .insert_draft_session(
-                &session_id,
-                session_model.as_str(),
-                base_branch,
-                &Status::Draft.to_string(),
-                project_id,
-            )
-            .await
-            .map_err(|error| {
-                SessionError::Workflow(format!("Failed to save session metadata: {error}"))
-            })?;
+        let insert_result = if let Some(parent_session_id) = parent_session_id {
+            services
+                .db()
+                .sessions()
+                .insert_stacked_draft_session(
+                    &session_id,
+                    session_model.as_str(),
+                    base_branch,
+                    &Status::Draft.to_string(),
+                    parent_session_id,
+                    project_id,
+                )
+                .await
+        } else {
+            services
+                .db()
+                .sessions()
+                .insert_draft_session(
+                    &session_id,
+                    session_model.as_str(),
+                    base_branch,
+                    &Status::Draft.to_string(),
+                    project_id,
+                )
+                .await
+        };
+
+        insert_result.map_err(|error| {
+            SessionError::Workflow(format!("Failed to save session metadata: {error}"))
+        })?;
 
         Self::record_session_creation_activity(services, &session_id).await;
         services.emit_app_event(AppEvent::RefreshSessions);
@@ -711,6 +792,12 @@ impl SessionManager {
             if session.status != Status::Draft {
                 return Err(SessionError::Workflow(
                     "Only `Draft` sessions can be started from staged drafts".to_string(),
+                ));
+            }
+            if session.is_stacked_child() {
+                return Err(SessionError::Workflow(
+                    "Stacked draft sessions can only be started after their parent is merged"
+                        .to_string(),
                 ));
             }
             if session.prompt.is_empty() {
@@ -2236,6 +2323,21 @@ impl SessionManager {
         services: &AppServices,
         session_id: &str,
     ) -> Result<(), SessionError> {
+        let status_updated = self.cancel_single_session(services, session_id).await?;
+        if status_updated {
+            self.cancel_stacked_child_sessions(services, session_id)
+                .await;
+        }
+
+        Ok(())
+    }
+
+    /// Cancels one session without cascading into stacked children.
+    async fn cancel_single_session(
+        &self,
+        services: &AppServices,
+        session_id: &str,
+    ) -> Result<bool, SessionError> {
         let session = self.session_or_err(session_id)?;
         if !session.allows_cancel_action() {
             return Err(SessionError::Workflow(
@@ -2277,7 +2379,48 @@ impl SessionManager {
             );
         }
 
-        Ok(())
+        Ok(status_updated)
+    }
+
+    /// Cancels every loaded one-level stacked child of `parent_session_id`.
+    ///
+    /// Child cancellation is best-effort after the parent has already reached
+    /// `Canceled`, but it reuses the same single-session cancellation path so
+    /// staged draft temp data and any future child worktree resources are
+    /// cleaned consistently.
+    pub(crate) async fn cancel_stacked_child_sessions(
+        &self,
+        services: &AppServices,
+        parent_session_id: &str,
+    ) {
+        for child_session_id in self.stacked_child_session_ids(parent_session_id) {
+            if let Err(error) = self
+                .cancel_single_session(services, child_session_id.as_str())
+                .await
+            {
+                warn!(
+                    parent_session_id = parent_session_id,
+                    child_session_id = %child_session_id,
+                    error = %error,
+                    "failed to cancel stacked child session after parent cancellation"
+                );
+            }
+        }
+    }
+
+    /// Returns loaded one-level child ids for one parent session.
+    fn stacked_child_session_ids(&self, parent_session_id: &str) -> Vec<SessionId> {
+        self.state
+            .sessions
+            .iter()
+            .filter(|session| {
+                session
+                    .parent_session_id
+                    .as_ref()
+                    .is_some_and(|parent_id| parent_id.as_str() == parent_session_id)
+            })
+            .map(|session| session.id.clone())
+            .collect()
     }
 
     /// Defers terminal cancellation cleanup so foreground key handling returns
@@ -2640,6 +2783,7 @@ mod tests {
             is_draft: false,
             model: AgentModel::ClaudeSonnet46,
             output: output.to_string(),
+            parent_session_id: None,
             project_name: "project".to_string(),
             prompt: prompt.to_string(),
             queued_messages: Vec::new(),

@@ -496,6 +496,7 @@ mod tests {
                 is_draft: false,
                 model: AgentModel::Gpt54,
                 output: String::new(),
+                parent_session_id: None,
                 project_name: "project".to_string(),
                 prompt: String::new(),
                 queued_messages: Vec::new(),

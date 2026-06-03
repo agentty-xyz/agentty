@@ -433,6 +433,7 @@ mod tests {
             is_draft: false,
             model: AgentKind::Gemini.default_model(),
             output: String::new(),
+            parent_session_id: None,
             project_name: "project".to_string(),
             prompt: String::new(),
             queued_messages: Vec::new(),

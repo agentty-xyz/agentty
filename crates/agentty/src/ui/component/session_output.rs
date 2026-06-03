@@ -26,8 +26,14 @@ const DRAFT_PREVIEW_HEADER: &str = "## Draft Session";
 const DRAFT_PREVIEW_EMPTY_NOTE: &str = "No draft messages staged yet. Use `Enter` to stage the \
                                         first draft locally, then press `s` in session view to \
                                         start the bundle.";
+const DRAFT_PREVIEW_STACKED_EMPTY_NOTE: &str = "No draft messages staged yet. Use `Enter` to \
+                                                stage the first draft locally. This stacked draft \
+                                                can start after its parent is merged.";
 const DRAFT_PREVIEW_STAGED_NOTE: &str =
     "Draft messages stay local until you press `s` in session view to start the staged bundle.";
+const DRAFT_PREVIEW_STACKED_STAGED_NOTE: &str = "Draft messages stay local until the parent \
+                                                 session is merged. After restacking, press `s` \
+                                                 in session view to start the staged bundle.";
 const USER_PROMPT_PREFIX: &str = " › ";
 /// User prompt prefix when the prompt starts after a transcript newline.
 const USER_PROMPT_LINE_PREFIX: &str = "\n › ";
@@ -47,6 +53,8 @@ struct SessionOutputLayoutCacheKey {
     active_progress: TextFingerprint,
     active_prompt_output: TextFingerprint,
     draft_prompt: TextFingerprint,
+    /// Whether the draft preview should render stacked-session start guidance.
+    is_stacked_child: bool,
     markdown_render_version: u64,
     output_width: u16,
     queued_messages: TextFingerprint,
@@ -460,6 +468,7 @@ impl<'a> SessionOutput<'a> {
             active_progress: TextFingerprint::from_text(context.active_progress),
             active_prompt_output: TextFingerprint::from_text(context.active_prompt_output),
             draft_prompt: Self::draft_prompt_fingerprint(session),
+            is_stacked_child: session.is_stacked_child(),
             markdown_render_version,
             output_width: u16::try_from(inner_width).unwrap_or(u16::MAX),
             queued_messages: TextFingerprint::from_texts(
@@ -763,10 +772,20 @@ impl<'a> SessionOutput<'a> {
         let mut output = String::from(DRAFT_PREVIEW_HEADER);
 
         if session.has_staged_drafts() {
-            let _ = write!(output, "\n\n{DRAFT_PREVIEW_STAGED_NOTE}\n\n");
+            let draft_note = if session.is_stacked_child() {
+                DRAFT_PREVIEW_STACKED_STAGED_NOTE
+            } else {
+                DRAFT_PREVIEW_STAGED_NOTE
+            };
+            let _ = write!(output, "\n\n{draft_note}\n\n");
             output.push_str(&Self::staged_draft_transcript_block(&session.prompt));
         } else {
-            let _ = write!(output, "\n\n{DRAFT_PREVIEW_EMPTY_NOTE}\n");
+            let draft_note = if session.is_stacked_child() {
+                DRAFT_PREVIEW_STACKED_EMPTY_NOTE
+            } else {
+                DRAFT_PREVIEW_EMPTY_NOTE
+            };
+            let _ = write!(output, "\n\n{draft_note}\n");
         }
 
         output
@@ -1348,6 +1367,42 @@ mod tests {
     }
 
     #[test]
+    fn test_output_layout_cache_keys_stacked_draft_preview() {
+        // Arrange
+        let mut session = session_fixture();
+        session.is_draft = true;
+        session.prompt = "First staged draft".to_string();
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let output_layout_cache = SessionOutputLayoutCache::default();
+        let context = line_context(None, None, None);
+
+        // Act
+        let root_layout = output_layout_cache.layout(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            context,
+            Some(&markdown_render_cache),
+        );
+        session.parent_session_id = Some(SessionId::from("parent-session"));
+        let stacked_layout = output_layout_cache.layout(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            context,
+            Some(&markdown_render_cache),
+        );
+        let stacked_text = stacked_layout
+            .lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(!Arc::ptr_eq(&root_layout.lines, &stacked_layout.lines));
+        assert!(stacked_text.contains("until the parent session is merged"));
+    }
+
+    #[test]
     /// Verifies queued chat rows invalidate the output layout cache so
     /// in-progress replies appear as soon as they are staged.
     fn test_output_layout_cache_keys_queued_messages() {
@@ -1758,6 +1813,33 @@ mod tests {
     }
 
     #[test]
+    fn test_output_lines_render_staged_draft_preview_for_stacked_session() {
+        // Arrange
+        let mut session = session_fixture();
+        session.is_draft = true;
+        session.parent_session_id = Some(SessionId::from("parent-session"));
+        session.prompt = "Stacked draft".to_string();
+
+        // Act
+        let lines = output_lines(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            line_context(None, None, None),
+            None,
+        );
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(text.contains("Draft Session"));
+        assert!(text.contains("until the parent session is merged"));
+        assert!(text.contains("Stacked draft"));
+    }
+
+    #[test]
     fn test_output_lines_render_empty_draft_preview_for_new_session() {
         // Arrange
         let mut session = session_fixture();
@@ -1780,6 +1862,32 @@ mod tests {
         assert!(text.contains("Draft Session"));
         assert!(text.contains("No draft messages staged yet."));
         assert!(text.contains("Use Enter to stage the first draft locally"));
+    }
+
+    #[test]
+    fn test_output_lines_render_empty_draft_preview_for_stacked_session() {
+        // Arrange
+        let mut session = session_fixture();
+        session.is_draft = true;
+        session.parent_session_id = Some(SessionId::from("parent-session"));
+
+        // Act
+        let lines = output_lines(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            line_context(None, None, None),
+            None,
+        );
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(text.contains("Draft Session"));
+        assert!(text.contains("stacked draft"));
+        assert!(text.contains("parent"));
     }
 
     #[test]

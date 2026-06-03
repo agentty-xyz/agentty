@@ -498,6 +498,24 @@ impl App {
         .await
     }
 
+    /// Creates a draft session stacked on the selected parent session.
+    ///
+    /// # Errors
+    /// Returns an error if the parent is not eligible for stacking or the
+    /// stacked draft row cannot be persisted.
+    pub async fn create_stacked_draft_session(
+        &mut self,
+        parent_session_id: &str,
+    ) -> Result<String, AppError> {
+        let session_id = self
+            .sessions
+            .create_stacked_draft_session(&self.services, parent_session_id)
+            .await?;
+        self.finish_session_creation(&session_id).await;
+
+        Ok(session_id)
+    }
+
     /// Creates one fresh draft session, stages the continuation context as
     /// its first draft message, and opens an empty composer for follow-up
     /// notes.
@@ -1651,6 +1669,7 @@ mod tests {
             is_draft: false,
             model: AgentModel::Gemini3FlashPreview,
             output: String::new(),
+            parent_session_id: None,
             project_name: "test-project".to_string(),
             prompt: "test prompt".to_string(),
             queued_messages: Vec::new(),
@@ -5362,6 +5381,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_apply_review_request_status_update_closed_cancels_stacked_child() {
+        // Arrange
+        let mut app = new_test_app().await;
+        let project_id = app.active_project_id();
+        let session_id = "session-closed";
+        let child_session_id = "session-child";
+        app.services
+            .db()
+            .sessions()
+            .insert_session(
+                session_id,
+                "gemini-3-flash-preview",
+                "main",
+                &Status::Review.to_string(),
+                project_id,
+            )
+            .await
+            .expect("failed to insert parent session");
+        app.services
+            .db()
+            .sessions()
+            .insert_stacked_draft_session(
+                child_session_id,
+                "gemini-3-flash-preview",
+                "wt/session",
+                &Status::Draft.to_string(),
+                session_id,
+                project_id,
+            )
+            .await
+            .expect("failed to insert child session");
+        let session_folder_name = session_id.chars().take(8).collect::<String>();
+        let session_data_dir = app
+            .services
+            .base_path()
+            .join(session_folder_name)
+            .join(SESSION_DATA_DIR);
+        fs::create_dir_all(session_data_dir).expect("failed to create session data dir");
+        app.refresh_sessions_now().await;
+
+        let task_result = SyncReviewRequestTaskResult {
+            outcome: session::SyncReviewRequestOutcome::Closed {
+                display_id: "#7".to_string(),
+            },
+            summary: Some(test_review_request_summary(
+                "#7",
+                ReviewRequestState::Closed,
+            )),
+        };
+
+        let update = ReviewRequestStatusUpdate {
+            result: Ok(task_result),
+            session_id: session_id.into(),
+        };
+
+        // Act
+        app.apply_review_request_status_update(update).await;
+        app.process_pending_app_events().await;
+
+        // Assert
+        let parent_session = app
+            .sessions
+            .session_or_err(session_id)
+            .expect("expected parent session to remain loaded");
+        let child_session = app
+            .sessions
+            .session_or_err(child_session_id)
+            .expect("expected child session to remain loaded");
+        assert_eq!(parent_session.status, Status::Canceled);
+        assert_eq!(child_session.status, Status::Canceled);
+    }
+
+    #[tokio::test]
     async fn test_apply_review_request_status_update_merged_marks_session_done() {
         // Arrange
         let mut app = new_test_app().await;
@@ -5423,5 +5515,100 @@ mod tests {
             .expect("failed to load merged commit hash")
             .expect("expected persisted merged commit hash");
         assert_eq!(merged_commit_hash, "abc1234");
+    }
+
+    #[tokio::test]
+    async fn test_apply_review_request_status_update_merged_restacks_stacked_child() {
+        // Arrange
+        let mut app = new_test_app().await;
+        let project_id = app.active_project_id();
+        let session_id = "session-merged";
+        let child_session_id = "session-child";
+        app.services
+            .db()
+            .sessions()
+            .insert_session(
+                session_id,
+                "gemini-3-flash-preview",
+                "main",
+                &Status::Review.to_string(),
+                project_id,
+            )
+            .await
+            .expect("failed to insert parent session");
+        app.services
+            .db()
+            .sessions()
+            .insert_stacked_draft_session(
+                child_session_id,
+                "gemini-3-flash-preview",
+                "wt/session",
+                &Status::Draft.to_string(),
+                session_id,
+                project_id,
+            )
+            .await
+            .expect("failed to insert child session");
+        app.services
+            .db()
+            .sessions()
+            .update_session_prompt(child_session_id, "Ready to start")
+            .await
+            .expect("failed to stage child prompt");
+        let session_folder_name = session_id.chars().take(8).collect::<String>();
+        let session_data_dir = app
+            .services
+            .base_path()
+            .join(session_folder_name)
+            .join(SESSION_DATA_DIR);
+        fs::create_dir_all(session_data_dir).expect("failed to create session data dir");
+        app.refresh_sessions_now().await;
+
+        let task_result = SyncReviewRequestTaskResult {
+            outcome: session::SyncReviewRequestOutcome::Merged {
+                display_id: "#9".to_string(),
+                session_head_hash: Some("abc1234".to_string()),
+            },
+            summary: Some(test_review_request_summary(
+                "#9",
+                ReviewRequestState::Merged,
+            )),
+        };
+
+        let update = ReviewRequestStatusUpdate {
+            result: Ok(task_result),
+            session_id: session_id.into(),
+        };
+
+        // Act
+        app.apply_review_request_status_update(update).await;
+        app.process_pending_app_events().await;
+        app.refresh_sessions_now().await;
+        app.sessions
+            .load_session_detail_into_state(app.services.db(), child_session_id)
+            .await;
+
+        // Assert
+        let child_session = app
+            .sessions
+            .session_or_err(child_session_id)
+            .expect("expected child session to remain loaded");
+        assert_eq!(child_session.parent_session_id, None);
+        assert_eq!(child_session.base_branch, "main");
+        assert!(child_session.can_start_staged_session());
+
+        let db_sessions = app
+            .services
+            .db()
+            .sessions()
+            .load_sessions()
+            .await
+            .expect("failed to load sessions");
+        let db_child_session = db_sessions
+            .iter()
+            .find(|session| session.id == child_session_id)
+            .expect("missing persisted child session");
+        assert_eq!(db_child_session.parent_session_id, None);
+        assert_eq!(db_child_session.base_branch, "main");
     }
 }

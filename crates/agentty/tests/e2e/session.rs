@@ -757,7 +757,7 @@ fn session_creation_opens_prompt_mode() -> E2eResult {
         .with_git()
         .zola(
             "Session creation",
-            "Choose a regular or draft session from the session creation selector.",
+            "Choose a regular, draft, or stacked session from the session creation selector.",
             30,
         )
         .run(
@@ -780,7 +780,11 @@ fn session_creation_opens_prompt_mode() -> E2eResult {
                 assertion::assert_text_in_region(&selector_frame, "Regular", &selector_full);
                 assertion::assert_text_in_region(&selector_frame, "Draft", &selector_full);
                 assertion::assert_text_in_region(&selector_frame, "Stacked", &selector_full);
-                assertion::assert_text_in_region(&selector_frame, "Coming soon...", &selector_full);
+                assertion::assert_text_in_region(
+                    &selector_frame,
+                    "Select parent first",
+                    &selector_full,
+                );
                 assertion::assert_text_in_region(&selector_frame, "Enter: select", &selector_full);
                 assertion::assert_text_in_region(&selector_frame, "q: close", &selector_full);
 
@@ -788,6 +792,62 @@ fn session_creation_opens_prompt_mode() -> E2eResult {
                 assertion::assert_text_in_region(frame, "Enter: submit", &full);
                 assertion::assert_text_in_region(frame, "Ctrl+V/Alt+V: paste image", &full);
                 assertion::assert_text_in_region(frame, "Esc: cancel", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that choosing Stacked creates a draft under the selected parent and
+/// renders the one-level stack with a tree connection in the session list.
+#[test]
+fn stacked_session_creation() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("stacked_session_creation")
+        .with_git()
+        .setup(seed_review_ready_session)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .wait_for_text("Review-ready session shortcuts", 5000)
+                    .viewing_pause_ms(1200)
+                    .press_key("a")
+                    .wait_for_text("Stacked", 5000)
+                    .press_key("Down")
+                    .press_key("Down")
+                    .wait_for_text("[Preview] Stack on selected", 5000)
+                    .capture_labeled("stacked_selector", "Stacked creation selector")
+                    .press_key("Enter")
+                    .wait_for_text("Enter: stage draft", 5000)
+                    .capture_labeled("stacked_draft_view", "Stacked draft action footer")
+                    .write_text("Stacked draft")
+                    .press_key("Enter")
+                    .wait_for_text("Draft Session", 5000)
+                    .viewing_pause_ms(1200)
+                    .press_key("q")
+                    .wait_for_text("Stacked draft", 5000)
+                    .capture_labeled("stacked_list", "Stacked draft connected in session list")
+            },
+            |frame, report| {
+                let selector_frame = common::frame_from_capture(&report.captures[0]);
+                let selector_full = Region::full(selector_frame.cols(), selector_frame.rows());
+                assertion::assert_text_in_region(&selector_frame, "Stacked", &selector_full);
+                assertion::assert_text_in_region(
+                    &selector_frame,
+                    "[Preview] Stack on selected",
+                    &selector_full,
+                );
+
+                let draft_view_frame = common::frame_from_capture(&report.captures[1]);
+                assertion::assert_not_visible(&draft_view_frame, "s: start");
+                assertion::assert_not_visible(&draft_view_frame, "m: add to merge queue");
+                assertion::assert_not_visible(&draft_view_frame, "r: rebase");
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Review-ready ses", &full);
+                assertion::assert_text_in_region(frame, "└ Stacked draft", &full);
             },
         )?;
 

@@ -341,6 +341,7 @@ WHERE id = ?
         assert_eq!(session_row.deleted_lines, 6);
         assert_eq!(session_row.input_tokens, 11);
         assert_eq!(session_row.output_tokens, 29);
+        assert_eq!(session_row.parent_session_id, None);
         assert_eq!(session_row.size, "L");
         assert_eq!(
             session_row.summary.as_deref(),
@@ -627,6 +628,101 @@ WHERE id = ?
                 .iter()
                 .all(|row| row.project_id == Some(first_project_id))
         );
+    }
+
+    /// Verifies stacked draft inserts persist their parent session link.
+    #[tokio::test]
+    async fn test_insert_stacked_draft_session_persists_parent_session_id() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to insert project");
+        insert_session_fixture(&database, "parent-session", "main", "Review", project_id).await;
+
+        // Act
+        database
+            .sessions()
+            .insert_stacked_draft_session(
+                "child-session",
+                "gpt-5.4",
+                "wt/parent-session",
+                "Draft",
+                "parent-session",
+                project_id,
+            )
+            .await
+            .expect("failed to insert stacked draft session");
+        let child_session = load_session_row(&database, "child-session").await;
+
+        // Assert
+        assert_eq!(child_session.base_branch, "wt/parent-session");
+        assert!(child_session.is_draft);
+        assert_eq!(
+            child_session.parent_session_id.as_deref(),
+            Some("parent-session")
+        );
+    }
+
+    /// Verifies restacking clears active child parent links after parent merge.
+    #[tokio::test]
+    async fn test_restack_child_sessions_after_parent_merge_clears_active_children() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to insert project");
+        insert_session_fixture(&database, "parent-session", "main", "Review", project_id).await;
+        database
+            .sessions()
+            .insert_stacked_draft_session(
+                "child-session",
+                "gpt-5.4",
+                "wt/parent-session",
+                "Draft",
+                "parent-session",
+                project_id,
+            )
+            .await
+            .expect("failed to insert active stacked child");
+        database
+            .sessions()
+            .insert_stacked_draft_session(
+                "canceled-child",
+                "gpt-5.4",
+                "wt/parent-session",
+                "Canceled",
+                "parent-session",
+                project_id,
+            )
+            .await
+            .expect("failed to insert canceled stacked child");
+
+        // Act
+        database
+            .sessions()
+            .restack_child_sessions_after_parent_merge("parent-session", "main")
+            .await
+            .expect("failed to restack child sessions");
+        let child_session = load_session_row(&database, "child-session").await;
+        let canceled_child = load_session_row(&database, "canceled-child").await;
+
+        // Assert
+        assert_eq!(child_session.parent_session_id, None);
+        assert_eq!(child_session.base_branch, "main");
+        assert_eq!(
+            canceled_child.parent_session_id.as_deref(),
+            Some("parent-session")
+        );
+        assert_eq!(canceled_child.base_branch, "wt/parent-session");
     }
 
     /// Verifies `load_sessions_metadata()` returns session count and max
@@ -1092,6 +1188,10 @@ WHERE model = ?
         // Assert
         assert_eq!(session_row.id, "session-a");
         assert_eq!(session_row.project_id, Some(7));
+        assert_eq!(
+            session_row.parent_session_id.as_deref(),
+            Some("parent-session")
+        );
         assert_eq!(session_row.status, "Review");
         assert_eq!(session_row.added_lines, 14);
         assert_eq!(session_row.deleted_lines, 6);
@@ -1113,6 +1213,10 @@ WHERE model = ?
         assert_eq!(session_row.added_lines, 14);
         assert_eq!(session_row.deleted_lines, 6);
         assert_eq!(session_row.project_id, Some(7));
+        assert_eq!(
+            session_row.parent_session_id.as_deref(),
+            Some("parent-session")
+        );
         assert_eq!(
             session_row.published_upstream_ref.as_deref(),
             Some("origin/session-a")

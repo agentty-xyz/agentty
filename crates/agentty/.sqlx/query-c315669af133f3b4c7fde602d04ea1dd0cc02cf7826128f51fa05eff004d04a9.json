@@ -6,52 +6,112 @@
       {
         "name": "id!",
         "ordinal": 0,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_operation",
+            "name": "id"
+          }
+        }
       },
       {
         "name": "session_id!",
         "ordinal": 1,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_operation",
+            "name": "session_id"
+          }
+        }
       },
       {
         "name": "kind!",
         "ordinal": 2,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_operation",
+            "name": "kind"
+          }
+        }
       },
       {
         "name": "status!",
         "ordinal": 3,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_operation",
+            "name": "status"
+          }
+        }
       },
       {
         "name": "queued_at",
         "ordinal": 4,
-        "type_info": "Integer"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_operation",
+            "name": "queued_at"
+          }
+        }
       },
       {
         "name": "started_at",
         "ordinal": 5,
-        "type_info": "Integer"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_operation",
+            "name": "started_at"
+          }
+        }
       },
       {
         "name": "finished_at",
         "ordinal": 6,
-        "type_info": "Integer"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_operation",
+            "name": "finished_at"
+          }
+        }
       },
       {
         "name": "heartbeat_at",
         "ordinal": 7,
-        "type_info": "Integer"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_operation",
+            "name": "heartbeat_at"
+          }
+        }
       },
       {
         "name": "last_error",
         "ordinal": 8,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_operation",
+            "name": "last_error"
+          }
+        }
       },
       {
         "name": "cancel_requested: _",
         "ordinal": 9,
-        "type_info": "Integer"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_operation",
+            "name": "cancel_requested"
+          }
+        }
       }
     ],
     "parameters": {

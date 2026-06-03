@@ -6,7 +6,13 @@
       {
         "name": "value: _",
         "ordinal": 0,
-        "type_info": "Integer"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "project_id"
+          }
+        }
       }
     ],
     "parameters": {
