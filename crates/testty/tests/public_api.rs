@@ -30,7 +30,7 @@ use testty::feature::{
 use testty::frame::{CellColor, CellStyle, TerminalFrame};
 use testty::journey::{Journey, StartupWait};
 use testty::locator::MatchedSpan;
-use testty::proof::backend::ProofBackend;
+use testty::proof::backend::{ProofBackend, RenderContext};
 use testty::proof::report::{AssertionResult, ProofCapture, ProofError, ProofReport};
 use testty::region::Region;
 use testty::scenario::Scenario;
@@ -40,10 +40,14 @@ use testty::step::{FramePredicate, Step};
 
 /// Minimal `ProofBackend` impl used to exercise the trait through its
 /// owning module path without instantiating a real backend.
+///
+/// The `render` signature pins the stable contract that backends receive a
+/// single `&RenderContext` argument, so a downstream implementor's code keeps
+/// compiling as long as that shape holds.
 struct NoopBackend;
 
 impl ProofBackend for NoopBackend {
-    fn render(&self, _report: &ProofReport, _output: &Path) -> Result<(), ProofError> {
+    fn render(&self, _context: &RenderContext<'_>) -> Result<(), ProofError> {
         Ok(())
     }
 }
@@ -104,6 +108,15 @@ fn public_surface_is_stable() {
     let _: Option<ProofReport> = None;
     let _: Option<ProofError> = None;
     let _: Option<AssertionResult> = None;
+
+    // `RenderContext` is the stable input bundle every `ProofBackend::render`
+    // receives. Pin construction through the builder and field reads so the
+    // documented shape — and its `#[non_exhaustive]` lock-down — cannot
+    // regress to a struct literal in downstream backend implementations.
+    let render_report = ProofReport::new("render-context");
+    let render_context = RenderContext::new(&render_report, Path::new("/tmp/proof"));
+    let _: &ProofReport = render_context.report;
+    let _: &Path = render_context.output;
 
     let _: fn(&NoopBackend) = accept_backend::<NoopBackend>;
 
@@ -253,6 +266,21 @@ fn step_eventually_destructuring_is_stable(step: &Step) -> &'static str {
             "eventually"
         }
         _ => "other",
+    }
+}
+
+/// Lock in the supported pattern for matching `ProofError` variants.
+///
+/// `ProofError` is `#[non_exhaustive]` so future variants stay non-breaking.
+/// Downstream callers that match on it must include a fallback `_` arm. This
+/// function is compiled (not run) so accidental renames of the documented
+/// variants fail the build before publication.
+#[allow(dead_code)]
+fn proof_error_destructuring_is_stable(error: &ProofError) -> &'static str {
+    match error {
+        ProofError::Io(_err) => "io",
+        ProofError::Format(_message) => "format",
+        _ => "unknown",
     }
 }
 

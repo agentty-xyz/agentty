@@ -7,7 +7,7 @@
 use std::fmt::Write;
 use std::path::Path;
 
-use super::backend::ProofBackend;
+use super::backend::{ProofBackend, RenderContext};
 use crate::assertion::AssertionFailure;
 use crate::diff::FrameDiff;
 use crate::frame::TerminalFrame;
@@ -68,7 +68,12 @@ pub struct AssertionResult {
 }
 
 /// Errors that can occur during proof report generation.
+///
+/// Marked `#[non_exhaustive]` so future error variants stay non-breaking for
+/// downstream callers that match on this type; such callers must include a
+/// fallback `_` arm.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ProofError {
     /// An I/O operation failed during proof output.
     #[error("proof I/O error: {0}")]
@@ -210,7 +215,9 @@ impl ProofReport {
     ///
     /// Returns a [`ProofError`] if rendering or I/O fails.
     pub fn save(&self, backend: &dyn ProofBackend, path: &Path) -> Result<(), ProofError> {
-        backend.render(self, path)
+        let context = RenderContext::new(self, path);
+
+        backend.render(&context)
     }
 
     /// Render the report as annotated plain text.

@@ -69,7 +69,11 @@ impl CellStyle {
     }
 
     /// Extract style flags from a `vt100` terminal cell.
-    pub fn from_cell(cell: &vt100::Cell) -> Self {
+    ///
+    /// Crate-internal: this borrows a `vt100::Cell`, an implementation-detail
+    /// type that must not appear in testty's public API. External callers
+    /// obtain a [`CellStyle`] through [`TerminalFrame::cell_style`] instead.
+    pub(crate) fn from_cell(cell: &vt100::Cell) -> Self {
         let mut flags = 0u8;
         if cell.bold() {
             flags |= BOLD_FLAG;

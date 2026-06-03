@@ -7,13 +7,12 @@
 
 use std::fmt::Write;
 use std::io::Cursor;
-use std::path::Path;
 
 use base64::Engine;
 use image::ImageFormat;
 use unicode_width::UnicodeWidthStr;
 
-use super::backend::ProofBackend;
+use super::backend::{ProofBackend, RenderContext};
 use super::report::{AssertionResult, ProofCapture, ProofError, ProofReport};
 use crate::assertion::{AssertionFailure, Expected};
 use crate::frame::{CellColor, CellStyle, TerminalFrame};
@@ -32,9 +31,9 @@ impl ProofBackend for HtmlBackend {
     /// # Errors
     ///
     /// Returns a [`ProofError`] if rendering or writing fails.
-    fn render(&self, report: &ProofReport, output: &Path) -> Result<(), ProofError> {
-        let html = build_html(report)?;
-        std::fs::write(output, html)?;
+    fn render(&self, context: &RenderContext<'_>) -> Result<(), ProofError> {
+        let html = build_html(context.report)?;
+        std::fs::write(context.output, html)?;
 
         Ok(())
     }
@@ -806,7 +805,7 @@ mod tests {
         // Act
         let backend = HtmlBackend;
         backend
-            .render(&report, &output_path)
+            .render(&RenderContext::new(&report, &output_path))
             .expect("render should succeed");
 
         // Assert

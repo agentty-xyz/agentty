@@ -7,6 +7,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- testty: `ProofBackend::render` now takes a single `RenderContext` argument instead of
+  `(&ProofReport, &Path)`, so future render inputs can be added without breaking
+  external backends. Callers using `ProofReport::save` are unaffected. (Breaking for
+  custom `ProofBackend` implementations.)
+- testty: `ProofError` is now `#[non_exhaustive]`. (Breaking for exhaustive matches.)
+
+### Removed
+
+- testty: `CellStyle::from_cell` is no longer public; it leaked the `vt100::Cell`
+  implementation-detail type. Use `TerminalFrame::cell_style` instead. (Breaking.)
+
 ## [v0.10.0] - 2026-06-02
 
 ### Added

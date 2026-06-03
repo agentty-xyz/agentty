@@ -10,6 +10,38 @@ items (`testty::recipe`, `testty::snapshot::DEFAULT_UPDATE_ENV_VAR`,
 
 ## From earlier 0.x releases
 
+- `ProofBackend::render` now takes a single `testty::proof::backend::RenderContext`
+  argument instead of `(&ProofReport, &Path)`. Callers that render through
+  `ProofReport::save(&backend, path)` are unaffected. Custom backends read the report
+  and destination from the context:
+
+  ```rust
+  // Before
+  fn render(&self, report: &ProofReport, output: &Path) -> Result<(), ProofError> {
+      let html = build(report)?;
+      std::fs::write(output, html)?;
+      Ok(())
+  }
+
+  // After
+  fn render(&self, context: &RenderContext<'_>) -> Result<(), ProofError> {
+      let html = build(context.report)?;
+      std::fs::write(context.output, html)?;
+      Ok(())
+  }
+  ```
+
+  `RenderContext` is `#[non_exhaustive]` so future render inputs can be added without
+  another breaking change; build one with `RenderContext::new(report, output)` and read
+  its `report` / `output` fields.
+
+- `ProofError` is `#[non_exhaustive]`. Match arms over it need a fallback `_` arm so new
+  error variants stay non-breaking.
+
+- `CellStyle::from_cell` is no longer public — it borrowed a `vt100::Cell`, an
+  implementation-detail type that must not appear in testty's public API. Obtain a
+  `CellStyle` through `TerminalFrame::cell_style(row, col)` instead.
+
 - The `testty::prelude` wildcard re-export module has been removed. Replace
   `use testty::prelude::*;` with explicit per-module imports for the items each call
   site actually uses, for example:
