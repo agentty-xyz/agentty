@@ -3520,6 +3520,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "testty-cli"
+version = "0.10.0"
+dependencies = [
+ "clap",
+ "testty",
+]
+
+[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"

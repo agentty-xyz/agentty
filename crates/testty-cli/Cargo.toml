@@ -1,0 +1,28 @@
+[package]
+name = "testty-cli"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Language-agnostic command-line front end for the testty TUI end-to-end testing framework."
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["tui", "testing", "e2e", "cli", "ratatui"]
+categories = ["development-tools::testing", "command-line-interface"]
+include = [
+  "src/**/*",
+  "Cargo.toml",
+  "README.md",
+]
+
+[[bin]]
+name = "testty"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+clap.workspace = true
+testty.workspace = true

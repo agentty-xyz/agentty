@@ -11,3 +11,5 @@ Contains the workspace member crates.
 - `crates/agentty/` is the main TUI application crate with `app`, `domain`, `infra`,
   `runtime`, and `ui` layers.
 - `crates/testty/` provides the Rust-native TUI end-to-end testing framework.
+- `crates/testty-cli/` provides the language-agnostic `testty` command-line front end
+  for the `testty` framework.
