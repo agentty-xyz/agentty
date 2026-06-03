@@ -847,7 +847,7 @@ fn stacked_session_creation() -> E2eResult {
 
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Review-ready ses", &full);
-                assertion::assert_text_in_region(frame, "└ Stacked draft", &full);
+                assertion::assert_text_in_region(frame, "└ [XS] Stacked draft", &full);
             },
         )?;
 
