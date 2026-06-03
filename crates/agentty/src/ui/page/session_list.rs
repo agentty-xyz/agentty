@@ -65,11 +65,7 @@ impl Page for SessionListPage<'_> {
         let header_cells = ["Session", "Model", "Status", "Timer"]
             .iter()
             .map(|h| Cell::from(*h));
-        let header = Row::new(header_cells)
-            .style(header_style)
-            .height(1)
-            .bottom_margin(1);
-
+        let header = Row::new(header_cells).style(header_style).height(1);
         let block = Block::default()
             .borders(Borders::ALL)
             .title("Sessions")
