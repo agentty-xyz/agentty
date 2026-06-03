@@ -158,6 +158,32 @@ impl SessionWorkerContext {
         }
     }
 
+    /// Returns whether follow-up prompts are waiting for inline drainage.
+    ///
+    /// Treats a poisoned queue lock as non-empty so the worker does not start
+    /// side-effectful post-turn work unless it can prove there are no queued
+    /// user messages waiting to run.
+    fn has_queued_messages(&self) -> bool {
+        self.queued_messages
+            .lock()
+            .map_or(true, |guard| !guard.is_empty())
+    }
+
+    /// Loads the latest published upstream reference before running a queued
+    /// follow-up turn.
+    ///
+    /// Queued prompts are created while another turn is still running, so
+    /// their auto-push metadata is resolved at drain time from persistence
+    /// instead of being captured when the user submits the queued prompt.
+    async fn load_published_upstream_ref(&self) -> Option<String> {
+        self.db
+            .sessions()
+            .load_session_published_upstream_ref(&self.session_id)
+            .await
+            .ok()
+            .flatten()
+    }
+
     /// Returns the current shared session status.
     fn current_status(&self) -> Status {
         // Sync critical section (single read, no `.await`); `std::sync::Mutex`
@@ -521,6 +547,7 @@ impl SessionWorkerService {
                 .operations()
                 .insert_session_operation(&operation_id, &context.session_id, "reply")
                 .await;
+            let published_upstream_ref = context.load_published_upstream_ref().await;
             append_drained_prompt_to_output(context, &prompt).await;
             let command = SessionCommand::Run {
                 operation_id,
@@ -529,7 +556,7 @@ impl SessionWorkerService {
                 },
                 prompt,
                 turn_metadata: TurnMetadata {
-                    published_upstream_ref: None,
+                    published_upstream_ref,
                     session_model: context.session_model,
                 },
             };
@@ -1233,12 +1260,16 @@ async fn apply_successful_turn_result(
 }
 
 /// Starts one detached auto-push task for a session that already tracks a
-/// published upstream branch.
+/// published upstream branch and has no queued follow-up messages waiting.
 fn start_published_branch_auto_push(
     context: &SessionWorkerContext,
     published_upstream_ref: Option<String>,
     review_request_commit_message: Option<String>,
 ) {
+    if context.has_queued_messages() {
+        return;
+    }
+
     let Some(published_upstream_ref) = published_upstream_ref else {
         return;
     };
@@ -3227,6 +3258,93 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Verifies completed turns leave auto-push idle while queued follow-up
+    /// messages are waiting to run.
+    async fn test_apply_turn_result_skips_background_push_while_messages_are_queued() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let db = AppRepositories::in_memory().await;
+        let project_id = db
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to upsert project");
+        db.sessions()
+            .insert_session(
+                "sess1",
+                "gemini-3-flash-preview",
+                "main",
+                "InProgress",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client
+            .expect_is_worktree_clean()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(true) }));
+        mock_git_client
+            .expect_push_current_branch_to_remote_branch()
+            .never();
+        let context = SessionWorkerContext {
+            app_event_tx,
+            cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+            channel: Arc::new(MockAgentChannel::new()),
+            child_pid: Arc::new(Mutex::new(None)),
+            clock: Arc::new(crate::infra::clock::RealClock),
+            db: db.clone(),
+            folder: base_dir.path().join("sess1"),
+            fs_client: Arc::new(fs::MockFsClient::new()),
+            git_client: Arc::new(mock_git_client),
+            output: Arc::new(Mutex::new(String::new())),
+            queued_messages: Arc::new(Mutex::new(VecDeque::from([TurnPrompt::from_text(
+                "queued follow-up".to_string(),
+            )]))),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
+
+            session_update_versions: Arc::default(),
+            session_id: "sess1".into(),
+            session_model: AgentModel::Gemini3FlashPreview,
+            status: Arc::new(Mutex::new(Status::InProgress)),
+        };
+        let turn_result = Ok(TurnResult {
+            assistant_message: AgentResponse {
+                answer: "Implemented the change.".to_string(),
+                questions: Vec::new(),
+                summary: None,
+            },
+            context_reset: false,
+            input_tokens: 0,
+            output_tokens: 0,
+            provider_conversation_id: None,
+        });
+
+        // Act
+        let turn_metadata = TurnMetadata {
+            published_upstream_ref: Some("origin/wt/session-id".to_string()),
+            session_model: AgentModel::Gemini3FlashPreview,
+        };
+        let status = apply_turn_result(&context, turn_metadata, turn_result)
+            .await
+            .expect("turn result should succeed");
+        let mut emitted_sync_event = false;
+        while let Ok(event) = app_event_rx.try_recv() {
+            if matches!(event, AppEvent::PublishedBranchSyncUpdated { .. }) {
+                emitted_sync_event = true;
+            }
+        }
+
+        // Assert
+        assert_eq!(status, Status::Review);
+        assert!(
+            !emitted_sync_event,
+            "queued follow-up messages should suppress post-turn auto-push events"
+        );
+    }
+
+    #[tokio::test]
     /// Verifies failed background auto-push attempts append a visible error
     /// and keep the session marked as failed for the latest sync attempt.
     async fn test_apply_turn_result_reports_background_push_failures() {
@@ -3993,6 +4111,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_has_queued_messages_reports_pending_prompts() {
+        // Arrange
+        let queue: Arc<Mutex<VecDeque<TurnPrompt>>> =
+            Arc::new(Mutex::new(VecDeque::from([TurnPrompt::from_text(
+                "queued reply".to_string(),
+            )])));
+        let context = queue_helper_context(Arc::clone(&queue)).await;
+
+        // Act
+        let has_queued_before_clear = context.has_queued_messages();
+        context.clear_queued_messages();
+        let has_queued_after_clear = context.has_queued_messages();
+
+        // Assert
+        assert!(has_queued_before_clear);
+        assert!(!has_queued_after_clear);
+    }
+
+    #[tokio::test]
     /// Verifies that drainage holds while the session is in `Question` state
     /// so queued prompts wait for the clarification flow to resolve before
     /// dispatching as new turns.
@@ -4014,6 +4151,95 @@ mod tests {
         let queue = queue_handle.lock().expect("queue lock");
         assert_eq!(queue.len(), 1);
         assert_eq!(queue.front().expect("queued head").text, "queued reply");
+    }
+
+    #[tokio::test]
+    /// Verifies the last queued follow-up turn reloads the persisted
+    /// published branch and starts auto-push after the queue has drained.
+    async fn test_drain_queued_messages_auto_pushes_after_last_published_branch_follow_up() {
+        // Arrange
+        let mut mock_channel = MockAgentChannel::new();
+        mock_channel
+            .expect_run_turn()
+            .times(1)
+            .withf(|session_id, request, _events| {
+                session_id == "sess1" && request.prompt.text == "queued reply"
+            })
+            .returning(|_, _, _| Box::pin(async { Ok(successful_turn_result("Queued done.")) }));
+        let queued = VecDeque::from([TurnPrompt::from_text("queued reply".to_string())]);
+        let (mut context, db, queue_handle, base_dir) =
+            queue_test_context(mock_channel, queued, Status::InProgress).await;
+        db.sessions()
+            .update_session_published_upstream_ref(
+                "sess1",
+                Some("origin/wt/session-id".to_string()),
+            )
+            .await
+            .expect("failed to persist published upstream ref");
+
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        context.app_event_tx = app_event_tx;
+
+        let mut mock_git_client = MockGitClient::new();
+        let main_repo_root = base_dir.path().join("main");
+        mock_git_client
+            .expect_detect_git_info()
+            .times(1)
+            .returning(|_| Box::pin(async { Some("wt/sess1".to_string()) }));
+        mock_git_client.expect_main_repo_root().times(1).returning({
+            let main_repo_root = main_repo_root.clone();
+
+            move |_| {
+                let main_repo_root = main_repo_root.clone();
+                Box::pin(async move { Ok(main_repo_root) })
+            }
+        });
+        mock_git_client
+            .expect_tracked_worktree_status()
+            .times(2)
+            .returning(|_| Box::pin(async { Ok(String::new()) }));
+        mock_git_client
+            .expect_is_worktree_clean()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(true) }));
+        mock_git_client
+            .expect_diff()
+            .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+        mock_git_client
+            .expect_push_current_branch_to_remote_branch()
+            .times(1)
+            .withf(|_folder, remote_branch_name| remote_branch_name == "wt/session-id")
+            .returning(|_, _| Box::pin(async { Ok("origin/wt/session-id".to_string()) }));
+        context.git_client = Arc::new(mock_git_client);
+
+        // Act
+        SessionWorkerService::drain_queued_messages(&context).await;
+        let sync_events = tokio::time::timeout(Duration::from_secs(1), async {
+            let mut sync_events = Vec::new();
+            while sync_events.len() < 2 {
+                let event = app_event_rx.recv().await.expect("missing app event");
+                if let AppEvent::PublishedBranchSyncUpdated {
+                    session_id,
+                    sync_operation_id,
+                    sync_status,
+                } = event
+                {
+                    sync_events.push((session_id, sync_operation_id, sync_status));
+                }
+            }
+
+            sync_events
+        })
+        .await
+        .expect("timed out waiting for sync events");
+
+        // Assert
+        assert!(queue_handle.lock().expect("queue lock").is_empty());
+        assert_eq!(sync_events[0].2, PublishedBranchSyncStatus::InProgress);
+        assert_eq!(sync_events[1].2, PublishedBranchSyncStatus::Succeeded);
+        assert_eq!(sync_events[0].0, "sess1");
+        assert_eq!(sync_events[1].0, "sess1");
+        assert_eq!(sync_events[0].1, sync_events[1].1);
     }
 
     #[tokio::test]

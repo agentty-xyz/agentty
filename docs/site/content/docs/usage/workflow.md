@@ -208,8 +208,10 @@ model.
   name are left alone so the publish flow can create a new review request.
 - After a session branch has been published once, later completed turns automatically
   push that same remote branch in the background so linked review requests stay current
-  without reopening the publish popup. The session output shows when that post-turn
-  auto-push starts and when it completes or fails.
+  without reopening the publish popup. If inline chat messages are queued behind the
+  running turn, Agentty waits for the queue to drain and pushes after the last queued
+  turn completes. The session output shows when that post-turn auto-push starts and when
+  it completes or fails.
 - Completed turns with file changes also compare the linked open review request's
   current title and body/description with the latest session commit message, then update
   the review request metadata after the post-turn auto-push succeeds.
@@ -348,14 +350,17 @@ While the running turn is still active, pressing `Enter` opens the chat composer
 a non-slash message during **InProgress** stages the prompt onto an in-memory queue
 rendered inline beneath the running turn with a `queued ›` prefix. Once the running turn
 finishes, Agentty dispatches queued messages one-by-one as new turns without bouncing
-the session through **Review** between them. Drainage pauses while the session sits in
-**Question** state and resumes only after the clarification flow returns to a runnable
-state. While the queue is non-empty, each `Ctrl+c` press retracts the most recently
-queued chat message (LIFO) without interrupting the running turn so you can undo queue
-entries one-by-one in the reverse order they were added. Once the queue is empty, the
-next `Ctrl+c` cancels the running turn and returns the session to **Review** as usual.
-The queue is session-local and lives only for the active app session, so queued messages
-are discarded if `agentty` restarts before they dispatch.
+the session through **Review** between them. Post-turn auto-push for an already
+published session branch waits until those queued turns have drained, so the remote
+branch is updated after the latest queued follow-up rather than between queued turns.
+Drainage pauses while the session sits in **Question** state and resumes only after the
+clarification flow returns to a runnable state. While the queue is non-empty, each
+`Ctrl+c` press retracts the most recently queued chat message (LIFO) without
+interrupting the running turn so you can undo queue entries one-by-one in the reverse
+order they were added. Once the queue is empty, the next `Ctrl+c` cancels the running
+turn and returns the session to **Review** as usual. The queue is session-local and
+lives only for the active app session, so queued messages are discarded if `agentty`
+restarts before they dispatch.
 
 The session-chat timer measures only cumulative **active work** across `InProgress`
 intervals. That differs from `/stats`, whose `Session Time` reflects the overall session
