@@ -30,9 +30,9 @@ by backend:
 - Claude Code turns receive the prompt over stdin with `[Image #n]` placeholders
   rewritten to local image paths that Claude can inspect.
 - Antigravity CLI turns receive the prompt over stdin with `[Image #n]` placeholders
-  rewritten to local image paths. Agentty passes the session worktree and any local
-  image parent directories through `agy --add-dir` so Antigravity tools operate on the
-  expected workspace roots.
+  rewritten to local image paths. Agentty passes the session worktree first through
+  `agy --add-dir`, followed by any local image parent directories, so Antigravity tools
+  keep the session worktree as the editable workspace root.
 
 Codex now always runs through `codex app-server`, including isolated utility prompts
 such as title generation, review assist, commit-message generation, auto-commit
@@ -182,10 +182,11 @@ against the structured response protocol.
 - Antigravity turns use `agy --print` because the CLI does not currently expose an
   ACP/app-server flag. Agentty streams the full prompt through stdin, runs with
   `--sandbox`, uses `--dangerously-skip-permissions` so non-interactive worktree edits
-  can proceed, passes the session worktree through `--add-dir`, and relies on the shared
-  strict protocol parser for final validation. Before each Antigravity launch, Agentty
-  adds `.antigravitycli/` to the repository-local git exclude file so Antigravity's
-  project configuration state does not appear in session diffs.
+  can proceed, passes the session worktree as the first `--add-dir` root, and relies on
+  the shared strict protocol parser for final validation. Before each Antigravity
+  launch, Agentty adds `.antigravitycli/` and `cache/projects.json` to the
+  repository-local git exclude file so Antigravity's project configuration state does
+  not appear in session diffs.
 - Prompt-side protocol instructions rely on the raw self-descriptive `schemars` metadata
   (`title`, `description`, and related annotations), while transport `outputSchema`
   payloads are normalized separately for provider compatibility. The same prompt

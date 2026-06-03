@@ -573,12 +573,14 @@ by `infra/channel.rs`, with prompt payloads owned by `domain/turn_prompt.rs`):
   proceed inside the session worktree without granting durable session-wide approval.
   Antigravity and Claude subprocess turns run from the session worktree process
   directory and rely on the main-checkout tracked-file guard for isolation.
-- Antigravity command construction passes the session worktree through `agy --add-dir`,
-  because Antigravity print mode uses explicit workspace roots for file tools instead of
-  treating the process directory as an editable workspace.
-- Antigravity setup and command construction add `.antigravitycli/` to the
-  repository-local git exclude file before `agy` starts, keeping Antigravity's project
-  configuration symlink out of session diffs without changing tracked ignore files.
+- Antigravity command construction passes the session worktree as the first
+  `agy --add-dir` root, because Antigravity print mode uses ordered explicit workspace
+  roots for file tools instead of treating the process directory as an editable
+  workspace.
+- Antigravity setup and command construction add `.antigravitycli/` and
+  `cache/projects.json` to the repository-local git exclude file before `agy` starts,
+  keeping Antigravity's project configuration state out of session diffs without
+  changing tracked ignore files.
 
 ## Agent Interaction Protocol Flow
 

@@ -16,6 +16,13 @@ use crate::domain::turn_prompt::{
 const ANTIGRAVITY_PRINT_TIMEOUT: &str = "1h";
 /// Git exclude pattern for Antigravity workspace project state.
 const ANTIGRAVITY_PROJECT_STATE_PATTERN: &str = ".antigravitycli/";
+/// Git exclude pattern for Antigravity's workspace project cache file.
+const ANTIGRAVITY_PROJECT_CACHE_PATTERN: &str = "cache/projects.json";
+/// Git exclude patterns for Antigravity workspace-local state files.
+const ANTIGRAVITY_PROJECT_STATE_PATTERNS: &[&str] = &[
+    ANTIGRAVITY_PROJECT_STATE_PATTERN,
+    ANTIGRAVITY_PROJECT_CACHE_PATTERN,
+];
 
 /// Backend implementation for the Antigravity CLI.
 ///
@@ -64,11 +71,11 @@ impl AgentBackend for AntigravityBackend {
 /// Ensures Antigravity's workspace-local project state stays out of session
 /// diffs.
 ///
-/// `agy --print` creates `.antigravitycli/` as project configuration state in
-/// the current workspace. Agentty stores session output as git diffs and
-/// commits, so the backend adds a repository-local git exclude entry before
-/// the process can create that directory. The exclude lives under git
-/// metadata, not in tracked project files.
+/// `agy --print` creates `.antigravitycli/` and `cache/projects.json` as
+/// project configuration state in the current workspace. Agentty stores
+/// session output as git diffs and commits, so the backend adds
+/// repository-local git exclude entries before the process can create those
+/// paths. The exclude lives under git metadata, not in tracked project files.
 ///
 /// # Errors
 /// Returns an error when the session worktree's git exclude file cannot be
@@ -78,7 +85,11 @@ fn ensure_antigravity_project_state_ignored(folder: &Path) -> Result<(), AgentBa
         return Ok(());
     };
 
-    append_git_exclude_pattern(&exclude_path, ANTIGRAVITY_PROJECT_STATE_PATTERN)
+    for pattern in ANTIGRAVITY_PROJECT_STATE_PATTERNS {
+        append_git_exclude_pattern(&exclude_path, pattern)?;
+    }
+
+    Ok(())
 }
 
 /// Returns the git metadata exclude file used by one worktree.
@@ -263,9 +274,10 @@ pub(super) fn build_prompt_stdin_payload(
 /// attachments.
 ///
 /// `agy --print` uses `--add-dir` rather than the process working directory to
-/// decide which folders tools can read and write. Agentty always passes the
-/// session worktree, then adds pasted-image parent directories that live under
-/// Agentty's temp directory so Antigravity can inspect those local files.
+/// decide which folders tools can read and write. Agentty keeps the session
+/// worktree as the first workspace root, then adds pasted-image parent
+/// directories that live under Agentty's temp directory so Antigravity can
+/// inspect those local files without replacing the active editable workspace.
 fn append_workspace_access_directories(
     command: &mut Command,
     folder: &Path,
@@ -276,21 +288,28 @@ fn append_workspace_access_directories(
     }
 }
 
-/// Returns the sorted Antigravity workspace roots required by one turn.
+/// Returns the Antigravity workspace roots required by one turn.
+///
+/// The session worktree is always first because Antigravity derives editable
+/// workspace behavior from the ordered `--add-dir` roots. Attachment
+/// directories are sorted after the session root for deterministic arguments.
 fn workspace_access_directories(
     folder: &Path,
     attachments: &[TurnPromptAttachment],
 ) -> Vec<PathBuf> {
-    let mut workspace_directories = vec![folder.to_path_buf()];
-    workspace_directories.extend(
-        attachments
-            .iter()
-            .filter_map(|attachment| attachment.local_image_path.parent())
-            .map(std::path::Path::to_path_buf),
-    );
+    let folder = folder.to_path_buf();
+    let mut attachment_directories = attachments
+        .iter()
+        .filter_map(|attachment| attachment.local_image_path.parent())
+        .map(std::path::Path::to_path_buf)
+        .filter(|attachment_directory| attachment_directory != &folder)
+        .collect::<Vec<_>>();
+    attachment_directories.sort();
+    attachment_directories.dedup();
 
-    workspace_directories.sort();
-    workspace_directories.dedup();
+    let mut workspace_directories = Vec::with_capacity(attachment_directories.len() + 1);
+    workspace_directories.push(folder);
+    workspace_directories.extend(attachment_directories);
 
     workspace_directories
 }
@@ -387,6 +406,17 @@ mod tests {
             .expect("failed to read git exclude")
     }
 
+    /// Verifies all Antigravity workspace-local state patterns are present in
+    /// one git exclude file.
+    fn assert_antigravity_project_state_patterns_ignored(exclude: &str) {
+        for pattern in ANTIGRAVITY_PROJECT_STATE_PATTERNS {
+            assert!(
+                exclude.lines().any(|line| line.trim() == *pattern),
+                "exclude should contain pattern `{pattern}`"
+            );
+        }
+    }
+
     #[test]
     /// Verifies Antigravity starts in unattended print mode with sandbox
     /// restrictions enabled.
@@ -429,11 +459,9 @@ mod tests {
             ]
         );
         assert_eq!(command.get_current_dir(), Some(temp_directory.path()));
-        assert!(
-            read_standard_git_exclude(temp_directory.path())
-                .lines()
-                .any(|line| line.trim() == ANTIGRAVITY_PROJECT_STATE_PATTERN)
-        );
+        assert_antigravity_project_state_patterns_ignored(&read_standard_git_exclude(
+            temp_directory.path(),
+        ));
     }
 
     #[test]
@@ -451,11 +479,7 @@ mod tests {
 
         // Assert
         assert!(exclude.contains("# Agentty: ignore Antigravity CLI workspace project state"));
-        assert!(
-            exclude
-                .lines()
-                .any(|line| line.trim() == ANTIGRAVITY_PROJECT_STATE_PATTERN)
-        );
+        assert_antigravity_project_state_patterns_ignored(&exclude);
     }
 
     #[test]
@@ -484,15 +508,12 @@ mod tests {
             .expect("failed to read linked worktree git exclude");
 
         // Assert
-        assert!(
-            exclude
-                .lines()
-                .any(|line| line.trim() == ANTIGRAVITY_PROJECT_STATE_PATTERN)
-        );
+        assert_antigravity_project_state_patterns_ignored(&exclude);
     }
 
     #[test]
-    /// Verifies repeated Antigravity setup keeps a single exclude pattern.
+    /// Verifies repeated Antigravity setup keeps one copy of each exclude
+    /// pattern.
     fn test_antigravity_setup_ignores_project_state_idempotently() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
@@ -503,13 +524,15 @@ mod tests {
         AgentBackend::setup(&backend, temp_directory.path()).expect("first setup should succeed");
         AgentBackend::setup(&backend, temp_directory.path()).expect("second setup should succeed");
         let exclude = read_standard_git_exclude(temp_directory.path());
-        let pattern_count = exclude
-            .lines()
-            .filter(|line| line.trim() == ANTIGRAVITY_PROJECT_STATE_PATTERN)
-            .count();
 
         // Assert
-        assert_eq!(pattern_count, 1);
+        for pattern in ANTIGRAVITY_PROJECT_STATE_PATTERNS {
+            let pattern_count = exclude
+                .lines()
+                .filter(|line| line.trim() == *pattern)
+                .count();
+            assert_eq!(pattern_count, 1, "pattern `{pattern}` should appear once");
+        }
     }
 
     #[test]
@@ -551,6 +574,29 @@ mod tests {
 
         // Assert
         assert_eq!(args[..4], expected_workspace_args);
+    }
+
+    #[test]
+    /// Verifies Antigravity keeps the session worktree as the primary
+    /// workspace even when an attachment directory sorts before it.
+    fn test_workspace_access_directories_keep_session_folder_first() {
+        // Arrange
+        let temp_directory = tempdir().expect("failed to create temp dir");
+        let session_folder = temp_directory.path().join("z-session");
+        let attachment_directory = temp_directory.path().join("a-images");
+        let attachment = TurnPromptAttachment {
+            placeholder: "[Image #1]".to_string(),
+            local_image_path: attachment_directory.join("one.png"),
+        };
+
+        // Act
+        let workspace_directories = workspace_access_directories(&session_folder, &[attachment]);
+
+        // Assert
+        assert_eq!(
+            workspace_directories,
+            vec![session_folder, attachment_directory]
+        );
     }
 
     #[test]

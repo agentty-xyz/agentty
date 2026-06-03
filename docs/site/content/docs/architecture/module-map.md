@@ -194,7 +194,7 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
   one-shot prompts.
 - `crates/agentty/src/infra/agent/antigravity.rs`: Antigravity CLI backend
   implementation, `agy --add-dir` workspace-root wiring, and the repository-local git
-  exclude guard for `.antigravitycli/` project state.
+  exclude guard for Antigravity project state.
 - `crates/agentty/src/infra/agent/claude.rs`: Claude backend implementation.
 - `crates/agentty/src/infra/agent/app_server.rs` and
   `crates/agentty/src/infra/agent/app_server/`: Router plus provider-specific app-server
