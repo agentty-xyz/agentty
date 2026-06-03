@@ -28,6 +28,76 @@ const LOADER_SESSION_ID: &str = "loader-session-0001";
 /// Stable id for the seeded running session used by stop-turn tests.
 const RUNNING_STOP_SESSION_ID: &str = "running-stop-0001";
 
+/// Seeds one review-ready session whose transcript contains a beautified
+/// provider command failure.
+fn seed_session_with_beautified_agent_error(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let canonical_workdir = env.workdir.canonicalize()?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(async {
+        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
+        let database = Database::open(&db_path).await?;
+        let project_id = database
+            .projects()
+            .upsert_project(
+                &canonical_workdir.to_string_lossy(),
+                Some("main".to_string()),
+            )
+            .await?;
+
+        database
+            .projects()
+            .touch_project_last_opened(project_id)
+            .await?;
+        database
+            .sessions()
+            .insert_session(
+                "agent-error-0001",
+                "claude-opus-4-8",
+                "main",
+                "Review",
+                project_id,
+            )
+            .await?;
+        database
+            .sessions()
+            .update_session_title("agent-error-0001", "Readable agent error")
+            .await?;
+        database
+            .sessions()
+            .append_session_output(
+                "agent-error-0001",
+                "\
+ › hi
+
+Agent command failed with exit code 1.
+
+stdout:
+```text
+system | init | cwd: /tmp/test-agentty/wt/d4ab835d
+proxy warning: retrying
+rate_limit_event | rate_limit_status: rejected | rate_limit_reason: out_of_credits
+assistant: hi
+result error: rate_limit
+message: You've hit your session limit - resets 12:10am (America/Los_Angeles)
+api error status: 429
+request id: req_011Cbfc7AF16gbH
+duration: 283ms
+```
+",
+            )
+            .await
+    })?;
+
+    std::fs::create_dir_all(env.agentty_root.join("wt").join("agent-er"))?;
+
+    Ok(())
+}
+
 /// Seeds one review-ready session and propagates setup errors to the caller.
 fn seed_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     let canonical_workdir = env.workdir.canonicalize()?;
@@ -487,6 +557,41 @@ fn session_list_model_reasoning_level() -> E2eResult {
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "gpt-5.4 [medium]", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that session output renders beautified provider command failures
+/// with readable JSONL event summaries instead of raw event payloads.
+#[test]
+fn session_view_agent_error_output() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_view_agent_error_output")
+        .setup(seed_session_with_beautified_agent_error)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_text("result error: rate_limit", 5000)
+                    .capture_labeled(
+                        "agent_error",
+                        "Session view with beautified agent command error output",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "proxy warning: retrying", &full);
+                assertion::assert_text_in_region(frame, "result error: rate_limit", &full);
+                assertion::assert_text_in_region(
+                    frame,
+                    "message: You've hit your session limit",
+                    &full,
+                );
+                assertion::assert_text_in_region(frame, "request id: req_011Cbfc7AF16gbH", &full);
             },
         )?;
 

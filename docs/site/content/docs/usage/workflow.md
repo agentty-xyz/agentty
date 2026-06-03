@@ -187,6 +187,12 @@ When you use `@` file lookups in prompt or clarification input, Agentty keeps th
 rewrites those lookups to quoted `path/to/file` tokens before the prompt is sent to the
 model.
 
+If an agent command exits with an error, Agentty prints a short failure header followed
+by captured `stdout` and `stderr` sections. Provider event lines that arrive as JSONL
+are summarized into readable event, message, error, and request-id lines, while
+plain-text warning lines stay intact so session output remains useful without exposing a
+wall of raw JSON payloads.
+
 ## Branch Publish Flow
 
 <a id="usage-review-request-flow"></a> Session view exposes one publish shortcut:
