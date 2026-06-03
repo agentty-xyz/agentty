@@ -5,13 +5,12 @@
 //! delays, suitable for PR comments and documentation.
 
 use std::fs::File;
-use std::path::Path;
 
 use image::codecs::gif::{GifEncoder, Repeat};
 use image::{Frame, RgbaImage};
 
-use super::backend::ProofBackend;
-use super::report::{ProofError, ProofReport};
+use super::backend::{ProofBackend, RenderContext};
+use super::report::ProofError;
 use crate::frame::TerminalFrame;
 use crate::renderer;
 
@@ -65,7 +64,10 @@ impl ProofBackend for GifBackend {
     /// # Errors
     ///
     /// Returns a [`ProofError`] if rendering or encoding fails.
-    fn render(&self, report: &ProofReport, output: &Path) -> Result<(), ProofError> {
+    fn render(&self, context: &RenderContext<'_>) -> Result<(), ProofError> {
+        let report = context.report;
+        let output = context.output;
+
         if report.captures.is_empty() {
             return Err(ProofError::Format(
                 "cannot create GIF from empty report".to_string(),
@@ -107,6 +109,7 @@ fn build_gif_frame(image: RgbaImage, delay_hundredths: u32) -> Frame {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proof::report::ProofReport;
 
     #[test]
     fn gif_backend_default_delay() {
@@ -147,7 +150,7 @@ mod tests {
         // Act
         let backend = GifBackend::default();
         backend
-            .render(&report, &output_path)
+            .render(&RenderContext::new(&report, &output_path))
             .expect("render should succeed");
 
         // Assert — file exists and has non-trivial size.
@@ -165,7 +168,7 @@ mod tests {
 
         // Act
         let backend = GifBackend::default();
-        let result = backend.render(&report, &output_path);
+        let result = backend.render(&RenderContext::new(&report, &output_path));
 
         // Assert
         assert!(result.is_err());
@@ -183,7 +186,7 @@ mod tests {
 
         // Act
         let backend = GifBackend::with_delay_ms(500);
-        let result = backend.render(&report, &output_path);
+        let result = backend.render(&RenderContext::new(&report, &output_path));
 
         // Assert
         assert!(result.is_ok());

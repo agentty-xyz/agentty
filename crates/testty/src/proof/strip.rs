@@ -4,11 +4,9 @@
 //! renderer and composes them vertically into a single tall PNG image with
 //! step labels between each frame.
 
-use std::path::Path;
-
 use image::{Rgba, RgbaImage};
 
-use super::backend::ProofBackend;
+use super::backend::{ProofBackend, RenderContext};
 use super::report::{ProofCapture, ProofError, ProofReport};
 use crate::frame::TerminalFrame;
 use crate::renderer;
@@ -37,11 +35,13 @@ impl ProofBackend for ScreenshotStripBackend {
     /// # Errors
     ///
     /// Returns a [`ProofError::Io`] if writing the image file fails.
-    fn render(&self, report: &ProofReport, output: &Path) -> Result<(), ProofError> {
+    fn render(&self, context: &RenderContext<'_>) -> Result<(), ProofError> {
+        let report = context.report;
+
         let rendered_frames = render_all_frames(report);
         let strip = compose_strip(&rendered_frames, report);
         strip
-            .save(output)
+            .save(context.output)
             .map_err(|err| ProofError::Format(err.to_string()))?;
 
         Ok(())
@@ -237,7 +237,7 @@ mod tests {
         // Act
         let backend = ScreenshotStripBackend;
         backend
-            .render(&report, &output_path)
+            .render(&RenderContext::new(&report, &output_path))
             .expect("render should succeed");
 
         // Assert — file exists and is a valid PNG.

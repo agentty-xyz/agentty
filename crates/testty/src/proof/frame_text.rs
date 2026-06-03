@@ -5,10 +5,8 @@
 //! [`ProofReport::to_annotated_text()`](super::report::ProofReport::to_annotated_text)
 //! but routed through the [`ProofBackend`](super::backend::ProofBackend) trait.
 
-use std::path::Path;
-
-use super::backend::ProofBackend;
-use super::report::{ProofError, ProofReport};
+use super::backend::{ProofBackend, RenderContext};
+use super::report::ProofError;
 
 /// Renders a proof report as annotated plain-text frame dumps.
 ///
@@ -23,9 +21,9 @@ impl ProofBackend for FrameTextBackend {
     /// # Errors
     ///
     /// Returns a [`ProofError::Io`] if writing the file fails.
-    fn render(&self, report: &ProofReport, output: &Path) -> Result<(), ProofError> {
-        let text = report.to_annotated_text();
-        std::fs::write(output, text)?;
+    fn render(&self, context: &RenderContext<'_>) -> Result<(), ProofError> {
+        let text = context.report.to_annotated_text();
+        std::fs::write(context.output, text)?;
 
         Ok(())
     }
@@ -35,6 +33,7 @@ impl ProofBackend for FrameTextBackend {
 mod tests {
     use super::*;
     use crate::frame::TerminalFrame;
+    use crate::proof::report::ProofReport;
 
     #[test]
     fn frame_text_backend_produces_same_output_as_to_annotated_text() {
@@ -51,7 +50,7 @@ mod tests {
         // Act
         let backend = FrameTextBackend;
         backend
-            .render(&report, &output_path)
+            .render(&RenderContext::new(&report, &output_path))
             .expect("render should succeed");
 
         // Assert
@@ -73,7 +72,7 @@ mod tests {
         // Act
         let backend = FrameTextBackend;
         backend
-            .render(&report, &output_path)
+            .render(&RenderContext::new(&report, &output_path))
             .expect("render should succeed");
 
         // Assert
