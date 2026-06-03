@@ -9,6 +9,7 @@ use std::path::Path;
 use testty::proof::frame_text::FrameTextBackend;
 use testty::proof::gif::GifBackend;
 use testty::proof::html::HtmlBackend;
+use testty::proof::junit::JunitBackend;
 use testty::proof::strip::ScreenshotStripBackend;
 use testty::scenario::Scenario;
 use testty::session::PtySessionBuilder;
@@ -27,6 +28,7 @@ report.save(&FrameTextBackend,       Path::new("proof.txt")).unwrap();
 report.save(&ScreenshotStripBackend, Path::new("proof.png")).unwrap();
 report.save(&GifBackend::default(),  Path::new("proof.gif")).unwrap();
 report.save(&HtmlBackend,            Path::new("proof.html")).unwrap();
+report.save(&JunitBackend,           Path::new("proof.xml")).unwrap();
 ```
 
 ## Backends
@@ -35,6 +37,13 @@ report.save(&HtmlBackend,            Path::new("proof.html")).unwrap();
 - **`ScreenshotStripBackend`** → `.png` — review comments, docs
 - **`GifBackend`** → `.gif` — PR descriptions, demos
 - **`HtmlBackend`** → `.html` — detailed review with diffs and assertions
+- **`JunitBackend`** → `.xml` — JUnit-XML for non-Rust CI ingestion
+
+`JunitBackend` maps the report to a `<testsuites>`/`<testsuite>` for the scenario and
+one `<testcase>` per assertion, with a `<failure>` child for every failed assertion
+carrying the structured failure message. A capture with no assertions becomes a skipped
+`<testcase>` so a documented step is not counted as a passing check, and colliding
+test-case names gain a stable ` #N` suffix.
 
 Diffs between consecutive captures are computed automatically — see
 [Frame diffing](frame-diffing.md).

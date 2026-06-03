@@ -9,5 +9,6 @@ pub mod backend;
 pub mod frame_text;
 pub mod gif;
 pub mod html;
+pub mod junit;
 pub mod report;
 pub mod strip;

@@ -102,9 +102,11 @@ snapshot::assert_frame_snapshot_matches(&config, "startup", &frame.all_text())
 use std::path::Path;
 
 use testty::proof::html::HtmlBackend;
+use testty::proof::junit::JunitBackend;
 
 let (_frame, report) = scenario.run_with_proof(builder).expect("failed");
 report.save(&HtmlBackend, Path::new("proof.html")).unwrap();
+report.save(&JunitBackend, Path::new("proof.xml")).unwrap();
 ```
 
 ## Resources
@@ -114,7 +116,7 @@ report.save(&HtmlBackend, Path::new("proof.html")).unwrap();
 - [Assertions](docs/assertions.md) — check text, colors, and highlights on screen
 - [Snapshots](docs/snapshots.md) — compare a test against a saved baseline
 - [Proof pipeline](docs/proof-pipeline.md) — save what a test saw as text, image, GIF,
-  or HTML
+  HTML, or JUnit-XML
 - [Journeys](docs/journeys.md) — reusable building blocks for tests
 - [Frame diffing](docs/frame-diffing.md) — see what changed between two screens
 - [Examples](docs/examples.md) — runnable example programs

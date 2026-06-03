@@ -1,8 +1,9 @@
 //! Showcase: Full proof pipeline from captured frames to multi-format output.
 //!
 //! Demonstrates building a [`ProofReport`] from simulated terminal frames,
-//! attaching assertions, and rendering the report through all four proof
-//! backends: frame-text, PNG strip, animated GIF, and self-contained HTML.
+//! attaching assertions, and rendering the report through all five proof
+//! backends: frame-text, PNG strip, animated GIF, self-contained HTML, and
+//! JUnit-XML.
 //!
 //! Run with: `cargo run --example proof_pipeline -p testty`
 
@@ -14,6 +15,7 @@ use testty::frame::TerminalFrame;
 use testty::proof::frame_text::FrameTextBackend;
 use testty::proof::gif::GifBackend;
 use testty::proof::html::HtmlBackend;
+use testty::proof::junit::JunitBackend;
 use testty::proof::report::ProofReport;
 use testty::proof::strip::ScreenshotStripBackend;
 
@@ -66,7 +68,7 @@ fn main() {
         "Memory should show under 1 GB (found 1.2 GB)",
     );
 
-    // Render through all four backends.
+    // Render through all five backends.
     println!("=== Testty Proof Pipeline Showcase ===\n");
 
     // 1. Frame-text backend (annotated plain text).
@@ -114,8 +116,20 @@ fn main() {
         html_size
     );
 
+    // 5. JUnit-XML backend (CI ingestion).
+    let junit_path = output_path.join("proof.xml");
+    report
+        .save(&JunitBackend, &junit_path)
+        .expect("JUnit-XML render failed");
+    let junit_size = std::fs::metadata(&junit_path).map_or(0, |metadata| metadata.len());
     println!(
-        "\n=== All four proof formats generated in {} ===",
+        "JUnit-XML report written to: {} ({} bytes)",
+        junit_path.display(),
+        junit_size
+    );
+
+    println!(
+        "\n=== All five proof formats generated in {} ===",
         output_path.display()
     );
 }

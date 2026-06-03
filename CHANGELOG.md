@@ -7,6 +7,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- testty: add `proof::junit::JunitBackend`, a `ProofBackend` that renders a
+  `ProofReport` to JUnit-XML so non-Rust CIs can ingest testty proof results as test
+  cases and failures.
+
 ### Changed
 
 - testty: `ProofBackend::render` now takes a single `RenderContext` argument instead of

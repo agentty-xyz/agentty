@@ -31,6 +31,7 @@ use testty::frame::{CellColor, CellStyle, TerminalFrame};
 use testty::journey::{Journey, StartupWait};
 use testty::locator::MatchedSpan;
 use testty::proof::backend::{ProofBackend, RenderContext};
+use testty::proof::junit::JunitBackend;
 use testty::proof::report::{AssertionResult, ProofCapture, ProofError, ProofReport};
 use testty::region::Region;
 use testty::scenario::Scenario;
@@ -119,6 +120,12 @@ fn public_surface_is_stable() {
     let _: &Path = render_context.output;
 
     let _: fn(&NoopBackend) = accept_backend::<NoopBackend>;
+
+    // `JunitBackend` is a published external-style backend: it must stay
+    // addressable through its owning module and keep satisfying `ProofBackend`
+    // so non-Rust CIs can render proof reports to JUnit-XML.
+    let _: JunitBackend = JunitBackend;
+    accept_backend(&JunitBackend);
 
     let _: fn(&TerminalFrame, &str) = assertion::assert_not_visible;
 
