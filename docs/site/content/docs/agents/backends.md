@@ -204,11 +204,13 @@ against the structured response protocol.
   same transport is also used for one-shot Codex utility prompts, and prompt
   instructions embed the same full self-descriptive schema for consistency across
   providers.
-- Codex app-server file-change approvals are auto-accepted only when the declared paths
-  stay inside the session worktree. Codex command approvals are rejected when Agentty
-  cannot prove a session-local write set. Gemini ACP permission requests prefer explicit
-  one-shot allow options when Gemini offers them, so file-changing tools can proceed
-  inside the session worktree without granting durable session-wide approval.
+- Codex app-server turns use the non-interactive `never` approval policy with a
+  workspace-write sandbox. If Codex still emits pre-action approval requests, command
+  approvals are accepted under that sandbox and file-change approvals are accepted only
+  when every declared path stays inside the session worktree. Gemini ACP permission
+  requests prefer explicit one-shot allow options when Gemini offers them, so
+  file-changing tools can proceed inside the session worktree without granting durable
+  session-wide approval.
 - Claude always uses structured protocol output, including isolated one-shot utility
   prompts, through native schema enforcement plus prompt instructions.
 - Codex app-server turns include `outputSchema` at transport level and still require the

@@ -24,8 +24,13 @@ pub(super) struct PermissionModePolicy {
     web_search_mode: &'static str,
 }
 
+/// Codex app-server policy for Agentty's non-interactive auto-edit mode.
+///
+/// The `never` approval policy keeps normal turns from blocking on user
+/// approvals, while the workspace-write sandbox still constrains filesystem
+/// writes to the session worktree and explicit extra workspace roots.
 const AUTO_EDIT_POLICY: PermissionModePolicy = PermissionModePolicy {
-    approval_policy: "on-request",
+    approval_policy: "never",
     legacy_pre_action_decision: "approved",
     legacy_pre_action_rejection_decision: "denied",
     pre_action_decision: "accept",
@@ -167,16 +172,17 @@ pub(super) fn build_pre_action_approval_response(
 
 /// Returns the scoped decision for one Codex pre-action request.
 ///
-/// Agentty only auto-approves file-change approvals whose declared paths stay
-/// inside the session worktree. Command approvals are denied because the Codex
-/// request payload does not provide a reliable path-scoped write set.
+/// Agentty runs Codex in auto-edit mode with a workspace-write sandbox policy,
+/// so command approvals are accepted when Codex still emits a pre-action
+/// request. File-change approvals remain path-scoped and only pass when every
+/// declared path stays inside the session worktree.
 fn scoped_pre_action_decision(
     response_value: &Value,
     session_folder: &Path,
     approval_kind: &PreActionApprovalKind,
 ) -> &'static str {
     if approval_kind.is_command() {
-        return pre_action_rejection_decision(approval_kind);
+        return pre_action_approval_decision(approval_kind);
     }
 
     if approval_request_paths_are_session_local(response_value, session_folder) {

@@ -565,9 +565,10 @@ by `infra/channel.rs`, with prompt payloads owned by `domain/turn_prompt.rs`):
 - Merge and `sync main` workflows perform clean-check preflights on the target checkout
   before changing base-branch state, so dirty main-checkout state blocks only the
   workflows that actually depend on it.
-- Codex app-server approvals are scoped in `app_server/codex/policy.rs`: file-change
-  approvals are accepted only for paths inside the session folder, while command
-  approvals are rejected because they do not expose a reliable path-scoped write set.
+- Codex app-server permissions are scoped in `app_server/codex/policy.rs`: turns use the
+  non-interactive `never` approval policy plus a workspace-write sandbox. If Codex still
+  emits pre-action requests, command approvals are accepted under that sandbox and
+  file-change approvals are accepted only for paths inside the session folder.
 - Gemini ACP permission requests prefer explicit one-shot allow options in
   `app_server/gemini/policy.rs` when Gemini offers them, allowing file-changing tools to
   proceed inside the session worktree without granting durable session-wide approval.

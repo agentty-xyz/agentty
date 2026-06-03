@@ -630,7 +630,9 @@ mod tests {
     }
 
     #[test]
-    fn build_pre_action_approval_response_rejects_command_requests() {
+    /// Verifies Codex auto-edit accepts command approvals when the app-server
+    /// emits them despite the non-interactive approval policy.
+    fn build_pre_action_approval_response_accepts_command_requests() {
         // Arrange
         let response_value = serde_json::json!({
             "id": "approval-1",
@@ -649,9 +651,34 @@ mod tests {
             serde_json::json!({
                 "id": "approval-1",
                 "result": {
-                    "decision": "reject"
+                    "decision": "accept"
                 }
             })
+        );
+    }
+
+    #[test]
+    /// Verifies Codex thread startup asks the app-server to avoid interactive
+    /// approval prompts during Agentty-managed turns.
+    fn build_thread_start_payload_uses_never_approval_policy() {
+        // Arrange
+        let folder = tempdir().expect("temporary folder should be created");
+
+        // Act
+        let payload = lifecycle::build_thread_start_payload(
+            folder.path(),
+            AgentModel::Gpt54.as_str(),
+            ReasoningLevel::default(),
+            "thread-start-1",
+        );
+
+        // Assert
+        assert_eq!(
+            payload
+                .get("params")
+                .and_then(|params| params.get("approvalPolicy"))
+                .and_then(Value::as_str),
+            Some("never")
         );
     }
 

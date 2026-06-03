@@ -8,7 +8,9 @@ use super::backend::{AgentBackend, AgentBackendError, BuildCommandRequest};
 ///
 /// Codex session turns and one-shot utility prompts run on top of
 /// `codex app-server`, so `build_command()` constructs the long-lived runtime
-/// process command instead of a one-shot CLI prompt invocation.
+/// process command instead of a one-shot CLI prompt invocation. Runtime
+/// permission and sandbox policies are sent later through Codex app-server
+/// JSON-RPC payloads in `app_server/codex/policy.rs`.
 pub(super) struct CodexBackend;
 
 impl AgentBackend for CodexBackend {
