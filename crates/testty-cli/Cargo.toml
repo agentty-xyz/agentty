@@ -13,6 +13,7 @@ categories = ["development-tools::testing", "command-line-interface"]
 include = [
   "src/**/*",
   "Cargo.toml",
+  "Cargo.lock",
   "README.md",
 ]
 
