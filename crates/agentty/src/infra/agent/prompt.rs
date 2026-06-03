@@ -140,8 +140,9 @@ pub(crate) fn build_resume_prompt(
 /// protocol structs, and requires repository-root-relative POSIX file paths in
 /// rendered answers. The shared prompt contract also reminds agents to run the
 /// repository-defined quality checks for touched files and the affected
-/// dependency graph, or to fall back to the full repository validation suite
-/// when targeted coverage is unclear. If the prompt already contains the
+/// dependency graph, clean up temporary scripts or files created during the
+/// session, or fall back to the full repository validation suite when
+/// targeted coverage is unclear. If the prompt already contains the
 /// protocol marker, this function returns the prompt unchanged to avoid
 /// duplicated guidance.
 ///
@@ -379,6 +380,7 @@ mod tests {
         let normalized_rendered_prompt = normalized_rendered_prompt.join(" ");
         assert!(normalized_rendered_prompt.contains("affected dependencies and dependents"));
         assert!(rendered_prompt.contains("full repository test/check suite"));
+        assert!(rendered_prompt.contains("Remove any temporary scripts or files"));
         assert!(rendered_prompt.contains("Structured response protocol:"));
         assert!(rendered_prompt.contains("Return a single JSON object"));
         assert!(rendered_prompt.contains("Do not wrap the JSON in markdown code fences."));

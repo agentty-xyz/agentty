@@ -18,6 +18,8 @@ Quality check requirements:
   dependents are checked too.
 - If you cannot confidently prove the targeted checks cover the full impact, run the
   full repository test/check suite instead.
+- Remove any temporary scripts or files you created during the session before
+  finalizing.
 
 Structured response protocol:
 
