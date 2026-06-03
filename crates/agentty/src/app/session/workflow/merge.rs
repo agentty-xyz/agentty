@@ -407,6 +407,14 @@ impl RebaseAssistOutcome {
     }
 }
 
+/// Control result for one bounded rebase-assistance attempt.
+enum RebaseAssistAttemptOutcome {
+    /// The rebase assistance loop should continue with another attempt.
+    Continue,
+    /// The rebase completed successfully.
+    Completed,
+}
+
 impl SyncSessionStartError {
     /// Returns user-facing detail for non-popup sync start errors.
     pub(crate) fn detail_message(&self) -> String {
@@ -1801,101 +1809,8 @@ impl SessionManager {
         assist_input: RebaseAssistLoopInput,
         initial_conflict_detail: Option<String>,
     ) -> Result<RebaseAssistOutcome, SessionError> {
-        let assist_result: Result<RebaseAssistOutcome, SessionError> = async {
-            let mut failure_tracker =
-                FailureTracker::new(REBASE_ASSIST_POLICY.max_identical_failure_streak);
-            let mut assist_outcome = RebaseAssistOutcome::empty();
-            if let Some(initial_conflict_detail) = initial_conflict_detail {
-                // Seed the tracker with the initial conflict fingerprint.
-                let _ = failure_tracker.observe(&initial_conflict_detail);
-            }
-
-            let mut previous_conflict_files: Vec<String> = vec![];
-
-            for assist_attempt in 1..=REBASE_ASSIST_POLICY.max_attempts {
-                let conflicted_files = assist_input
-                    .load_conflicted_files(&previous_conflict_files)
-                    .await?;
-                if conflicted_files.is_empty() {
-                    let continue_step = assist_input.run_rebase_continue().await?;
-                    match continue_step {
-                        git::RebaseStepResult::Completed => {
-                            return Ok(assist_outcome);
-                        }
-                        git::RebaseStepResult::Conflict { detail } => {
-                            if failure_tracker.observe(&detail) {
-                                return Err(SessionError::Workflow(
-                                    assist_input.repeated_conflict_state_error(&detail),
-                                ));
-                            }
-
-                            if assist_attempt == REBASE_ASSIST_POLICY.max_attempts {
-                                return Err(SessionError::Workflow(
-                                    assist_input.still_conflicted_error(&detail),
-                                ));
-                            }
-                        }
-                    }
-
-                    continue;
-                }
-
-                let conflict_fingerprint = Self::conflicted_file_fingerprint(
-                    assist_input.fs_client(),
-                    assist_input.folder(),
-                    &conflicted_files,
-                )
-                .await;
-                if failure_tracker.observe(&conflict_fingerprint) {
-                    return Err(SessionError::Workflow(
-                        assist_input.unchanged_conflict_files_error(),
-                    ));
-                }
-                assist_outcome.extend_resolved_conflict_files(&conflicted_files);
-
-                assist_input
-                    .run_assist_attempt(assist_attempt, &conflicted_files)
-                    .await?;
-
-                let still_has_conflicts = assist_input
-                    .stage_and_check_for_conflicts(&conflicted_files)
-                    .await?;
-                previous_conflict_files = conflicted_files;
-                if still_has_conflicts {
-                    if assist_attempt == REBASE_ASSIST_POLICY.max_attempts {
-                        return Err(SessionError::Workflow(
-                            "Conflicts remain unresolved after maximum assistance attempts"
-                                .to_string(),
-                        ));
-                    }
-
-                    continue;
-                }
-
-                let continue_step = assist_input.run_rebase_continue().await?;
-                match continue_step {
-                    git::RebaseStepResult::Completed => {
-                        return Ok(assist_outcome);
-                    }
-                    git::RebaseStepResult::Conflict { detail } => {
-                        if failure_tracker.observe(&detail) {
-                            return Err(SessionError::Workflow(
-                                assist_input.repeated_conflict_state_error(&detail),
-                            ));
-                        }
-
-                        if assist_attempt == REBASE_ASSIST_POLICY.max_attempts {
-                            return Err(SessionError::Workflow(
-                                assist_input.still_conflicted_error(&detail),
-                            ));
-                        }
-                    }
-                }
-            }
-
-            Err(SessionError::Workflow(assist_input.exhausted_error()))
-        }
-        .await;
+        let assist_result =
+            Self::run_rebase_assist_attempts(&assist_input, initial_conflict_detail).await;
 
         match assist_result {
             Ok(assist_outcome) => Ok(assist_outcome),
@@ -1905,6 +1820,244 @@ impl SessionManager {
                 Err(error)
             }
         }
+    }
+
+    /// Runs each bounded rebase-assistance attempt until completion or
+    /// exhaustion.
+    ///
+    /// # Errors
+    /// Returns an error when conflict resolution fails, git operations fail,
+    /// or the retry budget is exhausted.
+    async fn run_rebase_assist_attempts(
+        assist_input: &RebaseAssistLoopInput,
+        initial_conflict_detail: Option<String>,
+    ) -> Result<RebaseAssistOutcome, SessionError> {
+        let mut failure_tracker =
+            Self::rebase_failure_tracker_with_initial_detail(initial_conflict_detail);
+        let mut assist_outcome = RebaseAssistOutcome::empty();
+        let mut previous_conflict_files: Vec<String> = vec![];
+
+        for assist_attempt in 1..=REBASE_ASSIST_POLICY.max_attempts {
+            let attempt_outcome = Self::run_rebase_assist_attempt(
+                assist_input,
+                &mut failure_tracker,
+                &mut assist_outcome,
+                &mut previous_conflict_files,
+                assist_attempt,
+            )
+            .await?;
+
+            if let RebaseAssistAttemptOutcome::Completed = attempt_outcome {
+                return Ok(assist_outcome);
+            }
+        }
+
+        Err(SessionError::Workflow(assist_input.exhausted_error()))
+    }
+
+    /// Builds the no-progress tracker and seeds it with the initial conflict
+    /// detail when the rebase starts from a known conflict state.
+    fn rebase_failure_tracker_with_initial_detail(
+        initial_conflict_detail: Option<String>,
+    ) -> FailureTracker {
+        let mut failure_tracker =
+            FailureTracker::new(REBASE_ASSIST_POLICY.max_identical_failure_streak);
+
+        if let Some(initial_conflict_detail) = initial_conflict_detail {
+            let _ = failure_tracker.observe(&initial_conflict_detail);
+        }
+
+        failure_tracker
+    }
+
+    /// Executes one rebase-assistance attempt and records loop state needed
+    /// by the next attempt.
+    ///
+    /// # Errors
+    /// Returns an error when conflict inspection, assistance, staging, or
+    /// rebase continuation fails.
+    async fn run_rebase_assist_attempt(
+        assist_input: &RebaseAssistLoopInput,
+        failure_tracker: &mut FailureTracker,
+        assist_outcome: &mut RebaseAssistOutcome,
+        previous_conflict_files: &mut Vec<String>,
+        assist_attempt: usize,
+    ) -> Result<RebaseAssistAttemptOutcome, SessionError> {
+        let conflicted_files = assist_input
+            .load_conflicted_files(previous_conflict_files)
+            .await?;
+
+        if conflicted_files.is_empty() {
+            return Self::continue_rebase_after_assist_attempt(
+                assist_input,
+                failure_tracker,
+                assist_attempt,
+            )
+            .await;
+        }
+
+        Self::resolve_conflicted_files_with_assist(
+            assist_input,
+            failure_tracker,
+            assist_outcome,
+            previous_conflict_files,
+            assist_attempt,
+            conflicted_files,
+        )
+        .await
+    }
+
+    /// Applies assistance to conflicted files, stages the result, and
+    /// continues the rebase when conflicts clear.
+    ///
+    /// # Errors
+    /// Returns an error when assistance makes no progress, the retry budget is
+    /// exhausted, or git operations fail.
+    async fn resolve_conflicted_files_with_assist(
+        assist_input: &RebaseAssistLoopInput,
+        failure_tracker: &mut FailureTracker,
+        assist_outcome: &mut RebaseAssistOutcome,
+        previous_conflict_files: &mut Vec<String>,
+        assist_attempt: usize,
+        conflicted_files: Vec<String>,
+    ) -> Result<RebaseAssistAttemptOutcome, SessionError> {
+        Self::record_conflicted_file_fingerprint(assist_input, failure_tracker, &conflicted_files)
+            .await?;
+        assist_outcome.extend_resolved_conflict_files(&conflicted_files);
+
+        assist_input
+            .run_assist_attempt(assist_attempt, &conflicted_files)
+            .await?;
+
+        let still_has_conflicts = assist_input
+            .stage_and_check_for_conflicts(&conflicted_files)
+            .await?;
+        *previous_conflict_files = conflicted_files;
+
+        if still_has_conflicts {
+            return Self::evaluate_remaining_assist_conflicts(assist_attempt);
+        }
+
+        Self::continue_rebase_after_assist_attempt(assist_input, failure_tracker, assist_attempt)
+            .await
+    }
+
+    /// Records the content fingerprint for the current conflicted file set.
+    ///
+    /// # Errors
+    /// Returns an error when the conflict fingerprint matches the previous
+    /// no-progress observations too many times.
+    async fn record_conflicted_file_fingerprint(
+        assist_input: &RebaseAssistLoopInput,
+        failure_tracker: &mut FailureTracker,
+        conflicted_files: &[String],
+    ) -> Result<(), SessionError> {
+        let conflict_fingerprint = Self::conflicted_file_fingerprint(
+            assist_input.fs_client(),
+            assist_input.folder(),
+            conflicted_files,
+        )
+        .await;
+
+        if failure_tracker.observe(&conflict_fingerprint) {
+            return Err(SessionError::Workflow(
+                assist_input.unchanged_conflict_files_error(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Converts unresolved conflicts after an assistance attempt into either
+    /// another retry or the final retry-exhaustion error.
+    ///
+    /// # Errors
+    /// Returns an error when the maximum assistance attempt has already been
+    /// used.
+    fn evaluate_remaining_assist_conflicts(
+        assist_attempt: usize,
+    ) -> Result<RebaseAssistAttemptOutcome, SessionError> {
+        if assist_attempt == REBASE_ASSIST_POLICY.max_attempts {
+            return Err(SessionError::Workflow(
+                "Conflicts remain unresolved after maximum assistance attempts".to_string(),
+            ));
+        }
+
+        Ok(RebaseAssistAttemptOutcome::Continue)
+    }
+
+    /// Runs `git rebase --continue` after one assistance attempt and evaluates
+    /// the result.
+    ///
+    /// # Errors
+    /// Returns an error when rebase continuation fails, repeats an unchanged
+    /// conflict detail, or reports a final unresolved conflict.
+    async fn continue_rebase_after_assist_attempt(
+        assist_input: &RebaseAssistLoopInput,
+        failure_tracker: &mut FailureTracker,
+        assist_attempt: usize,
+    ) -> Result<RebaseAssistAttemptOutcome, SessionError> {
+        let continue_step = assist_input.run_rebase_continue().await?;
+
+        Self::evaluate_rebase_continue_step(
+            assist_input,
+            failure_tracker,
+            assist_attempt,
+            continue_step,
+        )
+    }
+
+    /// Interprets one rebase continuation result for the assistance loop.
+    ///
+    /// # Errors
+    /// Returns an error when the continuation reports repeated or final
+    /// conflict detail.
+    fn evaluate_rebase_continue_step(
+        assist_input: &RebaseAssistLoopInput,
+        failure_tracker: &mut FailureTracker,
+        assist_attempt: usize,
+        continue_step: git::RebaseStepResult,
+    ) -> Result<RebaseAssistAttemptOutcome, SessionError> {
+        match continue_step {
+            git::RebaseStepResult::Completed => Ok(RebaseAssistAttemptOutcome::Completed),
+            git::RebaseStepResult::Conflict { detail } => {
+                Self::record_rebase_conflict_detail(
+                    assist_input,
+                    failure_tracker,
+                    assist_attempt,
+                    &detail,
+                )?;
+
+                Ok(RebaseAssistAttemptOutcome::Continue)
+            }
+        }
+    }
+
+    /// Records conflict detail from rebase continuation and enforces
+    /// no-progress and retry-exhaustion policies.
+    ///
+    /// # Errors
+    /// Returns an error when the conflict detail repeats too often or the
+    /// final attempt still reports a conflict.
+    fn record_rebase_conflict_detail(
+        assist_input: &RebaseAssistLoopInput,
+        failure_tracker: &mut FailureTracker,
+        assist_attempt: usize,
+        detail: &str,
+    ) -> Result<(), SessionError> {
+        if failure_tracker.observe(detail) {
+            return Err(SessionError::Workflow(
+                assist_input.repeated_conflict_state_error(detail),
+            ));
+        }
+
+        if assist_attempt == REBASE_ASSIST_POLICY.max_attempts {
+            return Err(SessionError::Workflow(
+                assist_input.still_conflicted_error(detail),
+            ));
+        }
+
+        Ok(())
     }
 
     /// Returns whether the session worktree has an in-progress rebase.
