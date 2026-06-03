@@ -11,6 +11,7 @@ use std::path::Path;
 use std::process::Command;
 
 use agentty::db::{DB_DIR, DB_FILE, Database};
+use agentty::domain::agent::ReasoningLevel;
 use agentty::domain::session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
 };
@@ -70,6 +71,29 @@ fn seed_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
     })?;
 
     std::fs::create_dir_all(env.agentty_root.join("wt").join("review-s"))?;
+
+    Ok(())
+}
+
+/// Seeds one review-ready session with a persisted reasoning-level override.
+fn seed_session_with_reasoning_level(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session(env)?;
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(async {
+        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
+        let database = Database::open(&db_path).await?;
+        database
+            .sessions()
+            .update_session_reasoning_level(
+                "review-shortcut-0001",
+                Some(ReasoningLevel::Medium.as_str().to_string()),
+            )
+            .await
+    })?;
 
     Ok(())
 }
@@ -435,6 +459,34 @@ fn session_list_empty_state() -> E2eResult {
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "No sessions", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that the Sessions tab model column includes the effective reasoning
+/// level next to the model name.
+#[test]
+fn session_list_model_reasoning_level() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_list_model_reasoning_level")
+        .with_git()
+        .setup(seed_session_with_reasoning_level)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .wait_for_text("gpt-5.4 [medium]", 5000)
+                    .capture_labeled(
+                        "model_reasoning",
+                        "Session row model column with reasoning level",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "gpt-5.4 [medium]", &full);
             },
         )?;
 

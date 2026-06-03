@@ -4,6 +4,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 
+use crate::domain::agent::ReasoningLevel;
 use crate::domain::session::{Session, SessionSize, Status};
 use crate::ui::input_layout::first_table_column_width;
 use crate::ui::state::help_action;
@@ -16,9 +17,11 @@ const ROW_HIGHLIGHT_SYMBOL: &str = "";
 const TABLE_COLUMN_SPACING: u16 = 2;
 /// Placeholder text rendered under group headers with no sessions.
 const GROUP_EMPTY_PLACEHOLDER: &str = "No sessions...";
-
 /// Session list page renderer.
 pub struct SessionListPage<'a> {
+    /// Active project-scoped default reasoning level for sessions without an
+    /// override.
+    pub default_reasoning_level: ReasoningLevel,
     /// Session rows available for rendering.
     pub sessions: &'a [Session],
     /// Table selection state tied to the raw session ordering.
@@ -32,9 +35,11 @@ impl<'a> SessionListPage<'a> {
     pub fn new(
         sessions: &'a [Session],
         table_state: &'a mut TableState,
+        default_reasoning_level: ReasoningLevel,
         wall_clock_unix_seconds: i64,
     ) -> Self {
         Self {
+            default_reasoning_level,
             sessions,
             table_state,
             wall_clock_unix_seconds,
@@ -67,7 +72,7 @@ impl Page for SessionListPage<'_> {
             .border_style(style::border_style());
         let column_constraints = [
             Constraint::Fill(1),
-            model_column_width(self.sessions),
+            model_column_width(self.sessions, self.default_reasoning_level),
             size_column_width(),
             status_column_width(self.sessions),
             timer_column_width(self.sessions, self.wall_clock_unix_seconds),
@@ -82,7 +87,12 @@ impl Page for SessionListPage<'_> {
         let selected_session_id = selected_session_id(self.sessions, self.table_state.selected());
         let selected_row = selected_render_row(&table_rows, selected_session_id);
         let rows = table_rows.iter().map(|table_row| {
-            render_table_row(table_row, title_column_width, self.wall_clock_unix_seconds)
+            render_table_row(
+                table_row,
+                title_column_width,
+                self.default_reasoning_level,
+                self.wall_clock_unix_seconds,
+            )
         });
         let table = Table::new(rows, column_constraints)
             .column_spacing(TABLE_COLUMN_SPACING)
@@ -253,14 +263,18 @@ fn selected_render_row(
 fn render_table_row(
     row: &SessionTableRow<'_>,
     title_column_width: usize,
+    default_reasoning_level: ReasoningLevel,
     wall_clock_unix_seconds: i64,
 ) -> Row<'static> {
     match row {
         SessionTableRow::GroupLabel(group) => render_group_label_row(*group),
         SessionTableRow::EmptyGroupPlaceholder => render_empty_group_placeholder_row(),
-        SessionTableRow::Session(session) => {
-            render_session_row(session, title_column_width, wall_clock_unix_seconds)
-        }
+        SessionTableRow::Session(session) => render_session_row(
+            session,
+            title_column_width,
+            default_reasoning_level,
+            wall_clock_unix_seconds,
+        ),
     }
 }
 
@@ -295,6 +309,7 @@ fn render_empty_group_placeholder_row() -> Row<'static> {
 fn render_session_row(
     session: &Session,
     title_column_width: usize,
+    default_reasoning_level: ReasoningLevel,
     wall_clock_unix_seconds: i64,
 ) -> Row<'static> {
     let status = session.status;
@@ -324,7 +339,10 @@ fn render_session_row(
     };
     let cells = vec![
         Cell::from(Line::from(title_spans)),
-        Cell::from(session.model.as_str()),
+        Cell::from(session_model_and_reasoning_level(
+            session,
+            default_reasoning_level,
+        )),
         Cell::from(session.size.to_string()).style(Style::default().fg(size_color(session.size))),
         status_cell,
         Cell::from(timer_label),
@@ -336,11 +354,26 @@ fn render_session_row(
 }
 
 /// Calculates the width of the model column from known session values.
-pub(crate) fn model_column_width(sessions: &[Session]) -> Constraint {
+pub(crate) fn model_column_width(
+    sessions: &[Session],
+    default_reasoning_level: ReasoningLevel,
+) -> Constraint {
     text_column_width(
         "Model",
-        sessions.iter().map(|session| session.model.as_str()),
+        sessions
+            .iter()
+            .map(|session| session_model_and_reasoning_level(session, default_reasoning_level)),
     )
+}
+
+/// Formats model name together with the effective reasoning level label.
+fn session_model_and_reasoning_level(
+    session: &Session,
+    default_reasoning_level: ReasoningLevel,
+) -> String {
+    let reasoning_level = session.effective_reasoning_level(default_reasoning_level);
+
+    format!("{} [{}]", session.model.as_str(), reasoning_level.as_str())
 }
 
 fn size_column_width() -> Constraint {
@@ -426,7 +459,7 @@ mod tests {
     use ratatui::widgets::TableState;
 
     use super::*;
-    use crate::agent::AgentModel;
+    use crate::agent::{AgentModel, ReasoningLevel};
     use crate::domain::session::SessionStats;
     use crate::domain::theme::ColorTheme;
 
@@ -595,7 +628,8 @@ mod tests {
         // Act
         terminal
             .draw(|frame| {
-                SessionListPage::new(&sessions, &mut table_state, 0).render(frame, frame.area());
+                SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::default(), 0)
+                    .render(frame, frame.area());
             })
             .expect("failed to draw");
 
@@ -793,14 +827,69 @@ mod tests {
     #[test]
     fn test_model_column_width_uses_longest_model_value() {
         // Arrange
-        let expected_width = u16::try_from("claude-sonnet-4-6".chars().count()).unwrap_or(u16::MAX);
-        let models = ["gpt-5.4", "claude-sonnet-4-6"];
+        let expected_width =
+            u16::try_from("claude-sonnet-4-6 [low]".chars().count()).unwrap_or(u16::MAX);
+        let mut default_session = test_session("active-1", Status::Review);
+        default_session.model = AgentModel::ClaudeSonnet46;
+        let mut medium_session = test_session("active-2", Status::Review);
+        medium_session.model = AgentModel::Gpt54;
+        medium_session.reasoning_level_override = Some(ReasoningLevel::Medium);
+        let sessions = vec![default_session, medium_session];
 
         // Act
-        let width = text_column_width("Model", models.into_iter());
+        let width = model_column_width(&sessions, ReasoningLevel::Low);
 
         // Assert
         assert_eq!(width, Constraint::Length(expected_width));
+    }
+
+    #[test]
+    fn test_render_session_row_shows_model_with_default_reasoning_level() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(100, 12);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let mut table_state = TableState::default();
+        table_state.select(Some(0));
+        let mut session = test_session("session-1", Status::Review);
+        session.model = AgentModel::Gpt54;
+        let sessions = vec![session];
+
+        // Act
+        terminal
+            .draw(|frame| {
+                SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::Medium, 0)
+                    .render(frame, frame.area());
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("gpt-5.4 [medium]"));
+    }
+
+    #[test]
+    fn test_render_session_row_shows_model_with_override_reasoning_level() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(100, 12);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let mut table_state = TableState::default();
+        table_state.select(Some(0));
+        let mut session = test_session("session-1", Status::Review);
+        session.model = AgentModel::Gpt54;
+        session.reasoning_level_override = Some(ReasoningLevel::High);
+        let sessions = vec![session];
+
+        // Act
+        terminal
+            .draw(|frame| {
+                SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::Low, 0)
+                    .render(frame, frame.area());
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("gpt-5.4 [high]"));
     }
 
     #[test]
@@ -958,7 +1047,8 @@ mod tests {
         // Act
         terminal
             .draw(|frame| {
-                SessionListPage::new(&sessions, &mut table_state, 160).render(frame, frame.area());
+                SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::default(), 160)
+                    .render(frame, frame.area());
             })
             .expect("failed to draw");
 
@@ -981,8 +1071,13 @@ mod tests {
         // Act
         terminal
             .draw(|frame| {
-                SessionListPage::new(&sessions, &mut table_state, 9_999)
-                    .render(frame, frame.area());
+                SessionListPage::new(
+                    &sessions,
+                    &mut table_state,
+                    ReasoningLevel::default(),
+                    9_999,
+                )
+                .render(frame, frame.area());
             })
             .expect("failed to draw");
 
@@ -1003,7 +1098,8 @@ mod tests {
         // Act
         terminal
             .draw(|frame| {
-                SessionListPage::new(&sessions, &mut table_state, 0).render(frame, frame.area());
+                SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::default(), 0)
+                    .render(frame, frame.area());
             })
             .expect("failed to draw");
 
@@ -1026,7 +1122,8 @@ mod tests {
         // Act
         terminal
             .draw(|frame| {
-                SessionListPage::new(&sessions, &mut table_state, 0).render(frame, frame.area());
+                SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::default(), 0)
+                    .render(frame, frame.area());
             })
             .expect("failed to draw");
 
@@ -1047,7 +1144,8 @@ mod tests {
         // Act
         terminal
             .draw(|frame| {
-                SessionListPage::new(&sessions, &mut table_state, 0).render(frame, frame.area());
+                SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::default(), 0)
+                    .render(frame, frame.area());
             })
             .expect("failed to draw");
 

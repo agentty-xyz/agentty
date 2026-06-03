@@ -774,6 +774,7 @@ pub(crate) fn render_list_background(
             page::session_list::SessionListPage::new(
                 sessions,
                 table_state,
+                settings.reasoning_level,
                 wall_clock_unix_seconds,
             )
             .render(f, chunks[1]);

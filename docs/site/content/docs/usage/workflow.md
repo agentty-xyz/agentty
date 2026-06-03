@@ -44,9 +44,10 @@ branch-sync status row while Agentty is auto-pushing the latest completed turn o
 the most recent automatic push failed. The timer keeps ticking only while the session is
 actively working and freezes between turns.
 
-The grouped **Sessions** tab also shows that same cumulative active-work timer in its
-own `Timer` column, so in-progress rows keep ticking live there while completed sessions
-retain their frozen total.
+The grouped **Sessions** tab also shows the current model with its effective reasoning
+level in the `Model` column, using `model-name [level]` formatting. The same list shows
+the cumulative active-work timer in its own `Timer` column, so in-progress rows keep
+ticking live there while completed sessions retain their frozen total.
 
 The top status bar keeps the current version and update status visible, and it also
 rotates short page-scoped `FYI:` messages once per minute while you are in the
