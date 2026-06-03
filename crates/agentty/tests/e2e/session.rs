@@ -1489,8 +1489,9 @@ fn qe_check_slash_command_is_visible() -> E2eResult {
 ///
 /// Creates two sessions ("alpha" and "beta"), navigates down with `j`,
 /// opens the selection with `Enter`, returns with `q`, navigates back
-/// up with `k`, and opens again. Asserts that both navigations still land on
-/// openable session views after moving the cursor in the list.
+/// up with `k`, and opens again. Asserts that the list shows display-only
+/// size prefixes and that both navigations still land on openable session
+/// views after moving the cursor in the list.
 #[test]
 fn session_list_jk_navigation() -> E2eResult {
     // Arrange, Act, Assert
@@ -1545,6 +1546,10 @@ fn session_list_jk_navigation() -> E2eResult {
                 assert!(
                     initial_text.contains("alpha") && initial_text.contains("beta"),
                     "Expected both session prompts visible in list"
+                );
+                assert!(
+                    initial_text.contains("[XS]"),
+                    "Expected session-size prefix visible in list"
                 );
 
                 // Extract text from the two opened-session captures.

@@ -62,7 +62,7 @@ impl Page for SessionListPage<'_> {
             .bg(style::palette::surface())
             .fg(style::palette::text_muted())
             .add_modifier(Modifier::BOLD);
-        let header_cells = ["Session", "Model", "Size", "Status", "Timer"]
+        let header_cells = ["Session", "Model", "Status", "Timer"]
             .iter()
             .map(|h| Cell::from(*h));
         let header = Row::new(header_cells)
@@ -77,7 +77,6 @@ impl Page for SessionListPage<'_> {
         let column_constraints = [
             Constraint::Fill(1),
             model_column_width(self.sessions, self.default_reasoning_level),
-            size_column_width(),
             status_column_width(self.sessions),
             timer_column_width(self.sessions, self.wall_clock_unix_seconds),
         ];
@@ -373,7 +372,6 @@ fn render_group_label_row(group: SessionGroup) -> Row<'static> {
         Cell::from(""),
         Cell::from(""),
         Cell::from(""),
-        Cell::from(""),
     ];
 
     Row::new(cells).height(1)
@@ -384,7 +382,6 @@ fn render_empty_group_placeholder_row() -> Row<'static> {
     let cells = vec![
         Cell::from(GROUP_EMPTY_PLACEHOLDER)
             .style(Style::default().fg(style::palette::text_subtle())),
-        Cell::from(""),
         Cell::from(""),
         Cell::from(""),
         Cell::from(""),
@@ -402,11 +399,8 @@ fn render_session_row(
     wall_clock_unix_seconds: i64,
 ) -> Row<'static> {
     let status = session.status;
-    let title_text = inline_text(session.display_title());
-    let title_spans =
-        markdown::parse_inline_spans(&title_text, Style::default().fg(style::palette::text()));
-    let title_spans = truncate_spans_with_ellipsis(
-        title_spans,
+    let title_spans = render_session_title(
+        session,
         title_column_width.saturating_sub(tree_prefix.width()),
     );
     let mut title_line_spans = Vec::new();
@@ -440,7 +434,6 @@ fn render_session_row(
             session,
             default_reasoning_level,
         )),
-        Cell::from(session.size.to_string()).style(Style::default().fg(size_color(session.size))),
         status_cell,
         Cell::from(timer_label),
     ];
@@ -476,15 +469,6 @@ fn session_model_and_reasoning_level(
     let reasoning_level = session.effective_reasoning_level(default_reasoning_level);
 
     format!("{} [{}]", session.model.as_str(), reasoning_level.as_str())
-}
-
-fn size_column_width() -> Constraint {
-    text_column_width(
-        "Size",
-        SessionSize::ALL
-            .iter()
-            .map(std::string::ToString::to_string),
-    )
 }
 
 /// Calculates the width of the status column from every supported session
@@ -528,6 +512,26 @@ fn timer_column_width(sessions: &[Session], wall_clock_unix_seconds: i64) -> Con
                 )
             }),
     )
+}
+
+/// Builds display-only title spans with a colored size marker prefix.
+///
+/// The prefix is derived from the row's current session size at render time
+/// and is not written into the persisted session title.
+fn render_session_title(session: &Session, title_column_width: usize) -> Vec<Span<'static>> {
+    let mut title_spans = markdown::parse_inline_spans(
+        &inline_text(session.display_title()),
+        Style::default().fg(style::palette::text()),
+    );
+    title_spans.insert(
+        0,
+        Span::styled(
+            format!("[{}] ", session.size),
+            Style::default().fg(size_color(session.size)),
+        ),
+    );
+
+    truncate_spans_with_ellipsis(title_spans, title_column_width)
 }
 
 /// Returns the palette color representing each session size bucket.
@@ -1062,7 +1066,7 @@ mod tests {
         // Assert
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("Parent session"));
-        assert!(text.contains("└ Child session"));
+        assert!(text.contains("└ [XS] Child session"));
         let buffer = terminal.backend().buffer();
         let fallback_cell = &buffer.content()[0];
         let tree_cell = find_text_start_cell(buffer, "└").unwrap_or(fallback_cell);
@@ -1094,18 +1098,6 @@ mod tests {
         // Assert
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("gpt-5.4 [high]"));
-    }
-
-    #[test]
-    fn test_size_column_width_uses_header_width() {
-        // Arrange
-        let expected_width = u16::try_from("Size".chars().count()).unwrap_or(u16::MAX);
-
-        // Act
-        let width = size_column_width();
-
-        // Assert
-        assert_eq!(width, Constraint::Length(expected_width));
     }
 
     #[test]
@@ -1185,6 +1177,36 @@ mod tests {
         for (size, expected_color) in test_cases {
             assert_eq!(size_color(size), expected_color);
         }
+    }
+
+    #[test]
+    fn test_render_session_row_includes_size_prefix_in_title() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(120, 12);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let mut table_state = TableState::default();
+        table_state.select(Some(0));
+        let mut session = test_session("new-1", Status::Draft);
+        session.size = SessionSize::Xxl;
+        session.title = Some("Update dependency graph".to_string());
+        let sessions = vec![session];
+
+        // Act
+        terminal
+            .draw(|frame| {
+                SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::default(), 0)
+                    .render(frame, frame.area());
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("[XXL] Update dependency graph"));
+        assert_eq!(
+            sessions[0].title.as_deref(),
+            Some("Update dependency graph")
+        );
+        assert!(!text.contains("Size"));
     }
 
     #[test]

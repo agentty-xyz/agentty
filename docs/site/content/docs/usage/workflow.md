@@ -44,10 +44,12 @@ branch-sync status row while Agentty is auto-pushing the latest completed turn o
 the most recent automatic push failed. The timer keeps ticking only while the session is
 actively working and freezes between turns.
 
-The grouped **Sessions** tab also shows the current model with its effective reasoning
-level in the `Model` column, using `model-name [level]` formatting. The same list shows
-the cumulative active-work timer in its own `Timer` column, so in-progress rows keep
-ticking live there while completed sessions retain their frozen total.
+The grouped **Sessions** tab prefixes each row title with the current session-size
+marker, for example `[XL]`, without writing that marker into the persisted title. It
+also shows the current model with its effective reasoning level in the `Model` column,
+using `model-name [level]` formatting. The same list shows the cumulative active-work
+timer in its own `Timer` column, so in-progress rows keep ticking live there while
+completed sessions retain their frozen total.
 
 The top status bar keeps the current version and update status visible, and it also
 rotates short page-scoped `FYI:` messages once per minute while you are in the
@@ -430,8 +432,8 @@ lines in their diff:
 | Size | Changed Lines | |------|---------------| | **XS** | 0-10 | | **S** | 11-30 | |
 **M** | 31-80 | | **L** | 81-200 | | **XL** | 201-500 | | **XXL** | 501+ |
 
-Session size is recalculated after each completed agent turn and persisted to the
-session record.
+Session size is recalculated after each completed agent turn, persisted to the session
+record, and rendered as a title prefix in the **Sessions** list.
 
 ## Slash Commands
 
