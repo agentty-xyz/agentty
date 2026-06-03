@@ -430,7 +430,7 @@ fn render_session_row(
     };
     let cells = vec![
         Cell::from(Line::from(title_line_spans)),
-        Cell::from(session_model_and_reasoning_level(
+        Cell::from(session_model_and_reasoning_level_line(
             session,
             default_reasoning_level,
         )),
@@ -469,6 +469,32 @@ fn session_model_and_reasoning_level(
     let reasoning_level = session.effective_reasoning_level(default_reasoning_level);
 
     format!("{} [{}]", session.model.as_str(), reasoning_level.as_str())
+}
+
+/// Builds a styled model column cell where the reasoning label is colorized.
+fn session_model_and_reasoning_level_line(
+    session: &Session,
+    default_reasoning_level: ReasoningLevel,
+) -> Line<'static> {
+    let reasoning_level = session.effective_reasoning_level(default_reasoning_level);
+    let color = reasoning_level_color(reasoning_level);
+
+    Line::from(vec![
+        Span::raw(session.model.as_str()),
+        Span::raw(" ["),
+        Span::styled(reasoning_level.as_str(), Style::default().fg(color)),
+        Span::raw("]"),
+    ])
+}
+
+/// Returns the palette color for one reasoning effort level.
+fn reasoning_level_color(reasoning_level: ReasoningLevel) -> Color {
+    match reasoning_level {
+        ReasoningLevel::Low => style::palette::success(),
+        ReasoningLevel::Medium => style::palette::warning(),
+        ReasoningLevel::High => style::palette::warning_soft(),
+        ReasoningLevel::XHigh => style::palette::danger(),
+    }
 }
 
 /// Calculates the width of the status column from every supported session
@@ -1014,6 +1040,54 @@ mod tests {
 
         // Assert
         assert_eq!(width, Constraint::Length(expected_width));
+    }
+
+    #[test]
+    fn test_reasoning_level_color_matches_schema() {
+        // Arrange
+        let expected_colors = [
+            (ReasoningLevel::Low, style::palette::success()),
+            (ReasoningLevel::Medium, style::palette::warning()),
+            (ReasoningLevel::High, style::palette::warning_soft()),
+            (ReasoningLevel::XHigh, style::palette::danger()),
+        ];
+
+        // Act & Assert
+        for (reasoning_level, expected_color) in expected_colors {
+            assert_eq!(reasoning_level_color(reasoning_level), expected_color);
+        }
+    }
+
+    #[test]
+    fn test_render_session_row_colors_reasoning_level_within_model_column() {
+        // Arrange
+        let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
+        let backend = ratatui::backend::TestBackend::new(100, 12);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let mut table_state = TableState::default();
+        table_state.select(Some(0));
+        let mut session = test_session("session-1", Status::Review);
+        session.model = AgentModel::Gpt54;
+        session.reasoning_level_override = Some(ReasoningLevel::High);
+        let sessions = vec![session];
+        let expected_reasoning_color = reasoning_level_color(ReasoningLevel::High);
+
+        // Act
+        terminal
+            .draw(|frame| {
+                SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::Low, 0)
+                    .render(frame, frame.area());
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let buffer = terminal.backend().buffer();
+        let fallback_cell = &buffer.content()[0];
+        let model_cell = find_text_start_cell(buffer, "gpt-5.4").unwrap_or(fallback_cell);
+        let reasoning_cell = find_text_start_cell(buffer, "high").unwrap_or(fallback_cell);
+
+        assert_eq!(model_cell.fg, style::palette::text());
+        assert_eq!(reasoning_cell.fg, expected_reasoning_color);
     }
 
     #[test]

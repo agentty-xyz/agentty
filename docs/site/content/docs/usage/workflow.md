@@ -47,9 +47,10 @@ actively working and freezes between turns.
 The grouped **Sessions** tab prefixes each row title with the current session-size
 marker, for example `[XL]`, without writing that marker into the persisted title. It
 also shows the current model with its effective reasoning level in the `Model` column,
-using `model-name [level]` formatting. The same list shows the cumulative active-work
-timer in its own `Timer` column, so in-progress rows keep ticking live there while
-completed sessions retain their frozen total.
+using `model-name [level]` formatting with the level label color-coded by reasoning
+effort. The same list shows the cumulative active-work timer in its own `Timer` column,
+so in-progress rows keep ticking live there while completed sessions retain their frozen
+total.
 
 The top status bar keeps the current version and update status visible, and it also
 rotates short page-scoped `FYI:` messages once per minute while you are in the
