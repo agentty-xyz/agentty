@@ -4,11 +4,12 @@ use tokio::sync::mpsc;
 
 use super::lifecycle::{self, CodexRuntimeState};
 use super::transport::CodexStdioTransport;
+use crate::domain::agent::AgentKind;
 use crate::infra::app_server::{
     self, AppServerClient, AppServerError, AppServerFuture, AppServerSessionRegistry,
     AppServerStreamEvent, AppServerTurnRequest, AppServerTurnResponse,
 };
-use crate::infra::app_server_transport;
+use crate::infra::{agent, app_server_transport};
 
 /// Production [`AppServerClient`] backed by `codex app-server` process
 /// instances.
@@ -42,6 +43,7 @@ impl RealCodexAppServerClient {
                 provider_conversation_id: CodexSessionRuntime::provider_conversation_id,
                 restored_context: CodexSessionRuntime::restored_context,
             },
+            agent::protocol_schema_instruction_mode(AgentKind::Codex),
             |request| {
                 let request = request.clone();
 

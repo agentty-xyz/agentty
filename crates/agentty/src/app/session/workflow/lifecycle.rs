@@ -3775,7 +3775,8 @@ mod tests {
         assert!(title_prompt.contains("Do not include long file names"));
         assert!(title_prompt.contains("Do not describe your own progress"));
         assert!(title_prompt.contains("Do not use first-person phrasing"));
-        assert!(title_prompt.contains("Return only the title text."));
+        assert!(title_prompt.contains("Put only the title text in `answer`"));
+        assert!(!title_prompt.contains("Return only the title text."));
         assert!(title_prompt.contains(request_prompt));
     }
 

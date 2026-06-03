@@ -6,6 +6,7 @@ use super::backend::{
     AgentBackend, AgentBackendError, AgentPromptTransport, AgentTransport, AppServerThoughtPolicy,
     BuildCommandRequest,
 };
+use super::prompt::ProtocolSchemaInstructionMode;
 use super::protocol;
 use super::response_parser::ParsedResponse;
 use crate::domain::agent::{AgentKind, AgentModel};
@@ -53,6 +54,16 @@ pub fn transport_mode(kind: AgentKind) -> AgentTransport {
 /// Returns whether the provider expects prompts through stdin.
 pub(crate) fn prompt_transport(kind: AgentKind) -> AgentPromptTransport {
     provider_descriptor(kind).prompt_transport
+}
+
+/// Returns whether bootstrap prompts should include schema text for the
+/// selected provider.
+///
+/// Providers that enforce Agentty's response shape natively still receive
+/// policy and field-routing instructions, but skip the large prompt-side JSON
+/// Schema to avoid redundant tokens.
+pub(crate) fn protocol_schema_instruction_mode(kind: AgentKind) -> ProtocolSchemaInstructionMode {
+    provider_descriptor(kind).protocol_schema_instruction_mode
 }
 
 /// Parses one final assistant payload strictly against the shared protocol and
@@ -108,13 +119,20 @@ pub(crate) fn build_command_stdin_payload(
     kind: AgentKind,
     request: BuildCommandRequest<'_>,
 ) -> Result<Option<Vec<u8>>, AgentBackendError> {
+    let protocol_schema_instruction_mode = protocol_schema_instruction_mode(kind);
+
     match prompt_transport(kind) {
         AgentPromptTransport::Argv => Ok(None),
         AgentPromptTransport::Stdin => match kind {
-            AgentKind::Antigravity => {
-                super::antigravity::build_prompt_stdin_payload(request).map(Some)
+            AgentKind::Antigravity => super::antigravity::build_prompt_stdin_payload(
+                request,
+                protocol_schema_instruction_mode,
+            )
+            .map(Some),
+            AgentKind::Claude => {
+                super::claude::build_prompt_stdin_payload(request, protocol_schema_instruction_mode)
+                    .map(Some)
             }
-            AgentKind::Claude => super::claude::build_prompt_stdin_payload(request).map(Some),
             AgentKind::Codex | AgentKind::Gemini => Ok(None),
         },
     }
@@ -139,6 +157,7 @@ struct AgentProviderDescriptor {
     parse_response: fn(&str, &str) -> ParsedResponse,
     parse_stream_output_line: fn(&str) -> Option<(String, bool)>,
     prompt_transport: AgentPromptTransport,
+    protocol_schema_instruction_mode: ProtocolSchemaInstructionMode,
     transport: AgentTransport,
 }
 
@@ -151,6 +170,7 @@ fn provider_descriptor(kind: AgentKind) -> AgentProviderDescriptor {
             parse_response: super::response_parser::parse_antigravity_response_with_fallback,
             parse_stream_output_line: super::response_parser::parse_antigravity_stream_output_line,
             prompt_transport: AgentPromptTransport::Stdin,
+            protocol_schema_instruction_mode: ProtocolSchemaInstructionMode::PromptSchema,
             transport: AgentTransport::Cli,
         },
         AgentKind::Gemini => AgentProviderDescriptor {
@@ -165,6 +185,7 @@ fn provider_descriptor(kind: AgentKind) -> AgentProviderDescriptor {
             parse_response: super::response_parser::parse_gemini_response_with_fallback,
             parse_stream_output_line: super::response_parser::parse_gemini_stream_output_line,
             prompt_transport: AgentPromptTransport::Argv,
+            protocol_schema_instruction_mode: ProtocolSchemaInstructionMode::PromptSchema,
             transport: AgentTransport::AppServer,
         },
         AgentKind::Claude => AgentProviderDescriptor {
@@ -174,6 +195,7 @@ fn provider_descriptor(kind: AgentKind) -> AgentProviderDescriptor {
             parse_response: super::response_parser::parse_claude_response_with_fallback,
             parse_stream_output_line: super::response_parser::parse_claude_stream_output_line,
             prompt_transport: AgentPromptTransport::Stdin,
+            protocol_schema_instruction_mode: ProtocolSchemaInstructionMode::TransportSchema,
             transport: AgentTransport::Cli,
         },
         AgentKind::Codex => AgentProviderDescriptor {
@@ -188,6 +210,7 @@ fn provider_descriptor(kind: AgentKind) -> AgentProviderDescriptor {
             parse_response: super::response_parser::parse_codex_response_with_fallback,
             parse_stream_output_line: super::response_parser::parse_codex_stream_output_line,
             prompt_transport: AgentPromptTransport::Argv,
+            protocol_schema_instruction_mode: ProtocolSchemaInstructionMode::TransportSchema,
             transport: AgentTransport::AppServer,
         },
     }
@@ -254,6 +277,29 @@ mod tests {
         assert_eq!(claude_transport, AgentPromptTransport::Stdin);
         assert_eq!(codex_transport, AgentPromptTransport::Argv);
         assert_eq!(gemini_transport, AgentPromptTransport::Argv);
+    }
+
+    #[test]
+    /// Ensures provider schema capabilities are derived from the shared
+    /// descriptor.
+    fn test_protocol_schema_instruction_mode_reports_expected_mode_by_provider() {
+        // Arrange / Act / Assert
+        assert_eq!(
+            protocol_schema_instruction_mode(AgentKind::Antigravity),
+            ProtocolSchemaInstructionMode::PromptSchema
+        );
+        assert_eq!(
+            protocol_schema_instruction_mode(AgentKind::Gemini),
+            ProtocolSchemaInstructionMode::PromptSchema
+        );
+        assert_eq!(
+            protocol_schema_instruction_mode(AgentKind::Claude),
+            ProtocolSchemaInstructionMode::TransportSchema
+        );
+        assert_eq!(
+            protocol_schema_instruction_mode(AgentKind::Codex),
+            ProtocolSchemaInstructionMode::TransportSchema
+        );
     }
 
     #[test]

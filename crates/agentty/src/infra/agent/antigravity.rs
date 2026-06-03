@@ -4,7 +4,7 @@ use std::process::{Command, Stdio};
 use std::{fs, io};
 
 use super::backend::{AgentBackend, AgentBackendError, BuildCommandRequest};
-use super::prompt::{PromptPreparationRequest, prepare_prompt_text};
+use super::prompt::{PromptPreparationRequest, ProtocolSchemaInstructionMode, prepare_prompt_text};
 use crate::domain::turn_prompt::{
     TurnPromptAttachment, TurnPromptContentPart, split_turn_prompt_content,
 };
@@ -254,6 +254,7 @@ fn append_git_exclude_pattern(exclude_path: &Path, pattern: &str) -> Result<(), 
 /// rendering fails.
 pub(super) fn build_prompt_stdin_payload(
     request: BuildCommandRequest<'_>,
+    schema_instruction_mode: ProtocolSchemaInstructionMode,
 ) -> Result<Vec<u8>, AgentBackendError> {
     let prompt = render_prompt_with_local_images(request.prompt, request.attachments)?;
     let prompt = prepare_prompt_text(PromptPreparationRequest {
@@ -265,6 +266,7 @@ pub(super) fn build_prompt_stdin_payload(
         prompt: &prompt,
         protocol_profile: request.request_kind.protocol_profile(),
         replay_session_output: request.request_kind.session_output(),
+        schema_instruction_mode,
     })?;
 
     Ok(prompt.into_bytes())
@@ -608,14 +610,17 @@ mod tests {
         let request_kind = session_resume_request_kind(Some("previous answer"));
 
         // Act
-        let payload = build_prompt_stdin_payload(BuildCommandRequest {
-            attachments: &[],
-            folder: temp_directory.path(),
-            prompt: "continue work",
-            request_kind: &request_kind,
-            model: "antigravity",
-            reasoning_level: ReasoningLevel::default(),
-        })
+        let payload = build_prompt_stdin_payload(
+            BuildCommandRequest {
+                attachments: &[],
+                folder: temp_directory.path(),
+                prompt: "continue work",
+                request_kind: &request_kind,
+                model: "antigravity",
+                reasoning_level: ReasoningLevel::default(),
+            },
+            ProtocolSchemaInstructionMode::PromptSchema,
+        )
         .expect("stdin payload should build");
         let prompt = String::from_utf8(payload).expect("prompt should be utf8");
 

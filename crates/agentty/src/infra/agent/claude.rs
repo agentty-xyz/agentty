@@ -2,7 +2,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use super::backend::{AgentBackend, AgentBackendError, BuildCommandRequest};
-use super::prompt::{PromptPreparationRequest, prepare_prompt_text};
+use super::prompt::{PromptPreparationRequest, ProtocolSchemaInstructionMode, prepare_prompt_text};
 use crate::domain::turn_prompt::{
     TurnPromptAttachment, TurnPromptContentPart, split_turn_prompt_content,
 };
@@ -76,6 +76,7 @@ impl AgentBackend for ClaudeBackend {
 /// Returns an error when resume or protocol prompt rendering fails.
 pub(super) fn build_prompt_stdin_payload(
     request: BuildCommandRequest<'_>,
+    schema_instruction_mode: ProtocolSchemaInstructionMode,
 ) -> Result<Vec<u8>, AgentBackendError> {
     let prompt = render_prompt_with_local_images(request.prompt, request.attachments)?;
     let prompt = prepare_prompt_text(PromptPreparationRequest {
@@ -87,6 +88,7 @@ pub(super) fn build_prompt_stdin_payload(
         prompt: &prompt,
         protocol_profile: request.request_kind.protocol_profile(),
         replay_session_output: request.request_kind.session_output(),
+        schema_instruction_mode,
     })?;
 
     Ok(prompt.into_bytes())
@@ -374,14 +376,17 @@ mod tests {
 
         // Act
         let prompt = String::from_utf8(
-            build_prompt_stdin_payload(BuildCommandRequest {
-                attachments: &[],
-                folder: temp_directory.path(),
-                prompt: "Plan prompt",
-                request_kind: &session_start_request_kind(),
-                model: "claude-sonnet-4-6",
-                reasoning_level: ReasoningLevel::default(),
-            })
+            build_prompt_stdin_payload(
+                BuildCommandRequest {
+                    attachments: &[],
+                    folder: temp_directory.path(),
+                    prompt: "Plan prompt",
+                    request_kind: &session_start_request_kind(),
+                    model: "claude-sonnet-4-6",
+                    reasoning_level: ReasoningLevel::default(),
+                },
+                ProtocolSchemaInstructionMode::TransportSchema,
+            )
             .expect("prompt payload should build"),
         )
         .expect("prompt payload should be utf-8");
@@ -393,8 +398,8 @@ mod tests {
     }
 
     #[test]
-    /// Verifies one-shot Claude prompts keep protocol JSON with schema-only
-    /// summary guidance.
+    /// Verifies one-shot Claude prompts keep protocol JSON guidance while
+    /// native schema enforcement carries the full response schema.
     fn test_claude_one_shot_command_enforces_json_schema_without_summary_prose() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
@@ -415,14 +420,17 @@ mod tests {
         .expect("command should build");
         let debug_command = format!("{command:?}");
         let prompt = String::from_utf8(
-            build_prompt_stdin_payload(BuildCommandRequest {
-                attachments: &[],
-                folder: temp_directory.path(),
-                prompt: "Generate title",
-                request_kind: &utility_request_kind(),
-                model: "claude-sonnet-4-6",
-                reasoning_level: ReasoningLevel::default(),
-            })
+            build_prompt_stdin_payload(
+                BuildCommandRequest {
+                    attachments: &[],
+                    folder: temp_directory.path(),
+                    prompt: "Generate title",
+                    request_kind: &utility_request_kind(),
+                    model: "claude-sonnet-4-6",
+                    reasoning_level: ReasoningLevel::default(),
+                },
+                ProtocolSchemaInstructionMode::TransportSchema,
+            )
             .expect("prompt payload should build"),
         )
         .expect("prompt payload should be utf-8");
@@ -430,6 +438,7 @@ mod tests {
         // Assert
         assert!(prompt.contains("Structured response protocol:"));
         assert!(prompt.contains("summary"));
+        assert!(!prompt.contains("Authoritative JSON Schema:"));
         assert!(debug_command.contains("--output-format"));
         assert!(debug_command.contains("stream-json"));
         assert!(debug_command.contains("--json-schema"));
@@ -459,14 +468,17 @@ mod tests {
         .expect("command should build");
         let debug_command = format!("{command:?}");
         let prompt = String::from_utf8(
-            build_prompt_stdin_payload(BuildCommandRequest {
-                attachments: &[],
-                folder: temp_directory.path(),
-                prompt: "Return protocol response",
-                request_kind: &session_start_request_kind(),
-                model: "claude-sonnet-4-6",
-                reasoning_level: ReasoningLevel::default(),
-            })
+            build_prompt_stdin_payload(
+                BuildCommandRequest {
+                    attachments: &[],
+                    folder: temp_directory.path(),
+                    prompt: "Return protocol response",
+                    request_kind: &session_start_request_kind(),
+                    model: "claude-sonnet-4-6",
+                    reasoning_level: ReasoningLevel::default(),
+                },
+                ProtocolSchemaInstructionMode::TransportSchema,
+            )
             .expect("prompt payload should build"),
         )
         .expect("prompt payload should be utf-8");
@@ -476,6 +488,7 @@ mod tests {
         assert!(debug_command.contains("AgentResponse"));
         assert!(prompt.contains("Structured response protocol:"));
         assert!(prompt.contains("summary"));
+        assert!(!prompt.contains("Authoritative JSON Schema:"));
     }
 
     #[test]

@@ -11,7 +11,9 @@ Rules:
 - Do not use first-person phrasing like "I have", "I'm", or "I'll".
 - Do not use Conventional Commit prefixes like `feat:` or `fix:`.
 - Keep it under 72 characters.
-- Return only the title text.
-- Do not include markdown fences, quotes, explanations, or any extra text.
+- Put only the title text in `answer` when Agentty wraps this prompt in the structured
+  response protocol.
+- The title text must not include markdown fences, quotes, explanations, or any extra
+  text.
 
 User Request: {{ prompt }}

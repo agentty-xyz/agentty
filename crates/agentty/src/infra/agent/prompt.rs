@@ -13,6 +13,26 @@ const PROTOCOL_INSTRUCTIONS_MARKER: &str = "Structured response protocol:";
 /// included in a prompt.
 const PROTOCOL_REFRESH_REMINDER_MARKER: &str = "Protocol refresh reminder:";
 
+/// Controls whether bootstrap prompt instructions include the full protocol
+/// JSON Schema text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProtocolSchemaInstructionMode {
+    /// Include the full self-descriptive JSON Schema in the prompt because
+    /// the provider does not enforce Agentty's response schema natively.
+    PromptSchema,
+    /// Omit the full schema text because the provider enforces the same
+    /// response schema through its transport-level structured output API.
+    TransportSchema,
+}
+
+impl ProtocolSchemaInstructionMode {
+    /// Returns whether bootstrap instructions should embed the full JSON
+    /// Schema text in the prompt body.
+    fn includes_response_json_schema(self) -> bool {
+        matches!(self, Self::PromptSchema)
+    }
+}
+
 /// Askama view model for rendering resume prompts with prior session output.
 #[derive(Template)]
 #[template(path = "resume_with_session_output_prompt.md", escape = "none")]
@@ -24,21 +44,34 @@ struct ResumeWithSessionOutputPromptTemplate<'a> {
 }
 
 /// Askama view model for rendering structured response protocol
-/// instructions.
-///
-/// The template embeds one shared self-descriptive JSON schema so every
-/// provider sees the same prompt-side protocol contract.
+/// instructions with the shared self-descriptive JSON Schema for providers
+/// that need prompt-side enforcement.
 #[derive(Template)]
 #[template(path = "protocol_instruction_prompt.md", escape = "none")]
 struct ProtocolInstructionPromptTemplate<'a> {
+    /// User prompt appended after protocol instructions.
+    prompt: &'a str,
     /// Request-family-specific instructions that reinforce the expected
     /// response shape for the active prompt type.
     protocol_usage_instructions: &'a str,
-    /// User prompt appended after protocol instructions.
-    prompt: &'a str,
     /// Pretty-printed self-descriptive JSON schema contract injected into the
     /// prompt template.
     response_json_schema: &'a str,
+}
+
+/// Askama view model for rendering policy-only protocol instructions.
+///
+/// Providers with native structured-output enforcement receive this smaller
+/// prompt contract so Agentty does not duplicate the full schema text in the
+/// model context.
+#[derive(Template)]
+#[template(path = "protocol_instruction_policy_prompt.md", escape = "none")]
+struct ProtocolInstructionPolicyPromptTemplate<'a> {
+    /// User prompt appended after protocol instructions.
+    prompt: &'a str,
+    /// Request-family-specific instructions that reinforce the expected
+    /// response shape for the active prompt type.
+    protocol_usage_instructions: &'a str,
 }
 
 /// Askama view model for rendering compact protocol refresh reminders.
@@ -86,6 +119,9 @@ pub(crate) struct PromptPreparationRequest<'a> {
     pub protocol_profile: ProtocolRequestProfile,
     /// Prior session output available for transcript replay.
     pub replay_session_output: Option<&'a str>,
+    /// Schema guidance mode selected from the provider's structured-output
+    /// capability.
+    pub schema_instruction_mode: ProtocolSchemaInstructionMode,
 }
 
 /// Applies transcript replay and protocol instructions to one prompt.
@@ -96,16 +132,22 @@ pub(crate) fn prepare_prompt_text(
     request: PromptPreparationRequest<'_>,
 ) -> Result<String, AgentBackendError> {
     match request.instruction_delivery_mode {
-        InstructionDeliveryMode::BootstrapFull => {
-            prepend_protocol_instructions(request.prompt, request.protocol_profile)
-        }
+        InstructionDeliveryMode::BootstrapFull => prepend_protocol_instructions(
+            request.prompt,
+            request.protocol_profile,
+            request.schema_instruction_mode,
+        ),
         InstructionDeliveryMode::DeltaOnly => {
             prepend_protocol_refresh_reminder(request.prompt, request.protocol_profile)
         }
         InstructionDeliveryMode::BootstrapWithReplay => {
             let prompt = build_resume_prompt(request.prompt, request.replay_session_output)?;
 
-            prepend_protocol_instructions(&prompt, request.protocol_profile)
+            prepend_protocol_instructions(
+                &prompt,
+                request.protocol_profile,
+                request.schema_instruction_mode,
+            )
         }
     }
 }
@@ -135,34 +177,43 @@ pub(crate) fn build_resume_prompt(
 
 /// Prepends structured response protocol instructions to a prompt.
 ///
-/// Tells agents to emit one top-level JSON object that matches the shared
-/// schema so response parsing can deserialize directly into the internal
-/// protocol structs, and requires repository-root-relative POSIX file paths in
-/// rendered answers. The shared prompt contract also reminds agents to run the
-/// repository-defined quality checks for touched files and the affected
-/// dependency graph, clean up temporary scripts or files created during the
-/// session, or fall back to the full repository validation suite when
-/// targeted coverage is unclear. If the prompt already contains the
-/// protocol marker, this function returns the prompt unchanged to avoid
-/// duplicated guidance.
+/// Tells agents to emit one top-level JSON object that matches Agentty's
+/// structured protocol while selecting the cheapest safe schema guidance for
+/// the current provider. Providers without native structured output receive
+/// the full JSON Schema in the prompt; providers with native enforcement get
+/// policy and field-routing instructions only. The shared prompt contract
+/// also requires repository-root-relative POSIX file paths, repository-defined
+/// quality checks for touched files and the affected dependency graph,
+/// cleanup of temporary session files, and full repository validation when
+/// targeted coverage is unclear. If the prompt already contains the protocol
+/// marker, this function returns the prompt unchanged to avoid duplicated
+/// guidance.
 ///
 /// # Errors
 /// Returns an error if Askama template rendering fails.
-// Future: expand `profile`-driven guidance to inject per-request-family
-// protocol rules once task-prompt formatting rules are consolidated.
 pub(crate) fn prepend_protocol_instructions(
     prompt: &str,
     profile: ProtocolRequestProfile,
+    schema_instruction_mode: ProtocolSchemaInstructionMode,
 ) -> Result<String, AgentBackendError> {
     if prompt.contains(PROTOCOL_INSTRUCTIONS_MARKER) {
         return Ok(prompt.to_string());
     }
 
-    let response_json_schema = protocol::agent_response_json_schema_json();
     let protocol_usage_instructions = render_protocol_usage_instructions(profile)?;
+    if !schema_instruction_mode.includes_response_json_schema() {
+        let template = ProtocolInstructionPolicyPromptTemplate {
+            prompt,
+            protocol_usage_instructions: &protocol_usage_instructions,
+        };
+
+        return render_template("protocol_instruction_policy_prompt.md", &template);
+    }
+
+    let response_json_schema = protocol::agent_response_json_schema_json();
     let template = ProtocolInstructionPromptTemplate {
-        protocol_usage_instructions: &protocol_usage_instructions,
         prompt,
+        protocol_usage_instructions: &protocol_usage_instructions,
         response_json_schema: &response_json_schema,
     };
 
@@ -364,9 +415,12 @@ mod tests {
         let prompt = "Implement feature";
 
         // Act
-        let rendered_prompt =
-            prepend_protocol_instructions(prompt, ProtocolRequestProfile::SessionTurn)
-                .expect("protocol instruction prompt should render");
+        let rendered_prompt = prepend_protocol_instructions(
+            prompt,
+            ProtocolRequestProfile::SessionTurn,
+            ProtocolSchemaInstructionMode::PromptSchema,
+        )
+        .expect("protocol instruction prompt should render");
 
         // Assert
         assert!(rendered_prompt.contains("File path output requirements:"));
@@ -403,33 +457,66 @@ mod tests {
     }
 
     #[test]
+    /// Ensures schema-enforcing transports get protocol policy without the
+    /// large prompt-side JSON Schema body.
+    fn test_prepend_protocol_instructions_omits_schema_for_transport_schema_mode() {
+        // Arrange
+        let prompt = "Implement feature";
+
+        // Act
+        let rendered_prompt = prepend_protocol_instructions(
+            prompt,
+            ProtocolRequestProfile::SessionTurn,
+            ProtocolSchemaInstructionMode::TransportSchema,
+        )
+        .expect("protocol instruction prompt should render");
+
+        // Assert
+        assert!(rendered_prompt.contains("Structured response protocol:"));
+        assert!(rendered_prompt.contains("provider enforces Agentty's response JSON schema"));
+        assert!(rendered_prompt.contains("Return a single JSON object"));
+        assert!(!rendered_prompt.contains("Follow this JSON Schema exactly."));
+        assert!(!rendered_prompt.contains("Authoritative JSON Schema:"));
+        assert!(rendered_prompt.ends_with(prompt));
+    }
+
+    #[test]
     /// Ensures protocol instructions are not duplicated when already present.
     fn test_prepend_protocol_instructions_is_idempotent() {
         // Arrange
-        let prompt =
-            prepend_protocol_instructions("Implement feature", ProtocolRequestProfile::SessionTurn)
-                .expect("protocol instruction prompt should render");
+        let prompt = prepend_protocol_instructions(
+            "Implement feature",
+            ProtocolRequestProfile::SessionTurn,
+            ProtocolSchemaInstructionMode::PromptSchema,
+        )
+        .expect("protocol instruction prompt should render");
 
         // Act
-        let rendered_prompt =
-            prepend_protocol_instructions(&prompt, ProtocolRequestProfile::UtilityPrompt)
-                .expect("protocol instruction prompt should render");
+        let rendered_prompt = prepend_protocol_instructions(
+            &prompt,
+            ProtocolRequestProfile::UtilityPrompt,
+            ProtocolSchemaInstructionMode::TransportSchema,
+        )
+        .expect("protocol instruction prompt should render");
 
         // Assert
         assert_eq!(rendered_prompt, prompt);
     }
 
     #[test]
-    /// Ensures one-shot prompts reuse the shared schema-only protocol
+    /// Ensures one-shot prompts reuse the shared full-schema protocol
     /// instructions.
     fn test_prepend_protocol_instructions_reuses_same_contract_for_one_shot() {
         // Arrange
         let prompt = "Generate title";
 
         // Act
-        let rendered_prompt =
-            prepend_protocol_instructions(prompt, ProtocolRequestProfile::UtilityPrompt)
-                .expect("protocol instruction prompt should render");
+        let rendered_prompt = prepend_protocol_instructions(
+            prompt,
+            ProtocolRequestProfile::UtilityPrompt,
+            ProtocolSchemaInstructionMode::PromptSchema,
+        )
+        .expect("protocol instruction prompt should render");
 
         // Assert
         assert!(rendered_prompt.contains("Structured response protocol:"));
@@ -450,6 +537,7 @@ mod tests {
             prompt: "Continue edits",
             protocol_profile: ProtocolRequestProfile::SessionTurn,
             replay_session_output: Some("previous output"),
+            schema_instruction_mode: ProtocolSchemaInstructionMode::PromptSchema,
         };
 
         // Act
@@ -491,6 +579,7 @@ mod tests {
             prompt: "Continue edits",
             protocol_profile: ProtocolRequestProfile::SessionTurn,
             replay_session_output: Some("previous output"),
+            schema_instruction_mode: ProtocolSchemaInstructionMode::PromptSchema,
         };
 
         // Act

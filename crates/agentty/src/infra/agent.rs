@@ -29,12 +29,15 @@ pub(crate) use instruction::{
     InstructionDeliveryMode, normalize_instruction_conversation_id,
     plan_app_server_instruction_delivery,
 };
-pub(crate) use prompt::{PromptPreparationRequest, diff_fence, prepare_prompt_text};
+pub(crate) use prompt::{
+    PromptPreparationRequest, ProtocolSchemaInstructionMode, diff_fence, prepare_prompt_text,
+};
 pub(crate) use protocol::AgentResponse;
 pub use protocol::ProtocolRequestProfile;
 pub(crate) use provider::{
     build_command_stdin_payload, create_app_server_client, is_app_server_thought_chunk,
-    parse_stream_output_line, parse_turn_response, provider_kind_for_model,
+    parse_stream_output_line, parse_turn_response, protocol_schema_instruction_mode,
+    provider_kind_for_model,
 };
 pub use provider::{create_backend, parse_response, transport_mode};
 pub use response_parser::ParsedResponse;

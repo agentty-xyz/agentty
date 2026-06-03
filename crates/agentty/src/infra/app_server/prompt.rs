@@ -33,9 +33,11 @@ pub(crate) fn read_latest_session_output(request: &AppServerTurnRequest) -> Opti
 /// replay according to the selected instruction delivery mode.
 ///
 ///
-/// `BootstrapFull` and `BootstrapWithReplay` include the full shared protocol
+/// `BootstrapFull` and `BootstrapWithReplay` include the shared protocol
 /// preamble, while `DeltaOnly` emits only a compact reminder for provider
-/// contexts that already received that contract.
+/// contexts that already received that contract. Providers that enforce the
+/// response schema at transport level can request a policy-only bootstrap
+/// preamble to avoid duplicating the full JSON Schema in prompt text.
 ///
 /// # Errors
 /// Returns an error when Askama prompt rendering fails after a context reset.
@@ -44,6 +46,7 @@ pub(crate) fn turn_prompt_for_runtime(
     request_kind: &AgentRequestKind,
     replay_session_output: Option<&str>,
     instruction_delivery_mode: InstructionDeliveryMode,
+    schema_instruction_mode: agent::ProtocolSchemaInstructionMode,
 ) -> Result<TurnPrompt, AppServerError> {
     let prompt = prompt.into();
     let agent_prompt = prompt.agent_text();
@@ -52,6 +55,7 @@ pub(crate) fn turn_prompt_for_runtime(
         prompt: &agent_prompt,
         protocol_profile: request_kind.protocol_profile(),
         replay_session_output,
+        schema_instruction_mode,
     })
     .map_err(|error| AppServerError::PromptRender(error.to_string()))?;
 
@@ -173,12 +177,39 @@ mod tests {
             &request_kind,
             None,
             InstructionDeliveryMode::BootstrapFull,
+            agent::ProtocolSchemaInstructionMode::PromptSchema,
         );
 
         // Assert
         let turn_prompt = result.expect("prompt rendering should succeed");
         assert!(turn_prompt.text.contains("fix the bug"));
         assert!(turn_prompt.text.contains("Structured response protocol:"));
+    }
+
+    #[test]
+    fn turn_prompt_for_runtime_omits_full_schema_for_transport_schema_mode() {
+        // Arrange
+        let prompt = TurnPrompt::from("fix the bug");
+        let request_kind = AgentRequestKind::SessionStart;
+
+        // Act
+        let result = turn_prompt_for_runtime(
+            prompt,
+            &request_kind,
+            None,
+            InstructionDeliveryMode::BootstrapFull,
+            agent::ProtocolSchemaInstructionMode::TransportSchema,
+        );
+
+        // Assert
+        let turn_prompt = result.expect("prompt rendering should succeed");
+        assert!(turn_prompt.text.contains("Structured response protocol:"));
+        assert!(
+            turn_prompt
+                .text
+                .contains("provider enforces Agentty's response JSON schema")
+        );
+        assert!(!turn_prompt.text.contains("Authoritative JSON Schema:"));
     }
 
     #[test]
@@ -195,6 +226,7 @@ mod tests {
             &request_kind,
             None,
             InstructionDeliveryMode::DeltaOnly,
+            agent::ProtocolSchemaInstructionMode::PromptSchema,
         );
 
         // Assert
@@ -215,6 +247,7 @@ mod tests {
             &request_kind,
             None,
             InstructionDeliveryMode::BootstrapFull,
+            agent::ProtocolSchemaInstructionMode::PromptSchema,
         );
 
         // Assert
@@ -238,6 +271,7 @@ mod tests {
             &request_kind,
             None,
             InstructionDeliveryMode::BootstrapFull,
+            agent::ProtocolSchemaInstructionMode::PromptSchema,
         );
 
         // Assert

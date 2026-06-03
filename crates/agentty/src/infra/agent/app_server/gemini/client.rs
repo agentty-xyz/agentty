@@ -4,11 +4,12 @@ use tokio::sync::mpsc;
 
 use super::lifecycle::{self, GeminiRuntimeState};
 use super::transport::GeminiStdioTransport;
+use crate::domain::agent::AgentKind;
 use crate::infra::app_server::{
     self, AppServerClient, AppServerError, AppServerFuture, AppServerSessionRegistry,
     AppServerStreamEvent, AppServerTurnRequest, AppServerTurnResponse,
 };
-use crate::infra::app_server_transport;
+use crate::infra::{agent, app_server_transport};
 
 /// Production [`AppServerClient`] backed by `gemini --acp`.
 pub(crate) struct RealGeminiAcpClient {
@@ -40,6 +41,7 @@ impl RealGeminiAcpClient {
                 provider_conversation_id: GeminiSessionRuntime::provider_conversation_id,
                 restored_context: GeminiSessionRuntime::restored_context,
             },
+            agent::protocol_schema_instruction_mode(AgentKind::Gemini),
             |request| {
                 let request = request.clone();
 

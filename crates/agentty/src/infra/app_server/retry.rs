@@ -9,6 +9,7 @@ use super::prompt::{
 };
 use super::registry::{ActiveAppServerTurn, AppServerSessionRegistry};
 use crate::domain::turn_prompt::TurnPrompt;
+use crate::infra::agent::ProtocolSchemaInstructionMode;
 
 /// Callbacks for inspecting runtime state during turn execution.
 ///
@@ -36,6 +37,10 @@ pub struct RuntimeInspector<Runtime> {
 /// Prompt transcript replay is only applied when a newly started runtime does
 /// not expose restored provider-native context for the session.
 ///
+/// `schema_instruction_mode` is selected by the provider client so bootstrap
+/// prompts include the full JSON Schema only for transports that need
+/// prompt-side schema guidance.
+///
 /// # Errors
 /// Returns an error when runtime startup/execution fails, retry fails, or the
 /// session registry lock is unavailable.
@@ -43,6 +48,7 @@ pub async fn run_turn_with_restart_retry<Runtime, StartRuntime, RunTurn, Shutdow
     sessions: &AppServerSessionRegistry<Runtime>,
     request: AppServerTurnRequest,
     inspector: RuntimeInspector<Runtime>,
+    schema_instruction_mode: ProtocolSchemaInstructionMode,
     mut start_runtime: StartRuntime,
     mut run_turn_with_runtime: RunTurn,
     mut shutdown_runtime: ShutdownRuntime,
@@ -75,6 +81,7 @@ where
         &request,
         first_replays,
         first_provider_conversation_id.as_deref(),
+        schema_instruction_mode,
         &mut shutdown_runtime,
         &mut session_runtime,
     )
@@ -115,6 +122,7 @@ where
         &request,
         retry_replays,
         retry_provider_conversation_id.as_deref(),
+        schema_instruction_mode,
         &mut shutdown_runtime,
         &mut restarted,
     )
@@ -307,6 +315,7 @@ async fn build_attempt_prompt<Runtime, ShutdownRuntime>(
     request: &AppServerTurnRequest,
     replays_context: bool,
     current_provider_conversation_id: Option<&str>,
+    schema_instruction_mode: ProtocolSchemaInstructionMode,
     shutdown_runtime: &mut ShutdownRuntime,
     runtime: &mut Runtime,
 ) -> Result<TurnPrompt, AppServerError>
@@ -325,6 +334,7 @@ where
         &request.request_kind,
         session_output.as_deref(),
         instruction_delivery_mode,
+        schema_instruction_mode,
     ) {
         Ok(prompt) => Ok(prompt),
         Err(error) => {
@@ -344,7 +354,7 @@ mod tests {
     use super::*;
     use crate::domain::agent::ReasoningLevel;
     use crate::domain::turn_prompt::TurnPrompt;
-    use crate::infra::agent::InstructionDeliveryMode;
+    use crate::infra::agent::{InstructionDeliveryMode, ProtocolSchemaInstructionMode};
     use crate::infra::channel::AgentRequestKind;
 
     struct TestRuntime {
@@ -397,6 +407,7 @@ mod tests {
             &session_start_request_kind(),
             Some("prior context"),
             InstructionDeliveryMode::BootstrapFull,
+            ProtocolSchemaInstructionMode::PromptSchema,
         )
         .expect("turn prompt should render");
 
@@ -417,6 +428,7 @@ mod tests {
             &session_resume_request_kind(Some("assistant: proposed plan")),
             Some("assistant: proposed plan"),
             InstructionDeliveryMode::BootstrapWithReplay,
+            ProtocolSchemaInstructionMode::PromptSchema,
         )
         .expect("turn prompt should render");
 
@@ -438,6 +450,7 @@ mod tests {
             &AgentRequestKind::UtilityPrompt,
             None,
             InstructionDeliveryMode::BootstrapFull,
+            ProtocolSchemaInstructionMode::PromptSchema,
         )
         .expect("turn prompt should render");
 
@@ -564,6 +577,7 @@ mod tests {
                 provider_conversation_id: |_runtime| None,
                 restored_context: |_runtime| false,
             },
+            ProtocolSchemaInstructionMode::PromptSchema,
             |request: &AppServerTurnRequest| {
                 let model = request.model.clone();
 
@@ -641,6 +655,7 @@ mod tests {
                 provider_conversation_id: |_runtime| None,
                 restored_context: |_runtime| false,
             },
+            ProtocolSchemaInstructionMode::PromptSchema,
             {
                 let start_count = Arc::clone(&start_count);
                 move |request: &AppServerTurnRequest| {
@@ -721,6 +736,7 @@ mod tests {
                 provider_conversation_id: |_runtime| None,
                 restored_context: |_runtime| false,
             },
+            ProtocolSchemaInstructionMode::PromptSchema,
             |request: &AppServerTurnRequest| {
                 let model = request.model.clone();
 
@@ -790,6 +806,7 @@ mod tests {
                 provider_conversation_id: |_runtime| Some("thread-123".to_string()),
                 restored_context: |_runtime| true,
             },
+            ProtocolSchemaInstructionMode::PromptSchema,
             |request: &AppServerTurnRequest| {
                 let model = request.model.clone();
 
