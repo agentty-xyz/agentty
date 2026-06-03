@@ -7,6 +7,30 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.10.0] - 2026-06-02
+
+### Added
+
+- agentty: add stacked draft session lineage and restack behavior.
+- agentty: show reasoning levels next to model names in the session list.
+
+### Changed
+
+- agentty: beautify provider command failure output.
+- agentty: select protocol schema guidance by provider capability and require temporary
+  artifact cleanup in protocol prompts.
+- agentty: preserve the Antigravity session worktree as the first `agy --add-dir` root.
+- agentty: skip published-branch auto-push while follow-up messages are queued.
+- agentty: move the runtime render throttle behind the shared `Clock` trait boundary.
+- Bump GitHub Actions and version-update automation dependencies.
+- Bump workspace crate metadata and lockfile package versions to `0.10.0`.
+
+### Contributors
+
+- @andagaev
+- @dependabot
+- @minev-dev
+
 ## [v0.9.6] - 2026-06-01
 
 ### Added
