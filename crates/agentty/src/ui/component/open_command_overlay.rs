@@ -2,7 +2,7 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, Paragraph, Wrap};
+use ratatui::widgets::{Paragraph, Wrap};
 
 use crate::ui::style::palette;
 use crate::ui::text_util::truncate_with_ellipsis;
@@ -114,7 +114,7 @@ impl Component for OpenCommandOverlay<'_> {
             .wrap(Wrap { trim: true })
             .block(overlay::overlay_block("Open Command", palette::accent()));
 
-        f.render_widget(Clear, popup_area);
+        overlay::clear_popup_area(f, popup_area);
         f.render_widget(paragraph, popup_area);
     }
 }

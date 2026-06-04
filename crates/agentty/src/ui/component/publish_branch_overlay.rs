@@ -2,7 +2,7 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 
 use crate::domain::input::InputState;
 use crate::ui::component::chat_input::ChatInput;
@@ -106,7 +106,7 @@ impl<'a> PublishBranchOverlay<'a> {
             .style(Self::locked_branch_text_style())
             .block(block);
 
-        f.render_widget(Clear, area);
+        overlay::clear_popup_area(f, area);
         f.render_widget(paragraph, area);
     }
 }
@@ -135,7 +135,7 @@ impl Component for PublishBranchOverlay<'_> {
             .alignment(Alignment::Center),
         );
 
-        f.render_widget(Clear, popup_area);
+        overlay::clear_popup_area(f, popup_area);
         f.render_widget(block, popup_area);
         f.render_widget(message, sections[0]);
         if self.locked_upstream_ref.is_some() {
@@ -143,7 +143,12 @@ impl Component for PublishBranchOverlay<'_> {
         } else {
             let placeholder = self.placeholder();
             let input = ChatInput::new(INPUT_TITLE, self.input.text(), self.input.cursor)
-                .placeholder(&placeholder);
+                .placeholder(&placeholder)
+                .clear_style(
+                    Style::default()
+                        .fg(palette::text())
+                        .bg(palette::surface_overlay()),
+                );
 
             input.render(f, sections[1]);
         }

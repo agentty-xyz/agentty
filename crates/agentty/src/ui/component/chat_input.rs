@@ -38,6 +38,7 @@ pub struct SuggestionList {
 pub struct ChatInput<'a> {
     pub placeholder: &'a str,
     active: bool,
+    clear_style: Option<Style>,
     cursor: usize,
     input: &'a str,
     suggestion_list: Option<&'a SuggestionList>,
@@ -50,6 +51,7 @@ impl<'a> ChatInput<'a> {
         Self {
             placeholder: "",
             active: true,
+            clear_style: None,
             cursor,
             input,
             suggestion_list: None,
@@ -78,6 +80,16 @@ impl<'a> ChatInput<'a> {
     #[must_use]
     pub fn suggestion_list(mut self, suggestion_list: &'a SuggestionList) -> Self {
         self.suggestion_list = Some(suggestion_list);
+        self
+    }
+
+    /// Sets the style reapplied after clearing the input area.
+    ///
+    /// Overlay-hosted inputs use this to keep popup-local cells on the
+    /// semantic overlay surface instead of terminal-default colors.
+    #[must_use]
+    pub fn clear_style(mut self, clear_style: Style) -> Self {
+        self.clear_style = Some(clear_style);
         self
     }
 
@@ -143,6 +155,18 @@ impl<'a> ChatInput<'a> {
         Style::default().fg(style::palette::text())
     }
 
+    /// Clears an input rectangle and optionally renders an empty styled block
+    /// so overlay-hosted input cells keep semantic colors.
+    fn clear_area(f: &mut Frame, area: Rect, clear_style: Option<Style>) {
+        f.render_widget(Clear, area);
+
+        let Some(clear_style) = clear_style else {
+            return;
+        };
+
+        f.render_widget(Block::default().style(clear_style), area);
+    }
+
     /// Renders the suggestion dropdown using the shared chat input chrome.
     ///
     /// This method is also used by the question-mode panel to render the
@@ -197,7 +221,7 @@ impl<'a> ChatInput<'a> {
             .style(Self::input_text_style())
             .block(Self::dropdown_block(&suggestion_list.title));
 
-        f.render_widget(Clear, area);
+        Self::clear_area(f, area, None);
         f.render_widget(dropdown, area);
     }
 
@@ -226,7 +250,7 @@ impl<'a> ChatInput<'a> {
             let widget = Paragraph::new(display_lines)
                 .style(Self::input_text_style())
                 .block(block);
-            f.render_widget(Clear, area);
+            Self::clear_area(f, area, self.clear_style);
             f.render_widget(widget, area);
             if self.active {
                 f.set_cursor_position(placeholder_cursor_position(area));
@@ -249,7 +273,7 @@ impl<'a> ChatInput<'a> {
             .scroll((scroll_offset, 0))
             .block(block);
 
-        f.render_widget(Clear, area);
+        Self::clear_area(f, area, self.clear_style);
         f.render_widget(widget, area);
         if self.active {
             f.set_cursor_position(input_cursor_position(area, cursor_x, cursor_row));
@@ -438,6 +462,32 @@ mod tests {
             test_support::rendered_text_start_cell(terminal.backend().buffer(), "typed-green")
                 .expect("typed input should render");
         assert_eq!(typed_cell.fg, style::palette::text());
+    }
+
+    #[test]
+    fn test_render_reapplies_configured_clear_style() {
+        // Arrange
+        let width = 48;
+        let backend = ratatui::backend::TestBackend::new(width, 5);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let clear_style = Style::default()
+            .fg(style::palette::text())
+            .bg(style::palette::surface_overlay());
+        let chat_input = ChatInput::new("Prompt", "typed", 5).clear_style(clear_style);
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                chat_input.render(frame, area);
+            })
+            .expect("failed to draw prompt input");
+
+        // Assert
+        let buffer = terminal.backend().buffer();
+        let blank_cell = &buffer[(1, 2)];
+        assert_eq!(blank_cell.fg, style::palette::text());
+        assert_eq!(blank_cell.bg, style::palette::surface_overlay());
     }
 
     #[test]

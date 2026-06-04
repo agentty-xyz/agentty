@@ -2,7 +2,7 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, Paragraph, Wrap};
+use ratatui::widgets::{Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
 use crate::ui::component::tachyon_loader::TachyonLoaderEffect;
@@ -270,7 +270,7 @@ impl Component for InfoOverlay<'_> {
             height,
         );
 
-        f.render_widget(Clear, popup_area);
+        overlay::clear_popup_area(f, popup_area);
         f.render_widget(paragraph, popup_area);
 
         if self.is_loading {

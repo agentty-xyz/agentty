@@ -2,7 +2,7 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, Paragraph};
+use ratatui::widgets::Paragraph;
 
 use crate::ui::style::palette;
 use crate::ui::text_util::truncate_with_ellipsis;
@@ -81,7 +81,7 @@ impl Component for ConfirmationOverlay<'_> {
         .alignment(Alignment::Center)
         .block(overlay::overlay_block(self.title, palette::warning()));
 
-        f.render_widget(Clear, popup_area);
+        overlay::clear_popup_area(f, popup_area);
         f.render_widget(paragraph, popup_area);
     }
 }

@@ -2,7 +2,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, Paragraph};
+use ratatui::widgets::Paragraph;
 
 use crate::ui::state::app_mode::HelpContext;
 use crate::ui::style::palette;
@@ -46,7 +46,7 @@ impl Component for HelpOverlay<'_> {
     fn render(&self, f: &mut Frame, area: Rect) {
         let popup_area = popup_area(area);
 
-        f.render_widget(Clear, popup_area);
+        overlay::clear_popup_area(f, popup_area);
 
         let bindings = self.context.keybindings();
 

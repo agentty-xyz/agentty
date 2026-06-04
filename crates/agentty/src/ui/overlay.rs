@@ -4,7 +4,7 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
-use ratatui::widgets::{Block, BorderType, Borders, Padding};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding};
 
 use crate::app::Tab;
 use crate::domain::agent::ReasoningLevel;
@@ -117,7 +117,6 @@ pub(crate) fn render_confirmation_overlay(
     wall_clock_unix_seconds: i64,
 ) {
     render_list_background(f, area, list_background, wall_clock_unix_seconds);
-    render_overlay_backdrop(f, area);
 
     let AppMode::Confirmation {
         confirmation_message,
@@ -153,7 +152,6 @@ pub(crate) fn render_session_creation_overlay(
             .is_some_and(Session::allows_stacked_child_creation);
 
     render_list_background(f, area, list_background, wall_clock_unix_seconds);
-    render_overlay_backdrop(f, area);
 
     component::session_creation_overlay::SessionCreationOverlay::new(
         selected_option_index,
@@ -179,7 +177,6 @@ pub(crate) fn render_sync_blocked_popup(
     } = context;
 
     render_list_background(f, area, list_background, wall_clock_unix_seconds);
-    render_overlay_backdrop(f, area);
 
     let popup_message = sync_popup_message(default_branch, message, project_name);
 
@@ -240,8 +237,6 @@ pub(crate) fn render_view_info_popup(
         .render(f, area);
     }
 
-    render_overlay_backdrop(f, area);
-
     component::info_overlay::InfoOverlay::new(title, message)
         .is_loading(is_loading)
         .loading_label(loading_label)
@@ -294,16 +289,20 @@ pub(crate) fn render_help(f: &mut Frame, area: Rect, context: HelpOverlayRenderC
             wall_clock_unix_seconds,
         },
     );
-    render_overlay_backdrop(f, area);
-
     component::help_overlay::HelpOverlay::new(help_context)
         .scroll_offset(scroll_offset)
         .render(f, area);
 }
 
-/// Renders a dimmed backdrop to emphasize a centered modal overlay.
-pub(crate) fn render_overlay_backdrop(f: &mut Frame, area: Rect) {
-    f.render_widget(Block::default().style(overlay_backdrop_style()), area);
+/// Clears popup-local cells and immediately reapplies the overlay surface
+/// style so modal content never falls back to terminal-default colors.
+pub(crate) fn clear_popup_area(f: &mut Frame, area: Rect) {
+    let popup_style = Style::default()
+        .fg(palette::text())
+        .bg(palette::surface_overlay());
+
+    f.render_widget(Clear, area);
+    f.render_widget(Block::default().style(popup_style), area);
 }
 
 /// Returns a centered popup rectangle constrained by bounds and minimum size.
@@ -362,13 +361,6 @@ pub(crate) fn overlay_block(title: &str, border_color: Color) -> Block<'static> 
         ))
         .title(Span::styled(title_text, overlay_title_style(border_color)))
         .title_alignment(Alignment::Center)
-}
-
-/// Returns the dimmed backdrop style applied behind overlay popups.
-fn overlay_backdrop_style() -> Style {
-    Style::default()
-        .bg(palette::surface_overlay())
-        .fg(palette::text_muted())
 }
 
 /// Returns the shared title text style for overlay frame headers.
@@ -731,27 +723,32 @@ mod tests {
     }
 
     #[test]
-    fn test_render_overlay_backdrop_applies_dimmed_style() {
+    fn test_clear_popup_area_uses_overlay_surface_style() {
         // Arrange
         let backend = ratatui::backend::TestBackend::new(8, 4);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let initial_style = Style::default()
+            .fg(palette::warning())
+            .bg(palette::surface());
 
         // Act
         terminal
             .draw(|frame| {
-                let area = frame.area();
-                render_overlay_backdrop(frame, area);
+                let area = Rect::new(2, 1, 3, 2);
+                frame.render_widget(Block::default().style(initial_style), frame.area());
+                clear_popup_area(frame, area);
             })
             .expect("failed to draw");
 
         // Assert
-        let first_cell = terminal
-            .backend()
-            .buffer()
-            .content()
-            .first()
-            .expect("buffer should contain at least one cell");
-        assert_eq!(first_cell.bg, palette::surface_overlay());
-        assert_eq!(first_cell.fg, palette::text_muted());
+        let buffer = terminal.backend().buffer();
+        for y in 1..3 {
+            for x in 2..5 {
+                let cell = &buffer[(x, y)];
+                assert_eq!(cell.symbol(), " ");
+                assert_eq!(cell.fg, palette::text());
+                assert_eq!(cell.bg, palette::surface_overlay());
+            }
+        }
     }
 }

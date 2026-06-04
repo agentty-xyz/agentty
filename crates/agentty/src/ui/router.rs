@@ -417,7 +417,6 @@ fn render_session_overlay_background(
             wall_clock_unix_seconds: context.wall_clock_unix_seconds,
         },
     );
-    overlay::render_overlay_backdrop(f, area);
 }
 
 /// Renders a session-scoped confirmation above the originating session chat
