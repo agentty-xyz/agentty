@@ -37,6 +37,3 @@ jobs:
 
       - name: Publish `agentty` to crates.io
         run: cargo publish -p agentty --token "${{ steps.auth.outputs.token }}"
-
-      - name: Publish `testty-cli` to crates.io
-        run: cargo publish -p testty-cli --token "${{ steps.auth.outputs.token }}"

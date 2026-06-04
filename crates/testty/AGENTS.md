@@ -16,7 +16,36 @@ expect a stable curated API surface.
   trait, and output renderers.
 - `src/feature.rs` provides the `FeatureDemo` builder for scenario execution with
   hash-cached VHS GIF generation.
+- `src/main.rs` is the `testty` command-line binary, auto-detected by Cargo alongside
+  the library. `cargo install testty` provides the executable.
 - `README.md` is the primary usage guide and should stay aligned with the public API.
+
+## CLI Binary
+
+`src/main.rs` is the language-agnostic `testty` command-line front end, so non-Rust
+projects can drive TUI end-to-end scenarios without writing Rust harness code. It is a
+packaging skeleton: the `clap` command tree and argument parsing are complete, but every
+verb is stubbed (each prints "not yet implemented" to stderr and exits non-zero). Later
+tasks replace the individual `Command::dispatch` arms with real behavior.
+
+Verbs:
+
+- `run <scenario> [--bin <BIN>] [--proof <DIR>]`: execute a scenario file.
+- `schema`: print the scenario JSON schema.
+- `proof open <html>`: open a single proof report.
+- `proof gallery <dir>`: build a gallery from proof reports.
+- `update`: update stored scenario snapshots.
+
+How to extend:
+
+1. Add or adjust the verb in the `Command` / `ProofCommand` enums in `src/main.rs`.
+1. Add an arg-parsing test under `#[cfg(test)] mod tests` first (TDD).
+1. Replace the matching `not_implemented` arm in `Command::dispatch` with real logic.
+
+Keep verb behavior thin: parse and validate arguments in `src/main.rs`, delegate
+execution to the library API. When verbs gain real behavior, update `README.md` and the
+framework docs under `docs/site/content/docs/`. The binary's arg-parsing tests run via
+the `test-testty-src` hook, which uses `--lib --bins`.
 
 ## Visibility Discipline
 

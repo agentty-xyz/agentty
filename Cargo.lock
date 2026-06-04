@@ -3511,20 +3511,13 @@ name = "testty"
 version = "0.10.0"
 dependencies = [
  "base64",
+ "clap",
  "image",
  "portable-pty",
  "tempfile",
  "thiserror 2.0.18",
  "unicode-width",
  "vt100",
-]
-
-[[package]]
-name = "testty-cli"
-version = "0.10.0"
-dependencies = [
- "clap",
- "testty",
 ]
 
 [[package]]

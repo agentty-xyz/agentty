@@ -21,9 +21,9 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
   domain, infrastructure, runtime, and UI layers.
 - `crates/testty/`: Rust-native TUI end-to-end testing framework with PTY-driven
   semantic assertions, VHS screenshot capture, native frame rendering, snapshot
-  workflows, and pluggable proof backends.
-- `crates/testty-cli/`: Language-agnostic `testty` command-line front end that exposes
-  the framework's `run`, `schema`, `proof`, and `update` verbs to non-Rust projects.
+  workflows, and pluggable proof backends. Also ships the language-agnostic `testty`
+  command-line binary (`src/main.rs`) that exposes the framework's `run`, `schema`,
+  `proof`, and `update` verbs to non-Rust projects.
 - `crates/ag-xtask/`: Workspace maintenance commands and automation helpers, including
   generated workspace-map output for tooling.
 

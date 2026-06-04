@@ -1,14 +1,19 @@
 //! Language-agnostic command-line front end for the `testty` framework.
 //!
-//! This binary exposes the full `testty` verb tree (`run`, `schema`,
-//! `proof open`, `proof gallery`, `update`) so non-Rust projects can drive
-//! TUI end-to-end scenarios without writing Rust test harnesses.
+//! This binary ships inside the `testty` crate so non-Rust projects can drive
+//! TUI end-to-end scenarios without writing Rust test harnesses. Installing the
+//! crate (`cargo install testty`) provides the `testty` executable, which Cargo
+//! auto-detects from this `src/main.rs` alongside the library `src/lib.rs`.
 //!
-//! The crate is currently a packaging skeleton: the command tree and argument
-//! parsing are complete, but every verb is stubbed. Each stub reports
-//! "not yet implemented" on stderr and exits with a non-zero status so callers
-//! and CI can detect that the behavior is not wired up yet. Later tasks replace
-//! each [`Command::dispatch`] arm with real scenario, schema, and proof logic.
+//! The binary exposes the full `testty` verb tree (`run`, `schema`,
+//! `proof open`, `proof gallery`, `update`).
+//!
+//! The command tree and argument parsing are complete, but every verb is
+//! currently stubbed. Each stub reports "not yet implemented" on stderr and
+//! exits with a non-zero status so callers and CI can detect that the behavior
+//! is not wired up yet. Later tasks replace each [`Command::dispatch`] arm with
+//! real scenario, schema, and proof logic that delegates into the `testty`
+//! library API.
 
 use std::io::{self, Write};
 use std::path::PathBuf;

@@ -18,6 +18,34 @@ testty = "0.9"
 tempfile = "3"
 ```
 
+## Command-line binary
+
+testty also ships a `testty` command-line front end so projects in any language — not
+just Rust crates — can drive TUI scenarios, generate schemas, and inspect proof
+artifacts. Install it with:
+
+```sh
+cargo install testty
+```
+
+```text
+testty run <scenario.yaml> [--bin <BIN>] [--proof <DIR>]
+testty schema
+testty proof open <html>
+testty proof gallery <dir>
+testty update
+```
+
+- `run` — execute a scenario file against a TUI binary.
+- `schema` — print the JSON schema for scenario files.
+- `proof open` — open a single proof report.
+- `proof gallery` — build a gallery from a directory of proof reports.
+- `update` — update stored scenario snapshots to match current output.
+
+The command-line binary is currently a stub: the command tree is in place, but every
+verb prints a "not yet implemented" notice and exits non-zero until the behavior is
+wired up.
+
 ## Capabilities
 
 ### Reliable • No flaky tests

@@ -12,6 +12,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - testty: add `proof::junit::JunitBackend`, a `ProofBackend` that renders a
   `ProofReport` to JUnit-XML so non-Rust CIs can ingest testty proof results as test
   cases and failures.
+- testty: the `testty` crate now ships the language-agnostic `testty` command-line
+  binary (`cargo install testty`), folding in the previously separate, never-published
+  `testty-cli` crate. The command tree is in place but the verbs remain stubbed.
 
 ### Changed
 
