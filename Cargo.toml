@@ -19,7 +19,7 @@ homepage = "https://github.com/agentty-xyz/agentty"
 ag-forge = { path = "crates/ag-forge", version = "0.10.0" }
 testty = { path = "crates/testty", version = "0.10.0" }
 async-trait = "0.1"
-agent-client-protocol = "0.13.1"
+agent-client-protocol = "0.14.0"
 assert_cmd = "2"
 arboard = { version = "3", features = ["image-data", "wayland-data-control"] }
 askama = "0.16.0"
@@ -32,7 +32,7 @@ image = { version = "0.25", default-features = false, features = ["png", "gif"] 
 mockall = "0.14"
 portable-pty = "0.9"
 pulldown-cmark = "0.13.4"
-ratatui = "0.30.0"
+ratatui = "0.30.1"
 rustc-hash = "2"
 schemars = { version = "1", features = ["derive"] }
 semver = "1"
