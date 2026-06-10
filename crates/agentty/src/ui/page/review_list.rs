@@ -99,10 +99,7 @@ fn render_review_table(
     let header_cells = ["Review", "Repository", "Status", "Updated"]
         .iter()
         .map(|header| Cell::from(*header));
-    let header = Row::new(header_cells)
-        .style(header_style)
-        .height(1)
-        .bottom_margin(1);
+    let header = Row::new(header_cells).style(header_style).height(1);
 
     let block = review_block();
     let constraints = [
@@ -407,6 +404,39 @@ mod tests {
     }
 
     #[test]
+    fn test_render_loaded_reviews_places_first_section_under_header() {
+        // Arrange
+        let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
+        let backend = TestBackend::new(100, 10);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let mut table_state = TableState::default();
+        let state = RequestedReviewState::Loaded {
+            items: vec![requested_review(
+                RequestedReviewAudience::Personal,
+                ForgeKind::GitHub,
+                "#42",
+                "Add review tab",
+            )],
+            project_id: 1,
+        };
+
+        // Act
+        terminal
+            .draw(|frame| {
+                ReviewListPage::new(&state, Some(0), &mut table_state).render(frame, frame.area());
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let buffer = terminal.backend().buffer();
+        let header_position =
+            find_text_position(buffer, "Repository").expect("header should render");
+        let section_position =
+            find_text_position(buffer, "Requested from you").expect("section should render");
+        assert_eq!(section_position.1, header_position.1 + 1);
+    }
+
+    #[test]
     fn test_render_empty_reviews_shows_empty_state() {
         // Arrange
         let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
@@ -634,6 +664,18 @@ mod tests {
         buffer: &'a ratatui::buffer::Buffer,
         needle: &str,
     ) -> Option<&'a ratatui::buffer::Cell> {
+        let (x_position, y_position) = find_text_position(buffer, needle)?;
+        let width = usize::from(buffer.area.width.max(1));
+        let cell_index = y_position * width + x_position;
+
+        buffer.content().get(cell_index)
+    }
+
+    /// Returns the first rendered cell position that starts the requested text.
+    fn find_text_position(
+        buffer: &ratatui::buffer::Buffer,
+        needle: &str,
+    ) -> Option<(usize, usize)> {
         let width = usize::from(buffer.area.width.max(1));
         let needle_symbols = needle
             .chars()
@@ -644,6 +686,7 @@ mod tests {
         for row_start in (0..content.len()).step_by(width) {
             let row_end = row_start + width.min(content.len().saturating_sub(row_start));
             let row = &content[row_start..row_end];
+            let y_position = row_start / width;
 
             for (index, window) in row.windows(needle_symbols.len()).enumerate() {
                 let window_matches = window
@@ -652,7 +695,7 @@ mod tests {
                     .all(|(cell, symbol)| cell.symbol() == symbol);
 
                 if window_matches {
-                    return Some(&row[index]);
+                    return Some((index, y_position));
                 }
             }
         }
