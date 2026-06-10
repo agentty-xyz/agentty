@@ -38,6 +38,8 @@ pub enum AgentModel {
     Gpt53CodexSpark,
     /// Claude Opus model backed by `claude-opus-4-8`.
     ClaudeOpus48,
+    /// Claude Fable model backed by `claude-fable-5`.
+    ClaudeFable5,
     /// Claude Sonnet model backed by `claude-sonnet-4-6`.
     ClaudeSonnet46,
     /// Claude Haiku model backed by `claude-haiku-4-5-20251001`.
@@ -82,6 +84,7 @@ impl AgentModel {
             Self::Gpt54Mini => "gpt-5.4-mini",
             Self::Gpt53CodexSpark => "gpt-5.3-codex-spark",
             Self::ClaudeOpus48 => "claude-opus-4-8",
+            Self::ClaudeFable5 => "claude-fable-5",
             Self::ClaudeSonnet46 => "claude-sonnet-4-6",
             Self::ClaudeHaiku4520251001 => "claude-haiku-4-5-20251001",
         }
@@ -89,9 +92,8 @@ impl AgentModel {
 
     /// Parses one persisted model identifier and upgrades retired aliases.
     ///
-    /// Stored retired Claude Opus values are migrated forward to
-    /// `claude-opus-4-8` so existing projects and sessions continue loading
-    /// after older Opus support is removed from the active model list.
+    /// Stored retired Claude Opus aliases are migrated forward to
+    /// `claude-opus-4-8` so existing projects and sessions continue loading.
     pub(crate) fn parse_persisted(value: &str) -> Result<Self, String> {
         match value {
             "claude-opus-4-6" | "claude-opus-4-7" => Ok(Self::ClaudeOpus48),
@@ -108,9 +110,10 @@ impl AgentModel {
             | Self::Gemini31FlashLitePreview
             | Self::Gemini31ProPreview => AgentKind::Gemini,
             Self::Gpt55 | Self::Gpt54 | Self::Gpt54Mini | Self::Gpt53CodexSpark => AgentKind::Codex,
-            Self::ClaudeOpus48 | Self::ClaudeSonnet46 | Self::ClaudeHaiku4520251001 => {
-                AgentKind::Claude
-            }
+            Self::ClaudeOpus48
+            | Self::ClaudeFable5
+            | Self::ClaudeSonnet46
+            | Self::ClaudeHaiku4520251001 => AgentKind::Claude,
         }
     }
 }
@@ -250,6 +253,7 @@ impl FromStr for AgentModel {
             "gpt-5.4-mini" => Ok(Self::Gpt54Mini),
             "gpt-5.3-codex-spark" => Ok(Self::Gpt53CodexSpark),
             "claude-opus-4-8" => Ok(Self::ClaudeOpus48),
+            "claude-fable-5" => Ok(Self::ClaudeFable5),
             "claude-sonnet-4-6" => Ok(Self::ClaudeSonnet46),
             "claude-haiku-4-5-20251001" => Ok(Self::ClaudeHaiku4520251001),
             other => Err(format!("unknown model: {other}")),
@@ -276,6 +280,7 @@ impl AgentSelectionMetadata for AgentModel {
             Self::Gpt54Mini => "Small, fast Codex model for simpler coding tasks.",
             Self::Gpt53CodexSpark => "Codex spark model for quick coding iterations.",
             Self::ClaudeOpus48 => "Latest Claude Opus model for complex tasks.",
+            Self::ClaudeFable5 => "Claude Fable 5 model for complex tasks.",
             Self::ClaudeSonnet46 => "Balanced Claude model for quality and latency.",
             Self::ClaudeHaiku4520251001 => "Fast Claude model for lighter tasks.",
         }
@@ -321,6 +326,7 @@ impl AgentKind {
         const ANTIGRAVITY_MODELS: &[AgentModel] = &[AgentModel::Antigravity];
         const CLAUDE_MODELS: &[AgentModel] = &[
             AgentModel::ClaudeOpus48,
+            AgentModel::ClaudeFable5,
             AgentModel::ClaudeSonnet46,
             AgentModel::ClaudeHaiku4520251001,
         ];
@@ -497,8 +503,9 @@ mod tests {
     }
 
     #[test]
-    /// Ensures retired Claude models no longer parse as selectable models.
-    fn test_parse_model_rejects_retired_claude_opus_models() {
+    /// Ensures retired Claude Opus aliases no longer parse as selectable
+    /// models.
+    fn test_parse_model_rejects_retired_claude_opus_aliases() {
         // Arrange
         let claude_kind = AgentKind::Claude;
 
@@ -512,18 +519,33 @@ mod tests {
     }
 
     #[test]
-    /// Ensures persisted retired Claude model ids migrate to the supported
-    /// replacement model.
-    fn test_parse_persisted_maps_retired_claude_opus_models_to_claude_opus_48() {
+    /// Ensures `claude-fable-5` parses as a supported Claude model.
+    fn test_parse_model_parses_claude_fable_5() {
+        // Arrange
+        let claude_kind = AgentKind::Claude;
+
+        // Act
+        let parsed_fable_5 = claude_kind.parse_model("claude-fable-5");
+
+        // Assert
+        assert_eq!(parsed_fable_5, Some(AgentModel::ClaudeFable5));
+    }
+
+    #[test]
+    /// Ensures persisted Claude model ids parse or migrate to supported
+    /// models.
+    fn test_parse_persisted_handles_supported_and_retired_claude_models() {
         // Arrange
 
         // Act
         let parsed_opus_46 = AgentModel::parse_persisted("claude-opus-4-6");
         let parsed_opus_47 = AgentModel::parse_persisted("claude-opus-4-7");
+        let parsed_fable_5 = AgentModel::parse_persisted("claude-fable-5");
 
         // Assert
         assert_eq!(parsed_opus_46, Ok(AgentModel::ClaudeOpus48));
         assert_eq!(parsed_opus_47, Ok(AgentModel::ClaudeOpus48));
+        assert_eq!(parsed_fable_5, Ok(AgentModel::ClaudeFable5));
     }
 
     #[test]
