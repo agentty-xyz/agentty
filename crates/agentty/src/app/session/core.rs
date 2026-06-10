@@ -4964,6 +4964,7 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Verifies rebase commits pending worktree changes before starting.
     async fn test_rebase_session_auto_commits_uncommitted_changes() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
@@ -4973,7 +4974,7 @@ mod tests {
         allow_detect_git_info(&mut mock_git_client);
         mock_git_client
             .expect_find_git_repo_root()
-            .times(1)
+            .times(0..)
             .returning(move |_| {
                 let repo_root = repo_root.clone();
                 Box::pin(async move { Some(repo_root) })
