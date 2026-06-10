@@ -96,9 +96,10 @@ fn settings_tab_shows_content() {
 /// Verify that `j` and `k` navigate through settings rows.
 ///
 /// Opens the Settings tab and presses `j` multiple times to move the
-/// selection down, then `k` to move back up. The test confirms the
-/// selected row by seeding deterministic model values and observing which
-/// selector value changes after each `Enter` press.
+/// selection down, then `k` to move back up. The test confirms the selected
+/// row by seeding deterministic retired Opus model values, observing startup
+/// migration to `claude-opus-4-8`, and then checking which selector advances
+/// to the next current Claude model after each `Enter` press.
 #[test]
 fn settings_jk_navigation() {
     // Arrange, Act, Assert
@@ -152,17 +153,17 @@ fn settings_jk_navigation() {
                 let initial_frame = common::frame_from_capture(&report.captures[0]);
                 assertion::assert_match_count(&initial_frame, "claude-opus-4-6", 0);
                 assertion::assert_match_count(&initial_frame, "claude-opus-4-8", 3);
-                assertion::assert_match_count(&initial_frame, "claude-sonnet-4-6", 0);
+                assertion::assert_match_count(&initial_frame, "claude-fable-5", 0);
 
                 let moved_down_frame = common::frame_from_capture(&report.captures[1]);
                 assertion::assert_match_count(&moved_down_frame, "claude-opus-4-6", 0);
                 assertion::assert_match_count(&moved_down_frame, "claude-opus-4-8", 2);
-                assertion::assert_match_count(&moved_down_frame, "claude-sonnet-4-6", 1);
+                assertion::assert_match_count(&moved_down_frame, "claude-fable-5", 1);
 
                 let moved_up_frame = common::frame_from_capture(&report.captures[2]);
                 assertion::assert_match_count(&moved_up_frame, "claude-opus-4-6", 0);
                 assertion::assert_match_count(&moved_up_frame, "claude-opus-4-8", 1);
-                assertion::assert_match_count(&moved_up_frame, "claude-sonnet-4-6", 2);
+                assertion::assert_match_count(&moved_up_frame, "claude-fable-5", 2);
             },
         )
         .expect("feature test failed");
