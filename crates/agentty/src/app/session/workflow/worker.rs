@@ -3640,7 +3640,7 @@ mod tests {
             .await
             .expect("failed to upsert project");
         db.sessions()
-            .insert_session("sess1", "gpt-5.4", "main", "InProgress", project_id)
+            .insert_session("sess1", "gpt-5.5", "main", "InProgress", project_id)
             .await
             .expect("failed to insert session");
 
@@ -3683,7 +3683,7 @@ mod tests {
         // Act
         let turn_metadata = TurnMetadata {
             published_upstream_ref: None,
-            session_model: AgentModel::Gpt54,
+            session_model: AgentModel::Gpt55,
         };
         let status = apply_turn_result(&context, turn_metadata, turn_result)
             .await

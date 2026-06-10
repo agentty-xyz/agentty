@@ -2866,7 +2866,7 @@ mod tests {
         input
             .db
             .sessions()
-            .insert_session("session-123", "gpt-5.4", "main", "Merging", project_id)
+            .insert_session("session-123", "gpt-5.5", "main", "Merging", project_id)
             .await
             .expect("failed to insert merge session row");
         let db = input.db.clone();
@@ -2935,7 +2935,7 @@ mod tests {
         input
             .db
             .sessions()
-            .insert_session("session-123", "gpt-5.4", "main", "Merging", project_id)
+            .insert_session("session-123", "gpt-5.5", "main", "Merging", project_id)
             .await
             .expect("failed to insert merge session row");
         let db = input.db.clone();
@@ -2999,7 +2999,7 @@ mod tests {
             .await
             .expect("failed to upsert project");
         db.sessions()
-            .insert_session("sess-local", "gpt-5.4", "main", "Review", project_id)
+            .insert_session("sess-local", "gpt-5.5", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
         let mut mock_git_client = git::MockGitClient::new();
@@ -3033,7 +3033,7 @@ mod tests {
             .await
             .expect("failed to upsert project");
         db.sessions()
-            .insert_session("sess-remote", "gpt-5.4", "main", "Review", project_id)
+            .insert_session("sess-remote", "gpt-5.5", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
         db.sessions()
@@ -3078,7 +3078,7 @@ mod tests {
             .await
             .expect("failed to upsert project");
         db.sessions()
-            .insert_session("sess-fetch", "gpt-5.4", "main", "Review", project_id)
+            .insert_session("sess-fetch", "gpt-5.5", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
         db.sessions()
@@ -3493,7 +3493,7 @@ mod tests {
             .await
             .expect("failed to insert project");
         db.sessions()
-            .insert_session("session-123", "gpt-5.4", "main", "Merging", project_id)
+            .insert_session("session-123", "gpt-5.5", "main", "Merging", project_id)
             .await
             .expect("failed to insert merge session row");
         let status = Arc::new(Mutex::new(Status::Merging));

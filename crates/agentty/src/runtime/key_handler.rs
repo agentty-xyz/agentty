@@ -1060,7 +1060,7 @@ mod tests {
             confirmation_message: "Add this session to merge queue?".to_string(),
             confirmation_title: "Confirm Merge".to_string(),
             restore_view: Some(ConfirmationViewMode {
-                review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
+                review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
                 review_text: Some("Review output".to_string()),
                 scroll_offset: Some(6),
                 session_id: session_id.clone().into(),
@@ -1083,7 +1083,7 @@ mod tests {
                 session_id: ref session_id_in_mode,
                 scroll_offset: Some(6),
             } if session_id_in_mode == &session_id
-                && review_status_message == &review_loading_message(AgentModel::Gpt54)
+                && review_status_message == &review_loading_message(AgentModel::Gpt55)
                 && review_text == "Review output"
         ));
     }
@@ -1253,7 +1253,7 @@ mod tests {
             locked_upstream_ref: None,
             publish_branch_action: crate::domain::session::PublishBranchAction::Push,
             restore_view: ConfirmationViewMode {
-                review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
+                review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
                 review_text: Some("Critical finding".to_string()),
                 scroll_offset: Some(7),
                 session_id: "session-id".into(),
@@ -1276,7 +1276,7 @@ mod tests {
                 ref session_id,
                 scroll_offset: Some(7),
             } if session_id == "session-id"
-                && status_message == &review_loading_message(AgentModel::Gpt54)
+                && status_message == &review_loading_message(AgentModel::Gpt55)
                 && review_text == "Critical finding"
         ));
     }
@@ -1508,7 +1508,7 @@ mod tests {
         app.mode = AppMode::OpenCommandSelector {
             commands: vec!["cargo test".to_string(), "npm run dev".to_string()],
             restore_view: ConfirmationViewMode {
-                review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
+                review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
                 review_text: Some("Critical finding".to_string()),
                 scroll_offset: Some(3),
                 session_id: "session-id".into(),
@@ -1533,7 +1533,7 @@ mod tests {
                 ref session_id,
                 scroll_offset: Some(3),
             } if session_id == "session-id"
-                && status_message == &review_loading_message(AgentModel::Gpt54)
+                && status_message == &review_loading_message(AgentModel::Gpt55)
                 && review_text == "Critical finding"
         ));
     }
@@ -1696,7 +1696,7 @@ mod tests {
         app.mode = AppMode::OpenCommandSelector {
             commands: vec!["cargo test".to_string(), "npm run dev".to_string()],
             restore_view: ConfirmationViewMode {
-                review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
+                review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
                 review_text: Some("Critical finding".to_string()),
                 scroll_offset: Some(1),
                 session_id: "session-id".into(),
@@ -1727,7 +1727,7 @@ mod tests {
                     },
             } if commands == &vec!["cargo test".to_string(), "npm run dev".to_string()]
                 && session_id == "session-id"
-                && status_message == &review_loading_message(AgentModel::Gpt54)
+                && status_message == &review_loading_message(AgentModel::Gpt55)
                 && review_text == "Critical finding"
         ));
     }

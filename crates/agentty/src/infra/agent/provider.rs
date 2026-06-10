@@ -381,7 +381,7 @@ mod tests {
             AgentKind::Antigravity
         );
         assert_eq!(
-            provider_kind_for_model(AgentModel::Gpt54.as_str()).expect("known model"),
+            provider_kind_for_model(AgentModel::Gpt55.as_str()).expect("known model"),
             AgentKind::Codex
         );
     }

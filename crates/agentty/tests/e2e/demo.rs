@@ -348,7 +348,7 @@ async fn seed_pre_existing_sessions(
         (
             "bbbb2222-bbbb-2222-bbbb-222222222222",
             "Add dark mode",
-            "gpt-5.4",
+            "gpt-5.5",
             "Done",
             "main",
             127,

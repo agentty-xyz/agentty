@@ -449,7 +449,7 @@ mod tests {
         let mut session = session_fixture();
         session.status = Status::InProgress;
         session.title = Some("This is a very long timer-aware session header title".to_string());
-        session.model = AgentModel::Gpt54;
+        session.model = AgentModel::Gpt55;
         session.in_progress_started_at = Some(0);
 
         // Act
@@ -483,7 +483,7 @@ mod tests {
     fn test_session_metadata_text_ticks_live_in_progress_timer() {
         // Arrange
         let mut session = session_fixture();
-        session.model = AgentModel::Gpt54;
+        session.model = AgentModel::Gpt55;
         session.stats.added_lines = 9;
         session.stats.deleted_lines = 3;
         session.status = Status::InProgress;
@@ -496,9 +496,9 @@ mod tests {
         // Assert
         assert!(early_metadata.contains("Lines: +9 / -3"));
         assert!(early_metadata.contains("Timer: 30s"));
-        assert!(early_metadata.contains("Model: gpt-5.4"));
+        assert!(early_metadata.contains("Model: gpt-5.5"));
         assert!(
-            early_metadata.find("Model: gpt-5.4") < early_metadata.find("Reasoning: high"),
+            early_metadata.find("Model: gpt-5.5") < early_metadata.find("Reasoning: high"),
             "model should appear before reasoning in metadata text"
         );
         assert!(later_metadata.contains("Timer: 1h1m0s"));
@@ -719,10 +719,10 @@ mod tests {
 
         // Assert
         assert_eq!(menu.items.len(), AgentKind::Codex.models().len());
-        assert_eq!(menu.items[0].label, "gpt-5.4");
+        assert_eq!(menu.items[0].label, "gpt-5.5");
         assert_eq!(
             menu.items[0].detail,
-            Some("Broadly available Codex model for coding quality.".to_string())
+            Some("Newer Codex model with stronger coding performance when available.".to_string())
         );
     }
 
@@ -1193,7 +1193,7 @@ mod tests {
             Status::InProgress,
             Some("Inspecting changed files"),
             None,
-            AgentModel::Gpt54,
+            AgentModel::Gpt55,
         )
         .expect("in-progress sessions should render a status line");
 
@@ -1235,8 +1235,8 @@ mod tests {
         let status_line = session_output_status_line(
             Status::AgentReview,
             None,
-            Some("Reviewing changes with gpt-5.4"),
-            AgentModel::Gpt54,
+            Some("Reviewing changes with gpt-5.5"),
+            AgentModel::Gpt55,
         )
         .expect("agent-review sessions should render a status line");
 
@@ -1244,7 +1244,7 @@ mod tests {
         assert!(
             status_line
                 .to_string()
-                .contains("Reviewing changes with gpt-5.4")
+                .contains("Reviewing changes with gpt-5.5")
         );
     }
 
@@ -1271,7 +1271,7 @@ mod tests {
 
         // Act
         let status_line =
-            session_output_status_line(Status::Merging, None, None, AgentModel::Gpt54)
+            session_output_status_line(Status::Merging, None, None, AgentModel::Gpt55)
                 .expect("merging sessions should render a status line");
 
         // Assert

@@ -551,7 +551,7 @@ mod tests {
             OneShotRequest {
                 child_pid: None,
                 folder: temp_directory.path(),
-                model: AgentModel::Gpt54,
+                model: AgentModel::Gpt55,
                 prompt: "Generate title",
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
@@ -693,7 +693,7 @@ mod tests {
             OneShotRequest {
                 child_pid: None,
                 folder: temp_directory.path(),
-                model: AgentModel::Gpt54,
+                model: AgentModel::Gpt55,
                 prompt: "Generate title",
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
@@ -731,7 +731,7 @@ mod tests {
             OneShotRequest {
                 child_pid: None,
                 folder: temp_directory.path(),
-                model: AgentModel::Gpt54,
+                model: AgentModel::Gpt55,
                 prompt: "Generate title",
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
@@ -916,7 +916,7 @@ mod tests {
             .expect_run_turn()
             .times(1)
             .returning(|request, _| {
-                assert_eq!(request.model, AgentModel::Gpt54.as_str());
+                assert_eq!(request.model, AgentModel::Gpt55.as_str());
                 assert!(matches!(
                     request.request_kind,
                     AgentRequestKind::UtilityPrompt
@@ -947,7 +947,7 @@ mod tests {
             OneShotRequest {
                 child_pid: None,
                 folder: temp_directory.path(),
-                model: AgentModel::Gpt54,
+                model: AgentModel::Gpt55,
                 prompt: "Generate title",
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
@@ -977,7 +977,7 @@ mod tests {
             .expect_run_turn()
             .times(2)
             .returning(|request, _| {
-                assert_eq!(request.model, AgentModel::Gpt54.as_str());
+                assert_eq!(request.model, AgentModel::Gpt55.as_str());
 
                 Box::pin(async {
                     Ok(AppServerTurnResponse {
@@ -1001,7 +1001,7 @@ mod tests {
             OneShotRequest {
                 child_pid: None,
                 folder: temp_directory.path(),
-                model: AgentModel::Gpt54,
+                model: AgentModel::Gpt55,
                 prompt: "Generate title",
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
@@ -1055,7 +1055,7 @@ mod tests {
             OneShotRequest {
                 child_pid: None,
                 folder: temp_directory.path(),
-                model: AgentModel::Gpt54,
+                model: AgentModel::Gpt55,
                 prompt: "Generate title",
                 request_kind: AgentRequestKind::SessionStart,
                 reasoning_level: ReasoningLevel::default(),

@@ -1728,7 +1728,7 @@ mod tests {
     async fn test_apply_view_scroll_and_output_mode_updates_review_state() {
         // Arrange
         let (mut app, _base_dir, expected_session_id) = new_test_app_with_session().await;
-        let expected_status_message = review_loading_message(AgentModel::Gpt54);
+        let expected_status_message = review_loading_message(AgentModel::Gpt55);
         app.mode = AppMode::View {
             review_status_message: None,
             review_text: None,
@@ -1799,7 +1799,7 @@ mod tests {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.settings.default_review_model = AgentModel::ClaudeHaiku4520251001;
-        app.sessions.sessions_mut()[0].model = AgentModel::Gpt54;
+        app.sessions.sessions_mut()[0].model = AgentModel::Gpt55;
         app.sessions.sessions_mut()[0].status = Status::AgentReview;
         let output_width = 14;
         let session = &app.sessions.sessions()[0];
@@ -2086,7 +2086,7 @@ mod tests {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.mode = AppMode::View {
-            review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
+            review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
             review_text: Some("Critical finding".to_string()),
             session_id: session_id.clone().into(),
             scroll_offset: Some(5),
@@ -2115,7 +2115,7 @@ mod tests {
                 && confirmation_message == "Add this session to merge queue?"
                 && restored_session_id == &session_id
                 && mode_session_id == &session_id
-                && status_message == &review_loading_message(AgentModel::Gpt54)
+                && status_message == &review_loading_message(AgentModel::Gpt55)
                 && review_text == "Critical finding"
         ));
     }
@@ -2126,7 +2126,7 @@ mod tests {
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.settings.open_command = "cargo test\nnpm run dev".to_string();
         app.mode = AppMode::View {
-            review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
+            review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
             review_text: Some("Critical finding".to_string()),
             session_id: session_id.clone().into(),
             scroll_offset: Some(4),
@@ -2151,7 +2151,7 @@ mod tests {
                 selected_command_index: 0,
             } if commands == &vec!["cargo test".to_string(), "npm run dev".to_string()]
                 && restored_session_id == &session_id
-                && status_message == &review_loading_message(AgentModel::Gpt54)
+                && status_message == &review_loading_message(AgentModel::Gpt55)
                 && review_text == "Critical finding"
         ));
     }
@@ -2215,7 +2215,7 @@ mod tests {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         let view_context = ViewContext {
-            review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
+            review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
             review_text: Some("Critical finding".to_string()),
             scroll_offset: Some(3),
             session_id: session_id.clone().into(),
@@ -2250,7 +2250,7 @@ mod tests {
                 },
                 scroll_offset: 0,
             } if session_id_in_mode == &session_id
-                && status_message == &review_loading_message(AgentModel::Gpt54)
+                && status_message == &review_loading_message(AgentModel::Gpt55)
                 && review_text == "Critical finding"
         ));
     }
@@ -2260,7 +2260,7 @@ mod tests {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         let view_context = ViewContext {
-            review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
+            review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
             review_text: Some("Critical finding".to_string()),
             scroll_offset: Some(5),
             session_id: session_id.clone().into(),
@@ -2293,7 +2293,7 @@ mod tests {
                 && input_state.cursor == 0
                 && input_state.text().is_empty()
                 && restored_session_id == &session_id
-                && status_message == &review_loading_message(AgentModel::Gpt54)
+                && status_message == &review_loading_message(AgentModel::Gpt55)
                 && review_text == "Critical finding"
         ));
     }

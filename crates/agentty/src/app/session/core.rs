@@ -1472,7 +1472,7 @@ mod tests {
                 in_progress_started_at: None,
                 in_progress_total_seconds: 0,
                 is_draft: false,
-                model: AgentModel::Gpt54,
+                model: AgentModel::Gpt55,
                 output: String::new(),
                 parent_session_id: None,
                 project_name: "project".to_string(),
@@ -1500,7 +1500,7 @@ mod tests {
 
         SessionManager::new(
             SessionDefaults {
-                model: AgentModel::Gpt54,
+                model: AgentModel::Gpt55,
             },
             Arc::new(git::MockGitClient::new()),
             state,
@@ -2305,7 +2305,7 @@ mod tests {
             .create_session()
             .await
             .expect("failed to create first session");
-        app.set_session_model(&first_session_id, AgentModel::Gpt54)
+        app.set_session_model(&first_session_id, AgentModel::Gpt55)
             .await
             .expect("failed to set session model");
         let active_project_id = app.active_project_id();
@@ -2374,7 +2374,7 @@ mod tests {
             .expect("failed to create first session");
 
         // Act
-        app.set_session_model(&first_session_id, AgentModel::Gpt54)
+        app.set_session_model(&first_session_id, AgentModel::Gpt55)
             .await
             .expect("failed to set session model");
         let default_smart_model_setting = app
@@ -2394,7 +2394,7 @@ mod tests {
         // Assert
         assert_eq!(
             default_smart_model_setting,
-            Some(AgentModel::Gpt54.as_str().to_string())
+            Some(AgentModel::Gpt55.as_str().to_string())
         );
         let second_session = restarted_app
             .sessions
@@ -2402,7 +2402,7 @@ mod tests {
             .iter()
             .find(|session| session.id == second_session_id)
             .expect("missing second session");
-        assert_eq!(second_session.model, AgentModel::Gpt54);
+        assert_eq!(second_session.model, AgentModel::Gpt55);
     }
 
     #[tokio::test]
@@ -2592,7 +2592,7 @@ mod tests {
         );
         let mut session_manager = SessionManager::new(
             SessionDefaults {
-                model: AgentModel::Gpt54,
+                model: AgentModel::Gpt55,
             },
             Arc::new(git::MockGitClient::new()),
             state,
@@ -2649,7 +2649,7 @@ mod tests {
         );
         let mut session_manager = SessionManager::new(
             SessionDefaults {
-                model: AgentModel::Gpt54,
+                model: AgentModel::Gpt55,
             },
             Arc::new(git::MockGitClient::new()),
             state,
@@ -2684,7 +2684,7 @@ mod tests {
         );
         let mut session_manager = SessionManager::new(
             SessionDefaults {
-                model: AgentModel::Gpt54,
+                model: AgentModel::Gpt55,
             },
             Arc::new(git::MockGitClient::new()),
             state,

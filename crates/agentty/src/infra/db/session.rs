@@ -599,7 +599,7 @@ impl SessionJoinRow {
             in_progress_total_seconds: 0,
             input_tokens: 11,
             is_draft: false,
-            model: "gpt-5.4".to_string(),
+            model: "gpt-5.5".to_string(),
             output: "Saved output".to_string(),
             output_tokens: 29,
             parent_session_id: Some("parent-session".to_string()),

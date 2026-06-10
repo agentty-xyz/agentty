@@ -1326,7 +1326,7 @@ mod tests {
             .sessions()
             .insert_session(
                 "session-id",
-                "gpt-5.4",
+                "gpt-5.5",
                 "main",
                 &Status::Draft.to_string(),
                 project_id,
@@ -1805,7 +1805,7 @@ mod tests {
                 Box::pin(async { Err(GitError::OutputParse("commit failed".to_string())) })
             });
         let database = AppRepositories::in_memory().await;
-        insert_review_session(&database, AgentModel::Gpt54.as_str()).await;
+        insert_review_session(&database, AgentModel::Gpt55.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let output = Arc::new(Mutex::new(String::new()));
         let context = AssistContext {
@@ -1816,7 +1816,7 @@ mod tests {
             git_client: Arc::new(mock_git_client),
             id: "session-id".to_string(),
             output: Arc::clone(&output),
-            session_model: AgentModel::Gpt54,
+            session_model: AgentModel::Gpt55,
             session_update_versions: Arc::default(),
         };
 
@@ -1842,7 +1842,7 @@ mod tests {
             .times(1)
             .returning(|_| Box::pin(async { Ok::<_, GitError>(true) }));
         let database = AppRepositories::in_memory().await;
-        insert_review_session(&database, AgentModel::Gpt54.as_str()).await;
+        insert_review_session(&database, AgentModel::Gpt55.as_str()).await;
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
         let output = Arc::new(Mutex::new(String::new()));
         let context = AssistContext {
@@ -1853,7 +1853,7 @@ mod tests {
             git_client: Arc::new(mock_git_client),
             id: "session-id".to_string(),
             output: Arc::clone(&output),
-            session_model: AgentModel::Gpt54,
+            session_model: AgentModel::Gpt55,
             session_update_versions: Arc::default(),
         };
 
@@ -1891,7 +1891,7 @@ mod tests {
     async fn test_load_include_coauthored_by_agentty_setting_defaults_to_false() {
         // Arrange
         let database = AppRepositories::in_memory().await;
-        insert_review_session(&database, AgentModel::Gpt54.as_str()).await;
+        insert_review_session(&database, AgentModel::Gpt55.as_str()).await;
 
         // Act
         let include_coauthored_by_agentty =
@@ -1908,7 +1908,7 @@ mod tests {
     async fn test_load_include_coauthored_by_agentty_setting_defaults_invalid_value_to_false() {
         // Arrange
         let database = AppRepositories::in_memory().await;
-        insert_review_session(&database, AgentModel::Gpt54.as_str()).await;
+        insert_review_session(&database, AgentModel::Gpt55.as_str()).await;
         let project_id = database
             .sessions()
             .load_session_project_id("session-id")
@@ -1967,7 +1967,7 @@ mod tests {
             .times(1)
             .returning(|_| Box::pin(async { Ok::<_, GitError>("abc1234".to_string()) }));
         let database = AppRepositories::in_memory().await;
-        insert_review_session(&database, AgentModel::Gpt54.as_str()).await;
+        insert_review_session(&database, AgentModel::Gpt55.as_str()).await;
         let summary_payload = "- Session branch updates README formatting.".to_string();
         database
             .sessions()
@@ -1984,7 +1984,7 @@ mod tests {
             git_client: Arc::new(mock_git_client),
             id: "session-id".to_string(),
             output: Arc::clone(&output),
-            session_model: AgentModel::Gpt54,
+            session_model: AgentModel::Gpt55,
             session_update_versions: Arc::default(),
         };
 
@@ -2025,7 +2025,7 @@ mod tests {
     async fn test_load_auto_commit_model_setting_prefers_project_fast_model() {
         // Arrange
         let database = AppRepositories::in_memory().await;
-        insert_review_session(&database, AgentModel::Gpt54.as_str()).await;
+        insert_review_session(&database, AgentModel::Gpt55.as_str()).await;
         let project_id = database
             .sessions()
             .load_session_project_id("session-id")
@@ -2055,7 +2055,7 @@ mod tests {
         let auto_commit_model = SessionTaskService::load_auto_commit_model_setting(
             &database,
             "session-id",
-            AgentModel::Gpt54,
+            AgentModel::Gpt55,
         )
         .await;
 
@@ -2069,7 +2069,7 @@ mod tests {
     async fn test_load_auto_commit_model_setting_falls_back_through_defaults() {
         // Arrange
         let database = AppRepositories::in_memory().await;
-        insert_review_session(&database, AgentModel::Gpt54.as_str()).await;
+        insert_review_session(&database, AgentModel::Gpt55.as_str()).await;
         let project_id = database
             .sessions()
             .load_session_project_id("session-id")
@@ -2090,7 +2090,7 @@ mod tests {
         let smart_fallback_model = SessionTaskService::load_auto_commit_model_setting(
             &database,
             "session-id",
-            AgentModel::Gpt54,
+            AgentModel::Gpt55,
         )
         .await;
 
@@ -2108,12 +2108,12 @@ mod tests {
         let session_fallback_model = SessionTaskService::load_auto_commit_model_setting(
             &database,
             "session-id",
-            AgentModel::Gpt54,
+            AgentModel::Gpt55,
         )
         .await;
 
         // Assert
-        assert_eq!(session_fallback_model, AgentModel::Gpt54);
+        assert_eq!(session_fallback_model, AgentModel::Gpt55);
     }
 
     #[tokio::test]

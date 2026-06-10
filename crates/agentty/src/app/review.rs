@@ -549,13 +549,13 @@ mod tests {
     #[test]
     fn review_loading_message_uses_requested_model_name() {
         // Arrange
-        let review_model = AgentModel::Gpt54;
+        let review_model = AgentModel::Gpt55;
 
         // Act
         let message = review_loading_message(review_model);
 
         // Assert
-        assert_eq!(message, "Reviewing changes with gpt-5.4");
+        assert_eq!(message, "Reviewing changes with gpt-5.5");
     }
 
     #[test]
@@ -637,7 +637,7 @@ mod tests {
         let review_text = "## Review\nPersist this finding.";
         let mut review_cache = loading_review_cache(&session_id, diff_hash);
         let mut mode = AppMode::View {
-            review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
+            review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
             review_text: None,
             scroll_offset: None,
             session_id: session_id.clone(),
@@ -671,7 +671,7 @@ mod tests {
         let diff_hash = 29;
         let mut review_cache = loading_review_cache(&session_id, diff_hash);
         let mut mode = AppMode::View {
-            review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
+            review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
             review_text: None,
             scroll_offset: None,
             session_id: session_id.clone(),
@@ -719,7 +719,7 @@ mod tests {
             attachment_state: PromptAttachmentState::default(),
             history_state: PromptHistoryState::default(),
             input: InputState::default(),
-            review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
+            review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
             review_text: None,
             scroll_offset: None,
             session_id: session_id.clone(),
@@ -771,7 +771,7 @@ mod tests {
                 text: "Need more detail?".to_string(),
             }],
             responses: Vec::new(),
-            review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
+            review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
             review_text: None,
             scroll_offset: None,
             selected_option_index: None,

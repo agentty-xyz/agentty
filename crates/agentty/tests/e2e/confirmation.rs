@@ -37,7 +37,7 @@ fn seed_cancelable_draft_session(env: &BuilderEnv) -> E2eResult {
             .await?;
         database
             .sessions()
-            .insert_draft_session("draft-cancel-0001", "gpt-5.4", "main", "Draft", project_id)
+            .insert_draft_session("draft-cancel-0001", "gpt-5.5", "main", "Draft", project_id)
             .await?;
         database
             .sessions()
@@ -73,7 +73,7 @@ fn seed_cancelable_running_session(env: &BuilderEnv) -> E2eResult {
             .await?;
         database
             .sessions()
-            .insert_session(session_id, "gpt-5.4", "main", "InProgress", project_id)
+            .insert_session(session_id, "gpt-5.5", "main", "InProgress", project_id)
             .await?;
         database
             .sessions()

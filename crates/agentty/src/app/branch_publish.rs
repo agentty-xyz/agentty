@@ -919,7 +919,7 @@ mod tests {
             .expect("failed to insert project");
         database
             .sessions()
-            .insert_session("session-id", "gpt-5.4", "main", "Review", project_id)
+            .insert_session("session-id", "gpt-5.5", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
         let session_folder = PathBuf::from("/tmp/session-worktree");
@@ -1121,7 +1121,7 @@ mod tests {
             .expect("failed to insert project");
         database
             .sessions()
-            .insert_session("session-id", "gpt-5.4", "main", "Review", project_id)
+            .insert_session("session-id", "gpt-5.5", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
         let session_folder = PathBuf::from("/tmp/session-worktree");
@@ -1160,7 +1160,7 @@ mod tests {
             .expect("failed to insert project");
         database
             .sessions()
-            .insert_session("session-id", "gpt-5.4", "main", "Review", project_id)
+            .insert_session("session-id", "gpt-5.5", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
         let session_folder = PathBuf::from("/tmp/session-worktree");
@@ -1200,7 +1200,7 @@ mod tests {
             .expect("failed to insert project");
         database
             .sessions()
-            .insert_session("session-id", "gpt-5.4", "main", "Review", project_id)
+            .insert_session("session-id", "gpt-5.5", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
         let session_folder = PathBuf::from("/tmp/session-worktree");
@@ -1247,7 +1247,7 @@ mod tests {
             .expect("failed to insert project");
         database
             .sessions()
-            .insert_session("session-id", "gpt-5.4", "main", "Review", project_id)
+            .insert_session("session-id", "gpt-5.5", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
         let session_folder = PathBuf::from("/tmp/session-worktree");
@@ -1297,7 +1297,7 @@ mod tests {
             .expect("failed to insert project");
         database
             .sessions()
-            .insert_session("session-id", "gpt-5.4", "main", "Review", project_id)
+            .insert_session("session-id", "gpt-5.5", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
         let session_folder = PathBuf::from("/tmp/session-worktree");

@@ -1098,7 +1098,7 @@ mod tests {
             .upsert_project_setting(
                 project_id,
                 SettingName::DefaultSmartModel,
-                AgentModel::Gpt54.as_str(),
+                AgentModel::Gpt55.as_str(),
             )
             .await
             .expect("failed to persist smart model");
@@ -1112,7 +1112,7 @@ mod tests {
         .await;
 
         // Assert
-        assert_eq!(loaded_model, AgentModel::Gpt54);
+        assert_eq!(loaded_model, AgentModel::Gpt55);
     }
 
     #[tokio::test]
@@ -1175,7 +1175,7 @@ mod tests {
             .upsert_project_setting(
                 project_id,
                 SettingName::DefaultFastModel,
-                AgentModel::Gpt54.as_str(),
+                AgentModel::Gpt55.as_str(),
             )
             .await
             .expect("failed to persist fast model");
@@ -1189,7 +1189,7 @@ mod tests {
         .await;
 
         // Assert
-        assert_eq!(explicit_fast_model, AgentModel::Gpt54);
+        assert_eq!(explicit_fast_model, AgentModel::Gpt55);
     }
 
     #[tokio::test]
@@ -1202,7 +1202,7 @@ mod tests {
             .upsert_project_setting(
                 project_id,
                 SettingName::DefaultSmartModel,
-                AgentModel::Gpt54.as_str(),
+                AgentModel::Gpt55.as_str(),
             )
             .await
             .expect("failed to persist project smart model");
@@ -1261,7 +1261,7 @@ mod tests {
         let manager = SettingsManager::new(&services, project_id).await;
 
         // Assert
-        assert_eq!(manager.default_smart_model, AgentModel::Gpt54);
+        assert_eq!(manager.default_smart_model, AgentModel::Gpt55);
         assert_eq!(manager.default_fast_model, AgentModel::Gpt53CodexSpark);
         assert_eq!(manager.default_review_model, AgentModel::ClaudeOpus48);
         assert_eq!(manager.open_command, "nvim .");
@@ -1545,13 +1545,13 @@ mod tests {
     fn settings_rows_show_default_fast_model_value() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.default_fast_model = AgentModel::Gpt54;
+        manager.default_fast_model = AgentModel::Gpt55;
 
         // Act
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[3].1, AgentModel::Gpt54.as_str());
+        assert_eq!(rows[3].1, AgentModel::Gpt55.as_str());
     }
 
     #[test]

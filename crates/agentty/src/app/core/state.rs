@@ -1862,7 +1862,7 @@ mod tests {
             .upsert_project_setting(
                 second_project_id,
                 SettingName::DefaultSmartModel,
-                AgentModel::Gpt54.as_str(),
+                AgentModel::Gpt55.as_str(),
             )
             .await
             .expect("failed to persist second project smart model");
@@ -1892,7 +1892,7 @@ mod tests {
             .expect("failed to switch project");
 
         // Assert
-        assert_eq!(app.settings.default_smart_model, AgentModel::Gpt54);
+        assert_eq!(app.settings.default_smart_model, AgentModel::Gpt55);
         assert_eq!(app.settings.open_command, "cargo test");
     }
 
@@ -3621,7 +3621,7 @@ mod tests {
         app.sessions
             .push_session(test_session(PathBuf::from("/tmp/session-question-view")));
         app.mode = AppMode::View {
-            review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
+            review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
             review_text: Some("Focused review".to_string()),
             session_id: "session-1".into(),
             scroll_offset: None,
@@ -3674,7 +3674,7 @@ mod tests {
                 ..
             } if session_id == "session-1"
                 && questions == &expected_questions
-                && review_status_message == &review_loading_message(AgentModel::Gpt54)
+                && review_status_message == &review_loading_message(AgentModel::Gpt55)
                 && review_text == "Focused review"
                 && responses.is_empty()
                 && input.text().is_empty()
@@ -4155,7 +4155,7 @@ mod tests {
             SessionHandles::new("Merge finished".to_string(), Status::Done),
         );
         app.mode = AppMode::View {
-            review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
+            review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
             review_text: Some("Review text".to_string()),
             session_id: "session-1".into(),
             scroll_offset: Some(9),
@@ -4689,7 +4689,7 @@ mod tests {
         app.services
             .db()
             .sessions()
-            .insert_session("done-source", "gpt-5.4", "release", "Done", project_id)
+            .insert_session("done-source", "gpt-5.5", "release", "Done", project_id)
             .await
             .expect("failed to insert source session row");
         let merged_commit_hash = "704de31d0f4b5a1234567890abcdef1234567890";
@@ -4788,7 +4788,7 @@ mod tests {
         app.services
             .db()
             .sessions()
-            .insert_session("done-source", "gpt-5.4", "main", "Done", project_id)
+            .insert_session("done-source", "gpt-5.5", "main", "Done", project_id)
             .await
             .expect("failed to insert source session row");
         let source_session = crate::domain::session::tests::SessionFixtureBuilder::new()

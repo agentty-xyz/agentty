@@ -248,7 +248,7 @@ mod tests {
     ) {
         database
             .sessions()
-            .insert_session(session_id, "gpt-5.4", base_branch, status, project_id)
+            .insert_session(session_id, "gpt-5.5", base_branch, status, project_id)
             .await
             .expect("failed to insert session fixture");
     }
@@ -649,7 +649,7 @@ WHERE id = ?
             .sessions()
             .insert_stacked_draft_session(
                 "child-session",
-                "gpt-5.4",
+                "gpt-5.5",
                 "wt/parent-session",
                 "Draft",
                 "parent-session",
@@ -685,7 +685,7 @@ WHERE id = ?
             .sessions()
             .insert_stacked_draft_session(
                 "child-session",
-                "gpt-5.4",
+                "gpt-5.5",
                 "wt/parent-session",
                 "Draft",
                 "parent-session",
@@ -697,7 +697,7 @@ WHERE id = ?
             .sessions()
             .insert_stacked_draft_session(
                 "canceled-child",
-                "gpt-5.4",
+                "gpt-5.5",
                 "wt/parent-session",
                 "Canceled",
                 "parent-session",
@@ -1309,7 +1309,7 @@ WHERE model = ?
             .expect("failed to persist default smart model");
         database
             .settings()
-            .upsert_setting(SettingName::DefaultFastModel, AgentModel::Gpt54.as_str())
+            .upsert_setting(SettingName::DefaultFastModel, AgentModel::Gpt55.as_str())
             .await
             .expect("failed to persist default fast model");
         database
@@ -1345,7 +1345,7 @@ WHERE model = ?
         );
         assert_eq!(
             default_fast_model,
-            Some(AgentModel::Gpt54.as_str().to_string())
+            Some(AgentModel::Gpt55.as_str().to_string())
         );
         assert_eq!(
             default_review_model,
@@ -1525,7 +1525,7 @@ WHERE model = ?
             .expect("failed to upsert project");
         database
             .sessions()
-            .insert_session("session-a", "gpt-5.4", "main", "Done", project_id)
+            .insert_session("session-a", "gpt-5.5", "main", "Done", project_id)
             .await
             .expect("failed to insert session");
 
@@ -1569,7 +1569,7 @@ WHERE model = ?
             .expect("failed to upsert project");
         database
             .sessions()
-            .insert_session("session-a", "gpt-5.4", "main", "Done", project_id)
+            .insert_session("session-a", "gpt-5.5", "main", "Done", project_id)
             .await
             .expect("failed to insert session");
         let instruction_conversation_id = Some("thread-123");
@@ -1617,7 +1617,7 @@ WHERE model = ?
             .expect("failed to upsert project");
         database
             .sessions()
-            .insert_session("session-a", "gpt-5.4", "main", "Review", project_id)
+            .insert_session("session-a", "gpt-5.5", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
 
@@ -1673,7 +1673,7 @@ WHERE model = ?
             .expect("failed to upsert project");
         database
             .sessions()
-            .insert_session("session-load", "gpt-5.4", "main", "Review", project_id)
+            .insert_session("session-load", "gpt-5.5", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
         database
@@ -1709,7 +1709,7 @@ WHERE model = ?
             .expect("failed to upsert project");
         database
             .sessions()
-            .insert_session("session-unset", "gpt-5.4", "main", "Review", project_id)
+            .insert_session("session-unset", "gpt-5.5", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
 
@@ -1755,7 +1755,7 @@ WHERE model = ?
             .expect("failed to upsert project");
         database
             .sessions()
-            .insert_session("session-a", "gpt-5.4", "main", "Done", project_id)
+            .insert_session("session-a", "gpt-5.5", "main", "Done", project_id)
             .await
             .expect("failed to insert session");
 
@@ -1799,7 +1799,7 @@ WHERE model = ?
             .expect("failed to upsert project");
         database
             .sessions()
-            .insert_session("session-a", "gpt-5.4", "main", "Review", project_id)
+            .insert_session("session-a", "gpt-5.5", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
         let review_request = review_request_fixture();
@@ -1850,7 +1850,7 @@ WHERE model = ?
             .expect("failed to upsert project");
         database
             .sessions()
-            .insert_session("session-a", "gpt-5.4", "main", "Done", project_id)
+            .insert_session("session-a", "gpt-5.5", "main", "Done", project_id)
             .await
             .expect("failed to insert session");
 
@@ -1883,7 +1883,7 @@ WHERE model = ?
             .expect("failed to upsert project");
         database
             .sessions()
-            .insert_session("session-a", "gpt-5.4", "main", "Done", project_id)
+            .insert_session("session-a", "gpt-5.5", "main", "Done", project_id)
             .await
             .expect("failed to insert session");
 
@@ -1921,7 +1921,7 @@ WHERE model = ?
             .expect("failed to upsert project");
         database
             .sessions()
-            .insert_session("session-a", "gpt-5.4", "main", "Done", project_id)
+            .insert_session("session-a", "gpt-5.5", "main", "Done", project_id)
             .await
             .expect("failed to insert first session");
         database
@@ -1931,7 +1931,7 @@ WHERE model = ?
             .expect("failed to persist first activity event");
         database
             .sessions()
-            .insert_session("session-b", "gpt-5.4", "main", "Done", project_id)
+            .insert_session("session-b", "gpt-5.5", "main", "Done", project_id)
             .await
             .expect("failed to insert second session");
         database
@@ -1971,17 +1971,17 @@ WHERE model = ?
             .expect("failed to upsert project");
         database
             .sessions()
-            .insert_session("session-a", "gpt-5.4", "main", "Done", project_id)
+            .insert_session("session-a", "gpt-5.5", "main", "Done", project_id)
             .await
             .expect("failed to insert first session");
         database
             .sessions()
-            .insert_session("session-b", "gpt-5.4", "main", "Done", project_id)
+            .insert_session("session-b", "gpt-5.5", "main", "Done", project_id)
             .await
             .expect("failed to insert second session");
         database
             .sessions()
-            .insert_session("session-c", "gpt-5.4", "main", "Done", project_id)
+            .insert_session("session-c", "gpt-5.5", "main", "Done", project_id)
             .await
             .expect("failed to insert third session");
 
@@ -2045,12 +2045,12 @@ WHERE model = ?
             .expect("failed to upsert project");
         database
             .sessions()
-            .insert_session("session-a", "gpt-5.4", "main", "Done", project_id)
+            .insert_session("session-a", "gpt-5.5", "main", "Done", project_id)
             .await
             .expect("failed to insert session-a");
         database
             .sessions()
-            .insert_session("session-b", "gpt-5.4", "main", "Done", project_id)
+            .insert_session("session-b", "gpt-5.5", "main", "Done", project_id)
             .await
             .expect("failed to insert session-b");
 
@@ -2133,17 +2133,17 @@ WHERE model = ?
             .expect("failed to upsert project");
         database
             .sessions()
-            .insert_session("session-a", "gpt-5.4", "main", "Done", project_id)
+            .insert_session("session-a", "gpt-5.5", "main", "Done", project_id)
             .await
             .expect("failed to insert first session");
         database
             .sessions()
-            .insert_session("session-b", "gpt-5.4", "main", "Done", project_id)
+            .insert_session("session-b", "gpt-5.5", "main", "Done", project_id)
             .await
             .expect("failed to insert second session");
         database
             .sessions()
-            .insert_session("session-c", "gpt-5.4", "main", "Done", project_id)
+            .insert_session("session-c", "gpt-5.5", "main", "Done", project_id)
             .await
             .expect("failed to insert third session");
         database
@@ -2245,7 +2245,7 @@ WHERE model = ?
             .expect("failed to insert project");
         database
             .sessions()
-            .insert_session("session-a", "gpt-5.4", "main", "Done", project_id)
+            .insert_session("session-a", "gpt-5.5", "main", "Done", project_id)
             .await
             .expect("failed to insert session");
 
@@ -2273,7 +2273,7 @@ WHERE model = ?
             .expect("failed to insert project");
         database
             .sessions()
-            .insert_session("session-a", "gpt-5.4", "main", "Done", project_id)
+            .insert_session("session-a", "gpt-5.5", "main", "Done", project_id)
             .await
             .expect("failed to insert session");
         database
@@ -2306,7 +2306,7 @@ WHERE model = ?
             .expect("failed to insert project");
         database
             .sessions()
-            .insert_session("session-a", "gpt-5.4", "main", "Review", project_id)
+            .insert_session("session-a", "gpt-5.5", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
         database
@@ -2350,7 +2350,7 @@ WHERE model = ?
             .expect("failed to insert project");
         database
             .sessions()
-            .insert_session("session-a", "gpt-5.4", "main", "Review", project_id)
+            .insert_session("session-a", "gpt-5.5", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
         database
@@ -2394,7 +2394,7 @@ WHERE model = ?
             .expect("failed to insert project");
         database
             .sessions()
-            .insert_session("session-a", "gpt-5.4", "main", "Review", project_id)
+            .insert_session("session-a", "gpt-5.5", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
         database
@@ -2414,7 +2414,7 @@ WHERE model = ?
                 "session-a",
                 &SessionTurnMetadata {
                     instruction_conversation_id: Some("instruction-thread"),
-                    model: AgentModel::Gpt54.as_str(),
+                    model: AgentModel::Gpt55.as_str(),
                     provider_conversation_id: Some("thread-123"),
                     questions_json: r#"[{"text":"Need tests?"}]"#,
                     summary: r#"{"turn":"Updated the worker.","session":"Session state changed."}"#,

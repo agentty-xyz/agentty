@@ -306,14 +306,13 @@ Stored project defaults or session rows that still reference `claude-opus-4-6` o
 
 ### Codex Models
 
-- `gpt-5.4` (default): Broadly available Codex model for coding quality.
+- `gpt-5.5` (default): Newer Codex model with stronger coding performance when
+  available.
 - `gpt-5.4-mini`: Small, fast Codex model for simpler coding tasks.
-- `gpt-5.5`: Newer Codex model with stronger coding performance when available.
 - `gpt-5.3-codex-spark`: Codex spark model for quick coding iterations.
 
-OpenAI announced GPT‑5.5 rollout to Codex on April 23, 2026, but described the
-availability as gradual, so Agentty keeps `gpt-5.4` as the default until `gpt-5.5`
-access is more consistently available across Codex users.
+Stored project defaults or session rows that still reference retired `gpt-5.4` are
+upgraded to `gpt-5.5` when Agentty loads them.
 
 ## Switching Models
 

@@ -1018,7 +1018,7 @@ mod tests {
         app.sessions.push_session(
             crate::domain::session::tests::SessionFixtureBuilder::new()
                 .id(session_id)
-                .model(AgentModel::Gpt54)
+                .model(AgentModel::Gpt55)
                 .status(Status::AgentReview)
                 .build(),
         );

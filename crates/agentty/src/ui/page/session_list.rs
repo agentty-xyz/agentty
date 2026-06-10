@@ -1027,7 +1027,7 @@ mod tests {
         let mut default_session = test_session("active-1", Status::Review);
         default_session.model = AgentModel::ClaudeSonnet46;
         let mut medium_session = test_session("active-2", Status::Review);
-        medium_session.model = AgentModel::Gpt54;
+        medium_session.model = AgentModel::Gpt55;
         medium_session.reasoning_level_override = Some(ReasoningLevel::Medium);
         let sessions = vec![default_session, medium_session];
 
@@ -1063,7 +1063,7 @@ mod tests {
         let mut table_state = TableState::default();
         table_state.select(Some(0));
         let mut session = test_session("session-1", Status::Review);
-        session.model = AgentModel::Gpt54;
+        session.model = AgentModel::Gpt55;
         session.reasoning_level_override = Some(ReasoningLevel::High);
         let sessions = vec![session];
         let expected_reasoning_color = reasoning_level_color(ReasoningLevel::High);
@@ -1079,7 +1079,7 @@ mod tests {
         // Assert
         let buffer = terminal.backend().buffer();
         let fallback_cell = &buffer.content()[0];
-        let model_cell = find_text_start_cell(buffer, "gpt-5.4").unwrap_or(fallback_cell);
+        let model_cell = find_text_start_cell(buffer, "gpt-5.5").unwrap_or(fallback_cell);
         let reasoning_cell = find_text_start_cell(buffer, "high").unwrap_or(fallback_cell);
 
         assert_eq!(model_cell.fg, style::palette::text());
@@ -1094,7 +1094,7 @@ mod tests {
         let mut table_state = TableState::default();
         table_state.select(Some(0));
         let mut session = test_session("session-1", Status::Review);
-        session.model = AgentModel::Gpt54;
+        session.model = AgentModel::Gpt55;
         let sessions = vec![session];
 
         // Act
@@ -1107,7 +1107,7 @@ mod tests {
 
         // Assert
         let text = buffer_text(terminal.backend().buffer());
-        assert!(text.contains("gpt-5.4 [medium]"));
+        assert!(text.contains("gpt-5.5 [medium]"));
     }
 
     #[test]
@@ -1153,7 +1153,7 @@ mod tests {
         let mut table_state = TableState::default();
         table_state.select(Some(0));
         let mut session = test_session("session-1", Status::Review);
-        session.model = AgentModel::Gpt54;
+        session.model = AgentModel::Gpt55;
         session.reasoning_level_override = Some(ReasoningLevel::High);
         let sessions = vec![session];
 
@@ -1167,7 +1167,7 @@ mod tests {
 
         // Assert
         let text = buffer_text(terminal.backend().buffer());
-        assert!(text.contains("gpt-5.4 [high]"));
+        assert!(text.contains("gpt-5.5 [high]"));
     }
 
     #[test]

@@ -1240,7 +1240,7 @@ mod tests {
         SessionOutputLineContext {
             active_prompt_output: None,
             active_progress,
-            review_model: AgentModel::Gpt54,
+            review_model: AgentModel::Gpt55,
             review_status_message,
             review_text,
             session_update_version: 0,
@@ -1987,7 +1987,7 @@ mod tests {
             &session,
             Rect::new(0, 0, 80, 8),
             line_context(
-                Some("Reviewing changes with gpt-5.4"),
+                Some("Reviewing changes with gpt-5.5"),
                 Some(assisted_review),
                 None,
             ),
@@ -2002,7 +2002,7 @@ mod tests {
         // Assert
         assert!(text.contains("Merged session work."));
         assert!(!text.contains("Focused finding"));
-        assert!(!text.contains("Reviewing changes with gpt-5.4"));
+        assert!(!text.contains("Reviewing changes with gpt-5.5"));
     }
 
     /// Verifies a terminal `Canceled` session keeps its interrupted transcript
@@ -2020,7 +2020,7 @@ mod tests {
             &session,
             Rect::new(0, 0, 80, 8),
             line_context(
-                Some("Reviewing changes with gpt-5.4"),
+                Some("Reviewing changes with gpt-5.5"),
                 Some(assisted_review),
                 None,
             ),
@@ -2035,7 +2035,7 @@ mod tests {
         // Assert
         assert!(text.contains("interrupted transcript"));
         assert!(!text.contains("Focused finding"));
-        assert!(!text.contains("Reviewing changes with gpt-5.4"));
+        assert!(!text.contains("Reviewing changes with gpt-5.5"));
     }
 
     /// Verifies focused-review failures remain visible after the transient
@@ -2438,7 +2438,7 @@ mod tests {
             &session,
             Rect::new(0, 0, 80, 5),
             line_context(
-                Some("Reviewing changes with gpt-5.4"),
+                Some("Reviewing changes with gpt-5.5"),
                 Some(assisted_text),
                 None,
             ),

@@ -30,8 +30,6 @@ pub enum AgentModel {
     Gemini31FlashLitePreview,
     /// Higher-quality Gemini preview model backed by `gemini-3.1-pro-preview`.
     Gemini31ProPreview,
-    /// Codex model backed by `gpt-5.4`.
-    Gpt54,
     /// Smaller Codex model backed by `gpt-5.4-mini`.
     Gpt54Mini,
     /// Codex spark model backed by `gpt-5.3-codex-spark`.
@@ -80,7 +78,6 @@ impl AgentModel {
             Self::Gemini35Flash => "gemini-3.5-flash",
             Self::Gemini31FlashLitePreview => "gemini-3.1-flash-lite-preview",
             Self::Gemini31ProPreview => "gemini-3.1-pro-preview",
-            Self::Gpt54 => "gpt-5.4",
             Self::Gpt54Mini => "gpt-5.4-mini",
             Self::Gpt53CodexSpark => "gpt-5.3-codex-spark",
             Self::ClaudeOpus48 => "claude-opus-4-8",
@@ -92,11 +89,12 @@ impl AgentModel {
 
     /// Parses one persisted model identifier and upgrades retired aliases.
     ///
-    /// Stored retired Claude Opus aliases are migrated forward to
-    /// `claude-opus-4-8` so existing projects and sessions continue loading.
+    /// Stored retired Claude Opus and Codex aliases are migrated forward so
+    /// existing projects and sessions continue loading after model removals.
     pub(crate) fn parse_persisted(value: &str) -> Result<Self, String> {
         match value {
             "claude-opus-4-6" | "claude-opus-4-7" => Ok(Self::ClaudeOpus48),
+            "gpt-5.4" => Ok(Self::Gpt55),
             _ => value.parse(),
         }
     }
@@ -109,7 +107,7 @@ impl AgentModel {
             | Self::Gemini35Flash
             | Self::Gemini31FlashLitePreview
             | Self::Gemini31ProPreview => AgentKind::Gemini,
-            Self::Gpt55 | Self::Gpt54 | Self::Gpt54Mini | Self::Gpt53CodexSpark => AgentKind::Codex,
+            Self::Gpt55 | Self::Gpt54Mini | Self::Gpt53CodexSpark => AgentKind::Codex,
             Self::ClaudeOpus48
             | Self::ClaudeFable5
             | Self::ClaudeSonnet46
@@ -249,7 +247,6 @@ impl FromStr for AgentModel {
             "gemini-3.1-flash-lite-preview" => Ok(Self::Gemini31FlashLitePreview),
             "gemini-3.1-pro-preview" => Ok(Self::Gemini31ProPreview),
             "gpt-5.5" => Ok(Self::Gpt55),
-            "gpt-5.4" => Ok(Self::Gpt54),
             "gpt-5.4-mini" => Ok(Self::Gpt54Mini),
             "gpt-5.3-codex-spark" => Ok(Self::Gpt53CodexSpark),
             "claude-opus-4-8" => Ok(Self::ClaudeOpus48),
@@ -276,7 +273,6 @@ impl AgentSelectionMetadata for AgentModel {
                 "Lightweight Gemini model for fast, cost-conscious iterations."
             }
             Self::Gemini31ProPreview => "Higher-quality Gemini model for deeper reasoning.",
-            Self::Gpt54 => "Broadly available Codex model for coding quality.",
             Self::Gpt54Mini => "Small, fast Codex model for simpler coding tasks.",
             Self::Gpt53CodexSpark => "Codex spark model for quick coding iterations.",
             Self::ClaudeOpus48 => "Latest Claude Opus model for complex tasks.",
@@ -302,7 +298,7 @@ impl AgentKind {
             Self::Antigravity => AgentModel::Antigravity,
             Self::Gemini => AgentModel::Gemini31ProPreview,
             Self::Claude => AgentModel::ClaudeOpus48,
-            Self::Codex => AgentModel::Gpt54,
+            Self::Codex => AgentModel::Gpt55,
         }
     }
 
@@ -331,9 +327,8 @@ impl AgentKind {
             AgentModel::ClaudeHaiku4520251001,
         ];
         const CODEX_MODELS: &[AgentModel] = &[
-            AgentModel::Gpt54,
-            AgentModel::Gpt54Mini,
             AgentModel::Gpt55,
+            AgentModel::Gpt54Mini,
             AgentModel::Gpt53CodexSpark,
         ];
 
@@ -451,16 +446,16 @@ mod tests {
     }
 
     #[test]
-    /// Ensures `gpt-5.4` parses as a Codex model.
-    fn test_parse_model_parses_gpt_54() {
+    /// Ensures retired `gpt-5.4` no longer parses as a selectable model.
+    fn test_parse_model_rejects_retired_gpt_54() {
         // Arrange
         let codex_kind = AgentKind::Codex;
 
         // Act
-        let parsed_model = codex_kind.parse_model("gpt-5.4");
+        let parsed_gpt_54 = codex_kind.parse_model("gpt-5.4");
 
         // Assert
-        assert_eq!(parsed_model, Some(AgentModel::Gpt54));
+        assert_eq!(parsed_gpt_54, None);
     }
 
     #[test]
@@ -532,20 +527,22 @@ mod tests {
     }
 
     #[test]
-    /// Ensures persisted Claude model ids parse or migrate to supported
+    /// Ensures persisted model ids parse or migrate to supported
     /// models.
-    fn test_parse_persisted_handles_supported_and_retired_claude_models() {
+    fn test_parse_persisted_handles_supported_and_retired_models() {
         // Arrange
 
         // Act
         let parsed_opus_46 = AgentModel::parse_persisted("claude-opus-4-6");
         let parsed_opus_47 = AgentModel::parse_persisted("claude-opus-4-7");
         let parsed_fable_5 = AgentModel::parse_persisted("claude-fable-5");
+        let parsed_gpt_54 = AgentModel::parse_persisted("gpt-5.4");
 
         // Assert
         assert_eq!(parsed_opus_46, Ok(AgentModel::ClaudeOpus48));
         assert_eq!(parsed_opus_47, Ok(AgentModel::ClaudeOpus48));
         assert_eq!(parsed_fable_5, Ok(AgentModel::ClaudeFable5));
+        assert_eq!(parsed_gpt_54, Ok(AgentModel::Gpt55));
     }
 
     #[test]
@@ -583,9 +580,8 @@ mod tests {
     fn test_codex_model_kind_is_codex() {
         // Arrange
         let models = [
-            AgentModel::Gpt54,
-            AgentModel::Gpt54Mini,
             AgentModel::Gpt55,
+            AgentModel::Gpt54Mini,
             AgentModel::Gpt53CodexSpark,
         ];
 
@@ -593,7 +589,7 @@ mod tests {
         let kinds = models.map(AgentModel::kind);
 
         // Assert
-        assert_eq!(kinds, [AgentKind::Codex; 4]);
+        assert_eq!(kinds, [AgentKind::Codex; 3]);
     }
 
     #[test]
@@ -676,9 +672,8 @@ mod tests {
         assert_eq!(
             selectable_models,
             vec![
-                AgentModel::Gpt54,
-                AgentModel::Gpt54Mini,
                 AgentModel::Gpt55,
+                AgentModel::Gpt54Mini,
                 AgentModel::Gpt53CodexSpark,
                 AgentModel::Gemini31ProPreview,
                 AgentModel::Gemini35Flash,
@@ -695,7 +690,7 @@ mod tests {
         // Arrange
         let unavailable_model = AgentModel::ClaudeOpus48;
         let available_agent_kinds = [AgentKind::Codex, AgentKind::Gemini];
-        let fallback_model = AgentModel::Gpt54;
+        let fallback_model = AgentModel::Gpt55;
 
         // Act
         let resolved_model = resolve_model_for_available_agent_kinds(
@@ -705,7 +700,7 @@ mod tests {
         );
 
         // Assert
-        assert_eq!(resolved_model, AgentModel::Gpt54);
+        assert_eq!(resolved_model, AgentModel::Gpt55);
     }
 
     #[test]

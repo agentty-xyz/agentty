@@ -124,7 +124,7 @@ fn seed_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
             .sessions()
             .insert_session(
                 "review-shortcut-0001",
-                "gpt-5.4",
+                "gpt-5.5",
                 "main",
                 "Review",
                 project_id,
@@ -196,11 +196,33 @@ fn seed_failing_antigravity_cli_stub(env: &BuilderEnv) -> Result<(), Box<dyn std
     Ok(())
 }
 
+/// Adds a Codex CLI stub that intentionally exits with failure.
+///
+/// Picker tests only need the executable to exist on `PATH`; using a failing
+/// stub keeps accidental provider execution from looking successful.
+fn seed_failing_codex_cli_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    let stub_agent_path = env.stub_bin.join("codex");
+    std::fs::write(&stub_agent_path, "#!/bin/sh\nexit 1\n")?;
+
+    #[cfg(unix)]
+    std::fs::set_permissions(&stub_agent_path, std::fs::Permissions::from_mode(0o755))?;
+
+    Ok(())
+}
+
 /// Adds Gemini and Antigravity CLI stubs so Antigravity appears in a stable
 /// `/model` picker position.
 fn seed_model_picker_cli_stubs(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     seed_failing_gemini_cli_stub(env)?;
     seed_failing_antigravity_cli_stub(env)?;
+
+    Ok(())
+}
+
+/// Adds all agent CLI stubs so provider picker tests have stable ordering.
+fn seed_all_model_picker_cli_stubs(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_model_picker_cli_stubs(env)?;
+    seed_failing_codex_cli_stub(env)?;
 
     Ok(())
 }
@@ -259,7 +281,7 @@ fn seed_running_stop_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
             .sessions()
             .insert_session(
                 RUNNING_STOP_SESSION_ID,
-                "gpt-5.4",
+                "gpt-5.5",
                 "main",
                 "InProgress",
                 project_id,
@@ -433,7 +455,7 @@ fn seed_done_session_for_continuation(env: &BuilderEnv) -> Result<(), Box<dyn st
             .await?;
         database
             .sessions()
-            .insert_session("done-continue-0001", "gpt-5.4", "main", "Done", project_id)
+            .insert_session("done-continue-0001", "gpt-5.5", "main", "Done", project_id)
             .await?;
         database
             .sessions()
@@ -480,7 +502,7 @@ fn seed_active_loader_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error
             .sessions()
             .insert_session(
                 LOADER_SESSION_ID,
-                "gpt-5.4",
+                "gpt-5.5",
                 "main",
                 "InProgress",
                 project_id,
@@ -548,7 +570,7 @@ fn session_list_model_reasoning_level() -> E2eResult {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .wait_for_text("gpt-5.4 [medium]", 5000)
+                    .wait_for_text("gpt-5.5 [medium]", 5000)
                     .capture_labeled(
                         "model_reasoning",
                         "Session row model column with reasoning level",
@@ -556,7 +578,7 @@ fn session_list_model_reasoning_level() -> E2eResult {
             },
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "gpt-5.4 [medium]", &full);
+                assertion::assert_text_in_region(frame, "gpt-5.5 [medium]", &full);
             },
         )?;
 
@@ -886,6 +908,47 @@ fn gemini_model_picker_includes_current_flash() -> E2eResult {
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "gemini-3.5-flash", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that the prompt `/model` picker keeps the Codex mini model
+/// selectable when the Codex backend is available.
+#[test]
+fn codex_model_picker_includes_gpt_54_mini() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("codex_model_picker_includes_gpt_54_mini")
+        .with_git()
+        .setup(seed_all_model_picker_cli_stubs)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Regular", 5000)
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .press_key("/")
+                    .write_text("model")
+                    .wait_for_text("Slash Command", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("/model Agent", 3000)
+                    .press_key("Down")
+                    .press_key("Down")
+                    .press_key("Down")
+                    .press_key("Enter")
+                    .wait_for_text("gpt-5.4-mini", 3000)
+                    .capture_labeled(
+                        "codex_model_picker",
+                        "Codex model picker includes GPT-5.4 mini",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "gpt-5.4-mini", &full);
             },
         )?;
 

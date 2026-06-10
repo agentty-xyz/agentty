@@ -1114,7 +1114,7 @@ mod tests {
             in_progress_total_seconds: 0,
             input_tokens: 0,
             is_draft: false,
-            model: "gpt-5.4".to_string(),
+            model: "gpt-5.5".to_string(),
             output_tokens: 0,
             parent_session_id: None,
             project_id: Some(1),

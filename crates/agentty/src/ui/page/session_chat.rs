@@ -752,7 +752,7 @@ mod tests {
             SessionOutputLineContext {
                 active_prompt_output: None,
                 active_progress: None,
-                review_model: AgentModel::Gpt54,
+                review_model: AgentModel::Gpt55,
                 review_status_message: None,
                 review_text: None,
                 session_update_version: 0,
@@ -795,7 +795,7 @@ mod tests {
         let session = session_fixture();
         let mode = AppMode::Question {
             at_mention_state: None,
-            review_status_message: Some("Reviewing changes with gpt-5.4".to_string()),
+            review_status_message: Some("Reviewing changes with gpt-5.5".to_string()),
             review_text: Some("Focused review".to_string()),
             session_id: "session-id".into(),
             questions: vec![QuestionItem::new("Need tests?")],
@@ -816,7 +816,7 @@ mod tests {
         assert_eq!(review_text, Some("Focused review"));
         assert_eq!(
             review_status_message,
-            Some("Reviewing changes with gpt-5.4")
+            Some("Reviewing changes with gpt-5.5")
         );
     }
 
@@ -832,7 +832,7 @@ mod tests {
             SessionOutputLineContext {
                 active_prompt_output: None,
                 active_progress: None,
-                review_model: AgentModel::Gpt54,
+                review_model: AgentModel::Gpt55,
                 review_status_message: None,
                 review_text: None,
                 session_update_version: 0,
@@ -848,8 +848,8 @@ mod tests {
             SessionOutputLineContext {
                 active_prompt_output: None,
                 active_progress: None,
-                review_model: AgentModel::Gpt54,
-                review_status_message: Some("Reviewing changes with gpt-5.4"),
+                review_model: AgentModel::Gpt55,
+                review_status_message: Some("Reviewing changes with gpt-5.5"),
                 review_text: Some("## Review\n\n- Focused finding"),
                 session_update_version: 0,
             },

@@ -400,7 +400,7 @@ mod tests {
     fn test_confirmation_view_mode_into_view_mode_restores_snapshot_values() {
         // Arrange
         let confirmation_view_mode = ConfirmationViewMode {
-            review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
+            review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
             review_text: Some("Critical finding".to_string()),
             scroll_offset: Some(7),
             session_id: "session-id".into(),
@@ -418,7 +418,7 @@ mod tests {
                 ref session_id,
                 scroll_offset: Some(7),
             } if session_id == "session-id"
-                && review_status_message == &review_loading_message(AgentModel::Gpt54)
+                && review_status_message == &review_loading_message(AgentModel::Gpt55)
                 && review_text == "Critical finding"
         ));
     }
@@ -456,7 +456,7 @@ mod tests {
         // Arrange
         let context = HelpContext::View {
             can_open_worktree: true,
-            review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
+            review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
             review_text: Some("Ready".to_string()),
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
             session_id: "session-id".into(),
@@ -477,7 +477,7 @@ mod tests {
                 scroll_offset: Some(4),
                 ..
             } if session_id == "session-id"
-                && review_status_message == &review_loading_message(AgentModel::Gpt54)
+                && review_status_message == &review_loading_message(AgentModel::Gpt55)
                 && review_text == "Ready"
         ));
     }
