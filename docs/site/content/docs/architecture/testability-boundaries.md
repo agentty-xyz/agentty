@@ -16,10 +16,12 @@ trait boundaries so orchestration logic can be tested deterministically.
 as `ag-forge` also expose test mocks through crate features for downstream tests.
 
 | Trait | Module | Boundary | |-------|--------|----------| | `SyncMainRunner` |
-`app/core.rs` | App-level async sync orchestration trigger used by list-mode sync flows.
-| | `ReviewRequestClient` | `crates/ag-forge/src/client.rs` | GitHub/GitLab
-review-request detection plus `gh`/`glab` orchestration boundary, including title and
-description sync for linked PRs/MRs after completed turns. | | `ForgeCommandRunner` |
+`app/sync.rs` | App-level async sync orchestration trigger used by list-mode sync flows.
+Production sends requests into `SyncOrchestrator`; tests can still mock the trigger
+without running git commands. | | `ReviewRequestClient` |
+`crates/ag-forge/src/client.rs` | GitHub/GitLab review-request detection plus
+`gh`/`glab` orchestration boundary, including title and description sync for linked
+PRs/MRs after completed turns. | | `ForgeCommandRunner` |
 `crates/ag-forge/src/command.rs` | Provider CLI command execution boundary used to
 unit-test forge adapters without live `gh` or `glab` binaries. | | `GitClient` |
 `infra/git/client.rs` | Git/process operations (worktree, merge, rebase, diff, push,
@@ -135,6 +137,11 @@ Session review-request publication and refresh follow this rule directly:
 `SessionManager` combines `GitClient` with `ReviewRequestClient` so tests can cover
 branch publish, duplicate detection, stored-link reuse, and archived session refresh
 without live forge auth or network state.
+
+Project sync follows the same pattern: `SyncOrchestrator` combines `GitClient`,
+`ReviewRequestClient`, `ReviewCommentCache`, and the mockable `SyncMainRunner` trigger
+so periodic status refreshes and manual `s` sync commands can be unit-tested without
+live git locks or forge CLI state.
 
 ## TUI E2E Testing Framework (`testty`)
 

@@ -22,8 +22,9 @@ use app::review::{
 use app::service::AppServices;
 use app::session::SessionManager;
 use app::setting::SettingsManager;
+use app::sync::SyncMainRunner;
 use app::tab::{Tab, TabManager};
-use app::task;
+use app::{sync, task};
 use session::SessionTaskService;
 #[cfg(test)]
 use session::{SyncMainOutcome, SyncSessionStartError, TurnAppliedState};
@@ -36,7 +37,6 @@ use crate::app;
 use crate::app::{AppError, RequestedReviewState, session};
 use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
 use crate::domain::input::InputState;
-use crate::domain::permission::PermissionMode;
 use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, Session, SessionId, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::turn_prompt::TurnPrompt;
@@ -132,47 +132,6 @@ pub(crate) struct SessionStatsSnapshot {
     pub usage_rows_result: Result<Vec<SessionStatsUsage>, String>,
 }
 
-/// Starts project sync work and emits completion events for list-mode popups.
-#[cfg_attr(test, mockall::automock)]
-pub(crate) trait SyncMainRunner: Send + Sync {
-    /// Starts sync for one project and emits one
-    /// [`AppEvent::SyncMainCompleted`] when work finishes.
-    fn start_sync_main(
-        &self,
-        app_event_tx: mpsc::UnboundedSender<AppEvent>,
-        default_branch: Option<String>,
-        git_client: Arc<dyn GitClient>,
-        session_model: AgentModel,
-        working_dir: PathBuf,
-    );
-}
-
-/// Production [`SyncMainRunner`] that executes sync in one spawned task.
-pub(crate) struct TokioSyncMainRunner;
-
-impl SyncMainRunner for TokioSyncMainRunner {
-    fn start_sync_main(
-        &self,
-        app_event_tx: mpsc::UnboundedSender<AppEvent>,
-        default_branch: Option<String>,
-        git_client: Arc<dyn GitClient>,
-        session_model: AgentModel,
-        working_dir: PathBuf,
-    ) {
-        tokio::spawn(async move {
-            let result = SessionManager::sync_main_for_project(
-                default_branch,
-                working_dir,
-                git_client,
-                session_model,
-            )
-            .await;
-            // Fire-and-forget: receiver may be dropped during shutdown.
-            let _ = app_event_tx.send(AppEvent::SyncMainCompleted { result });
-        });
-    }
-}
-
 /// External clients used to compose [`App`] startup dependencies.
 pub(crate) struct AppClients {
     pub(super) agent_availability_probe: Arc<dyn agent::AgentAvailabilityProbe>,
@@ -181,7 +140,7 @@ pub(crate) struct AppClients {
     pub(super) git_client: Arc<dyn GitClient>,
     pub(super) project_discovery_client: Arc<dyn ProjectDiscoveryClient>,
     pub(super) review_request_client: Arc<dyn ReviewRequestClient>,
-    pub(super) sync_main_runner: Arc<dyn SyncMainRunner>,
+    pub(super) sync_main_runner: Option<Arc<dyn SyncMainRunner>>,
     pub(super) tmux_client: Arc<dyn TmuxClient>,
 }
 
@@ -196,7 +155,7 @@ impl AppClients {
             git_client: Arc::new(RealGitClient),
             project_discovery_client: Arc::new(RealProjectDiscoveryClient),
             review_request_client: Arc::new(RealReviewRequestClient::default()),
-            sync_main_runner: Arc::new(TokioSyncMainRunner),
+            sync_main_runner: None,
             tmux_client: Arc::new(RealTmuxClient),
         }
     }
@@ -263,6 +222,9 @@ pub struct App {
     pub(crate) sessions: SessionManager,
     /// Runs sync-to-main workflows behind an injectable boundary.
     pub(crate) sync_main_runner: Arc<dyn SyncMainRunner>,
+    /// Owns the active-project sync orchestrator command and context
+    /// channels.
+    pub(crate) sync_handle: sync::SyncHandle,
     /// Monotonic requested-review refresh generation for rejecting stale task
     /// results.
     pub(super) requested_review_generation: u64,
@@ -411,7 +373,6 @@ impl App {
             .touch_project_last_opened(project.id)
             .await;
 
-        self.projects.replace_git_status_cancel();
         self.projects.update_active_project_context(
             project.id,
             project.display_label(),
@@ -1177,7 +1138,6 @@ impl App {
         let default_branch = self.projects.git_branch().map(str::to_string);
         let working_dir = self.projects.working_dir().to_path_buf();
         let git_client = self.services.git_client();
-        let _permission_mode = PermissionMode::default();
         let session_model = self.sessions.default_session_model();
 
         self.sync_main_runner.start_sync_main(
@@ -1240,43 +1200,67 @@ impl App {
         self.projects.replace_project_items(project_items);
     }
 
-    /// Restarts background status polling for the currently active project
-    /// context.
+    /// Publishes the current project/session sync context and requests an
+    /// immediate orchestrator refresh when the active project has a git
+    /// branch.
     pub(super) fn restart_git_status_task(&mut self) {
-        let cancel = self.projects.replace_git_status_cancel();
-        if !self.projects.has_git_branch() {
-            return;
+        self.publish_sync_context_for_refresh();
+        if self.projects.has_git_branch() {
+            self.sync_handle.request_refresh();
         }
+    }
 
-        task::TaskService::spawn_git_status_task(
-            self.projects.working_dir(),
-            self.projects.git_branch().unwrap_or_default().to_string(),
-            Self::session_git_status_targets(&self.sessions),
-            cancel,
-            self.services.event_sender(),
-            self.services.git_client(),
-        );
-        task::TaskService::spawn_review_request_status_task(
-            Self::review_request_sync_targets(&self.sessions),
-            self.projects.git_status_cancel(),
-            self.services.event_sender(),
-            self.services.git_client(),
-            self.services.review_request_client(),
-            self.services.review_comment_cache(),
-        );
+    /// Publishes a fresh sync context after reducer-applied session changes
+    /// that may affect polling targets.
+    pub(super) fn publish_sync_context(&self) {
+        self.sync_handle.publish_context(Self::sync_context_for(
+            &self.projects,
+            &self.services,
+            &self.sessions,
+        ));
+    }
+
+    /// Publishes a fresh sync context and forces a new generation so in-flight
+    /// status completions computed before the requested refresh are ignored.
+    pub(super) fn publish_sync_context_for_refresh(&self) {
+        self.sync_handle
+            .publish_refresh_context(Self::sync_context_for(
+                &self.projects,
+                &self.services,
+                &self.sessions,
+            ));
+    }
+
+    /// Builds the versioned sync context for the active project and session
+    /// snapshot.
+    pub(crate) fn sync_context_for(
+        projects: &ProjectManager,
+        services: &AppServices,
+        sessions: &SessionManager,
+    ) -> sync::SyncContext {
+        sync::SyncContext {
+            generation: 0,
+            git_client: services.git_client(),
+            project_branch_name: projects.git_branch().map(str::to_string),
+            review_comment_cache: services.review_comment_cache(),
+            review_request_client: services.review_request_client(),
+            review_request_sync_targets: Self::review_request_sync_targets(sessions),
+            session_git_status_targets: Self::session_git_status_targets(sessions),
+            working_dir: projects.working_dir().to_path_buf(),
+        }
     }
 
     /// Builds git-status polling targets for active session branches in the
     /// current project.
     pub(crate) fn session_git_status_targets(
         sessions: &SessionManager,
-    ) -> Vec<task::SessionGitStatusTarget> {
+    ) -> Vec<sync::SessionGitStatusTarget> {
         sessions
             .state()
             .sessions()
             .iter()
             .filter(|session| !matches!(session.status, Status::Canceled | Status::Done))
-            .map(|session| task::SessionGitStatusTarget {
+            .map(|session| sync::SessionGitStatusTarget {
                 base_branch: session.base_branch.clone(),
                 branch_name: sessions
                     .session_branch_name(&session.id)
@@ -1290,13 +1274,13 @@ impl App {
     /// the current project.
     pub(crate) fn review_request_sync_targets(
         sessions: &SessionManager,
-    ) -> Vec<task::ReviewRequestSyncTarget> {
+    ) -> Vec<sync::ReviewRequestSyncTarget> {
         sessions
             .state()
             .sessions()
             .iter()
             .filter(|session| session.can_sync_review_request())
-            .map(|session| task::ReviewRequestSyncTarget {
+            .map(|session| sync::ReviewRequestSyncTarget {
                 folder: session.folder.clone(),
                 linked_review_request: session.review_request.clone(),
                 published_upstream_ref: session.published_upstream_ref.clone(),
@@ -1793,7 +1777,7 @@ mod tests {
         // Assert
         assert_eq!(
             targets,
-            vec![task::SessionGitStatusTarget {
+            vec![sync::SessionGitStatusTarget {
                 base_branch: "main".to_string(),
                 branch_name: "wt/session-".to_string(),
                 session_id: "session-1".into(),
@@ -1818,7 +1802,7 @@ mod tests {
         // Assert
         assert_eq!(
             targets,
-            vec![task::SessionGitStatusTarget {
+            vec![sync::SessionGitStatusTarget {
                 base_branch: "main".to_string(),
                 branch_name: "agentty/session-".to_string(),
                 session_id: "session-1".into(),
@@ -3521,6 +3505,7 @@ mod tests {
 
         // Act
         app.apply_app_events(AppEvent::GitStatusUpdated {
+            generation: app.sync_handle.current_generation(),
             session_statuses: HashMap::from([(
                 SessionId::from("session-1"),
                 SessionGitStatus {
@@ -3544,9 +3529,132 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies explicit git-status refresh events restart polling
-    /// immediately instead of waiting for the periodic cadence.
-    async fn apply_app_events_refresh_git_status_restarts_task() {
+    /// Verifies stale git-status snapshots do not overwrite the current sync
+    /// generation.
+    async fn apply_app_events_git_status_updated_ignores_stale_generation() {
+        // Arrange
+        let mut app = new_test_app().await;
+        app.publish_sync_context_for_refresh();
+        let stale_generation = app.sync_handle.current_generation().saturating_sub(1);
+
+        // Act
+        app.apply_app_events(AppEvent::GitStatusUpdated {
+            generation: stale_generation,
+            session_statuses: HashMap::new(),
+            status: Some((9, 9)),
+        })
+        .await;
+
+        // Assert
+        assert_eq!(app.git_status_info(), None);
+        assert!(app.sessions.session_git_statuses().is_empty());
+    }
+
+    #[tokio::test]
+    /// Verifies stale review-request status results cannot transition a
+    /// session after the sync context moved to a newer generation.
+    async fn apply_app_events_review_request_status_updated_ignores_stale_generation() {
+        // Arrange
+        let mut app = new_test_app().await;
+        app.sessions
+            .push_session(test_session(PathBuf::from("/tmp/session-review-stale")));
+        app.publish_sync_context_for_refresh();
+        let stale_generation = app.sync_handle.current_generation().saturating_sub(1);
+
+        // Act
+        app.apply_app_events(AppEvent::ReviewRequestStatusUpdated {
+            generation: stale_generation,
+            result: Ok(SyncReviewRequestTaskResult {
+                outcome: session::SyncReviewRequestOutcome::Closed {
+                    display_id: "#42".to_string(),
+                },
+                summary: None,
+            }),
+            session_id: "session-1".into(),
+        })
+        .await;
+
+        // Assert
+        let session = app
+            .sessions
+            .sessions()
+            .iter()
+            .find(|session| session.id == "session-1")
+            .expect("session should remain loaded");
+        assert_eq!(session.status, Status::Review);
+    }
+
+    #[tokio::test]
+    /// Verifies review-request status updates emitted before a sync
+    /// completion in the same reducer batch are applied before the
+    /// post-sync refresh bumps the status generation.
+    async fn apply_app_events_review_request_status_survives_same_batch_sync_refresh() {
+        // Arrange
+        let mut app = new_test_app().await;
+        let project_id = app.active_project_id();
+        let session_id = "session-sync-batch";
+        app.services
+            .db()
+            .sessions()
+            .insert_session(
+                session_id,
+                "gemini-3-flash-preview",
+                "main",
+                &Status::Review.to_string(),
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        let session_folder_name = session_id.chars().take(8).collect::<String>();
+        let session_data_dir = app
+            .services
+            .base_path()
+            .join(session_folder_name)
+            .join(SESSION_DATA_DIR);
+        fs::create_dir_all(session_data_dir).expect("failed to create session data dir");
+        app.refresh_sessions_now().await;
+        let generation = app.sync_handle.current_generation();
+        app.services
+            .event_sender()
+            .send(AppEvent::SyncMainCompleted {
+                result: Ok(SyncMainOutcome {
+                    pulled_commit_titles: Vec::new(),
+                    pulled_commits: Some(0),
+                    pushed_commit_titles: Vec::new(),
+                    pushed_commits: Some(0),
+                    resolved_conflict_files: Vec::new(),
+                }),
+            })
+            .expect("sync completion should queue");
+
+        // Act
+        app.apply_app_events(AppEvent::ReviewRequestStatusUpdated {
+            generation,
+            result: Ok(SyncReviewRequestTaskResult {
+                outcome: session::SyncReviewRequestOutcome::Closed {
+                    display_id: "#42".to_string(),
+                },
+                summary: None,
+            }),
+            session_id: session_id.into(),
+        })
+        .await;
+        app.process_pending_app_events().await;
+
+        // Assert
+        let session = app
+            .sessions
+            .sessions()
+            .iter()
+            .find(|session| session.id == session_id)
+            .expect("session should remain loaded");
+        assert_eq!(session.status, Status::Canceled);
+    }
+
+    #[tokio::test]
+    /// Verifies explicit git-status refresh events request an immediate
+    /// orchestrator pass instead of waiting for the periodic cadence.
+    async fn apply_app_events_refresh_git_status_requests_orchestrator_refresh() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
         let base_path = base_dir.path().to_path_buf();
@@ -3607,6 +3715,7 @@ mod tests {
         // Assert
         assert!(
             observed_events.contains(&AppEvent::GitStatusUpdated {
+                generation: app.sync_handle.current_generation(),
                 session_statuses: HashMap::new(),
                 status: Some((2, 1)),
             }),
@@ -5261,6 +5370,7 @@ mod tests {
         app.mode = AppMode::List;
 
         let update = ReviewRequestStatusUpdate {
+            generation: 0,
             result: Err("network timeout".to_string()),
             session_id: "session-1".into(),
         };
@@ -5309,6 +5419,7 @@ mod tests {
         };
 
         let update = ReviewRequestStatusUpdate {
+            generation: 0,
             result: Ok(task_result),
             session_id: session_id.into(),
         };
@@ -5364,6 +5475,7 @@ mod tests {
         };
 
         let update = ReviewRequestStatusUpdate {
+            generation: 0,
             result: Ok(task_result),
             session_id: session_id.into(),
         };
@@ -5432,6 +5544,7 @@ mod tests {
         };
 
         let update = ReviewRequestStatusUpdate {
+            generation: 0,
             result: Ok(task_result),
             session_id: session_id.into(),
         };
@@ -5492,6 +5605,7 @@ mod tests {
         };
 
         let update = ReviewRequestStatusUpdate {
+            generation: 0,
             result: Ok(task_result),
             session_id: session_id.into(),
         };
@@ -5576,6 +5690,7 @@ mod tests {
         };
 
         let update = ReviewRequestStatusUpdate {
+            generation: 0,
             result: Ok(task_result),
             session_id: session_id.into(),
         };

@@ -1,8 +1,6 @@
 //! Active-project state, project discovery snapshots, and quick-select helpers.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use ratatui::widgets::TableState;
 
@@ -14,7 +12,6 @@ pub struct ProjectManager {
     active_project_name: String,
     git_branch: Option<String>,
     git_status: Option<(u32, u32)>,
-    git_status_cancel: Arc<AtomicBool>,
     git_upstream_ref: Option<String>,
     project_items: Vec<ProjectListItem>,
     table_state: TableState,
@@ -27,7 +24,6 @@ impl ProjectManager {
         active_project_id: i64,
         active_project_name: String,
         git_branch: Option<String>,
-        git_status_cancel: Arc<AtomicBool>,
         git_upstream_ref: Option<String>,
         project_items: Vec<ProjectListItem>,
         working_dir: PathBuf,
@@ -37,7 +33,6 @@ impl ProjectManager {
             active_project_name,
             git_branch,
             git_status: None,
-            git_status_cancel,
             git_upstream_ref,
             project_items,
             table_state: TableState::default(),
@@ -92,21 +87,6 @@ impl ProjectManager {
     /// Returns the active project working directory.
     pub(crate) fn working_dir(&self) -> &Path {
         self.working_dir.as_path()
-    }
-
-    /// Returns the current git-status cancellation token.
-    pub(crate) fn git_status_cancel(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.git_status_cancel)
-    }
-
-    /// Replaces the git-status cancellation token and cancels the previous one.
-    pub(crate) fn replace_git_status_cancel(&mut self) -> Arc<AtomicBool> {
-        self.git_status_cancel.store(true, Ordering::Relaxed);
-
-        let next_cancel_token = Arc::new(AtomicBool::new(false));
-        self.git_status_cancel = Arc::clone(&next_cancel_token);
-
-        next_cancel_token
     }
 
     /// Returns the selected project in the project list, when present.
@@ -292,7 +272,6 @@ mod tests {
             1,
             "agentty".to_string(),
             Some("main".to_string()),
-            Arc::new(AtomicBool::new(false)),
             Some("origin/main".to_string()),
             project_items,
             PathBuf::from("/tmp/agentty"),

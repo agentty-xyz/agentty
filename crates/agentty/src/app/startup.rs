@@ -11,7 +11,7 @@ use super::task;
 use crate::app::service::AppServices;
 use crate::app::session::SessionManager;
 use crate::app::session_state::SessionState;
-use crate::app::{AppError, ProjectManager, session};
+use crate::app::{AppError, session};
 use crate::domain::agent::{AgentKind, AgentModel};
 use crate::domain::project::{Project, ProjectListItem, project_name_from_path};
 use crate::infra::db::AppRepositories;
@@ -240,34 +240,13 @@ impl AppStartup {
         session_manager
     }
 
-    /// Spawns background pollers for git status, review-request status, and
-    /// version checks.
+    /// Spawns app-wide background tasks that are not owned by the sync
+    /// orchestrator.
     pub(crate) fn spawn_background_tasks(
         auto_update: bool,
         event_tx: &mpsc::UnboundedSender<AppEvent>,
-        projects: &ProjectManager,
-        services: &AppServices,
-        sessions: &SessionManager,
     ) {
         task::TaskService::spawn_version_check_task(event_tx, auto_update);
-        if projects.has_git_branch() {
-            task::TaskService::spawn_git_status_task(
-                projects.working_dir(),
-                projects.git_branch().unwrap_or_default().to_string(),
-                super::core::App::session_git_status_targets(sessions),
-                projects.git_status_cancel(),
-                event_tx.clone(),
-                services.git_client(),
-            );
-            task::TaskService::spawn_review_request_status_task(
-                super::core::App::review_request_sync_targets(sessions),
-                projects.git_status_cancel(),
-                event_tx.clone(),
-                services.git_client(),
-                services.review_request_client(),
-                services.review_comment_cache(),
-            );
-        }
     }
 
     /// Loads project list entries for the projects tab.

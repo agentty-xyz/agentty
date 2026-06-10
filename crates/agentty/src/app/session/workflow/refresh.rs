@@ -766,7 +766,6 @@ mod tests {
             1,
             "project".to_string(),
             Some("main".to_string()),
-            Arc::new(std::sync::atomic::AtomicBool::new(false)),
             None,
             Vec::new(),
             working_dir,

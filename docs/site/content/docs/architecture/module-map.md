@@ -41,9 +41,9 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
   orchestration APIs.
 - `crates/agentty/src/app/core.rs`: Router-only `App` core module that re-exports the
   facade and focused child modules under `app/core/`.
-- `crates/agentty/src/app/core/state.rs`: `App`, `AppClients`, `SyncMainRunner`, shared
-  state structs, and remaining workflow glue that does not belong to startup, draw, or
-  reducer slices.
+- `crates/agentty/src/app/core/state.rs`: `App`, `AppClients`, shared state structs,
+  sync-context publication, and remaining workflow glue that does not belong to startup,
+  draw, or reducer slices.
 - `crates/agentty/src/app/core/new.rs`: `App` construction, startup project loading,
   service wiring, and startup-only app helpers.
 - `crates/agentty/src/app/core/draw.rs`: Frame rendering plus render-facing app
@@ -52,6 +52,8 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
   app-event application, and sync or branch-publish popup helpers.
 - `crates/agentty/src/app/startup.rs`: `AppStartup` for startup project resolution,
   initial session hydration, and project catalog refresh helpers.
+- `crates/agentty/src/app/sync.rs`: `SyncOrchestrator`, `SyncHandle`, `SyncMainRunner`,
+  and active-project git/forge status refresh coordination.
 - `crates/agentty/src/app/reducer.rs`: `AppEventReducer` and `AppEventBatch` for
   app-event draining and batch coalescing during one runtime tick.
 - `crates/agentty/src/app/review.rs`: Focused review cache updates plus background
@@ -84,8 +86,8 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
   persistence.
 - `crates/agentty/src/app/tab.rs`: `TabManager` for top-level tab definitions and tab
   selection state.
-- `crates/agentty/src/app/task.rs`: App-scoped background tasks for git status polling,
-  version checks, review assists, and app-server turns.
+- `crates/agentty/src/app/task.rs`: App-scoped one-shot background tasks for
+  requested-review loads, version checks, and review assists.
 - `crates/agentty/src/app/session/core.rs`: `SessionManager`, session clock boundary,
   shared constants, and session module tests.
 - `crates/agentty/src/app/session/workflow/access.rs`: Session lookup helpers.

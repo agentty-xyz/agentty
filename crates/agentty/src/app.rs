@@ -19,12 +19,13 @@ pub(crate) mod session;
 pub mod session_state;
 pub(crate) mod setting;
 mod startup;
+mod sync;
 pub(crate) mod tab;
 mod task;
 
-pub use core::{AGENTTY_WT_DIR, App, UpdateStatus, agentty_home};
 #[cfg(test)]
-pub(crate) use core::{AppClients, MockSyncMainRunner};
+pub(crate) use core::AppClients;
+pub use core::{AGENTTY_WT_DIR, App, UpdateStatus, agentty_home};
 pub(crate) use core::{AppEvent, SessionStatsUsage};
 
 pub use error::AppError;
@@ -40,4 +41,6 @@ pub use session::{SessionError, SessionManager, SessionState};
 #[cfg(test)]
 pub(crate) use session::{SyncMainOutcome, SyncSessionStartError};
 pub use setting::SettingsManager;
+#[cfg(test)]
+pub(crate) use sync::MockSyncMainRunner;
 pub use tab::{Tab, TabManager};

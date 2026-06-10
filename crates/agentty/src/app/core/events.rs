@@ -49,6 +49,8 @@ pub(crate) enum AppEvent {
     /// Indicates the latest project-branch and session-branch ahead/behind
     /// information from the git status worker.
     GitStatusUpdated {
+        /// Sync-context generation used to reject stale completions.
+        generation: u64,
         session_statuses: HashMap<SessionId, SessionGitStatus>,
         status: Option<(u32, u32)>,
     },
@@ -146,6 +148,8 @@ pub(crate) enum AppEvent {
     },
     /// Indicates completion of one background review-request status refresh.
     ReviewRequestStatusUpdated {
+        /// Sync-context generation used to reject stale completions.
+        generation: u64,
         result: Result<SyncReviewRequestTaskResult, String>,
         session_id: SessionId,
     },
@@ -193,6 +197,8 @@ pub(super) struct AppEventBatch {
 /// Optional aggregate git status payload from the latest status event in one
 /// reducer batch.
 pub(super) struct GitStatusBatchUpdate {
+    /// Sync-context generation that produced this status snapshot.
+    generation: u64,
     /// Main worktree added/deleted line counts, when available.
     status: Option<(u32, u32)>,
 }
@@ -215,6 +221,7 @@ pub(super) struct PublishedBranchSyncUpdate {
 /// Completed review-request status refresh payload ready for reducer
 /// application.
 pub(super) struct ReviewRequestStatusUpdate {
+    pub(super) generation: u64,
     pub(super) result: Result<SyncReviewRequestTaskResult, String>,
     pub(super) session_id: SessionId,
 }
@@ -232,9 +239,10 @@ impl AppEventBatch {
                 session_id,
             } => self.collect_at_mention_entries_loaded(session_id, entries),
             AppEvent::GitStatusUpdated {
+                generation,
                 session_statuses,
                 status,
-            } => self.collect_git_status_updated(session_statuses, status),
+            } => self.collect_git_status_updated(generation, session_statuses, status),
             AppEvent::VersionAvailabilityUpdated {
                 latest_available_version,
             } => self.collect_version_availability_updated(latest_available_version),
@@ -315,9 +323,11 @@ impl AppEventBatch {
                 sync_operation_id,
                 sync_status,
             ),
-            AppEvent::ReviewRequestStatusUpdated { result, session_id } => {
-                self.collect_review_request_status_updated(result, session_id);
-            }
+            AppEvent::ReviewRequestStatusUpdated {
+                generation,
+                result,
+                session_id,
+            } => self.collect_review_request_status_updated(generation, result, session_id),
             AppEvent::ReviewCommentsUpdated { session_id } => {
                 self.collect_review_comments_updated(session_id);
             }
@@ -402,11 +412,18 @@ impl AppEventBatch {
     /// Stores the latest git status event for this reducer batch.
     fn collect_git_status_updated(
         &mut self,
+        generation: u64,
         session_statuses: HashMap<SessionId, SessionGitStatus>,
         status: Option<(u32, u32)>,
     ) {
-        self.git_status_update = Some(GitStatusBatchUpdate { status });
-        self.session_git_status_updates = session_statuses;
+        if self
+            .git_status_update
+            .as_ref()
+            .is_none_or(|batched_update| generation >= batched_update.generation)
+        {
+            self.git_status_update = Some(GitStatusBatchUpdate { generation, status });
+            self.session_git_status_updates = session_statuses;
+        }
     }
 
     /// Stores the latest version availability event for this reducer batch.
@@ -506,11 +523,16 @@ impl AppEventBatch {
     /// application.
     fn collect_review_request_status_updated(
         &mut self,
+        generation: u64,
         result: Result<SyncReviewRequestTaskResult, String>,
         session_id: SessionId,
     ) {
         self.review_request_status_updates
-            .push(ReviewRequestStatusUpdate { result, session_id });
+            .push(ReviewRequestStatusUpdate {
+                generation,
+                result,
+                session_id,
+            });
     }
 
     /// Stores the latest reduced handle version for one touched session.
@@ -587,6 +609,7 @@ impl App {
     /// reached terminal status (`Done`, `Canceled`) then drops its worker queue
     /// so background workers can shut down provider runtimes.
     async fn apply_app_event_batch(&mut self, mut event_batch: AppEventBatch) {
+        let sync_generation_for_review_updates = self.sync_handle.current_generation();
         let mut should_mark_dirty = Self::app_event_batch_changes_observable_state(&event_batch);
         let previous_session_states = self.previous_session_states(&event_batch.session_ids);
 
@@ -610,9 +633,19 @@ impl App {
             self.apply_branch_publish_action_update(branch_publish_action_update);
         }
 
+        let applied_review_request_status_update = event_batch
+            .review_request_status_updates
+            .iter()
+            .any(|update| update.generation == sync_generation_for_review_updates);
         for review_request_status_update in event_batch.review_request_status_updates {
+            if review_request_status_update.generation != sync_generation_for_review_updates {
+                continue;
+            }
             self.apply_review_request_status_update(review_request_status_update)
                 .await;
+        }
+        if applied_review_request_status_update {
+            self.publish_sync_context();
         }
 
         self.invalidate_diff_scroll_cache_for_review_comments(
@@ -698,7 +731,9 @@ impl App {
             self.restart_git_status_task();
         }
 
-        if let Some(git_status_update) = &event_batch.git_status_update {
+        if let Some(git_status_update) = &event_batch.git_status_update
+            && git_status_update.generation == self.sync_handle.current_generation()
+        {
             self.projects.set_git_status(git_status_update.status);
             self.sessions
                 .replace_session_git_statuses(event_batch.session_git_status_updates.clone());
@@ -1216,7 +1251,11 @@ impl App {
         &mut self,
         review_request_status_update: ReviewRequestStatusUpdate,
     ) {
-        let ReviewRequestStatusUpdate { result, session_id } = review_request_status_update;
+        let ReviewRequestStatusUpdate {
+            generation: _,
+            result,
+            session_id,
+        } = review_request_status_update;
 
         let Ok(task_result) = result else {
             return;

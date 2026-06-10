@@ -10,7 +10,7 @@ mod new;
 mod state;
 
 pub(crate) use events::AppEvent;
-pub use state::{AGENTTY_WT_DIR, App, UpdateStatus, agentty_home};
 #[cfg(test)]
-pub(crate) use state::{AppClients, MockSyncMainRunner};
+pub(crate) use state::AppClients;
+pub use state::{AGENTTY_WT_DIR, App, UpdateStatus, agentty_home};
 pub(crate) use state::{SessionStatsUsage, SyncReviewRequestTaskResult};

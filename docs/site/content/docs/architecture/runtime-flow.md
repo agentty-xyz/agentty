@@ -146,7 +146,9 @@ Reducer behaviors that matter for data flow:
   blocked/failure copy after the session-view `p` review-request publish flow finishes.
 - `ReviewRequestStatusUpdated` persists refreshed forge summaries for review-ready
   sessions and silently transitions externally merged sessions to `Done` or externally
-  closed sessions to `Canceled`.
+  closed sessions to `Canceled`. Git-status and review-request status events carry a
+  sync-context generation, and the reducer discards stale completions after the active
+  project or session target snapshot changes.
 - `SessionUpdated` marks touched sessions so reducer can call
   `sync_session_from_handle()` selectively.
 - `SessionProgressUpdated` refreshes transient loader text used by the session view.
@@ -702,16 +704,19 @@ paths and their trigger conditions:
 - Emits or writes: Terminal `Event` channel
 - What it does: Polls crossterm and forwards terminal events into the runtime loop.
 
-### Git status poller loop
+### Project sync orchestrator
 
-- Trigger: App startup when the project has a git branch, project switch, and session
-  refreshes that change active session branches
-- Spawn site: `TaskService::spawn_git_status_task`
-- Emits or writes: `AppEvent::GitStatusUpdated`
-- What it does: Runs a periodic fetch plus one repo-level upstream snapshot for the
-  active project branch, then combines each active session branch's base-branch
-  comparison with any tracked-remote snapshot before emitting one combined update about
-  every `30s`.
+- Trigger: App startup, project switch, session refreshes that change active session
+  branches, periodic ticks, and list-mode sync action `s`
+- Spawn site: `SyncHandle::spawn`
+- Emits or writes: `AppEvent::GitStatusUpdated`, `AppEvent::ReviewRequestStatusUpdated`,
+  `AppEvent::ReviewCommentsUpdated`, and `AppEvent::SyncMainCompleted`
+- What it does: Owns one command queue plus a watched `SyncContext` for the active
+  project. Periodic passes serialize a read-only `git fetch`, branch ahead/behind
+  snapshot, and every-other-tick review-request refresh. Manual sync commands enter the
+  same queue, so pull/rebase/push does not race the background fetch or forge-refresh
+  passes. Emitted status events carry the context generation so stale completions are
+  ignored after targets change.
 
 ### Version check one-shot
 
@@ -814,10 +819,11 @@ paths and their trigger conditions:
 ### Sync-main workflow task
 
 - Trigger: List-mode sync action `s`
-- Spawn site: `TokioSyncMainRunner::start_sync_main`
+- Spawn site: `OrchestratorSyncMainRunner::start_sync_main`
 - Emits or writes: `AppEvent::SyncMainCompleted`
-- What it does: Pulls, rebases, and pushes the selected project branch with the assisted
-  conflict flow when needed.
+- What it does: Enqueues the selected project branch pull/rebase/push through the sync
+  orchestrator so it serializes with background git and forge status refreshes. The
+  assisted conflict flow still runs when needed.
 
 ### Session merge task
 
@@ -843,7 +849,8 @@ use shared boundaries (`GitClient`, `FsClient`, assist helpers) but have distinc
 orchestration paths:
 
 - `sync main`: selected project branch pull/rebase/push, optional assisted conflict
-  resolution, popup result summary.
+  resolution, popup result summary, and post-success status refresh through the shared
+  sync orchestrator.
 - session merge: queue-aware workflow, assisted rebase first, reuse the single evolving
   session-branch `HEAD` commit message for the squash commit into the base branch, then
   clean up the worktree and set status `Done`.
@@ -856,8 +863,9 @@ orchestration paths:
   request; terminal same-branch requests are ignored so branch names can be reused after
   merge or close.
 - background review-request sync: review-ready sessions with a published branch or
-  linked review request are polled through `ReviewRequestClient`; merged requests move
-  the session to `Done`, and closed requests move it to `Canceled`.
+  linked review request are polled through `ReviewRequestClient` inside the shared sync
+  orchestrator; merged requests move the session to `Done`, and closed requests move it
+  to `Canceled`.
 
 ## Persistence and Recovery Boundaries
 

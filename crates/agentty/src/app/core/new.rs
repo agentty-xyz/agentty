@@ -11,7 +11,7 @@ use crate::app::service::{AppServiceDeps, AppServices};
 use crate::app::session::SessionManager;
 use crate::app::setting::SettingsManager;
 use crate::app::startup::{AppStartup, StartupProjectContext, StartupSessionLoadContext};
-use crate::app::{AppError, review, task};
+use crate::app::{AppError, review, sync, task};
 use crate::domain::agent::AgentKind;
 use crate::infra::clock::{Clock, RealClock};
 use crate::infra::db;
@@ -127,7 +127,6 @@ impl App {
             active_project_id,
             active_project_name,
             startup_git_branch,
-            Arc::new(std::sync::atomic::AtomicBool::new(false)),
             startup_git_upstream_ref,
             project_items,
             startup_working_dir.clone(),
@@ -156,7 +155,13 @@ impl App {
                 .unwrap_or_default(),
         );
 
-        AppStartup::spawn_background_tasks(auto_update, &event_tx, &projects, &services, &sessions);
+        let sync_context = Self::sync_context_for(&projects, &services, &sessions);
+        let sync_handle = sync::SyncHandle::spawn(event_tx.clone(), sync_context);
+        let sync_main_runner = clients
+            .sync_main_runner
+            .unwrap_or_else(|| sync_handle.sync_main_runner());
+
+        AppStartup::spawn_background_tasks(auto_update, &event_tx);
 
         Ok(Self {
             mode: crate::ui::state::app_mode::AppMode::List,
@@ -178,7 +183,8 @@ impl App {
                 crate::ui::component::session_output::SessionOutputLayoutCache::default(),
             session_progress_messages: std::collections::HashMap::new(),
             update_status: None,
-            sync_main_runner: clients.sync_main_runner,
+            sync_handle,
+            sync_main_runner,
             tmux_client: clients.tmux_client,
         })
     }
