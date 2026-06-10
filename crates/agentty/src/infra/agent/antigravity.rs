@@ -46,7 +46,7 @@ impl AgentBackend for AntigravityBackend {
             folder,
             prompt: _prompt,
             request_kind: _request_kind,
-            model: _model,
+            model,
             reasoning_level: _reasoning_level,
         } = request;
         let mut command = Command::new("agy");
@@ -60,6 +60,8 @@ impl AgentBackend for AntigravityBackend {
             .arg("--print")
             .arg("--print-timeout")
             .arg(ANTIGRAVITY_PRINT_TIMEOUT)
+            .arg("--model")
+            .arg(model)
             .current_dir(folder)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -382,7 +384,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::domain::agent::ReasoningLevel;
+    use crate::domain::agent::{AgentModel, ReasoningLevel};
     use crate::infra::channel::AgentRequestKind;
 
     fn session_resume_request_kind(session_output: Option<&str>) -> AgentRequestKind {
@@ -427,6 +429,7 @@ mod tests {
         let temp_directory = tempdir().expect("failed to create temp dir");
         create_standard_git_directory(temp_directory.path());
         let backend = AntigravityBackend;
+        let requested_model = AgentModel::AntigravityGemini31ProPreview.provider_model_str();
 
         // Act
         let command = AgentBackend::build_command(
@@ -436,7 +439,7 @@ mod tests {
                 folder: temp_directory.path(),
                 prompt: "Write tests",
                 request_kind: &session_start_request_kind(),
-                model: "antigravity",
+                model: requested_model,
                 reasoning_level: ReasoningLevel::default(),
             },
         )
@@ -458,6 +461,8 @@ mod tests {
                 "--print".to_string(),
                 "--print-timeout".to_string(),
                 ANTIGRAVITY_PRINT_TIMEOUT.to_string(),
+                "--model".to_string(),
+                requested_model.to_string(),
             ]
         );
         assert_eq!(command.get_current_dir(), Some(temp_directory.path()));
@@ -549,6 +554,7 @@ mod tests {
             local_image_path: attachment_directory.join("one.png"),
         };
         let backend = AntigravityBackend;
+        let requested_model = "gemini-3.5-flash";
 
         // Act
         let command = AgentBackend::build_command(
@@ -558,7 +564,7 @@ mod tests {
                 folder: temp_directory.path(),
                 prompt: "Review [Image #1]",
                 request_kind: &session_start_request_kind(),
-                model: "antigravity",
+                model: requested_model,
                 reasoning_level: ReasoningLevel::default(),
             },
         )
@@ -573,9 +579,15 @@ mod tests {
             "--add-dir".to_string(),
             attachment_directory.to_string_lossy().into_owned(),
         ];
+        let expected_model_args = ["--model".to_string(), requested_model.to_string()];
 
         // Assert
         assert_eq!(args[..4], expected_workspace_args);
+        assert!(
+            args.windows(2)
+                .any(|pair| pair[0] == expected_model_args[0] && pair[1] == expected_model_args[1]),
+            "command should include requested model"
+        );
     }
 
     #[test]
@@ -616,7 +628,7 @@ mod tests {
                 folder: temp_directory.path(),
                 prompt: "continue work",
                 request_kind: &request_kind,
-                model: "antigravity",
+                model: AgentModel::AntigravityGemini31ProPreview.provider_model_str(),
                 reasoning_level: ReasoningLevel::default(),
             },
             ProtocolSchemaInstructionMode::PromptSchema,

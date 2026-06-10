@@ -955,12 +955,12 @@ fn codex_model_picker_includes_gpt_54_mini() -> E2eResult {
     Ok(())
 }
 
-/// Verify that the prompt `/model` picker exposes the Antigravity CLI model
-/// marker when `agy` is locally available.
+/// Verify that the prompt `/model` picker exposes Gemini model choices for
+/// Antigravity when `agy` is locally available.
 #[test]
-fn antigravity_model_picker_includes_cli_marker() -> E2eResult {
+fn antigravity_model_picker_includes_gemini_models() -> E2eResult {
     // Arrange, Act, Assert
-    FeatureTest::new("antigravity_model_picker_includes_cli_marker")
+    FeatureTest::new("antigravity_model_picker_includes_gemini_models")
         .with_git()
         .setup(seed_model_picker_cli_stubs)
         .run(
@@ -979,15 +979,16 @@ fn antigravity_model_picker_includes_cli_marker() -> E2eResult {
                     .wait_for_text("/model Agent", 3000)
                     .press_key("Down")
                     .press_key("Enter")
-                    .wait_for_text("antigravity", 3000)
+                    .wait_for_text("gemini-3.5-flash", 3000)
                     .capture_labeled(
                         "antigravity_model_picker",
-                        "Antigravity model picker includes CLI marker",
+                        "Antigravity model picker includes Gemini models",
                     )
             },
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "antigravity", &full);
+                assertion::assert_text_in_region(frame, "gemini-3.1-pro-preview", &full);
+                assertion::assert_text_in_region(frame, "gemini-3.5-flash", &full);
             },
         )?;
 

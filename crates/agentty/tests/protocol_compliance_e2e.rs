@@ -84,7 +84,7 @@ async fn gemini_flash_protocol_compliance_e2e() {
 #[ignore = "requires real Antigravity CLI credentials and network"]
 async fn antigravity_protocol_compliance_e2e() {
     // Arrange
-    let model = AgentModel::Antigravity;
+    let model = AgentKind::Antigravity.default_model();
     if provider_preflight_skip_reason(AgentKind::Antigravity)
         .await
         .is_some()
@@ -177,7 +177,7 @@ async fn assert_provider_protocol_compliance(
     model: AgentModel,
 ) -> Result<(), String> {
     let folder = resolve_workspace_folder()?;
-    let session_id = format!("protocol-e2e-{}", model.as_str());
+    let session_id = format!("protocol-e2e-{}", model.provider_model_str());
     let app_server_client = Arc::new(RoutingAppServerClient::new());
     let channel = create_agent_channel(kind, Some(app_server_client));
     let start_request = StartSessionRequest {
@@ -268,7 +268,7 @@ fn build_turn_request(folder: PathBuf, model: AgentModel) -> TurnRequest {
     TurnRequest {
         folder,
         live_session_output: None,
-        model: model.as_str().to_string(),
+        model: model.provider_model_str().to_string(),
         request_kind: AgentRequestKind::SessionStart,
         prompt: PROTOCOL_COMPLIANCE_PROMPT.to_string().into(),
         provider_conversation_id: None,

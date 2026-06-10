@@ -259,9 +259,9 @@ app-server and Gemini ACP. Antigravity is CLI-backed and passes `--print` before
 ```
 
 Agentty now filters that picker to the backend CLIs currently available on the machine.
-If only `agy` is installed, `/model` shows only Antigravity and its model marker. If
-none of `agy`, `codex`, `claude`, or `gemini` are installed, Agentty now fails at
-startup with an error telling you to install a supported CLI on `PATH`.
+If only `agy` is installed, `/model` shows only Antigravity and its selectable Gemini
+model choices. If none of `agy`, `codex`, `claude`, or `gemini` are installed, Agentty
+now fails at startup with an error telling you to install a supported CLI on `PATH`.
 
 <a id="backends-persistent-defaults"></a> For persistent defaults, choose a default
 model in the **Settings** tab (`Tab` to navigate, `Enter` to edit). The selected model
@@ -282,9 +282,11 @@ entries with different trade-offs between speed, quality, and cost.
 
 ### Antigravity Models
 
-- `antigravity` (default): Uses whichever model is selected in Antigravity CLI settings.
-  Agentty exposes one model marker because `agy --help` does not currently expose a
-  model-selection flag.
+- `gemini-3.1-pro-preview` (default): Higher-quality Gemini model for deeper reasoning.
+- `gemini-3.5-flash`: Fast Gemini model for current Flash workloads.
+- `gemini-3.1-flash-lite-preview`: Lightweight Gemini model for fast, cost-conscious
+  iterations.
+- `gemini-3-flash-preview`: Fast Gemini model for quick iterations.
 
 ### Gemini Models
 

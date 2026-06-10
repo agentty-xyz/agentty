@@ -377,8 +377,8 @@ mod tests {
     fn test_provider_kind_for_model_reports_owner() {
         // Arrange / Act / Assert
         assert_eq!(
-            provider_kind_for_model(AgentModel::Antigravity.as_str()).expect("known model"),
-            AgentKind::Antigravity
+            provider_kind_for_model(AgentModel::Gemini31ProPreview.as_str()).expect("known model"),
+            AgentKind::Gemini
         );
         assert_eq!(
             provider_kind_for_model(AgentModel::Gpt55.as_str()).expect("known model"),

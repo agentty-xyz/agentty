@@ -690,7 +690,7 @@ impl SessionWorkerService {
         let req = TurnRequest {
             folder: context.folder.clone(),
             live_session_output: Some(Arc::clone(&context.output)),
-            model: turn_metadata.session_model.as_str().to_string(),
+            model: turn_metadata.session_model.provider_model_str().to_string(),
             request_kind: request_kind.clone(),
             prompt: prompt.clone(),
             provider_conversation_id,
