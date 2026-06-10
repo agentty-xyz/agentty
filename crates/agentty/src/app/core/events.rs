@@ -745,13 +745,20 @@ impl App {
                 .requested_reviews
                 .matches_loading_request(project_id, generation)
         {
-            self.requested_reviews = match result {
-                Ok(items) => app::RequestedReviewState::Loaded { items, project_id },
-                Err(message) => app::RequestedReviewState::Failed {
-                    message,
-                    project_id,
-                },
-            };
+            match result {
+                Ok(items) => {
+                    self.replace_requested_reviews(project_id, items);
+                }
+                Err(message) => {
+                    self.reset_requested_review_table_state();
+                    self.requested_review_selected_index = None;
+
+                    self.requested_reviews = app::RequestedReviewState::Failed {
+                        message,
+                        project_id,
+                    };
+                }
+            }
         }
 
         self.apply_status_bar_updates(
@@ -998,6 +1005,7 @@ impl App {
                 ..
             } => view_id == session_id,
             AppMode::List
+            | AppMode::ReviewDetail { .. }
             | AppMode::SessionCreation { .. }
             | AppMode::Confirmation { .. }
             | AppMode::SyncBlockedPopup { .. }
@@ -1035,6 +1043,7 @@ impl App {
                 ..
             } if diff_session_id == session_id => self.review_view_state(session_id),
             AppMode::List
+            | AppMode::ReviewDetail { .. }
             | AppMode::SessionCreation { .. }
             | AppMode::Confirmation { .. }
             | AppMode::SyncBlockedPopup { .. }

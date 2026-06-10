@@ -43,6 +43,13 @@ where
     } else {
         match &app.mode {
             AppMode::List => mode::list::handle(app, key).await,
+            AppMode::ReviewDetail { .. } => {
+                let size = terminal.size().map_err(backend_err)?;
+                let terminal_rect = Rect::new(0, 0, size.width, size.height);
+                let content_area = content_area_for_terminal(terminal_rect);
+
+                Ok(mode::review_detail::handle(app, content_area, key))
+            }
             AppMode::SessionCreation { .. } => {
                 unreachable!("session creation mode is handled before dispatch matching")
             }

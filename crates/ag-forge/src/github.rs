@@ -424,7 +424,7 @@ fn requested_reviews_command(remote: &ForgeRemote) -> ForgeCommand {
             "--limit".to_string(),
             REQUESTED_REVIEW_LIMIT.to_string(),
             "--json".to_string(),
-            "number,title,url,isDraft,updatedAt".to_string(),
+            "number,title,body,url,isDraft,updatedAt".to_string(),
         ],
     )
 }
@@ -445,7 +445,7 @@ fn personal_requested_reviews_command(remote: &ForgeRemote) -> ForgeCommand {
             "--limit".to_string(),
             REQUESTED_REVIEW_LIMIT.to_string(),
             "--json".to_string(),
-            "number,title,url,isDraft,updatedAt".to_string(),
+            "number,title,body,url,isDraft,updatedAt".to_string(),
         ],
     )
 }
@@ -570,6 +570,7 @@ fn parse_requested_reviews_response(
 
             RequestedReview {
                 audience: RequestedReviewAudience::Personal,
+                body: pull_request.body,
                 display_id: format!("#{}", pull_request.number),
                 forge_kind: ForgeKind::GitHub,
                 repository: remote.project_path(),
@@ -776,6 +777,8 @@ struct GitHubLookupResponse {
 /// GitHub search row returned by `gh search prs --json`.
 #[derive(Deserialize)]
 struct GitHubRequestedReviewResponse {
+    #[serde(default)]
+    body: Option<String>,
     #[serde(rename = "isDraft")]
     is_draft: bool,
     number: u64,
@@ -1251,6 +1254,7 @@ mod tests {
             vec![
                 RequestedReview {
                     audience: RequestedReviewAudience::Personal,
+                    body: Some("Implements the GitHub provider.".to_string()),
                     display_id: "#42".to_string(),
                     forge_kind: ForgeKind::GitHub,
                     repository: "agentty-xyz/agentty".to_string(),
@@ -1261,6 +1265,7 @@ mod tests {
                 },
                 RequestedReview {
                     audience: RequestedReviewAudience::Group,
+                    body: Some("Adds team-owned parser coverage.".to_string()),
                     display_id: "#43".to_string(),
                     forge_kind: ForgeKind::GitHub,
                     repository: "agentty-xyz/agentty".to_string(),
@@ -1271,6 +1276,7 @@ mod tests {
                 },
                 RequestedReview {
                     audience: RequestedReviewAudience::Personal,
+                    body: Some("Adds direct-only parser coverage.".to_string()),
                     display_id: "#44".to_string(),
                     forge_kind: ForgeKind::GitHub,
                     repository: "agentty-xyz/agentty".to_string(),
@@ -1619,6 +1625,7 @@ mod tests {
                 "isDraft": true,
                 "number": 42,
                 "title": "Add forge review support",
+                "body": "Implements the GitHub provider.",
                 "updatedAt": "2026-04-27T21:30:00Z",
                 "url": "https://github.com/agentty-xyz/agentty/pull/42"
             },
@@ -1626,6 +1633,7 @@ mod tests {
                 "isDraft": false,
                 "number": 43,
                 "title": "Review team-owned parser",
+                "body": "Adds team-owned parser coverage.",
                 "updatedAt": "2026-04-28T21:30:00Z",
                 "url": "https://github.com/agentty-xyz/agentty/pull/43"
             }
@@ -1640,6 +1648,7 @@ mod tests {
                 "isDraft": true,
                 "number": 42,
                 "title": "Add forge review support",
+                "body": "Implements the GitHub provider.",
                 "updatedAt": "2026-04-27T21:30:00Z",
                 "url": "https://github.com/agentty-xyz/agentty/pull/42"
             },
@@ -1647,6 +1656,7 @@ mod tests {
                 "isDraft": false,
                 "number": 44,
                 "title": "Review direct-only parser",
+                "body": "Adds direct-only parser coverage.",
                 "updatedAt": "2026-04-29T21:30:00Z",
                 "url": "https://github.com/agentty-xyz/agentty/pull/44"
             }

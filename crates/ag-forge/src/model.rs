@@ -195,6 +195,8 @@ pub struct RequestedReview {
     /// Whether the review request targets the user directly or through a
     /// group membership.
     pub audience: RequestedReviewAudience,
+    /// Optional PR body or MR description text for detail rendering.
+    pub body: Option<String>,
     /// Provider display id such as GitHub `#123` or GitLab `!123`.
     pub display_id: String,
     /// Forge family that owns the review request.

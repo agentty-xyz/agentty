@@ -60,6 +60,7 @@ impl App {
     pub(crate) fn has_visible_tick_driven_ui(&self) -> bool {
         match &self.mode {
             AppMode::List
+            | AppMode::ReviewDetail { .. }
             | AppMode::SessionCreation { .. }
             | AppMode::Confirmation { .. }
             | AppMode::SyncBlockedPopup { .. } => {
@@ -117,7 +118,9 @@ impl App {
             u64::try_from(wall_clock_unix_seconds.div_euclid(60)).unwrap_or_default();
         let projects = self.projects.project_items().to_vec();
         let review_comment_cache = self.services.review_comment_cache();
+        let requested_review_selected_index = self.requested_review_selected_index();
         let mode = &self.mode;
+        let requested_review_table_state = &mut self.requested_review_table_state;
         let project_table_state = self.projects.project_table_state_mut();
         let (sessions, stats_activity, table_state) = self.sessions.render_parts();
         let settings = &mut self.settings;
@@ -140,6 +143,8 @@ impl App {
                 projects: &projects,
                 review_comment_cache: &review_comment_cache,
                 requested_reviews: &self.requested_reviews,
+                requested_review_selected_index,
+                requested_review_table_state,
                 active_prompt_outputs: &active_prompt_outputs,
                 session_branch_names: &session_branch_names,
                 session_git_statuses: &session_git_statuses,

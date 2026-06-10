@@ -25,6 +25,8 @@ pub(crate) struct ListBackgroundRenderContext<'a> {
     pub(crate) current_tab: Tab,
     pub(crate) project_table_state: &'a mut TableState,
     pub(crate) projects: &'a [ProjectListItem],
+    pub(crate) requested_review_selected_index: Option<usize>,
+    pub(crate) requested_review_table_state: &'a mut TableState,
     pub(crate) requested_reviews: &'a RequestedReviewState,
     pub(crate) sessions: &'a [Session],
     pub(crate) settings: &'a mut SettingsManager,
@@ -39,6 +41,8 @@ struct RouteSharedContext<'a> {
     current_tab: Tab,
     project_table_state: &'a mut TableState,
     projects: &'a [ProjectListItem],
+    requested_review_selected_index: Option<usize>,
+    requested_review_table_state: &'a mut TableState,
     requested_reviews: &'a RequestedReviewState,
     sessions: &'a [Session],
     settings: &'a mut SettingsManager,
@@ -55,6 +59,8 @@ impl RouteSharedContext<'_> {
             current_tab: self.current_tab,
             project_table_state: self.project_table_state,
             projects: self.projects,
+            requested_review_selected_index: self.requested_review_selected_index,
+            requested_review_table_state: self.requested_review_table_state,
             requested_reviews: self.requested_reviews,
             sessions: self.sessions,
             settings: self.settings,
@@ -124,6 +130,8 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         output_layout_cache,
         project_table_state,
         projects,
+        requested_review_selected_index,
+        requested_review_table_state,
         requested_reviews,
         review_comment_cache,
         session_progress_messages,
@@ -142,6 +150,8 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         current_tab,
         project_table_state,
         projects,
+        requested_review_selected_index,
+        requested_review_table_state,
         requested_reviews,
         sessions,
         settings,
@@ -215,6 +225,17 @@ fn render_list_or_overlay_mode(
         ),
         AppMode::ViewInfoPopup { .. } => {
             render_view_info_popup_mode(f, area, mode, shared.sessions, aux);
+        }
+        AppMode::ReviewDetail {
+            review,
+            scroll_offset,
+        } => {
+            page::review_detail::ReviewDetailPage::new(
+                review,
+                aux.markdown_render_cache,
+                *scroll_offset,
+            )
+            .render(f, area);
         }
         AppMode::Help {
             context: help_context,
@@ -538,12 +559,7 @@ fn render_session_or_diff_mode(
             aux.markdown_render_cache,
             aux.review_comment_cache,
         ),
-        AppMode::List
-        | AppMode::SessionCreation { .. }
-        | AppMode::Confirmation { .. }
-        | AppMode::SyncBlockedPopup { .. }
-        | AppMode::ViewInfoPopup { .. }
-        | AppMode::Help { .. } => {}
+        _ => {}
     }
 }
 
@@ -746,6 +762,8 @@ pub(crate) fn render_list_background(
         current_tab,
         project_table_state,
         projects,
+        requested_review_selected_index,
+        requested_review_table_state,
         requested_reviews,
         sessions,
         settings,
@@ -779,7 +797,12 @@ pub(crate) fn render_list_background(
             .render(f, chunks[1]);
         }
         Tab::Review => {
-            page::review_list::ReviewListPage::new(requested_reviews).render(f, chunks[1]);
+            page::review_list::ReviewListPage::new(
+                requested_reviews,
+                requested_review_selected_index,
+                requested_review_table_state,
+            )
+            .render(f, chunks[1]);
         }
         Tab::Settings => {
             let active_project_name = active_project_name(active_project_id, projects);

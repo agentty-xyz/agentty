@@ -174,6 +174,7 @@ impl<'a> SessionChatPage<'a> {
                 restore_view.review_status_message.as_deref()
             }
             AppMode::List
+            | AppMode::ReviewDetail { .. }
             | AppMode::SessionCreation { .. }
             | AppMode::Confirmation { .. }
             | AppMode::SyncBlockedPopup { .. }
@@ -195,6 +196,7 @@ impl<'a> SessionChatPage<'a> {
             | AppMode::PublishBranchInput { restore_view, .. }
             | AppMode::ViewInfoPopup { restore_view, .. } => restore_view.review_text.as_deref(),
             AppMode::List
+            | AppMode::ReviewDetail { .. }
             | AppMode::SessionCreation { .. }
             | AppMode::Confirmation { .. }
             | AppMode::SyncBlockedPopup { .. }

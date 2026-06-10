@@ -315,6 +315,7 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
 - `crates/agentty/src/ui/page/diff.rs`: Diff view page.
 - `crates/agentty/src/ui/page/project_list.rs`: Project list page with activity heatmap.
 - `crates/agentty/src/ui/page/review_list.rs`: Requested PR/MR review list page.
+- `crates/agentty/src/ui/page/review_detail.rs`: Requested PR/MR review detail page.
 - `crates/agentty/src/ui/page/session_chat.rs`: Session chat page for new sessions and
   replies.
 - `crates/agentty/src/ui/page/session_list.rs`: Session list page.

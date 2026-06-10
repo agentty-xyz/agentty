@@ -27,7 +27,8 @@ When a project is active, this tab appears as `Sessions (<project-name>)`. | |
 project that request the current forge user's review, including drafts marked with a
 `Draft` status. GitHub rows are split between requests sent directly to the user and
 requests sent to a team the user belongs to. The tab is a read-only forge list; press
-`s` to refresh and open reviews from the forge UI or CLI. If the list reaches the
+`s` to refresh, use `j` / `k` to select a request, and press `Enter` to open a read-only
+title and rendered-description detail page with local scrolling. If the list reaches the
 provider cap, the footer shows that Agentty is displaying the first matching requests. |
 | **Settings** | Configure the color theme, default reasoning level, smart/fast/review
 model defaults, the optional `Last used model as default` smart-model mode, the session

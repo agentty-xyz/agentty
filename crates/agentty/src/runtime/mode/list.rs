@@ -57,13 +57,13 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
         KeyCode::Char('j') | KeyCode::Down => match app.tabs.current() {
             Tab::Projects => app.next_project(),
             Tab::Sessions => app.next(),
-            Tab::Review => {}
+            Tab::Review => app.next_requested_review(),
             Tab::Settings => app.settings.next(),
         },
         KeyCode::Char('k') | KeyCode::Up => match app.tabs.current() {
             Tab::Projects => app.previous_project(),
             Tab::Sessions => app.previous(),
-            Tab::Review => {}
+            Tab::Review => app.previous_requested_review(),
             Tab::Settings => app.settings.previous(),
         },
         KeyCode::Enter => return handle_enter_key(app).await,
@@ -151,7 +151,9 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
         Tab::Settings => {
             app.settings.handle_enter(&app.services).await;
         }
-        Tab::Review => {}
+        Tab::Review => {
+            app.open_selected_requested_review();
+        }
     }
 
     Ok(EventResult::Continue)
@@ -312,6 +314,7 @@ mod tests {
     use std::process::Command;
     use std::sync::Arc;
 
+    use ag_forge::{ForgeKind, RequestedReview, RequestedReviewAudience};
     use crossterm::event::KeyModifiers;
     use tempfile::tempdir;
 
@@ -677,6 +680,94 @@ mod tests {
                 && review_text == "Focused review"
                 && responses.is_empty()
                 && input.text().is_empty()
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_review_tab_navigation_selects_loaded_reviews() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_with_git().await;
+        app.tabs.set(Tab::Review);
+        app.replace_requested_reviews(
+            app.projects.active_project_id(),
+            vec![
+                requested_review("First review body"),
+                requested_review("Second body"),
+            ],
+        );
+
+        // Act
+        let event_result = handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to handle key");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert_eq!(app.requested_review_selected_index(), Some(1));
+    }
+
+    #[tokio::test]
+    async fn test_review_tab_enter_opens_selected_review_detail() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_with_git().await;
+        app.tabs.set(Tab::Review);
+        app.replace_requested_reviews(
+            app.projects.active_project_id(),
+            vec![
+                requested_review("First review body"),
+                requested_review("Second body"),
+            ],
+        );
+        app.next_requested_review();
+
+        // Act
+        let event_result = handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("failed to handle key");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(
+            app.mode,
+            AppMode::ReviewDetail {
+                ref review,
+                scroll_offset,
+            } if review.body.as_deref() == Some("Second body")
+                && scroll_offset == 0
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_review_tab_enter_uses_grouped_selection_order_after_mixed_provider_order() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_with_git().await;
+        app.tabs.set(Tab::Review);
+        app.replace_requested_reviews(
+            app.projects.active_project_id(),
+            vec![
+                requested_review_with_audience(RequestedReviewAudience::Group, "Group body"),
+                requested_review_with_audience(RequestedReviewAudience::Personal, "Personal body"),
+            ],
+        );
+
+        // Act
+        let event_result = handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("failed to handle key");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(
+            app.mode,
+            AppMode::ReviewDetail {
+                ref review,
+                scroll_offset,
+            } if review.audience == RequestedReviewAudience::Personal
+                && review.body.as_deref() == Some("Personal body")
+                && scroll_offset == 0
         ));
     }
 
@@ -1444,5 +1535,28 @@ mod tests {
                 && default_branch.as_deref() == Some("main")
                 && project_name.is_some()
         ));
+    }
+
+    /// Builds one requested review fixture for review-list navigation tests.
+    fn requested_review(body: &str) -> RequestedReview {
+        requested_review_with_audience(RequestedReviewAudience::Personal, body)
+    }
+
+    /// Builds one requested review fixture with the requested audience.
+    fn requested_review_with_audience(
+        audience: RequestedReviewAudience,
+        body: &str,
+    ) -> RequestedReview {
+        RequestedReview {
+            audience,
+            body: Some(body.to_string()),
+            display_id: "#42".to_string(),
+            forge_kind: ForgeKind::GitHub,
+            repository: "agentty-xyz/agentty".to_string(),
+            status_summary: None,
+            title: "Add review detail page".to_string(),
+            updated_at: Some("2026-04-27T21:30:00Z".to_string()),
+            web_url: "https://example.com/42".to_string(),
+        }
     }
 }

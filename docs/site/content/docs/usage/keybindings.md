@@ -63,13 +63,17 @@ The page is split into `Global settings` for the app-wide `Theme` row and
 
 ## Review
 
-| Key | Action | |-----|--------| | `q` | Quit | | `s` | Refresh PRs/MRs requesting your
-review for the active project | | `Tab` | Switch tab | | `?` | Help |
+| Key | Action | |-----|--------| | `q` | Quit | | `j` / `k` | Navigate reviews | |
+`Enter` | Open review details | | `s` | Refresh PRs/MRs requesting your review for the
+active project | | `Tab` | Switch tab | | `?` | Help |
 
 The **Review** tab is read-only: it lists matching GitHub pull requests and GitLab merge
-requests, including drafts marked with `Draft`, but does not select rows or open browser
-links. GitHub rows are separated into direct review requests and team-sourced review
-requests. Open a listed review from the forge UI or CLI.
+requests, including drafts marked with `Draft`. GitHub rows are separated into direct
+review requests and team-sourced review requests. Use `j` / `k` to select a review, then
+press `Enter` to open a read-only detail page with the review title and rendered
+description. On the detail page, use `j` / `k` or `Up` / `Down` to scroll, `Ctrl+d` /
+`Ctrl+u` to move by half pages, `g` / `G` to jump to the top or bottom, and `q` / `Esc`
+to return to the review list.
 
 ## Session View
 

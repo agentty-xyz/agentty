@@ -192,6 +192,8 @@ pub(crate) fn settings_footer_actions() -> Vec<HelpAction> {
 pub(crate) fn review_actions() -> Vec<HelpAction> {
     let mut actions = vec![
         HelpAction::new("quit", "q", "Quit"),
+        HelpAction::new("nav", "j/k", "Navigate reviews"),
+        HelpAction::new("open", "Enter", "Open review details"),
         HelpAction::new("refresh", "s", "Refresh requested reviews"),
     ];
     actions.push(HelpAction::new("next tab", "Tab", "Switch tab"));

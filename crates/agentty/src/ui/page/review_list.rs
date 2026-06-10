@@ -3,7 +3,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
+use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 
 use crate::app::RequestedReviewState;
 use crate::ui::input_layout::first_table_column_width;
@@ -13,18 +13,33 @@ use crate::ui::{Page, layout, style};
 
 /// Horizontal spacing between requested-review table columns.
 const TABLE_COLUMN_SPACING: u16 = 2;
+/// Empty highlight symbol keeps selected review rows aligned with unselected
+/// rows.
+const ROW_HIGHLIGHT_SYMBOL: &str = "";
 /// Requested-review provider row cap surfaced by the footer when reached.
 const REQUESTED_REVIEW_DISPLAY_LIMIT: usize = 100;
 /// Page renderer for PRs and MRs requesting the current user's review.
 pub struct ReviewListPage<'a> {
     /// Current requested-review cache snapshot to render.
     requested_reviews: &'a RequestedReviewState,
+    /// Selected requested-review item index, excluding section heading rows.
+    selected_review_index: Option<usize>,
+    /// Persistent table selection and viewport state for review rows.
+    table_state: &'a mut TableState,
 }
 
 impl<'a> ReviewListPage<'a> {
     /// Creates a requested-review list renderer from the current app cache.
-    pub fn new(requested_reviews: &'a RequestedReviewState) -> Self {
-        Self { requested_reviews }
+    pub fn new(
+        requested_reviews: &'a RequestedReviewState,
+        selected_review_index: Option<usize>,
+        table_state: &'a mut TableState,
+    ) -> Self {
+        Self {
+            requested_reviews,
+            selected_review_index,
+            table_state,
+        }
     }
 }
 
@@ -37,7 +52,13 @@ impl Page for ReviewListPage<'_> {
 
         match self.requested_reviews {
             RequestedReviewState::Loaded { items, .. } if !items.is_empty() => {
-                render_review_table(f, areas.main_area, items);
+                render_review_table(
+                    f,
+                    areas.main_area,
+                    items,
+                    self.selected_review_index,
+                    self.table_state,
+                );
             }
             RequestedReviewState::Loaded { .. } => {
                 render_message(
@@ -64,7 +85,13 @@ impl Page for ReviewListPage<'_> {
 }
 
 /// Renders the populated requested-review table.
-fn render_review_table(f: &mut Frame, area: Rect, items: &[RequestedReview]) {
+fn render_review_table(
+    f: &mut Frame,
+    area: Rect,
+    items: &[RequestedReview],
+    selected_review_index: Option<usize>,
+    table_state: &mut TableState,
+) {
     let header_style = Style::default()
         .bg(style::palette::surface())
         .fg(style::palette::text_muted())
@@ -90,13 +117,27 @@ fn render_review_table(f: &mut Frame, area: Rect, items: &[RequestedReview]) {
         TABLE_COLUMN_SPACING,
         0,
     );
-    let rows = review_rows(items, title_column_width);
+    let table_rows = review_table_rows(items);
+    let rows = table_rows
+        .iter()
+        .map(|row| row.render(title_column_width))
+        .collect::<Vec<_>>();
+    let selected_row = selected_render_row(&table_rows, selected_review_index);
+    prepare_review_table_state(table_state, selected_row);
     let table = Table::new(rows, constraints)
         .column_spacing(TABLE_COLUMN_SPACING)
         .header(header)
-        .block(block);
+        .block(block)
+        .row_highlight_style(Style::default().bg(style::palette::surface()))
+        .highlight_symbol(ROW_HIGHLIGHT_SYMBOL);
 
-    f.render_widget(table, area);
+    f.render_stateful_widget(table, area, table_state);
+}
+
+/// Updates the selected rendered row while preserving Ratatui's table
+/// viewport offset across frames.
+fn prepare_review_table_state(table_state: &mut TableState, selected_row: Option<usize>) {
+    table_state.select(selected_row);
 }
 
 /// Renders one centered state message inside the review list frame.
@@ -142,22 +183,46 @@ fn review_block() -> Block<'static> {
         .border_style(style::border_style())
 }
 
-/// Builds sectioned table rows for requested PRs or MRs, keeping personal
-/// review requests visually separate from group-sourced requests.
-fn review_rows(items: &[RequestedReview], title_column_width: usize) -> Vec<Row<'static>> {
+/// Intermediate row model shared by table rendering and selected-row mapping.
+enum ReviewTableRow<'a> {
+    /// Non-selectable audience section heading.
+    Section {
+        /// Visible section label.
+        label: &'static str,
+    },
+    /// Selectable requested-review row.
+    Review {
+        /// Requested-review item rendered on this table row.
+        item: &'a RequestedReview,
+        /// Original item index in the loaded requested-review list.
+        item_index: usize,
+    },
+}
+
+impl ReviewTableRow<'_> {
+    /// Converts this row model into a Ratatui table row.
+    fn render(&self, title_column_width: usize) -> Row<'static> {
+        match self {
+            Self::Section { label } => section_row(label),
+            Self::Review { item, .. } => review_row(item, title_column_width),
+        }
+    }
+}
+
+/// Builds sectioned table row models for requested PRs or MRs, keeping
+/// personal review requests visually separate from group-sourced requests.
+fn review_table_rows(items: &[RequestedReview]) -> Vec<ReviewTableRow<'_>> {
     let mut rows = Vec::new();
 
     push_review_section(
         &mut rows,
         items,
-        title_column_width,
         RequestedReviewAudience::Personal,
         "Requested from you",
     );
     push_review_section(
         &mut rows,
         items,
-        title_column_width,
         RequestedReviewAudience::Group,
         "Requested from your groups",
     );
@@ -166,23 +231,41 @@ fn review_rows(items: &[RequestedReview], title_column_width: usize) -> Vec<Row<
 }
 
 /// Appends one requested-review audience section when it contains rows.
-fn push_review_section(
-    rows: &mut Vec<Row<'static>>,
-    items: &[RequestedReview],
-    title_column_width: usize,
+fn push_review_section<'a>(
+    rows: &mut Vec<ReviewTableRow<'a>>,
+    items: &'a [RequestedReview],
     audience: RequestedReviewAudience,
     label: &'static str,
 ) {
     let mut section_items = items
         .iter()
-        .filter(|item| item.audience == audience)
+        .enumerate()
+        .filter(|(_, item)| item.audience == audience)
         .peekable();
     if section_items.peek().is_none() {
         return;
     }
 
-    rows.push(section_row(label));
-    rows.extend(section_items.map(|item| review_row(item, title_column_width)));
+    rows.push(ReviewTableRow::Section { label });
+    rows.extend(
+        section_items.map(|(item_index, item)| ReviewTableRow::Review { item, item_index }),
+    );
+}
+
+/// Maps a requested-review item selection to the rendered table row,
+/// accounting for audience section headers.
+fn selected_render_row(
+    rows: &[ReviewTableRow<'_>],
+    selected_review_index: Option<usize>,
+) -> Option<usize> {
+    let selected_review_index = selected_review_index?;
+
+    rows.iter().position(|row| {
+        matches!(
+            row,
+            ReviewTableRow::Review { item_index, .. } if *item_index == selected_review_index
+        )
+    })
 }
 
 /// Builds one visual section heading inside the requested-review table.
@@ -279,6 +362,7 @@ mod tests {
         let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
         let backend = TestBackend::new(100, 10);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let mut table_state = TableState::default();
         let state = RequestedReviewState::Loaded {
             items: vec![
                 requested_review(
@@ -300,7 +384,7 @@ mod tests {
         // Act
         terminal
             .draw(|frame| {
-                ReviewListPage::new(&state).render(frame, frame.area());
+                ReviewListPage::new(&state, Some(0), &mut table_state).render(frame, frame.area());
             })
             .expect("failed to draw");
 
@@ -328,6 +412,7 @@ mod tests {
         let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
         let backend = TestBackend::new(80, 8);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let mut table_state = TableState::default();
         let state = RequestedReviewState::Loaded {
             items: Vec::new(),
             project_id: 1,
@@ -336,7 +421,7 @@ mod tests {
         // Act
         terminal
             .draw(|frame| {
-                ReviewListPage::new(&state).render(frame, frame.area());
+                ReviewListPage::new(&state, None, &mut table_state).render(frame, frame.area());
             })
             .expect("failed to draw");
 
@@ -349,8 +434,9 @@ mod tests {
     fn test_render_reviews_at_limit_shows_truncation_hint() {
         // Arrange
         let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
-        let backend = TestBackend::new(110, 12);
+        let backend = TestBackend::new(140, 12);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let mut table_state = TableState::default();
         let state = RequestedReviewState::Loaded {
             items: (0..REQUESTED_REVIEW_DISPLAY_LIMIT)
                 .map(|index| {
@@ -368,7 +454,7 @@ mod tests {
         // Act
         terminal
             .draw(|frame| {
-                ReviewListPage::new(&state).render(frame, frame.area());
+                ReviewListPage::new(&state, Some(0), &mut table_state).render(frame, frame.area());
             })
             .expect("failed to draw");
 
@@ -376,6 +462,141 @@ mod tests {
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("showing first 100"));
         assert!(text.contains("read-only forge list"));
+    }
+
+    #[test]
+    fn test_render_loaded_reviews_highlights_selected_request() {
+        // Arrange
+        let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
+        let backend = TestBackend::new(100, 10);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let mut table_state = TableState::default();
+        let state = RequestedReviewState::Loaded {
+            items: vec![
+                requested_review(
+                    RequestedReviewAudience::Personal,
+                    ForgeKind::GitHub,
+                    "#42",
+                    "Add review tab",
+                ),
+                requested_review(
+                    RequestedReviewAudience::Group,
+                    ForgeKind::GitLab,
+                    "!7",
+                    "Polish merge request",
+                ),
+            ],
+            project_id: 1,
+        };
+
+        // Act
+        terminal
+            .draw(|frame| {
+                ReviewListPage::new(&state, Some(1), &mut table_state).render(frame, frame.area());
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let buffer = terminal.backend().buffer();
+        let selected_cell = find_text_start_cell(buffer, "MR !7 Polish merge request")
+            .expect("selected review row should render");
+        let unselected_cell = find_text_start_cell(buffer, "PR #42 Add review tab")
+            .expect("unselected review row should render");
+        assert_eq!(selected_cell.bg, style::palette::surface());
+        assert_ne!(unselected_cell.bg, style::palette::surface());
+    }
+
+    #[test]
+    fn test_selected_render_row_uses_review_table_rows() {
+        // Arrange
+        let items = vec![
+            requested_review(
+                RequestedReviewAudience::Personal,
+                ForgeKind::GitHub,
+                "#42",
+                "Personal review",
+            ),
+            requested_review(
+                RequestedReviewAudience::Group,
+                ForgeKind::GitLab,
+                "!7",
+                "First group review",
+            ),
+            requested_review(
+                RequestedReviewAudience::Group,
+                ForgeKind::GitHub,
+                "#8",
+                "Second group review",
+            ),
+        ];
+        let rows = review_table_rows(&items);
+
+        // Act
+        let personal_row = selected_render_row(&rows, Some(0));
+        let first_group_row = selected_render_row(&rows, Some(1));
+        let second_group_row = selected_render_row(&rows, Some(2));
+        let out_of_range_row = selected_render_row(&rows, Some(3));
+
+        // Assert
+        assert_eq!(personal_row, Some(1));
+        assert_eq!(first_group_row, Some(3));
+        assert_eq!(second_group_row, Some(4));
+        assert_eq!(out_of_range_row, None);
+    }
+
+    #[test]
+    fn test_prepare_review_table_state_preserves_viewport_offset() {
+        // Arrange
+        let mut table_state = TableState::default();
+        *table_state.offset_mut() = 12;
+        table_state.select(Some(18));
+
+        // Act
+        prepare_review_table_state(&mut table_state, Some(17));
+
+        // Assert
+        assert_eq!(table_state.offset(), 12);
+        assert_eq!(table_state.selected(), Some(17));
+    }
+
+    #[test]
+    fn test_render_loaded_reviews_reuses_table_viewport_offset() {
+        // Arrange
+        let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
+        let backend = TestBackend::new(100, 8);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let mut table_state = TableState::default();
+        let state = RequestedReviewState::Loaded {
+            items: (0..30)
+                .map(|index| {
+                    requested_review(
+                        RequestedReviewAudience::Personal,
+                        ForgeKind::GitHub,
+                        &format!("#{index}"),
+                        "Needs review",
+                    )
+                })
+                .collect(),
+            project_id: 1,
+        };
+
+        // Act
+        terminal
+            .draw(|frame| {
+                ReviewListPage::new(&state, Some(20), &mut table_state).render(frame, frame.area());
+            })
+            .expect("failed to draw selected row");
+        let offset_after_first_render = table_state.offset();
+
+        terminal
+            .draw(|frame| {
+                ReviewListPage::new(&state, Some(19), &mut table_state).render(frame, frame.area());
+            })
+            .expect("failed to draw previous selected row");
+
+        // Assert
+        assert!(offset_after_first_render > 0);
+        assert_eq!(table_state.offset(), offset_after_first_render);
     }
 
     /// Builds one requested-review fixture for render tests.
@@ -387,6 +608,7 @@ mod tests {
     ) -> RequestedReview {
         RequestedReview {
             audience,
+            body: Some("Review body".to_string()),
             display_id: display_id.to_string(),
             forge_kind,
             repository: "agentty-xyz/agentty".to_string(),

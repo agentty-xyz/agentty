@@ -7,7 +7,9 @@ use std::sync::Arc;
 
 #[cfg(test)]
 use ag_forge as forge;
-use ag_forge::{RealReviewRequestClient, ReviewRequestClient};
+use ag_forge::{
+    RealReviewRequestClient, RequestedReview, RequestedReviewAudience, ReviewRequestClient,
+};
 #[cfg(test)]
 use app::branch_publish::detected_forge_kind_from_git_push_error;
 #[cfg(test)]
@@ -25,6 +27,7 @@ use app::setting::SettingsManager;
 use app::sync::SyncMainRunner;
 use app::tab::{Tab, TabManager};
 use app::{sync, task};
+use ratatui::widgets::TableState;
 use session::SessionTaskService;
 #[cfg(test)]
 use session::{SyncMainOutcome, SyncSessionStartError, TurnAppliedState};
@@ -228,6 +231,11 @@ pub struct App {
     /// Monotonic requested-review refresh generation for rejecting stale task
     /// results.
     pub(super) requested_review_generation: u64,
+    /// Selected requested-review item index for the active project's
+    /// top-level `Review` tab, excluding non-selectable section headers.
+    pub(super) requested_review_selected_index: Option<usize>,
+    /// Persistent table viewport state for the top-level `Review` tab.
+    pub(super) requested_review_table_state: TableState,
     /// Caches requested PR/MR reviews for the active project's `Review` tab.
     pub(super) requested_reviews: RequestedReviewState,
     /// Receives app events emitted by background tasks and workflows.
@@ -289,6 +297,83 @@ impl App {
     /// Refreshes requested reviews when the `Review` tab is visible.
     pub fn refresh_requested_reviews_for_current_project(&mut self) {
         self.refresh_requested_reviews_if_review_tab(true);
+    }
+
+    /// Replaces the requested-review list for `project_id`, normalizes rows to
+    /// the render order, and selects the first review when the list is
+    /// non-empty.
+    pub(crate) fn replace_requested_reviews(
+        &mut self,
+        project_id: i64,
+        mut items: Vec<RequestedReview>,
+    ) {
+        items.sort_by_key(|item| Self::requested_review_audience_order(item.audience));
+        self.reset_requested_review_table_state();
+        self.requested_review_selected_index = (!items.is_empty()).then_some(0);
+        self.requested_reviews = RequestedReviewState::Loaded { items, project_id };
+    }
+
+    /// Returns the currently selected requested-review item index, excluding
+    /// section headers.
+    pub(crate) fn requested_review_selected_index(&self) -> Option<usize> {
+        self.requested_review_selected_index
+    }
+
+    /// Clears the persisted review-list table viewport after loading state,
+    /// project, or result changes.
+    pub(super) fn reset_requested_review_table_state(&mut self) {
+        self.requested_review_table_state = TableState::default();
+    }
+
+    /// Moves selection to the next requested review in the `Review` tab.
+    pub(crate) fn next_requested_review(&mut self) {
+        let Some(item_count) = self.requested_review_item_count() else {
+            self.requested_review_selected_index = None;
+
+            return;
+        };
+
+        self.requested_review_selected_index = Some(match self.requested_review_selected_index {
+            Some(index) => (index + 1) % item_count,
+            None => 0,
+        });
+    }
+
+    /// Moves selection to the previous requested review in the `Review` tab.
+    pub(crate) fn previous_requested_review(&mut self) {
+        let Some(item_count) = self.requested_review_item_count() else {
+            self.requested_review_selected_index = None;
+
+            return;
+        };
+
+        self.requested_review_selected_index = Some(match self.requested_review_selected_index {
+            Some(0) | None => item_count - 1,
+            Some(index) => index - 1,
+        });
+    }
+
+    /// Opens the currently selected requested review detail page, when one is
+    /// available in the loaded review list.
+    pub(crate) fn open_selected_requested_review(&mut self) {
+        let Some(review) = self.selected_requested_review().cloned() else {
+            return;
+        };
+
+        self.mode = AppMode::ReviewDetail {
+            review,
+            scroll_offset: 0,
+        };
+    }
+
+    /// Returns the currently selected requested review, when the review list
+    /// is loaded and the selection points at a row.
+    pub(crate) fn selected_requested_review(&self) -> Option<&RequestedReview> {
+        let RequestedReviewState::Loaded { items, .. } = &self.requested_reviews else {
+            return None;
+        };
+
+        items.get(self.requested_review_selected_index?)
     }
 
     /// Moves selection to the next session in the list.
@@ -409,6 +494,8 @@ impl App {
 
         self.requested_review_generation = self.requested_review_generation.saturating_add(1);
         let generation = self.requested_review_generation;
+        self.reset_requested_review_table_state();
+        self.requested_review_selected_index = None;
         self.requested_reviews = RequestedReviewState::Loading {
             generation,
             project_id,
@@ -422,6 +509,24 @@ impl App {
             self.services.review_request_client(),
         );
         self.mark_dirty();
+    }
+
+    /// Returns the loaded requested-review row count when at least one review
+    /// can be selected.
+    fn requested_review_item_count(&self) -> Option<usize> {
+        let RequestedReviewState::Loaded { items, .. } = &self.requested_reviews else {
+            return None;
+        };
+
+        (!items.is_empty()).then_some(items.len())
+    }
+
+    /// Returns the display-order rank for one requested-review audience.
+    fn requested_review_audience_order(audience: RequestedReviewAudience) -> u8 {
+        match audience {
+            RequestedReviewAudience::Personal => 0,
+            RequestedReviewAudience::Group => 1,
+        }
     }
 
     /// Creates a blank session and schedules list refresh through events.

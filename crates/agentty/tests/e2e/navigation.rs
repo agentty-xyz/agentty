@@ -35,7 +35,7 @@ fn seed_review_tab_requested_reviews(env: &BuilderEnv) -> E2eResult {
     let gh_stub = env.stub_bin.join("gh");
     std::fs::write(
         &gh_stub,
-        r#"#!/bin/sh
+        r###"#!/bin/sh
 if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
   exit 0
 fi
@@ -47,6 +47,7 @@ if [ "$1" = "search" ] && [ "$2" = "prs" ] && [ "$3" = "--review-requested" ]; t
     "isDraft": false,
     "number": 42,
     "title": "Review personal parser",
+    "body": "## Details\n- **Personal parser** review description.\n<details>\n<summary>Release notes</summary>\n<h2>v1.0.0</h2>\n<ul>\n<li>Fix <code>parser</code> output.</li>\n</ul>\n</details>",
     "updatedAt": "2026-04-27T21:30:00Z",
     "url": "https://github.com/agentty-xyz/agentty/pull/42"
   },
@@ -54,6 +55,7 @@ if [ "$1" = "search" ] && [ "$2" = "prs" ] && [ "$3" = "--review-requested" ]; t
     "isDraft": false,
     "number": 43,
     "title": "Review team parser",
+    "body": "Team parser review description.",
     "updatedAt": "2026-04-28T21:30:00Z",
     "url": "https://github.com/agentty-xyz/agentty/pull/43"
   }
@@ -69,6 +71,7 @@ if [ "$1" = "search" ] && [ "$2" = "prs" ] && [ "$3" = "user-review-requested:@m
     "isDraft": false,
     "number": 42,
     "title": "Review personal parser",
+    "body": "## Details\n- **Personal parser** review description.\n<details>\n<summary>Release notes</summary>\n<h2>v1.0.0</h2>\n<ul>\n<li>Fix <code>parser</code> output.</li>\n</ul>\n</details>",
     "updatedAt": "2026-04-27T21:30:00Z",
     "url": "https://github.com/agentty-xyz/agentty/pull/42"
   }
@@ -79,7 +82,7 @@ fi
 
 echo "unexpected gh args: $*" >&2
 exit 1
-"#,
+"###,
     )?;
 
     #[cfg(unix)]
@@ -223,14 +226,47 @@ fn review_tab_shows_requested_reviews_page() -> E2eResult {
                     .wait_for_text("Requested from your groups", 5000)
                     .viewing_pause_ms(1500)
                     .capture_labeled("review", "Review tab selected")
+                    .press_key("Enter")
+                    .wait_for_text("Review Request", 5000)
+                    .wait_for_text("Personal parser review description.", 5000)
+                    .wait_for_text("Release notes", 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled("detail", "Review request detail after Enter")
             },
-            |frame, _report| {
+            |frame, report| {
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Review Requests", &full);
-                assertion::assert_text_in_region(frame, "Requested from you", &full);
-                assertion::assert_text_in_region(frame, "PR #42 Review personal parser", &full);
-                assertion::assert_text_in_region(frame, "Requested from your groups", &full);
-                assertion::assert_text_in_region(frame, "PR #43 Review team parser", &full);
+                assertion::assert_text_in_region(frame, "Review Request", &full);
+                assertion::assert_text_in_region(frame, "Title", &full);
+                assertion::assert_text_in_region(frame, "Review personal parser", &full);
+                assertion::assert_text_in_region(frame, "Description", &full);
+                assertion::assert_text_in_region(
+                    frame,
+                    "Personal parser review description.",
+                    &full,
+                );
+                assertion::assert_text_in_region(frame, "Release notes", &full);
+                assertion::assert_text_in_region(frame, "v1.0.0", &full);
+                assertion::assert_text_in_region(frame, "Fix parser output.", &full);
+
+                let review_frame = common::frame_from_capture(&report.captures[0]);
+                let review_full = Region::full(review_frame.cols(), review_frame.rows());
+                assertion::assert_text_in_region(&review_frame, "Review Requests", &review_full);
+                assertion::assert_text_in_region(&review_frame, "Requested from you", &review_full);
+                assertion::assert_text_in_region(
+                    &review_frame,
+                    "PR #42 Review personal parser",
+                    &review_full,
+                );
+                assertion::assert_text_in_region(
+                    &review_frame,
+                    "Requested from your groups",
+                    &review_full,
+                );
+                assertion::assert_text_in_region(
+                    &review_frame,
+                    "PR #43 Review team parser",
+                    &review_full,
+                );
             },
         )?;
 

@@ -1,3 +1,4 @@
+use ag_forge::RequestedReview;
 use ratatui::layout::Rect;
 
 use super::help_action::{self, HelpAction, ViewHelpState, ViewSessionState};
@@ -135,6 +136,13 @@ pub enum QuestionFocus {
 /// Represents the active UI mode for the application.
 pub enum AppMode {
     List,
+    /// Displays the selected forge review request title and description.
+    ReviewDetail {
+        /// Requested review snapshot opened from the top-level review list.
+        review: RequestedReview,
+        /// Vertical offset applied to the rendered review description page.
+        scroll_offset: u16,
+    },
     /// Displays the session creation selector above the sessions list.
     SessionCreation {
         /// Highlighted session creation option.

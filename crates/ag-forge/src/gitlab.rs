@@ -567,6 +567,7 @@ fn parse_requested_reviews_response(
 
             RequestedReview {
                 audience: RequestedReviewAudience::Personal,
+                body: merge_request.description,
                 display_id: format!("!{}", merge_request.iid),
                 forge_kind: ForgeKind::GitLab,
                 repository: remote.project_path(),
@@ -728,6 +729,8 @@ struct GitLabLookupResponse {
 /// GitLab list row returned by `glab mr list --output json`.
 #[derive(Deserialize)]
 struct GitLabRequestedReviewResponse {
+    #[serde(default)]
+    description: Option<String>,
     #[serde(default)]
     draft: bool,
     iid: u64,
@@ -1191,6 +1194,7 @@ mod tests {
             requested_reviews,
             vec![RequestedReview {
                 audience: RequestedReviewAudience::Personal,
+                body: Some("Implements the GitLab provider.".to_string()),
                 display_id: "!42".to_string(),
                 forge_kind: ForgeKind::GitLab,
                 repository: "agentty-xyz/agentty".to_string(),
@@ -1389,6 +1393,7 @@ mod tests {
         r#"[
             {
                 "draft": true,
+                "description": "Implements the GitLab provider.",
                 "iid": 42,
                 "title": "Add forge review support",
                 "updated_at": "2026-04-27T21:30:00Z",
