@@ -35,5 +35,7 @@ jobs:
         run: |
           for release in $(echo "$PLAN" | jq --compact-output '.releases[] | select([.artifacts[] | endswith("-npm-package.tar.gz")] | any)'); do
             pkg=$(echo "$release" | jq '.artifacts[] | select(endswith("-npm-package.tar.gz"))' --raw-output)
-            npm publish --access public "./npm/${pkg}"
+            # npm requires an explicit dist-tag when publishing a stable version
+            # below a higher version that already exists in the registry.
+            npm publish --access public --tag latest "./npm/${pkg}"
           done
