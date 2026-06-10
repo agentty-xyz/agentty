@@ -7,27 +7,49 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.10.1] - 2026-06-09
+
 ### Added
 
+- agentty: add requested review detail navigation.
+- agentty: add Claude Fable 5 model support.
 - testty: add `proof::junit::JunitBackend`, a `ProofBackend` that renders a
   `ProofReport` to JUnit-XML so non-Rust CIs can ingest testty proof results as test
   cases and failures.
+- testty: add a proof gallery that aggregates run artifacts into an index page.
 - testty: the `testty` crate now ships the language-agnostic `testty` command-line
   binary (`cargo install testty`), folding in the previously separate, never-published
   `testty-cli` crate. The command tree is in place but the verbs remain stubbed.
 
 ### Changed
 
+- agentty: colorize reasoning labels and show session size markers as title prefixes in
+  the session list.
+- agentty: expand Antigravity model selection to individual Gemini model variants.
+- agentty: preserve popup clearing semantics for overlay backgrounds.
+- agentty: retire `gpt-5.4` Codex model selection and promote `gpt-5.5` as the default.
+- agentty: route project sync through a shared orchestrator.
+- agentty: use non-interactive Codex app-server approvals.
+- Bump GitHub Actions and version-update automation dependencies.
+- Bump workspace crate metadata and lockfile package versions to `0.10.1`.
 - testty: `ProofBackend::render` now takes a single `RenderContext` argument instead of
   `(&ProofReport, &Path)`, so future render inputs can be added without breaking
   external backends. Callers using `ProofReport::save` are unaffected. (Breaking for
   custom `ProofBackend` implementations.)
 - testty: `ProofError` is now `#[non_exhaustive]`. (Breaking for exhaustive matches.)
+- testty: gate the CLI binary tests in the source-test hook.
 
 ### Removed
 
+- agentty: remove the sessions list header bottom margin.
 - testty: `CellStyle::from_cell` is no longer public; it leaked the `vt100::Cell`
   implementation-detail type. Use `TerminalFrame::cell_style` instead. (Breaking.)
+
+### Contributors
+
+- @andagaev
+- @dependabot
+- @minev-dev
 
 ## [v0.10.0] - 2026-06-02
 
