@@ -175,6 +175,35 @@ mod tests {
     }
 
     #[test]
+    fn test_failure_tracker_observe_normalizes_case_and_whitespace() {
+        // Arrange
+        let mut tracker = FailureTracker::new(1);
+
+        // Act
+        let first_exceeded = tracker.observe("  Same Failure  ");
+        let second_exceeded = tracker.observe("same failure");
+
+        // Assert
+        assert!(!first_exceeded);
+        assert!(second_exceeded);
+    }
+
+    #[test]
+    fn test_failure_tracker_observe_empty_fingerprint_resets_streak() {
+        // Arrange
+        let mut tracker = FailureTracker::new(1);
+        let _ = tracker.observe("same");
+
+        // Act
+        let empty_exceeded = tracker.observe("  ");
+        let next_exceeded = tracker.observe("same");
+
+        // Assert
+        assert!(!empty_exceeded);
+        assert!(!next_exceeded);
+    }
+
+    #[test]
     fn test_format_detail_lines_returns_bulleted_non_empty_lines() {
         // Arrange
         let detail = "line one\n\nline two";
@@ -184,5 +213,20 @@ mod tests {
 
         // Assert
         assert_eq!(formatted, "- line one\n- line two");
+    }
+
+    #[test]
+    fn test_format_detail_lines_trims_lines_and_returns_empty_for_blank_detail() {
+        // Arrange
+        let detail = " line one \n\tline two\t";
+        let blank_detail = " \n\n\t";
+
+        // Act
+        let formatted = format_detail_lines(detail);
+        let blank_formatted = format_detail_lines(blank_detail);
+
+        // Assert
+        assert_eq!(formatted, "- line one\n- line two");
+        assert_eq!(blank_formatted, "");
     }
 }

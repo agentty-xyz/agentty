@@ -67,4 +67,39 @@ mod tests {
             Err("Unknown permission mode: autonomous".to_string())
         );
     }
+
+    #[test]
+    fn test_default_uses_auto_edit_mode() {
+        // Arrange, Act
+        let permission_mode = PermissionMode::default();
+
+        // Assert
+        assert_eq!(permission_mode, PermissionMode::AutoEdit);
+    }
+
+    #[test]
+    fn test_label_and_display_label_return_persisted_and_user_facing_text() {
+        // Arrange
+        let permission_mode = PermissionMode::AutoEdit;
+
+        // Act
+        let label = permission_mode.label();
+        let display_label = permission_mode.display_label();
+
+        // Assert
+        assert_eq!(label, "auto_edit");
+        assert_eq!(display_label, "Auto Edit");
+    }
+
+    #[test]
+    fn test_display_uses_persisted_label() {
+        // Arrange
+        let permission_mode = PermissionMode::AutoEdit;
+
+        // Act
+        let formatted = permission_mode.to_string();
+
+        // Assert
+        assert_eq!(formatted, "auto_edit");
+    }
 }
