@@ -2,8 +2,8 @@
 //!
 //! Tests cover session creation via `a` key, opening sessions with `Enter`,
 //! list navigation with `j`/`k`, deletion with confirmation, prompt input
-//! basics (typing, multiline via Alt+Enter, cancel via Esc), and returning
-//! to the session list from session view.
+//! basics (typing, multiline via Alt+Enter and CSI-u Shift+Enter, cancel via
+//! Esc), and returning to the session list from session view.
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -18,6 +18,7 @@ use agentty::domain::session::{
 use agentty::test_support;
 use testty::assertion;
 use testty::region::Region;
+use testty::scenario::Scenario;
 
 use crate::common;
 use crate::common::{BuilderEnv, FeatureTest};
@@ -1729,6 +1730,39 @@ fn prompt_multiline_via_alt_enter() -> E2eResult {
                 assertion::assert_text_in_region(frame, "second line", &full);
             },
         )?;
+
+    Ok(())
+}
+
+/// Verify that CSI-u `Shift+Enter` inserts a newline in the prompt input.
+#[test]
+fn prompt_multiline_via_csi_u_shift_enter() -> E2eResult {
+    // Arrange
+    let _test_guard = common::acquire_e2e_test_lock();
+    let temp = tempfile::TempDir::new()?;
+    let env = BuilderEnv::new(temp.path())?;
+    env.init_git()?;
+    let scenario = Scenario::new("prompt_multiline_shift_enter")
+        .compose(&common::wait_for_agentty_startup())
+        .compose(&common::switch_to_tab("Sessions"))
+        .press_key("a")
+        .press_key("Enter")
+        .wait_for_stable_frame(300, 5000)
+        .write_text("first line")
+        .wait_for_text("first line", 3000)
+        .write_text("\x1b[13;2u")
+        .wait_for_stable_frame(300, 3000)
+        .write_text("second line")
+        .wait_for_text("second line", 3000);
+
+    // Act
+    let frame = scenario.run(env.builder())?;
+
+    // Assert
+    let full = Region::full(frame.cols(), frame.rows());
+    assertion::assert_text_in_region(&frame, "first line", &full);
+    assertion::assert_text_in_region(&frame, "second line", &full);
+    assertion::assert_not_visible(&frame, "first linesecond line");
 
     Ok(())
 }

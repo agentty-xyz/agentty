@@ -197,6 +197,11 @@ including Wayland compositors such as Hyprland. Codex and Gemini preserve the mu
 ordering at transport level, while Claude rewrites the placeholders to local image paths
 before streaming the prompt.
 
+Agentty requests enhanced keyboard reporting from supporting terminals and `tmux` panes
+so remote sessions can distinguish `Shift+Enter` from plain `Enter`. `Ctrl+J` and
+`Ctrl+M` remain fallback newline shortcuts when a terminal or multiplexer does not
+forward modified `Enter`.
+
 When the current session was created as `Draft`, pressing `Enter` stages the current
 composer contents into the draft bundle and returns to session view. Use `s` from
 session view to launch the staged bundle as the first live turn. For a `Stacked` draft,
