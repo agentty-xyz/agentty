@@ -24,9 +24,6 @@ use crate::domain::session::{
 };
 use crate::infra::git;
 
-/// Render payload tuple returned by [`SessionManager::render_parts`].
-type SessionRenderParts<'a> = (&'a [Session], &'a [DailyActivity], &'a mut TableState);
-
 /// Low-frequency fallback interval for metadata-based session refresh.
 pub(crate) const SESSION_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 /// Cache duration for `@`-mention filesystem index snapshots.
@@ -37,6 +34,27 @@ pub(crate) const AT_MENTION_INDEX_TTL: Duration = Duration::from_secs(30);
 pub(crate) struct SessionDefaults {
     /// Default model selected for newly created sessions.
     pub(crate) model: AgentModel,
+}
+
+/// Borrowed session state required to draw one UI frame.
+pub(crate) struct SessionRenderParts<'a> {
+    /// Exact prompt transcript blocks keyed by session id for active turns.
+    pub(crate) active_prompt_outputs: &'a HashMap<SessionId, String>,
+    /// Detected session worktree branch names keyed by session id.
+    pub(crate) session_branch_names: &'a HashMap<SessionId, String>,
+    /// Latest session-branch ahead/behind snapshots keyed by session id.
+    pub(crate) session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
+    /// Cached session list positions keyed by stable session id.
+    pub(crate) session_index_by_id: &'a HashMap<SessionId, usize>,
+    /// Whether each rendered session currently has a materialized worktree on
+    /// disk, keyed by session id.
+    pub(crate) session_worktree_availability: &'a HashMap<SessionId, bool>,
+    /// Session rows available for rendering.
+    pub(crate) sessions: &'a [Session],
+    /// Daily session activity series used by dashboard activity summaries.
+    pub(crate) stats_activity: &'a [DailyActivity],
+    /// Table selection state for the session list.
+    pub(crate) table_state: &'a mut TableState,
 }
 
 /// Reducer-facing snapshot derived from one persisted turn result.
@@ -232,16 +250,23 @@ impl SessionManager {
         setting::load_default_smart_model_setting(services, project_id, fallback_model).await
     }
 
-    /// Returns session snapshots and stats payloads required for rendering.
+    /// Returns session snapshots, render caches, and list table state required
+    /// for one frame.
     ///
-    /// The tuple contains live sessions, activity heatmap data, and list table
-    /// state.
+    /// The render parts borrow disjoint manager fields directly so
+    /// [`crate::app::App::draw`] can avoid cloning session maps or active
+    /// prompt output blocks on the render hot path.
     pub(crate) fn render_parts(&mut self) -> SessionRenderParts<'_> {
-        (
-            &self.state.sessions,
-            &self.stats_activity,
-            &mut self.state.table_state,
-        )
+        SessionRenderParts {
+            active_prompt_outputs: &self.active_prompt_outputs,
+            session_branch_names: &self.state.session_branch_names,
+            session_git_statuses: &self.state.session_git_statuses,
+            session_index_by_id: &self.state.session_index_by_id,
+            session_worktree_availability: &self.state.session_worktree_availability,
+            sessions: &self.state.sessions,
+            stats_activity: &self.stats_activity,
+            table_state: &mut self.state.table_state,
+        }
     }
 
     /// Returns all loaded session snapshots in current list order.
@@ -588,11 +613,6 @@ impl SessionManager {
             .replace_session_git_statuses(session_git_statuses);
     }
 
-    /// Returns cached session git-status snapshots keyed by session id.
-    pub(crate) fn session_git_statuses(&self) -> &HashMap<SessionId, SessionGitStatus> {
-        &self.state.session_git_statuses
-    }
-
     /// Removes expired `@`-mention indexes so unused lookup roots do not
     /// accumulate indefinitely in memory.
     fn prune_expired_at_mention_indexes(&mut self) {
@@ -625,11 +645,6 @@ impl SessionManager {
     ) {
         self.state
             .replace_session_branch_names(session_branch_names);
-    }
-
-    /// Returns cached detected branch names keyed by session id.
-    pub(crate) fn session_branch_names(&self) -> &HashMap<SessionId, String> {
-        &self.state.session_branch_names
     }
 
     /// Returns the cached or derived branch name for one session.

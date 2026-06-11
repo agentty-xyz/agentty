@@ -98,66 +98,55 @@ impl App {
     /// assembling a [`ui::RenderContext`] from current app state, and
     /// dispatching to the UI render pipeline.
     pub fn draw(&mut self, frame: &mut Frame) {
-        let active_project_id = self.projects.active_project_id();
         let current_tab = self.tabs.current();
-        let working_dir = self.projects.working_dir().to_path_buf();
-        let git_branch = self.projects.git_branch().map(str::to_string);
-        let git_upstream_ref = self.projects.git_upstream_ref().map(str::to_string);
-        let git_status = self.projects.git_status();
-        let latest_available_version = self.latest_available_version.as_deref().map(str::to_string);
-        let session_git_statuses = self.sessions.session_git_statuses().clone();
-        let session_branch_names = self.sessions.session_branch_names().clone();
-        let session_index_by_id = self.sessions.state().session_index_by_id().clone();
-        let session_worktree_availability = self.sessions.session_worktree_availability().clone();
-        let active_prompt_outputs = self.sessions.active_prompt_outputs().clone();
-        let session_progress_messages = self.session_progress_messages.clone();
-        let update_status = self.update_status().cloned();
+        let latest_available_version = self.latest_available_version.as_deref();
+        let session_progress_messages = &self.session_progress_messages;
+        let update_status = self.update_status.as_ref();
         let wall_clock_unix_seconds =
             session::unix_timestamp_from_system_time(self.sessions.state().now_system_time());
         let status_bar_fyi_rotation_index =
             u64::try_from(wall_clock_unix_seconds.div_euclid(60)).unwrap_or_default();
-        let projects = self.projects.project_items().to_vec();
         let review_comment_cache = self.services.review_comment_cache();
         let requested_review_selected_index = self.requested_review_selected_index();
         let mode = &self.mode;
         let requested_review_table_state = &mut self.requested_review_table_state;
-        let project_table_state = self.projects.project_table_state_mut();
-        let (sessions, stats_activity, table_state) = self.sessions.render_parts();
+        let project_render_parts = self.projects.render_parts();
+        let session_render_parts = self.sessions.render_parts();
         let settings = &mut self.settings;
         let _theme_scope = style::scoped_active_theme(settings.theme);
 
         ui::render(
             frame,
             ui::RenderContext {
-                active_project_id,
+                active_project_id: project_render_parts.active_project_id,
                 current_tab,
-                git_branch: git_branch.as_deref(),
-                git_upstream_ref: git_upstream_ref.as_deref(),
-                git_status,
-                latest_available_version: latest_available_version.as_deref(),
+                git_branch: project_render_parts.git_branch,
+                git_upstream_ref: project_render_parts.git_upstream_ref,
+                git_status: project_render_parts.git_status,
+                latest_available_version,
                 markdown_render_cache: &self.markdown_render_cache,
-                update_status: update_status.as_ref(),
+                update_status,
                 mode,
                 output_layout_cache: &self.session_output_layout_cache,
-                project_table_state,
-                projects: &projects,
+                project_table_state: project_render_parts.table_state,
+                projects: project_render_parts.project_items,
                 review_comment_cache: &review_comment_cache,
                 requested_reviews: &self.requested_reviews,
                 requested_review_selected_index,
                 requested_review_table_state,
-                active_prompt_outputs: &active_prompt_outputs,
-                session_branch_names: &session_branch_names,
-                session_git_statuses: &session_git_statuses,
-                session_index_by_id: &session_index_by_id,
-                session_progress_messages: &session_progress_messages,
+                active_prompt_outputs: session_render_parts.active_prompt_outputs,
+                session_branch_names: session_render_parts.session_branch_names,
+                session_git_statuses: session_render_parts.session_git_statuses,
+                session_index_by_id: session_render_parts.session_index_by_id,
+                session_progress_messages,
                 session_update_versions: &self.last_seen_session_update_versions,
-                session_worktree_availability: &session_worktree_availability,
+                session_worktree_availability: session_render_parts.session_worktree_availability,
                 settings,
-                stats_activity,
-                sessions,
+                stats_activity: session_render_parts.stats_activity,
+                sessions: session_render_parts.sessions,
                 status_bar_fyi_rotation_index,
-                table_state,
-                working_dir: &working_dir,
+                table_state: session_render_parts.table_state,
+                working_dir: project_render_parts.working_dir,
                 wall_clock_unix_seconds,
             },
         );

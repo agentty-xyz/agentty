@@ -106,12 +106,6 @@ impl SessionState {
             .and_then(|session_index| self.sessions.get(session_index))
     }
 
-    /// Returns the cached session-id lookup map used by render and workflow
-    /// code.
-    pub(crate) fn session_index_by_id(&self) -> &HashMap<SessionId, usize> {
-        &self.session_index_by_id
-    }
-
     /// Replaces the full session snapshot list and rebuilds the cached
     /// identifier index in one step.
     pub(crate) fn replace_sessions(&mut self, sessions: Vec<Session>) {

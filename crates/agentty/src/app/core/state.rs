@@ -2236,7 +2236,7 @@ mod tests {
             .expect("failed to create current session folder");
 
         // Act
-        let app = App::new_with_clients(
+        let mut app = App::new_with_clients(
             agentty_home.clone(),
             current_project_path.clone(),
             Some("main".to_string()),
@@ -2256,15 +2256,14 @@ mod tests {
         );
         assert_eq!(app.sessions.sessions().len(), 1);
         assert_eq!(app.sessions.sessions()[0].id, current_session_id);
+        let project_items = app.projects.render_parts().project_items;
         assert!(
-            app.projects
-                .project_items()
+            project_items
                 .iter()
                 .any(|item| item.project.id == current_project_id)
         );
         assert!(
-            !app.projects
-                .project_items()
+            !project_items
                 .iter()
                 .any(|item| item.project.id == missing_project_id)
         );
@@ -3625,7 +3624,10 @@ mod tests {
         // Assert
         assert_eq!(app.git_status_info(), Some((1, 3)));
         assert_eq!(
-            app.sessions.session_git_statuses().get("session-1"),
+            app.sessions
+                .render_parts()
+                .session_git_statuses
+                .get("session-1"),
             Some(&SessionGitStatus {
                 base_status: Some((4, 2)),
                 remote_status: Some((1, 0)),
@@ -3652,7 +3654,7 @@ mod tests {
 
         // Assert
         assert_eq!(app.git_status_info(), None);
-        assert!(app.sessions.session_git_statuses().is_empty());
+        assert!(app.sessions.render_parts().session_git_statuses.is_empty());
     }
 
     #[tokio::test]
@@ -4734,7 +4736,8 @@ mod tests {
 
         let initial_active_count = app
             .projects
-            .project_items()
+            .render_parts()
+            .project_items
             .iter()
             .find(|item| item.project.id == project_id)
             .map_or(0, |item| item.active_session_count);
@@ -4753,7 +4756,8 @@ mod tests {
         // Assert
         let updated_active_count = app
             .projects
-            .project_items()
+            .render_parts()
+            .project_items
             .iter()
             .find(|item| item.project.id == project_id)
             .map_or(0, |item| item.active_session_count);

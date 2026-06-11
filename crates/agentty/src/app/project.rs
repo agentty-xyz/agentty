@@ -6,6 +6,24 @@ use ratatui::widgets::TableState;
 
 use crate::domain::project::ProjectListItem;
 
+/// Borrowed project state required to draw one UI frame.
+pub(crate) struct ProjectRenderParts<'a> {
+    /// Identifier of the currently active project.
+    pub(crate) active_project_id: i64,
+    /// Current local branch name for the active project.
+    pub(crate) git_branch: Option<&'a str>,
+    /// Latest ahead/behind counts for the active project branch.
+    pub(crate) git_status: Option<(u32, u32)>,
+    /// Current upstream reference tracked by the active project branch.
+    pub(crate) git_upstream_ref: Option<&'a str>,
+    /// Project rows available for rendering.
+    pub(crate) project_items: &'a [ProjectListItem],
+    /// Table selection state for the projects list.
+    pub(crate) table_state: &'a mut TableState,
+    /// Working directory for the active project.
+    pub(crate) working_dir: &'a Path,
+}
+
 /// Project domain state and git status tracking for the active project.
 pub struct ProjectManager {
     active_project_id: i64,
@@ -43,14 +61,22 @@ impl ProjectManager {
         manager
     }
 
-    /// Returns all persisted projects with list-level metadata.
-    pub(crate) fn project_items(&self) -> &[ProjectListItem] {
-        &self.project_items
-    }
-
-    /// Returns mutable table selection state for the projects list UI.
-    pub(crate) fn project_table_state_mut(&mut self) -> &mut TableState {
-        &mut self.table_state
+    /// Returns project rows, active-project context, and list table state
+    /// required for one frame.
+    ///
+    /// The render parts borrow disjoint manager fields directly so
+    /// [`crate::app::App::draw`] can avoid cloning the project list on the
+    /// render hot path.
+    pub(crate) fn render_parts(&mut self) -> ProjectRenderParts<'_> {
+        ProjectRenderParts {
+            active_project_id: self.active_project_id,
+            git_branch: self.git_branch.as_deref(),
+            git_status: self.git_status,
+            git_upstream_ref: self.git_upstream_ref.as_deref(),
+            project_items: &self.project_items,
+            table_state: &mut self.table_state,
+            working_dir: self.working_dir.as_path(),
+        }
     }
 
     /// Returns the active project identifier.
@@ -212,26 +238,26 @@ mod tests {
     fn test_next_project_wraps_to_first_row() {
         // Arrange
         let mut manager = project_manager_fixture();
-        manager.project_table_state_mut().select(Some(1));
+        manager.table_state.select(Some(1));
 
         // Act
         manager.next_project();
 
         // Assert
-        assert_eq!(manager.project_table_state_mut().selected(), Some(0));
+        assert_eq!(manager.table_state.selected(), Some(0));
     }
 
     #[test]
     fn test_previous_project_wraps_to_last_row() {
         // Arrange
         let mut manager = project_manager_fixture();
-        manager.project_table_state_mut().select(Some(0));
+        manager.table_state.select(Some(0));
 
         // Act
         manager.previous_project();
 
         // Assert
-        assert_eq!(manager.project_table_state_mut().selected(), Some(1));
+        assert_eq!(manager.table_state.selected(), Some(1));
     }
 
     fn project_manager_fixture() -> ProjectManager {
