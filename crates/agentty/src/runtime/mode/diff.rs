@@ -4,9 +4,8 @@ use ratatui::layout::Rect;
 use crate::app::App;
 use crate::runtime::EventResult;
 use crate::ui::component::file_explorer::FileExplorer;
-use crate::ui::diff_util::{parse_diff_lines, selected_diff_lines};
+use crate::ui::page;
 use crate::ui::state::app_mode::{AppMode, DiffScrollCache, HelpContext};
-use crate::ui::{markdown, page};
 
 /// Handles key input while the app is in `AppMode::Diff`.
 ///
@@ -116,81 +115,97 @@ fn handle_exit_key(app: &mut App, key: KeyEvent) -> bool {
 
 /// Applies file-selection and scroll navigation keys in diff mode.
 fn handle_navigation_key(app: &mut App, content_area: Rect, key: KeyEvent) {
-    let review_comment_snapshot = if let AppMode::Diff { session_id, .. } = &app.mode {
-        app.services.review_comment_cache().snapshot(session_id)
-    } else {
-        None
-    };
-    let markdown_render_cache = markdown::MarkdownRenderCache::default();
+    let mode = std::mem::replace(&mut app.mode, AppMode::List);
+    let AppMode::Diff {
+        diff,
+        mut file_explorer_selected_index,
+        restore_question,
+        right_panel,
+        mut scroll_cache,
+        mut scroll_offset,
+        session_id,
+    } = mode
+    else {
+        app.mode = mode;
 
-    if let AppMode::Diff {
+        return;
+    };
+
+    match key.code {
+        KeyCode::Char('j') if is_plain_char_key(key, 'j') => {
+            let content = app.diff_layout_cache().content(&diff);
+            let new_index = FileExplorer::next_selected_index(
+                file_explorer_selected_index,
+                content.item_count(),
+            );
+
+            if file_explorer_selected_index != new_index {
+                file_explorer_selected_index = new_index;
+                scroll_cache = None;
+                scroll_offset = 0;
+            }
+        }
+        KeyCode::Char('k') if is_plain_char_key(key, 'k') => {
+            let content = app.diff_layout_cache().content(&diff);
+            let new_index = FileExplorer::previous_selected_index(
+                file_explorer_selected_index,
+                content.item_count(),
+            );
+
+            if file_explorer_selected_index != new_index {
+                file_explorer_selected_index = new_index;
+                scroll_cache = None;
+                scroll_offset = 0;
+            }
+        }
+        KeyCode::Down | KeyCode::Char('J' | 'j')
+            if key.code == KeyCode::Down || is_shift_char_key(key, 'j') =>
+        {
+            let review_comment_snapshot = app.services.review_comment_cache().snapshot(&session_id);
+            let max_scroll_offset = diff_max_scroll_offset(
+                &diff,
+                content_area,
+                file_explorer_selected_index,
+                &mut scroll_cache,
+                review_comment_snapshot.as_ref(),
+                app.markdown_render_cache(),
+                app.diff_layout_cache(),
+            );
+            let clamped_scroll_offset = scroll_offset.min(max_scroll_offset);
+
+            scroll_offset = clamped_scroll_offset
+                .saturating_add(1)
+                .min(max_scroll_offset);
+        }
+        KeyCode::Up | KeyCode::Char('K' | 'k')
+            if key.code == KeyCode::Up || is_shift_char_key(key, 'k') =>
+        {
+            let review_comment_snapshot = app.services.review_comment_cache().snapshot(&session_id);
+            let max_scroll_offset = diff_max_scroll_offset(
+                &diff,
+                content_area,
+                file_explorer_selected_index,
+                &mut scroll_cache,
+                review_comment_snapshot.as_ref(),
+                app.markdown_render_cache(),
+                app.diff_layout_cache(),
+            );
+            let clamped_scroll_offset = scroll_offset.min(max_scroll_offset);
+
+            scroll_offset = clamped_scroll_offset.saturating_sub(1);
+        }
+        _ => {}
+    }
+
+    app.mode = AppMode::Diff {
         diff,
         file_explorer_selected_index,
+        restore_question,
+        right_panel,
         scroll_cache,
         scroll_offset,
-        ..
-    } = &mut app.mode
-    {
-        match key.code {
-            KeyCode::Char('j') if is_plain_char_key(key, 'j') => {
-                let parsed = parse_diff_lines(diff);
-                let count = FileExplorer::count_items(&parsed);
-                let new_index =
-                    FileExplorer::next_selected_index(*file_explorer_selected_index, count);
-
-                if *file_explorer_selected_index != new_index {
-                    *file_explorer_selected_index = new_index;
-                    *scroll_cache = None;
-                    *scroll_offset = 0;
-                }
-            }
-            KeyCode::Char('k') if is_plain_char_key(key, 'k') => {
-                let parsed = parse_diff_lines(diff);
-                let count = FileExplorer::count_items(&parsed);
-                let new_index =
-                    FileExplorer::previous_selected_index(*file_explorer_selected_index, count);
-
-                if *file_explorer_selected_index != new_index {
-                    *file_explorer_selected_index = new_index;
-                    *scroll_cache = None;
-                    *scroll_offset = 0;
-                }
-            }
-            KeyCode::Down | KeyCode::Char('J' | 'j')
-                if key.code == KeyCode::Down || is_shift_char_key(key, 'j') =>
-            {
-                let max_scroll_offset = diff_max_scroll_offset(
-                    diff,
-                    content_area,
-                    *file_explorer_selected_index,
-                    scroll_cache,
-                    review_comment_snapshot.as_ref(),
-                    &markdown_render_cache,
-                );
-                let clamped_scroll_offset = (*scroll_offset).min(max_scroll_offset);
-
-                *scroll_offset = clamped_scroll_offset
-                    .saturating_add(1)
-                    .min(max_scroll_offset);
-            }
-            KeyCode::Up | KeyCode::Char('K' | 'k')
-                if key.code == KeyCode::Up || is_shift_char_key(key, 'k') =>
-            {
-                let max_scroll_offset = diff_max_scroll_offset(
-                    diff,
-                    content_area,
-                    *file_explorer_selected_index,
-                    scroll_cache,
-                    review_comment_snapshot.as_ref(),
-                    &markdown_render_cache,
-                );
-                let clamped_scroll_offset = (*scroll_offset).min(max_scroll_offset);
-
-                *scroll_offset = clamped_scroll_offset.saturating_sub(1);
-            }
-            _ => {}
-        }
-    }
+        session_id,
+    };
 }
 
 /// Returns true when the key event is a plain character key with no
@@ -219,8 +234,11 @@ fn diff_max_scroll_offset(
     content_area: Rect,
     selected_index: usize,
     scroll_cache: &mut Option<DiffScrollCache>,
-    review_comment_snapshot: Option<&ag_forge::ReviewCommentSnapshot>,
+    review_comment_snapshot: Option<
+        &crate::infra::review_comment_cache::CachedReviewCommentSnapshot,
+    >,
     markdown_render_cache: &crate::ui::markdown::MarkdownRenderCache,
+    diff_layout_cache: &page::diff::DiffLayoutCache,
 ) -> u16 {
     if let Some(cached_scroll_limit) = scroll_cache
         && cached_scroll_limit.content_area == content_area
@@ -229,14 +247,13 @@ fn diff_max_scroll_offset(
         return cached_scroll_limit.max_scroll_offset;
     }
 
-    let parsed_lines = parse_diff_lines(diff);
-    let tree_items = FileExplorer::file_tree_items(&parsed_lines);
-    let selected_lines = selected_diff_lines(&parsed_lines, &tree_items, selected_index);
     let max_scroll_offset = page::diff::diff_view_max_scroll_offset_with_comments(
-        &selected_lines,
+        diff,
+        selected_index,
         content_area,
         review_comment_snapshot,
         markdown_render_cache,
+        diff_layout_cache,
     );
 
     *scroll_cache = Some(DiffScrollCache {
@@ -259,6 +276,7 @@ mod tests {
 
     use super::*;
     use crate::db::Database;
+    use crate::ui::markdown;
 
     const TEST_TERMINAL_SIZE: Rect = Rect::new(0, 0, 80, 12);
 
@@ -316,6 +334,21 @@ mod tests {
                 start_line: None,
             }],
         }
+    }
+
+    /// Stores a review-comment snapshot in the production cache wrapper so
+    /// scroll-bound tests exercise the versioned render input.
+    fn cached_review_comment_snapshot(
+        snapshot: ReviewCommentSnapshot,
+    ) -> crate::infra::review_comment_cache::CachedReviewCommentSnapshot {
+        let cache = crate::infra::review_comment_cache::ReviewCommentCache::default();
+        let session_id: crate::domain::session::SessionId = "scroll-comments".into();
+
+        cache.record_snapshot(session_id.clone(), snapshot);
+
+        cache
+            .snapshot(&session_id)
+            .expect("test snapshot should be cached")
     }
 
     #[tokio::test]
@@ -713,6 +746,7 @@ mod tests {
         let (mut app, _base_dir) = new_test_app().await;
         let diff = scrollable_diff_fixture();
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let diff_layout_cache = page::diff::DiffLayoutCache::default();
         let max_scroll_offset = diff_max_scroll_offset(
             &diff,
             TEST_TERMINAL_SIZE,
@@ -720,6 +754,7 @@ mod tests {
             &mut None,
             None,
             &markdown_render_cache,
+            &diff_layout_cache,
         );
         app.mode = AppMode::Diff {
             session_id: "session-id".into(),
@@ -755,6 +790,7 @@ mod tests {
         let (mut app, _base_dir) = new_test_app().await;
         let diff = scrollable_diff_fixture();
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let diff_layout_cache = page::diff::DiffLayoutCache::default();
         let max_scroll_offset = diff_max_scroll_offset(
             &diff,
             TEST_TERMINAL_SIZE,
@@ -762,6 +798,7 @@ mod tests {
             &mut None,
             None,
             &markdown_render_cache,
+            &diff_layout_cache,
         );
         app.mode = AppMode::Diff {
             session_id: "session-id".into(),
@@ -799,8 +836,9 @@ mod tests {
             "@@ -1 +1 @@\n",
             "+new content\n"
         );
-        let snapshot = review_comment_snapshot();
+        let snapshot = cached_review_comment_snapshot(review_comment_snapshot());
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let diff_layout_cache = page::diff::DiffLayoutCache::default();
 
         // Act
         let terminal_size = Rect::new(0, 0, 80, 6);
@@ -811,6 +849,7 @@ mod tests {
             &mut None,
             None,
             &markdown_render_cache,
+            &diff_layout_cache,
         );
         let with_comments = diff_max_scroll_offset(
             diff,
@@ -819,6 +858,7 @@ mod tests {
             &mut None,
             Some(&snapshot),
             &markdown_render_cache,
+            &diff_layout_cache,
         );
 
         // Assert

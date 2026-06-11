@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -35,7 +36,7 @@ pub enum FileTreeItem {
 
 /// Diff file explorer panel rendering the changed file list.
 pub struct FileExplorer {
-    file_list_lines: Vec<Line<'static>>,
+    file_list_lines: Arc<[Line<'static>]>,
     selected_index: usize,
 }
 
@@ -96,8 +97,16 @@ impl FileTreeNode {
 impl FileExplorer {
     /// Creates a new file explorer component from parsed diff lines.
     pub fn new(parsed_lines: &[DiffLine<'_>]) -> Self {
-        let (file_list_lines, _) = Self::build_tree(parsed_lines);
+        let (file_list_lines, _) = Self::file_tree(parsed_lines);
 
+        Self {
+            file_list_lines: Arc::from(file_list_lines),
+            selected_index: 0,
+        }
+    }
+
+    /// Creates a file explorer component from cached rendered tree lines.
+    pub(crate) fn from_cached_lines(file_list_lines: Arc<[Line<'static>]>) -> Self {
         Self {
             file_list_lines,
             selected_index: 0,
@@ -146,7 +155,7 @@ impl FileExplorer {
 
     /// Returns the number of items (files and folders) in the explorer list.
     pub fn count_items(parsed_lines: &[DiffLine<'_>]) -> usize {
-        let (lines, _) = Self::build_tree(parsed_lines);
+        let (lines, _) = Self::file_tree(parsed_lines);
 
         lines.len()
     }
@@ -156,9 +165,17 @@ impl FileExplorer {
     /// Each entry corresponds one-to-one to a rendered tree line so the
     /// selected index can be used to look up the matching item.
     pub fn file_tree_items(parsed_lines: &[DiffLine<'_>]) -> Vec<FileTreeItem> {
-        let (_, items) = Self::build_tree(parsed_lines);
+        let (_, items) = Self::file_tree(parsed_lines);
 
         items
+    }
+
+    /// Builds the rendered file tree lines and matching selection items for
+    /// one parsed diff snapshot.
+    pub(crate) fn file_tree(
+        parsed_lines: &[DiffLine<'_>],
+    ) -> (Vec<Line<'static>>, Vec<FileTreeItem>) {
+        Self::build_tree(parsed_lines)
     }
 
     /// Filters `parsed_lines` to only the lines belonging to the given

@@ -1,4 +1,7 @@
-use std::collections::HashMap;
+use std::borrow::Cow;
+use std::cell::RefCell;
+use std::collections::{HashMap, VecDeque};
+use std::hash::Hasher;
 use std::sync::Arc;
 
 use ag_forge::{
@@ -10,22 +13,378 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
+use rustc_hash::FxHasher;
 
 use crate::domain::session::{ReviewRequest, Session};
-use crate::ui::component::file_explorer::FileExplorer;
+use crate::infra::review_comment_cache::CachedReviewCommentSnapshot;
+use crate::ui::component::file_explorer::{FileExplorer, FileTreeItem};
 use crate::ui::diff_util::{
     DiffLine, DiffLineKind, diff_header_new_path, diff_header_old_path, parse_diff_lines,
-    selected_diff_lines,
 };
 use crate::ui::state::app_mode::DiffRightPanel;
 use crate::ui::state::help_action;
 use crate::ui::text_util::{inline_text, wrap_lines_to_rows};
 use crate::ui::{Component, Page, diff_util, markdown, style};
 
-const SCROLL_X_OFFSET: u16 = 0;
 const SCROLLBAR_TRACK_SYMBOL: &str = "│";
 const SCROLLBAR_THUMB_SYMBOL: &str = "█";
 const WRAPPED_CHUNK_START_INDEX: usize = 0;
+const DIFF_CONTENT_CACHE_ENTRY_LIMIT: usize = 8;
+const DIFF_LAYOUT_CACHE_ENTRY_LIMIT: usize = 16;
+
+/// Compact identity for one raw diff string.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DiffContentCacheKey {
+    content_hash: u64,
+    content_len: usize,
+}
+
+/// Cache key for one fully assembled diff-panel layout.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DiffLayoutCacheKey {
+    diff_area_height: u16,
+    diff_area_width: u16,
+    diff_content: DiffContentCacheKey,
+    markdown_style_version: u64,
+    reserve_scrollbar_width: bool,
+    review_comment_version: u64,
+    selected_index: usize,
+}
+
+/// Owned diff line retained by the parsed diff cache.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct OwnedDiffLine {
+    content: String,
+    kind: DiffLineKind,
+    new_line: Option<u32>,
+    old_line: Option<u32>,
+}
+
+impl OwnedDiffLine {
+    /// Copies one borrowed parsed diff line into the content cache.
+    fn from_diff_line(diff_line: DiffLine<'_>) -> Self {
+        Self {
+            content: diff_line.content.to_string(),
+            kind: diff_line.kind,
+            new_line: diff_line.new_line,
+            old_line: diff_line.old_line,
+        }
+    }
+
+    /// Returns this cached line as the borrowed representation expected by
+    /// existing diff formatting helpers.
+    fn borrowed(&self) -> DiffLine<'_> {
+        DiffLine {
+            content: &self.content,
+            kind: self.kind,
+            new_line: self.new_line,
+            old_line: self.old_line,
+        }
+    }
+}
+
+/// Parsed diff data reused by file-tree rendering and diff layout assembly.
+#[derive(Clone)]
+pub(crate) struct DiffContentSnapshot {
+    file_list_lines: Arc<[Line<'static>]>,
+    key: DiffContentCacheKey,
+    parsed_lines: Arc<[OwnedDiffLine]>,
+    tree_items: Arc<[FileTreeItem]>,
+}
+
+impl DiffContentSnapshot {
+    /// Returns cached file-explorer lines for the left diff panel.
+    pub(crate) fn file_list_lines(&self) -> Arc<[Line<'static>]> {
+        Arc::clone(&self.file_list_lines)
+    }
+
+    /// Returns the number of selectable file-tree entries in this diff.
+    pub(crate) fn item_count(&self) -> usize {
+        self.tree_items.len()
+    }
+
+    /// Returns parsed lines for the active file-tree selection.
+    fn selected_lines(&self, selected_index: usize) -> Vec<DiffLine<'_>> {
+        let parsed_lines = self.borrowed_lines();
+        let Some(selected_item) = self.tree_items.get(selected_index) else {
+            return parsed_lines;
+        };
+
+        FileExplorer::filter_diff_lines(&parsed_lines, selected_item)
+    }
+
+    /// Returns the complete parsed diff as borrowed lines.
+    fn borrowed_lines(&self) -> Vec<DiffLine<'_>> {
+        self.parsed_lines
+            .iter()
+            .map(OwnedDiffLine::borrowed)
+            .collect()
+    }
+}
+
+/// Cached fully assembled diff lines for one render-affecting key.
+#[derive(Clone)]
+struct DiffCachedLayout {
+    line_count: usize,
+    lines: Arc<[Line<'static>]>,
+    render_layout: diff_util::DiffRenderLayout,
+}
+
+/// Borrowed inputs used to derive or look up one cached diff layout.
+#[derive(Clone, Copy)]
+struct DiffLayoutRequest<'a> {
+    content: &'a DiffContentSnapshot,
+    diff_area: Rect,
+    markdown_render_cache: &'a markdown::MarkdownRenderCache,
+    reserve_scrollbar_width: bool,
+    review_comment_snapshot: Option<&'a ReviewCommentSnapshot>,
+    review_comment_version: u64,
+    selected_index: usize,
+}
+
+/// Final diff layout selected for the current panel and scrollbar state.
+#[derive(Clone)]
+pub(crate) struct DiffResolvedLayout {
+    pub(crate) line_count: usize,
+    pub(crate) lines: Arc<[Line<'static>]>,
+    pub(crate) render_layout: diff_util::DiffRenderLayout,
+    pub(crate) show_scrollbar: bool,
+}
+
+/// Cached parsed diff snapshot entry.
+struct DiffContentCacheEntry {
+    key: DiffContentCacheKey,
+    snapshot: DiffContentSnapshot,
+}
+
+/// Cached rendered diff layout entry.
+struct DiffLayoutCacheEntry {
+    key: DiffLayoutCacheKey,
+    layout: DiffCachedLayout,
+}
+
+/// Bounded cache for parsed diff content and fully assembled diff layouts.
+///
+/// The parsed-content layer avoids re-parsing the same raw diff and rebuilding
+/// file-tree metadata on every frame. The rendered-layout layer sits above
+/// markdown rendering and inline comment lookup so scroll metrics and frame
+/// painting reuse the same styled rows for unchanged diff content, selection,
+/// panel width/height, scrollbar gutter state, review-comment version, and
+/// active style version.
+pub struct DiffLayoutCache {
+    content_entries: RefCell<VecDeque<DiffContentCacheEntry>>,
+    layout_entries: RefCell<VecDeque<DiffLayoutCacheEntry>>,
+}
+
+impl Default for DiffLayoutCache {
+    fn default() -> Self {
+        Self {
+            content_entries: RefCell::new(VecDeque::with_capacity(DIFF_CONTENT_CACHE_ENTRY_LIMIT)),
+            layout_entries: RefCell::new(VecDeque::with_capacity(DIFF_LAYOUT_CACHE_ENTRY_LIMIT)),
+        }
+    }
+}
+
+impl DiffLayoutCache {
+    /// Returns parsed diff and file-tree data from cache or derives it once.
+    pub(crate) fn content(&self, diff: &str) -> DiffContentSnapshot {
+        let key = Self::content_cache_key(diff);
+        if let Some(snapshot) = self.cached_content(key) {
+            return snapshot;
+        }
+
+        let parsed_lines = parse_diff_lines(diff);
+        let (file_list_lines, tree_items) = FileExplorer::file_tree(&parsed_lines);
+        let snapshot = DiffContentSnapshot {
+            file_list_lines: Arc::from(file_list_lines),
+            key,
+            parsed_lines: Arc::from(
+                parsed_lines
+                    .into_iter()
+                    .map(OwnedDiffLine::from_diff_line)
+                    .collect::<Vec<_>>(),
+            ),
+            tree_items: Arc::from(tree_items),
+        };
+        self.store_content(DiffContentCacheEntry {
+            key,
+            snapshot: snapshot.clone(),
+        });
+
+        snapshot
+    }
+
+    /// Returns the resolved diff layout for the current panel, using cached
+    /// no-scrollbar line count to decide whether a gutter-reserved layout is
+    /// required.
+    pub(crate) fn resolved_layout(
+        &self,
+        content: &DiffContentSnapshot,
+        selected_index: usize,
+        diff_area: Rect,
+        review_comment_snapshot: Option<&CachedReviewCommentSnapshot>,
+        markdown_render_cache: &markdown::MarkdownRenderCache,
+    ) -> DiffResolvedLayout {
+        let review_comment_version = review_comment_snapshot
+            .map(CachedReviewCommentSnapshot::version)
+            .unwrap_or_default();
+        let review_comment_snapshot =
+            review_comment_snapshot.map(CachedReviewCommentSnapshot::snapshot);
+        let layout_without_scrollbar = self.layout(DiffLayoutRequest {
+            content,
+            diff_area,
+            markdown_render_cache,
+            reserve_scrollbar_width: false,
+            review_comment_snapshot,
+            review_comment_version,
+            selected_index,
+        });
+        let show_scrollbar = diff_util::diff_has_scrollable_overflow(
+            layout_without_scrollbar.line_count,
+            layout_without_scrollbar.render_layout.viewport_height,
+        );
+        if !show_scrollbar {
+            return DiffResolvedLayout {
+                line_count: layout_without_scrollbar.line_count,
+                lines: layout_without_scrollbar.lines,
+                render_layout: layout_without_scrollbar.render_layout,
+                show_scrollbar: false,
+            };
+        }
+
+        let layout_with_scrollbar = self.layout(DiffLayoutRequest {
+            content,
+            diff_area,
+            markdown_render_cache,
+            reserve_scrollbar_width: true,
+            review_comment_snapshot,
+            review_comment_version,
+            selected_index,
+        });
+        let show_scrollbar = diff_util::diff_has_scrollable_overflow(
+            layout_with_scrollbar.line_count,
+            layout_with_scrollbar.render_layout.viewport_height,
+        );
+
+        DiffResolvedLayout {
+            line_count: layout_with_scrollbar.line_count,
+            lines: layout_with_scrollbar.lines,
+            render_layout: layout_with_scrollbar.render_layout,
+            show_scrollbar,
+        }
+    }
+
+    /// Returns cached parsed content for a matching diff fingerprint and
+    /// promotes the entry to the front of the LRU queue.
+    fn cached_content(&self, key: DiffContentCacheKey) -> Option<DiffContentSnapshot> {
+        let mut entries = self.content_entries.borrow_mut();
+        let entry_index = entries.iter().position(|entry| entry.key == key)?;
+        let entry = entries.remove(entry_index)?;
+        let snapshot = entry.snapshot.clone();
+        entries.push_front(entry);
+
+        Some(snapshot)
+    }
+
+    /// Stores one parsed-content entry and evicts the oldest entry when the
+    /// bounded capacity is exceeded.
+    fn store_content(&self, entry: DiffContentCacheEntry) {
+        let mut entries = self.content_entries.borrow_mut();
+        entries.push_front(entry);
+
+        while entries.len() > DIFF_CONTENT_CACHE_ENTRY_LIMIT {
+            entries.pop_back();
+        }
+    }
+
+    /// Returns cached rendered diff rows, or assembles and stores them when
+    /// any render-affecting input changed.
+    fn layout(&self, request: DiffLayoutRequest<'_>) -> DiffCachedLayout {
+        let DiffLayoutRequest {
+            content,
+            diff_area,
+            markdown_render_cache,
+            reserve_scrollbar_width,
+            review_comment_snapshot,
+            review_comment_version,
+            selected_index,
+        } = request;
+        let key = DiffLayoutCacheKey {
+            diff_area_height: diff_area.height,
+            diff_area_width: diff_area.width,
+            diff_content: content.key,
+            markdown_style_version: Self::markdown_style_version(markdown_render_cache),
+            reserve_scrollbar_width,
+            review_comment_version,
+            selected_index,
+        };
+        if let Some(layout) = self.cached_layout(&key) {
+            return layout;
+        }
+
+        let selected_lines = content.selected_lines(selected_index);
+        let render_layout =
+            diff_util::diff_render_layout(&selected_lines, diff_area, reserve_scrollbar_width);
+        let lines = build_diff_lines_with_comments(
+            &selected_lines,
+            render_layout,
+            review_comment_snapshot,
+            markdown_render_cache,
+        );
+        let layout = DiffCachedLayout {
+            line_count: lines.len(),
+            lines: Arc::from(lines),
+            render_layout,
+        };
+        self.store_layout(DiffLayoutCacheEntry {
+            key,
+            layout: layout.clone(),
+        });
+
+        layout
+    }
+
+    /// Returns cached rendered layout for a matching entry and promotes it to
+    /// the front of the LRU queue.
+    fn cached_layout(&self, key: &DiffLayoutCacheKey) -> Option<DiffCachedLayout> {
+        let mut entries = self.layout_entries.borrow_mut();
+        let entry_index = entries.iter().position(|entry| &entry.key == key)?;
+        let entry = entries.remove(entry_index)?;
+        let layout = entry.layout.clone();
+        entries.push_front(entry);
+
+        Some(layout)
+    }
+
+    /// Stores one rendered layout and evicts the oldest entries over the
+    /// bounded capacity.
+    fn store_layout(&self, entry: DiffLayoutCacheEntry) {
+        let mut entries = self.layout_entries.borrow_mut();
+        entries.push_front(entry);
+
+        while entries.len() > DIFF_LAYOUT_CACHE_ENTRY_LIMIT {
+            entries.pop_back();
+        }
+    }
+
+    /// Returns a compact key for the raw diff string.
+    fn content_cache_key(diff: &str) -> DiffContentCacheKey {
+        let mut hasher = FxHasher::default();
+        hasher.write(diff.as_bytes());
+
+        DiffContentCacheKey {
+            content_hash: hasher.finish(),
+            content_len: diff.len(),
+        }
+    }
+
+    /// Returns the style version that invalidates cached styled diff rows.
+    fn markdown_style_version(markdown_render_cache: &markdown::MarkdownRenderCache) -> u64 {
+        markdown_render_cache
+            .version()
+            .wrapping_add(style::active_theme_cache_version())
+    }
+}
 
 /// Renders the current session's git diff in a scrollable page.
 ///
@@ -33,29 +392,55 @@ const WRAPPED_CHUNK_START_INDEX: usize = 0;
 /// comments, selected by [`DiffPage::right_panel`]. The left-hand file explorer
 /// is unchanged across panels; the `c` key toggles the right-hand view.
 pub struct DiffPage<'a> {
-    pub diff: String,
+    pub diff: &'a str,
+    pub diff_layout_cache: &'a DiffLayoutCache,
     pub file_explorer_selected_index: usize,
     pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
-    pub review_comment_snapshot: Option<&'a ReviewCommentSnapshot>,
+    pub review_comment_snapshot: Option<&'a CachedReviewCommentSnapshot>,
     pub right_panel: DiffRightPanel,
     pub scroll_offset: u16,
+    pub session: &'a Session,
+}
+
+/// Borrowed inputs required to construct a [`DiffPage`] for one frame.
+#[derive(Clone, Copy)]
+pub struct DiffPageInput<'a> {
+    /// Raw unified diff currently shown by the page.
+    pub diff: &'a str,
+    /// Shared cache for parsed diff content and rendered diff layouts.
+    pub diff_layout_cache: &'a DiffLayoutCache,
+    /// Selected file-tree row in the left panel.
+    pub file_explorer_selected_index: usize,
+    /// Shared markdown render cache used for inline review comments.
+    pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
+    /// Cached review-comment snapshot and version for inline diff comments.
+    pub review_comment_snapshot: Option<&'a CachedReviewCommentSnapshot>,
+    /// Active right-hand panel selection.
+    pub right_panel: DiffRightPanel,
+    /// Vertical scroll offset inside the active right panel.
+    pub scroll_offset: u16,
+    /// Session whose diff is being rendered.
     pub session: &'a Session,
 }
 
 impl<'a> DiffPage<'a> {
     /// Creates a diff page for the given session, scroll position, and right
     /// panel selection.
-    pub fn new(
-        session: &'a Session,
-        diff: String,
-        scroll_offset: u16,
-        file_explorer_selected_index: usize,
-        right_panel: DiffRightPanel,
-        markdown_render_cache: &'a markdown::MarkdownRenderCache,
-        review_comment_snapshot: Option<&'a ReviewCommentSnapshot>,
-    ) -> Self {
+    pub fn new(input: DiffPageInput<'a>) -> Self {
+        let DiffPageInput {
+            diff,
+            diff_layout_cache,
+            file_explorer_selected_index,
+            markdown_render_cache,
+            review_comment_snapshot,
+            right_panel,
+            scroll_offset,
+            session,
+        } = input;
+
         Self {
             diff,
+            diff_layout_cache,
             file_explorer_selected_index,
             markdown_render_cache,
             review_comment_snapshot,
@@ -71,7 +456,7 @@ impl<'a> DiffPage<'a> {
         &self,
         f: &mut Frame,
         area: Rect,
-        parsed: &[DiffLine],
+        content: &DiffContentSnapshot,
         total_added_lines: u64,
         total_removed_lines: u64,
     ) {
@@ -92,54 +477,73 @@ impl<'a> DiffPage<'a> {
             ),
         ]);
 
-        let mut layout = diff_util::diff_render_layout(parsed, area, false);
-        let mut lines = build_diff_lines_with_comments(
-            parsed,
-            layout,
+        let layout = self.diff_layout_cache.resolved_layout(
+            content,
+            self.file_explorer_selected_index,
+            area,
             self.review_comment_snapshot,
             self.markdown_render_cache,
         );
-        let mut show_scrollbar =
-            diff_util::diff_has_scrollable_overflow(lines.len(), layout.viewport_height);
-
-        if show_scrollbar {
-            layout = diff_util::diff_render_layout(parsed, area, true);
-            lines = build_diff_lines_with_comments(
-                parsed,
-                layout,
-                self.review_comment_snapshot,
-                self.markdown_render_cache,
-            );
-            show_scrollbar =
-                diff_util::diff_has_scrollable_overflow(lines.len(), layout.viewport_height);
-        }
-        let total_lines = lines.len();
 
         let scroll_offset = diff_util::clamp_diff_scroll_offset(
             self.scroll_offset,
-            total_lines,
-            layout.viewport_height,
+            layout.line_count,
+            layout.render_layout.viewport_height,
+        );
+        let paint_lines = Self::borrowed_visible_lines(
+            &layout.lines,
+            scroll_offset,
+            layout.render_layout.viewport_height,
         );
 
-        let paragraph = Paragraph::new(lines)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(title)
-                    .border_style(style::border_style()),
-            )
-            .scroll((scroll_offset, SCROLL_X_OFFSET));
+        let paragraph = Paragraph::new(paint_lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .border_style(style::border_style()),
+        );
 
         f.render_widget(paragraph, area);
 
-        if show_scrollbar {
+        if layout.show_scrollbar {
             Self::render_diff_scrollbar(
                 f,
                 area,
-                layout.viewport_height,
+                layout.render_layout.viewport_height,
                 scroll_offset,
-                total_lines,
+                layout.line_count,
             );
+        }
+    }
+
+    /// Builds short-lived paint rows for the visible viewport slice, borrowing
+    /// span content from cached static diff rows instead of cloning the whole
+    /// diff on every scroll repaint.
+    fn borrowed_visible_lines<'line>(
+        lines: &'line [Line<'static>],
+        scroll_offset: u16,
+        viewport_height: u16,
+    ) -> Vec<Line<'line>> {
+        let start_index = usize::from(scroll_offset).min(lines.len());
+        let end_index = start_index
+            .saturating_add(usize::from(viewport_height))
+            .min(lines.len());
+
+        lines[start_index..end_index]
+            .iter()
+            .map(|line| Line {
+                alignment: line.alignment,
+                spans: line.spans.iter().map(Self::borrowed_paint_span).collect(),
+                style: line.style,
+            })
+            .collect()
+    }
+
+    /// Builds one borrowed paint span from a cached diff span.
+    fn borrowed_paint_span<'span>(span: &'span Span<'static>) -> Span<'span> {
+        Span {
+            content: Cow::Borrowed(span.content.as_ref()),
+            style: span.style,
         }
     }
 
@@ -308,36 +712,31 @@ impl<'a> DiffPage<'a> {
 /// Returns the max valid scroll offset for a diff panel that may include
 /// inline review-request comments.
 pub(crate) fn diff_view_max_scroll_offset_with_comments(
-    parsed: &[DiffLine<'_>],
+    diff: &str,
+    selected_index: usize,
     terminal_area: Rect,
-    review_comment_snapshot: Option<&ReviewCommentSnapshot>,
+    review_comment_snapshot: Option<&CachedReviewCommentSnapshot>,
     markdown_render_cache: &markdown::MarkdownRenderCache,
+    diff_layout_cache: &DiffLayoutCache,
 ) -> u16 {
     let diff_area = diff_util::diff_page_areas(terminal_area).diff_area;
-    let mut layout = diff_util::diff_render_layout(parsed, diff_area, false);
-    if layout.viewport_height == 0 {
+    let content = diff_layout_cache.content(diff);
+    let layout = diff_layout_cache.resolved_layout(
+        &content,
+        selected_index,
+        diff_area,
+        review_comment_snapshot,
+        markdown_render_cache,
+    );
+    if layout.render_layout.viewport_height == 0 {
         return 0;
     }
 
-    let mut rendered_line_count = build_diff_lines_with_comments(
-        parsed,
-        layout,
-        review_comment_snapshot,
-        markdown_render_cache,
+    diff_util::clamp_diff_scroll_offset(
+        u16::MAX,
+        layout.line_count,
+        layout.render_layout.viewport_height,
     )
-    .len();
-    if diff_util::diff_has_scrollable_overflow(rendered_line_count, layout.viewport_height) {
-        layout = diff_util::diff_render_layout(parsed, diff_area, true);
-        rendered_line_count = build_diff_lines_with_comments(
-            parsed,
-            layout,
-            review_comment_snapshot,
-            markdown_render_cache,
-        )
-        .len();
-    }
-
-    diff_util::clamp_diff_scroll_offset(u16::MAX, rendered_line_count, layout.viewport_height)
 }
 
 /// Builds diff panel rows after merging inline comment threads onto matching
@@ -441,22 +840,18 @@ impl<'a> InlineCommentIndex<'a> {
 impl Page for DiffPage<'_> {
     fn render(&mut self, f: &mut Frame, area: Rect) {
         let areas = diff_util::diff_page_areas(area);
+        let content = self.diff_layout_cache.content(self.diff);
 
-        let parsed = parse_diff_lines(&self.diff);
-        let tree_items = FileExplorer::file_tree_items(&parsed);
-
-        FileExplorer::new(&parsed)
+        FileExplorer::from_cached_lines(content.file_list_lines())
             .selected_index(self.file_explorer_selected_index)
             .render(f, areas.file_list_area);
 
         match self.right_panel {
             DiffRightPanel::Diff => {
-                let filtered =
-                    selected_diff_lines(&parsed, &tree_items, self.file_explorer_selected_index);
                 self.render_diff_content(
                     f,
                     areas.diff_area,
-                    &filtered,
+                    &content,
                     self.session.stats.added_lines,
                     self.session.stats.deleted_lines,
                 );
@@ -628,7 +1023,10 @@ impl DiffPage<'_> {
     /// the top under a "General discussion" header.
     fn render_comments_content(&self, f: &mut Frame, area: Rect) {
         let inner_width = area.width.saturating_sub(2);
-        let (thread_count, comment_count) = comment_counts(self.review_comment_snapshot);
+        let snapshot = self
+            .review_comment_snapshot
+            .map(CachedReviewCommentSnapshot::snapshot);
+        let (thread_count, comment_count) = comment_counts(snapshot);
         let lines = self.build_comments_lines(inner_width);
         let wrapped_lines = wrap_lines_to_rows(lines, inner_width);
         let viewport_height = area.height.saturating_sub(2);
@@ -672,7 +1070,9 @@ impl DiffPage<'_> {
     fn build_comments_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
         let review_request = self.session.review_request.as_ref();
-        let snapshot = self.review_comment_snapshot;
+        let snapshot = self
+            .review_comment_snapshot
+            .map(CachedReviewCommentSnapshot::snapshot);
 
         lines.push(comments_header_line(review_request, snapshot));
         lines.push(Line::default());
@@ -930,7 +1330,7 @@ mod tests {
     use crate::domain::session::tests::SessionFixtureBuilder;
     use crate::domain::session::{ForgeKind, ReviewRequestSummary};
     use crate::domain::theme::ColorTheme;
-    use crate::ui::diff_util::parse_diff_lines;
+    use crate::ui::diff_util::{parse_diff_lines, selected_diff_lines};
 
     const SAMPLE_DIFF: &str = concat!(
         "diff --git a/src/main.rs b/src/main.rs\n",
@@ -966,20 +1366,38 @@ mod tests {
 
     fn new_diff_page<'a>(
         session: &'a Session,
-        diff: String,
+        diff: &'a str,
         scroll_offset: u16,
         file_explorer_selected_index: usize,
         markdown_render_cache: &'a markdown::MarkdownRenderCache,
     ) -> DiffPage<'a> {
-        DiffPage::new(
-            session,
+        DiffPage::new(DiffPageInput {
             diff,
-            scroll_offset,
+            diff_layout_cache: test_diff_layout_cache(),
             file_explorer_selected_index,
-            DiffRightPanel::Diff,
             markdown_render_cache,
-            None,
-        )
+            review_comment_snapshot: None,
+            right_panel: DiffRightPanel::Diff,
+            scroll_offset,
+            session,
+        })
+    }
+
+    fn test_diff_layout_cache() -> &'static DiffLayoutCache {
+        Box::leak(Box::new(DiffLayoutCache::default()))
+    }
+
+    fn cached_review_comment_snapshot(
+        snapshot: ReviewCommentSnapshot,
+    ) -> CachedReviewCommentSnapshot {
+        let cache = crate::infra::review_comment_cache::ReviewCommentCache::default();
+        let session_id: crate::domain::session::SessionId = "cached-comment-test".into();
+
+        cache.record_snapshot(session_id.clone(), snapshot);
+
+        cache
+            .snapshot(&session_id)
+            .expect("test snapshot should be cached")
     }
 
     fn mixed_review_comment_snapshot() -> ReviewCommentSnapshot {
@@ -1048,6 +1466,100 @@ mod tests {
     }
 
     #[test]
+    fn test_diff_layout_cache_reuses_parsed_content_snapshot() {
+        // Arrange
+        let cache = DiffLayoutCache::default();
+
+        // Act
+        let first_content = cache.content(SAMPLE_DIFF);
+        let second_content = cache.content(SAMPLE_DIFF);
+
+        // Assert
+        assert!(Arc::ptr_eq(
+            &first_content.parsed_lines,
+            &second_content.parsed_lines
+        ));
+        assert!(Arc::ptr_eq(
+            &first_content.file_list_lines,
+            &second_content.file_list_lines
+        ));
+    }
+
+    #[test]
+    fn test_diff_layout_cache_reuses_rendered_layout_rows() {
+        // Arrange
+        let cache = DiffLayoutCache::default();
+        let content = cache.content(SAMPLE_DIFF);
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let area = Rect::new(0, 0, 80, 12);
+
+        // Act
+        let first_layout = cache.resolved_layout(&content, 0, area, None, &markdown_render_cache);
+        let second_layout = cache.resolved_layout(&content, 0, area, None, &markdown_render_cache);
+
+        // Assert
+        assert!(Arc::ptr_eq(&first_layout.lines, &second_layout.lines));
+        assert_eq!(first_layout.line_count, second_layout.line_count);
+    }
+
+    #[test]
+    fn test_diff_layout_cache_keys_review_comment_version() {
+        // Arrange
+        let cache = DiffLayoutCache::default();
+        let content = cache.content(concat!(
+            "diff --git a/src/main.rs b/src/main.rs\n",
+            "@@ -1,2 +1,2 @@\n",
+            " unchanged\n",
+            "+new content\n"
+        ));
+        let review_cache = crate::infra::review_comment_cache::ReviewCommentCache::default();
+        let session_id: crate::domain::session::SessionId = "diff-cache-comments".into();
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let area = Rect::new(0, 0, 80, 12);
+        review_cache.record_snapshot(
+            session_id.clone(),
+            ReviewCommentSnapshot {
+                pr_level_comments: Vec::new(),
+                threads: vec![review_thread(2, "alice", "First body.", false)],
+            },
+        );
+        let first_snapshot = review_cache
+            .snapshot(&session_id)
+            .expect("first snapshot should be cached");
+        review_cache.record_snapshot(
+            session_id.clone(),
+            ReviewCommentSnapshot {
+                pr_level_comments: Vec::new(),
+                threads: vec![review_thread(2, "alice", "Second body.", false)],
+            },
+        );
+        let second_snapshot = review_cache
+            .snapshot(&session_id)
+            .expect("second snapshot should be cached");
+
+        // Act
+        let first_layout = cache.resolved_layout(
+            &content,
+            0,
+            area,
+            Some(&first_snapshot),
+            &markdown_render_cache,
+        );
+        let second_layout = cache.resolved_layout(
+            &content,
+            0,
+            area,
+            Some(&second_snapshot),
+            &markdown_render_cache,
+        );
+
+        // Assert
+        assert_eq!(first_snapshot.version(), 1);
+        assert_eq!(second_snapshot.version(), 2);
+        assert!(!Arc::ptr_eq(&first_layout.lines, &second_layout.lines));
+    }
+
+    #[test]
     fn test_render_shows_updated_diff_help_hint() {
         // Arrange
         let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
@@ -1055,13 +1567,8 @@ mod tests {
         session.stats.added_lines = 1;
         session.stats.deleted_lines = 0;
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
-        let mut diff_page = new_diff_page(
-            &session,
-            "diff --git a/src/main.rs b/src/main.rs\n+added".to_string(),
-            0,
-            0,
-            &markdown_render_cache,
-        );
+        let diff = "diff --git a/src/main.rs b/src/main.rs\n+added";
+        let mut diff_page = new_diff_page(&session, diff, 0, 0, &markdown_render_cache);
         let backend = ratatui::backend::TestBackend::new(120, 30);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 
@@ -1089,13 +1596,8 @@ mod tests {
         session.stats.added_lines = 9;
         session.stats.deleted_lines = 4;
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
-        let mut diff_page = new_diff_page(
-            &session,
-            "diff --git a/src/main.rs b/src/main.rs\n+added".to_string(),
-            0,
-            0,
-            &markdown_render_cache,
-        );
+        let diff = "diff --git a/src/main.rs b/src/main.rs\n+added";
+        let mut diff_page = new_diff_page(&session, diff, 0, 0, &markdown_render_cache);
         let backend = ratatui::backend::TestBackend::new(120, 30);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 
@@ -1151,19 +1653,13 @@ mod tests {
         // Arrange
         let session = session_fixture();
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
-        let mut diff_page = new_diff_page(
-            &session,
-            concat!(
-                "diff --git a/src/main.rs b/src/main.rs\n",
-                "@@ -1,2 +1,2 @@\n",
-                "-old content\n",
-                "+new content\n"
-            )
-            .to_string(),
-            0,
-            0,
-            &markdown_render_cache,
+        let diff = concat!(
+            "diff --git a/src/main.rs b/src/main.rs\n",
+            "@@ -1,2 +1,2 @@\n",
+            "-old content\n",
+            "+new content\n"
         );
+        let mut diff_page = new_diff_page(&session, diff, 0, 0, &markdown_render_cache);
         let backend = ratatui::backend::TestBackend::new(120, 30);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 
@@ -1192,22 +1688,23 @@ mod tests {
         // Arrange
         let session = session_fixture();
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
-        let snapshot = mixed_review_comment_snapshot();
-        let mut diff_page = DiffPage::new(
-            &session,
-            concat!(
-                "diff --git a/src/main.rs b/src/main.rs\n",
-                "@@ -1,2 +1,2 @@\n",
-                " unchanged\n",
-                "+new content\n"
-            )
-            .to_string(),
-            0,
-            0,
-            DiffRightPanel::Diff,
-            &markdown_render_cache,
-            Some(&snapshot),
+        let snapshot = cached_review_comment_snapshot(mixed_review_comment_snapshot());
+        let diff = concat!(
+            "diff --git a/src/main.rs b/src/main.rs\n",
+            "@@ -1,2 +1,2 @@\n",
+            " unchanged\n",
+            "+new content\n"
         );
+        let mut diff_page = DiffPage::new(DiffPageInput {
+            diff,
+            diff_layout_cache: test_diff_layout_cache(),
+            file_explorer_selected_index: 0,
+            markdown_render_cache: &markdown_render_cache,
+            review_comment_snapshot: Some(&snapshot),
+            right_panel: DiffRightPanel::Diff,
+            scroll_offset: 0,
+            session: &session,
+        });
         let backend = ratatui::backend::TestBackend::new(120, 30);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 
@@ -1233,16 +1730,17 @@ mod tests {
         // Arrange
         let session = session_with_review_request();
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
-        let snapshot = mixed_review_comment_snapshot();
-        let diff_page = DiffPage::new(
-            &session,
-            String::new(),
-            0,
-            0,
-            DiffRightPanel::Comments,
-            &markdown_render_cache,
-            Some(&snapshot),
-        );
+        let snapshot = cached_review_comment_snapshot(mixed_review_comment_snapshot());
+        let diff_page = DiffPage::new(DiffPageInput {
+            diff: "",
+            diff_layout_cache: test_diff_layout_cache(),
+            file_explorer_selected_index: 0,
+            markdown_render_cache: &markdown_render_cache,
+            review_comment_snapshot: Some(&snapshot),
+            right_panel: DiffRightPanel::Comments,
+            scroll_offset: 0,
+            session: &session,
+        });
 
         // Act
         let lines = diff_page.build_comments_lines(120);
@@ -1265,7 +1763,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
-        let mut diff_page = new_diff_page(&session, diff, 12, 0, &markdown_render_cache);
+        let mut diff_page = new_diff_page(&session, &diff, 12, 0, &markdown_render_cache);
         let backend = ratatui::backend::TestBackend::new(80, 12);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 
@@ -1292,7 +1790,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
-        let mut diff_page = new_diff_page(&session, diff, u16::MAX, 0, &markdown_render_cache);
+        let mut diff_page = new_diff_page(&session, &diff, u16::MAX, 0, &markdown_render_cache);
         let backend = ratatui::backend::TestBackend::new(80, 12);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 

@@ -36,6 +36,8 @@ pub struct RenderContext<'a> {
     pub current_tab: Tab,
     /// Current local branch name for the active project.
     pub git_branch: Option<&'a str>,
+    /// Shared cache for parsed and rendered diff-page layouts.
+    pub diff_layout_cache: &'a page::diff::DiffLayoutCache,
     /// Current upstream reference tracked by the active project branch.
     pub git_upstream_ref: Option<&'a str>,
     /// Latest ahead/behind counts for the active project branch.

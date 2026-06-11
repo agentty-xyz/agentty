@@ -121,6 +121,7 @@ impl App {
                 active_project_id: project_render_parts.active_project_id,
                 current_tab,
                 git_branch: project_render_parts.git_branch,
+                diff_layout_cache: &self.diff_layout_cache,
                 git_upstream_ref: project_render_parts.git_upstream_ref,
                 git_status: project_render_parts.git_status,
                 latest_available_version,

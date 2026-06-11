@@ -17,12 +17,31 @@ use crate::domain::session::SessionId;
 /// the UI render path.
 #[derive(Clone, Default)]
 pub struct ReviewCommentCache {
-    inner: Arc<Mutex<HashMap<SessionId, ReviewCommentSnapshot>>>,
+    inner: Arc<Mutex<HashMap<SessionId, CachedReviewCommentSnapshot>>>,
+}
+
+/// One cached review-comment snapshot plus its render invalidation version.
+#[derive(Clone)]
+pub struct CachedReviewCommentSnapshot {
+    snapshot: Arc<ReviewCommentSnapshot>,
+    version: u64,
+}
+
+impl CachedReviewCommentSnapshot {
+    /// Returns the review-comment snapshot shared by render callers.
+    pub fn snapshot(&self) -> &ReviewCommentSnapshot {
+        self.snapshot.as_ref()
+    }
+
+    /// Returns the monotonic version for this session's cached comments.
+    pub fn version(&self) -> u64 {
+        self.version
+    }
 }
 
 impl ReviewCommentCache {
     /// Returns the cached review-comment snapshot for `session_id`.
-    pub fn snapshot(&self, session_id: &SessionId) -> Option<ReviewCommentSnapshot> {
+    pub fn snapshot(&self, session_id: &SessionId) -> Option<CachedReviewCommentSnapshot> {
         let guard = self.inner.lock().ok()?;
 
         guard.get(session_id).cloned()
@@ -48,8 +67,23 @@ impl ReviewCommentCache {
         let Ok(mut guard) = self.inner.lock() else {
             return false;
         };
-        let changed = guard.get(&session_id) != Some(&snapshot);
-        guard.insert(session_id, snapshot);
+        let previous = guard.get(&session_id);
+        let changed = previous.is_none_or(|entry| entry.snapshot() != &snapshot);
+        if !changed {
+            return false;
+        }
+
+        let version = previous
+            .map(CachedReviewCommentSnapshot::version)
+            .unwrap_or_default()
+            .saturating_add(1);
+        guard.insert(
+            session_id,
+            CachedReviewCommentSnapshot {
+                snapshot: Arc::new(snapshot),
+                version,
+            },
+        );
 
         changed
     }
@@ -124,6 +158,7 @@ mod tests {
         // Assert
         assert_eq!(
             stored
+                .snapshot()
                 .threads
                 .iter()
                 .map(|thread| (thread.path.clone(), thread.line))
@@ -156,8 +191,8 @@ mod tests {
             .expect("cache should expose the inserted snapshot");
 
         // Assert
-        assert_eq!(stored.pr_level_comments.len(), 1);
-        assert_eq!(stored.pr_level_comments[0].author, "carol");
+        assert_eq!(stored.snapshot().pr_level_comments.len(), 1);
+        assert_eq!(stored.snapshot().pr_level_comments[0].author, "carol");
     }
 
     #[test]
@@ -169,14 +204,28 @@ mod tests {
 
         // Act
         let first_change = cache.record_snapshot(session_id.clone(), baseline.clone());
+        let first_version = cache
+            .snapshot(&session_id)
+            .expect("first cached snapshot should exist")
+            .version();
         let second_change = cache.record_snapshot(session_id.clone(), baseline);
+        let second_version = cache
+            .snapshot(&session_id)
+            .expect("second cached snapshot should exist")
+            .version();
         let mutated = snapshot_from_threads(vec![review_thread("src/a.rs", 1, true)]);
-        let third_change = cache.record_snapshot(session_id, mutated);
+        let third_change = cache.record_snapshot(session_id.clone(), mutated);
+        let third_version = cache
+            .snapshot(&session_id)
+            .expect("third cached snapshot should exist")
+            .version();
 
         // Assert
         assert!(first_change, "initial insert should report change");
         assert!(!second_change, "identical insert should not report change");
         assert!(third_change, "resolution flag change should report change");
+        assert_eq!(first_version, second_version);
+        assert_eq!(third_version, second_version.saturating_add(1));
     }
 
     #[test]

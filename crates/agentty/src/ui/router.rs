@@ -110,6 +110,7 @@ struct PublishBranchOverlayContext<'a> {
 struct RouteAuxContext<'a> {
     active_prompt_outputs: &'a HashMap<SessionId, String>,
     default_reasoning_level: ReasoningLevel,
+    diff_layout_cache: &'a page::diff::DiffLayoutCache,
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
     output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
     review_comment_cache: &'a ReviewCommentCache,
@@ -125,6 +126,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         active_project_id,
         active_prompt_outputs,
         current_tab,
+        diff_layout_cache,
         markdown_render_cache,
         mode,
         output_layout_cache,
@@ -162,6 +164,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
     let aux = RouteAuxContext {
         active_prompt_outputs,
         default_reasoning_level: shared.settings.reasoning_level,
+        diff_layout_cache,
         markdown_render_cache,
         output_layout_cache,
         review_comment_cache,
@@ -244,6 +247,7 @@ fn render_list_or_overlay_mode(
             f,
             area,
             HelpOverlayRenderContext {
+                diff_layout_cache: aux.diff_layout_cache,
                 help_context,
                 list_background: shared.list_background(),
                 markdown_render_cache: aux.markdown_render_cache,
@@ -557,6 +561,7 @@ fn render_session_or_diff_mode(
             *file_explorer_selected_index,
             *right_panel,
             aux.markdown_render_cache,
+            aux.diff_layout_cache,
             aux.review_comment_cache,
         ),
         _ => {}
@@ -733,19 +738,21 @@ fn render_diff_mode(
     file_explorer_selected_index: usize,
     right_panel: DiffRightPanel,
     markdown_render_cache: &markdown::MarkdownRenderCache,
+    diff_layout_cache: &page::diff::DiffLayoutCache,
     review_comment_cache: &ReviewCommentCache,
 ) {
     if let Some(session) = sessions.iter().find(|session| &session.id == session_id) {
         let snapshot = review_comment_cache.snapshot(session_id);
-        page::diff::DiffPage::new(
-            session,
-            diff.to_string(),
-            scroll_offset,
+        page::diff::DiffPage::new(page::diff::DiffPageInput {
+            diff,
+            diff_layout_cache,
             file_explorer_selected_index,
-            right_panel,
             markdown_render_cache,
-            snapshot.as_ref(),
-        )
+            review_comment_snapshot: snapshot.as_ref(),
+            right_panel,
+            scroll_offset,
+            session,
+        })
         .render(f, area);
     }
 }
@@ -867,6 +874,7 @@ mod tests {
         };
         let progress_messages = HashMap::new();
         let cache = markdown::MarkdownRenderCache::default();
+        let diff_layout_cache = page::diff::DiffLayoutCache::default();
         let review_comment_cache = ReviewCommentCache::default();
         let output_layout_cache = component::session_output::SessionOutputLayoutCache::default();
         let session_update_versions = HashMap::new();
@@ -882,6 +890,7 @@ mod tests {
                     RouteAuxContext {
                         active_prompt_outputs: &HashMap::new(),
                         default_reasoning_level: ReasoningLevel::default(),
+                        diff_layout_cache: &diff_layout_cache,
                         markdown_render_cache: &cache,
                         output_layout_cache: &output_layout_cache,
                         review_comment_cache: &review_comment_cache,
@@ -914,6 +923,7 @@ mod tests {
         let progress_messages = HashMap::new();
         let sessions = Vec::new();
         let cache = markdown::MarkdownRenderCache::default();
+        let diff_layout_cache = page::diff::DiffLayoutCache::default();
         let review_comment_cache = ReviewCommentCache::default();
         let output_layout_cache = component::session_output::SessionOutputLayoutCache::default();
         let session_update_versions = HashMap::new();
@@ -931,6 +941,7 @@ mod tests {
                     RouteAuxContext {
                         active_prompt_outputs: &HashMap::new(),
                         default_reasoning_level: ReasoningLevel::default(),
+                        diff_layout_cache: &diff_layout_cache,
                         markdown_render_cache: &cache,
                         output_layout_cache: &output_layout_cache,
                         review_comment_cache: &review_comment_cache,
@@ -968,6 +979,7 @@ mod tests {
         };
         let progress_messages = HashMap::new();
         let cache = markdown::MarkdownRenderCache::default();
+        let diff_layout_cache = page::diff::DiffLayoutCache::default();
         let review_comment_cache = ReviewCommentCache::default();
         let output_layout_cache = component::session_output::SessionOutputLayoutCache::default();
         let session_update_versions = HashMap::new();
@@ -983,6 +995,7 @@ mod tests {
                     RouteAuxContext {
                         active_prompt_outputs: &HashMap::new(),
                         default_reasoning_level: ReasoningLevel::default(),
+                        diff_layout_cache: &diff_layout_cache,
                         markdown_render_cache: &cache,
                         output_layout_cache: &output_layout_cache,
                         review_comment_cache: &review_comment_cache,

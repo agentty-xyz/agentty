@@ -254,6 +254,9 @@ pub struct App {
     /// Caches rendered markdown output for the session transcript panel so
     /// unchanged content is not re-parsed on every frame.
     pub(super) markdown_render_cache: markdown::MarkdownRenderCache,
+    /// Caches parsed diff content and rendered diff layouts so diff scroll
+    /// metrics and frame rendering share the same derived rows.
+    pub(super) diff_layout_cache: crate::ui::page::diff::DiffLayoutCache,
     /// Caches fully assembled session-output layouts so scroll metrics and
     /// frame rendering reuse the same derived transcript lines for unchanged
     /// session/update inputs.
@@ -907,6 +910,12 @@ impl App {
         &self,
     ) -> &crate::ui::component::session_output::SessionOutputLayoutCache {
         &self.session_output_layout_cache
+    }
+
+    /// Returns the shared diff layout cache used by diff scroll metrics and
+    /// frame rendering.
+    pub(crate) fn diff_layout_cache(&self) -> &crate::ui::page::diff::DiffLayoutCache {
+        &self.diff_layout_cache
     }
 
     /// Returns the shared markdown render cache used by session scroll

@@ -70,6 +70,8 @@ pub(crate) struct HelpOverlayRenderContext<'a> {
     pub(crate) help_context: &'a HelpContext,
     /// Shared tab-list state rendered behind list-backed help overlays.
     pub(crate) list_background: ListBackgroundRenderContext<'a>,
+    /// Shared diff-layout cache reused by restored diff backgrounds.
+    pub(crate) diff_layout_cache: &'a page::diff::DiffLayoutCache,
     /// Shared markdown cache reused by restored background pages.
     pub(crate) markdown_render_cache: &'a markdown::MarkdownRenderCache,
     /// Shared output-layout cache reused by restored session backgrounds.
@@ -93,6 +95,8 @@ struct HelpBackgroundRenderContext<'a> {
     help_context: &'a HelpContext,
     /// Shared tab-list state rendered behind list-backed help overlays.
     list_background: ListBackgroundRenderContext<'a>,
+    /// Shared diff-layout cache reused by restored diff backgrounds.
+    diff_layout_cache: &'a page::diff::DiffLayoutCache,
     /// Shared markdown cache reused by restored background pages.
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
     /// Shared output-layout cache reused by restored session backgrounds.
@@ -264,6 +268,7 @@ pub(crate) fn sync_popup_message(
 /// Renders help overlay above the context-specific background page.
 pub(crate) fn render_help(f: &mut Frame, area: Rect, context: HelpOverlayRenderContext<'_>) {
     let HelpOverlayRenderContext {
+        diff_layout_cache,
         help_context,
         list_background,
         markdown_render_cache,
@@ -281,6 +286,7 @@ pub(crate) fn render_help(f: &mut Frame, area: Rect, context: HelpOverlayRenderC
         HelpBackgroundRenderContext {
             help_context,
             list_background,
+            diff_layout_cache,
             markdown_render_cache,
             output_layout_cache,
             review_comment_cache,
@@ -386,7 +392,7 @@ enum ResolvedHelpBackground<'a> {
         right_panel: DiffRightPanel,
         scroll_offset: u16,
         session: &'a Session,
-        snapshot: Option<ag_forge::ReviewCommentSnapshot>,
+        snapshot: Option<crate::infra::review_comment_cache::CachedReviewCommentSnapshot>,
     },
 }
 
@@ -438,6 +444,7 @@ fn resolve_help_background<'a>(
 /// Renders background content behind help based on the source `HelpContext`.
 fn render_help_background(f: &mut Frame, area: Rect, context: HelpBackgroundRenderContext<'_>) {
     let HelpBackgroundRenderContext {
+        diff_layout_cache,
         help_context,
         list_background,
         markdown_render_cache,
@@ -495,15 +502,16 @@ fn render_help_background(f: &mut Frame, area: Rect, context: HelpBackgroundRend
             session,
             snapshot,
             scroll_offset,
-        }) => page::diff::DiffPage::new(
-            session,
-            diff.to_string(),
-            scroll_offset,
+        }) => page::diff::DiffPage::new(page::diff::DiffPageInput {
+            diff,
+            diff_layout_cache,
             file_explorer_selected_index,
-            right_panel,
             markdown_render_cache,
-            snapshot.as_ref(),
-        )
+            review_comment_snapshot: snapshot.as_ref(),
+            right_panel,
+            scroll_offset,
+            session,
+        })
         .render(f, area),
         None => {}
     }
