@@ -17,6 +17,7 @@ use crate::app::error::AppError;
 use crate::app::{AppEvent, UpdateStatus};
 use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
 use crate::domain::session::SessionId;
+use crate::domain::system_log::{SystemLogCategory, SystemLogEvent, SystemLogLevel};
 use crate::infra::agent;
 use crate::infra::git::GitClient;
 use crate::version;
@@ -74,12 +75,35 @@ impl TaskService {
         review_request_client: Arc<dyn ReviewRequestClient>,
     ) {
         tokio::spawn(async move {
+            let _ = app_event_tx.send(AppEvent::SystemLog {
+                event: SystemLogEvent::new(
+                    SystemLogLevel::Info,
+                    SystemLogCategory::Forge,
+                    "Requested reviews forge query started",
+                )
+                .with_detail(format!("project #{project_id}")),
+            });
             let result = load_requested_reviews(
                 working_dir,
                 git_client.as_ref(),
                 review_request_client.as_ref(),
             )
             .await;
+            let event = match &result {
+                Ok(items) => SystemLogEvent::new(
+                    SystemLogLevel::Success,
+                    SystemLogCategory::Forge,
+                    "Requested reviews forge query completed",
+                )
+                .with_detail(format!("project #{project_id}: {} reviews", items.len())),
+                Err(error) => SystemLogEvent::new(
+                    SystemLogLevel::Warning,
+                    SystemLogCategory::Forge,
+                    "Requested reviews forge query failed",
+                )
+                .with_detail(format!("project #{project_id}: {error}")),
+            };
+            let _ = app_event_tx.send(AppEvent::SystemLog { event });
             let _ = app_event_tx.send(AppEvent::RequestedReviewsLoaded {
                 generation,
                 project_id,

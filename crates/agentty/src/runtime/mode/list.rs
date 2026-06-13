@@ -10,7 +10,7 @@ use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
 use crate::runtime::mode::question;
 use crate::ui::state::app_mode::{AppMode, ConfirmationIntent, HelpContext, QuestionFocus};
 use crate::ui::state::help_action::{
-    HelpAction, project_list_actions, session_list_actions, settings_actions,
+    HelpAction, project_list_actions, session_list_actions, settings_actions, system_log_actions,
 };
 use crate::ui::state::prompt::{PromptAttachmentState, PromptHistoryState};
 use crate::ui::text_util::inline_text;
@@ -59,13 +59,21 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
             Tab::Sessions => app.next(),
             Tab::Review => app.next_requested_review(),
             Tab::Settings => app.settings.next(),
+            Tab::Logs => app.scroll_system_logs_down(),
         },
         KeyCode::Char('k') | KeyCode::Up => match app.tabs.current() {
             Tab::Projects => app.previous_project(),
             Tab::Sessions => app.previous(),
             Tab::Review => app.previous_requested_review(),
             Tab::Settings => app.settings.previous(),
+            Tab::Logs => app.scroll_system_logs_up(),
         },
+        KeyCode::Char('g') if app.tabs.current() == Tab::Logs => {
+            app.scroll_system_logs_to_top();
+        }
+        KeyCode::Char('G') if app.tabs.current() == Tab::Logs => {
+            app.scroll_system_logs_to_bottom();
+        }
         KeyCode::Enter => return handle_enter_key(app).await,
         KeyCode::Char('c') if app.tabs.current() == Tab::Sessions => {
             let selected_session = app.selected_session().and_then(|session| {
@@ -154,6 +162,7 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
         Tab::Review => {
             app.open_selected_requested_review();
         }
+        Tab::Logs => {}
     }
 
     Ok(EventResult::Continue)
@@ -278,6 +287,10 @@ fn list_keybindings(app: &App) -> Vec<HelpAction> {
 
     if app.tabs.current() == Tab::Review {
         return crate::ui::state::help_action::review_actions();
+    }
+
+    if app.tabs.current() == Tab::Logs {
+        return system_log_actions();
     }
 
     let is_sessions_tab = app.tabs.current() == Tab::Sessions;
@@ -488,7 +501,54 @@ mod tests {
 
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
-        assert_eq!(app.tabs.current(), Tab::Settings);
+        assert_eq!(app.tabs.current(), Tab::Logs);
+    }
+
+    /// Verifies log-page navigation keys move the tail-relative scroll
+    /// offset.
+    #[tokio::test]
+    async fn test_logs_tab_scroll_keys_update_tail_offset() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app().await;
+        app.tabs.set(Tab::Logs);
+        app.scroll_system_logs_up();
+
+        // Act
+        let down_result = handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to handle down key");
+        let after_down_offset = app.system_log_tail_offset;
+        let up_result = handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to handle up key");
+        let after_up_offset = app.system_log_tail_offset;
+        handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to handle top key");
+        let after_top_offset = app.system_log_tail_offset;
+        handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT),
+        )
+        .await
+        .expect("failed to handle bottom key");
+
+        // Assert
+        assert!(matches!(down_result, EventResult::Continue));
+        assert_eq!(after_down_offset, 0);
+        assert!(matches!(up_result, EventResult::Continue));
+        assert_eq!(after_up_offset, 1);
+        assert_eq!(after_top_offset, u16::MAX);
+        assert_eq!(app.system_log_tail_offset, 0);
     }
 
     #[tokio::test]

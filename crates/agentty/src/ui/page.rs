@@ -8,3 +8,4 @@ pub mod review_list;
 pub mod session_chat;
 pub mod session_list;
 pub mod setting;
+pub mod system_log;

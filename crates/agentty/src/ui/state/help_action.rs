@@ -188,6 +188,29 @@ pub(crate) fn settings_footer_actions() -> Vec<HelpAction> {
     ]
 }
 
+/// Returns help actions for the process-local system log page.
+pub(crate) fn system_log_actions() -> Vec<HelpAction> {
+    let mut actions = list_base_actions();
+    actions.push(HelpAction::new("scroll", "j/k", "Scroll logs"));
+    actions.push(HelpAction::new("top", "g", "Oldest logs"));
+    actions.push(HelpAction::new("bottom", "G", "Newest logs"));
+    actions.push(HelpAction::new("next tab", "Tab", "Switch tab"));
+    actions.push(HelpAction::new("help", "?", "Help"));
+
+    actions
+}
+
+/// Returns compact footer actions for the process-local system log page.
+pub(crate) fn system_log_footer_actions() -> Vec<HelpAction> {
+    vec![
+        HelpAction::new("quit", "q", "Quit"),
+        HelpAction::new("scroll", "j/k", "Scroll logs"),
+        HelpAction::new("top", "g", "Oldest logs"),
+        HelpAction::new("bottom", "G", "Newest logs"),
+        HelpAction::new("help", "?", "Help"),
+    ]
+}
+
 /// Returns help actions for the requested-review page.
 pub(crate) fn review_actions() -> Vec<HelpAction> {
     let mut actions = vec![

@@ -9,6 +9,7 @@ use crate::domain::agent::ReasoningLevel;
 use crate::domain::input::InputState;
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session, SessionId};
+use crate::domain::system_log::SystemLogBuffer;
 use crate::infra::review_comment_cache::ReviewCommentCache;
 use crate::ui::overlay::{
     HelpOverlayRenderContext, SyncBlockedPopupRenderContext, ViewInfoPopupRenderContext,
@@ -31,6 +32,8 @@ pub(crate) struct ListBackgroundRenderContext<'a> {
     pub(crate) sessions: &'a [Session],
     pub(crate) settings: &'a mut SettingsManager,
     pub(crate) stats_activity: &'a [DailyActivity],
+    pub(crate) system_log_tail_offset: u16,
+    pub(crate) system_logs: &'a SystemLogBuffer,
     pub(crate) table_state: &'a mut TableState,
 }
 
@@ -47,6 +50,8 @@ struct RouteSharedContext<'a> {
     sessions: &'a [Session],
     settings: &'a mut SettingsManager,
     stats_activity: &'a [DailyActivity],
+    system_log_tail_offset: u16,
+    system_logs: &'a SystemLogBuffer,
     table_state: &'a mut TableState,
 }
 
@@ -65,6 +70,8 @@ impl RouteSharedContext<'_> {
             sessions: self.sessions,
             settings: self.settings,
             stats_activity: self.stats_activity,
+            system_log_tail_offset: self.system_log_tail_offset,
+            system_logs: self.system_logs,
             table_state: self.table_state,
         }
     }
@@ -144,6 +151,8 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         sessions,
         table_state,
         wall_clock_unix_seconds,
+        system_log_tail_offset,
+        system_logs,
         ..
     } = context;
 
@@ -158,6 +167,8 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         sessions,
         settings,
         stats_activity,
+        system_log_tail_offset,
+        system_logs,
         table_state,
     };
 
@@ -775,6 +786,8 @@ pub(crate) fn render_list_background(
         sessions,
         settings,
         stats_activity,
+        system_log_tail_offset,
+        system_logs,
         table_state,
     } = context;
 
@@ -814,6 +827,10 @@ pub(crate) fn render_list_background(
         Tab::Settings => {
             let active_project_name = active_project_name(active_project_id, projects);
             page::setting::SettingsPage::new(settings, active_project_name).render(f, chunks[1]);
+        }
+        Tab::Logs => {
+            page::system_log::SystemLogPage::new(system_logs, system_log_tail_offset)
+                .render(f, chunks[1]);
         }
     }
 }

@@ -101,7 +101,8 @@ channels:
 - Producer(s): App background tasks, workers, and task helpers
 - Consumer(s): `App::apply_app_events()` reducer
 - Payload: `AppEvent` variants
-- Purpose: Safe cross-task app-state mutation.
+- Purpose: Safe cross-task app-state mutation, including process-local system log
+  recording.
 
 ### Turn event stream (`TurnEvent`)
 
@@ -160,6 +161,8 @@ Reducer behaviors that matter for data flow:
 - `PublishedBranchSyncUpdated` tracks detached post-turn auto-push state for
   already-published session branches so stale background completions do not overwrite
   newer sync attempts in the active session view.
+- `SystemLog` appends structured source/severity/message entries to the process-local
+  bounded log buffer that backs the top-level **Logs** tab.
 - After touched-session sync, terminal statuses (`Done`, `Canceled`) drop per-session
   worker senders so workers can shut down runtimes.
 
@@ -712,7 +715,8 @@ paths and their trigger conditions:
   branches, periodic ticks, and list-mode sync action `s`
 - Spawn site: `SyncHandle::spawn`
 - Emits or writes: `AppEvent::GitStatusUpdated`, `AppEvent::ReviewRequestStatusUpdated`,
-  `AppEvent::ReviewCommentsUpdated`, and `AppEvent::SyncMainCompleted`
+  `AppEvent::ReviewCommentsUpdated`, `AppEvent::SyncMainCompleted`, and
+  `AppEvent::SystemLog`
 - What it does: Owns one command queue plus a watched `SyncContext` for the active
   project. Periodic passes serialize a read-only `git fetch`, branch ahead/behind
   snapshot, and every-other-tick review-request refresh. Manual sync commands enter the
@@ -822,7 +826,7 @@ paths and their trigger conditions:
 
 - Trigger: List-mode sync action `s`
 - Spawn site: `OrchestratorSyncMainRunner::start_sync_main`
-- Emits or writes: `AppEvent::SyncMainCompleted`
+- Emits or writes: `AppEvent::SyncMainCompleted` and `AppEvent::SystemLog`
 - What it does: Enqueues the selected project branch pull/rebase/push through the sync
   orchestrator so it serializes with background git and forge status refreshes. The
   assisted conflict flow still runs when needed.
@@ -878,6 +882,8 @@ runtime flow:
   startup.
 - Session snapshots in memory are authoritative for rendering; DB is authoritative for
   restart recovery.
+- System logs are process-local only: `App` owns a bounded in-memory buffer, reducer
+  events append to it, and no log entry is written to SQLite or disk.
 - Shared session handles (`output`, `status`, `child_pid`) provide low-latency updates
   between DB reloads.
 - Event-driven refresh is primary (`RefreshSessions` for session rows and

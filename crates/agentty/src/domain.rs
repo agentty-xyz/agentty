@@ -10,6 +10,7 @@ pub mod question;
 pub mod review;
 pub mod session;
 pub mod setting;
+pub mod system_log;
 pub mod theme;
 pub(crate) mod transcript_notice;
 pub mod turn_prompt;

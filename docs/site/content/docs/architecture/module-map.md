@@ -129,6 +129,8 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
   from `ag-forge`.
 - `crates/agentty/src/domain/setting.rs`: Shared persisted setting keys used across app
   and infrastructure layers.
+- `crates/agentty/src/domain/system_log.rs`: Process-local structured system log events,
+  severity/source labels, and the bounded in-memory log buffer.
 - `crates/agentty/src/domain/theme.rs`: Terminal color theme values, persistence
   strings, and settings selector ordering.
 - `crates/agentty/src/domain/transcript_notice.rs`: Canonical bracketed transcript
@@ -320,6 +322,8 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
   replies.
 - `crates/agentty/src/ui/page/session_list.rs`: Session list page.
 - `crates/agentty/src/ui/page/setting.rs`: Settings page.
+- `crates/agentty/src/ui/page/system_log.rs`: Process-local Logs tab page with
+  severity-highlighted rows and tail-oriented scrolling.
 - `crates/agentty/src/ui/component/chat_input.rs`: Chat input widget.
 - `crates/agentty/src/ui/component/confirmation_overlay.rs`: Confirmation dialog
   overlay.

@@ -13,7 +13,7 @@ For keyboard shortcuts by view, see [Keybindings](@/docs/usage/keybindings.md).
 
 ## Interface Layout
 
-<a id="usage-interface-layout"></a> Agentty organizes its interface into four primary
+<a id="usage-interface-layout"></a> Agentty organizes its interface into five primary
 tabs, all accessible with `Tab`:
 
 | Tab | Purpose | |-----|---------| | **Projects** | Select between projects (git
@@ -32,7 +32,11 @@ title and rendered-description detail page with local scrolling. If the list rea
 provider cap, the footer shows that Agentty is displaying the first matching requests. |
 | **Settings** | Configure the color theme, default reasoning level, smart/fast/review
 model defaults, the optional `Last used model as default` smart-model mode, the session
-commit coauthor trailer, and `Open Commands` for the active project. |
+commit coauthor trailer, and `Open Commands` for the active project. | | **Logs** |
+Inspect process-local system log events such as startup, manual project sync,
+requested-review refreshes, background review-request status refreshes, and session
+status transitions. Logs are not persisted; Agentty keeps the newest `1000` entries in
+memory and purges the oldest entries after the limit is reached. |
 
 In session chat view, the status-colored session title renders in a dedicated header row
 above the output panel. A second metadata row shows the persisted size bucket, current
@@ -56,6 +60,10 @@ total.
 The top status bar keeps the current version and update status visible, and it also
 rotates short page-scoped `FYI:` messages once per minute while you are in the
 **Sessions** list or a session chat view.
+
+The **Logs** tab starts tailed to the newest entries, with severity and source labels
+highlighted for scanning. Use `k` to move toward older entries, `j` to move back toward
+newer entries, `g` for the oldest retained entries, and `G` for the newest entries.
 
 The footer hides workspace context on the **Projects** tab. In other top-level tabs it
 shows the active directory. When the current branch tracks an upstream, the footer

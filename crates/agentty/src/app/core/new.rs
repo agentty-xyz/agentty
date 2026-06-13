@@ -11,8 +11,11 @@ use crate::app::service::{AppServiceDeps, AppServices};
 use crate::app::session::SessionManager;
 use crate::app::setting::SettingsManager;
 use crate::app::startup::{AppStartup, StartupProjectContext, StartupSessionLoadContext};
-use crate::app::{AppError, review, sync, task};
+use crate::app::{AppError, review, session, sync, task};
 use crate::domain::agent::AgentKind;
+use crate::domain::system_log::{
+    SystemLogBuffer, SystemLogCategory, SystemLogEvent, SystemLogLevel,
+};
 use crate::infra::clock::{Clock, RealClock};
 use crate::infra::db;
 use crate::infra::db::AppRepositories;
@@ -160,6 +163,7 @@ impl App {
         let sync_main_runner = clients
             .sync_main_runner
             .unwrap_or_else(|| sync_handle.sync_main_runner());
+        let system_logs = Self::startup_system_logs(clock.as_ref(), projects.project_name());
 
         AppStartup::spawn_background_tasks(auto_update, &event_tx);
 
@@ -185,6 +189,8 @@ impl App {
             session_output_layout_cache:
                 crate::ui::component::session_output::SessionOutputLayoutCache::default(),
             session_progress_messages: std::collections::HashMap::new(),
+            system_log_tail_offset: 0,
+            system_logs,
             update_status: None,
             sync_handle,
             sync_main_runner,
@@ -255,6 +261,23 @@ impl App {
                 review_request_client: Arc::clone(&clients.review_request_client),
             },
         ))
+    }
+
+    /// Builds the process-local startup log buffer with the first visible
+    /// lifecycle event.
+    fn startup_system_logs(clock: &dyn Clock, project_name: &str) -> SystemLogBuffer {
+        let mut system_logs = SystemLogBuffer::default();
+        system_logs.push(
+            session::unix_timestamp_from_system_time(clock.now_system_time()),
+            SystemLogEvent::new(
+                SystemLogLevel::Info,
+                SystemLogCategory::System,
+                "Agentty started",
+            )
+            .with_detail(format!("active project: {project_name}")),
+        );
+
+        system_logs
     }
 
     /// Resolves the configured upstream reference for one project branch.

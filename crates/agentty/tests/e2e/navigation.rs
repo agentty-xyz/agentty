@@ -158,7 +158,7 @@ fn tab_key_switches_tabs() -> E2eResult {
 /// Verify that pressing Tab cycles through all primary tabs in order.
 ///
 /// Starts on Projects and asserts each successive tab becomes selected:
-/// Sessions, Review, Settings.
+/// Sessions, Review, Settings, Logs.
 #[test]
 fn tab_cycles_through_all_tabs() -> E2eResult {
     // Arrange, Act, Assert
@@ -183,15 +183,18 @@ fn tab_cycles_through_all_tabs() -> E2eResult {
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(2500)
                     .capture_labeled("settings", "Settings tab selected")
+                    .compose(&common::switch_to_tab("Logs"))
+                    .viewing_pause_ms(2500)
+                    .capture_labeled("logs", "Logs tab selected")
             },
             |frame, report| {
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Reasoning Level", &full);
+                assertion::assert_text_in_region(frame, "Agentty started", &full);
 
                 assert_eq!(
                     report.captures.len(),
-                    3,
-                    "Expected 3 captures (sessions, review, settings)"
+                    4,
+                    "Expected 4 captures (sessions, review, settings, logs)"
                 );
 
                 let sessions_frame = common::frame_from_capture(&report.captures[0]);
@@ -201,8 +204,42 @@ fn tab_cycles_through_all_tabs() -> E2eResult {
                 let review_frame = common::frame_from_capture(&report.captures[1]);
                 let review_full = Region::full(review_frame.cols(), review_frame.rows());
                 assertion::assert_text_in_region(&review_frame, "Review Requests", &review_full);
+
+                let settings_frame = common::frame_from_capture(&report.captures[2]);
+                let settings_full = Region::full(settings_frame.cols(), settings_frame.rows());
+                assertion::assert_text_in_region(
+                    &settings_frame,
+                    "Reasoning Level",
+                    &settings_full,
+                );
             },
         )?;
+
+    Ok(())
+}
+
+/// Verify that the Logs tab renders process-local system log entries.
+#[test]
+fn logs_tab_shows_process_system_logs() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("system_logs_page").with_git().run(
+        |scenario| {
+            scenario
+                .compose(&common::wait_for_agentty_startup())
+                .compose(&common::switch_to_tab("Sessions"))
+                .compose(&common::switch_to_tab("Review"))
+                .compose(&common::switch_to_tab("Settings"))
+                .compose(&common::switch_to_tab("Logs"))
+                .viewing_pause_ms(1500)
+                .capture_labeled("logs", "Logs tab selected")
+        },
+        |frame, _report| {
+            let full = Region::full(frame.cols(), frame.rows());
+            assertion::assert_text_in_region(frame, "Logs", &full);
+            assertion::assert_text_in_region(frame, "Agentty started", &full);
+            assertion::assert_text_in_region(frame, "system", &full);
+        },
+    )?;
 
     Ok(())
 }
@@ -337,9 +374,9 @@ fn startup_shows_footer_hints() -> E2eResult {
 
 /// Verify that `BackTab` (Shift+Tab) cycles tabs in reverse order.
 ///
-/// Starts on Projects (first tab), navigates forward to Settings (last tab),
-/// then presses `BackTab` to cycle back through Review, Sessions, and
-/// Projects.
+/// Starts on Projects (first tab), navigates forward to Logs (last tab),
+/// then presses `BackTab` to cycle back through Settings, Review, Sessions,
+/// and Projects.
 #[test]
 fn backtab_cycles_tabs_reverse() -> E2eResult {
     // Arrange, Act, Assert
@@ -357,31 +394,43 @@ fn backtab_cycles_tabs_reverse() -> E2eResult {
                     .compose(&common::switch_to_tab("Sessions"))
                     .compose(&common::switch_to_tab("Review"))
                     .compose(&common::switch_to_tab("Settings"))
+                    .compose(&common::switch_to_tab("Logs"))
                     .viewing_pause_ms(2000)
-                    .capture_labeled("at_settings", "Settings tab selected before reverse")
+                    .capture_labeled("at_logs", "Logs tab selected before reverse")
+                    .compose(&common::switch_to_tab_reverse("Settings"))
+                    .viewing_pause_ms(1500)
+                    .capture_labeled("back_to_settings", "Settings tab after first BackTab")
                     .compose(&common::switch_to_tab_reverse("Review"))
                     .viewing_pause_ms(1500)
-                    .capture_labeled("back_to_review", "Review tab after first BackTab")
+                    .capture_labeled("back_to_review", "Review tab after second BackTab")
                     .compose(&common::switch_to_tab_reverse("Sessions"))
                     .viewing_pause_ms(1500)
-                    .capture_labeled("back_to_sessions", "Sessions tab after second BackTab")
+                    .capture_labeled("back_to_sessions", "Sessions tab after third BackTab")
                     .compose(&common::switch_to_tab_reverse("Projects"))
                     .viewing_pause_ms(2000)
-                    .capture_labeled("back_to_projects", "Projects tab after third BackTab")
+                    .capture_labeled("back_to_projects", "Projects tab after fourth BackTab")
             },
             |frame, report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "test-project", &full);
 
-                let review_frame = common::frame_from_capture(&report.captures[1]);
+                let settings_frame = common::frame_from_capture(&report.captures[1]);
+                let settings_full = Region::full(settings_frame.cols(), settings_frame.rows());
+                assertion::assert_text_in_region(
+                    &settings_frame,
+                    "Reasoning Level",
+                    &settings_full,
+                );
+
+                let review_frame = common::frame_from_capture(&report.captures[2]);
                 let review_full = Region::full(review_frame.cols(), review_frame.rows());
                 assertion::assert_text_in_region(&review_frame, "Review Requests", &review_full);
 
-                let sessions_frame = common::frame_from_capture(&report.captures[2]);
+                let sessions_frame = common::frame_from_capture(&report.captures[3]);
                 let sessions_full = Region::full(sessions_frame.cols(), sessions_frame.rows());
                 assertion::assert_text_in_region(&sessions_frame, "No sessions", &sessions_full);
 
-                let projects_frame = common::frame_from_capture(&report.captures[3]);
+                let projects_frame = common::frame_from_capture(&report.captures[4]);
                 let projects_full = Region::full(projects_frame.cols(), projects_frame.rows());
                 assertion::assert_text_in_region(&projects_frame, "test-project", &projects_full);
             },

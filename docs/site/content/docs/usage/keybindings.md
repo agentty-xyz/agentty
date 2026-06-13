@@ -61,6 +61,16 @@ The page is split into `Global settings` for the app-wide `Theme` row and
 - `Open Commands` for launching session worktrees in the active project (one command per
   line).
 
+## Logs
+
+| Key | Action | |-----|--------| | `q` | Quit | | `j` / `k` | Scroll logs | | `g` |
+Jump to oldest retained log entries | | `G` | Jump to newest log entries | | `Tab` |
+Switch tab | | `?` | Help |
+
+The **Logs** tab is process-local and read-only. It keeps the newest `1000` system log
+entries in memory only, so entries disappear when Agentty exits and the oldest retained
+entries are purged as new ones arrive.
+
 ## Review
 
 | Key | Action | |-----|--------| | `q` | Quit | | `j` / `k` | Navigate reviews | |

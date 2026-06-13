@@ -143,6 +143,8 @@ impl App {
                 session_update_versions: &self.last_seen_session_update_versions,
                 session_worktree_availability: session_render_parts.session_worktree_availability,
                 settings,
+                system_log_tail_offset: self.system_log_tail_offset,
+                system_logs: &self.system_logs,
                 stats_activity: session_render_parts.stats_activity,
                 sessions: session_render_parts.sessions,
                 status_bar_fyi_rotation_index,

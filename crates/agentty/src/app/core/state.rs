@@ -41,6 +41,9 @@ use crate::app::{AppError, RequestedReviewState, session};
 use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
 use crate::domain::input::InputState;
 use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, Session, SessionId, Status};
+use crate::domain::system_log::{
+    SystemLogBuffer, SystemLogCategory, SystemLogEvent, SystemLogLevel,
+};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::turn_prompt::TurnPrompt;
 #[cfg(test)]
@@ -225,12 +228,18 @@ pub struct App {
     pub(crate) sessions: SessionManager,
     /// Runs sync-to-main workflows behind an injectable boundary.
     pub(crate) sync_main_runner: Arc<dyn SyncMainRunner>,
+    /// Process-local system log buffer retained only for this `agentty`
+    /// runtime.
+    pub(crate) system_logs: SystemLogBuffer,
     /// Owns the active-project sync orchestrator command and context
     /// channels.
     pub(crate) sync_handle: sync::SyncHandle,
     /// Monotonic requested-review refresh generation for rejecting stale task
     /// results.
     pub(super) requested_review_generation: u64,
+    /// Number of log output lines between the visible window and the newest
+    /// log lines. `0` keeps the logs page tailed to the newest events.
+    pub(crate) system_log_tail_offset: u16,
     /// Selected requested-review item index for the active project's
     /// top-level `Review` tab, excluding non-selectable section headers.
     pub(super) requested_review_selected_index: Option<usize>,
@@ -300,6 +309,34 @@ impl App {
     /// Refreshes requested reviews when the `Review` tab is visible.
     pub fn refresh_requested_reviews_for_current_project(&mut self) {
         self.refresh_requested_reviews_if_review_tab(true);
+    }
+
+    /// Scrolls the system log view one line toward newer entries.
+    pub(crate) fn scroll_system_logs_down(&mut self) {
+        self.system_log_tail_offset = self.system_log_tail_offset.saturating_sub(1);
+    }
+
+    /// Scrolls the system log view one line toward older entries.
+    pub(crate) fn scroll_system_logs_up(&mut self) {
+        self.system_log_tail_offset = self.system_log_tail_offset.saturating_add(1);
+    }
+
+    /// Scrolls the system log view to the newest entries.
+    pub(crate) fn scroll_system_logs_to_bottom(&mut self) {
+        self.system_log_tail_offset = 0;
+    }
+
+    /// Scrolls the system log view to the oldest retained entries.
+    pub(crate) fn scroll_system_logs_to_top(&mut self) {
+        self.system_log_tail_offset = u16::MAX;
+    }
+
+    /// Records one local system log event immediately.
+    pub(crate) fn record_system_log_event(&mut self, event: SystemLogEvent) {
+        let timestamp_unix_seconds =
+            session::unix_timestamp_from_system_time(self.services.clock().now_system_time());
+        self.system_logs.push(timestamp_unix_seconds, event);
+        self.mark_dirty();
     }
 
     /// Replaces the requested-review list for `project_id`, normalizes rows to
@@ -503,6 +540,17 @@ impl App {
             generation,
             project_id,
         };
+        let refresh_source = if force { "manual" } else { "background" };
+        self.record_system_log_event(
+            SystemLogEvent::new(
+                SystemLogLevel::Info,
+                SystemLogCategory::Forge,
+                "Requested review refresh started",
+            )
+            .with_detail(format!(
+                "{refresh_source} refresh for project #{project_id}"
+            )),
+        );
         task::TaskService::spawn_requested_reviews_task(
             generation,
             project_id,
@@ -1240,6 +1288,17 @@ impl App {
     /// opens a loading popup with project and branch context.
     pub(crate) fn start_sync_main(&mut self) {
         let sync_popup_context = self.sync_popup_context();
+        self.record_system_log_event(
+            SystemLogEvent::new(
+                SystemLogLevel::Info,
+                SystemLogCategory::Sync,
+                "Manual project sync started",
+            )
+            .with_detail(format!(
+                "{} on {}",
+                sync_popup_context.project_name, sync_popup_context.default_branch
+            )),
+        );
         self.mode = AppMode::SyncBlockedPopup {
             project_name: Some(sync_popup_context.project_name.clone()),
             default_branch: Some(sync_popup_context.default_branch),
@@ -1849,6 +1908,21 @@ mod tests {
     /// boundary.
     async fn new_test_app() -> App {
         new_test_app_with_tmux_client(Arc::new(MockTmuxClient::new())).await
+    }
+
+    /// Verifies app startup seeds the first process-local system log entry.
+    #[tokio::test]
+    async fn new_with_clients_records_startup_system_log() {
+        // Arrange, Act
+        let app = new_test_app().await;
+
+        // Assert
+        assert!(
+            app.system_logs
+                .entries()
+                .iter()
+                .any(|entry| entry.message == "Agentty started")
+        );
     }
 
     #[tokio::test]
@@ -3322,6 +3396,34 @@ mod tests {
         );
     }
 
+    /// Verifies system log events are retained in reducer batch order.
+    #[test]
+    fn app_event_batch_collect_event_keeps_system_log_events_ordered() {
+        // Arrange
+        let mut event_batch = AppEventBatch::default();
+
+        // Act
+        event_batch.collect_event(AppEvent::SystemLog {
+            event: SystemLogEvent::new(
+                SystemLogLevel::Info,
+                SystemLogCategory::System,
+                "First event",
+            ),
+        });
+        event_batch.collect_event(AppEvent::SystemLog {
+            event: SystemLogEvent::new(
+                SystemLogLevel::Warning,
+                SystemLogCategory::Forge,
+                "Second event",
+            ),
+        });
+
+        // Assert
+        assert_eq!(event_batch.system_log_events.len(), 2);
+        assert_eq!(event_batch.system_log_events[0].message, "First event");
+        assert_eq!(event_batch.system_log_events[1].message, "Second event");
+    }
+
     #[test]
     fn app_event_batch_collect_event_keeps_latest_same_session_updates() {
         // Arrange
@@ -3539,6 +3641,39 @@ mod tests {
         assert!(app.needs_redraw());
     }
 
+    /// Verifies direct system log events append to the process-local buffer.
+    #[tokio::test]
+    async fn apply_app_events_records_system_log_events() {
+        // Arrange
+        let mut app = new_test_app().await;
+        let initial_log_count = app.system_logs.len();
+        app.clear_redraw();
+
+        // Act
+        app.apply_app_events(AppEvent::SystemLog {
+            event: SystemLogEvent::new(
+                SystemLogLevel::Success,
+                SystemLogCategory::Sync,
+                "Manual sync completed",
+            )
+            .with_detail("main"),
+        })
+        .await;
+
+        // Assert
+        assert_eq!(app.system_logs.len(), initial_log_count + 1);
+        let entry = app
+            .system_logs
+            .entries()
+            .back()
+            .expect("system log event should be recorded");
+        assert_eq!(entry.level, SystemLogLevel::Success);
+        assert_eq!(entry.category, SystemLogCategory::Sync);
+        assert_eq!(entry.message, "Manual sync completed");
+        assert_eq!(entry.detail.as_deref(), Some("main"));
+        assert!(app.needs_redraw());
+    }
+
     #[tokio::test]
     /// Verifies workflow notices append to in-memory session state without
     /// changing persisted transcript output.
@@ -3698,6 +3833,76 @@ mod tests {
             .find(|session| session.id == "session-1")
             .expect("session should remain loaded");
         assert_eq!(session.status, Status::Review);
+    }
+
+    /// Verifies reducer-applied session status transitions are recorded in
+    /// the process-local system log.
+    #[tokio::test]
+    async fn apply_app_events_review_request_status_transition_records_system_log() {
+        // Arrange
+        let mut app = new_test_app().await;
+        let project_id = app.active_project_id();
+        let session_id = "session-log-transition";
+        app.services
+            .db()
+            .sessions()
+            .insert_session(
+                session_id,
+                AgentModel::Gemini3FlashPreview.as_str(),
+                "main",
+                &Status::Review.to_string(),
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        let session_folder_name = session_id.chars().take(8).collect::<String>();
+        let session_data_dir = app
+            .services
+            .base_path()
+            .join(session_folder_name)
+            .join(SESSION_DATA_DIR);
+        fs::create_dir_all(session_data_dir).expect("failed to create session data dir");
+        app.refresh_sessions_now().await;
+        let generation = app.sync_handle.current_generation();
+        let initial_log_count = app.system_logs.len();
+
+        // Act
+        app.apply_app_events(AppEvent::ReviewRequestStatusUpdated {
+            generation,
+            result: Ok(SyncReviewRequestTaskResult {
+                outcome: session::SyncReviewRequestOutcome::Closed {
+                    display_id: "#42".to_string(),
+                },
+                summary: None,
+            }),
+            session_id: session_id.into(),
+        })
+        .await;
+        app.process_pending_app_events().await;
+
+        // Assert
+        let session = app
+            .sessions
+            .sessions()
+            .iter()
+            .find(|session| session.id == session_id)
+            .expect("session should remain loaded");
+        assert_eq!(session.status, Status::Canceled);
+        let status_log_entry = app
+            .system_logs
+            .entries()
+            .iter()
+            .skip(initial_log_count)
+            .find(|entry| entry.message == "Session status changed")
+            .expect("status transition should be logged");
+        assert_eq!(status_log_entry.category, SystemLogCategory::Session);
+        assert_eq!(status_log_entry.level, SystemLogLevel::Info);
+        assert!(
+            status_log_entry
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("Review -> Canceled"))
+        );
     }
 
     #[tokio::test]

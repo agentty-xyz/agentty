@@ -10,6 +10,7 @@ use crate::app::session_state::SessionGitStatus;
 use crate::app::{RequestedReviewState, SettingsManager, Tab, UpdateStatus};
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session, SessionId};
+use crate::domain::system_log::SystemLogBuffer;
 use crate::infra::review_comment_cache::ReviewCommentCache;
 use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
 use crate::ui::{component, markdown, page, router};
@@ -79,6 +80,10 @@ pub struct RenderContext<'a> {
     pub session_worktree_availability: &'a HashMap<SessionId, bool>,
     /// Mutable project-scoped settings snapshot.
     pub settings: &'a mut SettingsManager,
+    /// Process-local retained system log entries.
+    pub system_logs: &'a SystemLogBuffer,
+    /// Tail-relative scroll offset for the logs page.
+    pub system_log_tail_offset: u16,
     /// Daily session activity series used by dashboard activity summaries.
     pub stats_activity: &'a [DailyActivity],
     /// Session rows available for rendering.

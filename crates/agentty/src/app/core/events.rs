@@ -20,16 +20,17 @@ use app::review::{
 };
 
 use super::state::{App, SyncPopupContext, SyncReviewRequestTaskResult, UpdateStatus};
-use crate::app;
 use crate::app::session::{
     SessionTaskService, SyncMainOutcome, SyncSessionStartError, TurnAppliedState,
 };
 use crate::app::session_state::SessionGitStatus;
+use crate::app::{self, session};
 use crate::domain::file_entry::FileEntry;
 use crate::domain::input::InputState;
 use crate::domain::session::{
     PublishBranchAction, PublishedBranchSyncStatus, SessionId, SessionSize, Status,
 };
+use crate::domain::system_log::{SystemLogCategory, SystemLogEvent, SystemLogLevel};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::runtime::mode::{at_mention, question, sync_blocked};
 use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, QuestionFocus};
@@ -60,6 +61,8 @@ pub(crate) enum AppEvent {
     },
     /// Indicates progress of the background auto-update.
     UpdateStatusChanged { update_status: UpdateStatus },
+    /// Records one process-local system log event.
+    SystemLog { event: SystemLogEvent },
     /// Indicates a session model selection has been persisted.
     SessionModelUpdated {
         session_id: SessionId,
@@ -192,6 +195,9 @@ pub(super) struct AppEventBatch {
     /// Whether this batch should reload session list snapshots from
     /// persistence.
     pub(super) should_reload_sessions: bool,
+    /// Ordered process-local system log events to append during this reducer
+    /// batch.
+    pub(super) system_log_events: Vec<SystemLogEvent>,
     pub(super) review_request_status_updates: Vec<ReviewRequestStatusUpdate>,
     pub(super) review_comment_session_ids: HashSet<SessionId>,
     /// Latest requested-review task result collected for this reducer batch,
@@ -257,6 +263,7 @@ impl AppEventBatch {
             AppEvent::UpdateStatusChanged { update_status } => {
                 self.collect_update_status_changed(update_status);
             }
+            AppEvent::SystemLog { event } => self.collect_system_log(event),
             AppEvent::SessionModelUpdated {
                 session_id,
                 session_model,
@@ -276,10 +283,7 @@ impl AppEventBatch {
             AppEvent::SessionProgressUpdated {
                 progress_message,
                 session_id,
-            } => {
-                self.session_progress_updates
-                    .insert(session_id, progress_message);
-            }
+            } => self.collect_session_progress_updated(session_id, progress_message),
             AppEvent::SyncMainCompleted { result } => self.collect_sync_main_completed(result),
             AppEvent::SessionSizeUpdated {
                 added_lines,
@@ -406,6 +410,17 @@ impl AppEventBatch {
     /// Stores one pending status-bar update.
     fn collect_update_status_changed(&mut self, update_status: UpdateStatus) {
         self.update_status = Some(update_status);
+    }
+
+    /// Stores an active session progress message update for reducer
+    /// application.
+    fn collect_session_progress_updated(
+        &mut self,
+        session_id: SessionId,
+        progress_message: Option<String>,
+    ) {
+        self.session_progress_updates
+            .insert(session_id, progress_message);
     }
 
     /// Marks the next reducer application as a session-list refresh.
@@ -579,6 +594,12 @@ impl AppEventBatch {
             }
         }
     }
+
+    /// Collects one structured system log event for ordered reducer
+    /// application.
+    fn collect_system_log(&mut self, event: SystemLogEvent) {
+        self.system_log_events.push(event);
+    }
 }
 
 impl App {
@@ -626,6 +647,8 @@ impl App {
         let sync_generation_for_review_updates = self.sync_handle.current_generation();
         let mut should_mark_dirty = Self::app_event_batch_changes_observable_state(&event_batch);
         let previous_session_states = self.previous_session_states(&event_batch.session_ids);
+
+        self.apply_system_log_events(std::mem::take(&mut event_batch.system_log_events));
 
         should_mark_dirty |=
             self.update_session_redraw_versions(&event_batch.session_update_versions);
@@ -699,8 +722,19 @@ impl App {
 
         if let Some(sync_main_result) = event_batch.sync_main_result {
             let sync_popup_context = self.sync_popup_context();
+            self.apply_system_log_events(vec![Self::sync_main_result_log_event(
+                &sync_main_result,
+                &sync_popup_context,
+            )]);
 
             self.mode = Self::sync_main_popup_mode(sync_main_result, &sync_popup_context);
+        }
+
+        let session_status_log_events =
+            self.session_status_transition_log_events(&previous_session_states);
+        if !session_status_log_events.is_empty() {
+            should_mark_dirty = true;
+            self.apply_system_log_events(session_status_log_events);
         }
 
         self.handle_merge_queue_progress(&event_batch.session_ids, &previous_session_states)
@@ -851,6 +885,105 @@ impl App {
             || !event_batch.session_title_generation_finished.is_empty()
             || !event_batch.session_workflow_notice_updates.is_empty()
             || event_batch.sync_main_result.is_some()
+            || !event_batch.system_log_events.is_empty()
+    }
+
+    /// Records reducer-batched system log events with the current app clock.
+    fn apply_system_log_events(&mut self, system_log_events: Vec<SystemLogEvent>) {
+        if system_log_events.is_empty() {
+            return;
+        }
+
+        let timestamp_unix_seconds =
+            session::unix_timestamp_from_system_time(self.services.clock().now_system_time());
+        for system_log_event in system_log_events {
+            self.system_logs
+                .push(timestamp_unix_seconds, system_log_event);
+        }
+    }
+
+    /// Builds the system log event for one completed manual sync workflow.
+    fn sync_main_result_log_event(
+        sync_main_result: &Result<SyncMainOutcome, SyncSessionStartError>,
+        sync_popup_context: &SyncPopupContext,
+    ) -> SystemLogEvent {
+        match sync_main_result {
+            Ok(sync_main_outcome) => SystemLogEvent::new(
+                SystemLogLevel::Success,
+                SystemLogCategory::Sync,
+                "Manual project sync completed",
+            )
+            .with_detail(format!(
+                "{} on {}: pulled {}, pushed {}, resolved {} conflicts",
+                sync_popup_context.project_name,
+                sync_popup_context.default_branch,
+                sync_main_outcome.pulled_commits.unwrap_or(0),
+                sync_main_outcome.pushed_commits.unwrap_or(0),
+                sync_main_outcome.resolved_conflict_files.len(),
+            )),
+            Err(SyncSessionStartError::MainHasUncommittedChanges { default_branch }) => {
+                SystemLogEvent::new(
+                    SystemLogLevel::Warning,
+                    SystemLogCategory::Sync,
+                    "Manual project sync blocked",
+                )
+                .with_detail(format!(
+                    "{} on {default_branch}: uncommitted changes",
+                    sync_popup_context.project_name
+                ))
+            }
+            Err(sync_error @ SyncSessionStartError::Other(_)) => SystemLogEvent::new(
+                SystemLogLevel::Error,
+                SystemLogCategory::Sync,
+                "Manual project sync failed",
+            )
+            .with_detail(format!(
+                "{} on {}: {}",
+                sync_popup_context.project_name,
+                sync_popup_context.default_branch,
+                sync_error.detail_message()
+            )),
+        }
+    }
+
+    /// Builds system log events for sessions whose rendered status changed
+    /// during the current reducer batch.
+    fn session_status_transition_log_events(
+        &self,
+        previous_session_states: &HashMap<SessionId, Status>,
+    ) -> Vec<SystemLogEvent> {
+        let mut events = Vec::new();
+
+        for (session_id, previous_status) in previous_session_states {
+            let Some(session) = self
+                .sessions
+                .sessions()
+                .iter()
+                .find(|session| session.id == *session_id)
+            else {
+                continue;
+            };
+            if session.status == *previous_status {
+                continue;
+            }
+
+            events.push(
+                SystemLogEvent::new(
+                    SystemLogLevel::Info,
+                    SystemLogCategory::Session,
+                    "Session status changed",
+                )
+                .with_detail(format!(
+                    "{}: {} -> {} ({})",
+                    session.id,
+                    previous_status,
+                    session.status,
+                    session.display_title()
+                )),
+            );
+        }
+
+        events
     }
 
     /// Updates the last-seen session-handle versions and returns whether any

@@ -26,6 +26,7 @@ use crate::app::session_state::SessionGitStatus;
 use crate::app::{AppEvent, session};
 use crate::domain::agent::AgentModel;
 use crate::domain::session::{ReviewRequestState, SessionId};
+use crate::domain::system_log::{SystemLogCategory, SystemLogEvent, SystemLogLevel};
 use crate::infra::git::GitClient;
 use crate::infra::review_comment_cache::ReviewCommentCache;
 
@@ -392,6 +393,19 @@ impl SyncOrchestrator {
             return;
         }
 
+        emit_system_log(
+            &self.app_event_tx,
+            SystemLogEvent::new(
+                SystemLogLevel::Info,
+                SystemLogCategory::Sync,
+                "Background project refresh started",
+            )
+            .with_detail(format!(
+                "{} session branches, {} review targets",
+                context.session_git_status_targets.len(),
+                context.review_request_sync_targets.len()
+            )),
+        );
         self.run_git_status_pass(&context).await;
         if include_review_pass {
             self.run_review_request_pass(&context).await;
@@ -474,6 +488,21 @@ impl SyncOrchestrator {
         self.review_pass_index = self.review_pass_index.wrapping_add(1);
         let mut updates = Vec::new();
 
+        if !context.review_request_sync_targets.is_empty() {
+            emit_system_log(
+                &self.app_event_tx,
+                SystemLogEvent::new(
+                    SystemLogLevel::Info,
+                    SystemLogCategory::Forge,
+                    "Review request status refresh started",
+                )
+                .with_detail(format!(
+                    "{} active review targets",
+                    context.review_request_sync_targets.len()
+                )),
+            );
+        }
+
         for review_request_sync_target in &context.review_request_sync_targets {
             if self.context_is_stale(context) {
                 return updates;
@@ -483,6 +512,15 @@ impl SyncOrchestrator {
                 continue;
             }
 
+            emit_system_log(
+                &self.app_event_tx,
+                SystemLogEvent::new(
+                    SystemLogLevel::Info,
+                    SystemLogCategory::Forge,
+                    "Refreshing review request status",
+                )
+                .with_detail(review_request_target_detail(review_request_sync_target)),
+            );
             let result = sync_review_request_status(
                 review_request_sync_target.folder.clone(),
                 context.git_client.as_ref(),
@@ -497,6 +535,10 @@ impl SyncOrchestrator {
             }
 
             self.record_review_sync_outcome(review_request_sync_target, &result, review_pass_index);
+            emit_system_log(
+                &self.app_event_tx,
+                review_request_status_log_event(review_request_sync_target, &result),
+            );
 
             let review_comments_sync_action = review_comments_sync_action(
                 review_request_sync_target.linked_review_request.as_ref(),
@@ -575,6 +617,18 @@ impl SyncOrchestrator {
             working_dir,
         } = request;
 
+        emit_system_log(
+            &self.app_event_tx,
+            SystemLogEvent::new(
+                SystemLogLevel::Info,
+                SystemLogCategory::Sync,
+                "Manual sync entered orchestrator queue",
+            )
+            .with_detail(format!(
+                "branch {}",
+                default_branch.as_deref().unwrap_or("not detected")
+            )),
+        );
         let context = self.context_rx.borrow().clone();
         let review_request_updates = self.collect_review_request_pass_updates(&context).await;
 
@@ -692,6 +746,73 @@ struct ReviewRequestPassUpdate {
     review_comments_sync_action: ReviewCommentsSyncAction,
     /// Polling target that produced this result.
     target: ReviewRequestSyncTarget,
+}
+
+/// Emits one process-local system log event through the app reducer.
+fn emit_system_log(app_event_tx: &mpsc::UnboundedSender<AppEvent>, event: SystemLogEvent) {
+    // Fire-and-forget: receiver may be dropped during shutdown.
+    let _ = app_event_tx.send(AppEvent::SystemLog { event });
+}
+
+/// Builds compact detail text for a review-request sync target.
+fn review_request_target_detail(target: &ReviewRequestSyncTarget) -> String {
+    let display_id = target
+        .linked_review_request
+        .as_ref()
+        .map_or("unlinked", |review_request| {
+            review_request.summary.display_id.as_str()
+        });
+    let upstream = target
+        .published_upstream_ref
+        .as_deref()
+        .unwrap_or("no upstream");
+
+    format!("session {} ({display_id}, {upstream})", target.session_id)
+}
+
+/// Builds the completion log event for one review-request status refresh.
+fn review_request_status_log_event(
+    target: &ReviewRequestSyncTarget,
+    result: &Result<SyncReviewRequestTaskResult, String>,
+) -> SystemLogEvent {
+    match result {
+        Ok(task_result) => SystemLogEvent::new(
+            SystemLogLevel::Success,
+            SystemLogCategory::Forge,
+            "Review request status refreshed",
+        )
+        .with_detail(format!(
+            "{}: {}",
+            review_request_target_detail(target),
+            review_request_outcome_label(&task_result.outcome)
+        )),
+        Err(error) => SystemLogEvent::new(
+            SystemLogLevel::Warning,
+            SystemLogCategory::Forge,
+            "Review request status refresh failed",
+        )
+        .with_detail(format!("{}: {error}", review_request_target_detail(target))),
+    }
+}
+
+/// Returns a compact description for one review-request sync outcome.
+fn review_request_outcome_label(outcome: &session::SyncReviewRequestOutcome) -> String {
+    match outcome {
+        session::SyncReviewRequestOutcome::Open {
+            display_id,
+            status_summary,
+        } => status_summary.as_ref().map_or_else(
+            || format!("{display_id} open"),
+            |summary| format!("{display_id} open ({summary})"),
+        ),
+        session::SyncReviewRequestOutcome::Merged { display_id, .. } => {
+            format!("{display_id} merged")
+        }
+        session::SyncReviewRequestOutcome::Closed { display_id } => {
+            format!("{display_id} closed")
+        }
+        session::SyncReviewRequestOutcome::NoReviewRequest => "no review request".to_string(),
+    }
 }
 
 /// Returns how many review passes a failing target is skipped before retry.
