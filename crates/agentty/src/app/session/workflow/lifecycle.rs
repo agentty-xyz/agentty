@@ -2526,6 +2526,12 @@ impl SessionManager {
             }
         }
 
+        if let Err(error) = agent::cleanup_session_worktree_artifacts(&folder) {
+            cleanup_errors.push(format!(
+                "failed to remove provider worktree artifacts: {error}"
+            ));
+        }
+
         if let Err(error) = fs_client.remove_dir_all(folder).await {
             cleanup_errors.push(format!("failed to remove worktree directory: {error}"));
         }
@@ -2839,6 +2845,19 @@ mod tests {
             .returning(|path| path.is_dir());
 
         mock_fs_client
+    }
+
+    /// Returns whether an Antigravity temp alias currently points at the
+    /// requested session folder.
+    fn antigravity_alias_exists_for(folder: &Path) -> bool {
+        let alias_root = std::env::temp_dir().join("agentty-antigravity-worktrees");
+        let Ok(alias_entries) = std::fs::read_dir(alias_root) else {
+            return false;
+        };
+
+        alias_entries.filter_map(Result::ok).any(|entry| {
+            std::fs::read_link(entry.path()).is_ok_and(|alias_target| alias_target == folder)
+        })
     }
 
     /// Persists one session row that matches the in-memory fixture.
@@ -3466,6 +3485,58 @@ mod tests {
                 .iter()
                 .any(|message| message.contains("failed to remove worktree directory"))
         );
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_session_worktree_resources_removes_provider_artifacts() {
+        // Arrange
+        let temp_dir = tempfile::tempdir().expect("temp dir should exist");
+        let folder = temp_dir
+            .path()
+            .join(".agentty")
+            .join("wt")
+            .join("session-id");
+        std::fs::create_dir_all(folder.join(".git"))
+            .expect("failed to create hidden session git metadata");
+        agent::create_backend(AgentKind::Antigravity)
+            .setup(&folder)
+            .expect("Antigravity setup should create alias");
+        assert!(antigravity_alias_exists_for(&folder));
+        let mut mock_fs_client = fs::MockFsClient::new();
+        mock_fs_client
+            .expect_remove_dir_all()
+            .once()
+            .returning(|path| {
+                Box::pin(async move {
+                    tokio::fs::remove_dir_all(path)
+                        .await
+                        .map_err(fs::FsError::from)
+                })
+            });
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_remove_worktree()
+            .once()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        mock_git_client
+            .expect_delete_branch()
+            .once()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        // Act
+        let cleanup_errors = SessionManager::cleanup_session_worktree_resources(
+            Arc::new(mock_fs_client),
+            Arc::new(mock_git_client),
+            folder.clone(),
+            "wt/session-id".to_string(),
+            Some(temp_dir.path().join("repo")),
+            true,
+        )
+        .await;
+
+        // Assert
+        assert!(cleanup_errors.is_empty());
+        assert!(!antigravity_alias_exists_for(&folder));
     }
 
     #[tokio::test]

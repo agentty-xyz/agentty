@@ -32,7 +32,11 @@ by backend:
 - Antigravity CLI turns receive the prompt over stdin with `[Image #n]` placeholders
   rewritten to local image paths. Agentty passes the session worktree first through
   `agy --add-dir`, followed by any local image parent directories, so Antigravity tools
-  keep the session worktree as the editable workspace root.
+  keep the session worktree as the editable workspace root. When the real worktree path
+  contains a hidden directory such as `.agentty`, Agentty gives `agy` a non-hidden temp
+  symlink alias for that worktree because Antigravity refuses hidden workspace roots.
+  Session teardown removes that alias so the system temp directory does not accumulate
+  stale Antigravity workspace links.
 
 Codex now always runs through `codex app-server`, including isolated utility prompts
 such as title generation, review assist, commit-message generation, auto-commit
@@ -182,11 +186,13 @@ against the structured response protocol.
 - Antigravity turns use `agy --print` because the CLI does not currently expose an
   ACP/app-server flag. Agentty streams the full prompt through stdin, runs with
   `--sandbox`, uses `--dangerously-skip-permissions` so non-interactive worktree edits
-  can proceed, passes the session worktree as the first `--add-dir` root, and relies on
-  the shared strict protocol parser for final validation. Before each Antigravity
-  launch, Agentty adds `.antigravitycli/` and `cache/projects.json` to the
-  repository-local git exclude file so Antigravity's project configuration state does
-  not appear in session diffs.
+  can proceed, passes the session worktree or its non-hidden temp symlink alias as the
+  first `--add-dir` root, and relies on the shared strict protocol parser for final
+  validation. Before each Antigravity launch, Agentty adds `.antigravitycli/` and
+  `cache/projects.json` to the repository-local git exclude file so Antigravity's
+  project configuration state does not appear in session diffs. When a session is
+  deleted, canceled, merged, or rolled back after setup failure, Agentty removes the
+  matching Antigravity temp symlink alias before deleting the real worktree directory.
 - Prompt-side protocol instructions rely on the raw self-descriptive `schemars` metadata
   (`title`, `description`, and related annotations), while transport `outputSchema`
   payloads are normalized separately for provider compatibility. The same prompt

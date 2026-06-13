@@ -584,7 +584,12 @@ by `infra/channel.rs`, with prompt payloads owned by `domain/turn_prompt.rs`):
 - Antigravity command construction passes the session worktree as the first
   `agy --add-dir` root, because Antigravity print mode uses ordered explicit workspace
   roots for file tools instead of treating the process directory as an editable
-  workspace.
+  workspace. If the real worktree path contains a hidden component such as `.agentty`,
+  Agentty first creates a non-hidden temp symlink alias and passes that alias as both
+  the process directory and the first `agy --add-dir` root, because Antigravity refuses
+  hidden workspace folders. Session teardown paths remove that alias before deleting the
+  real worktree directory, including deletion, cancellation, merge cleanup, and setup
+  rollback.
 - Antigravity setup and command construction add `.antigravitycli/` and
   `cache/projects.json` to the repository-local git exclude file before `agy` starts,
   keeping Antigravity's project configuration state out of session diffs without

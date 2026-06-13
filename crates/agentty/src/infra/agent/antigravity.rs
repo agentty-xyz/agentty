@@ -1,5 +1,7 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash as _, Hasher as _};
 use std::io::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::{fs, io};
 
@@ -23,6 +25,8 @@ const ANTIGRAVITY_PROJECT_STATE_PATTERNS: &[&str] = &[
     ANTIGRAVITY_PROJECT_STATE_PATTERN,
     ANTIGRAVITY_PROJECT_CACHE_PATTERN,
 ];
+/// Non-hidden temp directory used for Antigravity worktree aliases.
+const ANTIGRAVITY_WORKTREE_ALIAS_DIR: &str = "agentty-antigravity-worktrees";
 
 /// Backend implementation for the Antigravity CLI.
 ///
@@ -34,7 +38,10 @@ pub(super) struct AntigravityBackend;
 
 impl AgentBackend for AntigravityBackend {
     fn setup(&self, folder: &Path) -> Result<(), AgentBackendError> {
-        ensure_antigravity_project_state_ignored(folder)
+        ensure_antigravity_project_state_ignored(folder)?;
+        ensure_antigravity_workspace_alias(folder)?;
+
+        Ok(())
     }
 
     fn build_command<'request>(
@@ -52,7 +59,8 @@ impl AgentBackend for AntigravityBackend {
         let mut command = Command::new("agy");
 
         ensure_antigravity_project_state_ignored(folder)?;
-        append_workspace_access_directories(&mut command, folder, attachments);
+        let workspace_folder = ensure_antigravity_workspace_alias(folder)?;
+        append_workspace_access_directories(&mut command, &workspace_folder, attachments);
 
         command
             .arg("--sandbox")
@@ -62,12 +70,165 @@ impl AgentBackend for AntigravityBackend {
             .arg(ANTIGRAVITY_PRINT_TIMEOUT)
             .arg("--model")
             .arg(model)
-            .current_dir(folder)
+            .current_dir(workspace_folder)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
         Ok(command)
     }
+}
+
+/// Returns a workspace path Antigravity can mount for one session folder.
+///
+/// Antigravity rejects workspace roots whose path contains hidden components
+/// such as Agentty's default `.agentty` home. For those worktrees, Agentty
+/// creates a stable non-hidden symlink under the system temp directory and
+/// gives Antigravity that alias as both its cwd and primary `--add-dir` root.
+/// Git metadata updates still use the real worktree path.
+///
+/// # Errors
+/// Returns an error when the folder needs an alias but the alias cannot be
+/// created, verified, or placed at a non-hidden path.
+fn ensure_antigravity_workspace_alias(folder: &Path) -> Result<PathBuf, AgentBackendError> {
+    if !has_hidden_path_component(folder) {
+        return Ok(folder.to_path_buf());
+    }
+
+    let alias = antigravity_workspace_alias_path(folder);
+    if has_hidden_path_component(&alias) {
+        return Err(AgentBackendError::Setup(format!(
+            "Antigravity refuses hidden workspace folders and Agentty could not create a \
+             non-hidden alias for `{}` because the temp alias path `{}` also contains a hidden \
+             path component.",
+            folder.display(),
+            alias.display()
+        )));
+    }
+
+    ensure_directory_symlink(folder, &alias).map_err(|error| {
+        AgentBackendError::Setup(format!(
+            "Antigravity refuses hidden workspace folders and Agentty failed to create a \
+             non-hidden alias from `{}` to `{}`: {error}",
+            alias.display(),
+            folder.display()
+        ))
+    })?;
+
+    Ok(alias)
+}
+
+/// Removes the Antigravity temp symlink alias for one session worktree.
+///
+/// The cleanup only removes the alias when it is a symlink that still points at
+/// `folder`, preventing unrelated files at the deterministic alias path from
+/// being deleted. After removing the symlink, this prunes the shared alias
+/// directory only when no sibling aliases remain.
+///
+/// # Errors
+/// Returns an error when the alias symlink or its now-empty parent directory
+/// cannot be removed.
+pub(crate) fn cleanup_workspace_alias(folder: &Path) -> Result<(), AgentBackendError> {
+    if !has_hidden_path_component(folder) {
+        return Ok(());
+    }
+
+    let alias = antigravity_workspace_alias_path(folder);
+    let alias_target = match fs::read_link(&alias) {
+        Ok(alias_target) => alias_target,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::InvalidInput => return Ok(()),
+        Err(error) => {
+            return Err(AgentBackendError::Setup(format!(
+                "Failed to inspect Antigravity workspace alias `{}`: {error}",
+                alias.display()
+            )));
+        }
+    };
+
+    if alias_target != folder {
+        return Ok(());
+    }
+
+    fs::remove_file(&alias).map_err(|error| {
+        AgentBackendError::Setup(format!(
+            "Failed to remove Antigravity workspace alias `{}`: {error}",
+            alias.display()
+        ))
+    })?;
+
+    if let Some(parent) = alias.parent()
+        && let Err(error) = fs::remove_dir(parent)
+        && error.kind() != io::ErrorKind::NotFound
+        && error.kind() != io::ErrorKind::DirectoryNotEmpty
+    {
+        return Err(AgentBackendError::Setup(format!(
+            "Failed to prune Antigravity workspace alias directory `{}`: {error}",
+            parent.display()
+        )));
+    }
+
+    Ok(())
+}
+
+/// Returns whether a path contains a dot-prefixed component.
+fn has_hidden_path_component(path: &Path) -> bool {
+    path.components().any(|component| {
+        matches!(component, Component::Normal(name) if name.to_string_lossy().starts_with('.'))
+    })
+}
+
+/// Builds the stable non-hidden alias path for one real worktree folder.
+fn antigravity_workspace_alias_path(folder: &Path) -> PathBuf {
+    let mut hasher = DefaultHasher::new();
+    folder.hash(&mut hasher);
+
+    let folder_name = folder
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.trim_start_matches('.'))
+        .filter(|name| !name.is_empty())
+        .unwrap_or("worktree");
+    let alias_name = format!("{folder_name}-{:016x}", hasher.finish());
+
+    std::env::temp_dir()
+        .join(ANTIGRAVITY_WORKTREE_ALIAS_DIR)
+        .join(alias_name)
+}
+
+/// Ensures one directory symlink exists and points at the requested target.
+///
+/// # Errors
+/// Returns an I/O error when the alias parent cannot be created, the alias path
+/// is already occupied by another filesystem entry, or the symlink cannot be
+/// created.
+fn ensure_directory_symlink(target: &Path, link: &Path) -> Result<(), io::Error> {
+    if let Some(parent) = link.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    match fs::read_link(link) {
+        Ok(existing_target) if existing_target == target => return Ok(()),
+        Ok(existing_target) => {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!(
+                    "alias already points to `{}` instead of `{}`",
+                    existing_target.display(),
+                    target.display()
+                ),
+            ));
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+
+    create_directory_symlink(target, link)
+}
+
+#[cfg(unix)]
+/// Creates a Unix directory symlink.
+fn create_directory_symlink(target: &Path, link: &Path) -> Result<(), io::Error> {
+    std::os::unix::fs::symlink(target, link)
 }
 
 /// Ensures Antigravity's workspace-local project state stays out of session
@@ -278,10 +439,11 @@ pub(super) fn build_prompt_stdin_payload(
 /// attachments.
 ///
 /// `agy --print` uses `--add-dir` rather than the process working directory to
-/// decide which folders tools can read and write. Agentty keeps the session
-/// worktree as the first workspace root, then adds pasted-image parent
-/// directories that live under Agentty's temp directory so Antigravity can
-/// inspect those local files without replacing the active editable workspace.
+/// decide which folders tools can read and write. Agentty keeps the
+/// Antigravity-mountable session worktree path as the first workspace root,
+/// then adds pasted-image parent directories that live under Agentty's temp
+/// directory so Antigravity can inspect those local files without replacing
+/// the active editable workspace.
 fn append_workspace_access_directories(
     command: &mut Command,
     folder: &Path,
@@ -294,9 +456,10 @@ fn append_workspace_access_directories(
 
 /// Returns the Antigravity workspace roots required by one turn.
 ///
-/// The session worktree is always first because Antigravity derives editable
-/// workspace behavior from the ordered `--add-dir` roots. Attachment
-/// directories are sorted after the session root for deterministic arguments.
+/// The session worktree path Antigravity can mount is always first because
+/// Antigravity derives editable workspace behavior from the ordered
+/// `--add-dir` roots. Attachment directories are sorted after the session root
+/// for deterministic arguments.
 fn workspace_access_directories(
     folder: &Path,
     attachments: &[TurnPromptAttachment],
@@ -381,11 +544,31 @@ fn attachment_path_for_prompt(
 mod tests {
     use std::path::PathBuf;
 
-    use tempfile::tempdir;
+    use tempfile::{TempDir, tempdir};
 
     use super::*;
     use crate::domain::agent::{AgentModel, ReasoningLevel};
     use crate::infra::channel::AgentRequestKind;
+
+    struct AliasCleanup {
+        link: PathBuf,
+    }
+
+    impl AliasCleanup {
+        /// Tracks one Antigravity alias path so tests remove global temp
+        /// symlinks they create.
+        fn new(folder: &Path) -> Self {
+            Self {
+                link: antigravity_workspace_alias_path(folder),
+            }
+        }
+    }
+
+    impl Drop for AliasCleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.link);
+        }
+    }
 
     fn session_resume_request_kind(session_output: Option<&str>) -> AgentRequestKind {
         AgentRequestKind::SessionResume {
@@ -395,6 +578,16 @@ mod tests {
 
     fn session_start_request_kind() -> AgentRequestKind {
         AgentRequestKind::SessionStart
+    }
+
+    /// Creates a temp directory whose own basename is visible so no-alias
+    /// command assertions are stable on platforms where `tempdir()` uses dot
+    /// prefixes.
+    fn visible_tempdir() -> TempDir {
+        tempfile::Builder::new()
+            .prefix("agentty-antigravity-test-")
+            .tempdir()
+            .expect("failed to create visible temp dir")
     }
 
     /// Creates a minimal standard git metadata directory for backend setup
@@ -426,7 +619,7 @@ mod tests {
     /// restrictions enabled.
     fn test_antigravity_build_command_uses_print_mode_with_sandbox() {
         // Arrange
-        let temp_directory = tempdir().expect("failed to create temp dir");
+        let temp_directory = visible_tempdir();
         create_standard_git_directory(temp_directory.path());
         let backend = AntigravityBackend;
         let requested_model = AgentModel::AntigravityGemini31ProPreview.provider_model_str();
@@ -472,11 +665,61 @@ mod tests {
     }
 
     #[test]
+    /// Verifies Antigravity receives a non-hidden symlink alias when the real
+    /// session worktree path contains a hidden component.
+    fn test_antigravity_build_command_aliases_hidden_session_folder() {
+        // Arrange
+        let temp_directory = visible_tempdir();
+        let session_folder = temp_directory
+            .path()
+            .join(".agentty")
+            .join("wt")
+            .join("00cbfefe");
+        fs::create_dir_all(&session_folder).expect("failed to create hidden session folder");
+        create_standard_git_directory(&session_folder);
+        let _alias_cleanup = AliasCleanup::new(&session_folder);
+        let backend = AntigravityBackend;
+        let requested_model = AgentModel::AntigravityGemini31ProPreview.provider_model_str();
+
+        // Act
+        let command = AgentBackend::build_command(
+            &backend,
+            BuildCommandRequest {
+                attachments: &[],
+                folder: &session_folder,
+                prompt: "Write tests",
+                request_kind: &session_start_request_kind(),
+                model: requested_model,
+                reasoning_level: ReasoningLevel::default(),
+            },
+        )
+        .expect("command should build");
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        let alias = antigravity_workspace_alias_path(&session_folder);
+
+        // Assert
+        assert!(!has_hidden_path_component(&alias));
+        assert_eq!(
+            fs::read_link(&alias).expect("alias should exist"),
+            session_folder
+        );
+        assert_eq!(command.get_current_dir(), Some(alias.as_path()));
+        assert_eq!(args[0], "--add-dir");
+        assert_eq!(args[1], alias.to_string_lossy());
+        assert_antigravity_project_state_patterns_ignored(&read_standard_git_exclude(
+            &session_folder,
+        ));
+    }
+
+    #[test]
     /// Verifies Antigravity setup excludes workspace-local CLI state for
     /// standard repositories.
     fn test_antigravity_setup_ignores_project_state_for_standard_git_directory() {
         // Arrange
-        let temp_directory = tempdir().expect("failed to create temp dir");
+        let temp_directory = visible_tempdir();
         create_standard_git_directory(temp_directory.path());
         let backend = AntigravityBackend;
 
@@ -490,11 +733,94 @@ mod tests {
     }
 
     #[test]
+    /// Verifies Antigravity setup prepares a non-hidden alias before the first
+    /// command is built for a hidden session worktree path.
+    fn test_antigravity_setup_aliases_hidden_session_folder() {
+        // Arrange
+        let temp_directory = visible_tempdir();
+        let session_folder = temp_directory
+            .path()
+            .join(".agentty")
+            .join("wt")
+            .join("00cbfefe");
+        fs::create_dir_all(&session_folder).expect("failed to create hidden session folder");
+        create_standard_git_directory(&session_folder);
+        let _alias_cleanup = AliasCleanup::new(&session_folder);
+        let backend = AntigravityBackend;
+
+        // Act
+        AgentBackend::setup(&backend, &session_folder).expect("setup should succeed");
+        let alias = antigravity_workspace_alias_path(&session_folder);
+
+        // Assert
+        assert!(!has_hidden_path_component(&alias));
+        assert_eq!(
+            fs::read_link(alias).expect("alias should exist"),
+            session_folder
+        );
+    }
+
+    #[test]
+    /// Verifies Antigravity cleanup removes the non-hidden alias created for a
+    /// hidden session worktree path.
+    fn test_cleanup_workspace_alias_removes_hidden_session_alias() {
+        // Arrange
+        let temp_directory = visible_tempdir();
+        let session_folder = temp_directory
+            .path()
+            .join(".agentty")
+            .join("wt")
+            .join("00cbfefe");
+        fs::create_dir_all(&session_folder).expect("failed to create hidden session folder");
+        create_standard_git_directory(&session_folder);
+        let backend = AntigravityBackend;
+        AgentBackend::setup(&backend, &session_folder).expect("setup should succeed");
+        let alias = antigravity_workspace_alias_path(&session_folder);
+
+        // Act
+        cleanup_workspace_alias(&session_folder).expect("cleanup should succeed");
+
+        // Assert
+        let error = fs::read_link(alias).expect_err("alias should be removed");
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    /// Verifies Antigravity cleanup leaves an alias path alone when it points
+    /// at a different target.
+    fn test_cleanup_workspace_alias_preserves_unrelated_symlink() {
+        // Arrange
+        let temp_directory = visible_tempdir();
+        let session_folder = temp_directory
+            .path()
+            .join(".agentty")
+            .join("wt")
+            .join("00cbfefe");
+        let other_folder = temp_directory.path().join("other-worktree");
+        fs::create_dir_all(&session_folder).expect("failed to create hidden session folder");
+        fs::create_dir_all(&other_folder).expect("failed to create other folder");
+        let alias = antigravity_workspace_alias_path(&session_folder);
+        fs::create_dir_all(alias.parent().expect("alias should have parent"))
+            .expect("failed to create alias parent");
+        create_directory_symlink(&other_folder, &alias).expect("failed to create unrelated alias");
+        let _alias_cleanup = AliasCleanup::new(&session_folder);
+
+        // Act
+        cleanup_workspace_alias(&session_folder).expect("cleanup should succeed");
+
+        // Assert
+        assert_eq!(
+            fs::read_link(alias).expect("alias should remain"),
+            other_folder
+        );
+    }
+
+    #[test]
     /// Verifies Antigravity setup follows linked-worktree `.git` files and
     /// `commondir` metadata to the repository-local exclude file used by git.
     fn test_antigravity_setup_ignores_project_state_for_linked_worktree_gitdir() {
         // Arrange
-        let temp_directory = tempdir().expect("failed to create temp dir");
+        let temp_directory = visible_tempdir();
         let common_git_dir = temp_directory.path().join("main").join(".git");
         let worktree = temp_directory.path().join("worktree");
         let worktree_git_dir = common_git_dir.join("worktrees").join("feature");
@@ -523,7 +849,7 @@ mod tests {
     /// pattern.
     fn test_antigravity_setup_ignores_project_state_idempotently() {
         // Arrange
-        let temp_directory = tempdir().expect("failed to create temp dir");
+        let temp_directory = visible_tempdir();
         create_standard_git_directory(temp_directory.path());
         let backend = AntigravityBackend;
 
@@ -547,7 +873,7 @@ mod tests {
     /// external prompt image attachments.
     fn test_antigravity_build_command_adds_workspace_directories() {
         // Arrange
-        let temp_directory = tempdir().expect("failed to create temp dir");
+        let temp_directory = visible_tempdir();
         let attachment_directory = temp_directory.path().join("images");
         let attachment = TurnPromptAttachment {
             placeholder: "[Image #1]".to_string(),

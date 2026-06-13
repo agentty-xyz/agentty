@@ -199,7 +199,8 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
   Router plus shared CLI subprocess stdin or error helpers reused by session turns and
   one-shot prompts.
 - `crates/agentty/src/infra/agent/antigravity.rs`: Antigravity CLI backend
-  implementation, `agy --add-dir` workspace-root wiring, and the repository-local git
+  implementation, `agy --add-dir` workspace-root wiring, non-hidden worktree alias
+  creation and cleanup for hidden Agentty session paths, and the repository-local git
   exclude guard for Antigravity project state.
 - `crates/agentty/src/infra/agent/claude.rs`: Claude backend implementation.
 - `crates/agentty/src/infra/agent/app_server.rs` and

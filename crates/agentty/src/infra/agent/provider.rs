@@ -1,5 +1,6 @@
 //! Shared provider registry and transport policy descriptors.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use super::backend::{
@@ -33,6 +34,20 @@ pub(crate) fn create_app_server_client(
 /// Parses provider output and returns final response content and usage stats.
 pub fn parse_response(kind: AgentKind, stdout: &str, stderr: &str) -> ParsedResponse {
     (provider_descriptor(kind).parse_response)(stdout, stderr)
+}
+
+/// Removes provider-owned worktree artifacts that are derived from one session
+/// folder.
+///
+/// This is used by session teardown paths after provider setup or command
+/// construction has created auxiliary filesystem state outside the real
+/// worktree. Providers that do not create such state are no-ops.
+///
+/// # Errors
+/// Returns an error when a provider-owned artifact exists but cannot be
+/// removed safely.
+pub(crate) fn cleanup_session_worktree_artifacts(folder: &Path) -> Result<(), AgentBackendError> {
+    super::antigravity::cleanup_workspace_alias(folder)
 }
 
 /// Parses one stream line into incremental text and content classification.

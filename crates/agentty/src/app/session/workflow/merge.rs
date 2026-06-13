@@ -2366,6 +2366,13 @@ impl SessionManager {
             git_client.delete_branch(repo_root, source_branch).await?;
         }
 
+        if let Err(error) = agent::cleanup_session_worktree_artifacts(&folder) {
+            warn!(
+                error = %error,
+                "failed to remove provider worktree artifacts during merged session cleanup"
+            );
+        }
+
         if let Err(error) = fs_client.remove_dir_all(folder).await {
             warn!(
                 error = %error,
