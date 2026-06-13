@@ -11,19 +11,26 @@ use crate::infra::db::DbError;
 
 /// Transactional turn-metadata payload persisted after one completed agent
 /// turn.
-pub struct SessionTurnMetadata<'a> {
+///
+/// Owns its fields so the persistence trait method stays lifetime-free. A
+/// borrowed variant (`SessionTurnMetadata<'a>`) forced the persist method to
+/// carry a generic lifetime, which `mockall::automock` drops in the generated
+/// mock and newer `clippy` then rejects via `extra_unused_lifetimes`. Owning
+/// the data is allocation-cheap on this once-per-turn path and keeps the trait
+/// signature stable across toolchains.
+pub struct SessionTurnMetadata {
     /// Session-scoped instruction bootstrap marker for app-server providers.
-    pub(crate) instruction_conversation_id: Option<&'a str>,
+    pub(crate) instruction_conversation_id: Option<String>,
     /// Model identifier used for per-model usage aggregation.
-    pub(crate) model: &'a str,
+    pub(crate) model: String,
     /// Persisted provider-native conversation identifier for future resumes.
-    pub(crate) provider_conversation_id: Option<&'a str>,
+    pub(crate) provider_conversation_id: Option<String>,
     /// Serialized clarification-question payload stored on the session row.
-    pub(crate) questions_json: &'a str,
+    pub(crate) questions_json: String,
     /// Serialized structured summary payload stored on the session row.
-    pub(crate) summary: &'a str,
+    pub(crate) summary: String,
     /// Token-usage delta attributed to the completed turn.
-    pub(crate) token_usage_delta: &'a SessionStats,
+    pub(crate) token_usage_delta: SessionStats,
 }
 
 /// Row returned when loading a session from the `session` table.
@@ -289,10 +296,10 @@ pub trait SessionRepository: Send + Sync {
 
     /// Persists all canonical turn metadata for one completed agent turn in a
     /// single transaction.
-    async fn persist_session_turn_metadata<'metadata>(
+    async fn persist_session_turn_metadata(
         &self,
         session_id: &str,
-        turn_metadata: &SessionTurnMetadata<'metadata>,
+        turn_metadata: &SessionTurnMetadata,
     ) -> Result<(), DbError>;
 
     #[cfg(test)]
@@ -1260,10 +1267,10 @@ WHERE id = ?
         Ok(row.map(|row| (row.created_at, row.updated_at)))
     }
 
-    async fn persist_session_turn_metadata<'metadata>(
+    async fn persist_session_turn_metadata(
         &self,
         session_id: &str,
-        turn_metadata: &SessionTurnMetadata<'metadata>,
+        turn_metadata: &SessionTurnMetadata,
     ) -> Result<(), DbError> {
         let mut transaction = self.0.begin().await?;
 
@@ -1277,10 +1284,10 @@ SET questions = ?,
 WHERE id = ?
 ",
         )
-        .bind(turn_metadata.questions_json)
-        .bind(turn_metadata.summary)
-        .bind(turn_metadata.provider_conversation_id)
-        .bind(turn_metadata.instruction_conversation_id)
+        .bind(&turn_metadata.questions_json)
+        .bind(&turn_metadata.summary)
+        .bind(turn_metadata.provider_conversation_id.as_deref())
+        .bind(turn_metadata.instruction_conversation_id.as_deref())
         .bind(session_id)
         .execute(&mut *transaction)
         .await?;
@@ -1316,7 +1323,7 @@ ON CONFLICT(session_id, model) DO UPDATE SET
 ",
             )
             .bind(session_id)
-            .bind(turn_metadata.model)
+            .bind(&turn_metadata.model)
             .bind(turn_metadata.token_usage_delta.input_tokens.cast_signed())
             .bind(turn_metadata.token_usage_delta.output_tokens.cast_signed())
             .execute(&mut *transaction)

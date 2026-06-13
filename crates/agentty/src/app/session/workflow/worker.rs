@@ -919,12 +919,12 @@ impl TurnPersistence<'_> {
             .persist_session_turn_metadata(
                 &self.context.session_id,
                 &SessionTurnMetadata {
-                    instruction_conversation_id: instruction_conversation_id.as_deref(),
-                    model: self.session_model.as_str(),
-                    provider_conversation_id,
-                    questions_json: &questions_json,
-                    summary: &summary,
-                    token_usage_delta: &token_usage_delta,
+                    instruction_conversation_id,
+                    model: self.session_model.as_str().to_string(),
+                    provider_conversation_id: provider_conversation_id.map(str::to_string),
+                    questions_json,
+                    summary: summary.clone(),
+                    token_usage_delta: token_usage_delta.clone(),
                 },
             )
             .await?;

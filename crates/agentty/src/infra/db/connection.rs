@@ -2413,12 +2413,13 @@ WHERE model = ?
             .persist_session_turn_metadata(
                 "session-a",
                 &SessionTurnMetadata {
-                    instruction_conversation_id: Some("instruction-thread"),
-                    model: AgentModel::Gpt55.as_str(),
-                    provider_conversation_id: Some("thread-123"),
-                    questions_json: r#"[{"text":"Need tests?"}]"#,
-                    summary: r#"{"turn":"Updated the worker.","session":"Session state changed."}"#,
-                    token_usage_delta: &SessionStats {
+                    instruction_conversation_id: Some("instruction-thread".to_string()),
+                    model: AgentModel::Gpt55.as_str().to_string(),
+                    provider_conversation_id: Some("thread-123".to_string()),
+                    questions_json: r#"[{"text":"Need tests?"}]"#.to_string(),
+                    summary: r#"{"turn":"Updated the worker.","session":"Session state changed."}"#
+                        .to_string(),
+                    token_usage_delta: SessionStats {
                         added_lines: 0,
                         deleted_lines: 0,
                         input_tokens: 3,
