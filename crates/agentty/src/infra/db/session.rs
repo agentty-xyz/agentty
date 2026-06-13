@@ -292,7 +292,7 @@ pub trait SessionRepository: Send + Sync {
     async fn persist_session_turn_metadata<'metadata>(
         &self,
         session_id: &str,
-        turn_metadata: &'metadata SessionTurnMetadata<'metadata>,
+        turn_metadata: &SessionTurnMetadata<'metadata>,
     ) -> Result<(), DbError>;
 
     #[cfg(test)]
@@ -1263,7 +1263,7 @@ WHERE id = ?
     async fn persist_session_turn_metadata<'metadata>(
         &self,
         session_id: &str,
-        turn_metadata: &'metadata SessionTurnMetadata<'metadata>,
+        turn_metadata: &SessionTurnMetadata<'metadata>,
     ) -> Result<(), DbError> {
         let mut transaction = self.0.begin().await?;
 
