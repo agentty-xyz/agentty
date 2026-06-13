@@ -19,11 +19,11 @@ const GIT_INDEX_LOCK_RETRY_DELAY: Duration = Duration::from_millis(100);
 #[cfg_attr(test, mockall::automock)]
 trait GitCommandRunner: Send + Sync {
     /// Runs a git command in `repo_path` with environment overrides.
-    fn run_git_command_output_with_env<'argument>(
+    fn run_git_command_output_with_env(
         &self,
         repo_path: &Path,
-        args: &[&'argument str],
-        environment: &[(&'argument str, &'argument str)],
+        args: &[String],
+        environment: &[(String, String)],
     ) -> Result<Output, GitError>;
 }
 
@@ -31,13 +31,19 @@ trait GitCommandRunner: Send + Sync {
 struct ProcessGitCommandRunner;
 
 impl GitCommandRunner for ProcessGitCommandRunner {
-    fn run_git_command_output_with_env<'argument>(
+    fn run_git_command_output_with_env(
         &self,
         repo_path: &Path,
-        args: &[&'argument str],
-        environment: &[(&'argument str, &'argument str)],
+        args: &[String],
+        environment: &[(String, String)],
     ) -> Result<Output, GitError> {
-        run_git_command_output_with_env_sync(repo_path, args, environment)
+        let args = args.iter().map(String::as_str).collect::<Vec<_>>();
+        let environment = environment
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect::<Vec<_>>();
+
+        run_git_command_output_with_env_sync(repo_path, &args, &environment)
     }
 }
 
@@ -358,9 +364,18 @@ fn run_git_command_with_index_lock_retry_with_dependencies(
     command_runner: &dyn GitCommandRunner,
     sleeper: &dyn Sleeper,
 ) -> Result<Output, GitError> {
+    let args = args
+        .iter()
+        .map(|arg| String::from(*arg))
+        .collect::<Vec<_>>();
+    let environment = environment
+        .iter()
+        .map(|(key, value)| (String::from(*key), String::from(*value)))
+        .collect::<Vec<_>>();
+
     for attempt in 0..GIT_INDEX_LOCK_RETRY_ATTEMPTS {
         let output =
-            command_runner.run_git_command_output_with_env(repo_path, args, environment)?;
+            command_runner.run_git_command_output_with_env(repo_path, &args, &environment)?;
         if output.status.success() {
             return Ok(output);
         }

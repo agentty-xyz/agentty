@@ -95,13 +95,6 @@ impl App {
         clients: AppClients,
     ) -> Result<Self, AppError> {
         let repositories = repositories.into();
-        let startup_project_context = Self::load_startup_project_state(
-            working_dir.as_path(),
-            git_branch,
-            &repositories,
-            &clients,
-        )
-        .await?;
         let StartupProjectContext {
             active_project_id,
             active_project_name,
@@ -109,7 +102,13 @@ impl App {
             startup_git_branch,
             startup_git_upstream_ref,
             startup_working_dir,
-        } = startup_project_context;
+        } = Self::load_startup_project_state(
+            working_dir.as_path(),
+            git_branch,
+            &repositories,
+            &clients,
+        )
+        .await?;
 
         let clock: Arc<dyn Clock> = Arc::new(RealClock);
         let (event_tx, event_rx) = mpsc::unbounded_channel();

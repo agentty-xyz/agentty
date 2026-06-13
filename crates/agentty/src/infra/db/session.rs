@@ -289,10 +289,10 @@ pub trait SessionRepository: Send + Sync {
 
     /// Persists all canonical turn metadata for one completed agent turn in a
     /// single transaction.
-    async fn persist_session_turn_metadata<'a>(
+    async fn persist_session_turn_metadata<'metadata>(
         &self,
-        session_id: &'a str,
-        turn_metadata: &'a SessionTurnMetadata<'a>,
+        session_id: &str,
+        turn_metadata: &SessionTurnMetadata<'metadata>,
     ) -> Result<(), DbError>;
 
     #[cfg(test)]
@@ -1260,10 +1260,10 @@ WHERE id = ?
         Ok(row.map(|row| (row.created_at, row.updated_at)))
     }
 
-    async fn persist_session_turn_metadata<'a>(
+    async fn persist_session_turn_metadata<'metadata>(
         &self,
-        session_id: &'a str,
-        turn_metadata: &'a SessionTurnMetadata<'a>,
+        session_id: &str,
+        turn_metadata: &SessionTurnMetadata<'metadata>,
     ) -> Result<(), DbError> {
         let mut transaction = self.0.begin().await?;
 
