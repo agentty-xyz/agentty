@@ -116,6 +116,13 @@ impl AppServices {
         let _ = self.event_tx.send(event);
     }
 
+    /// Enqueues refresh events for workflows that changed both session
+    /// snapshots and project-level session aggregates.
+    pub(crate) fn emit_session_and_project_refresh_events(&self) {
+        self.emit_app_event(AppEvent::RefreshSessions);
+        self.emit_app_event(AppEvent::RefreshProjects);
+    }
+
     /// Tracks one best-effort cleanup task that should complete before the app
     /// finishes graceful shutdown.
     pub(crate) fn track_cleanup_task(&self, join_handle: JoinHandle<()>) {

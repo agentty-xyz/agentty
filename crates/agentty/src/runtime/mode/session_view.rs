@@ -725,7 +725,7 @@ async fn cancel_in_progress_turn(app: &mut App, session_id: &str) {
             session_id,
         ),
     });
-    app.services.emit_app_event(AppEvent::RefreshSessions);
+    app.services.emit_session_and_project_refresh_events();
 }
 
 /// Marks automatic focused review as suppressed after a user stops one active

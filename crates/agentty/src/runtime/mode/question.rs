@@ -841,11 +841,11 @@ async fn submit_response(app: &mut App, response: String) {
 /// The persisted transition uses the timing-aware status update so any
 /// lingering active-work interval is closed before the session returns to
 /// `Review`. After the write succeeds it emits both
-/// [`AppEvent::SessionUpdated`] and [`AppEvent::RefreshSessions`] so the UI
-/// refreshes the focused session snapshot and any list-derived state. It also
-/// updates the shared runtime handle status alongside the snapshot so the
-/// periodic `sync_from_handles` cycle does not revert the status back to
-/// `Question`.
+/// [`AppEvent::SessionUpdated`] plus session and project refresh events so the
+/// UI refreshes the focused session snapshot and any aggregate project-list
+/// state. It also updates the shared runtime handle status alongside the
+/// snapshot so the periodic `sync_from_handles` cycle does not revert the
+/// status back to `Question`.
 async fn end_turn_no_answer(app: &mut App) {
     let AppMode::Question { session_id, .. } = &app.mode else {
         return;
@@ -883,7 +883,7 @@ async fn end_turn_no_answer(app: &mut App) {
             session_id.as_str(),
         ),
     });
-    app.services.emit_app_event(AppEvent::RefreshSessions);
+    app.services.emit_session_and_project_refresh_events();
 
     if let Some(session) = app
         .sessions

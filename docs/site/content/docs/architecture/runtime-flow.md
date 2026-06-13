@@ -138,8 +138,10 @@ Flow:
 
 Reducer behaviors that matter for data flow:
 
-- `RefreshSessions` sets `should_force_reload`, which triggers `refresh_sessions_now()`
-  and `reload_projects()`.
+- `RefreshSessions` sets `should_reload_sessions`, which triggers
+  `refresh_sessions_now()` without reloading project rows.
+- `RefreshProjects` sets `should_reload_projects`, which triggers `reload_projects()`
+  for project-table metadata and aggregate session counts.
 - `reload_projects()` now reloads only persisted project rows; the expensive
   home-directory repository discovery pass runs only during `App::new()`.
 - `BranchPublishActionCompleted` swaps the session-view popup from loading to success or
@@ -878,8 +880,8 @@ runtime flow:
   restart recovery.
 - Shared session handles (`output`, `status`, `child_pid`) provide low-latency updates
   between DB reloads.
-- Event-driven refresh is primary (`RefreshSessions`); metadata polling is fallback
-  safety only.
+- Event-driven refresh is primary (`RefreshSessions` for session rows and
+  `RefreshProjects` for project rows); metadata polling is fallback safety only.
 - External integrations (`GitClient`, `ReviewRequestClient`, `AppServerClient`,
   `AgentChannel`, `EventSource`, `FsClient`, `TmuxClient`) isolate side effects and
   enable deterministic tests.

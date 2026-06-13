@@ -4706,7 +4706,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn apply_app_events_refresh_sessions_reloads_project_active_session_count() {
+    async fn apply_app_events_refresh_projects_reloads_project_active_session_count() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
         let base_path = base_dir.path().to_path_buf();
@@ -4760,7 +4760,7 @@ mod tests {
             .expect("failed to update session status");
 
         // Act
-        app.apply_app_events(AppEvent::RefreshSessions).await;
+        app.apply_app_events(AppEvent::RefreshProjects).await;
 
         // Assert
         let updated_active_count = app

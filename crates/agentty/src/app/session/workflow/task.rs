@@ -940,8 +940,8 @@ impl SessionTaskService {
     ///
     /// This bumps the session-update version, emits
     /// [`AppEvent::SessionUpdated`] for targeted snapshot sync, and emits
-    /// [`AppEvent::RefreshSessions`] for transitions that require full list
-    /// reload.
+    /// session/project refresh events for transitions that affect list
+    /// snapshots or project session aggregates.
     pub(crate) async fn update_status(
         status: &Mutex<Status>,
         clock: &dyn Clock,
@@ -981,12 +981,7 @@ impl SessionTaskService {
         }
         Self::emit_session_updated(app_event_tx, session_update_versions, id);
         if Self::status_requires_full_refresh(new) {
-            Self::send_app_event(
-                app_event_tx,
-                AppEvent::RefreshSessions,
-                Some(id),
-                "RefreshSessions",
-            );
+            Self::send_session_and_project_refresh_events(app_event_tx, id);
         }
 
         true
@@ -1048,6 +1043,26 @@ impl SessionTaskService {
             status,
             Status::InProgress | Status::Review | Status::Merging | Status::Done | Status::Canceled
         )
+    }
+
+    /// Emits session and project refresh events for persisted lifecycle
+    /// changes that can alter both session rows and project aggregates.
+    fn send_session_and_project_refresh_events(
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+        session_id: &str,
+    ) {
+        Self::send_app_event(
+            app_event_tx,
+            AppEvent::RefreshSessions,
+            Some(session_id),
+            "RefreshSessions",
+        );
+        Self::send_app_event(
+            app_event_tx,
+            AppEvent::RefreshProjects,
+            Some(session_id),
+            "RefreshProjects",
+        );
     }
 
     /// Emits one app event and warns when the reducer side has already shut

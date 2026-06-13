@@ -319,7 +319,7 @@ impl SessionManager {
         })?;
 
         Self::record_session_creation_activity(services, &session_id).await;
-        services.emit_app_event(AppEvent::RefreshSessions);
+        services.emit_session_and_project_refresh_events();
 
         Ok(session_id)
     }
@@ -416,7 +416,7 @@ impl SessionManager {
                 "Failed to setup session backend: {error}"
             )));
         }
-        services.emit_app_event(AppEvent::RefreshSessions);
+        services.emit_session_and_project_refresh_events();
 
         Ok(session_id)
     }
@@ -1264,8 +1264,8 @@ impl SessionManager {
 
     /// Deletes the currently selected session and cleans related resources.
     ///
-    /// After persistence and filesystem cleanup, this triggers a full list
-    /// reload through [`AppEvent::RefreshSessions`].
+    /// After persistence and filesystem cleanup, this triggers session and
+    /// project-list reloads through app refresh events.
     pub async fn delete_selected_session(
         &mut self,
         projects: &ProjectManager,
@@ -1354,7 +1354,7 @@ impl SessionManager {
                 "failed to delete session record during session deletion"
             );
         }
-        services.emit_app_event(AppEvent::RefreshSessions);
+        services.emit_session_and_project_refresh_events();
 
         let staged_draft_root = services.base_path().join(&session.id);
 

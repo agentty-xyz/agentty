@@ -70,8 +70,11 @@ pub(crate) enum AppEvent {
         reasoning_level_override: Option<crate::domain::agent::ReasoningLevel>,
         session_id: SessionId,
     },
-    /// Requests a full session list refresh.
+    /// Requests a DB-backed session list refresh.
     RefreshSessions,
+    /// Requests a DB-backed project list refresh, including aggregate session
+    /// counts shown on the projects tab.
+    RefreshProjects,
     /// Requests an immediate git-status refresh outside the periodic poll
     /// cadence.
     RefreshGitStatus,
@@ -183,7 +186,12 @@ pub(super) struct AppEventBatch {
     pub(super) session_title_generation_finished: HashMap<SessionId, u64>,
     pub(super) session_workflow_notice_updates: HashMap<SessionId, Vec<String>>,
     pub(super) should_refresh_git_status: bool,
-    pub(super) should_force_reload: bool,
+    /// Whether this batch should reload project list snapshots from
+    /// persistence.
+    pub(super) should_reload_projects: bool,
+    /// Whether this batch should reload session list snapshots from
+    /// persistence.
+    pub(super) should_reload_sessions: bool,
     pub(super) review_request_status_updates: Vec<ReviewRequestStatusUpdate>,
     pub(super) review_comment_session_ids: HashSet<SessionId>,
     /// Latest requested-review task result collected for this reducer batch,
@@ -258,6 +266,7 @@ impl AppEventBatch {
                 session_id,
             } => self.collect_session_reasoning_level_updated(session_id, reasoning_level_override),
             AppEvent::RefreshSessions => self.collect_refresh_sessions(),
+            AppEvent::RefreshProjects => self.collect_refresh_projects(),
             AppEvent::RefreshGitStatus => self.collect_refresh_git_status(),
             AppEvent::RequestedReviewsLoaded {
                 generation,
@@ -399,9 +408,14 @@ impl AppEventBatch {
         self.update_status = Some(update_status);
     }
 
-    /// Marks the next reducer application as a full session refresh.
+    /// Marks the next reducer application as a session-list refresh.
     fn collect_refresh_sessions(&mut self) {
-        self.should_force_reload = true;
+        self.should_reload_sessions = true;
+    }
+
+    /// Marks the next reducer application as a project-list refresh.
+    fn collect_refresh_projects(&mut self) {
+        self.should_reload_projects = true;
     }
 
     /// Marks git status polling for restart.
@@ -722,8 +736,11 @@ impl App {
     /// Applies reducer-batch updates that affect global app runtime state
     /// before session-local projections are synchronized.
     async fn apply_batch_runtime_updates(&mut self, event_batch: &mut AppEventBatch) {
-        if event_batch.should_force_reload {
+        if event_batch.should_reload_sessions {
             self.refresh_sessions_now().await;
+        }
+
+        if event_batch.should_reload_projects {
             self.reload_projects().await;
         }
 
@@ -814,7 +831,8 @@ impl App {
     /// Returns whether one reduced event batch changes any render-visible
     /// application state before `SessionUpdated` version deduplication.
     fn app_event_batch_changes_observable_state(event_batch: &AppEventBatch) -> bool {
-        event_batch.should_force_reload
+        event_batch.should_reload_sessions
+            || event_batch.should_reload_projects
             || event_batch.git_status_update.is_some()
             || event_batch.latest_available_version_update.is_some()
             || event_batch.update_status.is_some()
@@ -1596,6 +1614,32 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_refresh_sessions_batch_sets_only_session_reload_scope() {
+        // Arrange
+        let mut event_batch = AppEventBatch::default();
+
+        // Act
+        event_batch.collect_event(AppEvent::RefreshSessions);
+
+        // Assert
+        assert!(event_batch.should_reload_sessions);
+        assert!(!event_batch.should_reload_projects);
+    }
+
+    #[test]
+    fn test_refresh_projects_batch_sets_only_project_reload_scope() {
+        // Arrange
+        let mut event_batch = AppEventBatch::default();
+
+        // Act
+        event_batch.collect_event(AppEvent::RefreshProjects);
+
+        // Assert
+        assert!(event_batch.should_reload_projects);
+        assert!(!event_batch.should_reload_sessions);
+    }
 
     #[test]
     fn test_requested_review_batch_keeps_newer_generation_when_stale_event_arrives_later() {
