@@ -197,6 +197,11 @@ pub struct RequestedReview {
     pub audience: RequestedReviewAudience,
     /// Optional PR body or MR description text for detail rendering.
     pub body: Option<String>,
+    /// Optional review-request comments fetched for detail rendering.
+    ///
+    /// `None` means the caller listed the requested review without loading
+    /// the heavier comment snapshot yet.
+    pub comment_snapshot: Option<ReviewCommentSnapshot>,
     /// Provider display id such as GitHub `#123` or GitLab `!123`.
     pub display_id: String,
     /// Forge family that owns the review request.

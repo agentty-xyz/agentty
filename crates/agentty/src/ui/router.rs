@@ -241,6 +241,8 @@ fn render_list_or_overlay_mode(
             render_view_info_popup_mode(f, area, mode, shared.sessions, aux);
         }
         AppMode::ReviewDetail {
+            comment_error,
+            is_loading_comments,
             review,
             scroll_offset,
         } => {
@@ -249,6 +251,7 @@ fn render_list_or_overlay_mode(
                 aux.markdown_render_cache,
                 *scroll_offset,
             )
+            .with_comment_status(comment_error.as_deref(), *is_loading_comments)
             .render(f, area);
         }
         AppMode::Help {

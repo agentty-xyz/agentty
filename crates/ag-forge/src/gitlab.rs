@@ -568,6 +568,7 @@ fn parse_requested_reviews_response(
             RequestedReview {
                 audience: RequestedReviewAudience::Personal,
                 body: merge_request.description,
+                comment_snapshot: None,
                 display_id: format!("!{}", merge_request.iid),
                 forge_kind: ForgeKind::GitLab,
                 repository: remote.project_path(),
@@ -1195,6 +1196,7 @@ mod tests {
             vec![RequestedReview {
                 audience: RequestedReviewAudience::Personal,
                 body: Some("Implements the GitLab provider.".to_string()),
+                comment_snapshot: None,
                 display_id: "!42".to_string(),
                 forge_kind: ForgeKind::GitLab,
                 repository: "agentty-xyz/agentty".to_string(),

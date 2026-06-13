@@ -19,7 +19,10 @@ use app::review::{
     FocusedReviewPersistence, ReviewUpdate, apply_review_updates, auto_start_reviews,
 };
 
-use super::state::{App, SyncPopupContext, SyncReviewRequestTaskResult, UpdateStatus};
+use super::state::{
+    App, RequestedReviewCommentFetchKey, SyncPopupContext, SyncReviewRequestTaskResult,
+    UpdateStatus,
+};
 use crate::app::session::{
     SessionTaskService, SyncMainOutcome, SyncSessionStartError, TurnAppliedState,
 };
@@ -89,6 +92,20 @@ pub(crate) enum AppEvent {
         project_id: i64,
         /// Forge result from the background requested-review task.
         result: Result<Vec<ag_forge::RequestedReview>, String>,
+    },
+    /// Indicates completion of one requested-review detail comment load.
+    RequestedReviewCommentSnapshotLoaded {
+        /// Provider display id such as GitHub `#123` or GitLab `!123`.
+        display_id: String,
+        /// Requested-review list generation visible when the comment load
+        /// began.
+        generation: u64,
+        /// Project id whose selected review comment snapshot was loaded.
+        project_id: i64,
+        /// Comment snapshot result from the background detail task.
+        result: Result<ag_forge::ReviewCommentSnapshot, String>,
+        /// Browser-openable review-request URL used to disambiguate rows.
+        web_url: String,
     },
     /// Indicates compact live thinking text for an in-progress session.
     SessionProgressUpdated {
@@ -204,6 +221,7 @@ pub(super) struct AppEventBatch {
     /// including its generation for stale-result rejection.
     pub(super) requested_reviews:
         Option<(u64, i64, Result<Vec<ag_forge::RequestedReview>, String>)>,
+    pub(super) requested_review_comment_snapshots: Vec<RequestedReviewCommentSnapshotUpdate>,
     pub(super) sync_main_result: Option<Result<SyncMainOutcome, SyncSessionStartError>>,
     pub(super) update_status: Option<UpdateStatus>,
 }
@@ -238,6 +256,16 @@ pub(super) struct ReviewRequestStatusUpdate {
     pub(super) generation: u64,
     pub(super) result: Result<SyncReviewRequestTaskResult, String>,
     pub(super) session_id: SessionId,
+}
+
+/// Completed requested-review comment snapshot load ready for reducer
+/// application.
+pub(super) struct RequestedReviewCommentSnapshotUpdate {
+    pub(super) display_id: String,
+    pub(super) generation: u64,
+    pub(super) project_id: i64,
+    pub(super) result: Result<ag_forge::ReviewCommentSnapshot, String>,
+    pub(super) web_url: String,
 }
 
 impl AppEventBatch {
@@ -280,6 +308,23 @@ impl AppEventBatch {
                 project_id,
                 result,
             } => self.collect_requested_reviews_loaded(generation, project_id, result),
+            AppEvent::RequestedReviewCommentSnapshotLoaded {
+                display_id,
+                generation,
+                project_id,
+                result,
+                web_url,
+            } => self.collect_requested_review_comment_snapshot_loaded(
+                display_id, generation, project_id, result, web_url,
+            ),
+            event => self.collect_runtime_event(event),
+        }
+    }
+
+    /// Collects session, workflow, and runtime events after top-level app
+    /// refresh events have been handled.
+    fn collect_runtime_event(&mut self, event: AppEvent) {
+        match event {
             AppEvent::SessionProgressUpdated {
                 progress_message,
                 session_id,
@@ -344,6 +389,7 @@ impl AppEventBatch {
             AppEvent::ReviewCommentsUpdated { session_id } => {
                 self.collect_review_comments_updated(session_id);
             }
+            _ => unreachable!("top-level app event should be collected before runtime events"),
         }
     }
 
@@ -362,6 +408,27 @@ impl AppEventBatch {
         {
             self.requested_reviews = Some((generation, project_id, result));
         }
+    }
+
+    /// Stores every requested-review comment snapshot result because users can
+    /// open multiple review details while earlier background loads are still
+    /// in flight.
+    fn collect_requested_review_comment_snapshot_loaded(
+        &mut self,
+        display_id: String,
+        generation: u64,
+        project_id: i64,
+        result: Result<ag_forge::ReviewCommentSnapshot, String>,
+        web_url: String,
+    ) {
+        self.requested_review_comment_snapshots
+            .push(RequestedReviewCommentSnapshotUpdate {
+                display_id,
+                generation,
+                project_id,
+                result,
+                web_url,
+            });
     }
 
     /// Stores a session model update for reducer application.
@@ -812,10 +879,122 @@ impl App {
             }
         }
 
+        for requested_review_comment_snapshot in
+            std::mem::take(&mut event_batch.requested_review_comment_snapshots)
+        {
+            self.apply_requested_review_comment_snapshot_update(requested_review_comment_snapshot);
+        }
+
         self.apply_status_bar_updates(
             event_batch.latest_available_version_update.as_ref(),
             event_batch.update_status.take(),
         );
+    }
+
+    /// Clears the in-flight marker for one requested-review comment snapshot
+    /// result, then applies it to the current detail page and cached Review
+    /// tab row when it still matches the active project.
+    fn apply_requested_review_comment_snapshot_update(
+        &mut self,
+        update: RequestedReviewCommentSnapshotUpdate,
+    ) {
+        let RequestedReviewCommentSnapshotUpdate {
+            display_id,
+            generation,
+            project_id,
+            result,
+            web_url,
+        } = update;
+        let was_in_flight =
+            self.requested_review_comment_fetches
+                .remove(&RequestedReviewCommentFetchKey {
+                    display_id: display_id.clone(),
+                    generation,
+                    project_id,
+                    web_url: web_url.clone(),
+                });
+        if !was_in_flight {
+            return;
+        }
+        if project_id != self.projects.active_project_id() {
+            return;
+        }
+
+        match result {
+            Ok(comment_snapshot) => {
+                self.cache_requested_review_comment_snapshot(
+                    &display_id,
+                    &web_url,
+                    &comment_snapshot,
+                );
+                self.apply_requested_review_detail_comment_success(
+                    &display_id,
+                    &web_url,
+                    comment_snapshot,
+                );
+            }
+            Err(error) => {
+                self.apply_requested_review_detail_comment_error(
+                    &display_id,
+                    &web_url,
+                    format!("Failed to load review comments: {error}"),
+                );
+            }
+        }
+    }
+
+    /// Applies a successful comment snapshot only when the same review detail
+    /// page is still visible.
+    fn apply_requested_review_detail_comment_success(
+        &mut self,
+        display_id: &str,
+        web_url: &str,
+        comment_snapshot: ag_forge::ReviewCommentSnapshot,
+    ) {
+        let AppMode::ReviewDetail {
+            comment_error,
+            is_loading_comments,
+            review,
+            ..
+        } = &mut self.mode
+        else {
+            return;
+        };
+        if review.display_id != display_id || review.web_url != web_url {
+            return;
+        }
+
+        review.comment_snapshot = Some(comment_snapshot);
+        *comment_error = None;
+        *is_loading_comments = false;
+    }
+
+    /// Applies a comment-load error only when the same review detail page is
+    /// still visible.
+    fn apply_requested_review_detail_comment_error(
+        &mut self,
+        display_id: &str,
+        web_url: &str,
+        error: String,
+    ) {
+        let AppMode::ReviewDetail {
+            comment_error,
+            is_loading_comments,
+            review,
+            ..
+        } = &mut self.mode
+        else {
+            return;
+        };
+        if review.display_id != display_id || review.web_url != web_url {
+            return;
+        }
+        if review.comment_snapshot.is_some() {
+            return;
+        }
+
+        *comment_error = Some(error);
+        *is_loading_comments = false;
     }
 
     /// Synchronizes touched sessions from their runtime handles and drops
@@ -877,6 +1056,7 @@ impl App {
             || !event_batch.review_request_status_updates.is_empty()
             || !event_batch.review_comment_session_ids.is_empty()
             || event_batch.requested_reviews.is_some()
+            || !event_batch.requested_review_comment_snapshots.is_empty()
             || !event_batch.review_updates.is_empty()
             || !event_batch.session_model_updates.is_empty()
             || !event_batch.session_progress_updates.is_empty()

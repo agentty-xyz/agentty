@@ -571,6 +571,7 @@ fn parse_requested_reviews_response(
             RequestedReview {
                 audience: RequestedReviewAudience::Personal,
                 body: pull_request.body,
+                comment_snapshot: None,
                 display_id: format!("#{}", pull_request.number),
                 forge_kind: ForgeKind::GitHub,
                 repository: remote.project_path(),
@@ -1255,6 +1256,7 @@ mod tests {
                 RequestedReview {
                     audience: RequestedReviewAudience::Personal,
                     body: Some("Implements the GitHub provider.".to_string()),
+                    comment_snapshot: None,
                     display_id: "#42".to_string(),
                     forge_kind: ForgeKind::GitHub,
                     repository: "agentty-xyz/agentty".to_string(),
@@ -1266,6 +1268,7 @@ mod tests {
                 RequestedReview {
                     audience: RequestedReviewAudience::Group,
                     body: Some("Adds team-owned parser coverage.".to_string()),
+                    comment_snapshot: None,
                     display_id: "#43".to_string(),
                     forge_kind: ForgeKind::GitHub,
                     repository: "agentty-xyz/agentty".to_string(),
@@ -1277,6 +1280,7 @@ mod tests {
                 RequestedReview {
                     audience: RequestedReviewAudience::Personal,
                     body: Some("Adds direct-only parser coverage.".to_string()),
+                    comment_snapshot: None,
                     display_id: "#44".to_string(),
                     forge_kind: ForgeKind::GitHub,
                     repository: "agentty-xyz/agentty".to_string(),

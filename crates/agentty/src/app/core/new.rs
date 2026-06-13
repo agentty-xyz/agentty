@@ -176,6 +176,7 @@ impl App {
             services,
             sessions,
             requested_review_generation: 0,
+            requested_review_comment_fetches: std::collections::HashSet::new(),
             requested_review_selected_index: None,
             requested_review_table_state: ratatui::widgets::TableState::default(),
             requested_reviews: crate::app::RequestedReviewState::default(),

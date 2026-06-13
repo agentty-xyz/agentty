@@ -15,13 +15,18 @@ pub(crate) fn handle(app: &mut App, content_area: Rect, key: KeyEvent) -> EventR
     }
 
     let max_scroll_offset = match &app.mode {
-        AppMode::ReviewDetail { review, .. } => {
-            page::review_detail::review_detail_max_scroll_offset(
-                review,
-                content_area,
-                app.markdown_render_cache(),
-            )
-        }
+        AppMode::ReviewDetail {
+            comment_error,
+            is_loading_comments,
+            review,
+            ..
+        } => page::review_detail::review_detail_max_scroll_offset(
+            review,
+            comment_error.as_deref(),
+            *is_loading_comments,
+            content_area,
+            app.markdown_render_cache(),
+        ),
         _ => 0,
     };
 
@@ -93,6 +98,8 @@ mod tests {
         // Arrange
         let mut app = new_test_app().await;
         app.mode = AppMode::ReviewDetail {
+            comment_error: None,
+            is_loading_comments: false,
             review: requested_review("line 1\nline 2\nline 3\nline 4\nline 5\nline 6"),
             scroll_offset: 0,
         };
@@ -124,6 +131,8 @@ mod tests {
         // Arrange
         let mut app = new_test_app().await;
         app.mode = AppMode::ReviewDetail {
+            comment_error: None,
+            is_loading_comments: false,
             review: requested_review("line 1\nline 2\nline 3\nline 4\nline 5\nline 6"),
             scroll_offset: 0,
         };
@@ -139,7 +148,7 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::ReviewDetail {
-                scroll_offset: 6,
+                scroll_offset: 9,
                 ..
             }
         ));
@@ -161,6 +170,8 @@ mod tests {
         .await
         .expect("failed to build app");
         app.mode = AppMode::ReviewDetail {
+            comment_error: None,
+            is_loading_comments: false,
             review: requested_review("Detail body"),
             scroll_offset: 0,
         };
@@ -183,6 +194,7 @@ mod tests {
         RequestedReview {
             audience: RequestedReviewAudience::Personal,
             body: Some(body.to_string()),
+            comment_snapshot: None,
             display_id: "#42".to_string(),
             forge_kind: ForgeKind::GitHub,
             repository: "agentty-xyz/agentty".to_string(),

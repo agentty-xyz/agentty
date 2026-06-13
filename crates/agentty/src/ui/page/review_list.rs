@@ -639,6 +639,7 @@ mod tests {
         RequestedReview {
             audience,
             body: Some("Review body".to_string()),
+            comment_snapshot: None,
             display_id: display_id.to_string(),
             forge_kind,
             repository: "agentty-xyz/agentty".to_string(),

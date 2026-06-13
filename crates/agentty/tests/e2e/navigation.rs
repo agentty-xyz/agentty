@@ -80,6 +80,24 @@ JSON
   exit 0
 fi
 
+if [ "$1" = "api" ] && [ "$2" = "--hostname" ] && [ "$4" = "graphql" ]; then
+  case "$*" in
+    *"number=42"*)
+      sleep 3
+      cat <<'JSON'
+{"data":{"repository":{"pullRequest":{"comments":{"nodes":[{"author":{"login":"alice"},"body":"General **review** comment."}]},"reviewThreads":{"nodes":[{"diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":7,"path":"crates/agentty/src/ui/page/review_detail.rs","startLine":null,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"bob"},"body":"Please show this selected review comment."}]}}]}}}}}
+JSON
+      exit 0
+      ;;
+    *"number=43"*)
+      cat <<'JSON'
+{"data":{"repository":{"pullRequest":{"comments":{"nodes":[]},"reviewThreads":{"nodes":[]}}}}}
+JSON
+      exit 0
+      ;;
+  esac
+fi
+
 echo "unexpected gh args: $*" >&2
 exit 1
 "###,
@@ -251,7 +269,7 @@ fn review_tab_shows_requested_reviews_page() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("review_tab")
         .with_git()
-        .with_terminal_size(100, 24)
+        .with_terminal_size(120, 36)
         .setup(seed_review_tab_requested_reviews)
         .run(
             |scenario| {
@@ -265,8 +283,12 @@ fn review_tab_shows_requested_reviews_page() -> E2eResult {
                     .capture_labeled("review", "Review tab selected")
                     .press_key("Enter")
                     .wait_for_text("Review Request", 5000)
+                    .wait_for_text("Loading comments...", 5000)
+                    .capture_labeled("loading", "Review request detail while comments load")
                     .wait_for_text("Personal parser review description.", 5000)
                     .wait_for_text("Release notes", 5000)
+                    .wait_for_text("General discussion", 5000)
+                    .wait_for_text("Please show this selected review comment.", 5000)
                     .viewing_pause_ms(1500)
                     .capture_labeled("detail", "Review request detail after Enter")
             },
@@ -284,6 +306,19 @@ fn review_tab_shows_requested_reviews_page() -> E2eResult {
                 assertion::assert_text_in_region(frame, "Release notes", &full);
                 assertion::assert_text_in_region(frame, "v1.0.0", &full);
                 assertion::assert_text_in_region(frame, "Fix parser output.", &full);
+                assertion::assert_text_in_region(frame, "Comments", &full);
+                assertion::assert_text_in_region(frame, "General discussion", &full);
+                assertion::assert_text_in_region(frame, "General review comment.", &full);
+                assertion::assert_text_in_region(
+                    frame,
+                    "crates/agentty/src/ui/page/review_detail.rs:7",
+                    &full,
+                );
+                assertion::assert_text_in_region(
+                    frame,
+                    "Please show this selected review comment.",
+                    &full,
+                );
 
                 let review_frame = common::frame_from_capture(&report.captures[0]);
                 let review_full = Region::full(review_frame.cols(), review_frame.rows());
@@ -303,6 +338,14 @@ fn review_tab_shows_requested_reviews_page() -> E2eResult {
                     &review_frame,
                     "PR #43 Review team parser",
                     &review_full,
+                );
+
+                let loading_frame = common::frame_from_capture(&report.captures[1]);
+                let loading_full = Region::full(loading_frame.cols(), loading_frame.rows());
+                assertion::assert_text_in_region(
+                    &loading_frame,
+                    "Loading comments...",
+                    &loading_full,
                 );
             },
         )?;

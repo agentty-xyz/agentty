@@ -1,4 +1,7 @@
-use ag_forge::RequestedReview;
+use ag_forge::{
+    RequestedReview, ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot,
+    ReviewCommentThread,
+};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -8,8 +11,14 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use crate::ui::state::help_action;
 use crate::ui::{Page, layout, markdown, style};
 
-/// Page renderer for one requested PR or MR review summary.
+/// Page renderer for one requested PR or MR review summary, comments, and
+/// comment-load failures.
 pub struct ReviewDetailPage<'a> {
+    /// Optional comment-load failure rendered before the generic unloaded
+    /// comments fallback.
+    comment_error: Option<&'a str>,
+    /// Whether comments are currently being fetched in the background.
+    is_loading_comments: bool,
     /// Shared cache used for styled markdown body rendering.
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
     /// Requested review opened from the review list.
@@ -26,21 +35,37 @@ impl<'a> ReviewDetailPage<'a> {
         scroll_offset: u16,
     ) -> Self {
         Self {
+            comment_error: None,
+            is_loading_comments: false,
             markdown_render_cache,
             review,
             scroll_offset,
         }
     }
+
+    /// Adds comment-load status for inline detail rendering.
+    #[must_use]
+    pub fn with_comment_status(
+        mut self,
+        comment_error: Option<&'a str>,
+        is_loading_comments: bool,
+    ) -> Self {
+        self.comment_error = comment_error;
+        self.is_loading_comments = is_loading_comments;
+
+        self
+    }
 }
 
 impl Page for ReviewDetailPage<'_> {
-    /// Renders only the selected review's title and description, leaving
-    /// provider actions for later iterations.
+    /// Renders the selected review's title, description, and comment status.
     fn render(&mut self, f: &mut Frame, area: Rect) {
         let areas = layout::tab_page_areas(area);
         let content_width = detail_content_width(area);
         let paragraph = Paragraph::new(detail_lines(
             self.review,
+            self.comment_error,
+            self.is_loading_comments,
             self.markdown_render_cache,
             content_width,
         ))
@@ -55,9 +80,12 @@ impl Page for ReviewDetailPage<'_> {
     }
 }
 
-/// Returns the largest valid vertical scroll offset for a review detail page.
+/// Returns the largest valid vertical scroll offset for a review detail page,
+/// including any inline comment-load failure message.
 pub(crate) fn review_detail_max_scroll_offset(
     review: &RequestedReview,
+    comment_error: Option<&str>,
+    is_loading_comments: bool,
     area: Rect,
     markdown_render_cache: &markdown::MarkdownRenderCache,
 ) -> u16 {
@@ -66,17 +94,25 @@ pub(crate) fn review_detail_max_scroll_offset(
         return 0;
     }
 
-    let rendered_line_count =
-        detail_lines(review, markdown_render_cache, detail_content_width(area)).len();
+    let rendered_line_count = detail_lines(
+        review,
+        comment_error,
+        is_loading_comments,
+        markdown_render_cache,
+        detail_content_width(area),
+    )
+    .len();
 
     u16::try_from(rendered_line_count.saturating_sub(usize::from(viewport_height)))
         .unwrap_or(u16::MAX)
 }
 
-/// Builds the visible title and rendered markdown description lines for a
-/// review detail page.
+/// Builds the visible title, rendered markdown description, and comment or
+/// comment-load-failure lines for a review detail page.
 fn detail_lines(
     review: &RequestedReview,
+    comment_error: Option<&str>,
+    is_loading_comments: bool,
     markdown_render_cache: &markdown::MarkdownRenderCache,
     width: usize,
 ) -> Vec<Line<'static>> {
@@ -100,8 +136,183 @@ fn detail_lines(
             .iter()
             .cloned(),
     );
+    lines.push(Line::from(""));
+    lines.push(section_label("Comments"));
+    append_review_comments(
+        &mut lines,
+        review.comment_snapshot.as_ref(),
+        comment_error,
+        is_loading_comments,
+        markdown_render_cache,
+        width,
+    );
 
     lines
+}
+
+/// Appends the requested review's conversation comments, inline threads, or
+/// comment-load failure.
+fn append_review_comments(
+    lines: &mut Vec<Line<'static>>,
+    snapshot: Option<&ReviewCommentSnapshot>,
+    comment_error: Option<&str>,
+    is_loading_comments: bool,
+    markdown_render_cache: &markdown::MarkdownRenderCache,
+    width: usize,
+) {
+    if let Some(comment_error) = comment_error {
+        lines.push(error_line(comment_error));
+
+        return;
+    }
+
+    if is_loading_comments {
+        lines.push(muted_line("Loading comments..."));
+
+        return;
+    }
+
+    let Some(snapshot) = snapshot else {
+        lines.push(muted_line("Comments are not loaded."));
+
+        return;
+    };
+
+    if snapshot.pr_level_comments.is_empty() && snapshot.threads.is_empty() {
+        lines.push(muted_line("No comments."));
+
+        return;
+    }
+
+    let (thread_count, comment_count) = review_comment_counts(snapshot);
+    lines.push(muted_line(format!(
+        "{comment_count} comments in {thread_count} threads"
+    )));
+
+    if !snapshot.pr_level_comments.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(comment_group_label("General discussion"));
+        append_review_comment_bodies(
+            lines,
+            &snapshot.pr_level_comments,
+            markdown_render_cache,
+            width,
+        );
+    }
+
+    for thread in &snapshot.threads {
+        lines.push(Line::from(""));
+        lines.push(review_thread_header_line(thread));
+        append_review_comment_bodies(lines, &thread.comments, markdown_render_cache, width);
+    }
+}
+
+/// Returns total inline thread and comment counts for the detail page.
+fn review_comment_counts(snapshot: &ReviewCommentSnapshot) -> (usize, usize) {
+    let thread_count = snapshot.threads.len();
+    let inline_comment_count = snapshot
+        .threads
+        .iter()
+        .map(|thread| thread.comments.len())
+        .sum::<usize>();
+    let comment_count = snapshot.pr_level_comments.len() + inline_comment_count;
+
+    (thread_count, comment_count)
+}
+
+/// Builds one subsection label for a group of comments.
+fn comment_group_label(label: &'static str) -> Line<'static> {
+    Line::from(Span::styled(
+        label,
+        Style::default()
+            .fg(style::palette::text())
+            .add_modifier(Modifier::BOLD),
+    ))
+}
+
+/// Appends each comment author and markdown body under one comment group.
+fn append_review_comment_bodies(
+    lines: &mut Vec<Line<'static>>,
+    comments: &[ReviewComment],
+    markdown_render_cache: &markdown::MarkdownRenderCache,
+    width: usize,
+) {
+    for (comment_index, comment) in comments.iter().enumerate() {
+        if comment_index > 0 {
+            lines.push(Line::from(""));
+        }
+
+        lines.push(Line::from(Span::styled(
+            comment.author.clone(),
+            Style::default()
+                .fg(style::palette::text())
+                .add_modifier(Modifier::BOLD),
+        )));
+
+        let body_width = width.saturating_sub(2).max(1);
+        let rendered = markdown_render_cache.render(&comment.body, body_width);
+        for rendered_line in rendered.iter() {
+            let mut spans = Vec::with_capacity(rendered_line.spans.len() + 1);
+            spans.push(Span::raw("  "));
+            spans.extend(rendered_line.spans.iter().cloned());
+            lines.push(Line::from(spans));
+        }
+    }
+}
+
+/// Builds the file, line, side, and state header for one inline thread.
+fn review_thread_header_line(thread: &ReviewCommentThread) -> Line<'static> {
+    let anchor = match thread.line {
+        Some(line) => format!("{}:{line}", thread.path),
+        None => thread.path.clone(),
+    };
+    let side_tag = match thread.anchor_side {
+        ReviewCommentAnchorSide::File => "file",
+        ReviewCommentAnchorSide::New => "new",
+        ReviewCommentAnchorSide::Old => "old",
+    };
+    let comment_count = thread.comments.len();
+    let resolution_tag = if thread.is_resolved {
+        "resolved"
+    } else {
+        "unresolved"
+    };
+    let outdated_tag = if thread.is_outdated == Some(true) {
+        "  ·  outdated"
+    } else {
+        ""
+    };
+
+    Line::from(vec![
+        Span::styled(
+            anchor,
+            Style::default()
+                .fg(style::palette::text())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(
+                "  ·  {side_tag}  ·  {comment_count} comments  ·  {resolution_tag}{outdated_tag}"
+            ),
+            Style::default().fg(style::palette::text_muted()),
+        ),
+    ])
+}
+
+/// Builds one muted informational line.
+fn muted_line(text: impl Into<String>) -> Line<'static> {
+    Line::from(Span::styled(
+        text.into(),
+        Style::default().fg(style::palette::text_muted()),
+    ))
+}
+
+/// Builds one danger-colored informational line.
+fn error_line(text: impl Into<String>) -> Line<'static> {
+    Line::from(Span::styled(
+        text.into(),
+        Style::default().fg(style::palette::danger()),
+    ))
 }
 
 /// Converts common HTML snippets embedded in forge markdown bodies to
@@ -374,6 +585,106 @@ mod tests {
     }
 
     #[test]
+    fn test_render_detail_shows_loaded_comments() {
+        // Arrange
+        let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
+        let backend = TestBackend::new(120, 24);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let mut review = requested_review(Some("Implements the detail page."));
+        review.comment_snapshot = Some(ReviewCommentSnapshot {
+            pr_level_comments: vec![ReviewComment {
+                author: "alice".to_string(),
+                body: "General **feedback** looks good.".to_string(),
+            }],
+            threads: vec![ReviewCommentThread {
+                anchor_side: ReviewCommentAnchorSide::New,
+                comments: vec![ReviewComment {
+                    author: "bob".to_string(),
+                    body: "Please cover this branch.".to_string(),
+                }],
+                is_outdated: Some(false),
+                is_resolved: false,
+                line: Some(42),
+                path: "crates/agentty/src/ui/page/review_detail.rs".to_string(),
+                start_line: None,
+            }],
+        });
+
+        // Act
+        terminal
+            .draw(|frame| {
+                ReviewDetailPage::new(&review, &markdown::MarkdownRenderCache::default(), 0)
+                    .render(frame, frame.area());
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("Comments"));
+        assert!(text.contains("2 comments in 1 threads"));
+        assert!(text.contains("General discussion"));
+        assert!(text.contains("alice"));
+        assert!(text.contains("General feedback looks good."));
+        assert!(text.contains("crates/agentty/src/ui/page/review_detail.rs:42"));
+        assert!(text.contains("new  ·  1 comments  ·  unresolved"));
+        assert!(text.contains("bob"));
+        assert!(text.contains("Please cover this branch."));
+    }
+
+    #[test]
+    fn test_render_detail_shows_comment_load_error() {
+        // Arrange
+        let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
+        let backend = TestBackend::new(120, 12);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let review = requested_review(Some("Implements the detail page."));
+
+        // Act
+        terminal
+            .draw(|frame| {
+                ReviewDetailPage::new(&review, &markdown::MarkdownRenderCache::default(), 0)
+                    .with_comment_status(
+                        Some("Failed to load review comments: authentication failed"),
+                        false,
+                    )
+                    .render(frame, frame.area());
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("Comments"));
+        assert!(text.contains("Failed to load review comments: authentication failed"));
+        assert!(!text.contains("Comments are not loaded."));
+        assert!(!text.contains("Loading comments..."));
+    }
+
+    #[test]
+    fn test_render_detail_shows_comment_loading_state() {
+        // Arrange
+        let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
+        let backend = TestBackend::new(120, 12);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let review = requested_review(Some("Implements the detail page."));
+
+        // Act
+        terminal
+            .draw(|frame| {
+                ReviewDetailPage::new(&review, &markdown::MarkdownRenderCache::default(), 0)
+                    .with_comment_status(None, true)
+                    .render(frame, frame.area());
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("Comments"));
+        assert!(text.contains("Loading comments..."));
+        assert!(!text.contains("Comments are not loaded."));
+        assert!(!text.contains("Failed to load review comments: authentication failed"));
+    }
+
+    #[test]
     fn test_render_detail_renders_markdown_description() {
         // Arrange
         let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
@@ -460,12 +771,14 @@ mod tests {
         // Act
         let max_scroll_offset = review_detail_max_scroll_offset(
             &review,
+            None,
+            false,
             Rect::new(0, 0, 80, 8),
             &markdown_render_cache,
         );
 
         // Assert
-        assert_eq!(max_scroll_offset, 6);
+        assert_eq!(max_scroll_offset, 9);
     }
 
     #[test]
@@ -485,6 +798,7 @@ mod tests {
         RequestedReview {
             audience: RequestedReviewAudience::Personal,
             body: body.map(str::to_string),
+            comment_snapshot: None,
             display_id: "#42".to_string(),
             forge_kind: ForgeKind::GitHub,
             repository: "agentty-xyz/agentty".to_string(),

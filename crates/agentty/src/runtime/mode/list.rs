@@ -795,6 +795,7 @@ mod tests {
             AppMode::ReviewDetail {
                 ref review,
                 scroll_offset,
+                ..
             } if review.body.as_deref() == Some("Second body")
                 && scroll_offset == 0
         ));
@@ -825,6 +826,7 @@ mod tests {
             AppMode::ReviewDetail {
                 ref review,
                 scroll_offset,
+                ..
             } if review.audience == RequestedReviewAudience::Personal
                 && review.body.as_deref() == Some("Personal body")
                 && scroll_offset == 0
@@ -1610,6 +1612,7 @@ mod tests {
         RequestedReview {
             audience,
             body: Some(body.to_string()),
+            comment_snapshot: None,
             display_id: "#42".to_string(),
             forge_kind: ForgeKind::GitHub,
             repository: "agentty-xyz/agentty".to_string(),

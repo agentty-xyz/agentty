@@ -873,6 +873,16 @@ orchestration paths:
   through `ReviewRequestClient`. Unlinked sessions only reuse an open same-branch review
   request; terminal same-branch requests are ignored so branch names can be reused after
   merge or close.
+- requested-review detail loading: the top-level Review tab loads only PR/MR metadata;
+  pressing `Enter` opens the detail page immediately, renders a comment loading message,
+  and starts a detached `ReviewRequestClient` comment snapshot fetch that reports back
+  through `AppEvent`. The reducer applies the result only to the matching active project
+  and review detail, clears the generation-scoped in-flight fetch marker on completion,
+  and caches successful snapshots on the list row for later opens. Reopening the same
+  detail page while a fetch is still running reuses that in-flight request instead of
+  spawning a duplicate forge API call. Refreshing the top-level Review tab invalidates
+  older in-flight comment loads so stale completions cannot repopulate the refreshed
+  list.
 - background review-request sync: review-ready sessions with a published branch or
   linked review request are polled through `ReviewRequestClient` inside the shared sync
   orchestrator; merged requests move the session to `Done`, and closed requests move it
