@@ -150,13 +150,12 @@ impl App {
             },
         )
         .await;
-        let review_cache = review::review_cache_from_rows(
-            repositories
-                .sessions()
-                .load_session_focused_reviews_for_project(active_project_id)
-                .await
-                .unwrap_or_default(),
-        );
+        let focused_review_rows = repositories
+            .sessions()
+            .load_session_focused_reviews_for_project(active_project_id)
+            .await
+            .unwrap_or_default();
+        let review_cache = review::review_cache_from_rows(focused_review_rows);
 
         let sync_context = Self::sync_context_for(&projects, &services, &sessions);
         let sync_handle = sync::SyncHandle::spawn(event_tx.clone(), sync_context);

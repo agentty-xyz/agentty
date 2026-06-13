@@ -4491,6 +4491,8 @@ mod tests {
         app.next_tab();
         assert_eq!(app.tabs.current(), Tab::Settings);
         app.next_tab();
+        assert_eq!(app.tabs.current(), Tab::Logs);
+        app.next_tab();
         assert_eq!(app.tabs.current(), Tab::Projects);
     }
 
@@ -4515,6 +4517,8 @@ mod tests {
         assert_eq!(app.tabs.current(), Tab::Review);
         app.next_tab();
         assert_eq!(app.tabs.current(), Tab::Settings);
+        app.next_tab();
+        assert_eq!(app.tabs.current(), Tab::Logs);
         app.next_tab();
         assert_eq!(app.tabs.current(), Tab::Projects);
     }
