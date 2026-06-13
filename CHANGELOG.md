@@ -7,6 +7,33 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.10.2] - 2026-06-12
+
+### Added
+
+- agentty: add the process-local Logs tab.
+- agentty: show requested review comments in the review detail view.
+- agentty: manage Antigravity hidden worktree aliases.
+- agentty: support CSI-u `Shift+Enter` input in tmux.
+
+### Changed
+
+- agentty: split project refresh from session refresh.
+- agentty: cache diff layouts and reduce render-state cloning in hot render paths.
+- Add regression coverage for forge and Codex helper behavior.
+- Bump GitHub Actions, npm publishing, and version-update automation dependencies.
+- Bump workspace crate metadata and lockfile package versions to `0.10.2`.
+
+### Fixed
+
+- agentty: fix Logs tab navigation and lifetime cleanup.
+- agentty: fix review list section spacing.
+
+### Contributors
+
+- @dependabot
+- @minev-dev
+
 ## [v0.10.1] - 2026-06-09
 
 ### Added
