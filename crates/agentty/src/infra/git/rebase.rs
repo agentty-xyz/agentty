@@ -517,6 +517,48 @@ mod tests {
     }
 
     #[test]
+    fn test_run_git_command_with_index_lock_retry_passes_owned_args_and_environment() {
+        // Arrange
+        let mut command_runner = MockGitCommandRunner::new();
+        let mut sleeper = MockSleeper::new();
+        let repo_path = Path::new(".");
+        let args = ["-c", "core.editor=true", "rebase", "main"];
+        let environment = [("GIT_EDITOR", "true")];
+
+        command_runner
+            .expect_run_git_command_output_with_env()
+            .withf(|repo_path, args, environment| {
+                repo_path == Path::new(".")
+                    && args.iter().map(String::as_str).eq([
+                        "-c",
+                        "core.editor=true",
+                        "rebase",
+                        "main",
+                    ])
+                    && environment
+                        .iter()
+                        .map(|(key, value)| (key.as_str(), value.as_str()))
+                        .eq([("GIT_EDITOR", "true")])
+            })
+            .times(1)
+            .returning(|_, _, _| Ok(success_output()));
+        sleeper.expect_sleep().times(0);
+
+        // Act
+        let output = run_git_command_with_index_lock_retry_with_dependencies(
+            repo_path,
+            &args,
+            &environment,
+            &command_runner,
+            &sleeper,
+        )
+        .expect("retry helper should return command output");
+
+        // Assert
+        assert!(output.status.success());
+    }
+
+    #[test]
     fn test_run_git_command_with_index_lock_retry_returns_last_lock_failure() {
         // Arrange
         let mut command_runner = MockGitCommandRunner::new();

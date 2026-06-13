@@ -1844,3 +1844,51 @@ fn is_missing_follow_up_task_table(error: &sqlx::Error) -> bool {
             if database_error.message().contains("no such table: session_follow_up_task")
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_session_follow_up_task_row_converts_to_domain_task() {
+        // Arrange
+        let row = SessionFollowUpTaskRow {
+            id: 7,
+            launched_session_id: Some("launched-session".to_string()),
+            position: 3,
+            session_id: "source-session".to_string(),
+            text: "Follow up on coverage".to_string(),
+        };
+
+        // Act
+        let follow_up_task = row.into_session_follow_up_task();
+
+        // Assert
+        assert_eq!(follow_up_task.id, 7);
+        assert_eq!(
+            follow_up_task.launched_session_id,
+            Some(SessionId::from("launched-session"))
+        );
+        assert_eq!(follow_up_task.position, 3);
+        assert_eq!(follow_up_task.text, "Follow up on coverage");
+    }
+
+    #[test]
+    fn test_session_follow_up_task_row_clamps_invalid_position() {
+        // Arrange
+        let row = SessionFollowUpTaskRow {
+            id: 8,
+            launched_session_id: None,
+            position: -1,
+            session_id: "source-session".to_string(),
+            text: "Handle invalid position".to_string(),
+        };
+
+        // Act
+        let follow_up_task = row.into_session_follow_up_task();
+
+        // Assert
+        assert_eq!(follow_up_task.launched_session_id, None);
+        assert_eq!(follow_up_task.position, usize::MAX);
+    }
+}
