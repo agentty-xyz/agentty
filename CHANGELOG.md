@@ -7,6 +7,21 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.10.4] - 2026-06-13
+
+### Added
+
+- agentty: show installed agent CLI versions on the projects dashboard.
+
+### Changed
+
+- testty: publish the npm installer under the `@agentty-xyz` scope.
+- Bump workspace crate metadata and lockfile package versions to `0.10.4`.
+
+### Contributors
+
+- @minev-dev
+
 ## [v0.10.3] - 2026-06-13
 
 This release supersedes `v0.10.2`, whose release workflow did not complete successfully.
