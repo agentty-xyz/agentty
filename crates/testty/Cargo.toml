@@ -18,6 +18,11 @@ include = [
   "README.md",
 ]
 
+[package.metadata.dist]
+# Publish the npm installer under the Agentty org scope while keeping the Cargo
+# crate and installed binary named `testty`.
+npm-scope = "@agentty-xyz"
+
 [lints]
 workspace = true
 
