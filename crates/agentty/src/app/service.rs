@@ -11,7 +11,7 @@ use tracing::warn;
 
 use crate::app::AppEvent;
 use crate::db::AppRepositories;
-use crate::domain::agent::AgentKind;
+use crate::domain::agent::{AgentCliInfo, AgentKind};
 use crate::domain::session::SessionId;
 use crate::infra::app_server::AppServerClient;
 use crate::infra::clock::Clock;
@@ -42,6 +42,7 @@ pub(crate) struct AppServiceDeps {
 
 /// Shared app dependencies used by managers and background workflows.
 pub struct AppServices {
+    available_agent_clis: Arc<Mutex<Vec<AgentCliInfo>>>,
     available_agent_kinds: Arc<[AgentKind]>,
     app_server_client_override: Option<Arc<dyn AppServerClient>>,
     base_path: PathBuf,
@@ -57,13 +58,14 @@ pub struct AppServices {
 }
 
 impl AppServices {
-    /// Creates a shared service container with explicit external client
-    /// dependencies.
-    pub(crate) fn new(
+    /// Creates a shared service container with versioned agent CLI
+    /// availability captured at startup.
+    pub(crate) fn new_with_agent_clis(
         base_path: PathBuf,
         clock: Arc<dyn Clock>,
         event_tx: mpsc::UnboundedSender<AppEvent>,
         deps: AppServiceDeps,
+        available_agent_clis: Vec<AgentCliInfo>,
     ) -> Self {
         let AppServiceDeps {
             app_server_client_override,
@@ -75,6 +77,7 @@ impl AppServices {
         } = deps;
 
         Self {
+            available_agent_clis: Arc::new(Mutex::new(available_agent_clis)),
             available_agent_kinds: Arc::<[AgentKind]>::from(available_agent_kinds),
             app_server_client_override,
             base_path,
@@ -98,6 +101,22 @@ impl AppServices {
     /// Returns the cached locally runnable agent kinds.
     pub(crate) fn available_agent_kinds(&self) -> Vec<AgentKind> {
         self.available_agent_kinds.as_ref().to_vec()
+    }
+
+    /// Returns the cached locally runnable agent CLIs and detected versions.
+    pub(crate) fn available_agent_clis(&self) -> Vec<AgentCliInfo> {
+        self.available_agent_clis
+            .lock()
+            .map(|agent_clis| agent_clis.clone())
+            .unwrap_or_default()
+    }
+
+    /// Replaces the cached CLI rows after background version detection
+    /// completes.
+    pub(crate) fn replace_available_agent_clis(&self, available_agent_clis: Vec<AgentCliInfo>) {
+        if let Ok(mut agent_clis) = self.available_agent_clis.lock() {
+            *agent_clis = available_agent_clis;
+        }
     }
 
     /// Returns the application repository bundle.

@@ -5,6 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap};
 use time::OffsetDateTime;
 
+use crate::domain::agent::{AgentCliInfo, AgentCliVersion};
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::DailyActivity;
 use crate::ui::activity_heatmap::{
@@ -25,14 +26,13 @@ const ACTIVE_PROJECT_MARKER: &str = "* ";
 const TABLE_COLUMN_SPACING: u16 = 2;
 /// Fixed height reserved for the top activity and work-pace panels.
 const PROJECT_DASHBOARD_PANEL_HEIGHT: u16 = 12;
-/// Percentage of the top-panel width reserved for the activity heatmap,
-/// keeping it at half of the available panel.
-const ACTIVITY_HEATMAP_WIDTH_PERCENT: u16 = 50;
 /// Projects tab renderer showing saved repositories, activity, compact
-/// work-performance stats, and project metadata.
+/// work-performance stats, available agent CLIs, and project metadata.
 pub struct ProjectListPage<'a> {
     /// Identifier for the currently active project.
     pub active_project_id: i64,
+    /// Locally available agent CLI executables and detected versions.
+    pub agent_clis: &'a [AgentCliInfo],
     /// Git repository project rows displayed in the table.
     pub projects: &'a [ProjectListItem],
     /// Persisted local-day session activity used by the projects heatmap.
@@ -43,15 +43,17 @@ pub struct ProjectListPage<'a> {
 
 impl<'a> ProjectListPage<'a> {
     /// Creates a project-list page renderer with active-project highlighting
-    /// and activity summary data.
+    /// plus activity and agent-CLI summary data.
     pub fn new(
         projects: &'a [ProjectListItem],
+        agent_clis: &'a [AgentCliInfo],
         stats_activity: &'a [DailyActivity],
         table_state: &'a mut TableState,
         active_project_id: i64,
     ) -> Self {
         Self {
             active_project_id,
+            agent_clis,
             projects,
             stats_activity,
             table_state,
@@ -71,13 +73,11 @@ impl Page for ProjectListPage<'_> {
         .split(areas.main_area);
         let info_area = content_chunks[0];
         let project_area = content_chunks[1];
-        let info_panel_chunks = Layout::horizontal([
-            Constraint::Percentage(ACTIVITY_HEATMAP_WIDTH_PERCENT),
-            Constraint::Fill(1),
-        ])
-        .split(info_area);
+        let info_panel_chunks =
+            Layout::horizontal(project_dashboard_panel_constraints()).split(info_area);
         let heatmap_area = info_panel_chunks[0];
         let details_area = info_panel_chunks[1];
+        let agent_cli_area = info_panel_chunks[2];
         let heatmap_block = Block::default()
             .borders(Borders::ALL)
             .title("Activity")
@@ -85,6 +85,10 @@ impl Page for ProjectListPage<'_> {
         let details_block = Block::default()
             .borders(Borders::ALL)
             .title("Work Pace")
+            .border_style(style::border_style());
+        let agent_cli_block = Block::default()
+            .borders(Borders::ALL)
+            .title("Agent CLIs")
             .border_style(style::border_style());
         let heatmap_inner_area = heatmap_block.inner(heatmap_area);
         let heatmap_panel = Paragraph::new(self.build_heatmap_lines(heatmap_inner_area.width))
@@ -97,6 +101,10 @@ impl Page for ProjectListPage<'_> {
         let details_panel = Paragraph::new(work_stats_summary_lines(&activity_stats, active_stats))
             .style(Style::default().fg(style::palette::text()))
             .block(details_block)
+            .wrap(Wrap { trim: true });
+        let agent_cli_panel = Paragraph::new(agent_cli_summary_lines(self.agent_clis))
+            .style(Style::default().fg(style::palette::text()))
+            .block(agent_cli_block)
             .wrap(Wrap { trim: true });
 
         let selected_style = Style::default().bg(style::palette::surface());
@@ -129,6 +137,7 @@ impl Page for ProjectListPage<'_> {
         f.render_stateful_widget(table, project_area, self.table_state);
         f.render_widget(heatmap_panel, heatmap_area);
         f.render_widget(details_panel, details_area);
+        f.render_widget(agent_cli_panel, agent_cli_area);
 
         let help_message = Paragraph::new(project_list_footer_line());
         f.render_widget(help_message, areas.footer_area);
@@ -257,6 +266,15 @@ impl ActiveProjectStats {
     }
 }
 
+/// Returns equal-width constraints for the top dashboard panels.
+fn project_dashboard_panel_constraints() -> [Constraint; 3] {
+    [
+        Constraint::Fill(1),
+        Constraint::Fill(1),
+        Constraint::Fill(1),
+    ]
+}
+
 /// Renders one project metadata row.
 fn render_project_row(project_item: &ProjectListItem, active_project_id: i64) -> Row<'static> {
     let (title, branch, last_opened, path) = project_row_values(project_item, active_project_id);
@@ -313,6 +331,38 @@ fn work_stats_summary_lines(
             stat_value_span(active_stats.project_count.to_string()),
         ]),
     ]
+}
+
+/// Builds styled summary lines for available agent CLI versions.
+fn agent_cli_summary_lines(agent_clis: &[AgentCliInfo]) -> Vec<Line<'static>> {
+    if agent_clis.is_empty() {
+        return vec![Line::from(Span::styled(
+            "No supported CLIs found",
+            Style::default().fg(style::palette::text_muted()),
+        ))];
+    }
+
+    agent_clis
+        .iter()
+        .map(|agent_cli| {
+            Line::from(vec![
+                stat_label_span(format!("{} ", agent_cli.executable_name)),
+                agent_cli_version_span(&agent_cli.version),
+            ])
+        })
+        .collect()
+}
+
+/// Returns a styled version or loading span for one agent CLI row.
+fn agent_cli_version_span(version: &AgentCliVersion) -> Span<'static> {
+    match version {
+        AgentCliVersion::Loading => Span::styled(
+            "loading...",
+            Style::default().fg(style::palette::text_muted()),
+        ),
+        AgentCliVersion::Unknown => stat_value_span("version unknown"),
+        AgentCliVersion::Value(version) => stat_value_span(version.clone()),
+    }
 }
 
 /// Returns a muted label span for the work-stats summary.
@@ -406,6 +456,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use crate::domain::agent::AgentKind;
     use crate::domain::project::Project;
     use crate::domain::theme::ColorTheme;
 
@@ -452,15 +503,19 @@ mod tests {
     }
 
     #[test]
-    fn test_activity_heatmap_uses_half_of_top_panel_width() {
+    fn test_dashboard_panels_use_equal_widths() {
         // Arrange
-        let expected_width_percent = 50;
+        let expected_constraints = [
+            Constraint::Fill(1),
+            Constraint::Fill(1),
+            Constraint::Fill(1),
+        ];
 
         // Act
-        let width_percent = ACTIVITY_HEATMAP_WIDTH_PERCENT;
+        let constraints = project_dashboard_panel_constraints();
 
         // Assert
-        assert_eq!(width_percent, expected_width_percent);
+        assert_eq!(constraints, expected_constraints);
     }
 
     #[test]
@@ -491,7 +546,7 @@ mod tests {
         // Act
         terminal
             .draw(|frame| {
-                ProjectListPage::new(&projects, &activity, &mut table_state, 42)
+                ProjectListPage::new(&projects, &[], &activity, &mut table_state, 42)
                     .render(frame, frame.area());
             })
             .expect("failed to draw projects page");
@@ -499,8 +554,9 @@ mod tests {
         // Assert
         let border_cell_count = foreground_symbol_cell_count(terminal.backend().buffer(), "┌");
         assert!(
-            border_cell_count >= 3,
-            "expected heatmap, work-pace, and projects panels to use palette border color"
+            border_cell_count >= 4,
+            "expected heatmap, work-pace, agent CLI, and projects panels to use palette border \
+             color"
         );
     }
 
@@ -733,6 +789,10 @@ mod tests {
             day_key: current_day_key_local(),
             session_count: 3,
         }];
+        let agent_clis = vec![AgentCliInfo::new(
+            AgentKind::Claude,
+            Some("2.1.39".to_string()),
+        )];
         let mut table_state = TableState::default();
         let backend = ratatui::backend::TestBackend::new(120, 30);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
@@ -740,7 +800,7 @@ mod tests {
         // Act
         terminal
             .draw(|frame| {
-                ProjectListPage::new(&projects, &activity, &mut table_state, 42)
+                ProjectListPage::new(&projects, &agent_clis, &activity, &mut table_state, 42)
                     .render(frame, frame.area());
             })
             .expect("failed to draw projects page");
@@ -751,6 +811,8 @@ mod tests {
         assert!(text.contains("Less"));
         assert!(text.contains("More"));
         assert!(text.contains("Work Pace"));
+        assert!(text.contains("Agent CLIs"));
+        assert!(text.contains("claude 2.1.39"));
         assert!(!text.contains("Version"));
         assert!(!text.contains("Agentic Development Environment"));
         assert!(text.contains("Active Sessions 0"));
@@ -766,7 +828,7 @@ mod tests {
             session_count: 50,
         }];
         let mut table_state = TableState::default();
-        let page = ProjectListPage::new(&[], &activity, &mut table_state, 42);
+        let page = ProjectListPage::new(&[], &[], &activity, &mut table_state, 42);
 
         // Act
         let heatmap_lines = page.build_heatmap_lines(80);
@@ -788,7 +850,7 @@ mod tests {
             session_count: 1,
         }];
         let mut table_state = TableState::default();
-        let page = ProjectListPage::new(&[], &activity, &mut table_state, 42);
+        let page = ProjectListPage::new(&[], &[], &activity, &mut table_state, 42);
 
         // Act
         let heatmap_lines = page.build_heatmap_lines(28);
@@ -829,6 +891,42 @@ mod tests {
         assert!(rendered_text.contains("Best 5d"));
         assert!(rendered_text.contains("Active Sessions 4"));
         assert!(rendered_text.contains("Active Projects 2"));
+    }
+
+    #[test]
+    fn test_agent_cli_summary_lines_show_versions_and_unknown_fallback() {
+        // Arrange
+        let agent_clis = vec![
+            AgentCliInfo::new(AgentKind::Gemini, Some("0.39.1".to_string())),
+            AgentCliInfo::new(AgentKind::Codex, None),
+        ];
+
+        // Act
+        let rendered_text = agent_cli_summary_lines(&agent_clis)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(rendered_text.contains("gemini 0.39.1"));
+        assert!(rendered_text.contains("codex version unknown"));
+    }
+
+    #[test]
+    fn test_agent_cli_summary_lines_show_loading_state() {
+        // Arrange
+        let agent_clis = vec![AgentCliInfo::loading(AgentKind::Claude)];
+
+        // Act
+        let rendered_text = agent_cli_summary_lines(&agent_clis)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(rendered_text.contains("claude loading..."));
     }
 
     #[test]

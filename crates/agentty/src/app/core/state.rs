@@ -39,6 +39,8 @@ use super::events::AppEvent;
 use super::events::{AppEventBatch, ReviewRequestStatusUpdate};
 use crate::app;
 use crate::app::{AppError, RequestedReviewState, session};
+#[cfg(test)]
+use crate::domain::agent::AgentCliInfo;
 use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
 use crate::domain::input::InputState;
 use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, Session, SessionId, Status};
@@ -155,6 +157,8 @@ pub(crate) struct SessionStatsSnapshot {
 /// External clients used to compose [`App`] startup dependencies.
 pub(crate) struct AppClients {
     pub(super) agent_availability_probe: Arc<dyn agent::AgentAvailabilityProbe>,
+    /// Whether startup should spawn background CLI version detection.
+    pub(super) agent_cli_version_task_enabled: bool,
     pub(super) app_server_client_override: Option<Arc<dyn app_server::AppServerClient>>,
     pub(super) fs_client: Arc<dyn FsClient>,
     pub(super) git_client: Arc<dyn GitClient>,
@@ -170,6 +174,7 @@ impl AppClients {
     pub(crate) fn new() -> Self {
         Self {
             agent_availability_probe: Arc::new(agent::RealAgentAvailabilityProbe),
+            agent_cli_version_task_enabled: !cfg!(test),
             app_server_client_override: None,
             fs_client: Arc::new(RealFsClient),
             git_client: Arc::new(RealGitClient),
@@ -3783,6 +3788,37 @@ mod tests {
         );
     }
 
+    #[test]
+    /// Verifies that `AgentCliVersionsUpdated` events keep the latest
+    /// completed version snapshot in one reducer batch.
+    fn app_event_batch_collect_event_stores_agent_cli_versions() {
+        // Arrange
+        let mut event_batch = AppEventBatch::default();
+
+        // Act
+        event_batch.collect_event(AppEvent::AgentCliVersionsUpdated {
+            agent_clis: vec![AgentCliInfo::new(
+                AgentKind::Claude,
+                Some("2.1.39".to_string()),
+            )],
+        });
+        event_batch.collect_event(AppEvent::AgentCliVersionsUpdated {
+            agent_clis: vec![AgentCliInfo::new(
+                AgentKind::Codex,
+                Some("0.139.0".to_string()),
+            )],
+        });
+
+        // Assert
+        assert_eq!(
+            event_batch.agent_cli_updates,
+            Some(vec![AgentCliInfo::new(
+                AgentKind::Codex,
+                Some("0.139.0".to_string())
+            )])
+        );
+    }
+
     /// Verifies system log events are retained in reducer batch order.
     #[test]
     fn app_event_batch_collect_event_keeps_system_log_events_ordered() {
@@ -4024,6 +4060,36 @@ mod tests {
             Some(UpdateStatus::InProgress {
                 version: "v2.0.0".to_string()
             })
+        );
+        assert!(app.needs_redraw());
+    }
+
+    #[tokio::test]
+    /// Verifies that completed CLI version events replace startup loading
+    /// rows and request a redraw.
+    async fn apply_app_events_agent_cli_versions_updates_app_services() {
+        // Arrange
+        let mut app = new_test_app().await;
+        app.services
+            .replace_available_agent_clis(vec![AgentCliInfo::loading(AgentKind::Claude)]);
+        app.clear_redraw();
+
+        // Act
+        app.apply_app_events(AppEvent::AgentCliVersionsUpdated {
+            agent_clis: vec![AgentCliInfo::new(
+                AgentKind::Claude,
+                Some("2.1.39".to_string()),
+            )],
+        })
+        .await;
+
+        // Assert
+        assert_eq!(
+            app.services.available_agent_clis(),
+            vec![AgentCliInfo::new(
+                AgentKind::Claude,
+                Some("2.1.39".to_string())
+            )]
         );
         assert!(app.needs_redraw());
     }
@@ -5481,11 +5547,13 @@ mod tests {
         let db = app.services.db().clone();
         let event_sender = app.services.event_sender();
         let available_agent_kinds = app.services.available_agent_kinds();
+        let available_agent_clis =
+            crate::domain::agent::AgentCliInfo::from_kinds(&available_agent_kinds);
         let app_server_client_override = app.services.app_server_client_override();
         let fs_client = app.services.fs_client();
         let review_request_client = app.services.review_request_client();
 
-        app.services = AppServices::new(
+        app.services = AppServices::new_with_agent_clis(
             base_path,
             app.services.clock(),
             event_sender,
@@ -5497,6 +5565,7 @@ mod tests {
                 repositories: db,
                 review_request_client,
             },
+            available_agent_clis,
         );
     }
 
@@ -5513,10 +5582,12 @@ mod tests {
         let event_sender = app.services.event_sender();
         let app_server_client_override = app.services.app_server_client_override();
         let available_agent_kinds = app.services.available_agent_kinds();
+        let available_agent_clis =
+            crate::domain::agent::AgentCliInfo::from_kinds(&available_agent_kinds);
         let fs_client = app.services.fs_client();
         let git_client = app.services.git_client();
 
-        app.services = AppServices::new(
+        app.services = AppServices::new_with_agent_clis(
             base_path,
             app.services.clock(),
             event_sender,
@@ -5528,6 +5599,7 @@ mod tests {
                 repositories: db,
                 review_request_client,
             },
+            available_agent_clis,
         );
     }
 

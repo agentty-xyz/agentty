@@ -36,6 +36,9 @@ fn projects_page_shows_cwd() {
                 assertion::assert_text_in_region(frame, "Sessions", &full);
                 assertion::assert_text_in_region(frame, "Last Opened", &full);
                 assertion::assert_text_in_region(frame, "Work Pace", &full);
+                assertion::assert_text_in_region(frame, "Agent CLIs", &full);
+                assertion::assert_text_in_region(frame, "claude", &full);
+                assertion::assert_text_in_region(frame, "0.0.0-test", &full);
                 assertion::assert_not_visible(frame, "Version");
                 assertion::assert_not_visible(frame, "Agentty is an ADE");
                 assertion::assert_text_in_region(frame, "Active", &full);

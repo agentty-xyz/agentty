@@ -14,6 +14,7 @@ use crate::app::session_state::SessionState;
 use crate::app::{AppError, session};
 use crate::domain::agent::{AgentKind, AgentModel};
 use crate::domain::project::{Project, ProjectListItem, project_name_from_path};
+use crate::infra::agent::AgentAvailabilityProbe;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs::FsClient;
 use crate::infra::git::{GitClient, detect_git_info};
@@ -245,7 +246,16 @@ impl AppStartup {
     pub(crate) fn spawn_background_tasks(
         auto_update: bool,
         event_tx: &mpsc::UnboundedSender<AppEvent>,
+        agent_availability_probe: Option<Arc<dyn AgentAvailabilityProbe>>,
+        fallback_agent_kinds: Vec<AgentKind>,
     ) {
+        if let Some(agent_availability_probe) = agent_availability_probe {
+            task::TaskService::spawn_agent_cli_version_task(
+                event_tx,
+                agent_availability_probe,
+                fallback_agent_kinds,
+            );
+        }
         task::TaskService::spawn_version_check_task(event_tx, auto_update);
     }
 

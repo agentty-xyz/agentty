@@ -5,7 +5,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::widgets::TableState;
 
 use crate::app::{RequestedReviewState, SettingsManager, Tab};
-use crate::domain::agent::ReasoningLevel;
+use crate::domain::agent::{AgentCliInfo, ReasoningLevel};
 use crate::domain::input::InputState;
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session, SessionId};
@@ -23,6 +23,8 @@ use crate::ui::{Component, Page, RenderContext, component, markdown, overlay, pa
 pub(crate) struct ListBackgroundRenderContext<'a> {
     /// Identifier for the currently active project in the project list tab.
     pub(crate) active_project_id: i64,
+    /// Locally available agent CLI executables and detected versions.
+    pub(crate) available_agent_clis: &'a [AgentCliInfo],
     pub(crate) current_tab: Tab,
     pub(crate) project_table_state: &'a mut TableState,
     pub(crate) projects: &'a [ProjectListItem],
@@ -41,6 +43,8 @@ pub(crate) struct ListBackgroundRenderContext<'a> {
 struct RouteSharedContext<'a> {
     /// Identifier for the active project shared across list-mode renders.
     active_project_id: i64,
+    /// Locally available agent CLI executables and detected versions.
+    available_agent_clis: &'a [AgentCliInfo],
     current_tab: Tab,
     project_table_state: &'a mut TableState,
     projects: &'a [ProjectListItem],
@@ -61,6 +65,7 @@ impl RouteSharedContext<'_> {
     fn list_background(&mut self) -> ListBackgroundRenderContext<'_> {
         ListBackgroundRenderContext {
             active_project_id: self.active_project_id,
+            available_agent_clis: self.available_agent_clis,
             current_tab: self.current_tab,
             project_table_state: self.project_table_state,
             projects: self.projects,
@@ -132,6 +137,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
     let RenderContext {
         active_project_id,
         active_prompt_outputs,
+        available_agent_clis,
         current_tab,
         diff_layout_cache,
         markdown_render_cache,
@@ -158,6 +164,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
 
     let mut shared = RouteSharedContext {
         active_project_id,
+        available_agent_clis,
         current_tab,
         project_table_state,
         projects,
@@ -780,6 +787,7 @@ pub(crate) fn render_list_background(
 ) {
     let ListBackgroundRenderContext {
         active_project_id,
+        available_agent_clis,
         current_tab,
         project_table_state,
         projects,
@@ -804,6 +812,7 @@ pub(crate) fn render_list_background(
         Tab::Projects => {
             page::project_list::ProjectListPage::new(
                 projects,
+                available_agent_clis,
                 stats_activity,
                 project_table_state,
                 active_project_id,

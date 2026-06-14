@@ -61,7 +61,11 @@ impl BuilderEnv {
         // Create a stub `claude` executable so the app passes startup agent
         // availability validation on machines without real agent CLIs (CI).
         let stub_agent_path = stub_bin.join("claude");
-        std::fs::write(&stub_agent_path, "#!/bin/sh\nexit 1\n")?;
+        std::fs::write(
+            &stub_agent_path,
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'claude 0.0.0-test\\n'; exit \
+             0; fi\nexit 1\n",
+        )?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

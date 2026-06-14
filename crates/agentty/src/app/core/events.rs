@@ -28,6 +28,7 @@ use crate::app::session::{
 };
 use crate::app::session_state::SessionGitStatus;
 use crate::app::{self, session};
+use crate::domain::agent::AgentCliInfo;
 use crate::domain::file_entry::FileEntry;
 use crate::domain::input::InputState;
 use crate::domain::session::{
@@ -62,6 +63,8 @@ pub(crate) enum AppEvent {
     VersionAvailabilityUpdated {
         latest_available_version: Option<String>,
     },
+    /// Indicates locally available agent CLI versions finished loading.
+    AgentCliVersionsUpdated { agent_clis: Vec<AgentCliInfo> },
     /// Indicates progress of the background auto-update.
     UpdateStatusChanged { update_status: UpdateStatus },
     /// Records one process-local system log event.
@@ -189,6 +192,7 @@ pub(crate) enum AppEvent {
 #[derive(Default)]
 pub(super) struct AppEventBatch {
     pub(super) applied_turns: HashMap<SessionId, TurnAppliedState>,
+    pub(super) agent_cli_updates: Option<Vec<AgentCliInfo>>,
     pub(super) at_mention_entries_updates: HashMap<SessionId, Vec<FileEntry>>,
     pub(super) branch_publish_action_update: Option<BranchPublishActionUpdate>,
     pub(super) git_status_update: Option<GitStatusBatchUpdate>,
@@ -288,6 +292,9 @@ impl AppEventBatch {
             AppEvent::VersionAvailabilityUpdated {
                 latest_available_version,
             } => self.collect_version_availability_updated(latest_available_version),
+            AppEvent::AgentCliVersionsUpdated { agent_clis } => {
+                self.collect_agent_cli_versions_updated(agent_clis);
+            }
             AppEvent::UpdateStatusChanged { update_status } => {
                 self.collect_update_status_changed(update_status);
             }
@@ -477,6 +484,11 @@ impl AppEventBatch {
     /// Stores one pending status-bar update.
     fn collect_update_status_changed(&mut self, update_status: UpdateStatus) {
         self.update_status = Some(update_status);
+    }
+
+    /// Stores completed agent CLI version rows for reducer application.
+    fn collect_agent_cli_versions_updated(&mut self, agent_clis: Vec<AgentCliInfo>) {
+        self.agent_cli_updates = Some(agent_clis);
     }
 
     /// Stores an active session progress message update for reducer
@@ -849,6 +861,10 @@ impl App {
             self.restart_git_status_task();
         }
 
+        if let Some(agent_clis) = event_batch.agent_cli_updates.take() {
+            self.services.replace_available_agent_clis(agent_clis);
+        }
+
         if let Some(git_status_update) = &event_batch.git_status_update
             && git_status_update.generation == self.sync_handle.current_generation()
         {
@@ -1046,6 +1062,7 @@ impl App {
     fn app_event_batch_changes_observable_state(event_batch: &AppEventBatch) -> bool {
         event_batch.should_reload_sessions
             || event_batch.should_reload_projects
+            || event_batch.agent_cli_updates.is_some()
             || event_batch.git_status_update.is_some()
             || event_batch.latest_available_version_update.is_some()
             || event_batch.update_status.is_some()

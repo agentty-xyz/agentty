@@ -2926,7 +2926,7 @@ mod tests {
     ) -> AppServices {
         let (event_tx, _event_rx) = mpsc::unbounded_channel();
 
-        AppServices::new(
+        AppServices::new_with_agent_clis(
             PathBuf::from("/tmp/agentty-tests"),
             Arc::new(crate::infra::clock::RealClock),
             event_tx,
@@ -2938,6 +2938,7 @@ mod tests {
                 repositories: database.clone(),
                 review_request_client,
             },
+            crate::domain::agent::AgentCliInfo::from_kinds(AgentKind::ALL),
         )
     }
 
@@ -2963,7 +2964,7 @@ mod tests {
         review_request_client: Arc<dyn forge::ReviewRequestClient>,
     ) -> (AppServices, mpsc::UnboundedReceiver<AppEvent>) {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
-        let services = AppServices::new(
+        let services = AppServices::new_with_agent_clis(
             PathBuf::from("/tmp/agentty-tests"),
             Arc::new(crate::infra::clock::RealClock),
             event_tx,
@@ -2975,6 +2976,7 @@ mod tests {
                 repositories: database.clone(),
                 review_request_client,
             },
+            crate::domain::agent::AgentCliInfo::from_kinds(AgentKind::ALL),
         );
 
         (services, event_rx)

@@ -99,6 +99,7 @@ impl App {
     /// dispatching to the UI render pipeline.
     pub fn draw(&mut self, frame: &mut Frame) {
         let current_tab = self.tabs.current();
+        let available_agent_clis = self.services.available_agent_clis();
         let latest_available_version = self.latest_available_version.as_deref();
         let session_progress_messages = &self.session_progress_messages;
         let update_status = self.update_status.as_ref();
@@ -119,6 +120,7 @@ impl App {
             frame,
             ui::RenderContext {
                 active_project_id: project_render_parts.active_project_id,
+                available_agent_clis: &available_agent_clis,
                 current_tab,
                 git_branch: project_render_parts.git_branch,
                 diff_layout_cache: &self.diff_layout_cache,

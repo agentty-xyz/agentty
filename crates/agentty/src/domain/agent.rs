@@ -14,6 +14,65 @@ pub enum AgentKind {
     Codex,
 }
 
+/// One locally runnable agent CLI and the installed version detected at
+/// startup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentCliInfo {
+    /// Executable name used to launch the provider CLI.
+    pub executable_name: &'static str,
+    /// Agent provider family backed by the executable.
+    pub kind: AgentKind,
+    /// Current version probe state for this executable.
+    pub version: AgentCliVersion,
+}
+
+/// Version probe state for one locally runnable agent CLI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentCliVersion {
+    /// Version detection is still running in the background.
+    Loading,
+    /// Version detection finished, but the executable did not report a usable
+    /// version.
+    Unknown,
+    /// Version detection finished with a parsed display value.
+    Value(String),
+}
+
+impl AgentCliInfo {
+    /// Creates one CLI availability row for a provider and optional version.
+    pub fn new(kind: AgentKind, version: Option<String>) -> Self {
+        Self {
+            executable_name: kind.executable_name(),
+            kind,
+            version: version.map_or(AgentCliVersion::Unknown, AgentCliVersion::Value),
+        }
+    }
+
+    /// Creates one CLI availability row whose version is still loading.
+    pub fn loading(kind: AgentKind) -> Self {
+        Self {
+            executable_name: kind.executable_name(),
+            kind,
+            version: AgentCliVersion::Loading,
+        }
+    }
+
+    /// Builds unknown-version CLI rows for an existing provider availability
+    /// list.
+    pub fn from_kinds(agent_kinds: &[AgentKind]) -> Vec<Self> {
+        agent_kinds
+            .iter()
+            .copied()
+            .map(|agent_kind| Self::new(agent_kind, None))
+            .collect()
+    }
+
+    /// Builds loading CLI rows for an existing provider availability list.
+    pub fn loading_from_kinds(agent_kinds: &[AgentKind]) -> Vec<Self> {
+        agent_kinds.iter().copied().map(Self::loading).collect()
+    }
+}
+
 /// Supported agent model names across all providers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentModel {
@@ -330,6 +389,16 @@ impl AgentKind {
         AgentKind::Claude,
         AgentKind::Codex,
     ];
+
+    /// Returns the provider CLI executable name.
+    pub fn executable_name(self) -> &'static str {
+        match self {
+            Self::Antigravity => "agy",
+            Self::Gemini => "gemini",
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+        }
+    }
 
     /// Returns the default model for this agent kind.
     pub fn default_model(self) -> AgentModel {

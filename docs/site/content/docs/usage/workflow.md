@@ -471,6 +471,10 @@ when the saved backend is missing locally. Retired stored model ids such as
 `claude-opus-4-6` and `claude-opus-4-7` are upgraded to the current supported
 replacement when projects and sessions load.
 
+The Projects tab summarizes the runnable agent CLI executables detected at startup,
+shows their versions as loading while background `--version` checks run, and then
+replaces the loaders with reported versions when checks succeed.
+
 ## Auto-Update
 
 <a id="usage-auto-update"></a> When Agentty launches, it checks npmjs for a newer

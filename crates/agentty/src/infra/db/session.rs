@@ -165,7 +165,6 @@ impl SessionFollowUpTaskRow {
     }
 }
 /// Session-focused persistence boundary used by app orchestration and tests.
-#[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait SessionRepository: Send + Sync {
     /// Appends text to the saved output for a session row.

@@ -957,7 +957,7 @@ mod tests {
             .await
             .expect("failed to create project");
         let (event_tx, _event_rx) = mpsc::unbounded_channel();
-        let services = AppServices::new(
+        let services = AppServices::new_with_agent_clis(
             PathBuf::from("/tmp/agentty-settings-tests"),
             Arc::new(crate::infra::clock::RealClock),
             event_tx,
@@ -969,6 +969,7 @@ mod tests {
                 repositories: database.clone(),
                 review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             },
+            crate::domain::agent::AgentCliInfo::from_kinds(AgentKind::ALL),
         );
 
         (services, project_id)
@@ -1846,18 +1847,20 @@ mod tests {
     async fn load_default_smart_model_setting_falls_back_to_available_backend() {
         // Arrange
         let (mut services, project_id) = test_services().await;
-        services = AppServices::new(
+        let available_agent_kinds = vec![AgentKind::Codex];
+        services = AppServices::new_with_agent_clis(
             services.base_path().to_path_buf(),
             services.clock(),
             services.event_sender(),
             crate::app::service::AppServiceDeps {
                 app_server_client_override: services.app_server_client_override(),
-                available_agent_kinds: vec![AgentKind::Codex],
+                available_agent_kinds: available_agent_kinds.clone(),
                 fs_client: services.fs_client(),
                 git_client: services.git_client(),
                 repositories: services.db().clone(),
                 review_request_client: services.review_request_client(),
             },
+            crate::domain::agent::AgentCliInfo::from_kinds(&available_agent_kinds),
         );
         services
             .db()

@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 
 use crate::app::error::AppError;
 use crate::app::{AppEvent, UpdateStatus};
-use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
+use crate::domain::agent::{AgentCliInfo, AgentKind, AgentModel, ReasoningLevel};
 use crate::domain::session::SessionId;
 use crate::domain::system_log::{SystemLogCategory, SystemLogEvent, SystemLogLevel};
 use crate::infra::agent;
@@ -66,13 +66,39 @@ struct ReviewAssistPromptTemplate<'a> {
 
 impl TaskService {
     /// Loads one fresh machine-scoped snapshot of locally runnable agent
-    /// kinds behind the injected availability boundary.
+    /// kinds without probing CLI versions.
     pub(super) async fn load_agent_availability(
         availability_probe: Arc<dyn agent::AgentAvailabilityProbe>,
     ) -> Vec<AgentKind> {
         tokio::task::spawn_blocking(move || availability_probe.available_agent_kinds())
             .await
             .unwrap_or_else(|_| AgentKind::ALL.to_vec())
+    }
+
+    /// Loads one fresh machine-scoped snapshot of locally runnable agent CLIs
+    /// and their versions behind the injected availability boundary.
+    pub(super) async fn load_agent_cli_availability(
+        availability_probe: Arc<dyn agent::AgentAvailabilityProbe>,
+        fallback_agent_kinds: Vec<AgentKind>,
+    ) -> Vec<AgentCliInfo> {
+        tokio::task::spawn_blocking(move || availability_probe.available_agent_clis())
+            .await
+            .unwrap_or_else(|_| AgentCliInfo::from_kinds(&fallback_agent_kinds))
+    }
+
+    /// Spawns background agent CLI version detection and emits the completed
+    /// snapshot through the app event bus.
+    pub(super) fn spawn_agent_cli_version_task(
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+        availability_probe: Arc<dyn agent::AgentAvailabilityProbe>,
+        fallback_agent_kinds: Vec<AgentKind>,
+    ) {
+        let app_event_tx = app_event_tx.clone();
+        tokio::spawn(async move {
+            let agent_clis =
+                Self::load_agent_cli_availability(availability_probe, fallback_agent_kinds).await;
+            let _ = app_event_tx.send(AppEvent::AgentCliVersionsUpdated { agent_clis });
+        });
     }
 
     /// Spawns one requested-review refresh for the active project.
@@ -490,6 +516,18 @@ mod tests {
     use crate::infra::agent::protocol::AgentResponse;
     use crate::infra::git::MockGitClient;
 
+    struct PanickingAgentAvailabilityProbe;
+
+    impl crate::infra::agent::AgentAvailabilityProbe for PanickingAgentAvailabilityProbe {
+        fn available_agent_kinds(&self) -> Vec<AgentKind> {
+            vec![AgentKind::Claude]
+        }
+
+        fn available_agent_clis(&self) -> Vec<AgentCliInfo> {
+            std::panic::resume_unwind(Box::new("version probe failed".to_string()));
+        }
+    }
+
     #[tokio::test]
     /// Ensures requested-review list loading does not fetch detail comment
     /// snapshots for every listed PR or MR.
@@ -637,6 +675,24 @@ mod tests {
                 latest_available_version: None,
             }
         );
+    }
+
+    #[tokio::test]
+    /// Ensures CLI version fallback rows preserve the startup-discovered
+    /// availability subset when the blocking probe panics.
+    async fn load_agent_cli_availability_uses_startup_kinds_when_probe_panics() {
+        // Arrange
+        let fallback_agent_kinds = vec![AgentKind::Claude];
+
+        // Act
+        let agent_clis = TaskService::load_agent_cli_availability(
+            Arc::new(PanickingAgentAvailabilityProbe),
+            fallback_agent_kinds,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(agent_clis, vec![AgentCliInfo::new(AgentKind::Claude, None)]);
     }
 
     #[test]

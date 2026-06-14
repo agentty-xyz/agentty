@@ -946,11 +946,13 @@ mod tests {
         let db = app.services.db().clone();
         let event_sender = app.services.event_sender();
         let available_agent_kinds = app.services.available_agent_kinds();
+        let available_agent_clis =
+            crate::domain::agent::AgentCliInfo::from_kinds(&available_agent_kinds);
         let app_server_client_override = app.services.app_server_client_override();
         let fs_client = app.services.fs_client();
         let review_request_client = app.services.review_request_client();
 
-        app.services = crate::app::AppServices::new(
+        app.services = crate::app::AppServices::new_with_agent_clis(
             base_path,
             app.services.clock(),
             event_sender,
@@ -962,6 +964,7 @@ mod tests {
                 repositories: db,
                 review_request_client,
             },
+            available_agent_clis,
         );
     }
 

@@ -8,6 +8,7 @@ use ratatui::widgets::TableState;
 use crate::app::session::session_branch;
 use crate::app::session_state::SessionGitStatus;
 use crate::app::{RequestedReviewState, SettingsManager, Tab, UpdateStatus};
+use crate::domain::agent::AgentCliInfo;
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session, SessionId};
 use crate::domain::system_log::SystemLogBuffer;
@@ -33,6 +34,8 @@ pub struct RenderContext<'a> {
     pub active_prompt_outputs: &'a HashMap<SessionId, String>,
     /// Identifier of the currently active project.
     pub active_project_id: i64,
+    /// Locally available agent CLI executables and detected versions.
+    pub available_agent_clis: &'a [AgentCliInfo],
     /// Active top-level tab selection.
     pub current_tab: Tab,
     /// Current local branch name for the active project.

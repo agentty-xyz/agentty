@@ -12,7 +12,7 @@ use crate::app::session::SessionManager;
 use crate::app::setting::SettingsManager;
 use crate::app::startup::{AppStartup, StartupProjectContext, StartupSessionLoadContext};
 use crate::app::{AppError, review, session, sync, task};
-use crate::domain::agent::AgentKind;
+use crate::domain::agent::{AgentCliInfo, AgentKind};
 use crate::domain::system_log::{
     SystemLogBuffer, SystemLogCategory, SystemLogEvent, SystemLogLevel,
 };
@@ -158,12 +158,11 @@ impl App {
 
         let sync_context = Self::sync_context_for(&projects, &services, &sessions);
         let sync_handle = sync::SyncHandle::spawn(event_tx.clone(), sync_context);
+        Self::spawn_startup_background_tasks(auto_update, &event_tx, &services, &clients);
         let sync_main_runner = clients
             .sync_main_runner
             .unwrap_or_else(|| sync_handle.sync_main_runner());
         let system_logs = Self::startup_system_logs(clock.as_ref(), projects.project_name());
-
-        AppStartup::spawn_background_tasks(auto_update, &event_tx);
 
         Ok(Self {
             mode: crate::ui::state::app_mode::AppMode::List,
@@ -195,6 +194,33 @@ impl App {
             sync_main_runner,
             tmux_client: clients.tmux_client,
         })
+    }
+
+    /// Returns the optional agent availability probe used by the background
+    /// CLI version task.
+    fn startup_agent_cli_version_probe(
+        clients: &AppClients,
+    ) -> Option<Arc<dyn crate::infra::agent::AgentAvailabilityProbe>> {
+        clients
+            .agent_cli_version_task_enabled
+            .then(|| Arc::clone(&clients.agent_availability_probe))
+    }
+
+    /// Spawns startup background tasks with the initial availability snapshot
+    /// needed for CLI version fallback rows.
+    fn spawn_startup_background_tasks(
+        auto_update: bool,
+        event_tx: &mpsc::UnboundedSender<AppEvent>,
+        services: &AppServices,
+        clients: &AppClients,
+    ) {
+        let agent_cli_version_probe = Self::startup_agent_cli_version_probe(clients);
+        AppStartup::spawn_background_tasks(
+            auto_update,
+            event_tx,
+            agent_cli_version_probe,
+            services.available_agent_kinds(),
+        );
     }
 
     /// Loads the startup project state and builds the repository bundle used
@@ -243,8 +269,9 @@ impl App {
         ))
         .await;
         AppStartup::validate_startup_agent_availability(&available_agent_kinds)?;
+        let available_agent_clis = AgentCliInfo::loading_from_kinds(&available_agent_kinds);
 
-        Ok(AppServices::new(
+        Ok(AppServices::new_with_agent_clis(
             base_path,
             clock,
             event_tx,
@@ -259,6 +286,7 @@ impl App {
                 repositories,
                 review_request_client: Arc::clone(&clients.review_request_client),
             },
+            available_agent_clis,
         ))
     }
 
