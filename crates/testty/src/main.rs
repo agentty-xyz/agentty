@@ -112,11 +112,9 @@ fn main() -> ExitCode {
 
 /// Loads a YAML scenario, runs it against the binary, and reports the outcome.
 ///
-/// `bin_override` replaces the scenario's `session.bin` (the `--bin` flag).
-/// Every diagnostic goes to stderr (avoiding the `print_stderr` lint) and the
-/// process exit code is the pass/fail signal for non-Rust CI: `SUCCESS` when
-/// every expectation passes, `FAILURE` on any failed expectation, parse error,
-/// or run error.
+/// Binds the production diagnostic sink (locked stderr) and delegates to
+/// [`run_scenario_reporting`]. The process exit code is the pass/fail signal
+/// for non-Rust CI.
 fn run_scenario(
     scenario_path: &Path,
     bin_override: Option<&Path>,
@@ -124,11 +122,28 @@ fn run_scenario(
 ) -> ExitCode {
     let mut stderr = io::stderr().lock();
 
+    run_scenario_reporting(scenario_path, bin_override, proof, &mut stderr)
+}
+
+/// Runs a YAML scenario and writes every diagnostic to `out`.
+///
+/// `bin_override` replaces the scenario's `session.bin` (the `--bin` flag).
+/// Routing diagnostics through an injected writer (instead of writing to
+/// stderr directly) keeps the messages observable in tests while still
+/// avoiding the `print_stderr` lint. The exit code is `SUCCESS` when every
+/// expectation passes, `FAILURE` on any failed expectation, parse error, or
+/// run error.
+fn run_scenario_reporting(
+    scenario_path: &Path,
+    bin_override: Option<&Path>,
+    proof: Option<&Path>,
+    out: &mut dyn Write,
+) -> ExitCode {
     let text = match fs::read_to_string(scenario_path) {
         Ok(text) => text,
         Err(err) => {
             let _ = writeln!(
-                stderr,
+                out,
                 "testty: cannot read {}: {err}",
                 scenario_path.display()
             );
@@ -140,7 +155,7 @@ fn run_scenario(
     let mut spec = match ScenarioSpec::from_yaml(&text) {
         Ok(spec) => spec,
         Err(err) => {
-            let _ = writeln!(stderr, "testty: {err}");
+            let _ = writeln!(out, "testty: {err}");
 
             return ExitCode::FAILURE;
         }
@@ -152,7 +167,7 @@ fn run_scenario(
 
     if proof.is_some() {
         let _ = writeln!(
-            stderr,
+            out,
             "testty: --proof is not yet supported; running without proof output"
         );
     }
@@ -160,22 +175,22 @@ fn run_scenario(
     let (_frame, failures) = match spec.lower().run() {
         Ok(result) => result,
         Err(err) => {
-            let _ = writeln!(stderr, "testty: scenario failed to run: {err}");
+            let _ = writeln!(out, "testty: scenario failed to run: {err}");
 
             return ExitCode::FAILURE;
         }
     };
 
     if failures.is_empty() {
-        let _ = writeln!(stderr, "testty: scenario passed");
+        let _ = writeln!(out, "testty: scenario passed");
 
         return ExitCode::SUCCESS;
     }
 
     for failure in &failures {
-        let _ = writeln!(stderr, "FAIL: {}", failure.message);
+        let _ = writeln!(out, "FAIL: {}", failure.message);
     }
-    let _ = writeln!(stderr, "testty: {} expectation(s) failed", failures.len());
+    let _ = writeln!(out, "testty: {} expectation(s) failed", failures.len());
 
     ExitCode::FAILURE
 }
@@ -355,6 +370,64 @@ mod tests {
         assert_eq!(code, ExitCode::FAILURE);
     }
 
+    /// The `Run` dispatch arm actually routes through `run_scenario`: a valid
+    /// scenario against a real fixture reports success, which a stub that
+    /// merely returned `FAILURE` could not produce.
+    #[cfg(unix)]
+    #[test]
+    fn dispatch_runs_scenario_for_run_verb() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Arrange — a fixture that renders deterministic text and a scenario
+        // that expects it, wired through the `Run` verb.
+        let temp = tempfile::tempdir().expect("temp dir");
+        let script = temp.path().join("greet.sh");
+        std::fs::write(&script, "#!/bin/sh\nprintf 'Hello World'\nsleep 60\n").expect("write");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("perms");
+        let scenario = temp.path().join("scenario.yaml");
+        std::fs::write(
+            &scenario,
+            format!(
+                "session:\n  bin: {bin}\n  size: [80, 24]\nsteps:\n  - wait_for_stable_frame: {{ \
+                 stable_ms: 300, timeout_ms: 5000 }}\nexpect:\n  - text_in_region: {{ text: \
+                 \"Hello World\", region: [0, 0, 80, 1] }}\n",
+                bin = script.display()
+            ),
+        )
+        .expect("write scenario");
+        let verb = Command::Run {
+            scenario,
+            bin: None,
+            proof: None,
+        };
+
+        // Act
+        let code = verb.dispatch();
+
+        // Assert
+        assert_eq!(code, ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn run_scenario_fails_when_binary_cannot_spawn() {
+        // Arrange — a parseable scenario whose binary does not exist, so the
+        // engine errors while spawning rather than producing expectations.
+        let temp = tempfile::tempdir().expect("temp dir");
+        let scenario = temp.path().join("scenario.yaml");
+        std::fs::write(
+            &scenario,
+            "session:\n  bin: /nonexistent/testty-missing-binary\n  size: [80, 24]\nsteps:\n  - \
+             wait_for_stable_frame: { stable_ms: 100, timeout_ms: 1000 }\n",
+        )
+        .expect("write scenario");
+
+        // Act
+        let code = run_scenario(&scenario, None, None);
+
+        // Assert
+        assert_eq!(code, ExitCode::FAILURE);
+    }
+
     /// End-to-end: the `run` verb drives a real binary and reports success.
     #[cfg(unix)]
     #[test]
@@ -383,5 +456,105 @@ mod tests {
 
         // Assert
         assert_eq!(code, ExitCode::SUCCESS);
+    }
+
+    /// `bin_override` (the `--bin` flag) replaces the scenario's `session.bin`:
+    /// the scenario points at a binary that cannot spawn, so success is only
+    /// possible when the override binary is the one actually driven.
+    #[cfg(unix)]
+    #[test]
+    fn run_scenario_honors_bin_override() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Arrange — the real fixture is supplied through `bin_override`, while
+        // the scenario points at a placeholder binary that must never spawn.
+        let temp = tempfile::tempdir().expect("temp dir");
+        let script = temp.path().join("greet.sh");
+        std::fs::write(&script, "#!/bin/sh\nprintf 'Hello World'\nsleep 60\n").expect("write");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("perms");
+        let scenario = temp.path().join("scenario.yaml");
+        std::fs::write(
+            &scenario,
+            "session:\n  bin: /nonexistent/placeholder\n  size: [80, 24]\nsteps:\n  - \
+             wait_for_stable_frame: { stable_ms: 300, timeout_ms: 5000 }\nexpect:\n  - \
+             text_in_region: { text: \"Hello World\", region: [0, 0, 80, 1] }\n",
+        )
+        .expect("write scenario");
+
+        // Act
+        let code = run_scenario(&scenario, Some(&script), None);
+
+        // Assert
+        assert_eq!(code, ExitCode::SUCCESS);
+    }
+
+    /// A `--proof` directory is not yet supported, so the run emits a notice on
+    /// the diagnostic sink and still drives the scenario to completion.
+    #[cfg(unix)]
+    #[test]
+    fn run_scenario_warns_when_proof_requested() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Arrange — a passing fixture scenario plus a requested proof directory.
+        let temp = tempfile::tempdir().expect("temp dir");
+        let script = temp.path().join("greet.sh");
+        std::fs::write(&script, "#!/bin/sh\nprintf 'Hello World'\nsleep 60\n").expect("write");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("perms");
+        let scenario = temp.path().join("scenario.yaml");
+        std::fs::write(
+            &scenario,
+            format!(
+                "session:\n  bin: {bin}\n  size: [80, 24]\nsteps:\n  - wait_for_stable_frame: {{ \
+                 stable_ms: 300, timeout_ms: 5000 }}\nexpect:\n  - text_in_region: {{ text: \
+                 \"Hello World\", region: [0, 0, 80, 1] }}\n",
+                bin = script.display()
+            ),
+        )
+        .expect("write scenario");
+        let proof = temp.path().join("proof-out");
+        let mut out = Vec::new();
+
+        // Act
+        let code = run_scenario_reporting(&scenario, None, Some(&proof), &mut out);
+
+        // Assert
+        let log = String::from_utf8(out).expect("utf8 log");
+        assert_eq!(code, ExitCode::SUCCESS);
+        assert!(log.contains("--proof is not yet supported"));
+    }
+
+    /// A scenario whose expectation does not match the rendered frame reports
+    /// the failed expectation on the diagnostic sink and exits with failure.
+    #[cfg(unix)]
+    #[test]
+    fn run_scenario_reports_failed_expectations() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Arrange — the fixture renders "Hello World" but the scenario expects
+        // different text.
+        let temp = tempfile::tempdir().expect("temp dir");
+        let script = temp.path().join("greet.sh");
+        std::fs::write(&script, "#!/bin/sh\nprintf 'Hello World'\nsleep 60\n").expect("write");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("perms");
+        let scenario = temp.path().join("scenario.yaml");
+        std::fs::write(
+            &scenario,
+            format!(
+                "session:\n  bin: {bin}\n  size: [80, 24]\nsteps:\n  - wait_for_stable_frame: {{ \
+                 stable_ms: 300, timeout_ms: 5000 }}\nexpect:\n  - text_in_region: {{ text: \
+                 \"Goodbye Moon\", region: [0, 0, 80, 1] }}\n",
+                bin = script.display()
+            ),
+        )
+        .expect("write scenario");
+        let mut out = Vec::new();
+
+        // Act
+        let code = run_scenario_reporting(&scenario, None, None, &mut out);
+
+        // Assert
+        let log = String::from_utf8(out).expect("utf8 log");
+        assert_eq!(code, ExitCode::FAILURE);
+        assert!(log.contains("expectation(s) failed"));
     }
 }
