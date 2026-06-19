@@ -7,6 +7,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- testty: `testty run <scenario.yaml>` executes a declarative YAML scenario against any
+  binary, so non-Rust projects can drive TUI end-to-end tests without a Rust harness.
+  The process exit code is the pass/fail signal. See
+  `crates/testty/docs/scenarios-yaml.md`.
+- testty: new `testty::spec` module (`ScenarioSpec`, `StepSpec`, `ExpectSpec`,
+  `SpecError`, `LoweredScenario`) deserializes a scenario from YAML and lowers it onto
+  the runtime engine shared with the Rust authoring API. `StepSpec`, `ExpectSpec`, and
+  `SpecError` are `#[non_exhaustive]`.
+
 ## [v0.10.4] - 2026-06-13
 
 ### Added

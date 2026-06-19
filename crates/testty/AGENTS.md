@@ -14,6 +14,9 @@ expect a stable curated API surface.
   authoring.
 - `src/proof.rs` and `src/proof/` own the proof pipeline: report collection, backend
   trait, and output renderers.
+- `src/spec.rs` and `src/spec/` own the declarative YAML scenario layer: `model.rs`
+  holds the pure-data spec types, `runtime.rs` lowers them onto the engine and evaluates
+  expectations. This powers `testty run scenario.yaml`.
 - `src/feature.rs` provides the `FeatureDemo` builder for scenario execution with
   hash-cached VHS GIF generation.
 - `src/main.rs` is the `testty` command-line binary, auto-detected by Cargo alongside
@@ -23,10 +26,12 @@ expect a stable curated API surface.
 ## CLI Binary
 
 `src/main.rs` is the language-agnostic `testty` command-line front end, so non-Rust
-projects can drive TUI end-to-end scenarios without writing Rust harness code. It is a
-packaging skeleton: the `clap` command tree and argument parsing are complete, but every
-verb is stubbed (each prints "not yet implemented" to stderr and exits non-zero). Later
-tasks replace the individual `Command::dispatch` arms with real behavior.
+projects can drive TUI end-to-end scenarios without writing Rust harness code. The `run`
+verb is implemented: it loads a YAML scenario via `testty::spec`, drives the binary
+under test, and reports pass/fail through the exit code. The remaining verbs (`schema`,
+`proof open`, `proof gallery`, `update`) are still stubbed (each prints "not yet
+implemented" to stderr and exits non-zero). Later tasks replace those
+`Command::dispatch` arms with real behavior.
 
 Verbs:
 

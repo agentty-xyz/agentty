@@ -37,6 +37,8 @@ use testty::region::Region;
 use testty::scenario::Scenario;
 use testty::session::{PtySession, PtySessionBuilder, PtySessionError};
 use testty::snapshot::{SnapshotConfig, SnapshotError};
+use testty::spec::model::{ExpectSpec, RegionSpec, ScenarioSpec, SessionSpec, StepSpec};
+use testty::spec::runtime::{LoweredScenario, SpecError};
 use testty::step::{FramePredicate, Step};
 
 /// Minimal `ProofBackend` impl used to exercise the trait through its
@@ -54,6 +56,10 @@ impl ProofBackend for NoopBackend {
 }
 
 fn accept_backend<B: ProofBackend>(_backend: &B) {}
+
+/// Pinned return type of `LoweredScenario::run`, factored out so the tripwire
+/// stays within clippy's type-complexity budget.
+type LoweredRunResult = Result<(TerminalFrame, Vec<AssertionFailure>), PtySessionError>;
 
 /// Reference every documented stable type so the build breaks if a name
 /// is removed or renamed in a backwards-incompatible way.
@@ -161,6 +167,20 @@ fn public_surface_is_stable() {
         |_frame: &TerminalFrame| Ok(()),
     );
     let _: FramePredicate = Arc::new(|_frame: &TerminalFrame| Ok(()));
+
+    // Declarative YAML scenario surface (the language-agnostic `run` front end).
+    // Pin the load/lower/run entry points and the spec types so the published
+    // shape the CLI and external tooling depend on cannot drift silently.
+    let _: fn(&str) -> Result<ScenarioSpec, SpecError> = ScenarioSpec::from_yaml;
+    let _: fn(&ScenarioSpec) -> LoweredScenario = ScenarioSpec::lower;
+    let _: fn(&LoweredScenario, &TerminalFrame) -> Vec<AssertionFailure> = LoweredScenario::check;
+    let _: fn(LoweredScenario) -> LoweredRunResult = LoweredScenario::run;
+    let _: RegionSpec = RegionSpec(0, 0, 1, 1);
+    let _: Option<ScenarioSpec> = None;
+    let _: Option<SessionSpec> = None;
+    let _: Option<StepSpec> = None;
+    let _: Option<ExpectSpec> = None;
+    let _: Option<SpecError> = None;
 }
 
 /// Reference always-available stable items that sit alongside the core
@@ -455,4 +475,137 @@ fn snapshot_error_destructuring_is_stable(error: &SnapshotError) -> &'static str
         SnapshotError::ImageError(_message) => "image-error",
         _ => "unknown",
     }
+}
+
+/// Lock the supported pattern for matching `StepSpec`.
+///
+/// `StepSpec` is `#[non_exhaustive]`, so new step kinds stay non-breaking as
+/// long as external matchers keep a fallback `_` arm; struct-variant fields use
+/// a trailing `..`. Compiled (not run) so a rename of a documented variant or
+/// field fails the build before publication.
+#[allow(dead_code)]
+fn step_spec_destructuring_is_stable(step: &StepSpec) -> &'static str {
+    match step {
+        StepSpec::PressKey(key) => {
+            let _: &String = key;
+
+            "press_key"
+        }
+        StepSpec::WriteText(text) => {
+            let _: &String = text;
+
+            "write_text"
+        }
+        StepSpec::SleepMs(ms) => {
+            let _: &u64 = ms;
+
+            "sleep_ms"
+        }
+        StepSpec::WaitForText {
+            needle, timeout_ms, ..
+        } => {
+            let _: (&String, &u32) = (needle, timeout_ms);
+
+            "wait_for_text"
+        }
+        StepSpec::WaitForStableFrame {
+            stable_ms,
+            timeout_ms,
+            ..
+        } => {
+            let _: (&u32, &u32) = (stable_ms, timeout_ms);
+
+            "wait_for_stable_frame"
+        }
+        StepSpec::Eventually {
+            matcher,
+            timeout_ms,
+            poll_ms,
+            ..
+        } => {
+            let _: (&ExpectSpec, &u64, &u64) = (matcher, timeout_ms, poll_ms);
+
+            "eventually"
+        }
+        StepSpec::Capture => "capture",
+        StepSpec::CaptureLabeled {
+            label, description, ..
+        } => {
+            let _: (&String, &String) = (label, description);
+
+            "capture_labeled"
+        }
+        _ => "unknown",
+    }
+}
+
+/// Lock the supported pattern for matching `ExpectSpec`.
+///
+/// `ExpectSpec` is `#[non_exhaustive]`; external matchers keep a `_` arm.
+#[allow(dead_code)]
+fn expect_spec_destructuring_is_stable(expect: &ExpectSpec) -> &'static str {
+    match expect {
+        ExpectSpec::SelectedTab(_) => "selected_tab",
+        ExpectSpec::UnselectedTab(_) => "unselected_tab",
+        ExpectSpec::InstructionVisible(_) => "instruction_visible",
+        ExpectSpec::KeybindingHint(_) => "keybinding_hint",
+        ExpectSpec::FooterAction(_) => "footer_action",
+        ExpectSpec::DialogTitle(_) => "dialog_title",
+        ExpectSpec::StatusMessage(_) => "status_message",
+        ExpectSpec::NotVisible(_) => "not_visible",
+        ExpectSpec::TextInRegion { text, region, .. } => {
+            let _: (&String, &RegionSpec) = (text, region);
+
+            "text_in_region"
+        }
+        _ => "unknown",
+    }
+}
+
+/// Lock the supported pattern for matching `SpecError`.
+///
+/// `SpecError` is `#[non_exhaustive]`; external callers keep a `_` arm.
+#[allow(dead_code)]
+fn spec_error_destructuring_is_stable(error: &SpecError) -> &'static str {
+    match error {
+        SpecError::Io(_) => "io",
+        SpecError::Parse(_) => "parse",
+        SpecError::UnsupportedVersion {
+            found, supported, ..
+        } => {
+            let _: (&u32, &u32) = (found, supported);
+
+            "unsupported-version"
+        }
+        _ => "unknown",
+    }
+}
+
+/// Lock struct-literal construction for the scenario spec types so their
+/// public field names (which are also the YAML contract) cannot be renamed or
+/// removed without breaking this build.
+#[test]
+fn spec_struct_literals_are_stable() {
+    // Arrange: construct the spec structs through their stable field names.
+    let session = SessionSpec {
+        bin: PathBuf::from("./app"),
+        size: Some([80, 24]),
+        args: Vec::new(),
+        env: std::collections::BTreeMap::new(),
+        workdir: None,
+    };
+    let scenario = ScenarioSpec {
+        version: 1,
+        name: None,
+        session,
+        steps: Vec::new(),
+        expect: Vec::new(),
+    };
+
+    // Act / Assert: the stable fields are readable.
+    assert_eq!(scenario.version, 1);
+    assert_eq!(scenario.session.bin, PathBuf::from("./app"));
+    assert_eq!(scenario.session.size, Some([80, 24]));
+    assert!(scenario.steps.is_empty());
+    assert!(scenario.expect.is_empty());
 }

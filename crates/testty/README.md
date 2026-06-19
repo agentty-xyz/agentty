@@ -42,9 +42,10 @@ testty update
 - `proof gallery` — build a gallery from a directory of proof reports.
 - `update` — update stored scenario snapshots to match current output.
 
-The command-line binary is currently a stub: the command tree is in place, but every
-verb prints a "not yet implemented" notice and exits non-zero until the behavior is
-wired up.
+`run` executes a YAML scenario against a binary and reports pass/fail through the exit
+code (see [YAML scenarios](docs/scenarios-yaml.md)). The remaining verbs (`schema`,
+`proof open`, `proof gallery`, `update`) are still stubs: they print a "not yet
+implemented" notice and exit non-zero until the behavior is wired up.
 
 ## Capabilities
 
@@ -137,10 +138,36 @@ report.save(&HtmlBackend, Path::new("proof.html")).unwrap();
 report.save(&JunitBackend, Path::new("proof.xml")).unwrap();
 ```
 
+#### Run a scenario from YAML — no Rust required
+
+Installing the crate (`cargo install testty`) provides the `testty` binary, so projects
+in any language can drive TUI scenarios with a YAML file:
+
+```yaml
+# scenario.yaml
+session:
+  bin: ./myapp
+  size: [80, 24]
+steps:
+  - wait_for_stable_frame: { stable_ms: 500, timeout_ms: 5000 }
+  - press_key: Tab
+expect:
+  - selected_tab: Sessions
+```
+
+```sh
+testty run scenario.yaml
+```
+
+The exit code is the pass/fail signal (`0` = passed), so it drops straight into any CI.
+See [YAML scenarios](docs/scenarios-yaml.md).
+
 ## Resources
 
 - [Getting started](docs/getting-started.md) — install, write your first test, run it
 - [Scenarios](docs/scenarios.md) — describe a sequence of actions and waits
+- [YAML scenarios](docs/scenarios-yaml.md) — run scenarios from a file with
+  `testty run`, no Rust required
 - [Assertions](docs/assertions.md) — check text, colors, and highlights on screen
 - [Snapshots](docs/snapshots.md) — compare a test against a saved baseline
 - [Proof pipeline](docs/proof-pipeline.md) — save what a test saw as text, image, GIF,

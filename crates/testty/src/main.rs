@@ -8,18 +8,21 @@
 //! The binary exposes the full `testty` verb tree (`run`, `schema`,
 //! `proof open`, `proof gallery`, `update`).
 //!
-//! The command tree and argument parsing are complete, but every verb is
-//! currently stubbed. Each stub reports "not yet implemented" on stderr and
-//! exits with a non-zero status so callers and CI can detect that the behavior
-//! is not wired up yet. Later tasks replace each [`Command::dispatch`] arm with
-//! real scenario, schema, and proof logic that delegates into the `testty`
-//! library API.
+//! `run` is implemented: it loads a YAML scenario, lowers it onto the engine
+//! via [`testty::spec`], drives the binary under test, and reports pass/fail
+//! through the process exit code. The remaining verbs are still stubbed — each
+//! reports "not yet implemented" on stderr and exits non-zero so callers and CI
+//! can detect that the behavior is not wired up yet. Later tasks replace each
+//! remaining [`Command::dispatch`] arm with real logic that delegates into the
+//! `testty` library API.
 
+use std::fs;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use testty::spec::model::ScenarioSpec;
 
 /// Top-level command-line interface for the `testty` runner.
 #[derive(Parser)]
@@ -62,12 +65,17 @@ enum Command {
 impl Command {
     /// Executes the selected verb and returns the process exit code.
     ///
-    /// All arms are stubbed: each writes a "not yet implemented" notice to
-    /// stderr and returns [`ExitCode::FAILURE`]. Replace the individual arms as
-    /// the verbs are implemented.
+    /// `run` executes a YAML scenario via [`run_scenario`]; the remaining arms
+    /// are stubbed and return [`ExitCode::FAILURE`] with a "not yet
+    /// implemented" notice. Replace the stubbed arms as the verbs are
+    /// implemented.
     fn dispatch(self) -> ExitCode {
         match self {
-            Command::Run { .. } => not_implemented("run"),
+            Command::Run {
+                scenario,
+                bin,
+                proof,
+            } => run_scenario(&scenario, bin.as_deref(), proof.as_deref()),
             Command::Schema => not_implemented("schema"),
             Command::Proof {
                 command: ProofCommand::Open { .. },
@@ -100,6 +108,76 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
 
     cli.command.dispatch()
+}
+
+/// Loads a YAML scenario, runs it against the binary, and reports the outcome.
+///
+/// `bin_override` replaces the scenario's `session.bin` (the `--bin` flag).
+/// Every diagnostic goes to stderr (avoiding the `print_stderr` lint) and the
+/// process exit code is the pass/fail signal for non-Rust CI: `SUCCESS` when
+/// every expectation passes, `FAILURE` on any failed expectation, parse error,
+/// or run error.
+fn run_scenario(
+    scenario_path: &Path,
+    bin_override: Option<&Path>,
+    proof: Option<&Path>,
+) -> ExitCode {
+    let mut stderr = io::stderr().lock();
+
+    let text = match fs::read_to_string(scenario_path) {
+        Ok(text) => text,
+        Err(err) => {
+            let _ = writeln!(
+                stderr,
+                "testty: cannot read {}: {err}",
+                scenario_path.display()
+            );
+
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let mut spec = match ScenarioSpec::from_yaml(&text) {
+        Ok(spec) => spec,
+        Err(err) => {
+            let _ = writeln!(stderr, "testty: {err}");
+
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if let Some(bin) = bin_override {
+        spec.session.bin = bin.to_path_buf();
+    }
+
+    if proof.is_some() {
+        let _ = writeln!(
+            stderr,
+            "testty: --proof is not yet supported; running without proof output"
+        );
+    }
+
+    let (_frame, failures) = match spec.lower().run() {
+        Ok(result) => result,
+        Err(err) => {
+            let _ = writeln!(stderr, "testty: scenario failed to run: {err}");
+
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if failures.is_empty() {
+        let _ = writeln!(stderr, "testty: scenario passed");
+
+        return ExitCode::SUCCESS;
+    }
+
+    for failure in &failures {
+        let _ = writeln!(stderr, "FAIL: {}", failure.message);
+    }
+    let _ = writeln!(stderr, "testty: {} expectation(s) failed", failures.len());
+
+    ExitCode::FAILURE
 }
 
 /// Reports an unimplemented verb on stderr and returns a failing exit code.
@@ -228,14 +306,9 @@ mod tests {
     }
 
     #[test]
-    fn every_stub_reports_unimplemented_and_fails() {
-        // Arrange
-        let verbs: [Command; 6] = [
-            Command::Run {
-                scenario: PathBuf::from("s.yaml"),
-                bin: None,
-                proof: None,
-            },
+    fn every_remaining_stub_reports_unimplemented_and_fails() {
+        // Arrange — verbs whose behavior is not yet wired up.
+        let verbs: [Command; 4] = [
             Command::Schema,
             Command::Proof {
                 command: ProofCommand::Open {
@@ -248,16 +321,67 @@ mod tests {
                 },
             },
             Command::Update,
-            Command::Run {
-                scenario: PathBuf::from("s.yaml"),
-                bin: Some(PathBuf::from("b")),
-                proof: Some(PathBuf::from("p")),
-            },
         ];
 
         // Act + Assert
         for verb in verbs {
             assert_eq!(verb.dispatch(), ExitCode::FAILURE);
         }
+    }
+
+    #[test]
+    fn run_scenario_fails_when_file_missing() {
+        // Arrange
+        let missing = Path::new("/nonexistent/testty-scenario.yaml");
+
+        // Act
+        let code = run_scenario(missing, None, None);
+
+        // Assert
+        assert_eq!(code, ExitCode::FAILURE);
+    }
+
+    #[test]
+    fn run_scenario_fails_on_unsupported_version() {
+        // Arrange — an otherwise valid scenario with an unknown version.
+        let temp = tempfile::tempdir().expect("temp dir");
+        let path = temp.path().join("bad.yaml");
+        std::fs::write(&path, "version: 999\nsession:\n  bin: /bin/echo\n").expect("write");
+
+        // Act
+        let code = run_scenario(&path, None, None);
+
+        // Assert
+        assert_eq!(code, ExitCode::FAILURE);
+    }
+
+    /// End-to-end: the `run` verb drives a real binary and reports success.
+    #[cfg(unix)]
+    #[test]
+    fn run_scenario_passes_against_fixture_binary() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Arrange — a fixture that renders deterministic text and stays alive.
+        let temp = tempfile::tempdir().expect("temp dir");
+        let script = temp.path().join("greet.sh");
+        std::fs::write(&script, "#!/bin/sh\nprintf 'Hello World'\nsleep 60\n").expect("write");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("perms");
+        let scenario = temp.path().join("scenario.yaml");
+        std::fs::write(
+            &scenario,
+            format!(
+                "session:\n  bin: {bin}\n  size: [80, 24]\nsteps:\n  - wait_for_stable_frame: {{ \
+                 stable_ms: 300, timeout_ms: 5000 }}\nexpect:\n  - text_in_region: {{ text: \
+                 \"Hello World\", region: [0, 0, 80, 1] }}\n",
+                bin = script.display()
+            ),
+        )
+        .expect("write scenario");
+
+        // Act
+        let code = run_scenario(&scenario, None, None);
+
+        // Assert
+        assert_eq!(code, ExitCode::SUCCESS);
     }
 }

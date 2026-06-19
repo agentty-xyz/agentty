@@ -25,6 +25,7 @@ pub mod region;
 pub mod scenario;
 pub mod session;
 pub mod snapshot;
+pub mod spec;
 pub mod step;
 pub mod vhs;
 

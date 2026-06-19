@@ -2,6 +2,8 @@
 
 - [Getting started](getting-started.md) — install, write your first test, run it
 - [Scenarios](scenarios.md) — describe a sequence of actions and waits
+- [YAML scenarios](scenarios-yaml.md) — run scenarios from a file with `testty run`, no
+  Rust required
 - [Assertions](assertions.md) — check text, colors, and highlights on screen
 - [Snapshots](snapshots.md) — compare a test against a saved baseline
 - [Proof pipeline](proof-pipeline.md) — save what a test saw as text, image, GIF, or
