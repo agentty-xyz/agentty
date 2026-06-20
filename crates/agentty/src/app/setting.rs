@@ -507,11 +507,13 @@ impl SettingsManager {
                 if self.use_last_used_model_as_default {
                     "Last used model as default".to_string()
                 } else {
-                    self.default_smart_model.as_str().to_string()
+                    display_model_selector_value(self.default_smart_model)
                 }
             }
-            SettingRow::DefaultFastModel => self.default_fast_model.as_str().to_string(),
-            SettingRow::DefaultReviewModel => self.default_review_model.as_str().to_string(),
+            SettingRow::DefaultFastModel => display_model_selector_value(self.default_fast_model),
+            SettingRow::DefaultReviewModel => {
+                display_model_selector_value(self.default_review_model)
+            }
             SettingRow::IncludeCoauthoredByAgentty => {
                 bool_setting_display(self.include_coauthored_by_agentty)
             }
@@ -819,6 +821,11 @@ fn bool_setting_display(setting_value: bool) -> String {
     } else {
         "Disabled".to_string()
     }
+}
+
+/// Returns a model selector value prefixed with its owning agent.
+fn display_model_selector_value(model: AgentModel) -> String {
+    format!("{}/{}", model.kind(), model.as_str())
 }
 
 /// Renders `text` with a `|` cursor marker at `cursor_char_index`.
@@ -1543,6 +1550,19 @@ mod tests {
     }
 
     #[test]
+    fn settings_rows_show_default_smart_model_with_agent_prefix() {
+        // Arrange
+        let mut manager = new_settings_manager();
+        manager.default_smart_model = AgentModel::AntigravityGemini31ProPreview;
+
+        // Act
+        let rows = manager.settings_rows();
+
+        // Assert
+        assert_eq!(rows[2].1, "antigravity/gemini-3.1-pro-preview");
+    }
+
+    #[test]
     fn settings_rows_show_default_fast_model_value() {
         // Arrange
         let mut manager = new_settings_manager();
@@ -1552,7 +1572,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[3].1, AgentModel::Gpt55.as_str());
+        assert_eq!(rows[3].1, "codex/gpt-5.5");
     }
 
     #[test]
@@ -1565,7 +1585,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[4].1, AgentModel::ClaudeOpus48.as_str());
+        assert_eq!(rows[4].1, "claude/claude-opus-4-8");
     }
 
     #[test]

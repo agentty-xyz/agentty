@@ -152,18 +152,18 @@ fn settings_jk_navigation() {
 
                 let initial_frame = common::frame_from_capture(&report.captures[0]);
                 assertion::assert_match_count(&initial_frame, "claude-opus-4-6", 0);
-                assertion::assert_match_count(&initial_frame, "claude-opus-4-8", 3);
+                assertion::assert_match_count(&initial_frame, "claude/claude-opus-4-8", 3);
                 assertion::assert_match_count(&initial_frame, "claude-fable-5", 0);
 
                 let moved_down_frame = common::frame_from_capture(&report.captures[1]);
                 assertion::assert_match_count(&moved_down_frame, "claude-opus-4-6", 0);
-                assertion::assert_match_count(&moved_down_frame, "claude-opus-4-8", 2);
-                assertion::assert_match_count(&moved_down_frame, "claude-fable-5", 1);
+                assertion::assert_match_count(&moved_down_frame, "claude/claude-opus-4-8", 2);
+                assertion::assert_match_count(&moved_down_frame, "claude/claude-fable-5", 1);
 
                 let moved_up_frame = common::frame_from_capture(&report.captures[2]);
                 assertion::assert_match_count(&moved_up_frame, "claude-opus-4-6", 0);
-                assertion::assert_match_count(&moved_up_frame, "claude-opus-4-8", 1);
-                assertion::assert_match_count(&moved_up_frame, "claude-fable-5", 2);
+                assertion::assert_match_count(&moved_up_frame, "claude/claude-opus-4-8", 1);
+                assertion::assert_match_count(&moved_up_frame, "claude/claude-fable-5", 2);
             },
         )
         .expect("feature test failed");
