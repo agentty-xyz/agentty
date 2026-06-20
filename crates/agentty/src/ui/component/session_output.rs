@@ -509,9 +509,10 @@ impl<'a> SessionOutput<'a> {
     /// that is already being superseded.
     /// Queued follow-up messages render beneath the running turn so users can
     /// see staged local input without mixing it into completed transcript
-    /// content. Focused-review output is appended for non-terminal review
-    /// states so terminal views can keep their final transcript and summary
-    /// display stable.
+    /// content. Focused-review output is appended before any trailing
+    /// transcript notices for non-terminal review states, keeping workflow
+    /// failures below the completed turn's summary/review content while
+    /// terminal views keep their final transcript and summary display stable.
     fn output_lines_with_metadata(
         session: &Session,
         output_area: Rect,
@@ -561,12 +562,6 @@ impl<'a> SessionOutput<'a> {
                 markdown_render_cache,
             );
         }
-        Self::append_trailing_transcript_notice_lines(
-            &mut lines,
-            trailing_notice_text,
-            inner_width,
-            markdown_render_cache,
-        );
         Self::append_active_turn_lines(
             &mut lines,
             active_turn_text.as_deref(),
@@ -583,6 +578,12 @@ impl<'a> SessionOutput<'a> {
                 markdown_render_cache,
             );
         }
+        Self::append_trailing_transcript_notice_lines(
+            &mut lines,
+            trailing_notice_text,
+            inner_width,
+            markdown_render_cache,
+        );
         Self::append_workflow_notice_lines(
             &mut lines,
             session.workflow_notice.as_deref(),
@@ -943,8 +944,8 @@ impl<'a> SessionOutput<'a> {
         );
     }
 
-    /// Appends trailing transcript notices after any summary produced for the
-    /// completed turn when known workflow-status blocks are present.
+    /// Appends trailing transcript notices after completed-turn summary and
+    /// focused-review content when known workflow-status blocks are present.
     fn append_trailing_transcript_notice_lines(
         lines: &mut Vec<Line<'static>>,
         trailing_notice_text: Option<&str>,
@@ -1970,6 +1971,46 @@ mod tests {
         assert!(output_index < summary_index);
         assert!(summary_index < commit_index);
         assert!(commit_index < rebase_index);
+    }
+
+    /// Verifies merge failures render after focused review content, so the
+    /// review summary remains visually grouped with the completed turn.
+    #[test]
+    fn test_output_lines_places_review_before_trailing_workflow_notices() {
+        // Arrange
+        let mut session = session_fixture();
+        session.output = "implemented fix\n\n[Merge Error] Cannot merge branch".to_string();
+        session.summary = Some(summary_fixture());
+        session.status = Status::Review;
+        let review_text = "## Review\n\n### Project Impact\n\n- Documentation-only change.";
+
+        // Act
+        let lines = output_lines(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            line_context(None, Some(review_text), None),
+            None,
+        );
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let output_index = text
+            .find("implemented fix")
+            .expect("completed output should be rendered");
+        let summary_index = text
+            .find("Change Summary")
+            .expect("structured summary should be rendered");
+        let review_index = text.find("Review").expect("review should be rendered");
+        let merge_error_index = text
+            .find("[Merge Error] Cannot merge branch")
+            .expect("merge error should be rendered");
+
+        // Assert
+        assert!(output_index < summary_index);
+        assert!(summary_index < review_index);
+        assert!(review_index < merge_error_index);
     }
 
     /// Verifies a terminal `Done` session keeps its final summary without
