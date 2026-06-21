@@ -235,7 +235,9 @@ mod tests {
     fn project_list_item(id: i64, display_name: Option<&str>, path: &str) -> ProjectListItem {
         ProjectListItem {
             active_session_count: 0,
+            input_tokens: 0,
             last_session_updated_at: None,
+            output_tokens: 0,
             project: Project {
                 created_at: 0,
                 display_name: display_name.map(std::string::ToString::to_string),

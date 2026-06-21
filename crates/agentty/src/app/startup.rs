@@ -429,7 +429,9 @@ impl AppStartup {
         ProjectListItem {
             active_session_count: u32::try_from(project_row.active_session_count)
                 .unwrap_or(u32::MAX),
+            input_tokens: u64::try_from(project_row.input_tokens).unwrap_or(0),
             last_session_updated_at: project_row.last_session_updated_at,
+            output_tokens: u64::try_from(project_row.output_tokens).unwrap_or(0),
             project,
             session_count: u32::try_from(project_row.session_count).unwrap_or(u32::MAX),
         }
@@ -536,9 +538,11 @@ mod tests {
             display_name: None,
             git_branch: Some("main".to_string()),
             id: project_id,
+            input_tokens: 0,
             is_favorite: false,
             last_opened_at: None,
             last_session_updated_at: None,
+            output_tokens: 0,
             path: project_path.to_string_lossy().to_string(),
             session_count: 0,
             updated_at: 0,

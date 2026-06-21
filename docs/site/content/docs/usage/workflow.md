@@ -18,28 +18,29 @@ tabs, all accessible with `Tab`:
 
 | Tab | Purpose | |-----|---------| | **Projects** | Select between projects (git
 repositories) in a dashboard view: equal-width activity heatmap and `Work Pace` panels
-on top, with recent session pace and active-project metrics beside the heatmap; the
-project table below shows project names, branches, session counts, last-opened dates,
-and paths. Agentty skips stale entries whose project directories no longer exist or no
-longer contain git metadata. | | **Sessions** | List, create, and manage agent sessions.
-When a project is active, this tab appears as `Sessions (<project-name>)`. | |
-**Review** | List open GitHub pull requests or GitLab merge requests in the active
-project that request the current forge user's review, including drafts marked with a
-`Draft` status. GitHub rows are split between requests sent directly to the user and
-requests sent to a team the user belongs to. The tab is a read-only forge list; press
-`s` to refresh, use `j` / `k` to select a request, and press `Enter` to open a read-only
-detail page with the title, rendered description, review-request-wide comments, and
-inline comment threads. The detail page opens immediately while comments load in the
-background; if comment loading fails, it keeps the title and description visible and
-shows the comment-load failure in the comments section. If the list reaches the provider
-cap, the footer shows that Agentty is displaying the first matching requests. | |
-**Settings** | Configure the color theme, default reasoning level, smart/fast/review
-model defaults, the optional `Last used model as default` smart-model mode, the session
-commit coauthor trailer, and `Open Commands` for the active project. | | **Logs** |
-Inspect process-local system log events such as startup, manual project sync,
-requested-review refreshes, background review-request status refreshes, and session
-status transitions. Logs are not persisted; Agentty keeps the newest `1000` entries in
-memory and purges the oldest entries after the limit is reached. |
+on top, with recent session pace, active-project metrics, and total input/output token
+usage beside the heatmap; the project table below shows project names, branches, session
+counts, last-opened dates, and paths. Agentty skips stale entries whose project
+directories no longer exist or no longer contain git metadata. | | **Sessions** | List,
+create, and manage agent sessions. When a project is active, this tab appears as
+`Sessions (<project-name>)`. | | **Review** | List open GitHub pull requests or GitLab
+merge requests in the active project that request the current forge user's review,
+including drafts marked with a `Draft` status. GitHub rows are split between requests
+sent directly to the user and requests sent to a team the user belongs to. The tab is a
+read-only forge list; press `s` to refresh, use `j` / `k` to select a request, and press
+`Enter` to open a read-only detail page with the title, rendered description,
+review-request-wide comments, and inline comment threads. The detail page opens
+immediately while comments load in the background; if comment loading fails, it keeps
+the title and description visible and shows the comment-load failure in the comments
+section. If the list reaches the provider cap, the footer shows that Agentty is
+displaying the first matching requests. | | **Settings** | Configure the color theme,
+default reasoning level, smart/fast/review model defaults, the optional
+`Last used model as default` smart-model mode, the session commit coauthor trailer, and
+`Open Commands` for the active project. | | **Logs** | Inspect process-local system log
+events such as startup, manual project sync, requested-review refreshes, background
+review-request status refreshes, and session status transitions. Logs are not persisted;
+Agentty keeps the newest `1000` entries in memory and purges the oldest entries after
+the limit is reached. |
 
 In session chat view, the status-colored session title renders in a dedicated header row
 above the output panel. A second metadata row shows the persisted size bucket, current

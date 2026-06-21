@@ -2037,7 +2037,7 @@ WHERE model = ?
     }
 
     #[tokio::test]
-    async fn test_load_projects_with_stats_returns_session_counts_and_last_update() {
+    async fn test_load_projects_with_stats_returns_session_counts_tokens_and_last_update() {
         // Arrange
         let database = Database::open_in_memory()
             .await
@@ -2054,9 +2054,49 @@ WHERE model = ?
             .expect("failed to insert session-a");
         database
             .sessions()
+            .persist_session_turn_metadata(
+                "session-a",
+                &SessionTurnMetadata {
+                    instruction_conversation_id: None,
+                    model: AgentModel::Gpt55.as_str().to_string(),
+                    provider_conversation_id: None,
+                    questions_json: "[]".to_string(),
+                    summary: String::new(),
+                    token_usage_delta: SessionStats {
+                        added_lines: 0,
+                        deleted_lines: 0,
+                        input_tokens: 1_200,
+                        output_tokens: 650,
+                    },
+                },
+            )
+            .await
+            .expect("failed to persist session-a token metadata");
+        database
+            .sessions()
             .insert_session("session-b", "gpt-5.5", "main", "Done", project_id)
             .await
             .expect("failed to insert session-b");
+        database
+            .sessions()
+            .persist_session_turn_metadata(
+                "session-b",
+                &SessionTurnMetadata {
+                    instruction_conversation_id: None,
+                    model: AgentModel::Gpt55.as_str().to_string(),
+                    provider_conversation_id: None,
+                    questions_json: "[]".to_string(),
+                    summary: String::new(),
+                    token_usage_delta: SessionStats {
+                        added_lines: 0,
+                        deleted_lines: 0,
+                        input_tokens: 3,
+                        output_tokens: 5,
+                    },
+                },
+            )
+            .await
+            .expect("failed to persist session-b token metadata");
 
         // Act
         let projects = database
@@ -2068,6 +2108,8 @@ WHERE model = ?
         // Assert
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].session_count, 2);
+        assert_eq!(projects[0].input_tokens, 1_203);
+        assert_eq!(projects[0].output_tokens, 655);
         assert!(projects[0].last_session_updated_at.is_some());
     }
 

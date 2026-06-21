@@ -14,7 +14,7 @@ use crate::ui::activity_heatmap::{
     heatmap_max_count, visible_heatmap_week_count,
 };
 use crate::ui::state::help_action;
-use crate::ui::{Page, layout, style};
+use crate::ui::{Page, layout, style, text_util};
 
 const DAY_LABELS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const HEATMAP_CELL_WIDTH: usize = 2;
@@ -237,9 +237,13 @@ impl ProjectListPage<'_> {
     }
 }
 
-/// Aggregated active-session load shown in the compact work stats panel.
+/// Aggregated project metrics shown in the compact work stats panel.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ActiveProjectStats {
+    /// Total input tokens accumulated across visible projects.
+    input_tokens: u64,
+    /// Total output tokens accumulated across visible projects.
+    output_tokens: u64,
     /// Number of projects with at least one active session.
     project_count: u32,
     /// Number of currently active sessions across all projects.
@@ -258,8 +262,16 @@ impl ActiveProjectStats {
         let session_count = projects.iter().fold(0_u32, |total, project_item| {
             total.saturating_add(project_item.active_session_count)
         });
+        let input_tokens = projects.iter().fold(0_u64, |total, project_item| {
+            total.saturating_add(project_item.input_tokens)
+        });
+        let output_tokens = projects.iter().fold(0_u64, |total, project_item| {
+            total.saturating_add(project_item.output_tokens)
+        });
 
         Self {
+            input_tokens,
+            output_tokens,
             project_count,
             session_count,
         }
@@ -329,6 +341,12 @@ fn work_stats_summary_lines(
         Line::from(vec![
             stat_label_span("Active Projects "),
             stat_value_span(active_stats.project_count.to_string()),
+        ]),
+        Line::from(vec![
+            stat_label_span("Tokens In "),
+            stat_value_span(text_util::format_token_count(active_stats.input_tokens)),
+            stat_label_span("   Out "),
+            stat_value_span(text_util::format_token_count(active_stats.output_tokens)),
         ]),
     ]
 }
@@ -524,7 +542,9 @@ mod tests {
         let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
         let projects = vec![ProjectListItem {
             active_session_count: 0,
+            input_tokens: 0,
             last_session_updated_at: None,
+            output_tokens: 0,
             project: Project {
                 created_at: 1,
                 display_name: Some("agentty".to_string()),
@@ -601,7 +621,9 @@ mod tests {
         // Arrange
         let project_item = ProjectListItem {
             active_session_count: 0,
+            input_tokens: 0,
             last_session_updated_at: Some(20),
+            output_tokens: 0,
             project: Project {
                 created_at: 1,
                 display_name: Some("agentty".to_string()),
@@ -630,7 +652,9 @@ mod tests {
         // Arrange
         let project_item = ProjectListItem {
             active_session_count: 0,
+            input_tokens: 0,
             last_session_updated_at: None,
+            output_tokens: 0,
             project: Project {
                 created_at: 1,
                 display_name: None,
@@ -681,7 +705,9 @@ mod tests {
         // Arrange
         let project_item = ProjectListItem {
             active_session_count: 0,
+            input_tokens: 0,
             last_session_updated_at: Some(20),
+            output_tokens: 0,
             project: Project {
                 created_at: 1,
                 display_name: Some("agentty".to_string()),
@@ -707,7 +733,9 @@ mod tests {
         // Arrange
         let project_item = ProjectListItem {
             active_session_count: 0,
+            input_tokens: 0,
             last_session_updated_at: None,
+            output_tokens: 0,
             project: Project {
                 created_at: 1,
                 display_name: Some("agentty".to_string()),
@@ -733,7 +761,9 @@ mod tests {
         // Arrange
         let project_item = ProjectListItem {
             active_session_count: 0,
+            input_tokens: 0,
             last_session_updated_at: None,
+            output_tokens: 0,
             project: Project {
                 created_at: 1,
                 display_name: Some("agentty".to_string()),
@@ -772,7 +802,9 @@ mod tests {
         let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
         let projects = vec![ProjectListItem {
             active_session_count: 0,
+            input_tokens: 12_345,
             last_session_updated_at: None,
+            output_tokens: 5_678,
             project: Project {
                 created_at: 1,
                 display_name: Some("test-project".to_string()),
@@ -817,6 +849,8 @@ mod tests {
         assert!(!text.contains("Agentic Development Environment"));
         assert!(text.contains("Active Sessions 0"));
         assert!(text.contains("Active Projects 0"));
+        assert!(text.contains("Tokens In 12.3k"));
+        assert!(text.contains("Out 5.7k"));
         assert!(!text.contains("Daily Pace"));
     }
 
@@ -870,6 +904,8 @@ mod tests {
             sessions_last_7_days: 8,
         };
         let active_stats = ActiveProjectStats {
+            input_tokens: 12_345,
+            output_tokens: 5_678,
             project_count: 2,
             session_count: 4,
         };
@@ -891,6 +927,8 @@ mod tests {
         assert!(rendered_text.contains("Best 5d"));
         assert!(rendered_text.contains("Active Sessions 4"));
         assert!(rendered_text.contains("Active Projects 2"));
+        assert!(rendered_text.contains("Tokens In 12.3k"));
+        assert!(rendered_text.contains("Out 5.7k"));
     }
 
     /// Ensures project summaries show agent executable names with detected CLI
@@ -937,7 +975,9 @@ mod tests {
         let projects = vec![
             ProjectListItem {
                 active_session_count: 0,
+                input_tokens: 100,
                 last_session_updated_at: None,
+                output_tokens: 25,
                 project: Project {
                     created_at: 1,
                     display_name: Some("agentty".to_string()),
@@ -952,7 +992,9 @@ mod tests {
             },
             ProjectListItem {
                 active_session_count: 2,
+                input_tokens: 1_000,
                 last_session_updated_at: None,
+                output_tokens: 250,
                 project: Project {
                     created_at: 1,
                     display_name: Some("other".to_string()),
@@ -967,7 +1009,9 @@ mod tests {
             },
             ProjectListItem {
                 active_session_count: 1,
+                input_tokens: 2_000,
                 last_session_updated_at: None,
+                output_tokens: 500,
                 project: Project {
                     created_at: 1,
                     display_name: Some("third".to_string()),
@@ -988,6 +1032,8 @@ mod tests {
         // Assert
         assert_eq!(stats.project_count, 2);
         assert_eq!(stats.session_count, 3);
+        assert_eq!(stats.input_tokens, 3_100);
+        assert_eq!(stats.output_tokens, 775);
     }
 
     fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {

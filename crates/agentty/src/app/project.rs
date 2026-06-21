@@ -264,7 +264,9 @@ mod tests {
         let project_items = vec![
             ProjectListItem {
                 active_session_count: 0,
+                input_tokens: 0,
                 last_session_updated_at: Some(10),
+                output_tokens: 0,
                 project: Project {
                     created_at: 1,
                     display_name: Some("agentty".to_string()),
@@ -279,7 +281,9 @@ mod tests {
             },
             ProjectListItem {
                 active_session_count: 0,
+                input_tokens: 0,
                 last_session_updated_at: Some(11),
+                output_tokens: 0,
                 project: Project {
                     created_at: 1,
                     display_name: Some("service".to_string()),

@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\nWITH stats AS (\n    SELECT project_id,\n           MAX(updated_at) AS last_session_updated_at,\n           COUNT(*) AS session_count,\n           COUNT(CASE WHEN status NOT IN ('Done', 'Canceled', 'Queued', 'Merging')\n                      THEN 1 END) AS active_session_count\n    FROM session\n    WHERE project_id IS NOT NULL\n    GROUP BY project_id\n)\nSELECT stats.active_session_count,\n       p.created_at AS \"created_at!\",\n       p.display_name,\n       p.git_branch,\n       p.id AS \"id!\",\n       p.is_favorite AS \"is_favorite: _\",\n       p.last_opened_at,\n       stats.last_session_updated_at AS \"last_session_updated_at?: i64\",\n       p.path,\n       stats.session_count,\n       p.updated_at AS \"updated_at!\"\nFROM project AS p\nLEFT JOIN stats\nON stats.project_id = p.id\nORDER BY p.is_favorite DESC,\n         COALESCE(p.last_opened_at, 0) DESC,\n         p.path\n            ",
+  "query": "\nWITH stats AS (\n    SELECT project_id,\n           MAX(updated_at) AS last_session_updated_at,\n           SUM(input_tokens) AS input_tokens,\n           SUM(output_tokens) AS output_tokens,\n           COUNT(*) AS session_count,\n           COUNT(CASE WHEN status NOT IN ('Done', 'Canceled', 'Queued', 'Merging')\n                      THEN 1 END) AS active_session_count\n    FROM session\n    WHERE project_id IS NOT NULL\n    GROUP BY project_id\n)\nSELECT stats.active_session_count,\n       p.created_at AS \"created_at!\",\n       p.display_name,\n       p.git_branch,\n       p.id AS \"id!\",\n       stats.input_tokens AS \"input_tokens?: i64\",\n       p.is_favorite AS \"is_favorite: _\",\n       p.last_opened_at,\n       stats.last_session_updated_at AS \"last_session_updated_at?: i64\",\n       stats.output_tokens AS \"output_tokens?: i64\",\n       p.path,\n       stats.session_count,\n       p.updated_at AS \"updated_at!\"\nFROM project AS p\nLEFT JOIN stats\nON stats.project_id = p.id\nORDER BY p.is_favorite DESC,\n         COALESCE(p.last_opened_at, 0) DESC,\n         p.path\n            ",
   "describe": {
     "columns": [
       {
@@ -54,8 +54,14 @@
         }
       },
       {
-        "name": "is_favorite: _",
+        "name": "input_tokens?: i64",
         "ordinal": 5,
+        "type_info": "Null",
+        "origin": "Expression"
+      },
+      {
+        "name": "is_favorite: _",
+        "ordinal": 6,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -66,7 +72,7 @@
       },
       {
         "name": "last_opened_at",
-        "ordinal": 6,
+        "ordinal": 7,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -77,13 +83,19 @@
       },
       {
         "name": "last_session_updated_at?: i64",
-        "ordinal": 7,
+        "ordinal": 8,
+        "type_info": "Null",
+        "origin": "Expression"
+      },
+      {
+        "name": "output_tokens?: i64",
+        "ordinal": 9,
         "type_info": "Null",
         "origin": "Expression"
       },
       {
         "name": "path",
-        "ordinal": 8,
+        "ordinal": 10,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -94,13 +106,13 @@
       },
       {
         "name": "session_count",
-        "ordinal": 9,
+        "ordinal": 11,
         "type_info": "Integer",
         "origin": "Expression"
       },
       {
         "name": "updated_at!",
-        "ordinal": 10,
+        "ordinal": 12,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -119,7 +131,9 @@
       true,
       true,
       false,
+      true,
       false,
+      true,
       true,
       true,
       false,
@@ -127,5 +141,5 @@
       false
     ]
   },
-  "hash": "6f9c265a9564279cd6ffd21f23e1b6a616514b806d520588acf03968497d1bac"
+  "hash": "8a71f6d0c1ca9175383bb02e5418ceee5cf3372fd53bb1215e02f459b7323235"
 }

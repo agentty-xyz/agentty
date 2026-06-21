@@ -30,9 +30,17 @@ impl Project {
 /// Aggregated project snapshot for list and switcher views.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProjectListItem {
+    /// Number of sessions still in an active lifecycle state.
     pub active_session_count: u32,
+    /// Total input tokens accumulated by sessions in this project.
+    pub input_tokens: u64,
+    /// Most recent session update timestamp for this project.
     pub last_session_updated_at: Option<i64>,
+    /// Total output tokens accumulated by sessions in this project.
+    pub output_tokens: u64,
+    /// Persisted project metadata for display and selection.
     pub project: Project,
+    /// Total number of sessions belonging to this project.
     pub session_count: u32,
 }
 
