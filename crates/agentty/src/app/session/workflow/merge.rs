@@ -450,6 +450,13 @@ impl SessionMergeService {
                 "Session must be in review or queued status".to_string(),
             ));
         }
+        if !manager.can_mutate_session_branch_in_stack(session_id) {
+            return Err(SessionError::Workflow(
+                "Stacked branch work can only run when no other stack session is active and \
+                 parent branch edits are not blocked by materialized children"
+                    .to_string(),
+            ));
+        }
 
         let (db, folder, id, session_model) = (
             services.db().clone(),
@@ -660,6 +667,13 @@ impl SessionMergeService {
         if !session.status.allows_review_actions() {
             return Err(SessionError::Workflow(
                 "Session must be in review status".to_string(),
+            ));
+        }
+        if !manager.can_mutate_session_branch_in_stack(session_id) {
+            return Err(SessionError::Workflow(
+                "Stacked branch work can only run when no other stack session is active and \
+                 parent branch edits are not blocked by materialized children"
+                    .to_string(),
             ));
         }
 
@@ -1457,15 +1471,15 @@ impl SessionManager {
     /// Executes one assisted rebase workflow for a session worktree.
     ///
     /// Aborts any in-progress rebase when the assist loop fails so stale
-    /// rebase metadata does not leak into later merge/rebase operations.
+    /// rebase metadata does not leak into later merge or sync operations.
     ///
     /// # Errors
-    /// Returns an error when pre-rebase auto-commit fails or assisted rebase
+    /// Returns an error when pre-sync auto-commit fails or assisted rebase
     /// cannot be completed.
     ///
-    /// Emits user-visible commit output before rebase starts so users can see
+    /// Emits user-visible commit output before sync starts so users can see
     /// whether pending changes were committed or there was nothing to commit.
-    /// The pre-rebase auto-commit reuses the active project's fast-model
+    /// The pre-sync auto-commit reuses the active project's fast-model
     /// default when generating or repairing the session commit message, and a
     /// successful commit requests an immediate git-status refresh.
     async fn execute_rebase_workflow(input: RebaseAssistInput) -> Result<String, SessionError> {
@@ -1518,7 +1532,7 @@ impl SessionManager {
             }
             Err(error) => {
                 return Err(SessionError::Workflow(format!(
-                    "Failed to commit pending changes before rebase: {error}"
+                    "Failed to commit pending changes before sync: {error}"
                 )));
             }
         }
@@ -1526,14 +1540,14 @@ impl SessionManager {
         if let Err(error) = Self::run_rebase_assist_loop(input.clone()).await {
             Self::abort_rebase_after_assist_failure(&input).await;
 
-            return Err(SessionError::Workflow(format!("Failed to rebase: {error}")));
+            return Err(SessionError::Workflow(format!("Failed to sync: {error}")));
         }
 
         let source_branch = session_branch(&input.id);
         let rebase_target = &input.rebase_target;
 
         Ok(format!(
-            "Successfully rebased {source_branch} onto {rebase_target}"
+            "Successfully synced {source_branch} onto {rebase_target}"
         ))
     }
 
@@ -3178,7 +3192,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("Failed to rebase: state query failed"),
+                .contains("Failed to sync: state query failed"),
             "workflow error should include assist-loop failure reason"
         );
     }
@@ -4071,7 +4085,7 @@ mod tests {
             git_client: &git_client,
             id: "sess-rebase",
             output: &output,
-            rebase_result: Ok("Successfully rebased wt/sess-rebase onto main".to_string()),
+            rebase_result: Ok("Successfully synced wt/sess-rebase onto main".to_string()),
             session_update_versions: &Arc::default(),
             status: &status,
         })
@@ -4104,7 +4118,7 @@ mod tests {
         assert_eq!(sync_events[0].1, sync_events[1].1);
 
         let output_text = output.lock().expect("output lock poisoned").clone();
-        assert!(output_text.contains("[Rebase] Successfully rebased"));
+        assert!(output_text.contains("[Sync] Successfully synced"));
     }
 
     #[tokio::test]
@@ -4145,7 +4159,7 @@ mod tests {
             git_client: &git_client,
             id: "sess-no-push",
             output: &output,
-            rebase_result: Ok("Successfully rebased wt/sess-no-push onto main".to_string()),
+            rebase_result: Ok("Successfully synced wt/sess-no-push onto main".to_string()),
             session_update_versions: &Arc::default(),
             status: &status,
         })
@@ -4166,6 +4180,6 @@ mod tests {
         );
 
         let output_text = output.lock().expect("output lock poisoned").clone();
-        assert!(output_text.contains("[Rebase] Successfully rebased"));
+        assert!(output_text.contains("[Sync] Successfully synced"));
     }
 }

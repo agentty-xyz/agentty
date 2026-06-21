@@ -98,7 +98,9 @@ mod tests {
         let (mut app, _base_dir) = new_test_app().await;
         app.mode = AppMode::Help {
             context: HelpContext::View {
+                can_mutate_session_branch: true,
                 can_open_worktree: true,
+                can_start_staged_session: false,
                 review_status_message: None,
                 review_text: None,
                 publish_pull_request_action: None,

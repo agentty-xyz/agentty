@@ -2297,6 +2297,13 @@ mod tests {
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
         let parent_session_id = app.create_session().await.expect("failed to create parent");
+        let parent_session = app
+            .sessions
+            .sessions_mut()
+            .iter_mut()
+            .find(|session| session.id == parent_session_id)
+            .expect("expected parent session");
+        parent_session.status = Status::Review;
         let child_session_id = app
             .create_stacked_draft_session(&parent_session_id)
             .await
@@ -2764,11 +2771,54 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_start_staged_session_rejects_stacked_draft_child() {
+    async fn test_start_staged_session_launches_stacked_draft_child() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
         let parent_session_id = app.create_session().await.expect("failed to create parent");
+        set_session_status_for_test(&mut app, &parent_session_id, Status::Review);
+        let child_session_id = app
+            .create_stacked_draft_session(&parent_session_id)
+            .await
+            .expect("failed to create stacked draft session");
+        app.stage_draft_message(&child_session_id, "Stacked draft")
+            .await
+            .expect("failed to stage stacked draft message");
+
+        // Act
+        app.start_staged_session(&child_session_id)
+            .await
+            .expect("failed to start stacked draft");
+        app.sessions.sync_from_handles();
+
+        // Assert
+        let child_session = app
+            .sessions
+            .sessions()
+            .iter()
+            .find(|session| session.id == child_session_id)
+            .expect("missing child session");
+        assert_eq!(child_session.status, Status::InProgress);
+        assert!(child_session.folder.exists());
+        assert_eq!(
+            child_session.parent_session_id.as_deref(),
+            Some(parent_session_id.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_start_staged_session_rejects_stacked_child_before_parent_review() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        let parent_session_id = app.create_session().await.expect("failed to create parent");
+        let parent_session = app
+            .sessions
+            .sessions_mut()
+            .iter_mut()
+            .find(|session| session.id == parent_session_id)
+            .expect("expected parent session");
+        parent_session.status = Status::InProgress;
         let child_session_id = app
             .create_stacked_draft_session(&parent_session_id)
             .await
@@ -2781,23 +2831,8 @@ mod tests {
         let result = app.start_staged_session(&child_session_id).await;
 
         // Assert
-        let error = result.expect_err("stacked draft should not start before restack");
-        assert!(
-            error.to_string().contains(
-                "Stacked draft sessions can only be started after their parent is merged"
-            )
-        );
-        let child_session = app
-            .sessions
-            .sessions()
-            .iter()
-            .find(|session| session.id == child_session_id)
-            .expect("missing child session");
-        assert_eq!(child_session.status, Status::Draft);
-        assert_eq!(
-            child_session.parent_session_id.as_deref(),
-            Some(parent_session_id.as_str())
-        );
+        let error = result.expect_err("parent branch work should block child start");
+        assert!(error.to_string().contains("parent is in review"));
     }
 
     #[tokio::test]
@@ -4982,7 +5017,7 @@ mod tests {
 
         // Assert
         assert!(result.is_ok(), "rebase should succeed: {:?}", result.err());
-        wait_for_output_contains(&mut app, &session_id, "[Rebase] Successfully rebased", 200).await;
+        wait_for_output_contains(&mut app, &session_id, "[Sync] Successfully synced", 200).await;
     }
 
     #[tokio::test]
@@ -5079,7 +5114,7 @@ mod tests {
 
         // Assert
         assert!(result.is_ok(), "rebase should succeed: {:?}", result.err());
-        wait_for_output_contains(&mut app, &session_id, "[Rebase] Successfully rebased", 200).await;
+        wait_for_output_contains(&mut app, &session_id, "[Sync] Successfully synced", 200).await;
         // The commit call itself is verified by mock expectations; output can
         // be refreshed from persisted state before the commit line is observed
         // in this integration test under full-suite runtime contention.

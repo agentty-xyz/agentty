@@ -1283,8 +1283,8 @@ SET questions = ?,
 WHERE id = ?
 ",
         )
-        .bind(&turn_metadata.questions_json)
-        .bind(&turn_metadata.summary)
+        .bind(turn_metadata.questions_json.as_str())
+        .bind(turn_metadata.summary.as_str())
         .bind(turn_metadata.provider_conversation_id.as_deref())
         .bind(turn_metadata.instruction_conversation_id.as_deref())
         .bind(session_id)
@@ -1322,7 +1322,7 @@ ON CONFLICT(session_id, model) DO UPDATE SET
 ",
             )
             .bind(session_id)
-            .bind(&turn_metadata.model)
+            .bind(turn_metadata.model.as_str())
             .bind(turn_metadata.token_usage_delta.input_tokens.cast_signed())
             .bind(turn_metadata.token_usage_delta.output_tokens.cast_signed())
             .execute(&mut *transaction)

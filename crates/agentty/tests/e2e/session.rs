@@ -806,8 +806,9 @@ fn session_creation_opens_prompt_mode() -> E2eResult {
     Ok(())
 }
 
-/// Verify that choosing Stacked creates a draft under the selected parent and
-/// renders the one-level stack with a tree connection in the session list.
+/// Verify that choosing Stacked creates a startable draft under the selected
+/// parent and renders the one-level stack with a tree connection in the
+/// session list.
 #[test]
 fn stacked_session_creation() -> E2eResult {
     // Arrange, Act, Assert
@@ -833,6 +834,10 @@ fn stacked_session_creation() -> E2eResult {
                     .write_text("Stacked draft")
                     .press_key("Enter")
                     .wait_for_text("Draft Session", 5000)
+                    .capture_labeled(
+                        "stacked_draft_ready",
+                        "Stacked draft staged with start action available",
+                    )
                     .viewing_pause_ms(1200)
                     .press_key("q")
                     .wait_for_text("Stacked draft", 5000)
@@ -851,11 +856,59 @@ fn stacked_session_creation() -> E2eResult {
                 let draft_view_frame = common::frame_from_capture(&report.captures[1]);
                 assertion::assert_not_visible(&draft_view_frame, "s: start");
                 assertion::assert_not_visible(&draft_view_frame, "m: add to merge queue");
-                assertion::assert_not_visible(&draft_view_frame, "r: rebase");
+                assertion::assert_not_visible(&draft_view_frame, "r: sync");
+
+                let ready_frame = common::frame_from_capture(&report.captures[2]);
+                let ready_full = Region::full(ready_frame.cols(), ready_frame.rows());
+                assertion::assert_text_in_region(&ready_frame, "s: start", &ready_full);
+                assertion::assert_not_visible(&ready_frame, "m: add to merge queue");
+                assertion::assert_not_visible(&ready_frame, "r: sync");
 
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Review-ready ses", &full);
                 assertion::assert_text_in_region(frame, "└ [XS] Stacked draft", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that a stacked draft can keep collecting staged prompts while its
+/// parent is still running, but the start shortcut stays hidden until the
+/// parent returns to review.
+#[test]
+fn stacked_session_start_waits_for_parent_review() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("stacked_session_start_waits_for_parent_review")
+        .with_git()
+        .setup(seed_running_stop_session)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .wait_for_text("Running session stop", 5000)
+                    .press_key("a")
+                    .wait_for_text("Stacked", 5000)
+                    .press_key("Down")
+                    .press_key("Down")
+                    .wait_for_text("[Preview] Stack on selected", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Enter: stage draft", 5000)
+                    .write_text("Waiting child draft")
+                    .press_key("Enter")
+                    .wait_for_text("Draft Session", 5000)
+                    .capture_labeled(
+                        "stacked_draft_waiting_parent",
+                        "Stacked draft staged while parent is still running",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Enter: add draft", &full);
+                assertion::assert_not_visible(frame, "s: start");
+                assertion::assert_not_visible(frame, "m: add to merge queue");
+                assertion::assert_not_visible(frame, "r: sync");
             },
         )?;
 

@@ -383,8 +383,8 @@ narrow screens.
 #### Trailing workflow notices
 
 - Comes from: trailing paragraphs in `session.output` that begin with known workflow
-  labels such as `[Commit]`, `[Commit Error]`, `[Commit Assist]`, `[Rebase Assist]`,
-  `[Rebase Error]`, or other bracketed workflow errors. Producers and the renderer share
+  labels such as `[Commit]`, `[Commit Error]`, `[Commit Assist]`, `[Sync Assist]`,
+  `[Sync Error]`, or other bracketed workflow errors. Producers and the renderer share
   these labels through `TranscriptNotice` in
   `crates/agentty/src/domain/transcript_notice.rs`.
 - Prints: reattached after the synthetic summary so the summary stays at the completed
@@ -501,11 +501,18 @@ restart-safe:
 - Draft session in `Draft` status -> `Canceled` (list-mode cancel before first turn)
 - `Review/Question -> InProgress` (reply)
 - `Review -> Queued -> Merging -> Done` (merge queue path)
-- `Review -> Rebasing -> Review/Question` (rebase path)
+- `Review -> Rebasing -> Review/Question` (session sync path)
 - `Review/Question -> Canceled`
 - `InProgress -> Review` (user stops the current turn)
 - `InProgress -> Canceled` (list-mode cancel stops the running turn)
-- `InProgress/Rebasing -> Review/Question` (post-turn or post-rebase)
+- `InProgress/Rebasing -> Review/Question` (post-turn or post-sync)
+
+Stacked-session branch gates are enforced before those transitions start branch work.
+`start_staged_session()` only materializes a stacked draft when its parent is
+review-ready and no sibling or parent stack member is running, queued, syncing, merging,
+or waiting on a question. `reply()`, session sync, and merge queue entry use the same
+loaded-session stack check, with parent branch edits blocked while a materialized child
+remains linked.
 
 ## Agent Channel Architecture
 
@@ -836,9 +843,9 @@ paths and their trigger conditions:
 - What it does: Runs rebase, reuses the single evolving session-branch `HEAD` commit
   message for squash merge, then cleans up the worktree in the background.
 
-### Session rebase task
+### Session sync task
 
-- Trigger: Rebase action in view mode
+- Trigger: Session sync action in view mode
 - Spawn site: `SessionMergeService::rebase_session`
 - Emits or writes: Output append and status updates
 - What it does: Runs the assisted rebase flow and returns the session to `Review` or
@@ -857,7 +864,7 @@ orchestration paths:
 - session merge: queue-aware workflow, assisted rebase first, reuse the single evolving
   session-branch `HEAD` commit message for the squash commit into the base branch, then
   clean up the worktree and set status `Done`.
-- session rebase: assisted rebase of session branch onto the local base branch for
+- session sync: assisted rebase of session branch onto the local base branch for
   unpublished sessions or onto the published upstream's remote base ref for published
   sessions, returns to `Review` after completion/failure reporting.
 - session review-request publish: review-ready sessions push the session branch through

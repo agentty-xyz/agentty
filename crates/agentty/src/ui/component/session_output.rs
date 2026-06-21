@@ -27,13 +27,13 @@ const DRAFT_PREVIEW_EMPTY_NOTE: &str = "No draft messages staged yet. Use `Enter
                                         first draft locally, then press `s` in session view to \
                                         start the bundle.";
 const DRAFT_PREVIEW_STACKED_EMPTY_NOTE: &str = "No draft messages staged yet. Use `Enter` to \
-                                                stage the first draft locally. This stacked draft \
-                                                can start after its parent is merged.";
+                                                stage the first draft locally. The `s` start \
+                                                action appears after the parent is review-ready.";
 const DRAFT_PREVIEW_STAGED_NOTE: &str =
     "Draft messages stay local until you press `s` in session view to start the staged bundle.";
-const DRAFT_PREVIEW_STACKED_STAGED_NOTE: &str = "Draft messages stay local until the parent \
-                                                 session is merged. After restacking, press `s` \
-                                                 in session view to start the staged bundle.";
+const DRAFT_PREVIEW_STACKED_STAGED_NOTE: &str =
+    "Draft messages stay local until the parent is review-ready and you press `s` in session view \
+     to start the stacked bundle from its parent branch.";
 const USER_PROMPT_PREFIX: &str = " › ";
 /// User prompt prefix when the prompt starts after a transcript newline.
 const USER_PROMPT_LINE_PREFIX: &str = "\n › ";
@@ -1399,14 +1399,14 @@ mod tests {
         // Act
         let root_layout = output_layout_cache.layout(
             &session,
-            Rect::new(0, 0, 80, 8),
+            Rect::new(0, 0, 80, 12),
             context,
             Some(&markdown_render_cache),
         );
         session.parent_session_id = Some(SessionId::from("parent-session"));
         let stacked_layout = output_layout_cache.layout(
             &session,
-            Rect::new(0, 0, 80, 8),
+            Rect::new(0, 0, 80, 12),
             context,
             Some(&markdown_render_cache),
         );
@@ -1419,7 +1419,9 @@ mod tests {
 
         // Assert
         assert!(!Arc::ptr_eq(&root_layout.lines, &stacked_layout.lines));
-        assert!(stacked_text.contains("until the parent session is merged"));
+        assert!(stacked_text.contains("start the stacked"));
+        assert!(stacked_text.contains("bundle from its parent"));
+        assert!(stacked_text.contains("parent"));
     }
 
     #[test]
@@ -1815,7 +1817,7 @@ mod tests {
         // Act
         let lines = output_lines(
             &session,
-            Rect::new(0, 0, 80, 8),
+            Rect::new(0, 0, 80, 12),
             line_context(None, None, None),
             None,
         );
@@ -1843,7 +1845,7 @@ mod tests {
         // Act
         let lines = output_lines(
             &session,
-            Rect::new(0, 0, 80, 8),
+            Rect::new(0, 0, 80, 12),
             line_context(None, None, None),
             None,
         );
@@ -1855,7 +1857,9 @@ mod tests {
 
         // Assert
         assert!(text.contains("Draft Session"));
-        assert!(text.contains("until the parent session is merged"));
+        assert!(text.contains("start the stacked"));
+        assert!(text.contains("bundle from its parent"));
+        assert!(text.contains("parent"));
         assert!(text.contains("Stacked draft"));
     }
 
@@ -1906,8 +1910,8 @@ mod tests {
 
         // Assert
         assert!(text.contains("Draft Session"));
-        assert!(text.contains("stacked draft"));
-        assert!(text.contains("parent"));
+        assert!(text.contains("No draft messages staged yet."));
+        assert!(text.contains("start action appears after the parent is review-ready"));
     }
 
     #[test]
@@ -1954,7 +1958,7 @@ mod tests {
     fn test_output_lines_places_summary_before_trailing_workflow_notices() {
         // Arrange
         let mut session = session_fixture();
-        session.output = "streamed output\n\n[Commit] No changes to commit.\n\n[Rebase Assist] \
+        session.output = "streamed output\n\n[Commit] No changes to commit.\n\n[Sync Assist] \
                           Attempt 1/3. Resolving conflicts in:\n- \
                           crates/agentty/src/runtime/worker.rs\n"
             .to_string();
@@ -1982,14 +1986,14 @@ mod tests {
         let commit_index = text
             .find("[Commit] No changes to commit.")
             .expect("commit notice should be rendered");
-        let rebase_index = text
-            .find("[Rebase Assist] Attempt 1/3.")
-            .expect("rebase notice should be rendered");
+        let sync_index = text
+            .find("[Sync Assist] Attempt 1/3.")
+            .expect("sync notice should be rendered");
 
         // Assert
         assert!(output_index < summary_index);
         assert!(summary_index < commit_index);
-        assert!(commit_index < rebase_index);
+        assert!(commit_index < sync_index);
     }
 
     /// Verifies merge failures render after focused review content, so the

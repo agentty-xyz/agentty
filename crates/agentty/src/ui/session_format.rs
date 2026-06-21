@@ -163,8 +163,18 @@ fn session_metadata_base_text(
 }
 
 /// Builds the footer help line shown in session view mode.
-pub fn session_view_footer_line(session: &Session, can_open_worktree: bool) -> Line<'static> {
-    help_action::footer_line(&session_view_footer_actions(session, can_open_worktree))
+pub fn session_view_footer_line(
+    session: &Session,
+    can_open_worktree: bool,
+    can_start_staged_session: bool,
+    can_mutate_session_branch: bool,
+) -> Line<'static> {
+    help_action::footer_line(&session_view_footer_actions(
+        session,
+        can_open_worktree,
+        can_start_staged_session,
+        can_mutate_session_branch,
+    ))
 }
 
 /// Renders persisted summary payloads into display markdown.
@@ -327,10 +337,14 @@ pub fn session_output_published_branch_sync_line(session: &Session) -> Option<Li
 fn session_view_footer_actions(
     session: &Session,
     can_open_worktree: bool,
+    can_start_staged_session: bool,
+    can_mutate_session_branch: bool,
 ) -> Vec<help_action::HelpAction> {
     let session_state = help_action::session_view_state(session);
     help_action::view_footer_actions(ViewHelpState {
+        can_mutate_session_branch,
         can_open_worktree,
+        can_start_staged_session,
         publish_pull_request_action: session.publish_pull_request_action(),
         session_state,
     })

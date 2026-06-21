@@ -345,7 +345,13 @@ mod tests {
     }
 
     fn view_footer_text(session: &Session, can_open_worktree: bool) -> String {
-        session_view_footer_line(session, can_open_worktree).to_string()
+        session_view_footer_line(
+            session,
+            can_open_worktree,
+            session.can_start_staged_session(),
+            true,
+        )
+        .to_string()
     }
 
     fn summary_fixture() -> String {
@@ -570,6 +576,7 @@ mod tests {
         let mut session = session_fixture();
         session.folder = PathBuf::new();
         session.is_draft = true;
+        session.prompt = "Staged draft".to_string();
 
         // Act
         let help_text = view_footer_text(&session, false);
@@ -579,7 +586,7 @@ mod tests {
         assert!(help_text.contains("s: start"));
         assert!(!help_text.contains("o: open"));
         assert!(help_text.contains("m: add to merge queue"));
-        assert!(help_text.contains("r: rebase"));
+        assert!(help_text.contains("r: sync"));
         assert!(help_text.contains("/: commands menu"));
         assert!(!help_text.contains("d: diff"));
     }

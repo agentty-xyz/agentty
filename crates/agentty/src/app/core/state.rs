@@ -907,9 +907,12 @@ impl App {
 
     /// Starts a `Draft` session from its persisted staged draft bundle.
     ///
+    /// Stacked drafts only launch when their parent branch is review-ready and
+    /// the stack has no other active branch work.
+    ///
     /// # Errors
     /// Returns an error if the session is missing, has no staged drafts, or
-    /// launch enqueue fails.
+    /// stack consistency or launch enqueueing fails.
     pub async fn start_staged_session(&mut self, session_id: &str) -> Result<(), AppError> {
         self.review_cache.remove(session_id);
         self.services
@@ -1659,16 +1662,25 @@ impl App {
     /// Validates whether a session is currently eligible for merge queueing.
     ///
     /// Sessions are eligible while actively under review or already marked as
-    /// `Queued` (for example, after app restart).
+    /// `Queued` (for example, after app restart). Stacked parent branches
+    /// cannot enter merge queueing while materialized children still depend on
+    /// them, and only one branch-mutating action may run in a one-level stack.
     ///
     /// # Errors
     /// Returns an error when the session does not exist or has an ineligible
-    /// status.
+    /// status, or when stack consistency blocks branch mutation.
     fn validate_merge_request(&self, session_id: &str) -> Result<(), AppError> {
         let session = self.sessions.session_or_err(session_id)?;
         if !(session.status.allows_review_actions() || session.status == Status::Queued) {
             return Err(AppError::Workflow(
                 "Session must be in review or queued status".to_string(),
+            ));
+        }
+        if !self.sessions.can_mutate_session_branch_in_stack(session_id) {
+            return Err(AppError::Workflow(
+                "Stacked branch work can only run when no other stack session is active and \
+                 parent branch edits are not blocked by materialized children"
+                    .to_string(),
             ));
         }
 
@@ -1814,11 +1826,47 @@ impl App {
 
     /// Builds one background-task snapshot for a branch-publish action.
     fn branch_publish_task_session(&self, session_id: &str) -> Option<BranchPublishTaskSession> {
-        self.sessions
+        let session = self
+            .sessions
             .sessions()
             .iter()
-            .find(|session| session.id == session_id)
-            .map(BranchPublishTaskSession::from_session)
+            .find(|session| session.id == session_id)?;
+        let mut branch_publish_session = BranchPublishTaskSession::from_session(session);
+        branch_publish_session.base_branch = self.review_target_branch_for_session(session);
+
+        Some(branch_publish_session)
+    }
+
+    /// Resolves the forge review-request target branch for one session.
+    ///
+    /// Root sessions target their stored base branch. Stacked children target
+    /// their parent session branch while the parent link exists, preferring
+    /// the parent's linked review-request source branch, then the parent's
+    /// pushed upstream branch, then the child row's stored local parent branch.
+    fn review_target_branch_for_session(&self, session: &Session) -> String {
+        self.stacked_parent_review_target_branch(session)
+            .unwrap_or_else(|| session.base_branch.clone())
+    }
+
+    /// Returns the best review target branch for one stacked child's parent.
+    fn stacked_parent_review_target_branch(&self, session: &Session) -> Option<String> {
+        let parent_session_id = session.parent_session_id.as_ref()?;
+        let parent_session = self
+            .sessions
+            .sessions()
+            .iter()
+            .find(|candidate| candidate.id.as_str() == parent_session_id.as_str())?;
+
+        parent_session
+            .review_request
+            .as_ref()
+            .map(|review_request| review_request.summary.source_branch.clone())
+            .or_else(|| {
+                parent_session
+                    .published_upstream_ref
+                    .as_deref()
+                    .map(session::remote_branch_name_from_upstream_ref)
+            })
     }
 
     /// Returns popup context for the currently active project sync target.
@@ -1861,9 +1909,9 @@ mod tests {
     use crate::domain::file_entry::FileEntry;
     use crate::domain::question::QuestionItem;
     use crate::domain::session::{
-        ForgeKind, PublishedBranchSyncStatus, ReviewRequestState, ReviewRequestSummary,
-        SESSION_DATA_DIR, Session, SessionFollowUpTask, SessionHandles, SessionSize, SessionStats,
-        Status,
+        ForgeKind, PublishedBranchSyncStatus, ReviewRequest, ReviewRequestState,
+        ReviewRequestSummary, SESSION_DATA_DIR, Session, SessionFollowUpTask, SessionHandles,
+        SessionSize, SessionStats, Status,
     };
     use crate::domain::setting::SettingName;
     use crate::infra::agent::protocol::AgentResponseSummary;
@@ -3044,6 +3092,64 @@ mod tests {
                 "Session must be in review to push the branch.".to_string(),
             ))
         );
+    }
+
+    #[tokio::test]
+    async fn branch_publish_task_session_targets_stacked_parent_review_source_branch() {
+        // Arrange
+        let mut app = new_test_app().await;
+        let mut parent_session = test_session(PathBuf::from("/tmp/parent-session"));
+        parent_session.id = "parent-session".into();
+        parent_session.review_request = Some(ReviewRequest {
+            last_refreshed_at: 0,
+            summary: ReviewRequestSummary {
+                display_id: "#12".to_string(),
+                forge_kind: ForgeKind::GitHub,
+                source_branch: "review/parent-session".to_string(),
+                state: ReviewRequestState::Open,
+                status_summary: Some("Draft".to_string()),
+                target_branch: "main".to_string(),
+                title: "Parent review".to_string(),
+                web_url: "https://github.com/org/repo/pull/12".to_string(),
+            },
+        });
+        let mut child_session = test_session(PathBuf::from("/tmp/child-session"));
+        child_session.id = "child-session".into();
+        child_session.base_branch = session::session_branch("parent-session");
+        child_session.parent_session_id = Some("parent-session".into());
+        app.sessions.push_session(parent_session);
+        app.sessions.push_session(child_session);
+
+        // Act
+        let branch_publish_session = app
+            .branch_publish_task_session("child-session")
+            .expect("expected branch-publish snapshot");
+
+        // Assert
+        assert_eq!(branch_publish_session.base_branch, "review/parent-session");
+    }
+
+    #[tokio::test]
+    async fn branch_publish_task_session_targets_stacked_parent_upstream_branch() {
+        // Arrange
+        let mut app = new_test_app().await;
+        let mut parent_session = test_session(PathBuf::from("/tmp/parent-session"));
+        parent_session.id = "parent-session".into();
+        parent_session.published_upstream_ref = Some("origin/review/parent-custom".to_string());
+        let mut child_session = test_session(PathBuf::from("/tmp/child-session"));
+        child_session.id = "child-session".into();
+        child_session.base_branch = session::session_branch("parent-session");
+        child_session.parent_session_id = Some("parent-session".into());
+        app.sessions.push_session(parent_session);
+        app.sessions.push_session(child_session);
+
+        // Act
+        let branch_publish_session = app
+            .branch_publish_task_session("child-session")
+            .expect("expected branch-publish snapshot");
+
+        // Assert
+        assert_eq!(branch_publish_session.base_branch, "review/parent-custom");
     }
 
     #[tokio::test]

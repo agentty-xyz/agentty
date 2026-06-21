@@ -66,15 +66,39 @@ struct ViewKeyContext<'a> {
     session_snapshot: &'a ViewSessionSnapshot,
 }
 
+/// Two-state action availability used in session-view snapshots.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ViewActionState {
+    Disabled,
+    Enabled,
+}
+
+impl ViewActionState {
+    /// Returns the action state that corresponds to `is_enabled`.
+    fn from_bool(is_enabled: bool) -> Self {
+        if is_enabled {
+            return Self::Enabled;
+        }
+
+        Self::Disabled
+    }
+
+    /// Returns whether the action is currently enabled.
+    fn is_enabled(self) -> bool {
+        self == Self::Enabled
+    }
+}
+
 /// Snapshot of session-derived state used by view-mode key handling.
 struct ViewSessionSnapshot {
-    can_continue_terminal_session: bool,
-    can_open_worktree: bool,
-    can_start_staged_session: bool,
+    continue_terminal_session: ViewActionState,
     follow_up_task_action: Option<FollowUpTaskAction>,
+    mutate_session_branch: ViewActionState,
+    open_worktree: ViewActionState,
     publish_pull_request_action: Option<PublishBranchAction>,
     session_state: ViewSessionState,
     session_status: Status,
+    start_staged_session: ViewActionState,
 }
 
 impl ViewSessionSnapshot {
@@ -82,13 +106,63 @@ impl ViewSessionSnapshot {
     /// mode.
     fn can_merge_session(&self) -> bool {
         is_view_action_allowed(self.session_status)
+            && self.can_mutate_session_branch()
             && self.session_state != ViewSessionState::StackedDraft
     }
 
-    /// Returns whether the active session can start a rebase from view mode.
+    /// Returns whether the active session can start the session sync action
+    /// from view mode.
     fn can_rebase_session(&self) -> bool {
         is_view_rebase_allowed(self.session_status)
+            && self.can_mutate_session_branch()
             && self.session_state != ViewSessionState::StackedDraft
+    }
+
+    /// Returns whether a terminal session can launch a continuation draft.
+    fn can_continue_terminal_session(&self) -> bool {
+        self.continue_terminal_session.is_enabled()
+    }
+
+    /// Returns whether this session can start branch-mutating stack work.
+    fn can_mutate_session_branch(&self) -> bool {
+        self.mutate_session_branch.is_enabled()
+    }
+
+    /// Returns whether this session's local worktree can be opened.
+    fn can_open_worktree(&self) -> bool {
+        self.open_worktree.is_enabled()
+    }
+
+    /// Returns whether this staged draft can start its first live turn.
+    fn can_start_staged_session(&self) -> bool {
+        self.start_staged_session.is_enabled()
+    }
+
+    /// Returns whether `Enter` may open a prompt composer from view mode.
+    fn can_open_prompt_composer(&self) -> bool {
+        if !is_view_chat_allowed(self.session_status) {
+            return false;
+        }
+
+        self.can_edit_without_branch_work() || self.can_mutate_session_branch()
+    }
+
+    /// Returns whether `/` may open the slash-command composer from view mode.
+    fn can_open_command_composer(&self) -> bool {
+        if !is_view_action_allowed(self.session_status) {
+            return false;
+        }
+
+        self.can_edit_without_branch_work() || self.can_mutate_session_branch()
+    }
+
+    /// Returns whether editing the viewed session only stages local draft
+    /// content and therefore does not mutate a session branch.
+    fn can_edit_without_branch_work(&self) -> bool {
+        matches!(
+            self.session_state,
+            ViewSessionState::NewSession | ViewSessionState::StackedDraft
+        )
     }
 }
 
@@ -192,7 +266,7 @@ async fn handle_primary_view_key(
         KeyCode::Char('q') => {
             app.mode = AppMode::List;
         }
-        KeyCode::Char('o') if view_session_snapshot.can_open_worktree => {
+        KeyCode::Char('o') if view_session_snapshot.can_open_worktree() => {
             open_worktree_for_view_session(app, view_context).await;
         }
         KeyCode::Char('l') if view_session_snapshot.follow_up_task_action.is_some() => {
@@ -209,7 +283,7 @@ async fn handle_primary_view_key(
 
             return Some(false);
         }
-        KeyCode::Char('s') if view_session_snapshot.can_start_staged_session => {
+        KeyCode::Char('s') if view_session_snapshot.can_start_staged_session() => {
             if let Err(error) = app.start_staged_session(&view_context.session_id).await {
                 app.append_output_for_session(
                     &view_context.session_id,
@@ -222,7 +296,7 @@ async fn handle_primary_view_key(
         }
         KeyCode::Char('c')
             if key.modifiers == event::KeyModifiers::NONE
-                && view_session_snapshot.can_continue_terminal_session =>
+                && view_session_snapshot.can_continue_terminal_session() =>
         {
             open_continue_confirmation(app, view_context);
 
@@ -234,7 +308,7 @@ async fn handle_primary_view_key(
         KeyCode::Char(']') if app.has_multiple_follow_up_tasks(&view_context.session_id) => {
             app.select_next_follow_up_task(&view_context.session_id);
         }
-        KeyCode::Enter if is_view_chat_allowed(view_session_snapshot.session_status) => {
+        KeyCode::Enter if view_session_snapshot.can_open_prompt_composer() => {
             switch_view_to_prompt(
                 app,
                 view_context,
@@ -246,8 +320,7 @@ async fn handle_primary_view_key(
             );
         }
         KeyCode::Char('/')
-            if is_view_action_allowed(view_session_snapshot.session_status)
-                && is_insertable_char_key(key) =>
+            if view_session_snapshot.can_open_command_composer() && is_insertable_char_key(key) =>
         {
             switch_view_to_prompt(
                 app,
@@ -302,7 +375,7 @@ fn handle_scroll_key(
 }
 
 /// Handles workflow actions in session view such as diff, publish, review,
-/// merge, rebase, cancellation, and help.
+/// merge, session sync, cancellation, and help.
 async fn handle_workflow_view_key(
     app: &mut App,
     key: KeyEvent,
@@ -482,13 +555,22 @@ fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSe
             .unwrap_or(&false);
 
     Some(ViewSessionSnapshot {
-        can_continue_terminal_session: session.allows_terminal_continuation(),
-        can_open_worktree,
-        can_start_staged_session: session.can_start_staged_session(),
+        continue_terminal_session: ViewActionState::from_bool(
+            session.allows_terminal_continuation(),
+        ),
         follow_up_task_action: app.selected_follow_up_task_action(&view_context.session_id),
+        mutate_session_branch: ViewActionState::from_bool(
+            app.sessions
+                .can_mutate_session_branch_in_stack(view_context.session_id.as_str()),
+        ),
+        open_worktree: ViewActionState::from_bool(can_open_worktree),
         publish_pull_request_action: session.publish_pull_request_action(),
         session_state: help_action::session_view_state(session),
         session_status,
+        start_staged_session: ViewActionState::from_bool(
+            app.sessions
+                .can_start_staged_session(view_context.session_id.as_str()),
+        ),
     })
 }
 
@@ -562,8 +644,7 @@ fn is_view_review_allowed(status: Status) -> bool {
     status.allows_review_actions()
 }
 
-/// Returns whether the `r` shortcut can start a session rebase from view
-/// mode.
+/// Returns whether the `r` shortcut can start session sync from view mode.
 fn is_view_rebase_allowed(status: Status) -> bool {
     is_view_action_allowed(status) && status != Status::AgentReview
 }
@@ -778,7 +859,9 @@ fn open_view_help_overlay(
 ) {
     app.mode = AppMode::Help {
         context: HelpContext::View {
-            can_open_worktree: view_session_snapshot.can_open_worktree,
+            can_mutate_session_branch: view_session_snapshot.can_mutate_session_branch(),
+            can_open_worktree: view_session_snapshot.can_open_worktree(),
+            can_start_staged_session: view_session_snapshot.can_start_staged_session(),
             review_status_message: view_context.review_status_message.clone(),
             review_text: view_context.review_text.clone(),
             publish_pull_request_action: view_session_snapshot.publish_pull_request_action,
@@ -1484,8 +1567,8 @@ mod tests {
         let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
 
         // Assert
-        assert!(snapshot.can_continue_terminal_session);
-        assert!(!snapshot.can_open_worktree);
+        assert!(snapshot.can_continue_terminal_session());
+        assert!(!snapshot.can_open_worktree());
         assert_eq!(snapshot.session_state, ViewSessionState::Done);
         assert_eq!(snapshot.session_status, Status::Done);
     }
@@ -1507,8 +1590,8 @@ mod tests {
         let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
 
         // Assert
-        assert!(!snapshot.can_continue_terminal_session);
-        assert!(!snapshot.can_open_worktree);
+        assert!(!snapshot.can_continue_terminal_session());
+        assert!(!snapshot.can_open_worktree());
         assert_eq!(snapshot.session_state, ViewSessionState::Canceled);
         assert_eq!(snapshot.session_status, Status::Canceled);
     }
@@ -1534,26 +1617,32 @@ mod tests {
         let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
 
         // Assert
-        assert!(!snapshot.can_open_worktree);
+        assert!(!snapshot.can_open_worktree());
         assert_eq!(snapshot.session_state, ViewSessionState::NewSession);
     }
 
     #[tokio::test]
-    async fn test_view_session_snapshot_hides_workflow_actions_for_stacked_draft() {
+    async fn test_view_session_snapshot_allows_start_for_stacked_draft() {
         // Arrange
-        let (mut app, _base_dir) =
-            new_test_app_with_git_and_tmux_client(Arc::new(MockTmuxClient::new())).await;
+        let (mut app, _base_dir, parent_session_id) = new_test_app_with_session().await;
         let session_id = app
             .create_draft_session()
             .await
             .expect("failed to create draft session");
+        let parent_session = app
+            .sessions
+            .sessions_mut()
+            .iter_mut()
+            .find(|session| session.id == parent_session_id)
+            .expect("expected parent session");
+        parent_session.status = Status::Review;
         let session = app
             .sessions
             .sessions_mut()
             .iter_mut()
             .find(|session| session.id == session_id)
             .expect("expected draft session");
-        session.parent_session_id = Some("parent-session".into());
+        session.parent_session_id = Some(parent_session_id.clone().into());
         session.prompt = "staged child draft".to_string();
         app.mode = AppMode::View {
             review_status_message: None,
@@ -1568,7 +1657,88 @@ mod tests {
 
         // Assert
         assert_eq!(snapshot.session_state, ViewSessionState::StackedDraft);
-        assert!(!snapshot.can_start_staged_session);
+        assert!(snapshot.can_start_staged_session());
+        assert!(!snapshot.can_merge_session());
+        assert!(!snapshot.can_rebase_session());
+    }
+
+    #[tokio::test]
+    async fn test_view_session_snapshot_blocks_stacked_draft_start_until_parent_review() {
+        // Arrange
+        let (mut app, _base_dir, parent_session_id) = new_test_app_with_session().await;
+        let session_id = app
+            .create_draft_session()
+            .await
+            .expect("failed to create draft session");
+        let parent_session = app
+            .sessions
+            .sessions_mut()
+            .iter_mut()
+            .find(|session| session.id == parent_session_id)
+            .expect("expected parent session");
+        parent_session.status = Status::InProgress;
+        let session = app
+            .sessions
+            .sessions_mut()
+            .iter_mut()
+            .find(|session| session.id == session_id)
+            .expect("expected draft session");
+        session.parent_session_id = Some(parent_session_id.into());
+        session.prompt = "staged child draft".to_string();
+        app.mode = AppMode::View {
+            review_status_message: None,
+            review_text: None,
+            session_id: session_id.into(),
+            scroll_offset: Some(1),
+        };
+        let context = view_context(&mut app).expect("expected view context");
+
+        // Act
+        let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
+
+        // Assert
+        assert_eq!(snapshot.session_state, ViewSessionState::StackedDraft);
+        assert!(!snapshot.can_start_staged_session());
+        assert!(snapshot.can_open_prompt_composer());
+    }
+
+    #[tokio::test]
+    async fn test_view_session_snapshot_blocks_parent_branch_actions_with_materialized_child() {
+        // Arrange
+        let (mut app, _base_dir, parent_session_id) = new_test_app_with_session().await;
+        let child_session_id = app
+            .create_draft_session()
+            .await
+            .expect("failed to create draft session");
+        let parent_session = app
+            .sessions
+            .sessions_mut()
+            .iter_mut()
+            .find(|session| session.id == parent_session_id)
+            .expect("expected parent session");
+        parent_session.status = Status::Review;
+        let child_session = app
+            .sessions
+            .sessions_mut()
+            .iter_mut()
+            .find(|session| session.id == child_session_id)
+            .expect("expected child session");
+        child_session.parent_session_id = Some(parent_session_id.clone().into());
+        child_session.status = Status::Review;
+        app.mode = AppMode::View {
+            review_status_message: None,
+            review_text: None,
+            session_id: parent_session_id.clone().into(),
+            scroll_offset: Some(1),
+        };
+        let context = view_context(&mut app).expect("expected view context");
+
+        // Act
+        let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
+
+        // Assert
+        assert_eq!(snapshot.session_state, ViewSessionState::Review);
+        assert!(!snapshot.can_open_prompt_composer());
         assert!(!snapshot.can_merge_session());
         assert!(!snapshot.can_rebase_session());
     }
@@ -1591,7 +1761,7 @@ mod tests {
         let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
 
         // Assert
-        assert!(!snapshot.can_open_worktree);
+        assert!(!snapshot.can_open_worktree());
     }
 
     #[tokio::test]
@@ -2207,7 +2377,7 @@ mod tests {
         // Assert
         app.sessions.sync_from_handles();
         let output = app.sessions.sessions()[0].output.clone();
-        assert!(output.contains("[Rebase Error]"));
+        assert!(output.contains("[Sync Error]"));
     }
 
     #[tokio::test]
@@ -2222,9 +2392,10 @@ mod tests {
             session_index: 0,
         };
         let view_session_snapshot = ViewSessionSnapshot {
-            can_continue_terminal_session: false,
-            can_open_worktree: true,
-            can_start_staged_session: false,
+            continue_terminal_session: ViewActionState::Disabled,
+            mutate_session_branch: ViewActionState::Enabled,
+            open_worktree: ViewActionState::Enabled,
+            start_staged_session: ViewActionState::Disabled,
             follow_up_task_action: None,
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
             session_state: ViewSessionState::Review,
@@ -2239,7 +2410,9 @@ mod tests {
             app.mode,
             AppMode::Help {
                 context: HelpContext::View {
+                    can_mutate_session_branch: true,
                     can_open_worktree: true,
+                    can_start_staged_session: false,
                     review_status_message: Some(ref status_message),
                     review_text: Some(ref review_text),
                     publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
@@ -2610,9 +2783,10 @@ mod tests {
         let view_context = view_context(&mut app).expect("expected view context");
         let mut pending_update = ViewPendingUpdate::from_context(&view_context);
         let view_session_snapshot = ViewSessionSnapshot {
-            can_continue_terminal_session: false,
-            can_open_worktree: false,
-            can_start_staged_session: false,
+            continue_terminal_session: ViewActionState::Disabled,
+            mutate_session_branch: ViewActionState::Enabled,
+            open_worktree: ViewActionState::Disabled,
+            start_staged_session: ViewActionState::Disabled,
             follow_up_task_action: None,
             publish_pull_request_action: None,
             session_state: ViewSessionState::Done,
@@ -2804,9 +2978,10 @@ mod tests {
         let view_context = view_context(&mut app).expect("expected view context");
         let mut pending_update = ViewPendingUpdate::from_context(&view_context);
         let view_session_snapshot = ViewSessionSnapshot {
-            can_continue_terminal_session: false,
-            can_open_worktree: true,
-            can_start_staged_session: false,
+            continue_terminal_session: ViewActionState::Disabled,
+            mutate_session_branch: ViewActionState::Enabled,
+            open_worktree: ViewActionState::Enabled,
+            start_staged_session: ViewActionState::Disabled,
             follow_up_task_action: None,
             publish_pull_request_action: None,
             session_state: ViewSessionState::Review,
@@ -2862,9 +3037,10 @@ mod tests {
         let view_context = view_context(&mut app).expect("expected view context");
         let mut pending_update = ViewPendingUpdate::from_context(&view_context);
         let view_session_snapshot = ViewSessionSnapshot {
-            can_continue_terminal_session: false,
-            can_open_worktree: true,
-            can_start_staged_session: false,
+            continue_terminal_session: ViewActionState::Disabled,
+            mutate_session_branch: ViewActionState::Enabled,
+            open_worktree: ViewActionState::Enabled,
+            start_staged_session: ViewActionState::Disabled,
             follow_up_task_action: None,
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
             session_state: ViewSessionState::Review,
@@ -2913,9 +3089,10 @@ mod tests {
         let view_context = view_context(&mut app).expect("expected view context");
         let mut pending_update = ViewPendingUpdate::from_context(&view_context);
         let view_session_snapshot = ViewSessionSnapshot {
-            can_continue_terminal_session: false,
-            can_open_worktree: true,
-            can_start_staged_session: false,
+            continue_terminal_session: ViewActionState::Disabled,
+            mutate_session_branch: ViewActionState::Enabled,
+            open_worktree: ViewActionState::Enabled,
+            start_staged_session: ViewActionState::Disabled,
             follow_up_task_action: None,
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
             session_state: ViewSessionState::Review,
@@ -2982,9 +3159,10 @@ mod tests {
         ] {
             let mut pending_update = ViewPendingUpdate::from_context(&view_context);
             let view_session_snapshot = ViewSessionSnapshot {
-                can_continue_terminal_session: false,
-                can_open_worktree: false,
-                can_start_staged_session: false,
+                continue_terminal_session: ViewActionState::Disabled,
+                mutate_session_branch: ViewActionState::Enabled,
+                open_worktree: ViewActionState::Disabled,
+                start_staged_session: ViewActionState::Disabled,
                 follow_up_task_action: None,
                 publish_pull_request_action: None,
                 session_state: ViewSessionState::Done,

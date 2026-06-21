@@ -21,6 +21,8 @@ use crate::app::{
 use crate::domain::agent::{AgentModel, ReasoningLevel};
 use crate::domain::session::{
     ReviewRequest, SESSION_DATA_DIR, Session, SessionHandles, SessionId, Status,
+    can_mutate_session_branch_in_stack as stack_can_mutate_session_branch,
+    can_start_staged_session_in_stack as stack_can_start_staged_session,
 };
 use crate::domain::setting::SettingName;
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -195,9 +197,11 @@ impl SessionManager {
     /// Creates a blank draft session stacked on top of a selected parent
     /// session branch.
     ///
-    /// The child remains an explicit draft and cannot start until the parent
-    /// reaches `Done`, which clears the child parent link and retargets it to
-    /// the parent's base branch.
+    /// The child remains an explicit draft while prompts are staged. It can
+    /// start once the parent is review-ready and no other stack member is
+    /// doing branch work. Its lazy worktree is based on the stored parent
+    /// branch, and the parent link is kept so review publishing can target the
+    /// parent branch while the stack is active.
     ///
     /// # Errors
     /// Returns an error when the parent is missing, already stacked, terminal,
@@ -769,10 +773,24 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Returns whether a staged draft can start under the current one-level
+    /// stack constraints.
+    pub(crate) fn can_start_staged_session(&self, session_id: &str) -> bool {
+        stack_can_start_staged_session(&self.state.sessions, session_id)
+    }
+
+    /// Returns whether a session can start branch-mutating work without
+    /// competing with another member of its one-level stack.
+    pub(crate) fn can_mutate_session_branch_in_stack(&self, session_id: &str) -> bool {
+        stack_can_mutate_session_branch(&self.state.sessions, session_id)
+    }
+
     /// Starts a `Draft` session from its persisted staged draft bundle.
     ///
     /// This materializes the deferred draft worktree before launching the
-    /// first live turn.
+    /// first live turn. Stacked drafts additionally wait for a review-ready
+    /// parent and an otherwise idle stack so only one branch-mutating session
+    /// runs in that stack.
     ///
     /// # Errors
     /// Returns an error if the session is missing, is not a draft session, no
@@ -794,15 +812,16 @@ impl SessionManager {
                     "Only `Draft` sessions can be started from staged drafts".to_string(),
                 ));
             }
-            if session.is_stacked_child() {
-                return Err(SessionError::Workflow(
-                    "Stacked draft sessions can only be started after their parent is merged"
-                        .to_string(),
-                ));
-            }
             if session.prompt.is_empty() {
                 return Err(SessionError::Workflow(
                     "Stage at least one draft before starting the session".to_string(),
+                ));
+            }
+            if !self.can_start_staged_session(session_id) {
+                return Err(SessionError::Workflow(
+                    "Stacked sessions can only start when their parent is in review and the stack \
+                     has no other active branch work"
+                        .to_string(),
                 ));
             }
 
@@ -1640,6 +1659,22 @@ impl SessionManager {
         session_model: AgentModel,
         should_replay_history: bool,
     ) -> Result<Option<ReplyContext>, SessionError> {
+        let Some(session_id) = self
+            .state
+            .sessions
+            .get(session_index)
+            .map(|session| session.id.clone())
+        else {
+            return Ok(None);
+        };
+        if !self.can_mutate_session_branch_in_stack(session_id.as_str()) {
+            return Err(SessionError::Workflow(
+                "Stacked branch work can only run when no other stack session is active and \
+                 parent branch edits are not blocked by materialized children"
+                    .to_string(),
+            ));
+        }
+
         let Some(session) = self.state.sessions.get_mut(session_index) else {
             return Ok(None);
         };

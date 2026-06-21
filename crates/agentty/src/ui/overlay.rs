@@ -695,7 +695,9 @@ mod tests {
     fn test_resolve_help_background_returns_none_for_missing_view_session() {
         // Arrange
         let help_context = HelpContext::View {
+            can_mutate_session_branch: true,
             can_open_worktree: true,
+            can_start_staged_session: false,
             review_status_message: None,
             review_text: None,
             publish_pull_request_action: None,

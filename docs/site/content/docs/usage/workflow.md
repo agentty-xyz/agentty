@@ -90,20 +90,22 @@ tracking branch.
 |--------|-------------|-------------------| | **Draft** | Session created but not yet
 started. Regular sessions submit their first prompt immediately; draft sessions can
 stage multiple prompts locally first and only create their worktree when the staged
-bundle starts. Stacked drafts remain linked to a parent session branch until that parent
-merges. | `Enter` compose first prompt or add draft, `/` open slash-command composer,
-`s` start staged draft session after any parent link is cleared, `m` add to merge queue,
-`r` rebase, `o` open worktree after the session has started; stacked drafts hide `s`,
-`m`, and `r` until restacked, scroll, help | | **InProgress** | Agent is actively
-working. | `Enter` open the chat composer to queue the next message, `Ctrl+c` retracts
-the most recently queued chat message (LIFO) one press at a time without interrupting
-the running turn, then stops the current turn once the queue is empty, `c` from the
-session list stops and cancels the session after confirmation, scroll, help | |
-**Review** | Agent finished; changes are ready for review. Linked pull requests / merge
-requests refresh in the background; merged requests move the session to `Done` and save
-the synced session branch `HEAD` hash for `c` continuation, and closed requests move it
-to `Canceled`. | `Enter` reply, `/` open slash-command composer, `m` add to merge queue,
-`r` rebase, `o` open worktree, `p` create or refresh forge review request, `d` diff, `f`
+bundle starts. Stacked drafts remain linked to a parent session branch while that parent
+is active, and only show `s` after the parent is review-ready and the stack has no other
+active branch work. | `Enter` compose first prompt or add draft, `/` open slash-command
+composer, `s` start staged draft session, `m` add to merge queue, `r` sync, `o` open
+worktree after the session has started; unstarted stacked drafts hide `m` and `r` until
+launch, scroll, help | | **InProgress** | Agent is actively working. | `Enter` open the
+chat composer to queue the next message, `Ctrl+c` retracts the most recently queued chat
+message (LIFO) one press at a time without interrupting the running turn, then stops the
+current turn once the queue is empty, `c` from the session list stops and cancels the
+session after confirmation, scroll, help | | **Review** | Agent finished; changes are
+ready for review. Linked pull requests / merge requests refresh in the background;
+merged requests move the session to `Done` and save the synced session branch `HEAD`
+hash for `c` continuation, and closed requests move it to `Canceled`. A parent with a
+materialized stacked child hides branch-mutating actions until that child is terminal or
+restacked. | `Enter` reply, `/` open slash-command composer, `m` add to merge queue, `r`
+sync, `o` open worktree, `p` create or refresh forge review request, `d` diff, `f`
 focused review, scroll, help | | **AgentReview** | Agentty is generating the focused
 review output in the background. Linked pull requests / merge requests continue
 refreshing in the background. | `Enter` reply, `/` open slash-command composer, `m` add
@@ -174,14 +176,17 @@ commit message.
 
 When a session enters **Merging**, Agentty reuses the session branch `HEAD` commit
 message for the final squash commit on the base branch. Merge first requires the main
-checkout to be clean, then stops and returns the session to **Review** if rebase or
-squash-merge git steps fail. It no longer runs a separate merge-only commit-message
-prompt. Successful merge notices use the same transient session-output status row as
-commit notices, so the persisted transcript remains focused on agent output.
+checkout to be clean, then stops and returns the session to **Review** if the
+preparatory rebase or squash-merge git steps fail. It no longer runs a separate
+merge-only commit-message prompt. Successful merge notices use the same transient
+session-output status row as commit notices, so the persisted transcript remains focused
+on agent output.
 
-When a published session enters **Rebasing**, Agentty fetches before rebasing and uses
-the remote base ref from the same remote as the published session branch. Unpublished
-sessions still rebase against the stored local base branch.
+When a session enters **Rebasing** from the view-mode `r` sync action, Agentty runs the
+assisted sync workflow, implemented as a rebase of the session branch. Published
+sessions fetch before syncing and use the remote base ref from the same remote as the
+published session branch. Unpublished sessions sync against the stored local base
+branch.
 
 When `Open Commands` in Settings contains multiple entries (one command per line),
 pressing `o` opens a selector popup (`j`/`k` to move, `Enter` to open, `Esc` to cancel).
@@ -224,6 +229,10 @@ wall of raw JSON payloads.
 - After the push succeeds, Agentty creates or refreshes the linked review request and
   shows the resulting pull request or merge request URL.
 - GitHub projects publish pull requests, while GitLab projects publish merge requests.
+- Stacked child review requests target the parent review branch while the parent link is
+  active. Agentty prefers the parent's linked pull request or merge request source
+  branch, then the parent's pushed upstream branch, then the child's stored parent
+  branch.
 - When the session already tracks a review request, Agentty refreshes that same review
   request instead of creating a duplicate.
 - When no review request is linked yet, Agentty only reuses an open pull request or
@@ -302,15 +311,17 @@ active project root so file search still works while you stage the draft bundle.
 
 `Stacked` creates a draft below the selected parent session and records the parent link
 in the session table. The stacked draft's future branch is based on the parent session
-branch, but the child remains a draft and cannot start while the parent link exists.
-Only one stacking level is available in this version, so a stacked child cannot itself
-create another stacked draft. When the parent merges, Agentty clears the child parent
-link and retargets the draft to the parent's base branch; after that, the child behaves
-like a normal draft and `s` can start it. Until that restack happens, the stacked
-draft's action list hides `s` start, `m` merge queue, and `r` rebase. When the parent is
-canceled, its stacked child is canceled too. If you decide not to start a staged bundle,
-return to the **Sessions** list and press `c` to cancel the still-unstarted draft
-session directly.
+branch. Only one stacking level is available in this version, so a stacked child cannot
+itself create another stacked draft. While the child is still an unstarted draft, it can
+keep staging local prompts, hides `m` merge queue and `r` sync, and only shows `s` start
+when the parent is in **Review** or **AgentReview** and no stack member is already
+running, queued, syncing, merging, or waiting on a question. After a stacked child has
+materialized, the parent hides branch-mutating actions such as reply, merge queue, and
+sync until the child is terminal or no longer linked. When the parent merges, Agentty
+clears the child parent link and retargets the child to the parent's base branch. When
+the parent is canceled, its stacked child is canceled too. If you decide not to start a
+staged bundle, return to the **Sessions** list and press `c` to cancel the
+still-unstarted draft session directly.
 
 ### Typical Transitions
 
@@ -352,6 +363,7 @@ flowchart TB
   new_draft -->|start staged bundle| in_progress
   new_draft -->|cancel from session list| canceled
   stacked_draft -->|stage more drafts| stacked_draft
+  stacked_draft -->|start staged bundle<br/>when parent review-ready| in_progress
   stacked_draft -->|parent merged| new_draft
   stacked_draft -->|parent canceled| canceled
   stacked_draft -->|cancel from session list| canceled
@@ -366,8 +378,8 @@ flowchart TB
   review -->|generate focused review| agent_review
   review -->|create stacked draft| stacked_draft
   agent_review -->|review ready| review
-  review -->|rebase| rebasing
-  rebasing -->|rebase complete| review
+  review -->|sync| rebasing
+  rebasing -->|sync complete| review
   review -->|queue merge| queued
   queued --> merging
   merging --> done

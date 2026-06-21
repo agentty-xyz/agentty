@@ -187,6 +187,25 @@ impl Status {
         matches!(self, Status::Done)
     }
 
+    /// Returns whether this status is stable enough for a stacked draft child
+    /// to materialize from the parent branch.
+    pub fn allows_stacked_child_start(self) -> bool {
+        self.allows_review_actions()
+    }
+
+    /// Returns whether this status represents branch work that should be the
+    /// only branch-mutating operation in a one-level stack.
+    pub fn is_stack_branch_mutating(self) -> bool {
+        matches!(
+            self,
+            Status::InProgress
+                | Status::Question
+                | Status::Queued
+                | Status::Rebasing
+                | Status::Merging
+        )
+    }
+
     /// Returns whether a transition to `next` is valid.
     ///
     /// Draft-session-only guards still live on [`Session`] methods, so
@@ -498,8 +517,8 @@ pub struct Session {
     pub model: AgentModel,
     /// Captured output transcript.
     pub output: String,
-    /// Parent session this draft is stacked on, when this session is blocked
-    /// behind another session branch.
+    /// Parent session this stacked session is based on while its parent branch
+    /// remains active.
     pub parent_session_id: Option<SessionId>,
     /// Human-readable project name associated with the session.
     pub project_name: String,
@@ -573,21 +592,15 @@ impl Session {
             && !matches!(self.status, Status::Done | Status::Canceled)
     }
 
-    /// Returns whether this draft session is still blocked behind a parent
-    /// session branch.
+    /// Returns whether this session belongs to a one-level stack beneath a
+    /// parent session branch.
     pub fn is_stacked_child(&self) -> bool {
         self.parent_session_id.is_some()
     }
 
     /// Returns whether the staged draft bundle can start its first live turn.
-    ///
-    /// Stacked draft children remain blocked until their parent is merged and
-    /// the persisted parent link is cleared.
     pub fn can_start_staged_session(&self) -> bool {
-        self.is_draft_session()
-            && self.status == Status::Draft
-            && self.has_staged_drafts()
-            && !self.is_stacked_child()
+        self.is_draft_session() && self.status == Status::Draft && self.has_staged_drafts()
     }
 
     /// Returns whether the session can be canceled by the user.
@@ -764,6 +777,112 @@ impl Session {
         let trimmed = value.trim();
         (!trimmed.is_empty()).then_some(trimmed)
     }
+}
+
+/// Returns whether the staged draft identified by `session_id` can start
+/// under the currently loaded one-level stack.
+///
+/// Root drafts only need their own staged prompt state. Stacked drafts also
+/// require a review-ready parent and no sibling/parent branch work already
+/// running or queued in the same stack.
+pub(crate) fn can_start_staged_session_in_stack(sessions: &[Session], session_id: &str) -> bool {
+    let Some(session) = find_session(sessions, session_id) else {
+        return false;
+    };
+    if !session.can_start_staged_session() {
+        return false;
+    }
+
+    let Some(parent_session_id) = session.parent_session_id.as_ref() else {
+        return true;
+    };
+    let Some(parent_session) = find_session(sessions, parent_session_id.as_str()) else {
+        return false;
+    };
+    if !parent_session.status.allows_stacked_child_start() {
+        return false;
+    }
+
+    !stack_has_branch_mutating_session(sessions, parent_session_id.as_str(), session_id)
+}
+
+/// Returns whether the session identified by `session_id` can start branch
+/// mutation while preserving one active branch worker per one-level stack.
+///
+/// This blocks parent branch edits once a child branch has materialized, and
+/// blocks any stack member from starting branch work while a different member
+/// is already running, queued, rebasing, merging, or waiting on a question.
+pub(crate) fn can_mutate_session_branch_in_stack(sessions: &[Session], session_id: &str) -> bool {
+    let Some(session) = find_session(sessions, session_id) else {
+        return false;
+    };
+    if let Some(parent_session_id) = session.parent_session_id.as_ref()
+        && find_session(sessions, parent_session_id.as_str()).is_none()
+    {
+        return false;
+    }
+    let stack_root_session_id = session
+        .parent_session_id
+        .as_ref()
+        .map_or(session.id.as_str(), SessionId::as_str);
+
+    if stack_has_branch_mutating_session(sessions, stack_root_session_id, session_id) {
+        return false;
+    }
+
+    if session.parent_session_id.is_none()
+        && stack_has_materialized_child(sessions, stack_root_session_id)
+    {
+        return false;
+    }
+
+    true
+}
+
+/// Finds one loaded session by id.
+fn find_session<'a>(sessions: &'a [Session], session_id: &str) -> Option<&'a Session> {
+    sessions
+        .iter()
+        .find(|session| session.id.as_str() == session_id)
+}
+
+/// Returns whether another member of the one-level stack is currently
+/// performing or reserving branch-mutating work.
+fn stack_has_branch_mutating_session(
+    sessions: &[Session],
+    stack_root_session_id: &str,
+    ignored_session_id: &str,
+) -> bool {
+    sessions
+        .iter()
+        .filter(|session| session.id.as_str() != ignored_session_id)
+        .filter(|session| session_belongs_to_stack(session, stack_root_session_id))
+        .any(|session| session.status.is_stack_branch_mutating())
+}
+
+/// Returns whether a loaded session is the root or a child of the one-level
+/// stack rooted at `stack_root_session_id`.
+fn session_belongs_to_stack(session: &Session, stack_root_session_id: &str) -> bool {
+    session.id.as_str() == stack_root_session_id
+        || session
+            .parent_session_id
+            .as_ref()
+            .is_some_and(|parent_session_id| parent_session_id.as_str() == stack_root_session_id)
+}
+
+/// Returns whether the stack root already has a child branch that has started
+/// at least one live turn and has not reached a terminal state.
+fn stack_has_materialized_child(sessions: &[Session], stack_root_session_id: &str) -> bool {
+    sessions.iter().any(|session| {
+        session
+            .parent_session_id
+            .as_ref()
+            .is_some_and(|parent_session_id| parent_session_id.as_str() == stack_root_session_id)
+            && !matches!(
+                session.status,
+                Status::Draft | Status::Done | Status::Canceled
+            )
+    })
 }
 
 /// Shared runtime handles for one active session worker.
@@ -1017,7 +1136,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_can_start_staged_session_blocks_stacked_child_until_restacked() {
+    fn test_can_start_staged_session_checks_only_draft_readiness() {
         // Arrange
         let root_draft_session = SessionFixtureBuilder::new()
             .draft(true)
@@ -1037,7 +1156,137 @@ pub(crate) mod tests {
 
         // Assert
         assert!(can_start_root_draft);
-        assert!(!can_start_stacked_draft);
+        assert!(can_start_stacked_draft);
+    }
+
+    #[test]
+    fn test_can_start_staged_session_in_stack_requires_parent_review() {
+        // Arrange
+        let parent_session = SessionFixtureBuilder::new()
+            .id("parent-session")
+            .draft(false)
+            .status(Status::InProgress)
+            .build();
+        let child_session = SessionFixtureBuilder::new()
+            .id("child-session")
+            .draft(true)
+            .status(Status::Draft)
+            .prompt("Ready child draft")
+            .parent_session_id(Some(SessionId::from("parent-session")))
+            .build();
+        let sessions = vec![parent_session, child_session];
+
+        // Act
+        let can_start_child = can_start_staged_session_in_stack(&sessions, "child-session");
+
+        // Assert
+        assert!(!can_start_child);
+    }
+
+    #[test]
+    fn test_can_start_staged_session_in_stack_blocks_active_stack_member() {
+        // Arrange
+        let parent_session = SessionFixtureBuilder::new()
+            .id("parent-session")
+            .draft(false)
+            .status(Status::Review)
+            .build();
+        let running_child_session = SessionFixtureBuilder::new()
+            .id("running-child")
+            .draft(true)
+            .status(Status::InProgress)
+            .parent_session_id(Some(SessionId::from("parent-session")))
+            .build();
+        let staged_child_session = SessionFixtureBuilder::new()
+            .id("staged-child")
+            .draft(true)
+            .status(Status::Draft)
+            .prompt("Ready child draft")
+            .parent_session_id(Some(SessionId::from("parent-session")))
+            .build();
+        let sessions = vec![parent_session, running_child_session, staged_child_session];
+
+        // Act
+        let can_start_child = can_start_staged_session_in_stack(&sessions, "staged-child");
+
+        // Assert
+        assert!(!can_start_child);
+    }
+
+    #[test]
+    fn test_can_start_staged_session_in_stack_allows_review_ready_parent() {
+        // Arrange
+        let parent_session = SessionFixtureBuilder::new()
+            .id("parent-session")
+            .draft(false)
+            .status(Status::Review)
+            .build();
+        let child_session = SessionFixtureBuilder::new()
+            .id("child-session")
+            .draft(true)
+            .status(Status::Draft)
+            .prompt("Ready child draft")
+            .parent_session_id(Some(SessionId::from("parent-session")))
+            .build();
+        let sessions = vec![parent_session, child_session];
+
+        // Act
+        let can_start_child = can_start_staged_session_in_stack(&sessions, "child-session");
+
+        // Assert
+        assert!(can_start_child);
+    }
+
+    #[test]
+    fn test_can_mutate_session_branch_in_stack_blocks_parent_with_materialized_child() {
+        // Arrange
+        let parent_session = SessionFixtureBuilder::new()
+            .id("parent-session")
+            .draft(false)
+            .status(Status::Review)
+            .build();
+        let child_session = SessionFixtureBuilder::new()
+            .id("child-session")
+            .draft(true)
+            .status(Status::Review)
+            .parent_session_id(Some(SessionId::from("parent-session")))
+            .build();
+        let sessions = vec![parent_session, child_session];
+
+        // Act
+        let can_mutate_parent = can_mutate_session_branch_in_stack(&sessions, "parent-session");
+
+        // Assert
+        assert!(!can_mutate_parent);
+    }
+
+    #[test]
+    fn test_can_mutate_session_branch_in_stack_blocks_concurrent_stack_member() {
+        // Arrange
+        let parent_session = SessionFixtureBuilder::new()
+            .id("parent-session")
+            .draft(false)
+            .status(Status::Review)
+            .build();
+        let running_child_session = SessionFixtureBuilder::new()
+            .id("running-child")
+            .draft(true)
+            .status(Status::InProgress)
+            .parent_session_id(Some(SessionId::from("parent-session")))
+            .build();
+        let review_child_session = SessionFixtureBuilder::new()
+            .id("review-child")
+            .draft(true)
+            .status(Status::Review)
+            .parent_session_id(Some(SessionId::from("parent-session")))
+            .build();
+        let sessions = vec![parent_session, running_child_session, review_child_session];
+
+        // Act
+        let can_mutate_review_child = can_mutate_session_branch_in_stack(&sessions, "review-child");
+
+        // Assert
+        assert!(!can_mutate_review_child);
     }
 
     /// Builds a minimal session fixture for reasoning-level tests.

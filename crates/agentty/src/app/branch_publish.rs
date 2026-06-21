@@ -16,8 +16,8 @@ use crate::ui::state::app_mode::ConfirmationViewMode;
 /// Session snapshot cloned into a branch-publish background task.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BranchPublishTaskSession {
-    /// Base branch used as the review-request target when a forge link is
-    /// generated after push.
+    /// Review-request target branch used when a forge link is generated after
+    /// push.
     pub(crate) base_branch: String,
     /// Session worktree used for git push and remote inspection.
     pub(crate) folder: PathBuf,
@@ -34,6 +34,9 @@ pub(crate) struct BranchPublishTaskSession {
 
 impl BranchPublishTaskSession {
     /// Builds one background-task snapshot from a live session row.
+    ///
+    /// The app layer may override `base_branch` with a stacked parent publish
+    /// target before moving this snapshot into the background task.
     pub(crate) fn from_session(session: &Session) -> Self {
         Self {
             base_branch: session.base_branch.clone(),

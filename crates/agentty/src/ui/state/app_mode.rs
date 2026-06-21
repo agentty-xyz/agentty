@@ -320,7 +320,9 @@ pub enum HelpContext {
     /// Generic list-mode help context with precomputed keybindings.
     List { keybindings: Vec<HelpAction> },
     View {
+        can_mutate_session_branch: bool,
         can_open_worktree: bool,
+        can_start_staged_session: bool,
         review_status_message: Option<String>,
         review_text: Option<String>,
         publish_pull_request_action: Option<PublishBranchAction>,
@@ -347,12 +349,16 @@ impl HelpContext {
     pub fn keybindings(&self) -> Vec<HelpAction> {
         match self {
             HelpContext::View {
+                can_mutate_session_branch,
                 can_open_worktree,
+                can_start_staged_session,
                 publish_pull_request_action,
                 session_state,
                 ..
             } => help_action::view_actions(ViewHelpState {
+                can_mutate_session_branch: *can_mutate_session_branch,
                 can_open_worktree: *can_open_worktree,
+                can_start_staged_session: *can_start_staged_session,
                 publish_pull_request_action: *publish_pull_request_action,
                 session_state: *session_state,
             }),
@@ -441,7 +447,9 @@ mod tests {
     fn test_help_context_view_keybindings_for_in_progress_hide_edit_actions() {
         // Arrange
         let context = HelpContext::View {
+            can_mutate_session_branch: true,
             can_open_worktree: true,
+            can_start_staged_session: false,
             review_status_message: None,
             review_text: None,
             publish_pull_request_action: None,
@@ -469,7 +477,9 @@ mod tests {
     fn test_help_context_restore_mode_ignores_help_only_view_fields() {
         // Arrange
         let context = HelpContext::View {
+            can_mutate_session_branch: true,
             can_open_worktree: true,
+            can_start_staged_session: false,
             review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
             review_text: Some("Ready".to_string()),
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
@@ -500,7 +510,9 @@ mod tests {
     fn test_help_context_view_keybindings_include_publish_pull_request_action() {
         // Arrange
         let context = HelpContext::View {
+            can_mutate_session_branch: true,
             can_open_worktree: true,
+            can_start_staged_session: false,
             review_status_message: None,
             review_text: None,
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),

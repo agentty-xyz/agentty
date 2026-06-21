@@ -30,8 +30,8 @@ operational heavy lifting for workflow safety:
 1. For regular sessions, type the first prompt and press `Enter` to start immediately.
 1. For draft sessions, stage one or more draft messages, then press `s` to start the
    bundle.
-1. For stacked drafts, stage messages while the parent is still under review, then start
-   the draft after the parent merges and the child is restacked onto the base branch.
+1. For stacked drafts, stage messages while the parent is still active, then press `s`
+   after the parent is review-ready and the stack has no other active branch work.
 1. Let the agent modify files in its worktree.
 1. Review the diff (`d`) and decide to apply or discard.
 
@@ -47,8 +47,9 @@ live session starts:
   If local `main` is behind `origin/main`, the session still starts from local `main`.
 - Regular sessions create the worktree as soon as you start the first prompt. Draft
   sessions delay worktree creation until you press `s` to start the staged bundle.
-  Stacked drafts are based on the parent session branch, but they stay blocked until the
-  parent merges; cancellation of the parent also cancels the stacked draft.
+  Stacked drafts are based on the parent session branch, start only after the parent is
+  review-ready and the stack has no other active branch work, and are canceled when the
+  parent is canceled.
 - All agent edits happen inside the worktree, keeping your base branch untouched until
   you explicitly merge.
 - Before each turn, Agentty verifies that the session folder still exists, is on its

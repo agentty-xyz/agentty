@@ -100,16 +100,19 @@ it opens the composer to queue the next chat message inline with a `queued ›` 
 draft session | | `o` | Open worktree in tmux when the session worktree exists | | `p` |
 Publish session branch and create or refresh forge review request | | `d` | Show diff |
 | `f` | Append focused review output (regenerate if already present) | | `m` | Add to
-merge queue (confirmation popup) | | `r` | Rebase | | `j` / `k` | Scroll output | | `g`
-| Scroll to top | | `G` | Scroll to bottom | | `Ctrl+d` | Half page down | | `Ctrl+u` |
-Half page up | | `Ctrl+c` | During **InProgress**: while the queue has staged chat
-messages, each press retracts the most recently queued message (LIFO) and leaves the
-running turn alone; once the queue is empty, the next press stops the current turn and
-returns the session to **Review** | | `?` | Help |
+merge queue (confirmation popup) | | `r` | Sync session branch | | `j` / `k` | Scroll
+output | | `g` | Scroll to top | | `G` | Scroll to bottom | | `Ctrl+d` | Half page down
+| | `Ctrl+u` | Half page up | | `Ctrl+c` | During **InProgress**: while the queue has
+staged chat messages, each press retracts the most recently queued message (LIFO) and
+leaves the running turn alone; once the queue is empty, the next press stops the current
+turn and returns the session to **Review** | | `?` | Help |
 
 During **AgentReview**, Agentty keeps the same review-oriented shortcuts but hides `r`
 until the background focused-review generation finishes and the session returns to
 **Review**.
+
+For stacked parents with a materialized child, branch-mutating shortcuts such as
+`Enter`, `/`, `m`, and `r` are hidden until the child is terminal or no longer linked.
 
 <a id="usage-additional-keys"></a> Additional notes:
 
@@ -121,15 +124,18 @@ until the background focused-review generation finishes and the session returns 
   those commands are dispatched into tmux windows.
 - **Draft sessions**: sessions created through the `a` selector do not create a worktree
   until you press `s` to start the staged bundle, so `o` stays hidden before the first
-  live turn. Stacked drafts can stage messages immediately, but `s` stays unavailable
-  until the parent session is merged and the draft is restacked onto the base branch.
-  Their action list also hides `m` and `r` while the parent link is still set.
+  live turn. Stacked drafts can stage messages immediately, but `s` appears only when
+  the parent is review-ready and no stack member is already running, queued, syncing,
+  merging, or waiting on a question. Their action list hides `m` and `r` until the
+  stacked draft launches.
 - **Forge review-request publish**: `p` is available in **Review** and **AgentReview**
   and opens a publish popup. Press `Enter` with an empty field to keep the default
   session branch target, or type a custom remote branch name first. Agentty pushes the
   branch, then creates or refreshes the linked forge review request after the push
-  succeeds. When no request is linked yet, only an open same-branch request is reused.
-  GitHub projects publish pull requests, while GitLab projects publish merge requests.
+  succeeds. Stacked child review requests target the parent review branch while the
+  parent link remains active. When no request is linked yet, only an open same-branch
+  request is reused. GitHub projects publish pull requests, while GitLab projects
+  publish merge requests.
 - **Focused review persistence**: when a focused review has already been generated, it
   stays visible after opening `d` diff mode, returning to the session view, or entering
   **Question** mode for clarifications.
@@ -218,8 +224,9 @@ forward modified `Enter`.
 When the current session was created as `Draft`, pressing `Enter` stages the current
 composer contents into the draft bundle and returns to session view. Use `s` from
 session view to launch the staged bundle as the first live turn. For a `Stacked` draft,
-that start action is blocked until its parent has merged. Sessions created as `Regular`
-start immediately on the first `Enter`.
+that start action creates the child worktree from the parent session branch after the
+parent is review-ready and the stack has no other active branch work. Sessions created
+as `Regular` start immediately on the first `Enter`.
 
 ## Question Input — Option Selection
 

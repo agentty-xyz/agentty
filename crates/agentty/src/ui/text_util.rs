@@ -613,18 +613,18 @@ mod tests {
     #[test]
     fn test_split_trailing_line_block_returns_matching_multiline_status_block() {
         // Arrange
-        let text = "Implemented the change.\n\n[Commit] committed with hash `abc1234`\n\n[Rebase \
+        let text = "Implemented the change.\n\n[Commit] committed with hash `abc1234`\n\n[Sync \
                     Assist] Attempt 1/3. Resolving conflicts in:\n- crates/agentty/src/app.rs\n";
 
         // Act
-        let (body, footer) = split_trailing_line_block(text, &["[Commit]", "[Rebase Assist]"]);
+        let (body, footer) = split_trailing_line_block(text, &["[Commit]", "[Sync Assist]"]);
 
         // Assert
         assert_eq!(body, "Implemented the change.\n\n");
         assert_eq!(
             footer,
             Some(
-                "[Commit] committed with hash `abc1234`\n\n[Rebase Assist] Attempt 1/3. Resolving \
+                "[Commit] committed with hash `abc1234`\n\n[Sync Assist] Attempt 1/3. Resolving \
                  conflicts in:\n- crates/agentty/src/app.rs\n"
             )
         );
@@ -633,17 +633,14 @@ mod tests {
     #[test]
     fn test_split_trailing_line_block_allows_leading_blank_lines_before_prefix() {
         // Arrange
-        let text = "Implemented the change.\n\n\n[Rebase Assist] Attempt 1/3.\n- src/main.rs\n";
+        let text = "Implemented the change.\n\n\n[Sync Assist] Attempt 1/3.\n- src/main.rs\n";
 
         // Act
-        let (body, footer) = split_trailing_line_block(text, &["[Rebase Assist]"]);
+        let (body, footer) = split_trailing_line_block(text, &["[Sync Assist]"]);
 
         // Assert
         assert_eq!(body, "Implemented the change.\n\n\n");
-        assert_eq!(
-            footer,
-            Some("[Rebase Assist] Attempt 1/3.\n- src/main.rs\n")
-        );
+        assert_eq!(footer, Some("[Sync Assist] Attempt 1/3.\n- src/main.rs\n"));
     }
 
     #[test]

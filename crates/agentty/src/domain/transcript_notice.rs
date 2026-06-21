@@ -30,11 +30,11 @@ pub(crate) enum TranscriptNotice {
     MainCheckoutWarning,
     /// Queued prompt failure.
     QueueError,
-    /// Rebase workflow progress.
+    /// Session sync workflow progress.
     Rebase,
-    /// Agent-assisted rebase recovery attempt.
+    /// Agent-assisted session sync recovery attempt.
     RebaseAssist,
-    /// Rebase workflow failure.
+    /// Session sync workflow failure.
     RebaseError,
     /// Reply submission failure.
     ReplyError,
@@ -61,9 +61,9 @@ impl TranscriptNotice {
             Self::MergeError => "[Merge Error]",
             Self::MainCheckoutWarning => "[Main Checkout Warning]",
             Self::QueueError => "[Queue Error]",
-            Self::Rebase => "[Rebase]",
-            Self::RebaseAssist => "[Rebase Assist]",
-            Self::RebaseError => "[Rebase Error]",
+            Self::Rebase => "[Sync]",
+            Self::RebaseAssist => "[Sync Assist]",
+            Self::RebaseError => "[Sync Error]",
             Self::ReplyError => "[Reply Error]",
             Self::ReviewRequestSyncWarning => "[Review Request Sync Warning]",
             Self::StartError => "[Start Error]",
@@ -121,7 +121,7 @@ mod tests {
         // Assert
         assert_eq!(
             formatted,
-            "\n[Rebase Assist] Attempt 1/3. Resolving conflicts in:\n- src/main.rs\n"
+            "\n[Sync Assist] Attempt 1/3. Resolving conflicts in:\n- src/main.rs\n"
         );
     }
 
