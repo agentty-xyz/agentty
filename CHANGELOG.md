@@ -7,6 +7,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.10.5] - 2026-06-20
+
 ### Added
 
 - testty: `testty run <scenario.yaml>` executes a declarative YAML scenario against any
@@ -22,6 +24,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - agentty: remove deprecated direct Gemini CLI/backend support; Google-backed model
   selection now goes through Antigravity.
+- Bump workspace crate metadata and lockfile package versions to `0.10.5`.
+
+### Contributors
+
+- @andagaev
+- @dependabot
+- @minev-dev
 
 ### Removed
 
