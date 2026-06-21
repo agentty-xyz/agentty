@@ -509,7 +509,9 @@ impl<'a> SessionOutput<'a> {
     /// that is already being superseded.
     /// Queued follow-up messages render beneath the running turn so users can
     /// see staged local input without mixing it into completed transcript
-    /// content. Focused-review output is appended before any trailing
+    /// content. Trailing transcript notices that belong to a completed turn
+    /// stay above any active prompt so in-progress sessions remain
+    /// chronological. Focused-review output is appended before trailing
     /// transcript notices for non-terminal review states, keeping workflow
     /// failures below the completed turn's summary/review content while
     /// terminal views keep their final transcript and summary display stable.
@@ -542,6 +544,9 @@ impl<'a> SessionOutput<'a> {
             &completed_turn_text,
             TRAILING_TRANSCRIPT_NOTICE_PREFIXES,
         );
+        let active_turn_has_visible_text = active_turn_text
+            .as_deref()
+            .is_some_and(|text| !text.trim().is_empty());
         let mut lines = Vec::new();
         Self::append_markdown_lines(
             &mut lines,
@@ -549,6 +554,14 @@ impl<'a> SessionOutput<'a> {
             inner_width,
             markdown_render_cache,
         );
+        if active_turn_has_visible_text {
+            Self::append_trailing_transcript_notice_lines(
+                &mut lines,
+                trailing_notice_text,
+                inner_width,
+                markdown_render_cache,
+            );
+        }
         let shows_summary_block = Self::shows_summary_block(
             session.status,
             active_prompt_output,
@@ -578,12 +591,14 @@ impl<'a> SessionOutput<'a> {
                 markdown_render_cache,
             );
         }
-        Self::append_trailing_transcript_notice_lines(
-            &mut lines,
-            trailing_notice_text,
-            inner_width,
-            markdown_render_cache,
-        );
+        if !active_turn_has_visible_text {
+            Self::append_trailing_transcript_notice_lines(
+                &mut lines,
+                trailing_notice_text,
+                inner_width,
+                markdown_render_cache,
+            );
+        }
         Self::append_workflow_notice_lines(
             &mut lines,
             session.workflow_notice.as_deref(),
@@ -944,8 +959,12 @@ impl<'a> SessionOutput<'a> {
         );
     }
 
-    /// Appends trailing transcript notices after completed-turn summary and
-    /// focused-review content when known workflow-status blocks are present.
+    /// Appends trailing transcript notices when known workflow-status blocks
+    /// are present.
+    ///
+    /// Callers choose placement based on status: active turns keep these
+    /// notices with the completed transcript, while completed/review output
+    /// places them after summary or review content.
     fn append_trailing_transcript_notice_lines(
         lines: &mut Vec<Line<'static>>,
         trailing_notice_text: Option<&str>,
