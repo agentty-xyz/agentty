@@ -137,7 +137,7 @@ impl App {
         let default_session_model = SessionManager::load_default_session_model(
             &services,
             Some(active_project_id),
-            AgentKind::Gemini.default_model(),
+            AgentKind::Antigravity.default_model(),
         )
         .await;
         let sessions = AppStartup::load_startup_sessions(

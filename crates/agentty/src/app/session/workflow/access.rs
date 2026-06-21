@@ -82,7 +82,7 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            model: AgentModel::Gemini3FlashPreview,
+            model: AgentModel::AntigravityGemini3FlashPreview,
             output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),
@@ -110,7 +110,7 @@ mod tests {
     ) -> SessionManager {
         SessionManager::new(
             SessionDefaults {
-                model: AgentKind::Gemini.default_model(),
+                model: AgentKind::Antigravity.default_model(),
             },
             Arc::new(git::MockGitClient::new()),
             SessionState::new(

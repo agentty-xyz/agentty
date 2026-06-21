@@ -37,7 +37,7 @@ fn known_agent_cli_exit_guidance(
         AgentKind::Claude if is_claude_authentication_error(stdout, stderr) => {
             Some(claude_authentication_error_message(command_label))
         }
-        AgentKind::Antigravity | AgentKind::Claude | AgentKind::Codex | AgentKind::Gemini => None,
+        AgentKind::Antigravity | AgentKind::Claude | AgentKind::Codex => None,
     }
 }
 
@@ -314,7 +314,7 @@ mod tests {
     fn test_format_generic_error_with_unknown_exit_code() {
         // Arrange / Act
         let result =
-            format_agent_cli_exit_error(AgentKind::Gemini, "gemini", None, "", "crash output");
+            format_agent_cli_exit_error(AgentKind::Antigravity, "agy", None, "", "crash output");
 
         // Assert
         assert!(result.contains("exit code unknown"));
@@ -451,8 +451,8 @@ mod tests {
     fn test_non_claude_provider_ignores_auth_keywords() {
         // Arrange / Act
         let result = format_agent_cli_exit_error(
-            AgentKind::Gemini,
-            "gemini",
+            AgentKind::Antigravity,
+            "agy",
             Some(1),
             "",
             "OAuth token has expired",

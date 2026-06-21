@@ -1303,7 +1303,7 @@ WHERE model = ?
             .settings()
             .upsert_setting(
                 SettingName::DefaultSmartModel,
-                AgentModel::Gemini31ProPreview.as_str(),
+                AgentModel::AntigravityGemini31ProPreview.as_str(),
             )
             .await
             .expect("failed to persist default smart model");
@@ -1341,7 +1341,11 @@ WHERE model = ?
         // Assert
         assert_eq!(
             default_smart_model,
-            Some(AgentModel::Gemini31ProPreview.as_str().to_string())
+            Some(
+                AgentModel::AntigravityGemini31ProPreview
+                    .as_str()
+                    .to_string()
+            )
         );
         assert_eq!(
             default_fast_model,

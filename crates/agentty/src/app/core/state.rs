@@ -586,7 +586,7 @@ impl App {
         let default_session_model = SessionManager::load_default_session_model(
             &self.services,
             Some(project.id),
-            AgentKind::Gemini.default_model(),
+            AgentKind::Antigravity.default_model(),
         )
         .await;
         self.sessions
@@ -1909,7 +1909,7 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            model: AgentModel::Gemini3FlashPreview,
+            model: AgentModel::AntigravityGemini3FlashPreview,
             output: String::new(),
             parent_session_id: None,
             project_name: "test-project".to_string(),
@@ -2029,7 +2029,7 @@ mod tests {
             result,
             Err(AppError::Workflow(message))
                 if message
-                    == "No supported backend CLI found on `PATH`. Install `agy`, `codex`, `claude`, or `gemini` and restart `agentty`."
+                    == "No supported backend CLI found on `PATH`. Install `agy`, `codex`, or `claude` and restart `agentty`."
         ));
     }
 
@@ -3855,11 +3855,11 @@ mod tests {
         // Act
         event_batch.collect_event(AppEvent::SessionModelUpdated {
             session_id: "session-a".into(),
-            session_model: AgentModel::Gemini3FlashPreview,
+            session_model: AgentModel::AntigravityGemini3FlashPreview,
         });
         event_batch.collect_event(AppEvent::SessionModelUpdated {
             session_id: "session-a".into(),
-            session_model: AgentModel::Gemini31ProPreview,
+            session_model: AgentModel::AntigravityGemini31ProPreview,
         });
         event_batch.collect_event(AppEvent::SessionProgressUpdated {
             progress_message: Some("first".to_string()),
@@ -3919,7 +3919,7 @@ mod tests {
         // Assert
         assert_eq!(
             event_batch.session_model_updates.get("session-a"),
-            Some(&AgentModel::Gemini31ProPreview)
+            Some(&AgentModel::AntigravityGemini31ProPreview)
         );
         assert_eq!(
             event_batch.session_progress_updates.get("session-a"),
@@ -4301,7 +4301,7 @@ mod tests {
             .sessions()
             .insert_session(
                 session_id,
-                AgentModel::Gemini3FlashPreview.as_str(),
+                AgentModel::AntigravityGemini3FlashPreview.as_str(),
                 "main",
                 &Status::Review.to_string(),
                 project_id,
@@ -5078,7 +5078,7 @@ mod tests {
             .sessions()
             .insert_session(
                 "session-1",
-                AgentModel::Gemini3FlashPreview.as_str(),
+                AgentModel::AntigravityGemini3FlashPreview.as_str(),
                 "main",
                 &Status::Merging.to_string(),
                 project_id,

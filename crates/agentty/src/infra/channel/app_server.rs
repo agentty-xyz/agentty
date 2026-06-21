@@ -287,7 +287,7 @@ mod tests {
         TurnRequest {
             folder: PathBuf::from("/tmp"),
             live_session_output: None,
-            model: "gemini-3-flash-preview".to_string(),
+            model: "gpt-5.5".to_string(),
             request_kind: AgentRequestKind::SessionStart,
             prompt: "Do something".into(),
             provider_conversation_id: None,
@@ -555,7 +555,7 @@ mod tests {
                     ))
                 })
             });
-        let channel = AppServerAgentChannel::new(Arc::new(mock_client), AgentKind::Gemini);
+        let channel = AppServerAgentChannel::new(Arc::new(mock_client), AgentKind::Antigravity);
         let (events_tx, _events_rx) = mpsc::unbounded_channel();
 
         // Act
@@ -654,9 +654,9 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies strict providers suppress streamed assistant chunks and rely on
-    /// the final parsed payload.
-    async fn test_run_turn_gemini_suppresses_streamed_assistant_messages() {
+    /// Verifies app-server providers suppress streamed assistant chunks and
+    /// rely on the final parsed payload.
+    async fn test_run_turn_app_server_suppresses_streamed_assistant_messages() {
         // Arrange
         let mut mock_client = MockAppServerClient::new();
         mock_client
@@ -674,7 +674,7 @@ mod tests {
                     ))
                 })
             });
-        let channel = AppServerAgentChannel::new(Arc::new(mock_client), AgentKind::Gemini);
+        let channel = AppServerAgentChannel::new(Arc::new(mock_client), AgentKind::Codex);
         let (events_tx, mut events_rx) = mpsc::unbounded_channel();
 
         // Act
@@ -691,15 +691,15 @@ mod tests {
         while let Ok(event) = events_rx.try_recv() {
             assert!(
                 !matches!(event, TurnEvent::ThoughtDelta(_)),
-                "no ThoughtDelta should be emitted for strict providers, got: {event:?}"
+                "no ThoughtDelta should be emitted for plain assistant deltas, got: {event:?}"
             );
         }
     }
 
     #[tokio::test]
-    /// Verifies Gemini turns surface invalid structured output after both the
-    /// original parse and the protocol-repair retry fail.
-    async fn test_run_turn_returns_error_for_invalid_structured_output_for_gemini() {
+    /// Verifies app-server turns surface invalid structured output after both
+    /// the original parse and the protocol-repair retry fail.
+    async fn test_run_turn_returns_error_for_invalid_structured_output() {
         // Arrange
         let mut mock_client = MockAppServerClient::new();
         mock_client
@@ -710,7 +710,7 @@ mod tests {
 
                 Box::pin(async { Ok(make_ok_response("plain non-json response")) })
             });
-        let channel = AppServerAgentChannel::new(Arc::new(mock_client), AgentKind::Gemini);
+        let channel = AppServerAgentChannel::new(Arc::new(mock_client), AgentKind::Codex);
         let (events_tx, _events_rx) = mpsc::unbounded_channel();
 
         // Act
@@ -726,9 +726,9 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies Gemini turns recover valid output when the initial parse fails
-    /// but the protocol-repair retry returns valid protocol JSON.
-    async fn test_run_turn_recovers_valid_output_via_protocol_repair_for_gemini() {
+    /// Verifies app-server turns recover valid output when the initial parse
+    /// fails but the protocol-repair retry returns valid protocol JSON.
+    async fn test_run_turn_recovers_valid_output_via_protocol_repair() {
         // Arrange
         let call_counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut mock_client = MockAppServerClient::new();
@@ -749,7 +749,7 @@ mod tests {
                 }
             }
         });
-        let channel = AppServerAgentChannel::new(Arc::new(mock_client), AgentKind::Gemini);
+        let channel = AppServerAgentChannel::new(Arc::new(mock_client), AgentKind::Codex);
         let (events_tx, _events_rx) = mpsc::unbounded_channel();
 
         // Act
@@ -766,9 +766,9 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies Gemini turns pass pasted image prompt payloads through to the
-    /// underlying app-server client.
-    async fn test_run_turn_allows_image_attachments_for_gemini() {
+    /// Verifies app-server turns pass pasted image prompt payloads through to
+    /// the underlying app-server client.
+    async fn test_run_turn_allows_image_attachments() {
         // Arrange
         let mut mock_client = MockAppServerClient::new();
         mock_client
@@ -779,11 +779,11 @@ mod tests {
 
                 Box::pin(async {
                     Ok(make_ok_response(
-                        r#"{"answer":"gemini ok","questions":[],"summary":null}"#,
+                        r#"{"answer":"codex ok","questions":[],"summary":null}"#,
                     ))
                 })
             });
-        let channel = AppServerAgentChannel::new(Arc::new(mock_client), AgentKind::Gemini);
+        let channel = AppServerAgentChannel::new(Arc::new(mock_client), AgentKind::Codex);
         let (events_tx, _events_rx) = mpsc::unbounded_channel();
         let mut request = make_turn_request();
         request.prompt.attachments.push(TurnPromptAttachment {
@@ -798,7 +798,7 @@ mod tests {
             .expect("turn should succeed");
 
         // Assert
-        assert_eq!(result.assistant_message.to_display_text(), "gemini ok");
+        assert_eq!(result.assistant_message.to_display_text(), "codex ok");
     }
 
     #[tokio::test]

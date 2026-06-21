@@ -2460,7 +2460,7 @@ mod tests {
                 id: "session-123".into(),
                 output: Arc::new(Mutex::new(String::new())),
                 rebase_target: "main".to_string(),
-                session_model: AgentModel::Gemini3FlashPreview,
+                session_model: AgentModel::AntigravityGemini3FlashPreview,
                 session_update_versions: Arc::default(),
             },
         )
@@ -2492,7 +2492,7 @@ mod tests {
                 output: Arc::new(Mutex::new(String::new())),
                 repo_root,
                 session_update_versions: Arc::default(),
-                session_model: AgentModel::Gemini3FlashPreview,
+                session_model: AgentModel::AntigravityGemini3FlashPreview,
                 source_branch: "wt/session-123".to_string(),
                 status: Arc::new(Mutex::new(Status::Merging)),
             },
@@ -2511,7 +2511,7 @@ mod tests {
             folder,
             fs_client: test_fs_client(),
             git_client,
-            session_model: AgentModel::Gemini3FlashPreview,
+            session_model: AgentModel::AntigravityGemini3FlashPreview,
             sync_assist_client,
         }
     }
@@ -2980,7 +2980,7 @@ mod tests {
             id: "session-123".into(),
             output: Arc::new(Mutex::new(String::new())),
             rebase_target: "origin/main".to_string(),
-            session_model: AgentModel::Gemini3FlashPreview,
+            session_model: AgentModel::AntigravityGemini3FlashPreview,
             session_update_versions: Arc::default(),
         };
 
@@ -3629,7 +3629,7 @@ mod tests {
             working_dir,
             test_fs_client(),
             Arc::new(mock_git_client),
-            AgentModel::Gemini3FlashPreview,
+            AgentModel::AntigravityGemini3FlashPreview,
             Arc::new(mock_sync_assist_client),
         )
         .await;
@@ -3718,7 +3718,7 @@ mod tests {
             working_dir,
             test_fs_client(),
             Arc::new(mock_git_client),
-            AgentModel::Gemini3FlashPreview,
+            AgentModel::AntigravityGemini3FlashPreview,
             Arc::new(mock_sync_assist_client),
         )
         .await;

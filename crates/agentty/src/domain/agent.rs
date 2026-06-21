@@ -6,8 +6,6 @@ use std::str::FromStr;
 pub enum AgentKind {
     /// Google Antigravity CLI/backend.
     Antigravity,
-    /// Google Gemini CLI/backend.
-    Gemini,
     /// Anthropic Claude Code CLI/backend.
     Claude,
     /// `OpenAI` Codex CLI/backend.
@@ -86,15 +84,6 @@ pub enum AgentModel {
     AntigravityGemini3FlashPreview,
     /// Codex model backed by `gpt-5.5`.
     Gpt55,
-    /// Fast Gemini preview model backed by `gemini-3-flash-preview`.
-    Gemini3FlashPreview,
-    /// Fast Gemini model backed by `gemini-3.5-flash`.
-    Gemini35Flash,
-    /// Lightweight Gemini preview model backed by
-    /// `gemini-3.1-flash-lite-preview`.
-    Gemini31FlashLitePreview,
-    /// Higher-quality Gemini preview model backed by `gemini-3.1-pro-preview`.
-    Gemini31ProPreview,
     /// Smaller Codex model backed by `gpt-5.4-mini`.
     Gpt54Mini,
     /// Codex spark model backed by `gpt-5.3-codex-spark`.
@@ -138,16 +127,10 @@ impl AgentModel {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Gpt55 => "gpt-5.5",
-            Self::AntigravityGemini3FlashPreview | Self::Gemini3FlashPreview => {
-                "gemini-3-flash-preview"
-            }
-            Self::AntigravityGemini35Flash | Self::Gemini35Flash => "gemini-3.5-flash",
-            Self::AntigravityGemini31FlashLitePreview | Self::Gemini31FlashLitePreview => {
-                "gemini-3.1-flash-lite-preview"
-            }
-            Self::AntigravityGemini31ProPreview | Self::Gemini31ProPreview => {
-                "gemini-3.1-pro-preview"
-            }
+            Self::AntigravityGemini3FlashPreview => "gemini-3-flash-preview",
+            Self::AntigravityGemini35Flash => "gemini-3.5-flash",
+            Self::AntigravityGemini31FlashLitePreview => "gemini-3.1-flash-lite-preview",
+            Self::AntigravityGemini31ProPreview => "gemini-3.1-pro-preview",
             Self::Gpt54Mini => "gpt-5.4-mini",
             Self::Gpt53CodexSpark => "gpt-5.3-codex-spark",
             Self::ClaudeOpus48 => "claude-opus-4-8",
@@ -159,8 +142,9 @@ impl AgentModel {
 
     /// Returns the model identifier passed to provider transports.
     ///
-    /// Antigravity and Gemini use the same raw Gemini CLI model ids, while
-    /// their enum variants keep provider ownership distinct in memory.
+    /// Antigravity uses raw Gemini model ids with the `agy` CLI, so persisted
+    /// model values stay stable even after direct Gemini CLI support is
+    /// removed.
     pub fn provider_model_str(self) -> &'static str {
         self.as_str()
     }
@@ -169,6 +153,7 @@ impl AgentModel {
     ///
     /// Stored retired Claude Opus and Codex aliases are migrated forward so
     /// existing projects and sessions continue loading after model removals.
+    /// Raw `gemini-*` ids now parse to Antigravity-owned model variants.
     pub(crate) fn parse_persisted(value: &str) -> Result<Self, String> {
         match value {
             "claude-opus-4-6" | "claude-opus-4-7" => Ok(Self::ClaudeOpus48),
@@ -184,10 +169,6 @@ impl AgentModel {
             | Self::AntigravityGemini35Flash
             | Self::AntigravityGemini31FlashLitePreview
             | Self::AntigravityGemini3FlashPreview => AgentKind::Antigravity,
-            Self::Gemini3FlashPreview
-            | Self::Gemini35Flash
-            | Self::Gemini31FlashLitePreview
-            | Self::Gemini31ProPreview => AgentKind::Gemini,
             Self::Gpt55 | Self::Gpt54Mini | Self::Gpt53CodexSpark => AgentKind::Codex,
             Self::ClaudeOpus48
             | Self::ClaudeFable5
@@ -335,10 +316,10 @@ impl FromStr for AgentModel {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
-            "gemini-3-flash-preview" => Ok(Self::Gemini3FlashPreview),
-            "gemini-3.5-flash" => Ok(Self::Gemini35Flash),
-            "gemini-3.1-flash-lite-preview" => Ok(Self::Gemini31FlashLitePreview),
-            "gemini-3.1-pro-preview" => Ok(Self::Gemini31ProPreview),
+            "gemini-3-flash-preview" => Ok(Self::AntigravityGemini3FlashPreview),
+            "gemini-3.5-flash" => Ok(Self::AntigravityGemini35Flash),
+            "gemini-3.1-flash-lite-preview" => Ok(Self::AntigravityGemini31FlashLitePreview),
+            "gemini-3.1-pro-preview" => Ok(Self::AntigravityGemini31ProPreview),
             "gpt-5.5" => Ok(Self::Gpt55),
             "gpt-5.4-mini" => Ok(Self::Gpt54Mini),
             "gpt-5.3-codex-spark" => Ok(Self::Gpt53CodexSpark),
@@ -358,18 +339,14 @@ impl AgentSelectionMetadata for AgentModel {
 
     fn description(&self) -> &'static str {
         match self {
-            Self::AntigravityGemini31ProPreview | Self::Gemini31ProPreview => {
+            Self::AntigravityGemini31ProPreview => {
                 "Higher-quality Gemini model for deeper reasoning."
             }
-            Self::AntigravityGemini35Flash | Self::Gemini35Flash => {
-                "Fast Gemini model for current Flash workloads."
-            }
-            Self::AntigravityGemini31FlashLitePreview | Self::Gemini31FlashLitePreview => {
+            Self::AntigravityGemini35Flash => "Fast Gemini model for current Flash workloads.",
+            Self::AntigravityGemini31FlashLitePreview => {
                 "Lightweight Gemini model for fast, cost-conscious iterations."
             }
-            Self::AntigravityGemini3FlashPreview | Self::Gemini3FlashPreview => {
-                "Fast Gemini model for quick iterations."
-            }
+            Self::AntigravityGemini3FlashPreview => "Fast Gemini model for quick iterations.",
             Self::Gpt55 => "Newer Codex model with stronger coding performance when available.",
             Self::Gpt54Mini => "Small, fast Codex model for simpler coding tasks.",
             Self::Gpt53CodexSpark => "Codex spark model for quick coding iterations.",
@@ -383,18 +360,12 @@ impl AgentSelectionMetadata for AgentModel {
 
 impl AgentKind {
     /// All available agent kinds, in display order.
-    pub const ALL: &[AgentKind] = &[
-        AgentKind::Gemini,
-        AgentKind::Antigravity,
-        AgentKind::Claude,
-        AgentKind::Codex,
-    ];
+    pub const ALL: &[AgentKind] = &[AgentKind::Antigravity, AgentKind::Claude, AgentKind::Codex];
 
     /// Returns the provider CLI executable name.
     pub fn executable_name(self) -> &'static str {
         match self {
             Self::Antigravity => "agy",
-            Self::Gemini => "gemini",
             Self::Claude => "claude",
             Self::Codex => "codex",
         }
@@ -404,7 +375,6 @@ impl AgentKind {
     pub fn default_model(self) -> AgentModel {
         match self {
             Self::Antigravity => AgentModel::AntigravityGemini31ProPreview,
-            Self::Gemini => AgentModel::Gemini31ProPreview,
             Self::Claude => AgentModel::ClaudeOpus48,
             Self::Codex => AgentModel::Gpt55,
         }
@@ -421,12 +391,6 @@ impl AgentKind {
 
     /// Returns the curated model list for this agent kind.
     pub fn models(self) -> &'static [AgentModel] {
-        const GEMINI_MODELS: &[AgentModel] = &[
-            AgentModel::Gemini31ProPreview,
-            AgentModel::Gemini35Flash,
-            AgentModel::Gemini31FlashLitePreview,
-            AgentModel::Gemini3FlashPreview,
-        ];
         const ANTIGRAVITY_MODELS: &[AgentModel] = &[
             AgentModel::AntigravityGemini31ProPreview,
             AgentModel::AntigravityGemini35Flash,
@@ -447,7 +411,6 @@ impl AgentKind {
 
         match self {
             Self::Antigravity => ANTIGRAVITY_MODELS,
-            Self::Gemini => GEMINI_MODELS,
             Self::Claude => CLAUDE_MODELS,
             Self::Codex => CODEX_MODELS,
         }
@@ -472,7 +435,6 @@ impl AgentSelectionMetadata for AgentKind {
     fn name(&self) -> &'static str {
         match self {
             Self::Antigravity => "antigravity",
-            Self::Gemini => "gemini",
             Self::Claude => "claude",
             Self::Codex => "codex",
         }
@@ -481,7 +443,6 @@ impl AgentSelectionMetadata for AgentKind {
     fn description(&self) -> &'static str {
         match self {
             Self::Antigravity => "Google Antigravity CLI agent.",
-            Self::Gemini => "Google Gemini CLI agent.",
             Self::Claude => "Anthropic Claude Code agent.",
             Self::Codex => "OpenAI Codex CLI agent.",
         }
@@ -510,7 +471,6 @@ impl FromStr for AgentKind {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "antigravity" | "agy" => Ok(Self::Antigravity),
-            "gemini" => Ok(Self::Gemini),
             "claude" => Ok(Self::Claude),
             "codex" => Ok(Self::Codex),
             other => Err(format!("unknown agent kind: {other}")),
@@ -527,10 +487,10 @@ mod tests {
     fn test_parse_model_returns_none_for_models_from_other_providers() {
         // Arrange
         let claude_kind = AgentKind::Claude;
-        let gemini_model = AgentModel::Gemini3FlashPreview.as_str();
+        let antigravity_model = AgentModel::AntigravityGemini3FlashPreview.as_str();
 
         // Act
-        let parsed_model = claude_kind.parse_model(gemini_model);
+        let parsed_model = claude_kind.parse_model(antigravity_model);
 
         // Assert
         assert_eq!(parsed_model, None);
@@ -590,32 +550,6 @@ mod tests {
     }
 
     #[test]
-    /// Ensures `gemini-3.1-flash-lite-preview` parses as a Gemini model.
-    fn test_parse_model_parses_gemini_31_flash_lite_preview() {
-        // Arrange
-        let gemini_kind = AgentKind::Gemini;
-
-        // Act
-        let parsed_model = gemini_kind.parse_model("gemini-3.1-flash-lite-preview");
-
-        // Assert
-        assert_eq!(parsed_model, Some(AgentModel::Gemini31FlashLitePreview));
-    }
-
-    #[test]
-    /// Ensures `gemini-3.5-flash` parses as a Gemini model.
-    fn test_parse_model_parses_gemini_35_flash() {
-        // Arrange
-        let gemini_kind = AgentKind::Gemini;
-
-        // Act
-        let parsed_model = gemini_kind.parse_model("gemini-3.5-flash");
-
-        // Assert
-        assert_eq!(parsed_model, Some(AgentModel::Gemini35Flash));
-    }
-
-    #[test]
     /// Ensures retired Claude Opus aliases no longer parse as selectable
     /// models.
     fn test_parse_model_rejects_retired_claude_opus_aliases() {
@@ -655,12 +589,17 @@ mod tests {
         let parsed_opus_47 = AgentModel::parse_persisted("claude-opus-4-7");
         let parsed_fable_5 = AgentModel::parse_persisted("claude-fable-5");
         let parsed_gpt_54 = AgentModel::parse_persisted("gpt-5.4");
+        let parsed_gemini_35_flash = AgentModel::parse_persisted("gemini-3.5-flash");
 
         // Assert
         assert_eq!(parsed_opus_46, Ok(AgentModel::ClaudeOpus48));
         assert_eq!(parsed_opus_47, Ok(AgentModel::ClaudeOpus48));
         assert_eq!(parsed_fable_5, Ok(AgentModel::ClaudeFable5));
         assert_eq!(parsed_gpt_54, Ok(AgentModel::Gpt55));
+        assert_eq!(
+            parsed_gemini_35_flash,
+            Ok(AgentModel::AntigravityGemini35Flash)
+        );
     }
 
     #[test]
@@ -724,24 +663,6 @@ mod tests {
     }
 
     #[test]
-    /// Ensures Gemini models still resolve their owning provider correctly.
-    fn test_gemini_model_kind_is_gemini() {
-        // Arrange
-        let models = [
-            AgentModel::Gemini31ProPreview,
-            AgentModel::Gemini35Flash,
-            AgentModel::Gemini31FlashLitePreview,
-            AgentModel::Gemini3FlashPreview,
-        ];
-
-        // Act
-        let kinds = models.map(AgentModel::kind);
-
-        // Assert
-        assert_eq!(kinds, [AgentKind::Gemini; 4]);
-    }
-
-    #[test]
     /// Ensures Antigravity models resolve to the Antigravity provider.
     fn test_antigravity_model_kind_is_antigravity() {
         // Arrange
@@ -801,7 +722,7 @@ mod tests {
     /// Ensures selectable-model ordering follows the provided provider order.
     fn test_selectable_models_for_agent_kinds_uses_provider_order() {
         // Arrange
-        let agent_kinds = [AgentKind::Codex, AgentKind::Gemini];
+        let agent_kinds = [AgentKind::Codex, AgentKind::Antigravity];
 
         // Act
         let selectable_models = selectable_models_for_agent_kinds(&agent_kinds);
@@ -813,34 +734,12 @@ mod tests {
                 AgentModel::Gpt55,
                 AgentModel::Gpt54Mini,
                 AgentModel::Gpt53CodexSpark,
-                AgentModel::Gemini31ProPreview,
-                AgentModel::Gemini35Flash,
-                AgentModel::Gemini31FlashLitePreview,
-                AgentModel::Gemini3FlashPreview,
+                AgentModel::AntigravityGemini31ProPreview,
+                AgentModel::AntigravityGemini35Flash,
+                AgentModel::AntigravityGemini31FlashLitePreview,
+                AgentModel::AntigravityGemini3FlashPreview,
             ]
         );
-    }
-
-    #[test]
-    /// Ensures Antigravity exposes the same selectable Gemini model set in
-    /// provider-owned form.
-    fn test_antigravity_models_match_gemini_model_set() {
-        // Arrange
-
-        // Act
-        let antigravity_provider_models = AgentKind::Antigravity
-            .models()
-            .iter()
-            .map(|model| model.provider_model_str())
-            .collect::<Vec<_>>();
-        let gemini_provider_models = AgentKind::Gemini
-            .models()
-            .iter()
-            .map(|model| model.provider_model_str())
-            .collect::<Vec<_>>();
-
-        // Assert
-        assert_eq!(antigravity_provider_models, gemini_provider_models);
     }
 
     #[test]
@@ -849,7 +748,7 @@ mod tests {
     fn test_resolve_model_for_available_agent_kinds_prefers_available_fallback() {
         // Arrange
         let unavailable_model = AgentModel::ClaudeOpus48;
-        let available_agent_kinds = [AgentKind::Codex, AgentKind::Gemini];
+        let available_agent_kinds = [AgentKind::Codex, AgentKind::Antigravity];
         let fallback_model = AgentModel::Gpt55;
 
         // Act
@@ -869,7 +768,7 @@ mod tests {
     fn test_resolve_model_for_available_agent_kinds_uses_first_available_default() {
         // Arrange
         let unavailable_model = AgentModel::ClaudeOpus48;
-        let available_agent_kinds = [AgentKind::Codex, AgentKind::Gemini];
+        let available_agent_kinds = [AgentKind::Codex, AgentKind::Antigravity];
         let unavailable_fallback_model = AgentModel::ClaudeSonnet46;
 
         // Act
@@ -888,7 +787,7 @@ mod tests {
     /// still available locally.
     fn test_resolve_prompt_model_agent_kind_prefers_current_agent() {
         // Arrange
-        let available_agent_kinds = [AgentKind::Gemini, AgentKind::Codex];
+        let available_agent_kinds = [AgentKind::Antigravity, AgentKind::Codex];
 
         // Act
         let resolved_agent_kind =
@@ -903,13 +802,13 @@ mod tests {
     /// available backend when the current backend is unavailable.
     fn test_resolve_prompt_model_agent_kind_uses_first_available_agent() {
         // Arrange
-        let available_agent_kinds = [AgentKind::Gemini, AgentKind::Codex];
+        let available_agent_kinds = [AgentKind::Antigravity, AgentKind::Codex];
 
         // Act
         let resolved_agent_kind =
             resolve_prompt_model_agent_kind(AgentKind::Claude, &available_agent_kinds);
 
         // Assert
-        assert_eq!(resolved_agent_kind, Some(AgentKind::Gemini));
+        assert_eq!(resolved_agent_kind, Some(AgentKind::Antigravity));
     }
 }

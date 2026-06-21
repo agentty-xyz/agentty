@@ -1,10 +1,9 @@
 //! Shared stdio JSON-RPC transport utilities for app-server protocols.
 //!
 //! Provides low-level helpers for NDJSON-over-stdio communication used by
-//! persistent app-server backends (e.g., Codex app-server, Gemini ACP).
-//! Each helper is protocol-agnostic — it operates on raw JSON values and
-//! async stdio handles without knowledge of specific method names or event
-//! shapes.
+//! persistent app-server backends such as Codex app-server. Each helper is
+//! protocol-agnostic — it operates on raw JSON values and async stdio handles
+//! without knowledge of specific method names or event shapes.
 
 use std::time::Duration;
 
@@ -48,7 +47,7 @@ pub enum AppServerTransportError {
 
 /// Default timeout for initialization handshakes and session creation.
 ///
-/// Gemini ACP cold starts can take materially longer than a typical
+/// App-server cold starts can take materially longer than a typical
 /// request/response round trip while the runtime initializes tools and model
 /// state, so the shared startup window stays measured in minutes rather than
 /// seconds to avoid aborting healthy app-server bootstraps.
@@ -175,9 +174,9 @@ pub async fn shutdown_child(child: &mut tokio::process::Child) {
 /// Spawns one app-server child process with piped stdin/stdout and hidden
 /// stderr, returning the child plus owned stdio handles.
 ///
-/// Both Codex and Gemini runtime bootstraps require the same stdio shape:
-/// line-delimited JSON-RPC over stdin/stdout, no interactive stderr stream,
-/// and `kill_on_drop(true)` so abandoned runtimes do not leak.
+/// Runtime bootstraps require line-delimited JSON-RPC over stdin/stdout, no
+/// interactive stderr stream, and `kill_on_drop(true)` so abandoned runtimes
+/// do not leak.
 ///
 /// # Errors
 ///

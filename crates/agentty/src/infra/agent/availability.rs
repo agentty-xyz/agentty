@@ -207,7 +207,6 @@ mod tests {
     fn test_executable_name_matches_agent_cli_names() {
         // Arrange / Act / Assert
         assert_eq!(executable_name(AgentKind::Antigravity), "agy");
-        assert_eq!(executable_name(AgentKind::Gemini), "gemini");
         assert_eq!(executable_name(AgentKind::Claude), "claude");
         assert_eq!(executable_name(AgentKind::Codex), "codex");
     }
@@ -220,16 +219,12 @@ mod tests {
         let temp_directory = tempdir().expect("failed to create temp dir");
         let antigravity_path = temp_directory.path().join("agy");
         let codex_path = temp_directory.path().join("codex");
-        let gemini_path = temp_directory.path().join("gemini");
         fs::write(&antigravity_path, "").expect("failed to create agy executable");
         fs::write(&codex_path, "").expect("failed to create codex executable");
-        fs::write(&gemini_path, "").expect("failed to create gemini executable");
         fs::set_permissions(&antigravity_path, fs::Permissions::from_mode(0o755))
             .expect("failed to mark agy executable");
         fs::set_permissions(&codex_path, fs::Permissions::from_mode(0o755))
             .expect("failed to mark codex executable");
-        fs::set_permissions(&gemini_path, fs::Permissions::from_mode(0o755))
-            .expect("failed to mark gemini executable");
         let path_value = env::join_paths([temp_directory.path()]).expect("valid path");
 
         // Act
@@ -238,7 +233,7 @@ mod tests {
         // Assert
         assert_eq!(
             available_agent_kinds,
-            vec![AgentKind::Gemini, AgentKind::Antigravity, AgentKind::Codex]
+            vec![AgentKind::Antigravity, AgentKind::Codex]
         );
     }
 

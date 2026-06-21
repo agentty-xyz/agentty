@@ -18,6 +18,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the runtime engine shared with the Rust authoring API. `StepSpec`, `ExpectSpec`, and
   `SpecError` are `#[non_exhaustive]`.
 
+### Changed
+
+- agentty: remove deprecated direct Gemini CLI/backend support; Google-backed model
+  selection now goes through Antigravity.
+
 ## [v0.10.4] - 2026-06-13
 
 ### Added

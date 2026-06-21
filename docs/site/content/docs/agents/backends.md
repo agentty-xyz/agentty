@@ -13,20 +13,18 @@ options.
 
 ## Supported Backends
 
-<a id="backends-supported-backends"></a> Agentty supports four agent backends. Each
+<a id="backends-supported-backends"></a> Agentty supports three agent backends. Each
 requires its respective CLI to be installed and available on your `PATH`.
 
-| Backend | CLI command | Description | |---------|-------------|-------------| | Gemini
-| `gemini` | Google Gemini CLI agent. | | Antigravity | `agy` | Google Antigravity CLI
-agent. | | Claude | `claude` | Anthropic Claude Code agent. | | Codex | `codex` | OpenAI
-Codex CLI agent. |
+| Backend | CLI command | Description | |---------|-------------|-------------| |
+Antigravity | `agy` | Google Antigravity CLI agent. | | Claude | `claude` | Anthropic
+Claude Code agent. | | Codex | `codex` | OpenAI Codex CLI agent. |
 
 All supported session backends accept pasted local prompt images from the Agentty
 composer (`Ctrl+V`, `Ctrl+Shift+V`, or `Alt+V` in prompt mode). Transport details differ
 by backend:
 
 - Codex app-server turns send `localImage` input items in placeholder order.
-- Gemini ACP turns send ordered `text` and `image` ACP content blocks.
 - Claude Code turns receive the prompt over stdin with `[Image #n]` placeholders
   rewritten to local image paths that Claude can inspect.
 - Antigravity CLI turns receive the prompt over stdin with `[Image #n]` placeholders
@@ -50,7 +48,6 @@ project-instruction discovery instead of inlining repository guidance into promp
 
 - Codex loads `AGENTS.md`.
 - Claude Code loads `CLAUDE.md`.
-- Gemini CLI loads `GEMINI.md`.
 - Antigravity CLI loads `AGENTS.md` and `GEMINI.md` from the active workspace.
 
 This repository keeps `CLAUDE.md` and `GEMINI.md` as symlinks to the canonical root
@@ -115,8 +112,8 @@ follow-up. Agentty now tracks an instruction-profile bootstrap marker per stored
 `provider_conversation_id` and switches among three delivery modes:
 
 - `BootstrapFull`: first turn in a provider context sends the full preamble plus schema.
-- `DeltaOnly`: later Codex/Gemini follow-up turns in the same restored provider context
-  send only a compact reminder of the existing file-path and JSON contract.
+- `DeltaOnly`: later Codex follow-up turns in the same restored provider context send
+  only a compact reminder of the existing file-path and JSON contract.
 - `BootstrapWithReplay`: runtime restarts or context resets resend the full contract and
   pair it with transcript replay when provider context was not restored.
 
@@ -162,8 +159,8 @@ session summary panel instead of being parsed back out of answer markdown.
 <a id="backends-protocol-validation-repair"></a> Agentty validates final agent output
 against the structured response protocol.
 
-- Claude, Antigravity, Gemini, and Codex session turns use strict parsing and fail
-  closed when output does not match the protocol schema.
+- Claude, Antigravity, and Codex session turns use strict parsing and fail closed when
+  output does not match the protocol schema.
 - Strict parsing accepts summary-only protocol payloads because the parser now relies on
   the shared protocol wire type instead of extra top-level field checks.
 - One-shot utility prompts use the same strict final validation across both CLI and
@@ -178,8 +175,8 @@ against the structured response protocol.
   app-server thought-phase handling are centralized in the shared provider registry in
   `crates/agentty/src/infra/agent/provider.rs`.
 - Concrete backends in `crates/agentty/src/infra/agent/` now also own app-server client
-  selection and runtime command construction, so Codex and Gemini transport wiring stays
-  with their provider-specific implementations instead of top-level `infra/` modules.
+  selection and runtime command construction, so Codex transport wiring stays with its
+  provider-specific implementation instead of top-level `infra/` modules.
 - Claude turns use native schema validation via `claude --json-schema` and
   `--output-format stream-json`, so tool/progress events can stream live while the final
   response remains schema-validated.
@@ -213,10 +210,7 @@ against the structured response protocol.
 - Codex app-server turns use the non-interactive `never` approval policy with a
   workspace-write sandbox. If Codex still emits pre-action approval requests, command
   approvals are accepted under that sandbox and file-change approvals are accepted only
-  when every declared path stays inside the session worktree. Gemini ACP permission
-  requests prefer explicit one-shot allow options when Gemini offers them, so
-  file-changing tools can proceed inside the session worktree without granting durable
-  session-wide approval.
+  when every declared path stays inside the session worktree.
 - Claude always uses structured protocol output, including isolated one-shot utility
   prompts, through native schema enforcement plus prompt instructions.
 - Codex app-server turns include `outputSchema` at transport level and still require the
@@ -228,9 +222,6 @@ against the structured response protocol.
 - Wrapped stream chunks that end in one valid protocol JSON object are reduced to that
   payload's `answer`, so prefatory provider prose is not persisted when recovery
   succeeds.
-- Gemini ACP final turn assembly now prefers the completed `session/prompt` payload when
-  it contains valid protocol JSON and the earlier streamed chunk accumulation does not,
-  so strict validation sees the authoritative structured response.
 
 ## Session Resume Behavior
 
@@ -241,9 +232,6 @@ bootstrap so restored contexts can keep using the compact reminder path.
 
 - Codex app-server: resumes by stored `threadId` via `thread/resume`, so restored
   threads can keep the existing bootstrap and use the compact reminder on later turns.
-- Gemini ACP: currently creates a fresh ACP `session/new` on runtime restart, so Agentty
-  treats the new `sessionId` as a fresh context, resends the full bootstrap, and falls
-  back to transcript replay when needed.
 - Antigravity CLI: runs each turn through stateless `agy --print`, so Agentty replays
   prior session output in the prompt for follow-up turns instead of using
   `agy --continue`, which resumes the most recent Antigravity conversation globally.
@@ -251,9 +239,9 @@ bootstrap so restored contexts can keep using the compact reminder path.
 ## App-Server Turn Timeout
 
 <a id="backends-app-server-turn-timeout"></a> App-server-backed turns can run for a long
-time. Agentty waits up to 4 hours for turn completion by default for both Codex
-app-server and Gemini ACP. Antigravity is CLI-backed and passes `--print` before
-`--print-timeout 1h` while the prompt body streams through stdin.
+time. Agentty waits up to 4 hours for Codex app-server turn completion by default.
+Antigravity is CLI-backed and passes `--print` before `--print-timeout 1h` while the
+prompt body streams through stdin.
 
 ## Selecting a Backend
 
@@ -266,8 +254,8 @@ app-server and Gemini ACP. Antigravity is CLI-backed and passes `--print` before
 
 Agentty now filters that picker to the backend CLIs currently available on the machine.
 If only `agy` is installed, `/model` shows only Antigravity and its selectable Gemini
-model choices. If none of `agy`, `codex`, `claude`, or `gemini` are installed, Agentty
-now fails at startup with an error telling you to install a supported CLI on `PATH`.
+model choices. If none of `agy`, `codex`, or `claude` are installed, Agentty now fails
+at startup with an error telling you to install a supported CLI on `PATH`.
 
 <a id="backends-persistent-defaults"></a> For persistent defaults, choose a default
 model in the **Settings** tab (`Tab` to navigate, `Enter` to edit). The selected model
@@ -287,14 +275,6 @@ supported by `claude-opus-4-8`.
 entries with different trade-offs between speed, quality, and cost.
 
 ### Antigravity Models
-
-- `gemini-3.1-pro-preview` (default): Higher-quality Gemini model for deeper reasoning.
-- `gemini-3.5-flash`: Fast Gemini model for current Flash workloads.
-- `gemini-3.1-flash-lite-preview`: Lightweight Gemini model for fast, cost-conscious
-  iterations.
-- `gemini-3-flash-preview`: Fast Gemini model for quick iterations.
-
-### Gemini Models
 
 - `gemini-3.1-pro-preview` (default): Higher-quality Gemini model for deeper reasoning.
 - `gemini-3.5-flash`: Fast Gemini model for current Flash workloads.

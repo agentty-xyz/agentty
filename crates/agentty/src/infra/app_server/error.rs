@@ -92,7 +92,7 @@ mod tests {
     fn retry_exhausted_display_includes_both_errors() {
         // Arrange
         let error = AppServerError::RetryExhausted {
-            provider: "Gemini ACP",
+            provider: "Codex",
             first_error: "connection reset".to_string(),
             retry_error: "timeout".to_string(),
         };
@@ -103,8 +103,8 @@ mod tests {
         // Assert
         assert_eq!(
             display,
-            "Gemini ACP app-server failed, then retry failed after restart: first error: \
-             connection reset; retry error: timeout"
+            "Codex app-server failed, then retry failed after restart: first error: connection \
+             reset; retry error: timeout"
         );
     }
 

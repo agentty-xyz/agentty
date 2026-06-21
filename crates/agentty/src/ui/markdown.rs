@@ -1263,7 +1263,7 @@ mod tests {
     #[test]
     fn test_render_markdown_styles_user_prompt() {
         // Arrange
-        let input = " › /model gemini";
+        let input = " › /model antigravity";
 
         // Act
         let lines = render_markdown(input, 80);

@@ -75,8 +75,7 @@ restart-and-replay orchestration for provider runtimes without duplicating lifec
 policy in each provider. | | `CodexRuntimeTransport` |
 `infra/agent/app_server/codex/transport.rs` | Codex stdio transport boundary for
 lifecycle, account usage, compaction, and turn-stream tests without scripted shell
-runtimes. | | `GeminiRuntimeTransport` | `infra/agent/app_server/gemini/transport.rs` |
-ACP stdio transport boundary for Gemini runtime protocol tests. |
+runtimes. |
 
 ### Typed Error Enums at Infra Boundaries
 

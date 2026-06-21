@@ -169,20 +169,6 @@ fn seed_session_with_reasoning_level(env: &BuilderEnv) -> Result<(), Box<dyn std
     Ok(())
 }
 
-/// Adds a Gemini CLI stub that intentionally exits with failure.
-///
-/// Picker tests only need the executable to exist on `PATH`; using a failing
-/// stub keeps accidental provider execution from looking successful.
-fn seed_failing_gemini_cli_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
-    let stub_agent_path = env.stub_bin.join("gemini");
-    std::fs::write(&stub_agent_path, "#!/bin/sh\nexit 1\n")?;
-
-    #[cfg(unix)]
-    std::fs::set_permissions(&stub_agent_path, std::fs::Permissions::from_mode(0o755))?;
-
-    Ok(())
-}
-
 /// Adds an Antigravity CLI stub that intentionally exits with failure.
 ///
 /// Picker tests only need the executable to exist on `PATH`; using a failing
@@ -211,10 +197,9 @@ fn seed_failing_codex_cli_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
-/// Adds Gemini and Antigravity CLI stubs so Antigravity appears in a stable
-/// `/model` picker position.
+/// Adds an Antigravity CLI stub so the `/model` picker can expose its
+/// Google-backed models.
 fn seed_model_picker_cli_stubs(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
-    seed_failing_gemini_cli_stub(env)?;
     seed_failing_antigravity_cli_stub(env)?;
 
     Ok(())
@@ -877,44 +862,6 @@ fn stacked_session_creation() -> E2eResult {
     Ok(())
 }
 
-/// Verify that the prompt `/model` picker exposes the current Gemini Flash
-/// model when the Gemini CLI is locally available.
-#[test]
-fn gemini_model_picker_includes_current_flash() -> E2eResult {
-    // Arrange, Act, Assert
-    FeatureTest::new("gemini_model_picker_includes_current_flash")
-        .with_git()
-        .setup(seed_failing_gemini_cli_stub)
-        .run(
-            |scenario| {
-                scenario
-                    .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab("Sessions"))
-                    .press_key("a")
-                    .wait_for_text("Regular", 5000)
-                    .press_key("Enter")
-                    .wait_for_stable_frame(300, 5000)
-                    .press_key("/")
-                    .write_text("model")
-                    .wait_for_text("Slash Command", 3000)
-                    .press_key("Enter")
-                    .wait_for_text("/model Agent", 3000)
-                    .press_key("Enter")
-                    .wait_for_text("gemini-3.5-flash", 3000)
-                    .capture_labeled(
-                        "gemini_model_picker",
-                        "Gemini model picker includes current Flash",
-                    )
-            },
-            |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "gemini-3.5-flash", &full);
-            },
-        )?;
-
-    Ok(())
-}
-
 /// Verify that the prompt `/model` picker keeps the Codex mini model
 /// selectable when the Codex backend is available.
 #[test]
@@ -937,7 +884,6 @@ fn codex_model_picker_includes_gpt_54_mini() -> E2eResult {
                     .wait_for_text("Slash Command", 3000)
                     .press_key("Enter")
                     .wait_for_text("/model Agent", 3000)
-                    .press_key("Down")
                     .press_key("Down")
                     .press_key("Down")
                     .press_key("Enter")
@@ -978,7 +924,6 @@ fn antigravity_model_picker_includes_gemini_models() -> E2eResult {
                     .wait_for_text("Slash Command", 3000)
                     .press_key("Enter")
                     .wait_for_text("/model Agent", 3000)
-                    .press_key("Down")
                     .press_key("Enter")
                     .wait_for_text("gemini-3.5-flash", 3000)
                     .capture_labeled(

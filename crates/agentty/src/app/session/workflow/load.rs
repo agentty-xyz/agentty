@@ -170,7 +170,7 @@ impl SessionManager {
         }
         session_worktree_availability.insert(session_id.clone(), has_session_folder);
         let session_model = AgentModel::parse_persisted(&row.model)
-            .unwrap_or_else(|_| AgentKind::Gemini.default_model());
+            .unwrap_or_else(|_| AgentKind::Antigravity.default_model());
 
         let session_detail = if active_session_id.is_some_and(|active_id| active_id == row.id) {
             db.sessions()

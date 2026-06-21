@@ -148,7 +148,7 @@ pub(crate) fn build_command_stdin_payload(
                 super::claude::build_prompt_stdin_payload(request, protocol_schema_instruction_mode)
                     .map(Some)
             }
-            AgentKind::Codex | AgentKind::Gemini => Ok(None),
+            AgentKind::Codex => Ok(None),
         },
     }
 }
@@ -187,21 +187,6 @@ fn provider_descriptor(kind: AgentKind) -> AgentProviderDescriptor {
             prompt_transport: AgentPromptTransport::Stdin,
             protocol_schema_instruction_mode: ProtocolSchemaInstructionMode::PromptSchema,
             transport: AgentTransport::Cli,
-        },
-        AgentKind::Gemini => AgentProviderDescriptor {
-            app_server_client_factory: |default_client| {
-                Some(default_client.unwrap_or_else(|| {
-                    Arc::new(super::app_server::RealGeminiAcpClient::new())
-                        as Arc<dyn AppServerClient>
-                }))
-            },
-            app_server_thought_policy: AppServerThoughtPolicy::None,
-            backend_factory: || Box::new(super::gemini::GeminiBackend),
-            parse_response: super::response_parser::parse_gemini_response_with_fallback,
-            parse_stream_output_line: super::response_parser::parse_gemini_stream_output_line,
-            prompt_transport: AgentPromptTransport::Argv,
-            protocol_schema_instruction_mode: ProtocolSchemaInstructionMode::PromptSchema,
-            transport: AgentTransport::AppServer,
         },
         AgentKind::Claude => AgentProviderDescriptor {
             app_server_client_factory: |_default_client| None,
@@ -256,19 +241,16 @@ mod tests {
         let antigravity_kind = AgentKind::Antigravity;
         let claude_kind = AgentKind::Claude;
         let codex_kind = AgentKind::Codex;
-        let gemini_kind = AgentKind::Gemini;
 
         // Act
         let antigravity_transport = transport_mode(antigravity_kind);
         let claude_transport = transport_mode(claude_kind);
         let codex_transport = transport_mode(codex_kind);
-        let gemini_transport = transport_mode(gemini_kind);
 
         // Assert
         assert_eq!(antigravity_transport, AgentTransport::Cli);
         assert_eq!(claude_transport, AgentTransport::Cli);
         assert_eq!(codex_transport, AgentTransport::AppServer);
-        assert_eq!(gemini_transport, AgentTransport::AppServer);
     }
 
     #[test]
@@ -279,19 +261,16 @@ mod tests {
         let antigravity_kind = AgentKind::Antigravity;
         let claude_kind = AgentKind::Claude;
         let codex_kind = AgentKind::Codex;
-        let gemini_kind = AgentKind::Gemini;
 
         // Act
         let antigravity_transport = prompt_transport(antigravity_kind);
         let claude_transport = prompt_transport(claude_kind);
         let codex_transport = prompt_transport(codex_kind);
-        let gemini_transport = prompt_transport(gemini_kind);
 
         // Assert
         assert_eq!(antigravity_transport, AgentPromptTransport::Stdin);
         assert_eq!(claude_transport, AgentPromptTransport::Stdin);
         assert_eq!(codex_transport, AgentPromptTransport::Argv);
-        assert_eq!(gemini_transport, AgentPromptTransport::Argv);
     }
 
     #[test]
@@ -301,10 +280,6 @@ mod tests {
         // Arrange / Act / Assert
         assert_eq!(
             protocol_schema_instruction_mode(AgentKind::Antigravity),
-            ProtocolSchemaInstructionMode::PromptSchema
-        );
-        assert_eq!(
-            protocol_schema_instruction_mode(AgentKind::Gemini),
             ProtocolSchemaInstructionMode::PromptSchema
         );
         assert_eq!(
@@ -323,12 +298,7 @@ mod tests {
         // Arrange
         let raw_response = "plain response";
 
-        for kind in [
-            AgentKind::Antigravity,
-            AgentKind::Claude,
-            AgentKind::Codex,
-            AgentKind::Gemini,
-        ] {
+        for kind in [AgentKind::Antigravity, AgentKind::Claude, AgentKind::Codex] {
             // Act
             let error = parse_turn_response(
                 kind,
@@ -381,7 +351,7 @@ mod tests {
             Some("thinking"),
         ));
         assert!(!is_app_server_thought_chunk(
-            AgentKind::Gemini,
+            AgentKind::Antigravity,
             true,
             Some("thinking"),
         ));
@@ -392,8 +362,9 @@ mod tests {
     fn test_provider_kind_for_model_reports_owner() {
         // Arrange / Act / Assert
         assert_eq!(
-            provider_kind_for_model(AgentModel::Gemini31ProPreview.as_str()).expect("known model"),
-            AgentKind::Gemini
+            provider_kind_for_model(AgentModel::AntigravityGemini31ProPreview.as_str())
+                .expect("known model"),
+            AgentKind::Antigravity
         );
         assert_eq!(
             provider_kind_for_model(AgentModel::Gpt55.as_str()).expect("known model"),

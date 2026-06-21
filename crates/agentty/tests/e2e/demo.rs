@@ -190,17 +190,17 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{r
 }
 
 /// Installs do-nothing executable stubs for the non-Claude agent CLIs
-/// (`gemini`, `agy`, `codex`) into `stub_bin`.
+/// (`agy`, `codex`) into `stub_bin`.
 ///
 /// Agent availability is probed purely by looking for each backend's
 /// executable on `PATH` (`RealAgentAvailabilityProbe`), so placing these
-/// stubs makes every agent kind — Gemini, Antigravity, Claude, and Codex —
-/// appear in the `/model` agent picker. The stubs are never executed by the
-/// demo because both live sessions resolve to Claude (the explicit
+/// stubs makes every agent kind — Antigravity, Claude, and Codex — appear in
+/// the `/model` agent picker. The stubs are never executed by the demo
+/// because both live sessions resolve to Claude (the explicit
 /// `claude-opus-4-8` pick and the default `claude-haiku-4-5-20251001`); they
 /// only need to exist as executable files for the probe to detect them.
 fn install_agent_availability_stubs(env: &BuilderEnv) -> std::io::Result<()> {
-    for executable_name in ["gemini", "agy", "codex"] {
+    for executable_name in ["agy", "codex"] {
         let stub_path = env.stub_bin.join(executable_name);
         std::fs::write(&stub_path, "#!/bin/sh\nexit 0\n")?;
         #[cfg(unix)]
@@ -419,8 +419,8 @@ fn repo_demo_dir() -> PathBuf {
 ///
 /// Each session starts from the `New Session` type picker (confirming
 /// `Regular`). The first session walks the `/model` picker's agent stage —
-/// which lists every available agent (Gemini, Antigravity, Claude, Codex) —
-/// down to Claude and selects `claude-opus-4-8`; the second keeps the
+/// which lists every available agent (Antigravity, Claude, Codex) — down to
+/// Claude and selects `claude-opus-4-8`; the second keeps the
 /// project default (`claude-haiku-4-5-20251001`) so two distinct Claude
 /// models appear in flight at once.
 fn build_demo_tape(env: &BuilderEnv, gif_path: &Path) -> String {
@@ -482,15 +482,13 @@ Sleep 900ms
 Enter
 Sleep 500ms
 
-# Open /model and walk the agent stage (Gemini, Antigravity, Claude,
-# Codex) down to Claude, then pick claude-opus-4-8.
+# Open /model and walk the agent stage (Antigravity, Claude, Codex) down to
+# Claude, then pick claude-opus-4-8.
 Type "/model"
 Sleep 500ms
 Enter
 Sleep 700ms
 
-Down
-Sleep 400ms
 Down
 Sleep 400ms
 Enter

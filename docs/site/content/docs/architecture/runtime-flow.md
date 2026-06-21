@@ -521,10 +521,9 @@ flowchart TD
   cli_channel["CliAgentChannel<br/>Antigravity/Claude; subprocess per turn"]
   app_server_mode["transport_mode() -> AppServer"]
   app_server_client["create_app_server_client()"]
-  app_server_channel["AppServerAgentChannel<br/>Codex/Gemini; persistent runtime per session"]
+  app_server_channel["AppServerAgentChannel<br/>Codex; persistent runtime per session"]
   client_trait["AppServerClient"]
   codex_client["RealCodexAppServerClient"]
-  gemini_client["RealGeminiAcpClient"]
 
   worker --> factory
   factory --> provider
@@ -535,7 +534,6 @@ flowchart TD
   app_server_mode --> app_server_channel
   app_server_channel --> client_trait
   client_trait --> codex_client
-  client_trait --> gemini_client
 ```
 
 <a id="architecture-key-types"></a> Key types (`infra/channel/contract.rs`, re-exported
@@ -576,10 +574,7 @@ by `infra/channel.rs`, with prompt payloads owned by `domain/turn_prompt.rs`):
   non-interactive `never` approval policy plus a workspace-write sandbox. If Codex still
   emits pre-action requests, command approvals are accepted under that sandbox and
   file-change approvals are accepted only for paths inside the session folder.
-- Gemini ACP permission requests prefer explicit one-shot allow options in
-  `app_server/gemini/policy.rs` when Gemini offers them, allowing file-changing tools to
-  proceed inside the session worktree without granting durable session-wide approval.
-  Antigravity and Claude subprocess turns run from the session worktree process
+- Antigravity and Claude subprocess turns run from the session worktree process
   directory and rely on the main-checkout tracked-file guard for isolation.
 - Antigravity command construction passes the session worktree as the first
   `agy --add-dir` root, because Antigravity print mode uses ordered explicit workspace
@@ -653,21 +648,18 @@ transport/provider:
 - App-server channel (`AppServerAgentChannel`): routes provider thought phases and
   progress updates to transient loader text, while withholding assistant transcript
   chunks until the completed turn result is parsed.
-- One-shot prompt submission asks the concrete backend for its transport path, so
-  app-server providers (Codex and Gemini) resolve their own runtime client while
-  Antigravity and Claude stay on direct CLI subprocess execution.
+- One-shot prompt submission asks the concrete backend for its transport path, so Codex
+  resolves its own app-server runtime client while Antigravity and Claude stay on direct
+  CLI subprocess execution.
 - Provider capabilities in `crates/agentty/src/infra/agent/provider.rs` centralize
   strict final protocol validation, CLI stream classification, app-server thought-phase
   handling, and provider app-server client construction.
-- Gemini ACP still accumulates streamed assistant chunks internally for its final turn
-  result, but the runtime now prefers the completed `session/prompt` payload whenever
-  that payload parses as protocol JSON and the streamed accumulation does not.
 - Worker persistence behavior: `ThoughtDelta` updates refresh the loader only, while
   assistant transcript output is appended once from the final parsed turn result.
 
 <a id="architecture-agent-interaction-validation"></a> Final-output validation:
 
-- Claude, Antigravity, Gemini, and Codex use strict protocol parsing and return an error
+- Claude, Antigravity, and Codex use strict protocol parsing and return an error
   immediately when invalid.
 - One-shot agent submissions still surface schema errors directly to the caller whenever
   the shared parser rejects the final output, including plain text, blank utility

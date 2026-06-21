@@ -1109,7 +1109,7 @@ mod tests {
         // Arrange
         let mut composer = PromptComposerState::with_input_and_history(
             InputState::with_text("/model".to_string()),
-            vec![AgentKind::Gemini, AgentKind::Codex],
+            vec![AgentKind::Antigravity, AgentKind::Codex],
             Vec::new(),
         );
         composer.slash_state.stage = PromptSlashStage::Model;

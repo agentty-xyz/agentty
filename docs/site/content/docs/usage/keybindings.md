@@ -204,11 +204,11 @@ an inline `[Image #n]` placeholder | | `Cmd+Left` | Move to start of current lin
 
 Prompt input keeps regular text paste on terminal `Event::Paste`. The dedicated image
 paste shortcuts insert highlighted `[Image #n]` tokens directly in the composer and send
-the referenced local image for Codex, Gemini, and Claude session models. On Linux,
+the referenced local image for Codex, Antigravity, and Claude session models. On Linux,
 clipboard image capture supports both X11 and Wayland data-control clipboard backends,
-including Wayland compositors such as Hyprland. Codex and Gemini preserve the multimodal
-ordering at transport level, while Claude rewrites the placeholders to local image paths
-before streaming the prompt.
+including Wayland compositors such as Hyprland. Codex preserves the multimodal ordering
+at transport level, while Antigravity and Claude rewrite the placeholders to local image
+paths before streaming the prompt.
 
 Agentty requests enhanced keyboard reporting from supporting terminals and `tmux` panes
 so remote sessions can distinguish `Shift+Enter` from plain `Enter`. `Ctrl+J` and

@@ -73,7 +73,7 @@ updates.
 ## Key Concepts
 
 | Concept | Description | |---------|-------------| | **Agent** | An external AI CLI
-backend (Gemini, Claude, or Codex) that performs coding work. See
+backend (Antigravity, Claude, or Codex) that performs coding work. See
 [Agents & Models](@/docs/agents/backends.md). | | **Session** | An isolated unit of
 work: one prompt, one worktree branch, one reviewable diff. See
 [Workflow](@/docs/usage/workflow.md) and [Keybindings](@/docs/usage/keybindings.md). | |

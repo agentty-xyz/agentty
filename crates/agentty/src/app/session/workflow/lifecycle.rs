@@ -4017,17 +4017,13 @@ mod tests {
     /// Ensures protocol-wrapped plain answer lines are accepted.
     fn test_parse_generated_session_title_accepts_protocol_answer_plain_text() {
         // Arrange
-        let response_content =
-            r#"{"answer":"Polish Gemini title parsing","questions":[],"summary":null}"#;
+        let response_content = r#"{"answer":"Polish title parsing","questions":[],"summary":null}"#;
 
         // Act
         let parsed_title = SessionManager::parse_generated_session_title(response_content);
 
         // Assert
-        assert_eq!(
-            parsed_title,
-            Some("Polish Gemini title parsing".to_string())
-        );
+        assert_eq!(parsed_title, Some("Polish title parsing".to_string()));
     }
 
     #[test]
@@ -4035,16 +4031,13 @@ mod tests {
     /// non-empty title line.
     fn test_parse_generated_session_title_uses_first_nonempty_line_for_multiline_response() {
         // Arrange
-        let response_content = "Polish Gemini title parsing\nExtra detail that should be ignored";
+        let response_content = "Polish title parsing\nExtra detail that should be ignored";
 
         // Act
         let parsed_title = SessionManager::parse_generated_session_title(response_content);
 
         // Assert
-        assert_eq!(
-            parsed_title,
-            Some("Polish Gemini title parsing".to_string())
-        );
+        assert_eq!(parsed_title, Some("Polish title parsing".to_string()));
     }
 
     #[test]

@@ -1433,7 +1433,7 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            model: AgentModel::Gemini3FlashPreview,
+            model: AgentModel::AntigravityGemini3FlashPreview,
             output: String::new(),
             parent_session_id: None,
             project_name: String::new(),
@@ -2179,7 +2179,7 @@ mod tests {
         assert_eq!(app.sessions.selected_session_index(), Some(0));
         assert_eq!(
             app.sessions.sessions()[0].model,
-            AgentKind::Gemini.default_model()
+            AgentKind::Antigravity.default_model()
         );
 
         // Check filesystem
@@ -2207,7 +2207,7 @@ mod tests {
         assert_eq!(db_sessions[0].base_branch, "main");
         assert_eq!(
             db_sessions[0].model,
-            AgentKind::Gemini.default_model().as_str()
+            AgentKind::Antigravity.default_model().as_str()
         );
         assert!(!db_sessions[0].is_draft);
         assert_eq!(db_sessions[0].status, "Draft");
@@ -2348,7 +2348,7 @@ mod tests {
             .iter()
             .find(|session| session.id == second_session_id)
             .expect("missing second session");
-        assert_eq!(second_session.model, AgentKind::Gemini.default_model());
+        assert_eq!(second_session.model, AgentKind::Antigravity.default_model());
         assert_eq!(default_smart_model_setting, None);
 
         let db_sessions = app
@@ -2364,7 +2364,7 @@ mod tests {
             .expect("missing second session in db");
         assert_eq!(
             db_second_session.model,
-            AgentKind::Gemini.default_model().as_str()
+            AgentKind::Antigravity.default_model().as_str()
         );
     }
 
@@ -2879,7 +2879,7 @@ mod tests {
                 &session_id,
                 prompt,
                 Arc::new(backend),
-                AgentModel::Gemini3FlashPreview,
+                AgentModel::AntigravityGemini3FlashPreview,
             )
             .await;
 
@@ -5117,7 +5117,7 @@ mod tests {
             app.projects.git_branch().map(str::to_string),
             app.projects.working_dir().to_path_buf(),
             Arc::new(mock_git_client),
-            AgentModel::Gemini3FlashPreview,
+            AgentModel::AntigravityGemini3FlashPreview,
         )
         .await;
 
@@ -5154,7 +5154,7 @@ mod tests {
             app.projects.git_branch().map(str::to_string),
             app.projects.working_dir().to_path_buf(),
             Arc::new(mock_git_client),
-            AgentModel::Gemini3FlashPreview,
+            AgentModel::AntigravityGemini3FlashPreview,
         )
         .await;
 
@@ -5178,7 +5178,7 @@ mod tests {
             app.projects.git_branch().map(str::to_string),
             app.projects.working_dir().to_path_buf(),
             app.services.git_client(),
-            AgentModel::Gemini3FlashPreview,
+            AgentModel::AntigravityGemini3FlashPreview,
         )
         .await;
 
@@ -5240,7 +5240,7 @@ mod tests {
             Some("main".to_string()),
             dir.path().to_path_buf(),
             Arc::new(mock_git_client),
-            AgentModel::Gemini3FlashPreview,
+            AgentModel::AntigravityGemini3FlashPreview,
         )
         .await;
 
@@ -5488,7 +5488,8 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Ensures canceling a review session shuts down its app-server runtime.
+    /// Ensures canceling a Codex review session shuts down its app-server
+    /// runtime.
     async fn test_cancel_session_triggers_app_server_shutdown() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
@@ -5533,6 +5534,9 @@ mod tests {
             .create_session()
             .await
             .expect("failed to create session");
+        app.set_session_model(&session_id, AgentModel::Gpt55)
+            .await
+            .expect("failed to set app-server model");
 
         // Act
         app.sessions
@@ -5555,8 +5559,8 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Ensures transitioning a session to `Done` shuts down its app-server
-    /// runtime.
+    /// Ensures transitioning a Codex session to `Done` shuts down its
+    /// app-server runtime.
     async fn test_done_status_triggers_app_server_shutdown() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
@@ -5601,6 +5605,9 @@ mod tests {
             .create_session()
             .await
             .expect("failed to create session");
+        app.set_session_model(&session_id, AgentModel::Gpt55)
+            .await
+            .expect("failed to set app-server model");
 
         // Act
         app.sessions

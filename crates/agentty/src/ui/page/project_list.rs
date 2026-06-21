@@ -893,11 +893,13 @@ mod tests {
         assert!(rendered_text.contains("Active Projects 2"));
     }
 
+    /// Ensures project summaries show agent executable names with detected CLI
+    /// versions or an unknown fallback.
     #[test]
     fn test_agent_cli_summary_lines_show_versions_and_unknown_fallback() {
         // Arrange
         let agent_clis = vec![
-            AgentCliInfo::new(AgentKind::Gemini, Some("0.39.1".to_string())),
+            AgentCliInfo::new(AgentKind::Antigravity, Some("0.39.1".to_string())),
             AgentCliInfo::new(AgentKind::Codex, None),
         ];
 
@@ -909,7 +911,7 @@ mod tests {
             .join("\n");
 
         // Assert
-        assert!(rendered_text.contains("gemini 0.39.1"));
+        assert!(rendered_text.contains("agy 0.39.1"));
         assert!(rendered_text.contains("codex version unknown"));
     }
 

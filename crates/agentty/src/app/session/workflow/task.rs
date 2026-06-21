@@ -1535,8 +1535,8 @@ mod tests {
     /// protocol-repair retry fail.
     async fn test_generate_session_commit_message_with_backend_rejects_plain_text_output() {
         // Arrange — use a CLI-backed model so the mock backend is exercised.
-        // App-server-backed models (Codex, Gemini) bypass `build_command`
-        // entirely and route through the shared app-server client.
+        // App-server-backed Codex models bypass `build_command` entirely and
+        // route through the shared app-server client.
         let temp_directory = tempfile::tempdir().expect("failed to create temp dir");
         let mut backend = MockAgentBackend::new();
         backend
@@ -2061,7 +2061,7 @@ mod tests {
             .upsert_project_setting(
                 project_id,
                 SettingName::DefaultSmartModel,
-                AgentModel::Gemini31ProPreview.as_str(),
+                AgentModel::AntigravityGemini31ProPreview.as_str(),
             )
             .await
             .expect("failed to persist default smart model");
@@ -2096,7 +2096,7 @@ mod tests {
             .upsert_project_setting(
                 project_id,
                 SettingName::DefaultSmartModel,
-                AgentModel::Gemini31ProPreview.as_str(),
+                AgentModel::AntigravityGemini31ProPreview.as_str(),
             )
             .await
             .expect("failed to persist default smart model");
@@ -2110,7 +2110,10 @@ mod tests {
         .await;
 
         // Assert
-        assert_eq!(smart_fallback_model, AgentModel::Gemini31ProPreview);
+        assert_eq!(
+            smart_fallback_model,
+            AgentModel::AntigravityGemini31ProPreview
+        );
 
         // Arrange
         database

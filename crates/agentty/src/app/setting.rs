@@ -179,7 +179,7 @@ impl SettingsManager {
         let default_smart_model = load_default_smart_model_setting(
             services,
             Some(project_id),
-            AgentKind::Gemini.default_model(),
+            AgentKind::Antigravity.default_model(),
         )
         .await;
 
@@ -992,9 +992,9 @@ mod tests {
         table_state.select(Some(0));
 
         SettingsManager {
-            default_fast_model: AgentKind::Gemini.default_model(),
-            default_review_model: AgentKind::Gemini.default_model(),
-            default_smart_model: AgentKind::Gemini.default_model(),
+            default_fast_model: AgentKind::Antigravity.default_model(),
+            default_review_model: AgentKind::Antigravity.default_model(),
+            default_smart_model: AgentKind::Antigravity.default_model(),
             open_command: String::new(),
             reasoning_level: ReasoningLevel::High,
             table_state,
@@ -1888,7 +1888,7 @@ mod tests {
             .upsert_project_setting(
                 project_id,
                 SettingName::DefaultSmartModel,
-                AgentModel::Gemini31ProPreview.as_str(),
+                AgentModel::AntigravityGemini31ProPreview.as_str(),
             )
             .await
             .expect("failed to persist unavailable smart model");
@@ -1897,7 +1897,7 @@ mod tests {
         let loaded_model = load_default_smart_model_setting(
             &services,
             Some(project_id),
-            AgentKind::Gemini.default_model(),
+            AgentKind::Antigravity.default_model(),
         )
         .await;
 
