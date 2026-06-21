@@ -285,7 +285,6 @@ entries with different trade-offs between speed, quality, and cost.
 ### Claude Models
 
 - `claude-opus-4-8` (default): Latest Claude Opus model for complex tasks.
-- `claude-fable-5`: New Claude Fable model for complex tasks.
 - `claude-sonnet-4-6`: Balanced Claude model for quality and latency.
 - `claude-haiku-4-5-20251001`: Fast Claude model for lighter tasks.
 

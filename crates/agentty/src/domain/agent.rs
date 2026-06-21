@@ -90,8 +90,6 @@ pub enum AgentModel {
     Gpt53CodexSpark,
     /// Claude Opus model backed by `claude-opus-4-8`.
     ClaudeOpus48,
-    /// Claude Fable model backed by `claude-fable-5`.
-    ClaudeFable5,
     /// Claude Sonnet model backed by `claude-sonnet-4-6`.
     ClaudeSonnet46,
     /// Claude Haiku model backed by `claude-haiku-4-5-20251001`.
@@ -134,7 +132,6 @@ impl AgentModel {
             Self::Gpt54Mini => "gpt-5.4-mini",
             Self::Gpt53CodexSpark => "gpt-5.3-codex-spark",
             Self::ClaudeOpus48 => "claude-opus-4-8",
-            Self::ClaudeFable5 => "claude-fable-5",
             Self::ClaudeSonnet46 => "claude-sonnet-4-6",
             Self::ClaudeHaiku4520251001 => "claude-haiku-4-5-20251001",
         }
@@ -170,10 +167,9 @@ impl AgentModel {
             | Self::AntigravityGemini31FlashLitePreview
             | Self::AntigravityGemini3FlashPreview => AgentKind::Antigravity,
             Self::Gpt55 | Self::Gpt54Mini | Self::Gpt53CodexSpark => AgentKind::Codex,
-            Self::ClaudeOpus48
-            | Self::ClaudeFable5
-            | Self::ClaudeSonnet46
-            | Self::ClaudeHaiku4520251001 => AgentKind::Claude,
+            Self::ClaudeOpus48 | Self::ClaudeSonnet46 | Self::ClaudeHaiku4520251001 => {
+                AgentKind::Claude
+            }
         }
     }
 
@@ -324,7 +320,6 @@ impl FromStr for AgentModel {
             "gpt-5.4-mini" => Ok(Self::Gpt54Mini),
             "gpt-5.3-codex-spark" => Ok(Self::Gpt53CodexSpark),
             "claude-opus-4-8" => Ok(Self::ClaudeOpus48),
-            "claude-fable-5" => Ok(Self::ClaudeFable5),
             "claude-sonnet-4-6" => Ok(Self::ClaudeSonnet46),
             "claude-haiku-4-5-20251001" => Ok(Self::ClaudeHaiku4520251001),
             other => Err(format!("unknown model: {other}")),
@@ -351,7 +346,6 @@ impl AgentSelectionMetadata for AgentModel {
             Self::Gpt54Mini => "Small, fast Codex model for simpler coding tasks.",
             Self::Gpt53CodexSpark => "Codex spark model for quick coding iterations.",
             Self::ClaudeOpus48 => "Latest Claude Opus model for complex tasks.",
-            Self::ClaudeFable5 => "Claude Fable 5 model for complex tasks.",
             Self::ClaudeSonnet46 => "Balanced Claude model for quality and latency.",
             Self::ClaudeHaiku4520251001 => "Fast Claude model for lighter tasks.",
         }
@@ -399,7 +393,6 @@ impl AgentKind {
         ];
         const CLAUDE_MODELS: &[AgentModel] = &[
             AgentModel::ClaudeOpus48,
-            AgentModel::ClaudeFable5,
             AgentModel::ClaudeSonnet46,
             AgentModel::ClaudeHaiku4520251001,
         ];
@@ -566,16 +559,18 @@ mod tests {
     }
 
     #[test]
-    /// Ensures `claude-fable-5` parses as a supported Claude model.
-    fn test_parse_model_parses_claude_fable_5() {
+    /// Ensures current Claude model ids parse as supported Claude models.
+    fn test_parse_model_parses_current_claude_models() {
         // Arrange
         let claude_kind = AgentKind::Claude;
 
         // Act
-        let parsed_fable_5 = claude_kind.parse_model("claude-fable-5");
+        let parsed_sonnet_46 = claude_kind.parse_model("claude-sonnet-4-6");
+        let parsed_haiku_45 = claude_kind.parse_model("claude-haiku-4-5-20251001");
 
         // Assert
-        assert_eq!(parsed_fable_5, Some(AgentModel::ClaudeFable5));
+        assert_eq!(parsed_sonnet_46, Some(AgentModel::ClaudeSonnet46));
+        assert_eq!(parsed_haiku_45, Some(AgentModel::ClaudeHaiku4520251001));
     }
 
     #[test]
@@ -587,14 +582,14 @@ mod tests {
         // Act
         let parsed_opus_46 = AgentModel::parse_persisted("claude-opus-4-6");
         let parsed_opus_47 = AgentModel::parse_persisted("claude-opus-4-7");
-        let parsed_fable_5 = AgentModel::parse_persisted("claude-fable-5");
+        let parsed_sonnet_46 = AgentModel::parse_persisted("claude-sonnet-4-6");
         let parsed_gpt_54 = AgentModel::parse_persisted("gpt-5.4");
         let parsed_gemini_35_flash = AgentModel::parse_persisted("gemini-3.5-flash");
 
         // Assert
         assert_eq!(parsed_opus_46, Ok(AgentModel::ClaudeOpus48));
         assert_eq!(parsed_opus_47, Ok(AgentModel::ClaudeOpus48));
-        assert_eq!(parsed_fable_5, Ok(AgentModel::ClaudeFable5));
+        assert_eq!(parsed_sonnet_46, Ok(AgentModel::ClaudeSonnet46));
         assert_eq!(parsed_gpt_54, Ok(AgentModel::Gpt55));
         assert_eq!(
             parsed_gemini_35_flash,

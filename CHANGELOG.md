@@ -23,6 +23,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - agentty: remove deprecated direct Gemini CLI/backend support; Google-backed model
   selection now goes through Antigravity.
 
+### Removed
+
+- agentty: remove Claude Fable 5 from selectable Claude models.
+
 ## [v0.10.4] - 2026-06-13
 
 ### Added
