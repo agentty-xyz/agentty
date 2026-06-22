@@ -225,8 +225,9 @@ impl AgentChannel for CliAgentChannel {
 /// Parses one CLI turn response strictly, falling back to a single
 /// protocol-repair retry when the initial parse fails.
 ///
-/// When repair is attempted, a [`TurnEvent::ThoughtDelta`] is emitted with
-/// the original parse error so the user can see what went wrong.
+/// When repair is attempted, a concise [`TurnEvent::ThoughtDelta`] is emitted
+/// so the user can see that schema repair is in progress without flooding the
+/// session output with parser diagnostics unless the turn ultimately fails.
 async fn parse_or_repair_cli_response(
     kind: AgentKind,
     content: &str,
@@ -242,7 +243,7 @@ async fn parse_or_repair_cli_response(
     };
 
     let _ = events.send(TurnEvent::ThoughtDelta(format!(
-        "Protocol parse error — retrying: {parse_error}"
+        "Protocol parse error; retrying schema repair for {kind}."
     )));
 
     let repair_prompt = agent::repair::build_protocol_repair_prompt(&parse_error, content)
@@ -268,12 +269,61 @@ async fn parse_or_repair_cli_response(
         ))
     })?;
 
-    agent::parse_turn_response(kind, &repair_content, protocol_profile).map_err(|error| {
-        AgentError::Backend(format!(
-            "{parse_error}\nprotocol repair retry also failed: \
-             {error}\nrepair_response:\n{repair_content}"
-        ))
-    })
+    match agent::parse_turn_response(kind, &repair_content, protocol_profile) {
+        Ok(response) => Ok(response),
+        Err(repair_error) => {
+            if let Some(response) =
+                antigravity_plain_text_fallback(kind, content, &repair_content, protocol_profile)
+            {
+                return Ok(response);
+            }
+
+            Err(AgentError::Backend(format!(
+                "{parse_error}\nprotocol repair retry also failed: \
+                 {repair_error}\nrepair_response:\n{repair_content}"
+            )))
+        }
+    }
+}
+
+/// Converts exhausted Antigravity protocol failures into plain answer text.
+///
+/// Antigravity print mode does not currently provide native response-schema
+/// enforcement, and it can ignore the protocol repair prompt by returning
+/// ordinary prose again. After strict parsing and the repair retry both fail,
+/// this preserves the original useful response as `answer` so the session can
+/// complete instead of surfacing an internal schema error to the user.
+fn antigravity_plain_text_fallback(
+    kind: AgentKind,
+    original_content: &str,
+    repair_content: &str,
+    protocol_profile: agent::ProtocolRequestProfile,
+) -> Option<agent::AgentResponse> {
+    if kind != AgentKind::Antigravity {
+        return None;
+    }
+
+    let fallback_content =
+        non_empty_content(original_content).or_else(|| non_empty_content(repair_content))?;
+    let mut response = agent::AgentResponse::plain(fallback_content.to_string());
+    if matches!(protocol_profile, agent::ProtocolRequestProfile::SessionTurn) {
+        response.summary = Some(agent::protocol::AgentResponseSummary {
+            session: String::new(),
+            turn: String::new(),
+        });
+    }
+
+    Some(response)
+}
+
+/// Returns one trimmed non-empty content string suitable for fallback output.
+fn non_empty_content(content: &str) -> Option<&str> {
+    let trimmed_content = content.trim();
+    if trimmed_content.is_empty() {
+        return None;
+    }
+
+    Some(trimmed_content)
 }
 
 /// Reads stdout line-by-line, classifying each line and forwarding loader
@@ -435,7 +485,7 @@ mod tests {
     use tokio::sync::mpsc;
 
     use super::*;
-    use crate::domain::agent::{AgentKind, ReasoningLevel};
+    use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
     use crate::infra::agent::tests::MockAgentBackend;
     use crate::infra::channel::{
         AgentRequestKind, TurnPrompt, TurnPromptAttachment, TurnPromptTextSource,
@@ -463,6 +513,16 @@ mod tests {
         command.env("CLI_CAPTURE_PATH", capture_path);
 
         command
+    }
+
+    /// Drains all currently buffered turn events from a test receiver.
+    fn drain_events(receiver: &mut mpsc::UnboundedReceiver<TurnEvent>) -> Vec<TurnEvent> {
+        let mut events = Vec::new();
+        while let Ok(event) = receiver.try_recv() {
+            events.push(event);
+        }
+
+        events
     }
 
     #[test]
@@ -868,6 +928,80 @@ mod tests {
             result.assistant_message.to_display_text(),
             "Repaired response"
         );
+    }
+
+    #[tokio::test]
+    /// Verifies Antigravity preserves useful prose when both strict parsing
+    /// and the protocol-repair retry produce non-JSON text.
+    async fn test_run_turn_falls_back_to_plain_text_for_antigravity_after_repair_failure() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let call_counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut mock_backend = MockAgentBackend::new();
+        mock_backend.expect_build_command().times(2).returning({
+            let counter = Arc::clone(&call_counter);
+
+            move |_| {
+                let call_number = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let mut command = std::process::Command::new("sh");
+
+                if call_number == 0 {
+                    command
+                        .arg("-c")
+                        .arg("cat >/dev/null; printf 'Plain Antigravity response'");
+                } else {
+                    command
+                        .arg("-c")
+                        .arg("cat >/dev/null; printf 'Still not JSON'");
+                }
+
+                Ok(command)
+            }
+        });
+        let channel = CliAgentChannel {
+            backend: Arc::new(mock_backend),
+            kind: AgentKind::Antigravity,
+        };
+        let (events_tx, mut events_rx) = mpsc::unbounded_channel();
+        let mut req = make_turn_request(dir.path().to_path_buf());
+        req.model = AgentModel::AntigravityGemini31ProPreview
+            .provider_model_str()
+            .to_string();
+
+        // Act
+        let result = channel
+            .run_turn("sess-1".to_string(), req, events_tx)
+            .await
+            .expect("Antigravity prose should fall back to a plain answer");
+
+        // Assert
+        assert_eq!(
+            result.assistant_message.to_display_text(),
+            "Plain Antigravity response"
+        );
+        assert_eq!(
+            result.assistant_message.summary,
+            Some(agent::protocol::AgentResponseSummary {
+                session: String::new(),
+                turn: String::new(),
+            })
+        );
+
+        let events = drain_events(&mut events_rx);
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                TurnEvent::ThoughtDelta(text)
+                    if text == "Protocol parse error; retrying schema repair for antigravity."
+            )
+        }));
+        assert!(events.iter().all(|event| {
+            !matches!(
+                event,
+                TurnEvent::ThoughtDelta(text)
+                    if text.contains("debug_details") || text.contains("response:")
+            )
+        }));
     }
 
     #[tokio::test]

@@ -666,8 +666,10 @@ transport/provider:
 
 <a id="architecture-agent-interaction-validation"></a> Final-output validation:
 
-- Claude, Antigravity, and Codex use strict protocol parsing and return an error
-  immediately when invalid.
+- Claude and Codex use strict protocol parsing and return an error immediately when
+  invalid. Antigravity uses strict parsing plus one repair retry first, then falls back
+  to a plain `answer` for non-empty `agy --print` prose so malformed Antigravity JSON
+  does not turn a completed session response into an internal schema error.
 - One-shot agent submissions still surface schema errors directly to the caller whenever
   the shared parser rejects the final output, including plain text, blank utility
   responses, non-utility prompts that miss the schema, or any output that leaves

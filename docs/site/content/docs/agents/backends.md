@@ -160,8 +160,10 @@ session summary panel instead of being parsed back out of answer markdown.
 <a id="backends-protocol-validation-repair"></a> Agentty validates final agent output
 against the structured response protocol.
 
-- Claude, Antigravity, and Codex session turns use strict parsing and fail closed when
-  output does not match the protocol schema.
+- Claude and Codex session turns use strict parsing and fail closed when output does not
+  match the protocol schema. Antigravity session turns use the same strict parse and one
+  protocol-repair retry first, then preserve non-empty plain text as `answer` when
+  `agy --print` ignores both schema prompts.
 - Strict parsing accepts summary-only protocol payloads because the parser now relies on
   the shared protocol wire type instead of extra top-level field checks.
 - One-shot utility prompts use the same strict final validation across both CLI and
@@ -185,8 +187,10 @@ against the structured response protocol.
   ACP/app-server flag. Agentty streams the full prompt through stdin, runs with
   `--sandbox`, uses `--dangerously-skip-permissions` so non-interactive worktree edits
   can proceed, passes the session worktree or its non-hidden temp symlink alias as the
-  first `--add-dir` root, and relies on the shared strict protocol parser for final
-  validation. Before each Antigravity launch, Agentty adds `.antigravitycli/` and
+  first `--add-dir` root, and tries the shared strict protocol parser plus one repair
+  retry for final validation. If Antigravity still returns non-empty plain text, Agentty
+  keeps that text as `answer` instead of failing the session with an internal schema
+  error. Before each Antigravity launch, Agentty adds `.antigravitycli/` and
   `cache/projects.json` to the repository-local git exclude file so Antigravity's
   project configuration state does not appear in session diffs. When a session is
   deleted, canceled, merged, or rolled back after setup failure, Agentty removes the
