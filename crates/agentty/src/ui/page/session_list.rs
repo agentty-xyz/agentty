@@ -6,6 +6,7 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::session::{Session, SessionSize, Status};
+use crate::domain::session_order::{self, GroupedSessionRow, SessionGroup, SessionTreePosition};
 use crate::ui::input_layout::first_table_column_width;
 use crate::ui::state::help_action;
 use crate::ui::text_util::{format_duration_compact, inline_text, truncate_spans_with_ellipsis};
@@ -82,7 +83,7 @@ impl Page for SessionListPage<'_> {
             TABLE_COLUMN_SPACING,
             0,
         );
-        let table_rows = grouped_session_rows(self.sessions);
+        let table_rows = session_order::grouped_session_rows(self.sessions);
         let selected_session_id = selected_session_id(self.sessions, self.table_state.selected());
         let selected_row = selected_render_row(&table_rows, selected_session_id);
         let rows = table_rows.iter().map(|table_row| {
@@ -137,184 +138,27 @@ fn prepare_grouped_table_state(table_state: &mut TableState, selected_row: Optio
     table_state.select(selected_row);
 }
 
-/// Render rows for grouped session list display.
-enum SessionTableRow<'a> {
-    GroupLabel(SessionGroup),
-    /// Marker row shown when a group has zero sessions.
-    EmptyGroupPlaceholder,
-    /// Selectable session row with raw index and tree placement metadata.
-    Session {
-        index: usize,
-        session: &'a Session,
-        tree_prefix: SessionTreePrefix,
-    },
-}
-
-/// Visual tree marker for a selectable session row.
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum SessionTreePrefix {
-    /// Root-level session row with no tree marker.
-    Root,
-    /// One-level child row connected to its parent.
-    Child { is_last: bool },
-}
-
-impl SessionTreePrefix {
-    /// Returns the rendered tree marker for this row.
-    fn label(self) -> &'static str {
-        match self {
-            Self::Root => "",
-            Self::Child { is_last: true } => TREE_BRANCH_LAST,
-            Self::Child { is_last: false } => TREE_BRANCH_MIDDLE,
-        }
-    }
-
-    /// Returns the display width consumed by the tree marker.
-    fn width(self) -> usize {
-        self.label().chars().count()
+/// Returns the display label for a session group.
+fn session_group_label(group: SessionGroup) -> &'static str {
+    match group {
+        SessionGroup::MergeQueue => "Merge queue",
+        SessionGroup::Active => "Active sessions",
+        SessionGroup::Archive => "Archive",
     }
 }
 
-/// Session list groups shown in the table.
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum SessionGroup {
-    ActiveSessions,
-    Archive,
-    MergeQueue,
-}
-
-impl SessionGroup {
-    /// Returns the display label for a session group.
-    fn label(self) -> &'static str {
-        match self {
-            Self::MergeQueue => "Merge queue",
-            Self::ActiveSessions => "Active sessions",
-            Self::Archive => "Archive",
-        }
+/// Returns the rendered tree marker for one grouped session row.
+fn tree_position_label(tree_position: SessionTreePosition) -> &'static str {
+    match tree_position {
+        SessionTreePosition::Root => "",
+        SessionTreePosition::Child { is_last: true } => TREE_BRANCH_LAST,
+        SessionTreePosition::Child { is_last: false } => TREE_BRANCH_MIDDLE,
     }
 }
 
-/// Resolves the initial raw-session selection index for list-mode focus.
-///
-/// Active sessions are preferred so opening the session list lands on ongoing
-/// work when both active and archived items are present. If no active sessions
-/// exist, this falls back to the first selectable grouped row.
-pub(crate) fn preferred_initial_session_index(sessions: &[Session]) -> Option<usize> {
-    sessions_for_group(sessions, SessionGroup::ActiveSessions)
-        .map(|(index, _)| index)
-        .next()
-        .or_else(|| grouped_session_indexes(sessions).first().copied())
-}
-
-/// Returns session indexes in the same order as selectable rows in the grouped
-/// session table.
-pub(crate) fn grouped_session_indexes(sessions: &[Session]) -> Vec<usize> {
-    grouped_session_rows(sessions)
-        .into_iter()
-        .filter_map(|row| match row {
-            SessionTableRow::Session { index, .. } => Some(index),
-            SessionTableRow::GroupLabel(_) | SessionTableRow::EmptyGroupPlaceholder => None,
-        })
-        .collect()
-}
-
-/// Returns grouped display rows with merge queue, active, then archive
-/// sessions.
-fn grouped_session_rows(sessions: &[Session]) -> Vec<SessionTableRow<'_>> {
-    let mut rows = Vec::with_capacity(sessions.len() + 6);
-    append_group_rows(&mut rows, sessions, SessionGroup::MergeQueue);
-    append_group_rows(&mut rows, sessions, SessionGroup::ActiveSessions);
-    append_group_rows(&mut rows, sessions, SessionGroup::Archive);
-
-    rows
-}
-
-/// Adds one group label row and either its sessions or an empty placeholder.
-fn append_group_rows<'a>(
-    rows: &mut Vec<SessionTableRow<'a>>,
-    sessions: &'a [Session],
-    group: SessionGroup,
-) {
-    rows.push(SessionTableRow::GroupLabel(group));
-
-    let mut group_has_sessions = false;
-    for (index, session) in sessions_for_group(sessions, group) {
-        if has_loaded_parent_session(sessions, session) {
-            continue;
-        }
-
-        rows.push(SessionTableRow::Session {
-            index,
-            session,
-            tree_prefix: SessionTreePrefix::Root,
-        });
-        append_stacked_child_rows(rows, sessions, session.id.as_str());
-        group_has_sessions = true;
-    }
-
-    if !group_has_sessions {
-        rows.push(SessionTableRow::EmptyGroupPlaceholder);
-    }
-}
-
-/// Adds the one-level stacked children for a parent session row.
-fn append_stacked_child_rows<'a>(
-    rows: &mut Vec<SessionTableRow<'a>>,
-    sessions: &'a [Session],
-    parent_session_id: &str,
-) {
-    let children = sessions
-        .iter()
-        .enumerate()
-        .filter(|(_, session)| {
-            session
-                .parent_session_id
-                .as_ref()
-                .is_some_and(|parent_id| parent_id.as_str() == parent_session_id)
-        })
-        .collect::<Vec<_>>();
-
-    let child_count = children.len();
-    for (child_position, (index, session)) in children.into_iter().enumerate() {
-        rows.push(SessionTableRow::Session {
-            index,
-            session,
-            tree_prefix: SessionTreePrefix::Child {
-                is_last: child_position + 1 == child_count,
-            },
-        });
-    }
-}
-
-/// Returns whether a session should be nested under a loaded parent row.
-fn has_loaded_parent_session(sessions: &[Session], session: &Session) -> bool {
-    let Some(parent_session_id) = session.parent_session_id.as_ref() else {
-        return false;
-    };
-
-    sessions
-        .iter()
-        .any(|candidate| candidate.id.as_str() == parent_session_id.as_str())
-}
-
-/// Returns session indexes and snapshots for one grouped section.
-fn sessions_for_group(
-    sessions: &[Session],
-    group: SessionGroup,
-) -> impl Iterator<Item = (usize, &Session)> {
-    sessions
-        .iter()
-        .enumerate()
-        .filter(move |(_, session)| session_group(session) == group)
-}
-
-/// Returns the grouped section where a session should be displayed.
-fn session_group(session: &Session) -> SessionGroup {
-    match session.status {
-        Status::Queued | Status::Merging => SessionGroup::MergeQueue,
-        Status::Done | Status::Canceled => SessionGroup::Archive,
-        _ => SessionGroup::ActiveSessions,
-    }
+/// Returns the display width consumed by a grouped session tree marker.
+fn tree_position_width(tree_position: SessionTreePosition) -> usize {
+    tree_position_label(tree_position).chars().count()
 }
 
 /// Resolves the selected session id from the original session ordering.
@@ -326,34 +170,34 @@ fn selected_session_id(sessions: &[Session], selected_index: Option<usize>) -> O
 
 /// Maps selected session id to the grouped table row index.
 fn selected_render_row(
-    rows: &[SessionTableRow<'_>],
+    rows: &[GroupedSessionRow<'_>],
     selected_session_id: Option<&str>,
 ) -> Option<usize> {
     let selected_session_id = selected_session_id?;
 
     rows.iter().position(|row| match row {
-        SessionTableRow::GroupLabel(_) | SessionTableRow::EmptyGroupPlaceholder => false,
-        SessionTableRow::Session { session, .. } => session.id == selected_session_id,
+        GroupedSessionRow::GroupLabel(_) | GroupedSessionRow::EmptyGroupPlaceholder => false,
+        GroupedSessionRow::Session { session, .. } => session.id == selected_session_id,
     })
 }
 
 /// Converts one grouped row descriptor into a `ratatui` table row.
 fn render_table_row(
-    row: &SessionTableRow<'_>,
+    row: &GroupedSessionRow<'_>,
     title_column_width: usize,
     default_reasoning_level: ReasoningLevel,
     wall_clock_unix_seconds: i64,
 ) -> Row<'static> {
     match row {
-        SessionTableRow::GroupLabel(group) => render_group_label_row(*group),
-        SessionTableRow::EmptyGroupPlaceholder => render_empty_group_placeholder_row(),
-        SessionTableRow::Session {
+        GroupedSessionRow::GroupLabel(group) => render_group_label_row(*group),
+        GroupedSessionRow::EmptyGroupPlaceholder => render_empty_group_placeholder_row(),
+        GroupedSessionRow::Session {
             session,
-            tree_prefix,
+            tree_position,
             ..
         } => render_session_row(
             session,
-            *tree_prefix,
+            *tree_position,
             title_column_width,
             default_reasoning_level,
             wall_clock_unix_seconds,
@@ -364,7 +208,7 @@ fn render_table_row(
 /// Renders a non-selectable group label row.
 fn render_group_label_row(group: SessionGroup) -> Row<'static> {
     let cells = vec![
-        Cell::from(group.label()).style(Style::default().fg(style::palette::accent())),
+        Cell::from(session_group_label(group)).style(Style::default().fg(style::palette::accent())),
         Cell::from(""),
         Cell::from(""),
         Cell::from(""),
@@ -389,7 +233,7 @@ fn render_empty_group_placeholder_row() -> Row<'static> {
 /// Renders one session row.
 fn render_session_row(
     session: &Session,
-    tree_prefix: SessionTreePrefix,
+    tree_position: SessionTreePosition,
     title_column_width: usize,
     default_reasoning_level: ReasoningLevel,
     wall_clock_unix_seconds: i64,
@@ -397,11 +241,12 @@ fn render_session_row(
     let status = session.status;
     let title_spans = render_session_title(
         session,
-        title_column_width.saturating_sub(tree_prefix.width()),
+        title_column_width.saturating_sub(tree_position_width(tree_position)),
     );
     let mut title_line_spans = Vec::new();
-    if !tree_prefix.label().is_empty() {
-        title_line_spans.push(Span::styled(tree_prefix.label(), tree_prefix_style()));
+    let tree_label = tree_position_label(tree_position);
+    if !tree_label.is_empty() {
+        title_line_spans.push(Span::styled(tree_label, tree_prefix_style()));
     }
     title_line_spans.extend(title_spans);
     let timer_label = if session.has_in_progress_timer() {
@@ -768,210 +613,6 @@ mod tests {
     }
 
     #[test]
-    fn test_preferred_initial_session_index_prefers_active_group_when_available() {
-        // Arrange
-        let sessions = vec![
-            test_session("archive-1", Status::Done),
-            test_session("active-1", Status::Review),
-            test_session("merge-1", Status::Queued),
-        ];
-
-        // Act
-        let selected_index = preferred_initial_session_index(&sessions);
-
-        // Assert
-        assert_eq!(selected_index, Some(1));
-    }
-
-    #[test]
-    fn test_preferred_initial_session_index_falls_back_to_first_grouped_session() {
-        // Arrange
-        let sessions = vec![
-            test_session("archive-1", Status::Done),
-            test_session("merge-1", Status::Queued),
-        ];
-
-        // Act
-        let selected_index = preferred_initial_session_index(&sessions);
-
-        // Assert
-        assert_eq!(selected_index, Some(1));
-    }
-
-    #[test]
-    fn test_grouped_session_indexes_orders_selectable_sessions_without_headers() {
-        // Arrange
-        let sessions = vec![
-            test_session("active-1", Status::Review),
-            test_session("queued-1", Status::Queued),
-            test_session("merge-1", Status::Merging),
-            test_session("done-1", Status::Done),
-            test_session("canceled-1", Status::Canceled),
-            test_session("active-2", Status::Draft),
-        ];
-
-        // Act
-        let indexes = grouped_session_indexes(&sessions);
-        let ordered_ids = indexes
-            .into_iter()
-            .map(|index| sessions[index].id.clone())
-            .collect::<Vec<_>>();
-
-        // Assert
-        assert_eq!(
-            ordered_ids,
-            vec![
-                "queued-1".to_string(),
-                "merge-1".to_string(),
-                "active-1".to_string(),
-                "active-2".to_string(),
-                "done-1".to_string(),
-                "canceled-1".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_grouped_session_indexes_places_stacked_child_after_parent() {
-        // Arrange
-        let mut child_session = test_session("child-1", Status::Draft);
-        child_session.parent_session_id = Some("parent-1".into());
-        let sessions = vec![
-            child_session,
-            test_session("parent-1", Status::Review),
-            test_session("sibling-1", Status::Review),
-        ];
-
-        // Act
-        let indexes = grouped_session_indexes(&sessions);
-        let ordered_ids = indexes
-            .into_iter()
-            .map(|index| sessions[index].id.clone())
-            .collect::<Vec<_>>();
-
-        // Assert
-        assert_eq!(
-            ordered_ids,
-            vec![
-                "parent-1".to_string(),
-                "child-1".to_string(),
-                "sibling-1".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_grouped_session_rows_orders_merge_queue_before_active_and_archive_sessions() {
-        // Arrange
-        let sessions = vec![
-            test_session("active-1", Status::Review),
-            test_session("queued-1", Status::Queued),
-            test_session("merge-1", Status::Merging),
-            test_session("done-1", Status::Done),
-            test_session("canceled-1", Status::Canceled),
-            test_session("active-2", Status::Draft),
-        ];
-
-        // Act
-        let rows = grouped_session_rows(&sessions);
-        let labels_and_ids = rows
-            .iter()
-            .map(|row| match row {
-                SessionTableRow::GroupLabel(group) => group.label().to_string(),
-                SessionTableRow::EmptyGroupPlaceholder => GROUP_EMPTY_PLACEHOLDER.to_string(),
-                SessionTableRow::Session { session, .. } => session.id.to_string(),
-            })
-            .collect::<Vec<_>>();
-
-        // Assert
-        assert_eq!(
-            labels_and_ids,
-            vec![
-                SessionGroup::MergeQueue.label().to_string(),
-                "queued-1".to_string(),
-                "merge-1".to_string(),
-                SessionGroup::ActiveSessions.label().to_string(),
-                "active-1".to_string(),
-                "active-2".to_string(),
-                SessionGroup::Archive.label().to_string(),
-                "done-1".to_string(),
-                "canceled-1".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_grouped_session_rows_includes_placeholder_for_groups_without_sessions() {
-        // Arrange
-        let sessions = vec![
-            test_session("active-1", Status::Review),
-            test_session("active-2", Status::InProgress),
-        ];
-
-        // Act
-        let rows = grouped_session_rows(&sessions);
-        let labels_and_ids = rows
-            .iter()
-            .map(|row| match row {
-                SessionTableRow::GroupLabel(group) => group.label().to_string(),
-                SessionTableRow::EmptyGroupPlaceholder => GROUP_EMPTY_PLACEHOLDER.to_string(),
-                SessionTableRow::Session { session, .. } => session.id.to_string(),
-            })
-            .collect::<Vec<_>>();
-
-        // Assert
-        assert_eq!(
-            labels_and_ids,
-            vec![
-                SessionGroup::MergeQueue.label().to_string(),
-                GROUP_EMPTY_PLACEHOLDER.to_string(),
-                SessionGroup::ActiveSessions.label().to_string(),
-                "active-1".to_string(),
-                "active-2".to_string(),
-                SessionGroup::Archive.label().to_string(),
-                GROUP_EMPTY_PLACEHOLDER.to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_grouped_session_rows_marks_stacked_child_with_tree_prefix() {
-        // Arrange
-        let mut first_child_session = test_session("child-1", Status::Draft);
-        first_child_session.parent_session_id = Some("parent-1".into());
-        let mut second_child_session = test_session("child-2", Status::Draft);
-        second_child_session.parent_session_id = Some("parent-1".into());
-        let sessions = vec![
-            first_child_session,
-            test_session("parent-1", Status::Review),
-            second_child_session,
-        ];
-
-        // Act
-        let session_rows = grouped_session_rows(&sessions)
-            .into_iter()
-            .filter_map(|row| match row {
-                SessionTableRow::Session {
-                    session,
-                    tree_prefix,
-                    ..
-                } => Some((session.id.to_string(), tree_prefix.label().to_string())),
-                SessionTableRow::GroupLabel(_) | SessionTableRow::EmptyGroupPlaceholder => None,
-            })
-            .collect::<Vec<_>>();
-
-        // Assert
-        assert_eq!(
-            session_rows,
-            vec![
-                ("parent-1".to_string(), String::new()),
-                ("child-1".to_string(), TREE_BRANCH_MIDDLE.to_string()),
-                ("child-2".to_string(), TREE_BRANCH_LAST.to_string()),
-            ]
-        );
-    }
-
-    #[test]
     fn test_selected_render_row_maps_original_selection_to_grouped_index() {
         // Arrange
         let sessions = vec![
@@ -980,7 +621,7 @@ mod tests {
             test_session("merge-1", Status::Merging),
             test_session("active-2", Status::Draft),
         ];
-        let rows = grouped_session_rows(&sessions);
+        let rows = session_order::grouped_session_rows(&sessions);
         let selected_session_id = selected_session_id(&sessions, Some(3));
 
         // Act

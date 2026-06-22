@@ -134,6 +134,9 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
 - `crates/agentty/src/domain/session.rs`: Session entities, statuses, sizes, stats,
   review-request linkage wrappers, and re-exports of shared forge review-request types
   from `ag-forge`.
+- `crates/agentty/src/domain/session_order.rs`: Pure grouped session-list ordering,
+  selectable row navigation, and stack-child placement shared by app workflows and UI
+  rendering.
 - `crates/agentty/src/domain/setting.rs`: Shared persisted setting keys used across app
   and infrastructure layers.
 - `crates/agentty/src/domain/system_log.rs`: Process-local structured system log events,

@@ -24,13 +24,13 @@ use crate::domain::session::{
     can_mutate_session_branch_in_stack as stack_can_mutate_session_branch,
     can_start_staged_session_in_stack as stack_can_start_staged_session,
 };
+use crate::domain::session_order;
 use crate::domain::setting::SettingName;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
 use crate::infra::channel::AgentRequestKind;
 use crate::infra::fs::{FsClient, FsError};
 use crate::infra::{agent, db, git};
-use crate::ui::page::session_list::grouped_session_indexes;
 
 /// Maximum accepted length for generated session titles.
 ///
@@ -92,31 +92,12 @@ impl SessionManager {
     ///
     /// Group header rows are non-selectable and are skipped by design.
     pub fn next(&mut self) {
-        let grouped_indexes = grouped_session_indexes(&self.state.sessions);
-        if grouped_indexes.is_empty() {
-            return;
+        if let Some(index) = session_order::next_selectable_session_index(
+            &self.state.sessions,
+            self.state.table_state.selected(),
+        ) {
+            self.state.table_state.select(Some(index));
         }
-
-        let index = match self
-            .state
-            .table_state
-            .selected()
-            .and_then(|selected_index| {
-                grouped_indexes
-                    .iter()
-                    .position(|session_index| *session_index == selected_index)
-            }) {
-            Some(position) => {
-                if position >= grouped_indexes.len() - 1 {
-                    0
-                } else {
-                    position + 1
-                }
-            }
-            None => 0,
-        };
-
-        self.state.table_state.select(Some(grouped_indexes[index]));
     }
 
     /// Moves selection to the previous selectable session in grouped list
@@ -124,31 +105,12 @@ impl SessionManager {
     ///
     /// Group header rows are non-selectable and are skipped by design.
     pub fn previous(&mut self) {
-        let grouped_indexes = grouped_session_indexes(&self.state.sessions);
-        if grouped_indexes.is_empty() {
-            return;
+        if let Some(index) = session_order::previous_selectable_session_index(
+            &self.state.sessions,
+            self.state.table_state.selected(),
+        ) {
+            self.state.table_state.select(Some(index));
         }
-
-        let index = match self
-            .state
-            .table_state
-            .selected()
-            .and_then(|selected_index| {
-                grouped_indexes
-                    .iter()
-                    .position(|session_index| *session_index == selected_index)
-            }) {
-            Some(position) => {
-                if position == 0 {
-                    grouped_indexes.len() - 1
-                } else {
-                    position - 1
-                }
-            }
-            None => 0,
-        };
-
-        self.state.table_state.select(Some(grouped_indexes[index]));
     }
 
     /// Creates a blank session with an empty prompt and output.

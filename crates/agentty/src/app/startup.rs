@@ -14,12 +14,12 @@ use crate::app::session_state::SessionState;
 use crate::app::{AppError, session};
 use crate::domain::agent::{AgentKind, AgentModel};
 use crate::domain::project::{Project, ProjectListItem, project_name_from_path};
+use crate::domain::session_order;
 use crate::infra::agent::AgentAvailabilityProbe;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs::FsClient;
 use crate::infra::git::{GitClient, detect_git_info};
 use crate::infra::project_discovery::ProjectDiscoveryClient;
-use crate::ui::page::session_list::preferred_initial_session_index;
 
 /// Startup project context resolved before the first render.
 pub(crate) struct StartupProjectContext {
@@ -210,7 +210,7 @@ impl AppStartup {
             .load_sessions_metadata()
             .await
             .unwrap_or((0, 0));
-        table_state.select(preferred_initial_session_index(&sessions));
+        table_state.select(session_order::preferred_initial_session_index(&sessions));
 
         let mut session_manager = SessionManager::new(
             session::SessionDefaults {
