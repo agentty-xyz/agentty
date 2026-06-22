@@ -12,6 +12,9 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use super::merge::{
+    ExistingSessionRebaseAssistClient, RebaseAssistFuture, RebaseAssistMode, RebaseCommandInput,
+};
 use super::{SessionTaskService, isolation};
 use crate::app::assist::AssistContext;
 use crate::app::service::SessionUpdateVersionMap;
@@ -62,6 +65,14 @@ pub(super) struct TurnMetadata {
 /// `StartPrompt`, `StartPromptAppServer`) with a single provider-agnostic
 /// variant. The underlying channel adapter handles transport-specific details.
 pub(super) enum SessionCommand {
+    /// Runs the session branch rebase workflow through this worker so
+    /// conflict-resolution prompts reuse the active provider conversation.
+    Rebase {
+        /// Stored base branch used to resolve the concrete rebase target.
+        base_branch: String,
+        /// Persisted operation identifier.
+        operation_id: String,
+    },
     /// Executes one agent turn with the given request kind and prompt.
     Run {
         /// Persisted operation identifier.
@@ -79,13 +90,14 @@ impl SessionCommand {
     /// Returns the persisted operation identifier for this command.
     fn operation_id(&self) -> &str {
         match self {
-            Self::Run { operation_id, .. } => operation_id,
+            Self::Rebase { operation_id, .. } | Self::Run { operation_id, .. } => operation_id,
         }
     }
 
     /// Returns the operation kind persisted in the operations table.
     fn kind(&self) -> &'static str {
         match self {
+            Self::Rebase { .. } => "rebase",
             Self::Run {
                 request_kind: AgentRequestKind::SessionStart,
                 ..
@@ -189,6 +201,266 @@ impl SessionWorkerContext {
         // Sync critical section (single read, no `.await`); `std::sync::Mutex`
         // is the correct choice per CLAUDE.md §"Mutex Selection".
         self.status.lock().map_or(Status::Review, |guard| *guard)
+    }
+}
+
+/// Existing-session rebase assistance backed by the worker's active channel.
+#[derive(Clone)]
+struct SessionWorkerRebaseAssistClient {
+    /// Reducer event sender used for transient progress and output updates.
+    app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    /// Per-turn cancellation token shared with the UI.
+    cancel_token: Arc<Mutex<CancellationToken>>,
+    /// Provider channel already associated with this session.
+    channel: Arc<dyn AgentChannel>,
+    /// Shared child-process PID slot used by cancellation.
+    child_pid: Arc<Mutex<Option<u32>>>,
+    /// Repository bundle used for conversation and usage persistence.
+    db: AppRepositories,
+    /// Session worktree folder where the utility prompt runs.
+    folder: PathBuf,
+    /// Shared transcript buffer for assist summaries.
+    output: Arc<Mutex<String>>,
+    /// Per-app session update versions for targeted refresh events.
+    session_update_versions: SessionUpdateVersionMap,
+    /// Session identifier whose provider conversation is reused.
+    session_id: SessionId,
+    /// Model used for the rebase-assist utility prompt.
+    session_model: AgentModel,
+}
+
+impl SessionWorkerRebaseAssistClient {
+    /// Clones the worker fields needed to run a rebase-assist utility turn.
+    fn from_context(context: &SessionWorkerContext) -> Self {
+        Self {
+            app_event_tx: context.app_event_tx.clone(),
+            cancel_token: Arc::clone(&context.cancel_token),
+            channel: Arc::clone(&context.channel),
+            child_pid: Arc::clone(&context.child_pid),
+            db: context.db.clone(),
+            folder: context.folder.clone(),
+            output: Arc::clone(&context.output),
+            session_update_versions: context.session_update_versions.clone(),
+            session_id: context.session_id.clone(),
+            session_model: context.session_model,
+        }
+    }
+
+    /// Runs one utility prompt through the current session channel.
+    ///
+    /// # Errors
+    /// Returns an error when the provider turn fails or conversation metadata
+    /// cannot be persisted.
+    async fn run_assist_turn(&self, prompt: String) -> Result<(), SessionError> {
+        let turn_cancel_token = self.fresh_turn_cancel_token()?;
+        let session_project_id = load_session_project_id(&self.db, &self.session_id).await;
+        let reasoning_level =
+            load_session_reasoning_level(&self.db, &self.session_id, session_project_id).await;
+        let provider_conversation_id = self
+            .db
+            .sessions()
+            .get_session_provider_conversation_id(&self.session_id)
+            .await
+            .ok()
+            .flatten();
+        let persisted_instruction_conversation_id = self
+            .db
+            .sessions()
+            .get_session_instruction_conversation_id(&self.session_id)
+            .await
+            .ok()
+            .flatten();
+        let req = TurnRequest {
+            folder: self.folder.clone(),
+            live_session_output: Some(Arc::clone(&self.output)),
+            model: self.session_model.provider_model_str().to_string(),
+            request_kind: AgentRequestKind::UtilityPrompt,
+            prompt: TurnPrompt::from_agent_data(prompt),
+            provider_conversation_id,
+            persisted_instruction_conversation_id,
+            reasoning_level,
+        };
+        let (event_tx, event_rx) = mpsc::unbounded_channel::<TurnEvent>();
+        let consumer = tokio::spawn(consume_turn_events(
+            event_rx,
+            self.app_event_tx.clone(),
+            self.session_id.clone(),
+            Arc::clone(&self.child_pid),
+        ));
+
+        let turn_result = self
+            .run_turn_with_cancellation(turn_cancel_token, req, event_tx)
+            .await;
+        let _ = consumer.await;
+        let turn_result = turn_result.map_err(session_error_from_agent_error)?;
+
+        self.append_assist_answer(&turn_result.assistant_message)
+            .await;
+        self.persist_assist_turn_metadata(&turn_result).await?;
+
+        Ok(())
+    }
+
+    /// Replaces the shared cancellation token for one rebase-assist turn.
+    fn fresh_turn_cancel_token(&self) -> Result<CancellationToken, SessionError> {
+        // Sync critical section (assignment + clone, no `.await`); `std::sync::Mutex`
+        // is the correct choice per CLAUDE.md §"Mutex Selection".
+        let mut guard = self
+            .cancel_token
+            .lock()
+            .map_err(|_| SessionError::Workflow("cancel token lock poisoned".to_string()))?;
+        *guard = CancellationToken::new();
+
+        Ok(guard.clone())
+    }
+
+    /// Runs the provider turn while honoring the shared cancellation token.
+    async fn run_turn_with_cancellation(
+        &self,
+        cancel_token: CancellationToken,
+        req: TurnRequest,
+        event_tx: mpsc::UnboundedSender<TurnEvent>,
+    ) -> Result<TurnResult, AgentError> {
+        if cancel_token.is_cancelled() {
+            self.terminate_child_process();
+            let _ = self
+                .channel
+                .shutdown_session(self.session_id.to_string())
+                .await;
+
+            return Err(AgentError::InterruptedByUser(
+                "[Stopped] Session interrupted by user.".to_string(),
+            ));
+        }
+
+        let turn_future = self
+            .channel
+            .run_turn(self.session_id.to_string(), req, event_tx);
+        tokio::pin!(turn_future);
+
+        tokio::select! {
+            result = &mut turn_future => result,
+            () = cancel_token.cancelled() => {
+                self.terminate_child_process();
+                let _ = self.channel.shutdown_session(self.session_id.to_string()).await;
+                let _ = tokio::time::timeout(Duration::from_secs(5), &mut turn_future).await;
+
+                Err(AgentError::InterruptedByUser(
+                    "[Stopped] Session interrupted by user.".to_string(),
+                ))
+            }
+        }
+    }
+
+    /// Sends `SIGTERM` to the active child process tracked by this assist turn.
+    fn terminate_child_process(&self) {
+        // Sync critical section (take PID, no `.await`); `std::sync::Mutex`
+        // is the correct choice per CLAUDE.md §"Mutex Selection".
+        let active_pid = self
+            .child_pid
+            .lock()
+            .ok()
+            .and_then(|mut child_pid| child_pid.take());
+
+        if let Some(pid) = active_pid {
+            process::send_terminate_signal(pid);
+        }
+    }
+
+    /// Appends the utility prompt answer to the session transcript.
+    async fn append_assist_answer(&self, assistant_message: &agent::AgentResponse) {
+        let answer_text = assistant_message.to_answer_display_text();
+        if answer_text.trim().is_empty() {
+            return;
+        }
+
+        SessionTaskService::append_session_output(
+            &self.output,
+            &self.db,
+            &self.app_event_tx,
+            &self.session_update_versions,
+            &self.session_id,
+            &answer_text,
+        )
+        .await;
+    }
+
+    /// Persists token usage and updated provider conversation identifiers.
+    ///
+    /// # Errors
+    /// Returns an error when conversation identifier persistence fails.
+    async fn persist_assist_turn_metadata(
+        &self,
+        turn_result: &TurnResult,
+    ) -> Result<(), SessionError> {
+        let token_usage_delta = SessionStats {
+            added_lines: 0,
+            deleted_lines: 0,
+            input_tokens: turn_result.input_tokens,
+            output_tokens: turn_result.output_tokens,
+        };
+        if let Err(error) = self
+            .db
+            .sessions()
+            .update_session_stats(&self.session_id, &token_usage_delta)
+            .await
+        {
+            tracing::warn!(
+                session_id = %self.session_id,
+                error = %error,
+                "failed to persist session stats after rebase-assist turn"
+            );
+        }
+        if let Err(error) = self
+            .db
+            .usage()
+            .upsert_session_usage(
+                &self.session_id,
+                self.session_model.as_str(),
+                &token_usage_delta,
+            )
+            .await
+        {
+            tracing::warn!(
+                session_id = %self.session_id,
+                model = %self.session_model.as_str(),
+                error = %error,
+                "failed to persist session usage after rebase-assist turn"
+            );
+        }
+        let Some(provider_conversation_id) = turn_result.provider_conversation_id.clone() else {
+            return Ok(());
+        };
+
+        self.db
+            .sessions()
+            .update_session_provider_conversation_id(
+                &self.session_id,
+                Some(provider_conversation_id.clone()),
+            )
+            .await?;
+        if agent::transport_mode(self.session_model.kind()).uses_app_server() {
+            self.db
+                .sessions()
+                .update_session_instruction_conversation_id(
+                    &self.session_id,
+                    agent::normalize_instruction_conversation_id(Some(&provider_conversation_id)),
+                )
+                .await?;
+        }
+
+        Ok(())
+    }
+}
+
+impl ExistingSessionRebaseAssistClient for SessionWorkerRebaseAssistClient {
+    fn resolve_rebase_conflicts(
+        &self,
+        prompt: String,
+    ) -> RebaseAssistFuture<Result<(), SessionError>> {
+        let assist_client = self.clone();
+
+        Box::pin(async move { assist_client.run_assist_turn(prompt).await })
     }
 }
 
@@ -589,14 +861,46 @@ impl SessionWorkerService {
         context: &SessionWorkerContext,
         command: SessionCommand,
     ) -> Result<(), SessionError> {
-        let SessionCommand::Run {
-            request_kind,
-            prompt,
-            turn_metadata,
-            ..
-        } = command;
+        match command {
+            SessionCommand::Rebase { base_branch, .. } => {
+                Self::run_rebase_command(context, base_branch).await
+            }
+            SessionCommand::Run {
+                request_kind,
+                prompt,
+                turn_metadata,
+                ..
+            } => Self::run_channel_turn(context, turn_metadata, request_kind, prompt).await,
+        }
+    }
 
-        Self::run_channel_turn(context, turn_metadata, request_kind, prompt).await
+    /// Runs the session rebase command inside this worker's serialized queue.
+    ///
+    /// # Errors
+    /// Returns an error when the rebase workflow fails after appending the
+    /// user-visible rebase outcome.
+    async fn run_rebase_command(
+        context: &SessionWorkerContext,
+        base_branch: String,
+    ) -> Result<(), SessionError> {
+        let assist_client = Arc::new(SessionWorkerRebaseAssistClient::from_context(context));
+        SessionManager::run_rebase_command(RebaseCommandInput {
+            app_event_tx: context.app_event_tx.clone(),
+            assist_mode: RebaseAssistMode::ExistingSession(assist_client),
+            base_branch,
+            child_pid: Arc::clone(&context.child_pid),
+            clock: Arc::clone(&context.clock),
+            db: context.db.clone(),
+            folder: context.folder.clone(),
+            fs_client: Arc::clone(&context.fs_client),
+            git_client: Arc::clone(&context.git_client),
+            id: context.session_id.clone(),
+            output: Arc::clone(&context.output),
+            session_model: context.session_model,
+            session_update_versions: context.session_update_versions.clone(),
+            status: Arc::clone(&context.status),
+        })
+        .await
     }
 
     /// Executes one agent turn through the session channel and applies all
@@ -1062,6 +1366,14 @@ fn fresh_turn_cancel_token(
     *guard = CancellationToken::new();
 
     Ok(guard.clone())
+}
+
+/// Converts channel-layer turn failures into session workflow errors.
+fn session_error_from_agent_error(error: AgentError) -> SessionError {
+    match error {
+        AgentError::InterruptedByUser(message) => SessionError::StoppedByUser(message),
+        other => SessionError::Workflow(other.to_string()),
+    }
 }
 
 /// joined question text so clarification prompts remain visible while
@@ -1830,7 +2142,7 @@ mod tests {
     use crate::infra::channel::MockAgentChannel;
     use crate::infra::db::AppRepositories;
     use crate::infra::fs;
-    use crate::infra::git::MockGitClient;
+    use crate::infra::git::{MockGitClient, RebaseStepResult};
 
     /// Builds one filesystem mock that treats every probed path as an
     /// existing directory.
@@ -3701,6 +4013,235 @@ mod tests {
             instruction_conversation_id,
             agent::normalize_instruction_conversation_id(Some("thread-123"))
         );
+    }
+
+    /// Test harness for existing-session rebase assistance worker coverage.
+    struct RebaseAssistWorkerHarness {
+        context: SessionWorkerContext,
+        db: AppRepositories,
+        output: Arc<Mutex<String>>,
+        status: Arc<Mutex<Status>>,
+    }
+
+    /// Writes one conflict-marked file used by rebase-assist worker tests.
+    fn write_rebase_conflict_file(base_dir: &std::path::Path) {
+        let conflict_file = base_dir.join("src/lib.rs");
+        std::fs::create_dir_all(
+            conflict_file
+                .parent()
+                .expect("conflict file should have a parent"),
+        )
+        .expect("failed to create conflict directory");
+        std::fs::write(
+            conflict_file,
+            "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> incoming\n",
+        )
+        .expect("failed to write conflict file");
+    }
+
+    /// Seeds one rebasing session with existing provider conversation ids.
+    async fn seed_existing_session_rebase_metadata(db: &AppRepositories) {
+        let project_id = db
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to upsert project");
+        db.sessions()
+            .insert_session("sess1", "gpt-5.5", "main", "Rebasing", project_id)
+            .await
+            .expect("failed to insert session");
+        db.sessions()
+            .update_session_provider_conversation_id("sess1", Some("thread-before".to_string()))
+            .await
+            .expect("failed to seed provider conversation id");
+        db.sessions()
+            .update_session_instruction_conversation_id(
+                "sess1",
+                Some("instruction-before".to_string()),
+            )
+            .await
+            .expect("failed to seed instruction conversation id");
+    }
+
+    /// Builds the mock channel expected for one existing-session rebase turn.
+    fn mock_existing_session_rebase_channel() -> MockAgentChannel {
+        let mut mock_channel = MockAgentChannel::new();
+        mock_channel
+            .expect_run_turn()
+            .times(1)
+            .withf(|session_id, request, _| {
+                session_id == "sess1"
+                    && request.request_kind == AgentRequestKind::UtilityPrompt
+                    && request.provider_conversation_id.as_deref() == Some("thread-before")
+                    && request.persisted_instruction_conversation_id.as_deref()
+                        == Some("instruction-before")
+                    && request
+                        .prompt
+                        .text
+                        .contains("Resolve conflicts in only these files")
+                    && request.prompt.text.contains("src/lib.rs")
+            })
+            .returning(|_, _, _| {
+                Box::pin(async {
+                    Ok(TurnResult {
+                        assistant_message: AgentResponse {
+                            answer: "Resolved conflicts inside existing session.".to_string(),
+                            questions: Vec::new(),
+                            summary: None,
+                        },
+                        context_reset: false,
+                        input_tokens: 11,
+                        output_tokens: 7,
+                        provider_conversation_id: Some("thread-after".to_string()),
+                    })
+                })
+            });
+
+        mock_channel
+    }
+
+    /// Builds the git mock expected for one assisted rebase conflict.
+    fn mock_successful_conflict_rebase_git_client() -> MockGitClient {
+        let mut mock_git_client = MockGitClient::new();
+        let mut sequence = Sequence::new();
+        mock_git_client
+            .expect_is_worktree_clean()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Box::pin(async { Ok(true) }));
+        mock_git_client
+            .expect_is_rebase_in_progress()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Box::pin(async { Ok(false) }));
+        mock_git_client
+            .expect_rebase_start()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, target| {
+                assert_eq!(target, "main");
+                Box::pin(async {
+                    Ok(RebaseStepResult::Conflict {
+                        detail: "CONFLICT (content): Merge conflict in src/lib.rs".to_string(),
+                    })
+                })
+            });
+        mock_git_client
+            .expect_list_conflicted_files()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Box::pin(async { Ok(vec!["src/lib.rs".to_string()]) }));
+        mock_git_client
+            .expect_list_staged_conflict_marker_files()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, paths| {
+                assert!(paths.is_empty());
+                Box::pin(async { Ok(Vec::new()) })
+            });
+        mock_git_client
+            .expect_stage_all()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        mock_git_client
+            .expect_has_unmerged_paths()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Box::pin(async { Ok(false) }));
+        mock_git_client
+            .expect_list_staged_conflict_marker_files()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, paths| {
+                assert_eq!(paths, vec!["src/lib.rs".to_string()]);
+                Box::pin(async { Ok(Vec::new()) })
+            });
+        mock_git_client
+            .expect_rebase_continue()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Box::pin(async { Ok(RebaseStepResult::Completed) }));
+
+        mock_git_client
+    }
+
+    /// Builds one worker harness for session rebase command tests.
+    fn rebase_assist_worker_harness(
+        base_dir: PathBuf,
+        db: AppRepositories,
+    ) -> RebaseAssistWorkerHarness {
+        let output = Arc::new(Mutex::new(String::new()));
+        let status = Arc::new(Mutex::new(Status::Rebasing));
+        let context = SessionWorkerContext {
+            app_event_tx: mpsc::unbounded_channel().0,
+            cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+            channel: Arc::new(mock_existing_session_rebase_channel()),
+            child_pid: Arc::new(Mutex::new(None)),
+            clock: Arc::new(crate::infra::clock::RealClock),
+            db: db.clone(),
+            folder: base_dir,
+            fs_client: Arc::new(fs::RealFsClient),
+            git_client: Arc::new(mock_successful_conflict_rebase_git_client()),
+            output: Arc::clone(&output),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
+            session_update_versions: Arc::default(),
+            session_id: "sess1".into(),
+            session_model: AgentModel::Gpt55,
+            status: Arc::clone(&status),
+        };
+
+        RebaseAssistWorkerHarness {
+            context,
+            db,
+            output,
+            status,
+        }
+    }
+
+    #[tokio::test]
+    /// Verifies session rebase conflict assistance runs through the existing
+    /// session channel, preserving provider conversation identifiers while
+    /// Agentty owns staging and `git rebase --continue`.
+    async fn test_run_rebase_command_uses_existing_session_channel_for_conflicts() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        write_rebase_conflict_file(base_dir.path());
+        let db = AppRepositories::in_memory().await;
+        seed_existing_session_rebase_metadata(&db).await;
+        let harness = rebase_assist_worker_harness(base_dir.path().to_path_buf(), db);
+
+        // Act
+        SessionWorkerService::run_rebase_command(&harness.context, "main".to_string())
+            .await
+            .expect("rebase command should complete");
+        let provider_conversation_id = harness
+            .db
+            .sessions()
+            .get_session_provider_conversation_id("sess1")
+            .await
+            .expect("failed to load provider conversation id");
+        let instruction_conversation_id = harness
+            .db
+            .sessions()
+            .get_session_instruction_conversation_id("sess1")
+            .await
+            .expect("failed to load instruction conversation id");
+        let output_text = harness.output.lock().expect("output lock").clone();
+        let final_status = *harness.status.lock().expect("status lock");
+
+        // Assert
+        assert_eq!(provider_conversation_id.as_deref(), Some("thread-after"));
+        assert_eq!(
+            instruction_conversation_id,
+            agent::normalize_instruction_conversation_id(Some("thread-after"))
+        );
+        assert_eq!(final_status, Status::Review);
+        assert!(output_text.contains("[Sync Assist] Attempt 1/3. Resolving conflicts in:"));
+        assert!(output_text.contains("- src/lib.rs"));
+        assert!(output_text.contains("Resolved conflicts inside existing session."));
+        assert!(output_text.contains("[Sync] Successfully synced wt/sess1 onto main"));
     }
 
     #[tokio::test]

@@ -187,7 +187,9 @@ When a session enters **Rebasing** from the view-mode `r` sync action, Agentty r
 assisted sync workflow, implemented as a rebase of the session branch. Published
 sessions fetch before syncing and use the remote base ref from the same remote as the
 published session branch. Unpublished sessions sync against the stored local base
-branch.
+branch. If `git rebase` stops on conflicts, Agentty lists the exact conflicted files in
+the session transcript, asks the existing agent session to resolve only those files,
+then stages the edits and runs `git rebase --continue` itself.
 
 When `Open Commands` in Settings contains multiple entries (one command per line),
 pressing `o` opens a selector popup (`j`/`k` to move, `Enter` to open, `Esc` to cancel).

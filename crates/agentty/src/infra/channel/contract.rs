@@ -25,7 +25,11 @@ pub enum AgentRequestKind {
         /// Prior session output used for history replay when present.
         session_output: Option<String>,
     },
-    /// Runs one isolated utility prompt outside the long-lived session flow.
+    /// Runs one utility prompt with utility protocol requirements.
+    ///
+    /// Callers may route this through an isolated one-shot channel or through
+    /// an existing session channel when the utility work needs provider
+    /// conversation continuity without normal post-turn auto-commit handling.
     UtilityPrompt,
     /// Reads provider account metadata without creating an agent turn.
     AccountRead,

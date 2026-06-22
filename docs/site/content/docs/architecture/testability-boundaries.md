@@ -57,7 +57,9 @@ command execution for update checks. | | `ProjectDiscoveryClient` |
 catalog refresh without walking the real filesystem from `app/`. | | `GitCommandRunner`
 | `infra/git/rebase.rs` | Rebase command invocation boundary for conflict/retry tests. |
 | `SyncAssistClient` | `app/session/workflow/merge.rs` | Sync-rebase assistance
-execution boundary. | | `SessionRepository` | `infra/db/session.rs` | Session row
+execution boundary. | | `ExistingSessionRebaseAssistClient` |
+`app/session/workflow/merge.rs` | Session rebase conflict assistance routed through the
+active session channel. | | `SessionRepository` | `infra/db/session.rs` | Session row
 persistence, turn metadata storage, and session list queries without binding app
 workflows to the full `Database` surface. | | `ProjectRepository` |
 `infra/db/project.rs` | Project persistence and project-list aggregation behind a narrow

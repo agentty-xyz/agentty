@@ -1365,7 +1365,7 @@ impl App {
     ///
     /// # Errors
     /// Returns an error if session cannot start rebasing.
-    pub async fn rebase_session(&self, session_id: &str) -> Result<(), AppError> {
+    pub async fn rebase_session(&mut self, session_id: &str) -> Result<(), AppError> {
         Ok(self
             .sessions
             .rebase_session(&self.services, session_id)

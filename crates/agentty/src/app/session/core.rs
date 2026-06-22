@@ -4931,7 +4931,7 @@ mod tests {
     async fn test_rebase_session_invalid_id() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
-        let app = new_test_app_with_git(dir.path()).await;
+        let mut app = new_test_app_with_git(dir.path()).await;
 
         // Act
         let result = app.rebase_session("missing").await;

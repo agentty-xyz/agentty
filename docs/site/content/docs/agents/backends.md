@@ -37,8 +37,9 @@ by backend:
   stale Antigravity workspace links.
 
 Codex now always runs through `codex app-server`, including isolated utility prompts
-such as title generation, review assist, commit-message generation, auto-commit
-recovery, and rebase-conflict assistance. Agentty no longer uses a direct `codex exec`
+such as title generation, review assist, commit-message generation, and auto-commit
+recovery. Session rebase-conflict assistance runs through the existing session channel
+so the provider keeps conversation context. Agentty no longer uses a direct `codex exec`
 path.
 
 ## Project Instruction Files
@@ -123,12 +124,12 @@ the optional top-level `summary` object. Session turns typically populate:
 - `summary.turn` describes only the work completed in the current turn
 - `summary.session` describes the cumulative session-branch diff that still applies
 
-One-shot utility prompts, such as title generation, session commit-message generation,
-focused review preparation, auto-commit assistance, and rebase conflict assistance,
-still return the same protocol JSON shape. They may leave `summary` unused, while
-session discussion turns typically populate it. Final parsing accepts any payload that
-deserializes to the shared protocol wire type, so session-turn responses can carry
-meaning in `summary` even when `answer` is blank and `questions` is empty.
+Utility prompts, such as title generation, session commit-message generation, focused
+review preparation, auto-commit assistance, and conflict assistance, still return the
+same protocol JSON shape. They may leave `summary` unused, while session discussion
+turns typically populate it. Final parsing accepts any payload that deserializes to the
+shared protocol wire type, so session-turn responses can carry meaning in `summary` even
+when `answer` is blank and `questions` is empty.
 
 Example payload:
 

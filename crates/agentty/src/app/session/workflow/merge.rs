@@ -11,6 +11,7 @@ use askama::Template;
 use tokio::sync::mpsc;
 use tracing::warn;
 
+use super::worker::SessionCommand;
 use super::{SessionTaskService, session_branch};
 use crate::app::assist::{
     AssistContext, AssistPolicy, FailureTracker, append_assist_header, format_detail_lines,
@@ -51,6 +52,28 @@ struct RebaseAssistPromptTemplate<'a> {
 /// Boxed async result used by sync conflict assistance boundary methods.
 type SyncAssistFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
+/// Boxed async result used by existing-session rebase assistance.
+pub(super) type RebaseAssistFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
+
+/// Executes one rebase-conflict prompt inside the already-active session
+/// channel.
+pub(super) trait ExistingSessionRebaseAssistClient: Send + Sync {
+    /// Resolves the current rebase conflict files with the provided prompt.
+    fn resolve_rebase_conflicts(
+        &self,
+        prompt: String,
+    ) -> RebaseAssistFuture<Result<(), SessionError>>;
+}
+
+/// Selects how session rebase conflicts are submitted to an agent.
+#[derive(Clone)]
+pub(super) enum RebaseAssistMode {
+    /// Submit through the session worker's existing provider conversation.
+    ExistingSession(Arc<dyn ExistingSessionRebaseAssistClient>),
+    /// Submit through the historical isolated one-shot utility prompt.
+    OneShot,
+}
+
 /// Shared context needed to restore a failed merge-start attempt back to
 /// `Review`.
 struct MergeStartRestoreContext<'a> {
@@ -83,6 +106,7 @@ struct MergeTaskInput {
 #[derive(Clone)]
 struct RebaseAssistInput {
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    assist_mode: RebaseAssistMode,
     child_pid: Arc<Mutex<Option<u32>>>,
     db: AppRepositories,
     folder: PathBuf,
@@ -95,20 +119,36 @@ struct RebaseAssistInput {
     session_update_versions: SessionUpdateVersionMap,
 }
 
-struct RebaseTaskInput {
-    app_event_tx: mpsc::UnboundedSender<AppEvent>,
-    base_branch: String,
-    child_pid: Arc<Mutex<Option<u32>>>,
-    clock: Arc<dyn Clock>,
-    db: AppRepositories,
-    folder: PathBuf,
-    fs_client: Arc<dyn FsClient>,
-    git_client: Arc<dyn GitClient>,
-    id: SessionId,
-    output: Arc<Mutex<String>>,
-    session_model: AgentModel,
-    session_update_versions: SessionUpdateVersionMap,
-    status: Arc<Mutex<Status>>,
+/// Input required to run a session rebase command to completion.
+pub(super) struct RebaseCommandInput {
+    /// Reducer event sender used for status/output updates.
+    pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    /// Agent submission mode used when rebase conflicts need edits.
+    pub(super) assist_mode: RebaseAssistMode,
+    /// Stored base branch for the session worktree.
+    pub(super) base_branch: String,
+    /// Shared child-process PID slot used by cancellation.
+    pub(super) child_pid: Arc<Mutex<Option<u32>>>,
+    /// Clock used for persisted status timing.
+    pub(super) clock: Arc<dyn Clock>,
+    /// Repository bundle used by workflow persistence.
+    pub(super) db: AppRepositories,
+    /// Session worktree folder where git commands run.
+    pub(super) folder: PathBuf,
+    /// Filesystem boundary used for conflict fingerprinting.
+    pub(super) fs_client: Arc<dyn FsClient>,
+    /// Git boundary used for rebase commands.
+    pub(super) git_client: Arc<dyn GitClient>,
+    /// Session identifier receiving output/status updates.
+    pub(super) id: SessionId,
+    /// Shared transcript buffer mirrored to persistence and UI.
+    pub(super) output: Arc<Mutex<String>>,
+    /// Model used by agent-assisted conflict prompts.
+    pub(super) session_model: AgentModel,
+    /// Per-app update versions for targeted session refresh events.
+    pub(super) session_update_versions: SessionUpdateVersionMap,
+    /// Shared session lifecycle status.
+    pub(super) status: Arc<Mutex<Status>>,
 }
 
 /// Bundled context for finalizing one rebase task.
@@ -654,13 +694,77 @@ impl SessionMergeService {
     ///
     /// # Errors
     /// Returns an error if the session is invalid for rebase, required git
-    /// metadata is missing, or starting the rebase task fails.
+    /// metadata is missing, or enqueueing the rebase command fails.
     async fn rebase_session(
         &self,
-        manager: &SessionManager,
+        manager: &mut SessionManager,
         services: &AppServices,
         session_id: &str,
     ) -> Result<(), SessionError> {
+        let (base_branch, persisted_session_id) =
+            Self::load_rebase_start_context(manager, services, session_id).await?;
+
+        let handles = manager
+            .session_handles_or_err(session_id)
+            .map_err(|_| SessionError::HandlesNotFound)?;
+        let status = Arc::clone(&handles.status);
+        let db = services.db().clone();
+        let app_event_tx = services.event_sender();
+        let clock = services.clock();
+        let session_update_versions = services.session_update_versions();
+
+        if !SessionTaskService::update_status(
+            &status,
+            clock.as_ref(),
+            &db,
+            &app_event_tx,
+            &session_update_versions,
+            &persisted_session_id,
+            Status::Rebasing,
+        )
+        .await
+        {
+            return Err(SessionError::Workflow(
+                "Invalid status transition to Rebasing".to_string(),
+            ));
+        }
+
+        let command = SessionCommand::Rebase {
+            base_branch,
+            operation_id: uuid::Uuid::new_v4().to_string(),
+        };
+        if let Err(error) = manager
+            .enqueue_session_command(services, &persisted_session_id, command)
+            .await
+        {
+            let _ = SessionTaskService::update_status(
+                &status,
+                clock.as_ref(),
+                &db,
+                &app_event_tx,
+                &session_update_versions,
+                &persisted_session_id,
+                Status::Review,
+            )
+            .await;
+
+            return Err(error);
+        }
+
+        Ok(())
+    }
+
+    /// Loads and validates the immutable inputs needed to enqueue a session
+    /// rebase command.
+    ///
+    /// # Errors
+    /// Returns an error when the session cannot be rebased or has no
+    /// worktree-backed base branch.
+    async fn load_rebase_start_context(
+        manager: &SessionManager,
+        services: &AppServices,
+        session_id: &str,
+    ) -> Result<(String, SessionId), SessionError> {
         let session = manager
             .session_or_err(session_id)
             .map_err(|_| SessionError::NotFound)?;
@@ -686,59 +790,7 @@ impl SessionMergeService {
                 SessionError::Workflow("No git worktree for this session".to_string())
             })?;
 
-        let handles = manager
-            .session_handles_or_err(session_id)
-            .map_err(|_| SessionError::HandlesNotFound)?;
-        let child_pid = Arc::clone(&handles.child_pid);
-        let output = Arc::clone(&handles.output);
-
-        let status = Arc::clone(&handles.status);
-        let db = services.db().clone();
-        let app_event_tx = services.event_sender();
-        let clock = services.clock();
-        let fs_client = services.fs_client();
-        let git_client = manager.git_client();
-        let session_update_versions = services.session_update_versions();
-
-        if !SessionTaskService::update_status(
-            &status,
-            clock.as_ref(),
-            &db,
-            &app_event_tx,
-            &session_update_versions,
-            &session.id,
-            Status::Rebasing,
-        )
-        .await
-        {
-            return Err(SessionError::Workflow(
-                "Invalid status transition to Rebasing".to_string(),
-            ));
-        }
-
-        let id = session.id.clone();
-        let session_model = session.model;
-
-        let rebase_task_input = RebaseTaskInput {
-            app_event_tx,
-            base_branch,
-            child_pid,
-            clock,
-            db,
-            folder: session.folder.clone(),
-            fs_client,
-            git_client,
-            id,
-            output,
-            session_model,
-            session_update_versions,
-            status,
-        };
-        tokio::spawn(async move {
-            SessionManager::run_rebase_task(rebase_task_input).await;
-        });
-
-        Ok(())
+        Ok((base_branch, session.id.clone()))
     }
 }
 
@@ -973,6 +1025,7 @@ impl SessionManager {
     fn merge_rebase_input(input: &MergeTaskInput) -> RebaseAssistInput {
         RebaseAssistInput {
             app_event_tx: input.app_event_tx.clone(),
+            assist_mode: RebaseAssistMode::OneShot,
             child_pid: Arc::clone(&input.child_pid),
             db: input.db.clone(),
             folder: input.folder.clone(),
@@ -1109,13 +1162,13 @@ impl SessionManager {
     ///
     /// # Errors
     /// Returns an error if the session is invalid for rebase, required git
-    /// metadata is missing, or starting the rebase task fails.
+    /// metadata is missing, or enqueueing the rebase command fails.
     pub async fn rebase_session(
-        &self,
+        &mut self,
         services: &AppServices,
         session_id: &str,
     ) -> Result<(), SessionError> {
-        self.merge_service()
+        SessionMergeService
             .rebase_session(self, services, session_id)
             .await
     }
@@ -1367,9 +1420,15 @@ impl SessionManager {
         }
     }
 
-    async fn run_rebase_task(input: RebaseTaskInput) {
-        let RebaseTaskInput {
+    /// Runs a rebase command and finalizes its user-visible status/output.
+    ///
+    /// # Errors
+    /// Returns an error when the rebase workflow fails after finalization has
+    /// appended the corresponding transcript notice and restored `Review`.
+    pub(super) async fn run_rebase_command(input: RebaseCommandInput) -> Result<(), SessionError> {
+        let RebaseCommandInput {
             app_event_tx,
+            assist_mode,
             base_branch,
             child_pid,
             clock,
@@ -1395,6 +1454,7 @@ impl SessionManager {
             .await?;
             let rebase_input = RebaseAssistInput {
                 app_event_tx: app_event_tx.clone(),
+                assist_mode,
                 child_pid: Arc::clone(&child_pid),
                 db: db.clone(),
                 folder: folder.clone(),
@@ -1410,6 +1470,7 @@ impl SessionManager {
             Self::execute_rebase_workflow(rebase_input).await
         }
         .await;
+        let command_error = rebase_result.as_ref().err().map(ToString::to_string);
 
         Self::finalize_rebase_task(FinalizeRebaseInput {
             app_event_tx: &app_event_tx,
@@ -1424,6 +1485,12 @@ impl SessionManager {
             status: &status,
         })
         .await;
+
+        if let Some(error) = command_error {
+            return Err(SessionError::Workflow(error));
+        }
+
+        Ok(())
     }
 
     /// Resolves the git ref used for rebasing one session branch.
@@ -1799,16 +1866,23 @@ impl SessionManager {
     /// when git/agent operations fail.
     async fn run_rebase_assist_loop(input: RebaseAssistInput) -> Result<(), SessionError> {
         let rebase_in_progress = Self::is_rebase_in_progress(&input).await?;
+        let mut initial_conflict_detail = None;
         if !rebase_in_progress {
             let initial_step = Self::run_rebase_start(&input).await?;
-            if initial_step == git::RebaseStepResult::Completed {
-                return Ok(());
+            match initial_step {
+                git::RebaseStepResult::Completed => return Ok(()),
+                git::RebaseStepResult::Conflict { detail } => {
+                    initial_conflict_detail = Some(detail);
+                }
             }
         }
 
-        Self::run_rebase_assist_loop_core(RebaseAssistLoopInput::Session(input), None)
-            .await
-            .map(|_| ())
+        Self::run_rebase_assist_loop_core(
+            RebaseAssistLoopInput::Session(input),
+            initial_conflict_detail,
+        )
+        .await
+        .map(|_| ())
     }
 
     /// Executes shared bounded assistance loop for both session rebases and
@@ -2220,11 +2294,19 @@ impl SessionManager {
         conflicted_files: &[String],
     ) -> Result<(), SessionError> {
         let prompt = Self::rebase_assist_prompt(&input.rebase_target, conflicted_files)?;
-        let assist_context = Self::assist_context(input);
+        match &input.assist_mode {
+            RebaseAssistMode::ExistingSession(assist_client) => assist_client
+                .resolve_rebase_conflicts(prompt)
+                .await
+                .map_err(|error| error.with_context("Rebase assistance failed")),
+            RebaseAssistMode::OneShot => {
+                let assist_context = Self::assist_context(input);
 
-        run_agent_assist(&assist_context, &prompt)
-            .await
-            .map_err(|error| error.with_context("Rebase assistance failed"))
+                run_agent_assist(&assist_context, &prompt)
+                    .await
+                    .map_err(|error| error.with_context("Rebase assistance failed"))
+            }
+        }
     }
 
     /// Stages all worktree edits and checks whether any conflicts remain.
@@ -2466,6 +2548,7 @@ mod tests {
             temp_dir,
             RebaseAssistInput {
                 app_event_tx,
+                assist_mode: RebaseAssistMode::OneShot,
                 child_pid: Arc::new(Mutex::new(None)),
                 db,
                 folder,
@@ -2986,6 +3069,7 @@ mod tests {
         let temp_dir = tempdir().expect("failed to create temporary test directory");
         let input = RebaseAssistInput {
             app_event_tx: tx,
+            assist_mode: RebaseAssistMode::OneShot,
             child_pid: Arc::new(Mutex::new(None)),
             db,
             folder: temp_dir.path().to_path_buf(),
@@ -3277,6 +3361,87 @@ mod tests {
             Some(repeated_detail.clone()),
         )
         .await;
+
+        // Assert
+        let error = result.expect_err("assist loop should stop on repeated conflict detail");
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "Rebase assistance made no progress: repeated identical conflict state. Last \
+                 detail: {repeated_detail}"
+            )
+        );
+    }
+
+    /// Verifies the first `git rebase` conflict detail seeds no-progress
+    /// tracking for the session rebase loop.
+    #[tokio::test]
+    async fn test_run_rebase_assist_loop_tracks_initial_rebase_conflict_detail() {
+        // Arrange
+        let repeated_detail = "CONFLICT (content): Merge conflict in src/lib.rs".to_string();
+        let mut mock_git_client = git::MockGitClient::new();
+        let mut sequence = Sequence::new();
+        mock_git_client
+            .expect_is_rebase_in_progress()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Box::pin(async { Ok(false) }));
+        mock_git_client
+            .expect_rebase_start()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning({
+                let repeated_detail = repeated_detail.clone();
+
+                move |_, _| {
+                    let repeated_detail = repeated_detail.clone();
+
+                    Box::pin(async move {
+                        Ok(git::RebaseStepResult::Conflict {
+                            detail: repeated_detail,
+                        })
+                    })
+                }
+            });
+        for _ in 0..REBASE_ASSIST_POLICY.max_attempts {
+            mock_git_client
+                .expect_list_conflicted_files()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|_| Box::pin(async { Ok(Vec::new()) }));
+            mock_git_client
+                .expect_list_staged_conflict_marker_files()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|_, _| Box::pin(async { Ok(Vec::new()) }));
+            mock_git_client
+                .expect_rebase_continue()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning({
+                    let repeated_detail = repeated_detail.clone();
+
+                    move |_| {
+                        let repeated_detail = repeated_detail.clone();
+
+                        Box::pin(async move {
+                            Ok(git::RebaseStepResult::Conflict {
+                                detail: repeated_detail,
+                            })
+                        })
+                    }
+                });
+        }
+        mock_git_client
+            .expect_abort_rebase()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        let (_temp_dir, input) =
+            build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
+
+        // Act
+        let result = SessionManager::run_rebase_assist_loop(input).await;
 
         // Assert
         let error = result.expect_err("assist loop should stop on repeated conflict detail");
