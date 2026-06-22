@@ -12,7 +12,7 @@ pub enum AgentKind {
     Codex,
 }
 
-/// One locally runnable agent CLI and the installed version detected at
+/// One locally runnable agent CLI and the installed version refreshed at
 /// startup.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentCliInfo {
@@ -20,14 +20,16 @@ pub struct AgentCliInfo {
     pub executable_name: &'static str,
     /// Agent provider family backed by the executable.
     pub kind: AgentKind,
-    /// Current version probe state for this executable.
+    /// Current automatic update and version probe state for this executable.
     pub version: AgentCliVersion,
 }
 
-/// Version probe state for one locally runnable agent CLI.
+/// Automatic update and version probe state for one locally runnable agent
+/// CLI.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentCliVersion {
-    /// Version detection is still running in the background.
+    /// Startup update plus version detection is still running in the
+    /// background.
     Loading,
     /// Version detection finished, but the executable did not report a usable
     /// version.
@@ -46,7 +48,8 @@ impl AgentCliInfo {
         }
     }
 
-    /// Creates one CLI availability row whose version is still loading.
+    /// Creates one CLI availability row whose update/version refresh is still
+    /// loading.
     pub fn loading(kind: AgentKind) -> Self {
         Self {
             executable_name: kind.executable_name(),
@@ -65,7 +68,8 @@ impl AgentCliInfo {
             .collect()
     }
 
-    /// Builds loading CLI rows for an existing provider availability list.
+    /// Builds loading CLI rows for an existing provider availability list
+    /// while the background update/version refresh is running.
     pub fn loading_from_kinds(agent_kinds: &[AgentKind]) -> Vec<Self> {
         agent_kinds.iter().copied().map(Self::loading).collect()
     }

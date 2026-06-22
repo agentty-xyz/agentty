@@ -71,6 +71,10 @@ automatically installs updates in the background. Progress is shown in the statu
 The new version takes effect on next launch. Use `--no-update` to disable automatic
 updates.
 
+Agent backend CLIs are also refreshed on startup: available `agy`, `claude`, and `codex`
+executables run their `update` command in the background, and the Projects tab updates
+their displayed versions when each refresh finishes.
+
 ## Key Concepts
 
 | Concept | Description | |---------|-------------| | **Agent** | An external AI CLI

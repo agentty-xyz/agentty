@@ -375,7 +375,7 @@ fn agent_cli_summary_lines(agent_clis: &[AgentCliInfo]) -> Vec<Line<'static>> {
 fn agent_cli_version_span(version: &AgentCliVersion) -> Span<'static> {
     match version {
         AgentCliVersion::Loading => Span::styled(
-            "loading...",
+            "updating...",
             Style::default().fg(style::palette::text_muted()),
         ),
         AgentCliVersion::Unknown => stat_value_span("version unknown"),
@@ -954,7 +954,7 @@ mod tests {
     }
 
     #[test]
-    fn test_agent_cli_summary_lines_show_loading_state() {
+    fn test_agent_cli_summary_lines_show_update_loading_state() {
         // Arrange
         let agent_clis = vec![AgentCliInfo::loading(AgentKind::Claude)];
 
@@ -966,7 +966,7 @@ mod tests {
             .join("\n");
 
         // Assert
-        assert!(rendered_text.contains("claude loading..."));
+        assert!(rendered_text.contains("claude updating..."));
     }
 
     #[test]

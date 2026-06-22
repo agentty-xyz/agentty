@@ -4,15 +4,17 @@ use std::env;
 use std::ffi::OsStr;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use crate::domain::agent::{AgentCliInfo, AgentKind};
 
 /// Maximum time spent waiting for one provider CLI `--version` command.
 const AGENT_CLI_VERSION_TIMEOUT: Duration = Duration::from_secs(2);
-/// Poll interval used while waiting for a bounded provider CLI version probe.
-const AGENT_CLI_VERSION_POLL_INTERVAL: Duration = Duration::from_millis(25);
+/// Maximum time spent waiting for one provider CLI `update` command.
+const AGENT_CLI_UPDATE_TIMEOUT: Duration = Duration::from_secs(300);
+/// Poll interval used while waiting for one bounded provider CLI subprocess.
+const AGENT_CLI_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 /// Detects which provider CLIs are locally runnable on the current machine.
 #[cfg_attr(test, mockall::automock)]
@@ -20,7 +22,7 @@ pub trait AgentAvailabilityProbe: Send + Sync {
     /// Returns the agent kinds whose backing CLI executable is available.
     fn available_agent_kinds(&self) -> Vec<AgentKind>;
 
-    /// Returns available agent CLI executables and their detected versions.
+    /// Returns available agent CLI executables and their refreshed versions.
     fn available_agent_clis(&self) -> Vec<AgentCliInfo> {
         AgentCliInfo::from_kinds(&self.available_agent_kinds())
     }
@@ -59,7 +61,7 @@ pub fn executable_name(agent_kind: AgentKind) -> &'static str {
 
 /// Returns available agent CLI metadata from one `PATH` value.
 fn available_agent_clis_from_path(path_value: Option<&OsStr>) -> Vec<AgentCliInfo> {
-    AgentKind::ALL
+    let executable_agent_clis = AgentKind::ALL
         .iter()
         .copied()
         .filter_map(|agent_kind| {
@@ -67,10 +69,9 @@ fn available_agent_clis_from_path(path_value: Option<&OsStr>) -> Vec<AgentCliInf
 
             Some((agent_kind, executable_path))
         })
-        .map(|(agent_kind, executable_path)| {
-            AgentCliInfo::new(agent_kind, detect_agent_cli_version(&executable_path))
-        })
-        .collect()
+        .collect();
+
+    refresh_agent_cli_versions(executable_agent_clis, refresh_agent_cli_version)
 }
 
 /// Returns agent kinds whose executables are present on one `PATH` value.
@@ -114,6 +115,52 @@ fn is_executable_file(candidate_path: &Path) -> bool {
     metadata.permissions().mode() & 0o111 != 0
 }
 
+/// Runs one available CLI's update command, then extracts the installed
+/// version token from a fresh version probe.
+fn refresh_agent_cli_version(executable_path: &Path) -> Option<String> {
+    run_agent_cli_update(executable_path);
+
+    detect_agent_cli_version(executable_path)
+}
+
+/// Refreshes all available CLI versions concurrently while preserving
+/// provider display order.
+fn refresh_agent_cli_versions(
+    executable_agent_clis: Vec<(AgentKind, PathBuf)>,
+    refresh_cli_version: impl Fn(&Path) -> Option<String> + Sync,
+) -> Vec<AgentCliInfo> {
+    std::thread::scope(|scope| {
+        let refresh_cli_version = &refresh_cli_version;
+        let refresh_handles = executable_agent_clis
+            .into_iter()
+            .map(|(agent_kind, executable_path)| {
+                (
+                    agent_kind,
+                    scope.spawn(move || refresh_cli_version(&executable_path)),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        refresh_handles
+            .into_iter()
+            .map(|(agent_kind, refresh_handle)| {
+                AgentCliInfo::new(agent_kind, refresh_handle.join().unwrap_or(None))
+            })
+            .collect()
+    })
+}
+
+/// Runs one available CLI's best-effort self-update command.
+fn run_agent_cli_update(executable_path: &Path) {
+    let _ = run_agent_cli_update_with_timeout(executable_path, AGENT_CLI_UPDATE_TIMEOUT);
+}
+
+/// Runs one available CLI's best-effort self-update command with a
+/// caller-provided timeout.
+fn run_agent_cli_update_with_timeout(executable_path: &Path, timeout: Duration) -> bool {
+    command_status_with_timeout(executable_path, &["update"], timeout).is_some()
+}
+
 /// Runs one available CLI's version command and extracts the installed
 /// version token from its output.
 fn detect_agent_cli_version(executable_path: &Path) -> Option<String> {
@@ -139,18 +186,54 @@ fn detect_agent_cli_version_with_timeout(
 /// Runs one provider CLI `--version` command and stops waiting once the
 /// timeout expires.
 fn version_command_output(executable_path: &Path, timeout: Duration) -> Option<Output> {
+    command_output_with_timeout(executable_path, &["--version"], timeout)
+}
+
+/// Runs one provider CLI command with output discarded and stops waiting once
+/// the timeout expires.
+fn command_status_with_timeout(
+    executable_path: &Path,
+    args: &[&str],
+    timeout: Duration,
+) -> Option<()> {
     let mut child = Command::new(executable_path)
-        .arg("--version")
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    wait_for_child_exit(&mut child, timeout)?;
+    let _ = child.wait().ok()?;
+
+    Some(())
+}
+
+/// Runs one provider CLI command and stops waiting once the timeout expires.
+fn command_output_with_timeout(
+    executable_path: &Path,
+    args: &[&str],
+    timeout: Duration,
+) -> Option<Output> {
+    let mut child = Command::new(executable_path)
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .ok()?;
+    wait_for_child_exit(&mut child, timeout)?;
+
+    child.wait_with_output().ok()
+}
+
+/// Waits for one child process to exit, killing it when the timeout expires.
+fn wait_for_child_exit(child: &mut Child, timeout: Duration) -> Option<()> {
     let started_at = Instant::now();
 
     loop {
         if child.try_wait().ok()?.is_some() {
-            return child.wait_with_output().ok();
+            return Some(());
         }
 
         if started_at.elapsed() >= timeout {
@@ -161,7 +244,7 @@ fn version_command_output(executable_path: &Path, timeout: Duration) -> Option<O
         }
 
         std::thread::sleep(
-            AGENT_CLI_VERSION_POLL_INTERVAL.min(timeout.saturating_sub(started_at.elapsed())),
+            AGENT_CLI_COMMAND_POLL_INTERVAL.min(timeout.saturating_sub(started_at.elapsed())),
         );
     }
 }
@@ -197,6 +280,8 @@ fn parse_agent_cli_version_output(output: &str) -> Option<String> {
 mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use tempfile::tempdir;
 
@@ -260,6 +345,143 @@ mod tests {
                 Some("1.2.3".to_string())
             )]
         );
+    }
+
+    #[test]
+    /// Ensures the startup CLI refresh runs `update` before probing the
+    /// visible version.
+    fn test_available_agent_clis_from_path_updates_before_version_probe() {
+        // Arrange
+        let temp_directory = tempdir().expect("failed to create temp dir");
+        let codex_path = temp_directory.path().join("codex");
+        let version_path = temp_directory.path().join("codex-version");
+        let script = format!(
+            "#!/bin/sh\nif [ \"$1\" = \"update\" ]; then printf '9.9.9-updated\\n' > \"{}\"; exit \
+             0; fi\nif [ \"$1\" = \"--version\" ]; then if [ -f \"{}\" ]; then read version < \
+             \"{}\"; else version='1.0.0-old'; fi; printf 'codex-cli %s\\n' \"$version\"; exit 0; \
+             fi\nexit 1\n",
+            version_path.display(),
+            version_path.display(),
+            version_path.display(),
+        );
+        fs::write(&codex_path, script).expect("failed to create codex executable");
+        fs::set_permissions(&codex_path, fs::Permissions::from_mode(0o755))
+            .expect("failed to mark codex executable");
+        let path_value = env::join_paths([temp_directory.path()]).expect("valid path");
+
+        // Act
+        let available_agent_clis = available_agent_clis_from_path(Some(path_value.as_os_str()));
+
+        // Assert
+        assert_eq!(
+            available_agent_clis,
+            vec![AgentCliInfo::new(
+                AgentKind::Codex,
+                Some("9.9.9-updated".to_string())
+            )]
+        );
+        assert!(version_path.exists());
+    }
+
+    #[test]
+    /// Ensures CLI refreshes start independently so one slow provider does
+    /// not delay every following provider.
+    fn test_refresh_agent_cli_versions_runs_providers_concurrently() {
+        // Arrange
+        let codex_started = Arc::new(AtomicBool::new(false));
+        let refresh_cli_version = {
+            let codex_started = Arc::clone(&codex_started);
+
+            move |executable_path: &Path| {
+                if executable_path.file_name() == Some(OsStr::new("agy")) {
+                    let started_at = Instant::now();
+                    while !codex_started.load(Ordering::SeqCst)
+                        && started_at.elapsed() < Duration::from_millis(200)
+                    {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+
+                    return if codex_started.load(Ordering::SeqCst) {
+                        Some("agy-concurrent".to_string())
+                    } else {
+                        Some("agy-sequential".to_string())
+                    };
+                }
+
+                if executable_path.file_name() == Some(OsStr::new("codex")) {
+                    codex_started.store(true, Ordering::SeqCst);
+
+                    return Some("codex-current".to_string());
+                }
+
+                None
+            }
+        };
+        let executable_agent_clis = vec![
+            (AgentKind::Antigravity, PathBuf::from("agy")),
+            (AgentKind::Codex, PathBuf::from("codex")),
+        ];
+
+        // Act
+        let agent_clis = refresh_agent_cli_versions(executable_agent_clis, refresh_cli_version);
+
+        // Assert
+        assert_eq!(
+            agent_clis,
+            vec![
+                AgentCliInfo::new(AgentKind::Antigravity, Some("agy-concurrent".to_string())),
+                AgentCliInfo::new(AgentKind::Codex, Some("codex-current".to_string())),
+            ]
+        );
+    }
+
+    #[test]
+    /// Ensures failed CLI updates do not prevent the post-update version
+    /// probe from refreshing the row.
+    fn test_refresh_agent_cli_version_probes_version_when_update_fails() {
+        // Arrange
+        let temp_directory = tempdir().expect("failed to create temp dir");
+        let codex_path = temp_directory.path().join("codex");
+        fs::write(
+            &codex_path,
+            "#!/bin/sh\nif [ \"$1\" = \"update\" ]; then exit 1; fi\nif [ \"$1\" = \"--version\" \
+             ]; then printf 'codex-cli 1.2.3\\n'; exit 0; fi\nexit 1\n",
+        )
+        .expect("failed to create codex executable");
+        fs::set_permissions(&codex_path, fs::Permissions::from_mode(0o755))
+            .expect("failed to mark codex executable");
+
+        // Act
+        let detected_version = refresh_agent_cli_version(&codex_path);
+
+        // Assert
+        assert_eq!(detected_version, Some("1.2.3".to_string()));
+    }
+
+    #[test]
+    /// Ensures noisy CLI update commands cannot block on unread pipe buffers.
+    fn test_run_agent_cli_update_discards_output_without_pipe_backpressure() {
+        // Arrange
+        let temp_directory = tempdir().expect("failed to create temp dir");
+        let codex_path = temp_directory.path().join("codex");
+        fs::write(
+            &codex_path,
+            "#!/bin/sh\nif [ \"$1\" = \"update\" ]; then i=0; while [ \"$i\" -lt 4096 ]; do \
+             printf \
+             '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\\n'; \
+             printf \
+             'fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210\\n' \
+             >&2; i=$((i + 1)); done; exit 0; fi\nexit 1\n",
+        )
+        .expect("failed to create noisy codex executable");
+        fs::set_permissions(&codex_path, fs::Permissions::from_mode(0o755))
+            .expect("failed to mark codex executable");
+
+        // Act
+        let did_finish = run_agent_cli_update_with_timeout(&codex_path, Duration::from_secs(2));
+
+        // Assert
+        assert!(did_finish);
     }
 
     #[test]

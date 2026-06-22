@@ -38,7 +38,7 @@ fn projects_page_shows_cwd() {
                 assertion::assert_text_in_region(frame, "Work Pace", &full);
                 assertion::assert_text_in_region(frame, "Agent CLIs", &full);
                 assertion::assert_text_in_region(frame, "claude", &full);
-                assertion::assert_text_in_region(frame, "0.0.0-test", &full);
+                assertion::assert_text_in_region(frame, "0.0.1-updated", &full);
                 assertion::assert_text_in_region(frame, "Tokens In", &full);
                 assertion::assert_text_in_region(frame, "Out", &full);
                 assertion::assert_not_visible(frame, "Version");

@@ -262,6 +262,10 @@ If only `agy` is installed, `/model` shows only Antigravity and its selectable G
 model choices. If none of `agy`, `codex`, or `claude` are installed, Agentty now fails
 at startup with an error telling you to install a supported CLI on `PATH`.
 
+At startup, Agentty runs each available agent CLI's `update` command in the background,
+then probes `--version` and refreshes the Projects tab's **Agent CLIs** rows with the
+current version. Rows show `updating...` until that refresh completes.
+
 <a id="backends-persistent-defaults"></a> For persistent defaults, choose a default
 model in the **Settings** tab (`Tab` to navigate, `Enter` to edit). The selected model
 determines which backend is used for new sessions. Stored defaults that point at an

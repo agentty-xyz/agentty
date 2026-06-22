@@ -76,7 +76,8 @@ impl TaskService {
     }
 
     /// Loads one fresh machine-scoped snapshot of locally runnable agent CLIs
-    /// and their versions behind the injected availability boundary.
+    /// after running their startup update commands behind the injected
+    /// availability boundary.
     pub(super) async fn load_agent_cli_availability(
         availability_probe: Arc<dyn agent::AgentAvailabilityProbe>,
         fallback_agent_kinds: Vec<AgentKind>,
@@ -86,8 +87,8 @@ impl TaskService {
             .unwrap_or_else(|_| AgentCliInfo::from_kinds(&fallback_agent_kinds))
     }
 
-    /// Spawns background agent CLI version detection and emits the completed
-    /// snapshot through the app event bus.
+    /// Spawns background agent CLI update/version refresh and emits the
+    /// completed snapshot through the app event bus.
     pub(super) fn spawn_agent_cli_version_task(
         app_event_tx: &mpsc::UnboundedSender<AppEvent>,
         availability_probe: Arc<dyn agent::AgentAvailabilityProbe>,
@@ -678,8 +679,8 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Ensures CLI version fallback rows preserve the startup-discovered
-    /// availability subset when the blocking probe panics.
+    /// Ensures CLI update/version fallback rows preserve the
+    /// startup-discovered availability subset when the blocking probe panics.
     async fn load_agent_cli_availability_uses_startup_kinds_when_probe_panics() {
         // Arrange
         let fallback_agent_kinds = vec![AgentKind::Claude];

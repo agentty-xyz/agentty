@@ -39,22 +39,23 @@ multi-command `send-keys` flows deterministic in unit tests. | | `AgentChannel` 
 `infra/channel.rs` | Provider-agnostic turn execution (session init, run turn,
 shutdown). | | `AgentBackend` | `infra/agent/backend.rs` | Per-provider setup and
 transport command construction. | | `AgentAvailabilityProbe` |
-`infra/agent/availability.rs` | Machine-scoped backend discovery used to filter settings
-defaults and `/model` without shelling out directly from app or runtime orchestration. |
-| `AppServerClient` | `infra/app_server/contract.rs` | Provider-specific app-server RPC
-execution and session runtime lifecycle. | | `EventSource` | `runtime/event.rs` |
-Terminal event polling for deterministic event-loop tests. | | `Clock` |
-`infra/clock.rs` | Shared wall-clock and monotonic time boundary used by session
-orchestration, runtime render-throttle accounting, and helpers such as pasted-image file
-naming. The `RealClock` production adapter lives alongside the trait in `infra/`. | |
-`Backend` (generic) | `runtime/core.rs` | Runtime accepts `Terminal<B: Backend>` via
-`run_with_backend`, enabling in-process TUI tests with `TestBackend` without a real
-terminal. | | `TerminalOperation` | `runtime/terminal.rs` | Terminal raw-mode and
-alternate-screen transitions for deterministic setup and restore failure-path tests. | |
-`Sleeper` | `lib.rs` | Wall-clock sleep boundary used by retry/polling flows such as git
-rebase assistance. | | `UpdateRunner` | `infra/version.rs` | npm install command
-execution for background auto-updates. | | `VersionCommandRunner` | `infra/version.rs` |
-npm/curl command execution for update checks. | | `ProjectDiscoveryClient` |
+`infra/agent/availability.rs` | Machine-scoped backend discovery and startup CLI
+update/version refresh used to filter settings defaults and `/model` without shelling
+out directly from app or runtime orchestration. | | `AppServerClient` |
+`infra/app_server/contract.rs` | Provider-specific app-server RPC execution and session
+runtime lifecycle. | | `EventSource` | `runtime/event.rs` | Terminal event polling for
+deterministic event-loop tests. | | `Clock` | `infra/clock.rs` | Shared wall-clock and
+monotonic time boundary used by session orchestration, runtime render-throttle
+accounting, and helpers such as pasted-image file naming. The `RealClock` production
+adapter lives alongside the trait in `infra/`. | | `Backend` (generic) |
+`runtime/core.rs` | Runtime accepts `Terminal<B: Backend>` via `run_with_backend`,
+enabling in-process TUI tests with `TestBackend` without a real terminal. | |
+`TerminalOperation` | `runtime/terminal.rs` | Terminal raw-mode and alternate-screen
+transitions for deterministic setup and restore failure-path tests. | | `Sleeper` |
+`lib.rs` | Wall-clock sleep boundary used by retry/polling flows such as git rebase
+assistance. | | `UpdateRunner` | `infra/version.rs` | npm install command execution for
+background auto-updates. | | `VersionCommandRunner` | `infra/version.rs` | npm/curl
+command execution for update checks. | | `ProjectDiscoveryClient` |
 `infra/project_discovery.rs` | Home-directory repository discovery used by startup
 catalog refresh without walking the real filesystem from `app/`. | | `GitCommandRunner`
 | `infra/git/rebase.rs` | Rebase command invocation boundary for conflict/retry tests. |
