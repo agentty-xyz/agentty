@@ -11,14 +11,14 @@ use crate::app::prompt_intent::{
 use crate::domain::agent::AgentKind;
 use crate::domain::input::InputState;
 use crate::domain::session::SessionId;
+use crate::runtime::EventResult;
 use crate::runtime::mode::{at_mention, input_key};
-use crate::runtime::{EventResult, clipboard_image};
 use crate::ui::input_layout::{move_input_cursor_down, move_input_cursor_up};
 use crate::ui::state::app_mode::AppMode;
 use crate::ui::state::prompt::{
     PromptAtMentionState, apply_prompt_delete_range as apply_prompt_delete_range_components,
     current_line_delete_range as prompt_current_line_delete_range, insert_prompt_character,
-    insert_prompt_local_image, insert_prompt_text, prompt_slash_option_count,
+    insert_prompt_text, prompt_slash_option_count,
 };
 
 /// Captures prompt-mode routing flags derived from the current session.
@@ -558,59 +558,10 @@ async fn handle_prompt_submit_key(app: &mut App, prompt_context: &PromptContext)
         .await;
 }
 
-/// Pastes one clipboard image into the prompt composer as an inline
-/// placeholder token.
+/// Dispatches one clipboard-image paste intent for the active prompt.
 async fn handle_prompt_image_paste(app: &mut App, prompt_context: &PromptContext) {
-    let attachment_number = match &app.mode {
-        AppMode::Prompt {
-            attachment_state, ..
-        } => attachment_state.next_attachment_number,
-        _ => return,
-    };
-
-    match clipboard_image::persist_clipboard_image(
-        &prompt_context.session_id,
-        attachment_number,
-        app.services.fs_client().as_ref(),
-    )
-    .await
-    {
-        Ok(persisted_image) => {
-            insert_pasted_image_placeholder(app, persisted_image.local_image_path);
-        }
-        Err(error) => {
-            append_prompt_status_line(
-                app,
-                &prompt_context.session_id,
-                "Paste Image Error",
-                &clipboard_image::normalize_clipboard_image_error(&error),
-            )
-            .await;
-        }
-    }
-}
-
-/// Inserts one persisted image placeholder into the prompt input and records
-/// the attachment metadata in prompt state.
-fn insert_pasted_image_placeholder(app: &mut App, local_image_path: std::path::PathBuf) {
-    if let AppMode::Prompt {
-        attachment_state,
-        history_state,
-        input,
-        slash_state,
-        ..
-    } = &mut app.mode
-    {
-        insert_prompt_local_image(
-            attachment_state,
-            history_state,
-            input,
-            slash_state,
-            local_image_path,
-        );
-    }
-
-    sync_prompt_at_mention_state(app);
+    app.handle_prompt_image_paste_intent(&prompt_context.to_intent_context())
+        .await;
 }
 
 /// Cancels the active prompt and drops any composer-owned attachment files.
@@ -620,16 +571,6 @@ fn insert_pasted_image_placeholder(app: &mut App, local_image_path: std::path::P
 async fn handle_prompt_cancel_key(app: &mut App, prompt_context: &PromptContext) {
     app.handle_prompt_cancel_intent(&prompt_context.to_intent_context())
         .await;
-}
-
-async fn append_output_for_session(app: &App, session_id: &str, output: &str) {
-    app.append_output_for_session(session_id, output).await;
-}
-
-/// Appends one prompt-mode status line to the session transcript shown above
-/// the composer.
-async fn append_prompt_status_line(app: &App, session_id: &str, label: &str, message: &str) {
-    append_output_for_session(app, session_id, &format!("\n[{label}] {message}\n")).await;
 }
 
 fn prompt_input_width<B: Backend>(terminal: &Terminal<B>) -> io::Result<u16>
@@ -949,6 +890,7 @@ mod tests {
         let available_agent_clis =
             crate::domain::agent::AgentCliInfo::from_kinds(&available_agent_kinds);
         let app_server_client_override = app.services.app_server_client_override();
+        let clipboard_image_client_override = Some(app.services.clipboard_image_client());
         let fs_client = app.services.fs_client();
         let review_request_client = app.services.review_request_client();
 
@@ -959,8 +901,46 @@ mod tests {
             crate::app::AppServiceDeps {
                 app_server_client_override,
                 available_agent_kinds,
+                clipboard_image_client_override,
                 fs_client,
                 git_client: mock_git_client,
+                repositories: db,
+                review_request_client,
+            },
+            available_agent_clis,
+        );
+    }
+
+    /// Replaces the app-level clipboard-image dependency with one
+    /// caller-provided mock.
+    fn install_mock_clipboard_image_client(
+        app: &mut App,
+        mock_clipboard_image_client: crate::infra::clipboard_image::MockClipboardImageClient,
+    ) {
+        let clipboard_image_client: std::sync::Arc<
+            dyn crate::infra::clipboard_image::ClipboardImageClient,
+        > = std::sync::Arc::new(mock_clipboard_image_client);
+        let base_path = app.services.base_path().to_path_buf();
+        let db = app.services.db().clone();
+        let event_sender = app.services.event_sender();
+        let available_agent_kinds = app.services.available_agent_kinds();
+        let available_agent_clis =
+            crate::domain::agent::AgentCliInfo::from_kinds(&available_agent_kinds);
+        let app_server_client_override = app.services.app_server_client_override();
+        let fs_client = app.services.fs_client();
+        let git_client = app.services.git_client();
+        let review_request_client = app.services.review_request_client();
+
+        app.services = crate::app::AppServices::new_with_agent_clis(
+            base_path,
+            app.services.clock(),
+            event_sender,
+            crate::app::AppServiceDeps {
+                app_server_client_override,
+                available_agent_kinds,
+                clipboard_image_client_override: Some(clipboard_image_client),
+                fs_client,
+                git_client,
                 repositories: db,
                 review_request_client,
             },
@@ -1213,7 +1193,7 @@ mod tests {
         }
 
         // Act
-        insert_pasted_image_placeholder(&mut app, std::path::PathBuf::from("/tmp/image-1.png"));
+        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
 
         // Assert
         if let AppMode::Prompt {
@@ -1239,10 +1219,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_handle_prompt_image_paste_uses_injected_clipboard_image_client() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+        let expected_session_id = prompt_context.session_id.as_str().to_string();
+        let mut clipboard_image_client =
+            crate::infra::clipboard_image::MockClipboardImageClient::new();
+        clipboard_image_client
+            .expect_persist_clipboard_image()
+            .once()
+            .withf(move |session_id, attachment_number| {
+                session_id == &expected_session_id && *attachment_number == 1
+            })
+            .returning(|_, _| {
+                Box::pin(async {
+                    Ok(crate::infra::clipboard_image::PersistedClipboardImage {
+                        local_image_path: std::path::PathBuf::from("/tmp/pasted.png"),
+                    })
+                })
+            });
+        install_mock_clipboard_image_client(&mut app, clipboard_image_client);
+
+        // Act
+        handle_prompt_image_paste(&mut app, &prompt_context).await;
+
+        // Assert
+        if let AppMode::Prompt {
+            attachment_state,
+            input,
+            ..
+        } = &app.mode
+        {
+            assert_eq!(input.text(), "Review [Image #1]");
+            assert_eq!(attachment_state.attachments.len(), 1);
+            assert_eq!(
+                attachment_state.attachments[0].local_image_path,
+                std::path::PathBuf::from("/tmp/pasted.png")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_prompt_image_paste_reports_injected_clipboard_image_errors() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+        let mut clipboard_image_client =
+            crate::infra::clipboard_image::MockClipboardImageClient::new();
+        clipboard_image_client
+            .expect_persist_clipboard_image()
+            .once()
+            .returning(|_, _| {
+                Box::pin(async { Err(crate::infra::clipboard_image::ClipboardError::NoImage) })
+            });
+        install_mock_clipboard_image_client(&mut app, clipboard_image_client);
+
+        // Act
+        handle_prompt_image_paste(&mut app, &prompt_context).await;
+
+        // Assert
+        app.sessions.sync_from_handles();
+        assert!(
+            app.sessions.sessions()[0]
+                .output
+                .contains("[Paste Image Error] Clipboard does not contain an image.")
+        );
+        if let AppMode::Prompt {
+            attachment_state,
+            input,
+            ..
+        } = &app.mode
+        {
+            assert_eq!(input.text(), "Review ");
+            assert!(attachment_state.attachments.is_empty());
+        }
+    }
+
+    #[tokio::test]
     async fn test_take_submitted_turn_prompt_drains_text_and_attachment_state() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
-        insert_pasted_image_placeholder(&mut app, std::path::PathBuf::from("/tmp/image-1.png"));
+        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
 
         // Act
         let prompt = app.take_submitted_turn_prompt();
@@ -1271,8 +1329,8 @@ mod tests {
     async fn test_take_submitted_turn_prompt_filters_deleted_attachment_placeholders() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
-        insert_pasted_image_placeholder(&mut app, std::path::PathBuf::from("/tmp/image-1.png"));
-        insert_pasted_image_placeholder(&mut app, std::path::PathBuf::from("/tmp/image-2.png"));
+        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
+        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-2.png"));
         if let AppMode::Prompt { input, .. } = &mut app.mode {
             *input = InputState::with_text("Review [Image #2]".to_string());
         }
@@ -1304,8 +1362,8 @@ mod tests {
     async fn test_take_submitted_turn_prompt_sorts_attachments_by_text_position() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("", None).await;
-        insert_pasted_image_placeholder(&mut app, std::path::PathBuf::from("/tmp/image-1.png"));
-        insert_pasted_image_placeholder(&mut app, std::path::PathBuf::from("/tmp/image-2.png"));
+        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
+        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-2.png"));
         if let AppMode::Prompt { input, .. } = &mut app.mode {
             *input = InputState::with_text("[Image #2] then [Image #1]".to_string());
         }
@@ -1936,7 +1994,7 @@ mod tests {
     async fn test_handle_prompt_backspace_removes_whole_image_token_and_attachment() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
-        insert_pasted_image_placeholder(&mut app, std::path::PathBuf::from("/tmp/image-1.png"));
+        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
         if let AppMode::Prompt {
             history_state,
             input,
@@ -1999,7 +2057,7 @@ mod tests {
     async fn test_handle_prompt_delete_removes_whole_image_token_and_attachment() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
-        insert_pasted_image_placeholder(&mut app, std::path::PathBuf::from("/tmp/image-1.png"));
+        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
         if let AppMode::Prompt {
             history_state,
             input,
@@ -2034,16 +2092,16 @@ mod tests {
     async fn test_handle_prompt_delete_reuses_deleted_image_number_on_next_paste() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("", None).await;
-        insert_pasted_image_placeholder(&mut app, std::path::PathBuf::from("/tmp/image-1.png"));
-        insert_pasted_image_placeholder(&mut app, std::path::PathBuf::from("/tmp/image-2.png"));
-        insert_pasted_image_placeholder(&mut app, std::path::PathBuf::from("/tmp/image-3.png"));
+        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
+        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-2.png"));
+        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-3.png"));
         if let AppMode::Prompt { input, .. } = &mut app.mode {
             input.cursor = "[Image #1][Image #2]".chars().count();
         }
 
         // Act
         handle_prompt_delete(&mut app);
-        insert_pasted_image_placeholder(&mut app, std::path::PathBuf::from("/tmp/image-4.png"));
+        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-4.png"));
 
         // Assert
         if let AppMode::Prompt {
@@ -2474,7 +2532,7 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_draft_prompt_app("Review ", None).await;
         app.sessions.sessions_mut()[0].model = crate::domain::agent::AgentModel::ClaudeSonnet46;
-        insert_pasted_image_placeholder(&mut app, std::path::PathBuf::from("/tmp/image-1.png"));
+        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
@@ -2499,7 +2557,7 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
         app.sessions.sessions_mut()[0].model = crate::domain::agent::AgentModel::ClaudeSonnet46;
-        insert_pasted_image_placeholder(&mut app, std::path::PathBuf::from("/tmp/image-1.png"));
+        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
@@ -2628,7 +2686,7 @@ mod tests {
         std::fs::create_dir_all(&image_directory).expect("image directory should exist");
         let image_path = image_directory.join("image-1.png");
         std::fs::write(&image_path, b"png").expect("image file should be written");
-        insert_pasted_image_placeholder(&mut app, image_path.clone());
+        app.insert_pasted_image_placeholder(image_path.clone());
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act

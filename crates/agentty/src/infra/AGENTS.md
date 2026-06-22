@@ -12,6 +12,8 @@ Implementations of external interfaces (Database, Git, System).
 - `app_server.rs` and `app_server/` own shared app-server runtime infrastructure.
 - `file_index.rs` owns gitignore-aware file traversal used by `@` mentions and explorer
   features.
+- `clipboard_image.rs` owns clipboard image capture, PNG encoding, and prompt-image
+  temp-file persistence behind `ClipboardImageClient`.
 
 ## Change Guidance
 

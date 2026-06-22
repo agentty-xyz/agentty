@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use tracing::warn;
 
 use crate::app::{App, ReviewCacheEntry, SessionStatsUsage, diff_content_hash};
@@ -6,10 +8,11 @@ use crate::domain::review;
 use crate::domain::session::{SessionId, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
+use crate::infra::clipboard_image;
 use crate::ui::state::app_mode::AppMode;
 use crate::ui::state::prompt::{
     PromptSlashStage, PromptSuggestionSelection, drain_prompt_submission,
-    resolve_prompt_slash_selection,
+    insert_prompt_local_image, resolve_prompt_slash_selection,
 };
 use crate::ui::text_util::format_token_count;
 
@@ -218,6 +221,62 @@ impl App {
                     .await;
             }
             None => {}
+        }
+    }
+
+    /// Handles the image-paste intent emitted by prompt-mode key routing.
+    ///
+    /// The app layer owns attachment numbering, clipboard-image service
+    /// dispatch, prompt mutation, and user-visible paste errors so runtime
+    /// only routes the key intent.
+    pub(crate) async fn handle_prompt_image_paste_intent(&mut self, context: &PromptIntentContext) {
+        let attachment_number = match &self.mode {
+            AppMode::Prompt {
+                attachment_state, ..
+            } => attachment_state.next_attachment_number,
+            _ => return,
+        };
+
+        match self
+            .services
+            .clipboard_image_client()
+            .persist_clipboard_image(context.session_id.as_str().to_string(), attachment_number)
+            .await
+        {
+            Ok(persisted_image) => {
+                self.insert_pasted_image_placeholder(persisted_image.local_image_path);
+            }
+            Err(error) => {
+                self.append_prompt_status_line(
+                    context.session_id.as_str(),
+                    "Paste Image Error",
+                    &clipboard_image::normalize_clipboard_image_error(&error),
+                )
+                .await;
+            }
+        }
+    }
+
+    /// Inserts one persisted image placeholder into the prompt input and
+    /// records the attachment metadata in prompt state.
+    pub(crate) fn insert_pasted_image_placeholder(&mut self, local_image_path: PathBuf) {
+        if let AppMode::Prompt {
+            at_mention_state,
+            attachment_state,
+            history_state,
+            input,
+            slash_state,
+            ..
+        } = &mut self.mode
+        {
+            insert_prompt_local_image(
+                attachment_state,
+                history_state,
+                input,
+                slash_state,
+                local_image_path,
+            );
+            *at_mention_state = None;
         }
     }
 

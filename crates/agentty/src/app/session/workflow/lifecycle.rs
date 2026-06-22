@@ -2967,8 +2967,9 @@ mod tests {
             event_tx,
             crate::app::service::AppServiceDeps {
                 app_server_client_override: Some(mock_app_server()),
-                fs_client,
                 available_agent_kinds: AgentKind::ALL.to_vec(),
+                clipboard_image_client_override: None,
+                fs_client,
                 git_client,
                 repositories: database.clone(),
                 review_request_client,
@@ -3005,8 +3006,9 @@ mod tests {
             event_tx,
             crate::app::service::AppServiceDeps {
                 app_server_client_override: Some(mock_app_server()),
-                fs_client: Arc::new(create_passthrough_mock_fs_client()),
                 available_agent_kinds: AgentKind::ALL.to_vec(),
+                clipboard_image_client_override: None,
+                fs_client: Arc::new(create_passthrough_mock_fs_client()),
                 git_client,
                 repositories: database.clone(),
                 review_request_client,

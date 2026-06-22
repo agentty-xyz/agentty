@@ -30,29 +30,31 @@ ahead/behind comparisons for both upstream-tracking and session-vs-base-branch s
 | | `FsClient` | `infra/fs.rs` | Async filesystem operations and path probes used by app
 or runtime orchestration, including non-blocking file reads, existence checks,
 canonicalization, session worktree cleanup, and prompt-image temp file or directory
-removal. | | `TmuxClient` | `infra/tmux.rs` | Tmux subprocess operations for opening
-session worktrees and dispatching open commands. | | `TmuxCommandRunner` |
-`infra/tmux.rs` | Internal tmux command boundary that keeps multi-command `send-keys`
-flows deterministic in unit tests. | | `AgentChannel` | `infra/channel.rs` |
-Provider-agnostic turn execution (session init, run turn, shutdown). | | `AgentBackend`
-| `infra/agent/backend.rs` | Per-provider setup and transport command construction. | |
-`AgentAvailabilityProbe` | `infra/agent/availability.rs` | Machine-scoped backend
-discovery used to filter settings defaults and `/model` without shelling out directly
-from app or runtime orchestration. | | `AppServerClient` |
-`infra/app_server/contract.rs` | Provider-specific app-server RPC execution and session
-runtime lifecycle. | | `EventSource` | `runtime/event.rs` | Terminal event polling for
-deterministic event-loop tests. | | `Clock` | `infra/clock.rs` | Shared wall-clock and
-monotonic time boundary used by session orchestration, runtime render-throttle
-accounting, and helpers such as pasted-image file naming. The `RealClock` production
-adapter lives alongside the trait in `infra/`. | | `Backend` (generic) |
-`runtime/core.rs` | Runtime accepts `Terminal<B: Backend>` via `run_with_backend`,
-enabling in-process TUI tests with `TestBackend` without a real terminal. | |
-`TerminalOperation` | `runtime/terminal.rs` | Terminal raw-mode and alternate-screen
-transitions for deterministic setup and restore failure-path tests. | | `Sleeper` |
-`lib.rs` | Wall-clock sleep boundary used by retry/polling flows such as git rebase
-assistance. | | `UpdateRunner` | `infra/version.rs` | npm install command execution for
-background auto-updates. | | `VersionCommandRunner` | `infra/version.rs` | npm/curl
-command execution for update checks. | | `ProjectDiscoveryClient` |
+removal. | | `ClipboardImageClient` | `infra/clipboard_image.rs` | Host clipboard image
+capture, PNG encoding, injected-clock file naming, filesystem persistence, and
+paste-error normalization for prompt attachments. | | `TmuxClient` | `infra/tmux.rs` |
+Tmux subprocess operations for opening session worktrees and dispatching open commands.
+| | `TmuxCommandRunner` | `infra/tmux.rs` | Internal tmux command boundary that keeps
+multi-command `send-keys` flows deterministic in unit tests. | | `AgentChannel` |
+`infra/channel.rs` | Provider-agnostic turn execution (session init, run turn,
+shutdown). | | `AgentBackend` | `infra/agent/backend.rs` | Per-provider setup and
+transport command construction. | | `AgentAvailabilityProbe` |
+`infra/agent/availability.rs` | Machine-scoped backend discovery used to filter settings
+defaults and `/model` without shelling out directly from app or runtime orchestration. |
+| `AppServerClient` | `infra/app_server/contract.rs` | Provider-specific app-server RPC
+execution and session runtime lifecycle. | | `EventSource` | `runtime/event.rs` |
+Terminal event polling for deterministic event-loop tests. | | `Clock` |
+`infra/clock.rs` | Shared wall-clock and monotonic time boundary used by session
+orchestration, runtime render-throttle accounting, and helpers such as pasted-image file
+naming. The `RealClock` production adapter lives alongside the trait in `infra/`. | |
+`Backend` (generic) | `runtime/core.rs` | Runtime accepts `Terminal<B: Backend>` via
+`run_with_backend`, enabling in-process TUI tests with `TestBackend` without a real
+terminal. | | `TerminalOperation` | `runtime/terminal.rs` | Terminal raw-mode and
+alternate-screen transitions for deterministic setup and restore failure-path tests. | |
+`Sleeper` | `lib.rs` | Wall-clock sleep boundary used by retry/polling flows such as git
+rebase assistance. | | `UpdateRunner` | `infra/version.rs` | npm install command
+execution for background auto-updates. | | `VersionCommandRunner` | `infra/version.rs` |
+npm/curl command execution for update checks. | | `ProjectDiscoveryClient` |
 `infra/project_discovery.rs` | Home-directory repository discovery used by startup
 catalog refresh without walking the real filesystem from `app/`. | | `GitCommandRunner`
 | `infra/git/rebase.rs` | Rebase command invocation boundary for conflict/retry tests. |
@@ -93,7 +95,9 @@ without parsing formatted messages.
 `std::io::Error` | | `AppServerError` | `infra/app_server/error.rs` | `Transport`,
 `Provider`, `SessionNotFound`, `Shutdown` | `AppServerTransportError` via `#[from]` | |
 `AgentError` | `infra/channel/contract.rs` | `AppServer`, `Backend`, `Io` |
-`AppServerError` via `#[from]` |
+`AppServerError` via `#[from]` | | `ClipboardError` | `infra/clipboard_image.rs` |
+`Unavailable`, `NoImage`, `Persist`, `PathResolve`, `SystemClock`, etc. | `arboard`,
+`image`, filesystem, clock, and task-join failures |
 
 The conversion chain `AppServerTransportError` → `AppServerError::Transport` →
 `AgentError::AppServer` allows `?`-propagation through the transport, provider, and

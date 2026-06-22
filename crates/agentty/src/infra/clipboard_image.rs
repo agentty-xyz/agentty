@@ -1,6 +1,9 @@
-//! Clipboard image capture helpers for prompt-mode pasted attachments.
+//! Clipboard image boundary for prompt-mode pasted attachments.
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
 use arboard::Clipboard;
@@ -8,8 +11,11 @@ use image::codecs::png::PngEncoder;
 use image::{ExtendedColorType, ImageEncoder};
 
 use crate::app;
-use crate::infra::clock::{Clock, RealClock};
+use crate::infra::clock::Clock;
 use crate::infra::fs::{self, FsClient};
+
+/// Boxed async result used by [`ClipboardImageClient`] trait methods.
+pub(crate) type ClipboardImageFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
 /// Typed error returned by clipboard image capture and persistence operations.
 ///
@@ -81,6 +87,62 @@ pub(crate) struct PersistedClipboardImage {
     pub(crate) local_image_path: PathBuf,
 }
 
+/// Async boundary for capturing and persisting one pasted clipboard image.
+///
+/// Production uses [`RealClipboardImageClient`], while tests can inject
+/// `MockClipboardImageClient` through [`crate::app::AppServices`] to avoid
+/// touching the host clipboard or filesystem.
+#[cfg_attr(test, mockall::automock)]
+pub(crate) trait ClipboardImageClient: Send + Sync {
+    /// Captures one clipboard image and persists it under the session temp
+    /// image directory.
+    ///
+    /// # Errors
+    /// Returns a [`ClipboardError`] when clipboard access fails, the clipboard
+    /// does not expose an image payload, or the PNG cannot be persisted.
+    fn persist_clipboard_image(
+        &self,
+        session_id: String,
+        attachment_number: usize,
+    ) -> ClipboardImageFuture<Result<PersistedClipboardImage, ClipboardError>>;
+}
+
+/// Production [`ClipboardImageClient`] backed by `arboard`, the injected
+/// filesystem boundary, and the injected wall clock.
+pub(crate) struct RealClipboardImageClient {
+    clock: Arc<dyn Clock>,
+    fs_client: Arc<dyn FsClient>,
+}
+
+impl RealClipboardImageClient {
+    /// Creates a clipboard-image adapter from shared infrastructure
+    /// dependencies.
+    pub(crate) fn new(clock: Arc<dyn Clock>, fs_client: Arc<dyn FsClient>) -> Self {
+        Self { clock, fs_client }
+    }
+}
+
+impl ClipboardImageClient for RealClipboardImageClient {
+    fn persist_clipboard_image(
+        &self,
+        session_id: String,
+        attachment_number: usize,
+    ) -> ClipboardImageFuture<Result<PersistedClipboardImage, ClipboardError>> {
+        let clock = Arc::clone(&self.clock);
+        let fs_client = Arc::clone(&self.fs_client);
+
+        Box::pin(async move {
+            persist_clipboard_image(
+                &session_id,
+                attachment_number,
+                fs_client.as_ref(),
+                clock.as_ref(),
+            )
+            .await
+        })
+    }
+}
+
 /// Reads one clipboard image and persists it as a PNG under the session temp
 /// image directory.
 ///
@@ -88,12 +150,13 @@ pub(crate) struct PersistedClipboardImage {
 /// Returns a [`ClipboardError`] when clipboard access fails, the clipboard
 /// does not expose an image payload, or the PNG cannot be persisted through
 /// the filesystem boundary.
-pub(crate) async fn persist_clipboard_image(
+async fn persist_clipboard_image(
     session_id: &str,
     attachment_number: usize,
     fs_client: &dyn FsClient,
+    clock: &dyn Clock,
 ) -> Result<PersistedClipboardImage, ClipboardError> {
-    let image_output_path = build_clipboard_image_path(session_id, attachment_number)?;
+    let image_output_path = build_clipboard_image_path(session_id, attachment_number, clock)?;
     let clipboard_payload = read_clipboard_payload().await?;
 
     persist_clipboard_payload(fs_client, &image_output_path, clipboard_payload).await?;
@@ -142,22 +205,7 @@ pub(crate) fn clipboard_image_directory(session_id: &str) -> Result<PathBuf, Cli
 /// # Errors
 /// Returns an error when the session id cannot be used as a temp directory
 /// name.
-pub(crate) fn build_clipboard_image_path(
-    session_id: &str,
-    attachment_number: usize,
-) -> Result<PathBuf, ClipboardError> {
-    let clock = RealClock;
-
-    build_clipboard_image_path_with_clock(session_id, attachment_number, &clock)
-}
-
-/// Builds a stable unique PNG path for one pasted image capture using the
-/// provided time source.
-///
-/// # Errors
-/// Returns an error when the session id cannot be used as a temp directory
-/// name or when the clock returns a pre-Unix-epoch timestamp.
-fn build_clipboard_image_path_with_clock(
+fn build_clipboard_image_path(
     session_id: &str,
     attachment_number: usize,
     clock: &dyn Clock,
@@ -406,8 +454,8 @@ mod tests {
         };
 
         // Act
-        let image_path = build_clipboard_image_path_with_clock(session_id, 2, &clock)
-            .expect("image path should resolve");
+        let image_path =
+            build_clipboard_image_path(session_id, 2, &clock).expect("image path should resolve");
 
         // Assert
         assert_eq!(image_path.parent(), Some(expected_directory.as_path()));
@@ -427,7 +475,7 @@ mod tests {
         };
 
         // Act
-        let result = build_clipboard_image_path_with_clock(session_id, 2, &clock);
+        let result = build_clipboard_image_path(session_id, 2, &clock);
 
         // Assert
         assert!(matches!(result, Err(ClipboardError::SystemClock(_))));

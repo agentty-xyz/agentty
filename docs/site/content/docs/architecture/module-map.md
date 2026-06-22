@@ -71,11 +71,11 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
 - `crates/agentty/src/app/project.rs`: `ProjectManager` for project CRUD and selection
   orchestration.
 - `crates/agentty/src/app/prompt_intent.rs`: App-layer prompt intents for prompt
-  submission routing, slash-command execution, `/apply`, `/qe:check`, `/stats`, and
-  prompt cancel cleanup.
+  submission routing, image-paste dispatch, slash-command execution, `/apply`,
+  `/qe:check`, `/stats`, and prompt cancel cleanup.
 - `crates/agentty/src/app/service.rs`: `AppServices` dependency container for
-  `AppRepositories`, `FsClient`, `GitClient`, `ReviewRequestClient`, the optional
-  app-server test override, and the event sender.
+  `AppRepositories`, `FsClient`, `GitClient`, `ClipboardImageClient`,
+  `ReviewRequestClient`, the optional app-server test override, and the event sender.
 - `crates/agentty/src/app/session_state.rs`: Compatibility re-exports for session
   snapshot state.
 - `crates/agentty/src/app/session/state.rs`: `SessionState`, the per-session runtime
@@ -174,6 +174,9 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
   `SqliteSettingRepository`, and global or project-scoped settings queries.
 - `crates/agentty/src/infra/fs.rs`: `FsClient` trait and production async filesystem
   adapter used by app orchestration.
+- `crates/agentty/src/infra/clipboard_image.rs`: `ClipboardImageClient` trait,
+  `RealClipboardImageClient` production adapter, and typed clipboard-image capture,
+  encoding, temp-file persistence, and paste-error normalization for prompt attachments.
 - `crates/agentty/src/infra/git.rs` and `crates/agentty/src/infra/git/`: Git module
   router plus async git workflow commands in `merge.rs`, `rebase.rs`, `repo.rs`,
   `sync.rs`, and `worktree.rs`, including the single-session-commit sync path that
@@ -266,8 +269,6 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
 
 - `crates/agentty/src/runtime.rs`: Runtime module router and public runtime entry
   re-exports.
-- `crates/agentty/src/runtime/clipboard_image.rs`: Clipboard image capture and temporary
-  PNG persistence helpers for prompt-mode attachments.
 - `crates/agentty/src/runtime/core.rs`: Terminal lifecycle, event and render loop
   orchestration, and `TerminalGuard`.
 - `crates/agentty/src/runtime/terminal.rs`: Terminal setup, cleanup, and raw-mode

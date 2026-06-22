@@ -971,6 +971,7 @@ mod tests {
             crate::app::service::AppServiceDeps {
                 app_server_client_override: Some(Arc::new(app_server::MockAppServerClient::new())),
                 available_agent_kinds: AgentKind::ALL.to_vec(),
+                clipboard_image_client_override: None,
                 fs_client: Arc::new(fs::MockFsClient::new()),
                 git_client: Arc::new(git::MockGitClient::new()),
                 repositories: database.clone(),
@@ -1875,6 +1876,7 @@ mod tests {
             crate::app::service::AppServiceDeps {
                 app_server_client_override: services.app_server_client_override(),
                 available_agent_kinds: available_agent_kinds.clone(),
+                clipboard_image_client_override: None,
                 fs_client: services.fs_client(),
                 git_client: services.git_client(),
                 repositories: services.db().clone(),

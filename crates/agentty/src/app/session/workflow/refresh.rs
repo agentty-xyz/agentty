@@ -402,6 +402,7 @@ mod tests {
             crate::app::service::AppServiceDeps {
                 app_server_client_override: Some(mock_app_server()),
                 available_agent_kinds: crate::domain::agent::AgentKind::ALL.to_vec(),
+                clipboard_image_client_override: None,
                 fs_client: Arc::new(create_passthrough_mock_fs_client()),
                 git_client,
                 repositories: database.clone(),

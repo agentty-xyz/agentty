@@ -281,6 +281,7 @@ impl App {
                     .as_ref()
                     .map(Arc::clone),
                 available_agent_kinds,
+                clipboard_image_client_override: None,
                 fs_client: Arc::clone(&clients.fs_client),
                 git_client: Arc::clone(&clients.git_client),
                 repositories,

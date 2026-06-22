@@ -5668,6 +5668,7 @@ mod tests {
             AppServiceDeps {
                 app_server_client_override,
                 available_agent_kinds,
+                clipboard_image_client_override: None,
                 fs_client,
                 git_client: Arc::clone(&mock_git_client),
                 repositories: db,
@@ -5702,6 +5703,7 @@ mod tests {
             AppServiceDeps {
                 app_server_client_override,
                 available_agent_kinds,
+                clipboard_image_client_override: None,
                 fs_client,
                 git_client,
                 repositories: db,

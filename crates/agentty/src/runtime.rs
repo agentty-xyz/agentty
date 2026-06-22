@@ -3,7 +3,6 @@
 //! This parent module intentionally exposes child modules and re-exports
 //! runtime entry APIs.
 
-mod clipboard_image;
 mod core;
 mod event;
 mod key_handler;

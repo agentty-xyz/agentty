@@ -9,6 +9,8 @@ pub mod app_server_router;
 pub mod app_server_transport;
 /// Provider-agnostic agent channel abstraction for session turn execution.
 pub mod channel;
+/// Clipboard image capture and persistence boundary for prompt attachments.
+pub(crate) mod clipboard_image;
 /// Wall-clock boundary used by app, runtime, and session orchestration.
 pub mod clock;
 pub mod db;

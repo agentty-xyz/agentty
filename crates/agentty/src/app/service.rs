@@ -14,6 +14,7 @@ use crate::db::AppRepositories;
 use crate::domain::agent::{AgentCliInfo, AgentKind};
 use crate::domain::session::SessionId;
 use crate::infra::app_server::AppServerClient;
+use crate::infra::clipboard_image::{ClipboardImageClient, RealClipboardImageClient};
 use crate::infra::clock::Clock;
 use crate::infra::fs::FsClient;
 use crate::infra::git::GitClient;
@@ -30,6 +31,9 @@ pub(crate) struct AppServiceDeps {
     pub(crate) app_server_client_override: Option<Arc<dyn AppServerClient>>,
     /// Cached locally runnable backends used to scope model selection.
     pub(crate) available_agent_kinds: Vec<AgentKind>,
+    /// Optional clipboard image client override used by tests and injected
+    /// environments.
+    pub(crate) clipboard_image_client_override: Option<Arc<dyn ClipboardImageClient>>,
     /// Shared filesystem client for async filesystem operations.
     pub(crate) fs_client: Arc<dyn FsClient>,
     /// Shared git client for async git operations.
@@ -47,6 +51,7 @@ pub struct AppServices {
     app_server_client_override: Option<Arc<dyn AppServerClient>>,
     base_path: PathBuf,
     cleanup_task_handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    clipboard_image_client: Arc<dyn ClipboardImageClient>,
     clock: Arc<dyn Clock>,
     event_tx: mpsc::UnboundedSender<AppEvent>,
     fs_client: Arc<dyn FsClient>,
@@ -70,11 +75,18 @@ impl AppServices {
         let AppServiceDeps {
             app_server_client_override,
             available_agent_kinds,
+            clipboard_image_client_override,
             fs_client,
             git_client,
             repositories,
             review_request_client,
         } = deps;
+        let clipboard_image_client = clipboard_image_client_override.unwrap_or_else(|| {
+            Arc::new(RealClipboardImageClient::new(
+                Arc::clone(&clock),
+                Arc::clone(&fs_client),
+            ))
+        });
 
         Self {
             available_agent_clis: Arc::new(Mutex::new(available_agent_clis)),
@@ -82,6 +94,7 @@ impl AppServices {
             app_server_client_override,
             base_path,
             cleanup_task_handles: Arc::default(),
+            clipboard_image_client,
             clock,
             event_tx,
             fs_client,
@@ -127,6 +140,11 @@ impl AppServices {
     /// Returns the shared wall-clock used by session workflows.
     pub(crate) fn clock(&self) -> Arc<dyn Clock> {
         Arc::clone(&self.clock)
+    }
+
+    /// Returns the shared clipboard-image client for pasted image capture.
+    pub(crate) fn clipboard_image_client(&self) -> Arc<dyn ClipboardImageClient> {
+        Arc::clone(&self.clipboard_image_client)
     }
 
     /// Enqueues an app event onto the internal event bus.
