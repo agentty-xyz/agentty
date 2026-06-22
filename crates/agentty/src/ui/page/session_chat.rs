@@ -720,15 +720,15 @@ mod tests {
     fn test_status_bar_fyi_rotates_between_session_chat_messages() {
         // Arrange
         let expected_messages = [
-            "Press ? to inspect the shortcuts available for the current session state.",
-            "Press / to open slash commands without typing into the composer first.",
-            "Press d to review the current worktree diff for this session.",
+            "Queued replies run one by one after the active turn finishes.",
+            "Ctrl+c retracts queued replies before stopping the running turn.",
+            "Published sessions auto-push after queued replies drain.",
+            "After publishing once, p refreshes the same review request.",
+            "Focused review output stays visible until you submit the next prompt.",
+            "Done sessions can continue in a fresh draft with c.",
+            "Stacked child review requests target the parent's review branch.",
             "Use @ to attach files or project context to the next prompt.",
-            "You can queue new messages while a session is in progress.",
-            "Press o to open the session worktree when one is available.",
-            "Agentty starts focused review automatically after each turn.",
-            "Press f to open or regenerate focused review output on demand.",
-            "Type /apply after focused review completes to verify and apply its suggestions.",
+            "Type /apply after focused review completes to verify and apply suggestions.",
         ];
 
         // Act
@@ -742,7 +742,7 @@ mod tests {
         assert_eq!(actual_messages, expected_messages);
         assert_eq!(
             wrapped_message,
-            Some("Press ? to inspect the shortcuts available for the current session state.")
+            Some("Queued replies run one by one after the active turn finishes.")
         );
     }
 

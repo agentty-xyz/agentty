@@ -537,31 +537,39 @@ mod tests {
             crate::ui::page::fyi::session_list_messages(),
             3,
         );
-        let wrapped_message = crate::ui::page::fyi::rotating_message(
+        let fifth_message = crate::ui::page::fyi::rotating_message(
             crate::ui::page::fyi::session_list_messages(),
             4,
+        );
+        let wrapped_message = crate::ui::page::fyi::rotating_message(
+            crate::ui::page::fyi::session_list_messages(),
+            5,
         );
 
         // Assert
         assert_eq!(
             first_message,
-            Some("Press Enter to open the selected session.")
+            Some("Use list sync before starting work when you need the newest base branch.")
         );
         assert_eq!(
             second_message,
-            Some("Go to Settings to specify commands that can open within a session."),
+            Some("Sessions are grouped as merge queue, active work, then archive."),
         );
         assert_eq!(
             third_message,
-            Some("Run Agentty in tmux to use session open commands.")
+            Some("Session timers count active agent work and freeze between turns.")
         );
         assert_eq!(
             fourth_message,
-            Some("Agentty refreshes PR statuses every minute.")
+            Some("Forge badges show whether review requests are open, merged, or closed.")
+        );
+        assert_eq!(
+            fifth_message,
+            Some("Session open commands run through tmux and use the configured Settings entries.")
         );
         assert_eq!(
             wrapped_message,
-            Some("Press Enter to open the selected session.")
+            Some("Use list sync before starting work when you need the newest base branch.")
         );
     }
 

@@ -63,7 +63,9 @@ total.
 
 The top status bar keeps the current version and update status visible, and it also
 rotates short page-scoped `FYI:` messages once per minute while you are in the
-**Sessions** list or a session chat view.
+**Sessions** list or a session chat view. These messages highlight workflow details that
+are easy to miss, such as branch freshness, queued replies, review-request sync, and
+focused-review behavior.
 
 The **Logs** tab starts tailed to the newest entries, with severity and source labels
 highlighted for scanning. Use `k` to move toward older entries, `j` to move back toward

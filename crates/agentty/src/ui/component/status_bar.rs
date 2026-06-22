@@ -205,9 +205,7 @@ mod tests {
         // Assert
         let text = buffer_text(&terminal);
         assert!(
-            text.contains(
-                "FYI: Go to Settings to specify commands that can open within a session."
-            )
+            text.contains("FYI: Sessions are grouped as merge queue, active work, then archive.")
         );
     }
 
@@ -305,9 +303,9 @@ mod tests {
         // Assert
         let text = buffer_text(&terminal);
         assert!(text.contains("Updated to v0.1.13"));
-        assert!(text.contains(
-            "FYI: Press ? to inspect the shortcuts available for the current session state."
-        ));
+        assert!(
+            text.contains("FYI: Queued replies run one by one after the active turn finishes.")
+        );
     }
 
     #[test]
