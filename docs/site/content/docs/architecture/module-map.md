@@ -98,6 +98,10 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
 - `crates/agentty/src/app/session/workflow/load.rs`: Session snapshot loading, including
   persisted question and summary hydration.
 - `crates/agentty/src/app/session/workflow/merge.rs`: Merge and rebase workflows.
+- `crates/agentty/src/app/session/workflow/post_turn.rs`: Completed-turn persistence,
+  reducer projection emission, auto-commit handoff, and final status refresh.
+- `crates/agentty/src/app/session/workflow/published_branch.rs`: Detached post-turn
+  auto-push and linked PR/MR metadata refresh for already-published session branches.
 - `crates/agentty/src/app/session/workflow/refresh.rs`: Periodic refresh scheduling plus
   on-demand forge review-request refresh.
 - `crates/agentty/src/app/session/workflow/review.rs`: Review transcript replay and
@@ -105,9 +109,12 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
 - `crates/agentty/src/app/session/workflow/task.rs`: Session process execution, session
   commit-message generation, auto-commit orchestration that keeps one evolving
   session-branch commit, and status persistence.
+- `crates/agentty/src/app/session/workflow/turn.rs`: Provider-agnostic channel turn
+  execution, cancellation, progress/PID event consumption, title generation, and
+  main-checkout isolation warnings.
 - `crates/agentty/src/app/session/workflow/worker.rs`: Per-session command queue
-  orchestration, `AgentChannel` turn dispatch, and post-turn persistence for summaries
-  and questions.
+  orchestration, session-operation bookkeeping, queued follow-up drainage, and rebase
+  command dispatch.
 
 ## Domain Layer (`domain/`)
 

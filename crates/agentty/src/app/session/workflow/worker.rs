@@ -2,12 +2,10 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ag_forge as forge;
-use serde_json;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -15,26 +13,17 @@ use uuid::Uuid;
 use super::merge::{
     ExistingSessionRebaseAssistClient, RebaseAssistFuture, RebaseAssistMode, RebaseCommandInput,
 };
-use super::{SessionTaskService, isolation};
-use crate::app::assist::AssistContext;
+use super::{SessionTaskService, turn};
 use crate::app::service::SessionUpdateVersionMap;
-use crate::app::session::{
-    Clock, SessionError, TurnAppliedState, remote_branch_name_from_upstream_ref,
-    unix_timestamp_from_system_time,
-};
-use crate::app::{AppEvent, AppServices, SessionManager, branch_publish};
-use crate::domain::agent::{AgentModel, ReasoningLevel};
-use crate::domain::session::{
-    PublishBranchAction, PublishedBranchSyncStatus, ReviewRequest, ReviewRequestState,
-    SessionFollowUpTask, SessionId, SessionStats, Status,
-};
-use crate::domain::setting::SettingName;
-use crate::domain::transcript_notice::TranscriptNotice;
+use crate::app::session::{Clock, SessionError, unix_timestamp_from_system_time};
+use crate::app::{AppEvent, AppServices, SessionManager};
+use crate::domain::agent::AgentModel;
+use crate::domain::session::{SessionId, SessionStats, Status};
 use crate::infra::channel::{
     AgentChannel, AgentError, AgentRequestKind, TurnEvent, TurnPrompt, TurnRequest, TurnResult,
     create_agent_channel,
 };
-use crate::infra::db::{AppRepositories, SessionTurnMetadata};
+use crate::infra::db::AppRepositories;
 use crate::infra::fs::FsClient;
 use crate::infra::git::GitClient;
 use crate::infra::{agent, process};
@@ -119,34 +108,34 @@ impl SessionCommand {
 }
 
 /// Shared state threaded through all worker turn executions.
-struct SessionWorkerContext {
-    app_event_tx: mpsc::UnboundedSender<AppEvent>,
+pub(super) struct SessionWorkerContext {
+    pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
     /// Per-turn cancellation token shared with the UI through
     /// [`SessionHandles`]. The worker swaps in a fresh token at the start
     /// of each turn; the UI calls `cancel()` on the current token to
     /// interrupt a running turn.
-    cancel_token: Arc<Mutex<CancellationToken>>,
+    pub(super) cancel_token: Arc<Mutex<CancellationToken>>,
     /// Provider-agnostic agent channel for this session's worker.
-    channel: Arc<dyn AgentChannel>,
-    child_pid: Arc<Mutex<Option<u32>>>,
-    clock: Arc<dyn Clock>,
-    db: AppRepositories,
-    folder: PathBuf,
-    fs_client: Arc<dyn FsClient>,
-    git_client: Arc<dyn GitClient>,
-    output: Arc<Mutex<String>>,
+    pub(super) channel: Arc<dyn AgentChannel>,
+    pub(super) child_pid: Arc<Mutex<Option<u32>>>,
+    pub(super) clock: Arc<dyn Clock>,
+    pub(super) db: AppRepositories,
+    pub(super) folder: PathBuf,
+    pub(super) fs_client: Arc<dyn FsClient>,
+    pub(super) git_client: Arc<dyn GitClient>,
+    pub(super) output: Arc<Mutex<String>>,
     /// In-memory queue of prompts staged while the session is `InProgress`.
     ///
     /// Shared with [`SessionHandles::queued_messages`]. The worker drains
     /// this queue between turns; the lifecycle pushes new entries when a
     /// user submits a chat message during a running turn.
-    queued_messages: Arc<Mutex<VecDeque<TurnPrompt>>>,
-    review_request_client: Arc<dyn forge::ReviewRequestClient>,
+    pub(super) queued_messages: Arc<Mutex<VecDeque<TurnPrompt>>>,
+    pub(super) review_request_client: Arc<dyn forge::ReviewRequestClient>,
     /// Per-app session update versions shared with the main runtime.
-    session_update_versions: SessionUpdateVersionMap,
-    session_id: SessionId,
-    session_model: AgentModel,
-    status: Arc<Mutex<Status>>,
+    pub(super) session_update_versions: SessionUpdateVersionMap,
+    pub(super) session_id: SessionId,
+    pub(super) session_model: AgentModel,
+    pub(super) status: Arc<Mutex<Status>>,
 }
 
 impl SessionWorkerContext {
@@ -175,7 +164,7 @@ impl SessionWorkerContext {
     /// Treats a poisoned queue lock as non-empty so the worker does not start
     /// side-effectful post-turn work unless it can prove there are no queued
     /// user messages waiting to run.
-    fn has_queued_messages(&self) -> bool {
+    pub(super) fn has_queued_messages(&self) -> bool {
         self.queued_messages
             .lock()
             .map_or(true, |guard| !guard.is_empty())
@@ -253,9 +242,10 @@ impl SessionWorkerRebaseAssistClient {
     /// cannot be persisted.
     async fn run_assist_turn(&self, prompt: String) -> Result<(), SessionError> {
         let turn_cancel_token = self.fresh_turn_cancel_token()?;
-        let session_project_id = load_session_project_id(&self.db, &self.session_id).await;
+        let session_project_id = turn::load_session_project_id(&self.db, &self.session_id).await;
         let reasoning_level =
-            load_session_reasoning_level(&self.db, &self.session_id, session_project_id).await;
+            turn::load_session_reasoning_level(&self.db, &self.session_id, session_project_id)
+                .await;
         let provider_conversation_id = self
             .db
             .sessions()
@@ -281,7 +271,7 @@ impl SessionWorkerRebaseAssistClient {
             reasoning_level,
         };
         let (event_tx, event_rx) = mpsc::unbounded_channel::<TurnEvent>();
-        let consumer = tokio::spawn(consume_turn_events(
+        let consumer = tokio::spawn(turn::consume_turn_events(
             event_rx,
             self.app_event_tx.clone(),
             self.session_id.clone(),
@@ -292,7 +282,7 @@ impl SessionWorkerRebaseAssistClient {
             .run_turn_with_cancellation(turn_cancel_token, req, event_tx)
             .await;
         let _ = consumer.await;
-        let turn_result = turn_result.map_err(session_error_from_agent_error)?;
+        let turn_result = turn_result.map_err(turn::session_error_from_agent_error)?;
 
         self.append_assist_answer(&turn_result.assistant_message)
             .await;
@@ -461,79 +451,6 @@ impl ExistingSessionRebaseAssistClient for SessionWorkerRebaseAssistClient {
         let assist_client = self.clone();
 
         Box::pin(async move { assist_client.run_assist_turn(prompt).await })
-    }
-}
-
-/// Applies one successful turn result to persistence and returns the
-/// corresponding reducer projection.
-struct TurnPersistence<'a> {
-    context: &'a SessionWorkerContext,
-    session_model: AgentModel,
-}
-
-/// Main-checkout tracked-file status captured before one provider turn.
-struct MainCheckoutSnapshot {
-    main_repo_root: PathBuf,
-    tracked_status_output: String,
-}
-
-impl MainCheckoutSnapshot {
-    /// Captures the main repository checkout tracked status before a provider
-    /// turn.
-    ///
-    /// # Errors
-    /// Returns a workflow error when the session folder is not a valid linked
-    /// worktree or the main-checkout tracked status cannot be read.
-    async fn capture(context: &SessionWorkerContext) -> Result<Self, SessionError> {
-        let validation = isolation::validate_session_worktree(
-            context.fs_client.as_ref(),
-            context.git_client.as_ref(),
-            &context.folder,
-            &context.session_id,
-        )
-        .await?;
-        let tracked_status_output = context
-            .git_client
-            .tracked_worktree_status(validation.main_repo_root.clone())
-            .await
-            .map_err(|error| Self::status_error(&error))?;
-
-        Ok(Self {
-            main_repo_root: validation.main_repo_root,
-            tracked_status_output,
-        })
-    }
-
-    /// Builds a warning when a provider turn changed tracked files in the main
-    /// checkout.
-    ///
-    /// # Errors
-    /// Returns a workflow error when the main-checkout tracked status cannot
-    /// be read after the provider turn.
-    async fn changed_warning(
-        &self,
-        context: &SessionWorkerContext,
-    ) -> Result<Option<String>, SessionError> {
-        let current_status = context
-            .git_client
-            .tracked_worktree_status(self.main_repo_root.clone())
-            .await
-            .map_err(|error| Self::status_error(&error))?;
-        if current_status != self.tracked_status_output {
-            return Ok(Some(TranscriptNotice::MainCheckoutWarning.format(
-                "Tracked files in the main checkout changed during this turn. Continuing this \
-                 session; merge and sync actions still require a clean main checkout.",
-            )));
-        }
-
-        Ok(None)
-    }
-
-    /// Converts main-checkout tracked status failures into workflow errors.
-    fn status_error(error: &crate::infra::git::GitError) -> SessionError {
-        SessionError::Workflow(format!(
-            "Session isolation violation: failed to inspect main checkout tracked status: {error}"
-        ))
     }
 }
 
@@ -870,7 +787,7 @@ impl SessionWorkerService {
                 prompt,
                 turn_metadata,
                 ..
-            } => Self::run_channel_turn(context, turn_metadata, request_kind, prompt).await,
+            } => turn::run_channel_turn(context, turn_metadata, request_kind, prompt).await,
         }
     }
 
@@ -901,140 +818,6 @@ impl SessionWorkerService {
             status: Arc::clone(&context.status),
         })
         .await
-    }
-
-    /// Executes one agent turn through the session channel and applies all
-    /// post-turn effects (stats, auto-commit, size refresh, status update).
-    ///
-    /// When `request_kind` is [`AgentRequestKind::SessionResume`], the session
-    /// is first transitioned to `InProgress` (start turns set `InProgress` in
-    /// the lifecycle before enqueueing). Start turns schedule detached title
-    /// generation immediately before the main turn request runs. Progress
-    /// events update the UI indicator; `PidUpdate` events update the shared PID
-    /// slot used for cancellation. If the turn fails, the error is appended to
-    /// session output before transitioning to `Review`; user-stopped turns
-    /// skip that fallback so the UI cancellation path can finalize `Canceled`.
-    ///
-    /// A fresh [`CancellationToken`] is swapped into the shared mutex at
-    /// the top of this function so stale cancellations from previous
-    /// turns cannot affect new work. A `Ctrl+c` arriving during setup
-    /// cancels the new token, which is detected by the early-exit check
-    /// in [`run_turn_with_cancellation`].
-    async fn run_channel_turn(
-        context: &SessionWorkerContext,
-        turn_metadata: TurnMetadata,
-        request_kind: AgentRequestKind,
-        prompt: TurnPrompt,
-    ) -> Result<(), SessionError> {
-        // Swap in a fresh token so stale cancellations from previous
-        // turns are discarded. The cloned token is passed to
-        // `run_turn_with_cancellation` for the duration of this turn.
-        let turn_cancel_token = fresh_turn_cancel_token(context)?;
-
-        if matches!(request_kind, AgentRequestKind::SessionResume { .. }) {
-            // Best-effort: questions persistence failure is non-critical.
-            let _ = context
-                .db
-                .sessions()
-                .update_session_questions(&context.session_id, "")
-                .await;
-
-            // Best-effort: status transition failure is non-critical.
-            let _ = SessionTaskService::update_status(
-                &context.status,
-                context.clock.as_ref(),
-                &context.db,
-                &context.app_event_tx,
-                &context.session_update_versions,
-                &context.session_id,
-                Status::InProgress,
-            )
-            .await;
-        }
-
-        let main_checkout_snapshot = match MainCheckoutSnapshot::capture(context).await {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                SessionManager::cleanup_prompt_attachment_paths(
-                    context.fs_client.clone(),
-                    prompt.local_image_paths().cloned().collect(),
-                )
-                .await;
-                let result = apply_turn_result(
-                    context,
-                    turn_metadata,
-                    Err(AgentError::Backend(error.to_string())),
-                )
-                .await;
-                finalize_channel_turn(context, &result).await;
-
-                return result.map(|_| ());
-            }
-        };
-
-        let session_project_id = load_session_project_id(&context.db, &context.session_id).await;
-        let reasoning_level =
-            load_session_reasoning_level(&context.db, &context.session_id, session_project_id)
-                .await;
-        let provider_conversation_id = context
-            .db
-            .sessions()
-            .get_session_provider_conversation_id(&context.session_id)
-            .await
-            .ok()
-            .flatten();
-        let persisted_instruction_conversation_id = context
-            .db
-            .sessions()
-            .get_session_instruction_conversation_id(&context.session_id)
-            .await
-            .ok()
-            .flatten();
-
-        let req = TurnRequest {
-            folder: context.folder.clone(),
-            live_session_output: Some(Arc::clone(&context.output)),
-            model: turn_metadata.session_model.provider_model_str().to_string(),
-            request_kind: request_kind.clone(),
-            prompt: prompt.clone(),
-            provider_conversation_id,
-            persisted_instruction_conversation_id,
-            reasoning_level,
-        };
-
-        let (event_tx, event_rx) = mpsc::unbounded_channel::<TurnEvent>();
-        let consumer = tokio::spawn(consume_turn_events(
-            event_rx,
-            context.app_event_tx.clone(),
-            context.session_id.clone(),
-            Arc::clone(&context.child_pid),
-        ));
-
-        spawn_start_turn_title_generation(
-            context,
-            session_project_id,
-            &request_kind,
-            &prompt.text,
-            turn_metadata.session_model,
-        )
-        .await;
-
-        let turn_result =
-            run_turn_with_cancellation(context, turn_cancel_token, req, event_tx).await;
-        SessionManager::cleanup_prompt_attachment_paths(
-            context.fs_client.clone(),
-            prompt.local_image_paths().cloned().collect(),
-        )
-        .await;
-
-        let _ = consumer.await;
-
-        let turn_result =
-            add_main_checkout_warning(context, &main_checkout_snapshot, turn_result).await;
-        let result = apply_turn_result(context, turn_metadata, turn_result).await;
-        finalize_channel_turn(context, &result).await;
-
-        result.map(|_| ())
     }
 
     /// Returns whether a queued command should be skipped before execution.
@@ -1164,922 +947,6 @@ impl SessionManager {
     }
 }
 
-/// Converts post-turn main-checkout changes into transcript warnings while
-/// preserving the successful provider result.
-async fn add_main_checkout_warning(
-    context: &SessionWorkerContext,
-    main_checkout_snapshot: &MainCheckoutSnapshot,
-    turn_result: Result<TurnResult, AgentError>,
-) -> Result<TurnResult, AgentError> {
-    let result = turn_result?;
-    match main_checkout_snapshot.changed_warning(context).await {
-        Ok(Some(warning)) => {
-            append_main_checkout_warning(context, warning).await;
-
-            Ok(result)
-        }
-        Ok(None) => Ok(result),
-        Err(error) => Err(AgentError::Backend(error.to_string())),
-    }
-}
-
-impl TurnPersistence<'_> {
-    /// Persists one completed turn and returns the reducer projection derived
-    /// from the canonical stored values.
-    async fn apply(
-        &self,
-        assistant_message: &agent::AgentResponse,
-        input_tokens: u64,
-        output_tokens: u64,
-        provider_conversation_id: Option<&str>,
-    ) -> Result<TurnAppliedState, SessionError> {
-        let summary = persisted_session_summary_payload(assistant_message);
-        let questions = assistant_message.question_items();
-        let questions_json = if questions.is_empty() {
-            String::new()
-        } else {
-            serde_json::to_string(&questions).unwrap_or_default()
-        };
-        let follow_up_tasks = turn_applied_follow_up_tasks(assistant_message);
-        let persisted_follow_up_text = follow_up_tasks
-            .iter()
-            .map(|follow_up_task| follow_up_task.text.clone())
-            .collect::<Vec<_>>();
-        let token_usage_delta = SessionStats {
-            added_lines: 0,
-            deleted_lines: 0,
-            input_tokens,
-            output_tokens,
-        };
-        let instruction_conversation_id =
-            if agent::transport_mode(self.session_model.kind()).uses_app_server() {
-                agent::normalize_instruction_conversation_id(provider_conversation_id)
-            } else {
-                None
-            };
-        self.context
-            .db
-            .sessions()
-            .persist_session_turn_metadata(
-                &self.context.session_id,
-                &SessionTurnMetadata {
-                    instruction_conversation_id,
-                    model: self.session_model.as_str().to_string(),
-                    provider_conversation_id: provider_conversation_id.map(str::to_string),
-                    questions_json,
-                    summary: summary.clone(),
-                    token_usage_delta: token_usage_delta.clone(),
-                },
-            )
-            .await?;
-        self.context
-            .db
-            .sessions()
-            .replace_session_follow_up_tasks(&self.context.session_id, &persisted_follow_up_text)
-            .await?;
-
-        Ok(TurnAppliedState {
-            follow_up_tasks,
-            questions,
-            summary: (!summary.is_empty()).then_some(summary),
-            token_usage_delta,
-        })
-    }
-}
-
-/// Applies the turn result: appends the final response, persists follow-up
-/// metadata, updates stats, and runs auto-commit. Returns `Ok(Status)` on
-/// success or `Err(description)` on turn failure after appending the error to
-/// session output.
-///
-/// The final parsed response appends non-empty protocol `answer` text once the
-/// turn completes. When no `answer` text exists, worker output falls back to
-/// Runs one agent turn with cancellation support.
-///
-/// Races `run_turn` against the per-turn [`CancellationToken`]. When the
-/// token is cancelled (`Ctrl+c`), `SIGTERM` is sent to the active child
-/// process (if any) via [`terminate_child_process`], the channel is shut
-/// down gracefully through `shutdown_session`, and the function waits for
-/// the `run_turn` future to resolve (with a timeout) so the subprocess is
-/// not orphaned. Sending `SIGTERM` from inside the cancellation branch
-/// (rather than from the UI) eliminates the stale-PID / PID-reuse risk:
-/// `run_turn` has not returned yet, so the PID slot still belongs to the
-/// active child.
-///
-/// Each turn receives its own fresh token, created at the start of
-/// [`run_channel_turn`]. This eliminates the stale-permit problem that
-/// required the previous `Notify` + `AtomicBool` flag-check pattern.
-async fn run_turn_with_cancellation(
-    context: &SessionWorkerContext,
-    cancel_token: CancellationToken,
-    req: TurnRequest,
-    event_tx: mpsc::UnboundedSender<TurnEvent>,
-) -> Result<TurnResult, AgentError> {
-    // Honour a cancel that arrived during pre-turn setup, before the
-    // select had a chance to observe it. The token was freshly created
-    // at the top of `run_channel_turn`, so a cancelled state here is a
-    // real `Ctrl+c`, not a stale leftover.
-    if cancel_token.is_cancelled() {
-        terminate_child_process(context);
-        let _ = context
-            .channel
-            .shutdown_session(context.session_id.to_string())
-            .await;
-
-        return Err(AgentError::InterruptedByUser(
-            "[Stopped] Session interrupted by user.".to_string(),
-        ));
-    }
-
-    let turn_future = context
-        .channel
-        .run_turn(context.session_id.to_string(), req, event_tx);
-    tokio::pin!(turn_future);
-
-    tokio::select! {
-        result = &mut turn_future => result,
-        () = cancel_token.cancelled() => {
-            // Send SIGTERM to the child process while it is guaranteed
-            // alive (run_turn has not returned yet). This is safe from
-            // PID-reuse because the PID slot is only cleared after
-            // run_turn completes. App-server channels ignore the signal
-            // because their PID slot is always None.
-            terminate_child_process(context);
-
-            // Graceful shutdown: close stdin, wait for exit, kill if
-            // needed.
-            let _ = context
-                .channel
-                .shutdown_session(context.session_id.to_string())
-                .await;
-
-            // Wait for the turn future to resolve so the subprocess is
-            // not orphaned. CLI channels return a signal-killed error
-            // once the child exits; app-server channels complete once
-            // their runtime stops. A timeout guards against indefinite
-            // blocking if the channel does not shut down promptly.
-            let _ = tokio::time::timeout(
-                Duration::from_secs(5),
-                &mut turn_future,
-            )
-            .await;
-
-            Err(AgentError::InterruptedByUser(
-                "[Stopped] Session interrupted by user.".to_string(),
-            ))
-        }
-    }
-}
-
-/// Sends `SIGTERM` to the active child process tracked in
-/// `context.child_pid`, if any.
-///
-/// Best-effort: the PID slot may be `None` (app-server channels never
-/// publish a PID) or the process may have already exited. Both cases are
-/// silently ignored.
-fn terminate_child_process(context: &SessionWorkerContext) {
-    // Sync critical section (the guard is dropped at the end of the chain
-    // expression, before any `.await`); `std::sync::Mutex` is the correct
-    // choice per CLAUDE.md §"Mutex Selection".
-    let active_pid = context
-        .child_pid
-        .lock()
-        .ok()
-        .and_then(|mut child_pid| child_pid.take());
-
-    if let Some(pid) = active_pid {
-        process::send_terminate_signal(pid);
-    }
-}
-
-/// Replaces the shared cancellation token for a new turn and returns the
-/// token used by the running channel future.
-fn fresh_turn_cancel_token(
-    context: &SessionWorkerContext,
-) -> Result<CancellationToken, SessionError> {
-    // Sync critical section (assignment + clone, no `.await`); `std::sync::Mutex`
-    // is the correct choice per CLAUDE.md §"Mutex Selection".
-    let mut guard = context
-        .cancel_token
-        .lock()
-        .map_err(|_| SessionError::Workflow("cancel token lock poisoned".to_string()))?;
-    *guard = CancellationToken::new();
-
-    Ok(guard.clone())
-}
-
-/// Converts channel-layer turn failures into session workflow errors.
-fn session_error_from_agent_error(error: AgentError) -> SessionError {
-    match error {
-        AgentError::InterruptedByUser(message) => SessionError::StoppedByUser(message),
-        other => SessionError::Workflow(other.to_string()),
-    }
-}
-
-/// joined question text so clarification prompts remain visible while
-/// thought-only responses are not persisted as final transcript output.
-///
-/// The raw agent `summary` payload is stored only in the session row. The
-/// reducer receives a matching [`TurnAppliedState`] projection so the active UI
-/// can render the same summary and follow-up metadata without embedding a
-/// second markdown copy into `session.output`. If canonical metadata
-/// persistence fails, the worker appends a recovery error, triggers
-/// `RefreshSessions`, and skips reducer projection emission.
-async fn apply_turn_result(
-    context: &SessionWorkerContext,
-    turn_metadata: TurnMetadata,
-    turn_result: Result<TurnResult, AgentError>,
-) -> Result<Status, SessionError> {
-    match turn_result {
-        Ok(result) => apply_successful_turn_result(context, turn_metadata, result).await,
-        Err(AgentError::InterruptedByUser(message)) => {
-            append_turn_error(context, &message).await;
-
-            Err(SessionError::StoppedByUser(message))
-        }
-        Err(error) => {
-            let error_text = error.to_string();
-            append_turn_error(context, &error_text).await;
-
-            Err(SessionError::Workflow(error_text))
-        }
-    }
-}
-
-/// Refreshes durable session projections and status after a turn result.
-async fn finalize_channel_turn(
-    context: &SessionWorkerContext,
-    result: &Result<Status, SessionError>,
-) {
-    if let Some((session_size, added_lines, deleted_lines)) =
-        SessionTaskService::refresh_persisted_session_diff_stats(
-            &context.db,
-            context.fs_client.as_ref(),
-            context.git_client.as_ref(),
-            &context.session_id,
-            &context.folder,
-        )
-        .await
-    {
-        // Fire-and-forget: receiver may be dropped during shutdown.
-        let _ = context.app_event_tx.send(AppEvent::SessionSizeUpdated {
-            added_lines,
-            deleted_lines,
-            session_id: context.session_id.clone(),
-            session_size,
-        });
-    }
-
-    if let Some(target_status) = status_update_after_turn_result(result) {
-        // Best-effort: status transition failure is non-critical.
-        let _ = SessionTaskService::update_status(
-            &context.status,
-            context.clock.as_ref(),
-            &context.db,
-            &context.app_event_tx,
-            &context.session_update_versions,
-            &context.session_id,
-            target_status,
-        )
-        .await;
-    }
-}
-
-/// Returns the status transition the worker should emit after a turn result.
-///
-/// User-stopped turns are finalized by the UI cancellation path, which has
-/// already requested `Review` and signaled the worker. The worker therefore
-/// skips its normal error fallback so the stopped turn cannot race with the
-/// explicit UI status transition.
-fn status_update_after_turn_result(result: &Result<Status, SessionError>) -> Option<Status> {
-    match result {
-        Ok(status) => Some(*status),
-        Err(SessionError::StoppedByUser(_)) => None,
-        Err(_) => Some(Status::Review),
-    }
-}
-
-/// Appends one terminal turn error to the live and persisted transcript.
-async fn append_turn_error(context: &SessionWorkerContext, error_text: &str) {
-    let message = format!("\n{}\n", error_text.trim());
-    SessionTaskService::append_session_output(
-        &context.output,
-        &context.db,
-        &context.app_event_tx,
-        &context.session_update_versions,
-        &context.session_id,
-        &message,
-    )
-    .await;
-}
-
-/// Appends one main-checkout warning to the live and persisted transcript.
-async fn append_main_checkout_warning(context: &SessionWorkerContext, warning: String) {
-    SessionTaskService::append_session_output(
-        &context.output,
-        &context.db,
-        &context.app_event_tx,
-        &context.session_update_versions,
-        &context.session_id,
-        &warning,
-    )
-    .await;
-}
-
-/// Persists the successful turn payload, emits the reducer projection, and
-/// runs the auto-commit workflow with the project's fast-model default before
-/// returning the next session status.
-async fn apply_successful_turn_result(
-    context: &SessionWorkerContext,
-    turn_metadata: TurnMetadata,
-    result: TurnResult,
-) -> Result<Status, SessionError> {
-    let TurnResult {
-        assistant_message,
-        context_reset: _,
-        input_tokens,
-        output_tokens,
-        provider_conversation_id,
-    } = result;
-
-    if let Some(message) = build_assistant_transcript_output(&assistant_message) {
-        SessionTaskService::append_session_output(
-            &context.output,
-            &context.db,
-            &context.app_event_tx,
-            &context.session_update_versions,
-            &context.session_id,
-            message.as_str(),
-        )
-        .await;
-    }
-    let turn_applied_state = match (TurnPersistence {
-        context,
-        session_model: turn_metadata.session_model,
-    }
-    .apply(
-        &assistant_message,
-        input_tokens,
-        output_tokens,
-        provider_conversation_id.as_deref(),
-    )
-    .await)
-    {
-        Ok(turn_applied_state) => turn_applied_state,
-        Err(error) => {
-            handle_turn_persistence_failure(context, &error).await;
-
-            return Err(error);
-        }
-    };
-    let target_status = if turn_applied_state.questions.is_empty() {
-        Status::Review
-    } else {
-        Status::Question
-    };
-    // Fire-and-forget: receiver may be dropped during shutdown.
-    let _ = context.app_event_tx.send(AppEvent::AgentResponseReceived {
-        session_id: context.session_id.clone(),
-        turn_applied_state,
-    });
-    let auto_commit_model = SessionTaskService::load_auto_commit_model_setting(
-        &context.db,
-        &context.session_id,
-        turn_metadata.session_model,
-    )
-    .await;
-
-    let commit_outcome = SessionTaskService::handle_auto_commit(AssistContext {
-        app_event_tx: context.app_event_tx.clone(),
-        child_pid: Arc::clone(&context.child_pid),
-        db: context.db.clone(),
-        folder: context.folder.clone(),
-        git_client: Arc::clone(&context.git_client),
-        id: context.session_id.to_string(),
-        output: Arc::clone(&context.output),
-        session_model: auto_commit_model,
-        session_update_versions: context.session_update_versions.clone(),
-    })
-    .await;
-    let review_request_commit_message = commit_outcome.map(|outcome| outcome.commit_message);
-    start_published_branch_auto_push(
-        context,
-        turn_metadata.published_upstream_ref,
-        review_request_commit_message,
-    );
-
-    Ok(target_status)
-}
-
-/// Starts one detached auto-push task for a session that already tracks a
-/// published upstream branch and has no queued follow-up messages waiting.
-fn start_published_branch_auto_push(
-    context: &SessionWorkerContext,
-    published_upstream_ref: Option<String>,
-    review_request_commit_message: Option<String>,
-) {
-    if context.has_queued_messages() {
-        return;
-    }
-
-    let Some(published_upstream_ref) = published_upstream_ref else {
-        return;
-    };
-
-    let sync_operation_id = Uuid::new_v4().to_string();
-    let session_id = context.session_id.clone();
-    let app_event_tx = context.app_event_tx.clone();
-    let db = context.db.clone();
-    let folder = context.folder.clone();
-    let git_client = Arc::clone(&context.git_client);
-    let output = Arc::clone(&context.output);
-    let review_request_metadata_sync =
-        review_request_commit_message.map(|commit_message| ReviewRequestMetadataSyncInput {
-            clock: Arc::clone(&context.clock),
-            commit_message,
-            review_request_client: Arc::clone(&context.review_request_client),
-        });
-    let session_update_versions = context.session_update_versions.clone();
-
-    let _ = app_event_tx.send(AppEvent::PublishedBranchSyncUpdated {
-        session_id: session_id.clone(),
-        sync_operation_id: sync_operation_id.clone(),
-        sync_status: PublishedBranchSyncStatus::InProgress,
-    });
-
-    let auto_push_input = PublishedBranchAutoPushInput {
-        app_event_tx,
-        db,
-        folder,
-        git_client,
-        output,
-        published_upstream_ref,
-        review_request_metadata_sync,
-        session_id,
-        session_update_versions,
-        sync_operation_id,
-    };
-    tokio::spawn(async move {
-        run_published_branch_auto_push_task(auto_push_input).await;
-    });
-}
-
-/// Owned inputs needed by one detached published-branch auto-push task across
-/// session workflows.
-pub(super) struct PublishedBranchAutoPushInput {
-    /// Reducer event sender used to publish auto-push progress and completion.
-    pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
-    /// Repository bundle used to resolve and persist branch-publish state.
-    pub(super) db: AppRepositories,
-    /// Session worktree folder pushed to its tracked upstream branch.
-    pub(super) folder: PathBuf,
-    /// Git boundary used for the remote push operation.
-    pub(super) git_client: Arc<dyn GitClient>,
-    /// Shared transcript buffer used to append push failure messages.
-    pub(super) output: Arc<Mutex<String>>,
-    /// Published upstream reference that provides the remote branch target.
-    pub(super) published_upstream_ref: String,
-    /// Optional metadata sync payload used after a successful post-turn push.
-    pub(super) review_request_metadata_sync: Option<ReviewRequestMetadataSyncInput>,
-    /// Session id whose branch is being pushed.
-    pub(super) session_id: SessionId,
-    /// Per-app session update versions shared with the main runtime.
-    pub(super) session_update_versions: SessionUpdateVersionMap,
-    /// Auto-push operation id used to ignore stale completion updates.
-    pub(super) sync_operation_id: String,
-}
-
-/// Owned dependencies for one optional linked PR/MR metadata sync after push.
-pub(super) struct ReviewRequestMetadataSyncInput {
-    /// Clock used to timestamp the refreshed review-request summary.
-    pub(super) clock: Arc<dyn Clock>,
-    /// Latest auto-commit message used to update linked PR/MR metadata.
-    pub(super) commit_message: String,
-    /// Forge boundary used to refresh linked PR/MR metadata after a push.
-    pub(super) review_request_client: Arc<dyn forge::ReviewRequestClient>,
-}
-
-/// Runs one detached auto-push for a previously published session branch and
-/// reports its state through the app event pipeline.
-pub(super) async fn run_published_branch_auto_push(input: PublishedBranchAutoPushInput) {
-    run_published_branch_auto_push_task(input).await;
-}
-
-/// Executes one detached published-branch auto-push from owned task inputs.
-async fn run_published_branch_auto_push_task(input: PublishedBranchAutoPushInput) {
-    let remote_branch_name = remote_branch_name_from_upstream_ref(&input.published_upstream_ref);
-    let push_result = branch_publish::push_session_branch_to_remote(
-        &input.db,
-        input.folder.clone(),
-        Arc::clone(&input.git_client),
-        PublishBranchAction::Push,
-        &input.session_id,
-        Some(remote_branch_name.as_str()),
-        Some(&input.published_upstream_ref),
-    )
-    .await;
-
-    match push_result {
-        Ok(_) => {
-            if let Some(metadata_sync_input) = input.review_request_metadata_sync.as_ref() {
-                sync_linked_review_request_metadata_after_push(&input, metadata_sync_input).await;
-            }
-
-            let _ = input
-                .app_event_tx
-                .send(AppEvent::PublishedBranchSyncUpdated {
-                    session_id: input.session_id,
-                    sync_operation_id: input.sync_operation_id,
-                    sync_status: PublishedBranchSyncStatus::Succeeded,
-                });
-        }
-        Err(failure) => {
-            let message = TranscriptNotice::BranchPushError.format(failure.message);
-            SessionTaskService::append_session_output(
-                &input.output,
-                &input.db,
-                &input.app_event_tx,
-                &input.session_update_versions,
-                &input.session_id,
-                &message,
-            )
-            .await;
-
-            let _ = input
-                .app_event_tx
-                .send(AppEvent::PublishedBranchSyncUpdated {
-                    session_id: input.session_id,
-                    sync_operation_id: input.sync_operation_id,
-                    sync_status: PublishedBranchSyncStatus::Failed,
-                });
-        }
-    }
-}
-
-/// Syncs linked open review-request metadata after the new commit has reached
-/// the already-published remote branch.
-async fn sync_linked_review_request_metadata_after_push(
-    input: &PublishedBranchAutoPushInput,
-    metadata_sync_input: &ReviewRequestMetadataSyncInput,
-) {
-    let Some(update_input) = review_request_update_input(&metadata_sync_input.commit_message)
-    else {
-        return;
-    };
-    let Some(linked_review_request) = load_open_review_request(input).await else {
-        return;
-    };
-
-    let result = sync_review_request_metadata(
-        input,
-        metadata_sync_input,
-        &linked_review_request,
-        update_input,
-    )
-    .await;
-    if let Err(error) = result {
-        append_review_request_sync_warning(input, error).await;
-    }
-}
-
-/// Builds an update payload from one canonical session commit message.
-fn review_request_update_input(commit_message: &str) -> Option<forge::UpdateReviewRequestInput> {
-    let review_request_commit_message =
-        crate::app::review_request::parse_review_request_commit_message(commit_message)?;
-
-    Some(forge::UpdateReviewRequestInput {
-        body: review_request_commit_message.body,
-        title: review_request_commit_message.title,
-    })
-}
-
-/// Loads the linked review request when it is still open.
-async fn load_open_review_request(input: &PublishedBranchAutoPushInput) -> Option<ReviewRequest> {
-    let review_request = match input
-        .db
-        .reviews()
-        .load_session_review_request(&input.session_id)
-        .await
-    {
-        Ok(Some(row)) => review_request_from_row(row),
-        Ok(None) => None,
-        Err(error) => {
-            warn_review_request_metadata_sync(
-                input,
-                &format!("failed to load linked review request: {error}"),
-            );
-
-            None
-        }
-    }?;
-
-    (review_request.summary.state == ReviewRequestState::Open).then_some(review_request)
-}
-
-/// Converts one persisted review-request row into the domain model used by
-/// session workflows.
-fn review_request_from_row(
-    row: crate::infra::db::SessionReviewRequestRow,
-) -> Option<ReviewRequest> {
-    Some(ReviewRequest {
-        last_refreshed_at: row.last_refreshed_at,
-        summary: forge::ReviewRequestSummary {
-            display_id: row.display_id,
-            forge_kind: forge::ForgeKind::from_str(&row.forge_kind).ok()?,
-            source_branch: row.source_branch,
-            state: ReviewRequestState::from_str(&row.state).ok()?,
-            status_summary: row.status_summary,
-            target_branch: row.target_branch,
-            title: row.title,
-            web_url: row.web_url,
-        },
-    })
-}
-
-/// Runs the forge metadata sync and persists the refreshed review-request
-/// summary when the provider call succeeds.
-async fn sync_review_request_metadata(
-    input: &PublishedBranchAutoPushInput,
-    metadata_sync_input: &ReviewRequestMetadataSyncInput,
-    linked_review_request: &ReviewRequest,
-    update_input: forge::UpdateReviewRequestInput,
-) -> Result<(), SessionError> {
-    let repo_url = input
-        .git_client
-        .repo_url(input.folder.clone())
-        .await
-        .map_err(|error| {
-            SessionError::Workflow(format!(
-                "Failed to resolve repository remote for review-request metadata sync: {error}"
-            ))
-        })?;
-    let remote = metadata_sync_input
-        .review_request_client
-        .detect_remote(repo_url)
-        .map(|remote| remote.with_command_working_directory(input.folder.clone()))
-        .map_err(|error| SessionError::Workflow(error.detail_message()))?;
-    let summary = metadata_sync_input
-        .review_request_client
-        .sync_review_request_metadata(
-            remote,
-            linked_review_request.summary.display_id.clone(),
-            update_input,
-        )
-        .await
-        .map_err(|error| SessionError::Workflow(error.detail_message()))?;
-    let review_request = ReviewRequest {
-        last_refreshed_at: unix_timestamp_from_system_time(
-            metadata_sync_input.clock.now_system_time(),
-        ),
-        summary,
-    };
-
-    input
-        .db
-        .reviews()
-        .update_session_review_request(&input.session_id, Some(review_request))
-        .await?;
-    SessionTaskService::emit_session_updated(
-        &input.app_event_tx,
-        &input.session_update_versions,
-        &input.session_id,
-    );
-    let _ = input.app_event_tx.send(AppEvent::RefreshSessions);
-
-    Ok(())
-}
-
-/// Appends one metadata-sync warning to the session transcript.
-async fn append_review_request_sync_warning(
-    input: &PublishedBranchAutoPushInput,
-    error: SessionError,
-) {
-    warn_review_request_metadata_sync(input, &error.to_string());
-    let message = TranscriptNotice::ReviewRequestSyncWarning.format(format!(
-        "Failed to update linked review-request metadata: {error}"
-    ));
-    SessionTaskService::append_session_output(
-        &input.output,
-        &input.db,
-        &input.app_event_tx,
-        &input.session_update_versions,
-        &input.session_id,
-        &message,
-    )
-    .await;
-}
-
-/// Logs a best-effort review-request metadata sync warning.
-fn warn_review_request_metadata_sync(input: &PublishedBranchAutoPushInput, error: &str) {
-    tracing::warn!(
-        session_id = %input.session_id,
-        error,
-        "failed to sync linked review-request metadata"
-    );
-}
-
-/// Reconciles a failed turn-metadata write by surfacing the error and forcing
-/// the next UI reload to prefer durable state.
-async fn handle_turn_persistence_failure(context: &SessionWorkerContext, error: &SessionError) {
-    let message = TranscriptNotice::TurnMetadataError.format(format!(
-        "Failed to persist completed turn metadata: {error}"
-    ));
-    SessionTaskService::append_session_output(
-        &context.output,
-        &context.db,
-        &context.app_event_tx,
-        &context.session_update_versions,
-        &context.session_id,
-        &message,
-    )
-    .await;
-
-    let _ = context.app_event_tx.send(AppEvent::RefreshSessions);
-}
-
-/// Spawns first-turn session title generation from the initial user prompt.
-async fn spawn_start_turn_title_generation(
-    context: &SessionWorkerContext,
-    session_project_id: Option<i64>,
-    request_kind: &AgentRequestKind,
-    prompt: &str,
-    session_model: AgentModel,
-) {
-    if !matches!(request_kind, AgentRequestKind::SessionStart) {
-        return;
-    }
-
-    let title_model = load_project_model_setting(
-        &context.db,
-        session_project_id,
-        SettingName::DefaultFastModel,
-    )
-    .await
-    .unwrap_or(session_model);
-
-    let _title_generation_task = SessionManager::spawn_session_title_generation_task(
-        context.app_event_tx.clone(),
-        context.db.clone(),
-        &context.session_id,
-        &context.folder,
-        prompt,
-        title_model,
-        None,
-    );
-}
-
-/// Loads the project identifier associated with one persisted session.
-async fn load_session_project_id(db: &AppRepositories, session_id: &str) -> Option<i64> {
-    db.sessions()
-        .load_session_project_id(session_id)
-        .await
-        .ok()
-        .flatten()
-}
-
-/// Loads the effective reasoning level for one session context.
-async fn load_session_reasoning_level(
-    db: &AppRepositories,
-    session_id: &str,
-    project_id: Option<i64>,
-) -> ReasoningLevel {
-    if let Ok(Some(reasoning_level)) = db
-        .sessions()
-        .load_session_reasoning_level_override(session_id)
-        .await
-    {
-        return reasoning_level;
-    }
-
-    let Some(project_id) = project_id else {
-        return ReasoningLevel::default();
-    };
-
-    db.settings()
-        .load_project_reasoning_level(project_id)
-        .await
-        .unwrap_or_default()
-}
-
-/// Loads one project-scoped model setting and parses it into an [`AgentModel`].
-///
-/// Retired persisted model ids are upgraded to their current replacement
-/// models before the setting is returned.
-async fn load_project_model_setting(
-    db: &AppRepositories,
-    project_id: Option<i64>,
-    setting_name: SettingName,
-) -> Option<AgentModel> {
-    let project_id = project_id?;
-
-    db.settings()
-        .get_project_setting(project_id, setting_name)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|setting_value| AgentModel::parse_persisted(&setting_value).ok())
-}
-
-/// Builds the persisted transcript chunk for one parsed assistant response.
-///
-/// Prefers the top-level `answer` text so normal chat output stays concise.
-/// Falls back to joined question text when no answer is present so
-/// clarification prompts stay visible while thought-only responses are not
-/// persisted as final transcript output.
-fn build_assistant_transcript_output(assistant_message: &agent::AgentResponse) -> Option<String> {
-    let answer_text = assistant_message.to_answer_display_text();
-    if !answer_text.trim().is_empty() {
-        return Some(format!("{}\n\n", answer_text.trim_end()));
-    }
-
-    let question_text = assistant_message
-        .question_items()
-        .into_iter()
-        .filter_map(|question_item| {
-            let trimmed_question = question_item.text.trim();
-            if trimmed_question.is_empty() {
-                return None;
-            }
-
-            Some(trimmed_question.to_string())
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n");
-    if question_text.is_empty() {
-        return None;
-    }
-
-    Some(format!("{question_text}\n\n"))
-}
-
-/// Serializes one assistant summary payload for session persistence.
-///
-/// Review-mode rendering uses the raw JSON object so it can display separate
-/// `Current Turn` and `Session Changes` sections without reparsing answer
-/// markdown.
-fn persisted_session_summary_payload(assistant_message: &agent::AgentResponse) -> String {
-    assistant_message
-        .summary
-        .as_ref()
-        .and_then(|summary| serde_json::to_string(summary).ok())
-        .unwrap_or_default()
-}
-
-/// Builds the reducer-facing follow-up-task projection for one assistant
-/// response.
-fn turn_applied_follow_up_tasks(
-    _assistant_message: &agent::AgentResponse,
-) -> Vec<SessionFollowUpTask> {
-    Vec::new()
-}
-
-/// Consumes [`TurnEvent`]s from `event_rx` and applies their side effects.
-///
-/// - [`TurnEvent::ThoughtDelta`]: updates the transient thinking loader text.
-/// - [`TurnEvent::PidUpdate`]: writes the new PID into `child_pid`.
-/// - [`TurnEvent::Completed`] / [`TurnEvent::Failed`]: reserved; ignored here
-///   because completion is signalled by `run_turn`'s return value.
-async fn consume_turn_events(
-    mut event_rx: mpsc::UnboundedReceiver<TurnEvent>,
-    app_event_tx: mpsc::UnboundedSender<AppEvent>,
-    session_id: SessionId,
-    child_pid: Arc<Mutex<Option<u32>>>,
-) {
-    let mut active_progress: Option<String> = None;
-
-    while let Some(event) = event_rx.recv().await {
-        match event {
-            TurnEvent::ThoughtDelta(thought) => {
-                let Some(thought) = normalize_thinking_stream_text(&thought) else {
-                    continue;
-                };
-                if active_progress.as_deref() == Some(thought.as_str()) {
-                    continue;
-                }
-
-                active_progress = Some(thought.clone());
-                SessionTaskService::set_session_progress(&app_event_tx, &session_id, Some(thought));
-            }
-            TurnEvent::PidUpdate(pid) => {
-                // Sync critical section (single assignment, no `.await`);
-                // `std::sync::Mutex` is the correct choice per CLAUDE.md
-                // §"Mutex Selection".
-                if let Ok(mut guard) = child_pid.lock() {
-                    *guard = pid;
-                }
-            }
-            TurnEvent::Completed { .. } | TurnEvent::Failed(_) => {
-                // Completion is signalled by run_turn's return value; these
-                // variants are reserved for future use and ignored here.
-            }
-        }
-    }
-
-    if active_progress.take().is_some() {
-        SessionTaskService::clear_session_progress(&app_event_tx, &session_id);
-    }
-}
-
 /// Appends one drained queued prompt to the session transcript and shared
 /// output buffer so it renders alongside the normal reply prompt line once
 /// the queued turn starts running.
@@ -2118,25 +985,25 @@ async fn append_drained_prompt_to_output(context: &SessionWorkerContext, prompt:
     .await;
 }
 
-/// Returns one normalized thinking text line.
-fn normalize_thinking_stream_text(text: &str) -> Option<String> {
-    let trimmed_text = text.trim();
-    if trimmed_text.is_empty() {
-        return None;
-    }
-
-    Some(trimmed_text.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use mockall::Sequence;
+    use serde_json;
     use tempfile::tempdir;
 
+    use super::super::post_turn::{
+        apply_turn_result, build_assistant_transcript_output, persisted_session_summary_payload,
+        status_update_after_turn_result,
+    };
+    use super::super::turn::{
+        consume_turn_events, run_channel_turn, run_turn_with_cancellation, terminate_child_process,
+    };
     use super::*;
+    use crate::domain::agent::ReasoningLevel;
     use crate::domain::question::QuestionItem;
+    use crate::domain::session::{PublishedBranchSyncStatus, ReviewRequest, ReviewRequestState};
     use crate::infra::agent::AgentResponse;
     use crate::infra::agent::protocol::AgentResponseSummary;
     use crate::infra::channel::MockAgentChannel;
@@ -2488,7 +1355,7 @@ mod tests {
         });
 
         // Act
-        let result = SessionWorkerService::run_channel_turn(
+        let result = run_channel_turn(
             &context,
             default_turn_metadata(),
             AgentRequestKind::SessionStart,
@@ -2620,7 +1487,7 @@ mod tests {
 
         // Act — the turn should complete normally because
         // `run_channel_turn` swaps in a fresh token.
-        let result = SessionWorkerService::run_channel_turn(
+        let result = run_channel_turn(
             &context,
             default_turn_metadata(),
             AgentRequestKind::SessionStart,
@@ -2725,7 +1592,7 @@ mod tests {
         };
 
         // Act
-        let result = SessionWorkerService::run_channel_turn(
+        let result = run_channel_turn(
             &context,
             default_turn_metadata(),
             AgentRequestKind::SessionStart,

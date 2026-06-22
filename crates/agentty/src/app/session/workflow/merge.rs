@@ -11,6 +11,7 @@ use askama::Template;
 use tokio::sync::mpsc;
 use tracing::warn;
 
+use super::published_branch::{self, PublishedBranchAutoPushInput};
 use super::worker::SessionCommand;
 use super::{SessionTaskService, session_branch};
 use crate::app::assist::{
@@ -1741,7 +1742,7 @@ impl SessionManager {
         let git_client = Arc::clone(git_client);
         let output = Arc::clone(output);
         let session_id = SessionId::from(session_id);
-        let auto_push_input = super::worker::PublishedBranchAutoPushInput {
+        let auto_push_input = PublishedBranchAutoPushInput {
             app_event_tx,
             db,
             folder,
@@ -1755,7 +1756,7 @@ impl SessionManager {
         };
 
         tokio::spawn(async move {
-            super::worker::run_published_branch_auto_push(auto_push_input).await;
+            published_branch::run_published_branch_auto_push(auto_push_input).await;
         });
     }
 

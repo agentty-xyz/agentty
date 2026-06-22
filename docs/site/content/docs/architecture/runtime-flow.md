@@ -107,7 +107,7 @@ channels:
 ### Turn event stream (`TurnEvent`)
 
 - Producer(s): `AgentChannel` implementations
-- Consumer(s): Session worker `consume_turn_events()`
+- Consumer(s): Session turn execution `consume_turn_events()`
 - Payload: Loader-thought and pid updates
 - Purpose: Transient loader updates and PID updates while final transcript output waits
   for the completed turn result.
@@ -190,8 +190,8 @@ The printed session-chat data comes from these sources:
   `session.output` so `SessionOutput` can split the transcript into completed-turn
   content and the currently active turn without reparsing generic prompt-looking lines
   from assistant output.
-- `session.summary` Persisted by the turn worker in
-  `crates/agentty/src/app/session/workflow/worker.rs` as the raw protocol `summary`
+- `session.summary` Persisted by post-turn application in
+  `crates/agentty/src/app/session/workflow/post_turn.rs` as the raw protocol `summary`
   payload. `App::apply_agent_response_received()` in `crates/agentty/src/app/core.rs`
   now applies that same raw payload to the in-memory session snapshot immediately, and
   `crates/agentty/src/ui/component/session_output.rs` renders the synthetic summary
@@ -446,12 +446,13 @@ narrow screens.
    without adding transport sentinels.
 1. Session command is persisted in `session_operation` before enqueue.
 1. `SessionWorkerService` lazily creates or reuses a per-session worker queue.
-1. Worker marks operation `running`, checks cancel flags, then runs channel turn.
-1. Worker creates `TurnRequest` (reasoning level, model, prompt, `request_kind`, replay
-   output, provider conversation id).
-1. Worker spawns `consume_turn_events()`.
+1. Worker marks operation `running`, checks cancel flags, then delegates to
+   `workflow/turn.rs` for channel execution.
+1. `workflow/turn.rs` creates `TurnRequest` (reasoning level, model, prompt,
+   `request_kind`, replay output, provider conversation id).
+1. `workflow/turn.rs` spawns `consume_turn_events()`.
 1. `AgentChannel::run_turn()` streams `TurnEvent` values and returns `TurnResult`.
-1. Worker applies final result:
+1. `workflow/post_turn.rs` applies final result:
 1. Append final assistant transcript output when no assistant chunks were already
    streamed (`answer` text, fallback `question` text).
 1. `TurnPersistence::apply(...)` transactionally stores the canonical summary payload,
@@ -522,6 +523,7 @@ remains linked.
 ```mermaid
 flowchart TD
   worker["app/session/workflow/worker.rs"]
+  turn["app/session/workflow/turn.rs"]
   factory["create_agent_channel(kind, override)"]
   provider["Provider registry<br/>infra/agent/provider.rs"]
   cli_mode["transport_mode() -> Cli"]
@@ -532,7 +534,8 @@ flowchart TD
   client_trait["AppServerClient"]
   codex_client["RealCodexAppServerClient"]
 
-  worker --> factory
+  worker --> turn
+  turn --> factory
   factory --> provider
   provider --> cli_mode
   cli_mode --> cli_channel
@@ -557,17 +560,17 @@ by `infra/channel.rs`, with prompt payloads owned by `domain/turn_prompt.rs`):
 <a id="architecture-provider-conversation-id-flow"></a> Provider conversation id flow:
 
 - App-server providers return `provider_conversation_id` in `TurnResult`.
-- Worker persists it to DB (`update_session_provider_conversation_id`).
-- Worker also persists the matching instruction-bootstrap marker so app-server follow-up
-  turns know whether the active provider context already received Agentty's full prompt
-  contract.
+- Post-turn application persists it to DB (`update_session_provider_conversation_id`).
+- Post-turn application also persists the matching instruction-bootstrap marker so
+  app-server follow-up turns know whether the active provider context already received
+  Agentty's full prompt contract.
 - Future `TurnRequest` loads and forwards both values so runtime restarts can resume
   native provider context and decide between a full bootstrap and a compact reminder.
 
 <a id="architecture-session-isolation-guards"></a> Session isolation guards:
 
-- Before every worker-dispatched turn, `worker.rs` calls `workflow/isolation.rs` to
-  verify the session folder exists, is checked out on the expected
+- Before every worker-dispatched turn, `workflow/turn.rs` calls `workflow/isolation.rs`
+  to verify the session folder exists, is checked out on the expected
   `wt/<session-id-prefix>` branch, and resolves to a linked worktree with a distinct
   main checkout.
 - The worker captures `git status --porcelain=v1 --untracked-files=no` for that main
