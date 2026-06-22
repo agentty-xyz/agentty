@@ -7,6 +7,29 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.10.6] - 2026-06-21
+
+### Added
+
+- agentty: show project token usage metrics in the project list.
+
+### Changed
+
+- agentty: refresh agent CLI versions after best-effort startup updates, preserving
+  provider display order and showing `updating...` while the background refresh runs.
+- agentty: split session worker turn workflows into focused workflow modules.
+- agentty: route prompt image paste handling through the infra client boundary.
+- agentty: route session rebase assistance through the session worker.
+- Bump workspace crate metadata and lockfile package versions to `0.10.6`.
+
+### Fixed
+
+- agentty: preserve Antigravity prose after repair failure.
+
+### Contributors
+
+- @minev-dev
+
 ## [v0.10.5] - 2026-06-20
 
 ### Added
