@@ -92,7 +92,7 @@ pub(crate) struct RunAgentAssistTaskInput {
 /// conversation content in the message table.
 pub(crate) struct SessionOutputMessageAppend<'a> {
     /// Formatted transcript chunk appended to the live output buffer and
-    /// legacy `session.output` column.
+    /// in-memory render snapshot.
     pub(crate) formatted_message: &'a str,
     /// Raw conversation message kind persisted in `session_message`.
     pub(crate) kind: SessionMessageKind,
@@ -1004,7 +1004,8 @@ impl SessionTaskService {
         true
     }
 
-    /// Appends output to the in-memory handle buffer and database.
+    /// Appends formatted workflow output to the in-memory handle buffer and
+    /// durable message store.
     pub(crate) async fn append_session_output(
         output: &Arc<Mutex<String>>,
         db: &AppRepositories,
@@ -1023,7 +1024,11 @@ impl SessionTaskService {
                 );
             }
         }
-        if let Err(error) = db.sessions().append_session_output(id, message).await {
+        if let Err(error) = db
+            .sessions()
+            .append_session_message(id, SessionMessageKind::WorkflowNotice, message)
+            .await
+        {
             warn!(
                 session_id = id,
                 error = %error,
@@ -1034,7 +1039,7 @@ impl SessionTaskService {
     }
 
     /// Appends formatted output with a durable raw user/assistant message to
-    /// the in-memory handle buffer and database.
+    /// the in-memory handle buffer and message store.
     pub(crate) async fn append_session_output_message(
         output: &Arc<Mutex<String>>,
         db: &AppRepositories,
@@ -1055,12 +1060,7 @@ impl SessionTaskService {
         }
         if let Err(error) = db
             .sessions()
-            .append_session_output_message(
-                id,
-                message.kind,
-                message.formatted_message,
-                message.raw_content,
-            )
+            .append_session_message(id, message.kind, message.raw_content)
             .await
         {
             warn!(

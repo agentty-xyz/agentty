@@ -114,8 +114,20 @@ pub struct SessionTranscript {
 
 impl SessionTranscript {
     /// Creates an ordered transcript from persisted messages.
+    ///
+    /// A `LegacyTranscript` row is a lossless checkpoint copied from the
+    /// historical `session.output` column. When it appears after earlier
+    /// canonical rows, those earlier rows are still preserved in the database
+    /// but are already represented by the checkpoint text, so rendering starts
+    /// from the latest checkpoint and continues with later rows.
     pub fn new(mut messages: Vec<SessionMessage>) -> Self {
         messages.sort_by_key(|message| message.position);
+        if let Some(legacy_checkpoint_index) = messages
+            .iter()
+            .rposition(|message| message.kind == SessionMessageKind::LegacyTranscript)
+        {
+            messages = messages.split_off(legacy_checkpoint_index);
+        }
 
         Self { messages }
     }
@@ -130,8 +142,8 @@ impl SessionTranscript {
         &self.messages
     }
 
-    /// Serializes the message store into the legacy `session.output`
-    /// transcript.
+    /// Serializes the message store into formatted session-chat transcript
+    /// text.
     ///
     /// User and assistant rows store raw content, so this method injects the
     /// legacy prompt marker and transcript spacing only at the compatibility
@@ -145,6 +157,19 @@ impl SessionTranscript {
 
         output
     }
+}
+
+/// Returns the durable message content for one kind.
+///
+/// Conversation rows store raw user/assistant text with outer whitespace
+/// removed. Compatibility rows preserve their exact formatted content so a
+/// migrated legacy transcript can round-trip without spacing changes.
+pub fn stored_message_content(kind: SessionMessageKind, content: &str) -> String {
+    if kind.is_conversation_message() {
+        return normalized_message_content(content);
+    }
+
+    content.to_string()
 }
 
 impl SessionMessage {
@@ -254,11 +279,55 @@ mod tests {
     }
 
     #[test]
+    fn test_session_transcript_uses_latest_legacy_checkpoint() {
+        // Arrange
+        let messages = vec![
+            SessionMessage::conversation(0, SessionMessageKind::UserPrompt, "old prompt"),
+            SessionMessage::new(
+                1,
+                SessionMessageKind::LegacyTranscript,
+                " › old prompt\n\nold answer\n\n[Sync Error] failed\n",
+            ),
+            SessionMessage::conversation(2, SessionMessageKind::AssistantAnswer, "new answer"),
+        ];
+
+        // Act
+        let transcript = SessionTranscript::new(messages);
+
+        // Assert
+        assert_eq!(
+            transcript.to_legacy_output(),
+            " › old prompt\n\nold answer\n\n[Sync Error] failed\nnew answer\n\n"
+        );
+    }
+
+    #[test]
     fn test_normalized_message_content_removes_outer_whitespace_only() {
         // Arrange, Act, Assert
         assert_eq!(
             normalized_message_content("\n  keep\ninner spacing  \n"),
             "keep\ninner spacing"
+        );
+    }
+
+    #[test]
+    fn test_stored_message_content_preserves_compatibility_spacing() {
+        // Arrange
+        let workflow_notice = "\n[Sync Error] failed\n";
+
+        // Act
+        let stored = stored_message_content(SessionMessageKind::WorkflowNotice, workflow_notice);
+
+        // Assert
+        assert_eq!(stored, workflow_notice);
+    }
+
+    #[test]
+    fn test_stored_message_content_normalizes_conversation_spacing() {
+        // Arrange, Act, Assert
+        assert_eq!(
+            stored_message_content(SessionMessageKind::UserPrompt, "\n  hello  \n"),
+            "hello"
         );
     }
 }

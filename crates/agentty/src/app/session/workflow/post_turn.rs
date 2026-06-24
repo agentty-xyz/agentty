@@ -209,8 +209,8 @@ impl TurnPersistence<'_> {
 /// The raw agent `summary` payload is stored only in the session row. The
 /// reducer receives a matching [`TurnAppliedState`] projection so the active UI
 /// can render the same summary and follow-up metadata without embedding a
-/// second markdown copy into `session.output`. If canonical metadata
-/// persistence fails, the worker appends a recovery error, triggers
+/// second markdown copy into the transcript message store. If canonical
+/// metadata persistence fails, the worker appends a recovery error, triggers
 /// `RefreshSessions`, and skips reducer projection emission.
 pub(super) async fn apply_turn_result(
     context: &PostTurnContext,

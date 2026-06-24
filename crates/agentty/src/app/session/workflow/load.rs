@@ -11,7 +11,10 @@ use crate::domain::session::{
     DailyActivity, PublishedBranchSyncStatus, ReviewRequest, ReviewRequestSummary, Session,
     SessionFollowUpTask, SessionHandles, SessionId, SessionSize, SessionStats, Status,
 };
-use crate::infra::db::{AppRepositories, SessionDetailRow, SessionListRow};
+use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
+use crate::infra::db::{
+    AppRepositories, DbError, SessionDetailRow, SessionListRow, SessionMessageRow,
+};
 use crate::infra::fs::FsClient;
 use crate::infra::git::GitClient;
 
@@ -172,29 +175,22 @@ impl SessionManager {
         let session_model = AgentModel::parse_persisted(&row.model)
             .unwrap_or_else(|_| AgentKind::Antigravity.default_model());
 
-        let session_detail = if active_session_id.is_some_and(|active_id| active_id == row.id) {
-            db.sessions()
-                .load_session_detail(&row.id)
-                .await
-                .ok()
-                .flatten()
-        } else {
-            None
-        };
+        let (session_detail, session_output) =
+            load_active_session_detail(db, *active_session_id, &row.id).await;
 
         let (session_output, session_status) =
             if let Some(existing_handle) = handles.get(&session_id) {
                 output_and_status_from_existing_handle(
                     existing_handle,
                     persisted_status,
-                    session_detail.as_ref(),
+                    session_output.as_deref(),
                 )
             } else {
                 let output = insert_loaded_session_handle(
                     handles,
                     session_id.clone(),
                     persisted_status,
-                    session_detail.as_ref(),
+                    session_output.as_deref(),
                 );
 
                 (output, persisted_status)
@@ -283,8 +279,11 @@ impl SessionManager {
         else {
             return;
         };
+        let Ok(transcript_output) = load_session_transcript_output(db, session_id).await else {
+            return;
+        };
 
-        self.apply_session_detail(session_id, detail);
+        self.apply_session_detail(session_id, detail, transcript_output);
     }
 
     /// Builds one in-memory session snapshot from a database row plus the
@@ -326,19 +325,25 @@ impl SessionManager {
         }
     }
 
-    /// Applies one lazily loaded detail row to the session snapshot and its
-    /// shared runtime handle without clobbering live in-process output.
-    fn apply_session_detail(&mut self, session_id: &str, detail: SessionDetailRow) {
+    /// Applies one lazily loaded detail row and message transcript to the
+    /// session snapshot and its shared runtime handle without clobbering live
+    /// in-process output.
+    fn apply_session_detail(
+        &mut self,
+        session_id: &str,
+        detail: SessionDetailRow,
+        transcript_output: String,
+    ) {
         let session_output = if let Some(handles) = self.state.handles.get(session_id)
             && let Ok(mut handle_output) = handles.output.lock()
         {
             if handle_output.is_empty() {
-                handle_output.clone_from(&detail.output);
+                handle_output.clone_from(&transcript_output);
             }
 
             handle_output.clone()
         } else {
-            detail.output.clone()
+            transcript_output
         };
 
         let Some(session) = self.state.session_mut_for_id(session_id) else {
@@ -354,12 +359,37 @@ impl SessionManager {
     }
 }
 
+/// Loads active-session detail metadata and transcript text for the selected
+/// row only.
+async fn load_active_session_detail(
+    db: &AppRepositories,
+    active_session_id: Option<&str>,
+    row_id: &str,
+) -> (Option<SessionDetailRow>, Option<String>) {
+    if active_session_id.is_none_or(|active_id| active_id != row_id) {
+        return (None, None);
+    }
+
+    let Some(detail) = db
+        .sessions()
+        .load_session_detail(row_id)
+        .await
+        .ok()
+        .flatten()
+    else {
+        return (None, None);
+    };
+    let output = load_session_transcript_output(db, row_id).await.ok();
+
+    (Some(detail), output)
+}
+
 /// Reads output/status from an existing handle while hydrating empty output
 /// from lazily loaded detail when the session has become active.
 fn output_and_status_from_existing_handle(
     existing_handle: &SessionHandles,
     persisted_status: Status,
-    session_detail: Option<&SessionDetailRow>,
+    session_output: Option<&str>,
 ) -> (String, Status) {
     let output_from_handle =
         existing_handle
@@ -368,9 +398,9 @@ fn output_and_status_from_existing_handle(
             .ok()
             .map_or_else(String::new, |mut output| {
                 if output.is_empty()
-                    && let Some(detail) = session_detail
+                    && let Some(session_output) = session_output
                 {
-                    output.push_str(&detail.output);
+                    output.push_str(session_output);
                 }
 
                 output.clone()
@@ -395,17 +425,41 @@ fn insert_loaded_session_handle(
     handles: &mut HashMap<SessionId, SessionHandles>,
     session_id: SessionId,
     persisted_status: Status,
-    session_detail: Option<&SessionDetailRow>,
+    session_output: Option<&str>,
 ) -> String {
-    let output = session_detail
-        .map(|detail| detail.output.clone())
-        .unwrap_or_default();
+    let output = session_output.map(str::to_string).unwrap_or_default();
     handles.insert(
         session_id,
         SessionHandles::new(output.clone(), persisted_status),
     );
 
     output
+}
+
+/// Loads ordered session messages and serializes them into the render
+/// transcript snapshot.
+async fn load_session_transcript_output(
+    db: &AppRepositories,
+    session_id: &str,
+) -> Result<String, DbError> {
+    let messages = db.sessions().load_session_messages(session_id).await?;
+
+    Ok(SessionTranscript::new(session_messages_from_rows(messages)).to_legacy_output())
+}
+
+/// Converts database message rows into domain messages, preserving unknown
+/// kind content as exact legacy transcript text.
+fn session_messages_from_rows(rows: Vec<SessionMessageRow>) -> Vec<SessionMessage> {
+    rows.into_iter()
+        .map(|row| {
+            let kind = row
+                .kind
+                .parse::<SessionMessageKind>()
+                .unwrap_or(SessionMessageKind::LegacyTranscript);
+
+            SessionMessage::new(row.position, kind, row.content)
+        })
+        .collect()
 }
 
 /// Returns whether one persisted session row should be skipped because its
@@ -560,9 +614,13 @@ mod tests {
             .await
             .expect("failed to insert session");
         db.sessions()
-            .append_session_output(session_id, "DB Output")
+            .append_session_message(
+                session_id,
+                SessionMessageKind::LegacyTranscript,
+                "DB Output",
+            )
             .await
-            .expect("failed to append persisted output");
+            .expect("failed to append persisted message");
 
         let base_path = Path::new("/virtual/session-base");
         let session_dir = session_folder(base_path, session_id);
@@ -709,9 +767,13 @@ mod tests {
             .await
             .expect("failed to update session summary");
         db.sessions()
-            .append_session_output(session_id, "persisted output")
+            .append_session_message(
+                session_id,
+                SessionMessageKind::LegacyTranscript,
+                "persisted output",
+            )
             .await
-            .expect("failed to append session output");
+            .expect("failed to append session message");
 
         let base_path = Path::new("/virtual/session-base");
         let session_dir = session_folder(base_path, session_id);
@@ -787,9 +849,13 @@ mod tests {
             .await
             .expect("failed to update summary");
         db.sessions()
-            .append_session_output(session_id, "large output")
+            .append_session_message(
+                session_id,
+                SessionMessageKind::LegacyTranscript,
+                "large output",
+            )
             .await
-            .expect("failed to append output");
+            .expect("failed to append message");
 
         let base_path = Path::new("/virtual/session-base");
         let session_dir = session_folder(base_path, session_id);
@@ -847,9 +913,13 @@ mod tests {
             .await
             .expect("failed to insert session");
         db.sessions()
-            .append_session_output(session_id, "persisted output")
+            .append_session_message(
+                session_id,
+                SessionMessageKind::LegacyTranscript,
+                "persisted output",
+            )
             .await
-            .expect("failed to append output");
+            .expect("failed to append message");
 
         let base_path = Path::new("/virtual/session-base");
         let session_dir = session_folder(base_path, session_id);
@@ -882,6 +952,26 @@ mod tests {
         let handle = handles.get(session_id).expect("missing runtime handle");
         let handle_output = handle.output.lock().expect("failed to lock output");
         assert_eq!(handle_output.as_str(), "persisted output");
+    }
+
+    /// Ensures transcript loading returns database failures instead of
+    /// converting them into empty transcript text.
+    #[tokio::test]
+    async fn test_load_session_transcript_output_returns_query_errors() {
+        // Arrange
+        let (db, pool) = AppRepositories::in_memory_with_pool().await;
+        sqlx::query("DROP TABLE session_message")
+            .execute(&pool)
+            .await
+            .expect("failed to drop session_message table");
+
+        // Act
+        let error = load_session_transcript_output(&db, "missing-session")
+            .await
+            .expect_err("transcript load should fail");
+
+        // Assert
+        assert!(matches!(error, DbError::Query(_)));
     }
 
     /// Ensures terminal persisted statuses replace stale active handle status
