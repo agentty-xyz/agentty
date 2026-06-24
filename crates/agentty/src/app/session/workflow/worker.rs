@@ -159,17 +159,6 @@ impl SessionWorkerContext {
         }
     }
 
-    /// Returns whether follow-up prompts are waiting for inline drainage.
-    ///
-    /// Treats a poisoned queue lock as non-empty so the worker does not start
-    /// side-effectful post-turn work unless it can prove there are no queued
-    /// user messages waiting to run.
-    pub(super) fn has_queued_messages(&self) -> bool {
-        self.queued_messages
-            .lock()
-            .map_or(true, |guard| !guard.is_empty())
-    }
-
     /// Loads the latest published upstream reference before running a queued
     /// follow-up turn.
     ///
@@ -994,8 +983,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::super::post_turn::{
-        apply_turn_result, build_assistant_transcript_output, persisted_session_summary_payload,
-        status_update_after_turn_result,
+        PostTurnContext, apply_turn_result, build_assistant_transcript_output,
+        persisted_session_summary_payload, status_update_after_turn_result,
     };
     use super::super::turn::{
         consume_turn_events, run_channel_turn, run_turn_with_cancellation, terminate_child_process,
@@ -1044,6 +1033,18 @@ mod tests {
             .expect("failed to insert session");
 
         project_id
+    }
+
+    /// Applies one turn result through the narrowed post-turn dependency set
+    /// cloned from a full worker context.
+    async fn apply_worker_turn_result(
+        context: &SessionWorkerContext,
+        turn_metadata: TurnMetadata,
+        turn_result: Result<TurnResult, AgentError>,
+    ) -> Result<Status, SessionError> {
+        let post_turn_context = PostTurnContext::from_worker(context);
+
+        apply_turn_result(&post_turn_context, turn_metadata, turn_result).await
     }
 
     #[test]
@@ -1945,7 +1946,7 @@ mod tests {
             published_upstream_ref: None,
             session_model: AgentModel::AntigravityGemini3FlashPreview,
         };
-        let status = apply_turn_result(&context, turn_metadata, turn_result)
+        let status = apply_worker_turn_result(&context, turn_metadata, turn_result)
             .await
             .expect("turn result should succeed");
         let sessions = db
@@ -2010,7 +2011,7 @@ mod tests {
         };
 
         // Act
-        let status = apply_turn_result(
+        let status = apply_worker_turn_result(
             &context,
             TurnMetadata {
                 published_upstream_ref: Some("origin/wt/session-id".to_string()),
@@ -2082,7 +2083,7 @@ mod tests {
         };
 
         // Act
-        let status = apply_turn_result(
+        let status = apply_worker_turn_result(
             &context,
             TurnMetadata {
                 published_upstream_ref: Some("origin/wt/session-id".to_string()),
@@ -2406,7 +2407,7 @@ mod tests {
             published_upstream_ref: Some("origin/wt/session-id".to_string()),
             session_model: AgentModel::AntigravityGemini3FlashPreview,
         };
-        let status = apply_turn_result(&context, turn_metadata, turn_result)
+        let status = apply_worker_turn_result(&context, turn_metadata, turn_result)
             .await
             .expect("turn result should succeed");
         let sync_events = tokio::time::timeout(Duration::from_secs(1), async {
@@ -2506,7 +2507,7 @@ mod tests {
             published_upstream_ref: Some("origin/wt/session-id".to_string()),
             session_model: AgentModel::AntigravityGemini3FlashPreview,
         };
-        let status = apply_turn_result(&context, turn_metadata, turn_result)
+        let status = apply_worker_turn_result(&context, turn_metadata, turn_result)
             .await
             .expect("turn result should succeed");
         let mut emitted_sync_event = false;
@@ -2601,7 +2602,7 @@ mod tests {
             published_upstream_ref: Some("origin/wt/session-id".to_string()),
             session_model: AgentModel::AntigravityGemini3FlashPreview,
         };
-        let status = apply_turn_result(&context, turn_metadata, turn_result)
+        let status = apply_worker_turn_result(&context, turn_metadata, turn_result)
             .await
             .expect("turn result should succeed");
         let sync_events = tokio::time::timeout(Duration::from_secs(1), async {
@@ -2698,7 +2699,7 @@ mod tests {
             published_upstream_ref: None,
             session_model: AgentModel::AntigravityGemini3FlashPreview,
         };
-        let error = apply_turn_result(&context, turn_metadata, turn_result)
+        let error = apply_worker_turn_result(&context, turn_metadata, turn_result)
             .await
             .expect_err("turn result should fail when metadata persistence fails");
         let events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
@@ -2793,7 +2794,7 @@ mod tests {
             published_upstream_ref: None,
             session_model: AgentModel::AntigravityGemini3FlashPreview,
         };
-        let status = apply_turn_result(&context, turn_metadata, turn_result)
+        let status = apply_worker_turn_result(&context, turn_metadata, turn_result)
             .await
             .expect("turn result should succeed");
         let output = output.lock().expect("output lock poisoned");
@@ -2865,7 +2866,7 @@ mod tests {
             published_upstream_ref: None,
             session_model: AgentModel::Gpt55,
         };
-        let status = apply_turn_result(&context, turn_metadata, turn_result)
+        let status = apply_worker_turn_result(&context, turn_metadata, turn_result)
             .await
             .expect("turn result should succeed");
         let instruction_conversation_id = db
@@ -3520,7 +3521,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_has_queued_messages_reports_pending_prompts() {
+    async fn test_clear_queued_messages_updates_shared_queue_state() {
         // Arrange
         let queue: Arc<Mutex<VecDeque<TurnPrompt>>> =
             Arc::new(Mutex::new(VecDeque::from([TurnPrompt::from_text(
@@ -3529,9 +3530,9 @@ mod tests {
         let context = queue_helper_context(Arc::clone(&queue)).await;
 
         // Act
-        let has_queued_before_clear = context.has_queued_messages();
+        let has_queued_before_clear = !queue.lock().expect("queue lock").is_empty();
         context.clear_queued_messages();
-        let has_queued_after_clear = context.has_queued_messages();
+        let has_queued_after_clear = !queue.lock().expect("queue lock").is_empty();
 
         // Assert
         assert!(has_queued_before_clear);

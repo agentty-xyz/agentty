@@ -1,24 +1,132 @@
 //! Post-turn result application for session workers.
 
-use std::sync::Arc;
+use std::collections::VecDeque;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
+use ag_forge as forge;
 use serde_json;
+use tokio::sync::mpsc;
 
 use super::worker::{SessionWorkerContext, TurnMetadata};
 use super::{SessionTaskService, published_branch};
 use crate::app::AppEvent;
 use crate::app::assist::AssistContext;
-use crate::app::session::{SessionError, TurnAppliedState};
-use crate::domain::session::{SessionFollowUpTask, SessionStats, Status};
+use crate::app::service::SessionUpdateVersionMap;
+use crate::app::session::{Clock, SessionError, TurnAppliedState};
+use crate::domain::session::{SessionFollowUpTask, SessionId, SessionStats, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
-use crate::infra::agent;
 use crate::infra::channel::{AgentError, TurnResult};
-use crate::infra::db::SessionTurnMetadata;
+use crate::infra::db::{AppRepositories, SessionTurnMetadata};
+use crate::infra::fs::FsClient;
+use crate::infra::git::GitClient;
+use crate::infra::{agent, channel};
+
+/// Narrow dependency set used to apply a completed provider turn.
+///
+/// This context intentionally excludes channel execution, filesystem diff
+/// refresh, and status mutation dependencies from the successful-turn path.
+/// New post-turn effects should add dependencies here, or to a smaller nested
+/// input, instead of widening [`SessionWorkerContext`].
+pub(super) struct PostTurnContext {
+    /// Reducer event sender used for output and post-turn projections.
+    pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    /// Shared child-process PID slot reused by auto-commit cancellation.
+    pub(super) child_pid: Arc<Mutex<Option<u32>>>,
+    /// Clock used by linked review-request metadata refresh.
+    pub(super) clock: Arc<dyn Clock>,
+    /// Repository bundle used for turn metadata, settings, and auto-commit.
+    pub(super) db: AppRepositories,
+    /// Session worktree folder used by auto-commit and auto-push effects.
+    pub(super) folder: PathBuf,
+    /// Git boundary used by auto-commit and published-branch auto-push.
+    pub(super) git_client: Arc<dyn GitClient>,
+    /// Shared transcript buffer receiving final response text and notices.
+    pub(super) output: Arc<Mutex<String>>,
+    /// In-memory queue checked before starting detached auto-push effects.
+    pub(super) queued_messages: Arc<Mutex<VecDeque<channel::TurnPrompt>>>,
+    /// Forge boundary used for optional linked PR/MR metadata refresh.
+    pub(super) review_request_client: Arc<dyn forge::ReviewRequestClient>,
+    /// Per-app session update versions shared with the main runtime.
+    pub(super) session_update_versions: SessionUpdateVersionMap,
+    /// Session identifier whose completed turn is being applied.
+    pub(super) session_id: SessionId,
+}
+
+impl PostTurnContext {
+    /// Clones the worker fields required by post-turn result application.
+    pub(super) fn from_worker(context: &SessionWorkerContext) -> Self {
+        Self {
+            app_event_tx: context.app_event_tx.clone(),
+            child_pid: Arc::clone(&context.child_pid),
+            clock: Arc::clone(&context.clock),
+            db: context.db.clone(),
+            folder: context.folder.clone(),
+            git_client: Arc::clone(&context.git_client),
+            output: Arc::clone(&context.output),
+            queued_messages: Arc::clone(&context.queued_messages),
+            review_request_client: Arc::clone(&context.review_request_client),
+            session_update_versions: context.session_update_versions.clone(),
+            session_id: context.session_id.clone(),
+        }
+    }
+
+    /// Returns whether follow-up prompts are waiting for inline drainage.
+    ///
+    /// Treats a poisoned queue lock as non-empty so detached post-turn effects
+    /// do not start unless the worker can prove no queued user messages are
+    /// waiting to run.
+    fn has_queued_messages(&self) -> bool {
+        self.queued_messages
+            .lock()
+            .map_or(true, |guard| !guard.is_empty())
+    }
+}
+
+/// Narrow dependency set used after a turn result to refresh status and diff
+/// projections.
+pub(super) struct TurnFinalizerContext {
+    /// Reducer event sender used for size and status updates.
+    pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    /// Clock used to timestamp status transitions.
+    pub(super) clock: Arc<dyn Clock>,
+    /// Repository bundle used to refresh persisted diff stats and status.
+    pub(super) db: AppRepositories,
+    /// Session worktree folder whose diff stats are refreshed.
+    pub(super) folder: PathBuf,
+    /// Filesystem boundary used by diff-stat refresh.
+    pub(super) fs_client: Arc<dyn FsClient>,
+    /// Git boundary used by diff-stat refresh.
+    pub(super) git_client: Arc<dyn GitClient>,
+    /// Per-app session update versions shared with the main runtime.
+    pub(super) session_update_versions: SessionUpdateVersionMap,
+    /// Session identifier whose final state is being refreshed.
+    pub(super) session_id: SessionId,
+    /// Shared status handle updated after the turn result is known.
+    pub(super) status: Arc<Mutex<Status>>,
+}
+
+impl TurnFinalizerContext {
+    /// Clones the worker fields required by turn finalization.
+    pub(super) fn from_worker(context: &SessionWorkerContext) -> Self {
+        Self {
+            app_event_tx: context.app_event_tx.clone(),
+            clock: Arc::clone(&context.clock),
+            db: context.db.clone(),
+            folder: context.folder.clone(),
+            fs_client: Arc::clone(&context.fs_client),
+            git_client: Arc::clone(&context.git_client),
+            session_update_versions: context.session_update_versions.clone(),
+            session_id: context.session_id.clone(),
+            status: Arc::clone(&context.status),
+        }
+    }
+}
 
 /// Applies one successful turn result to persistence and returns the
 /// corresponding reducer projection.
 struct TurnPersistence<'a> {
-    context: &'a SessionWorkerContext,
+    context: &'a PostTurnContext,
     session_model: crate::domain::agent::AgentModel,
 }
 
@@ -103,7 +211,7 @@ impl TurnPersistence<'_> {
 /// persistence fails, the worker appends a recovery error, triggers
 /// `RefreshSessions`, and skips reducer projection emission.
 pub(super) async fn apply_turn_result(
-    context: &SessionWorkerContext,
+    context: &PostTurnContext,
     turn_metadata: TurnMetadata,
     turn_result: Result<TurnResult, AgentError>,
 ) -> Result<Status, SessionError> {
@@ -125,7 +233,7 @@ pub(super) async fn apply_turn_result(
 
 /// Refreshes durable session projections and status after a turn result.
 pub(super) async fn finalize_channel_turn(
-    context: &SessionWorkerContext,
+    context: &TurnFinalizerContext,
     result: &Result<Status, SessionError>,
 ) {
     if let Some((session_size, added_lines, deleted_lines)) =
@@ -179,7 +287,7 @@ pub(super) fn status_update_after_turn_result(
 }
 
 /// Appends one terminal turn error to the live and persisted transcript.
-async fn append_turn_error(context: &SessionWorkerContext, error_text: &str) {
+async fn append_turn_error(context: &PostTurnContext, error_text: &str) {
     let message = format!("\n{}\n", error_text.trim());
     SessionTaskService::append_session_output(
         &context.output,
@@ -196,7 +304,7 @@ async fn append_turn_error(context: &SessionWorkerContext, error_text: &str) {
 /// runs the auto-commit workflow with the project's fast-model default before
 /// returning the next session status.
 async fn apply_successful_turn_result(
-    context: &SessionWorkerContext,
+    context: &PostTurnContext,
     turn_metadata: TurnMetadata,
     result: TurnResult,
 ) -> Result<Status, SessionError> {
@@ -268,18 +376,46 @@ async fn apply_successful_turn_result(
     })
     .await;
     let review_request_commit_message = commit_outcome.map(|outcome| outcome.commit_message);
-    published_branch::start_published_branch_auto_push(
-        context,
-        turn_metadata.published_upstream_ref,
-        review_request_commit_message,
-    );
+    start_published_branch_auto_push(context, turn_metadata, review_request_commit_message);
 
     Ok(target_status)
 }
 
+/// Starts the optional published-branch auto-push effect from explicit
+/// post-turn inputs.
+fn start_published_branch_auto_push(
+    context: &PostTurnContext,
+    turn_metadata: TurnMetadata,
+    review_request_commit_message: Option<String>,
+) {
+    if context.has_queued_messages() {
+        return;
+    }
+
+    let Some(published_upstream_ref) = turn_metadata.published_upstream_ref else {
+        return;
+    };
+
+    published_branch::start_published_branch_auto_push(
+        published_branch::PublishedBranchAutoPushStartInput {
+            app_event_tx: context.app_event_tx.clone(),
+            clock: Arc::clone(&context.clock),
+            db: context.db.clone(),
+            folder: context.folder.clone(),
+            git_client: Arc::clone(&context.git_client),
+            output: Arc::clone(&context.output),
+            published_upstream_ref,
+            review_request_client: Arc::clone(&context.review_request_client),
+            review_request_commit_message,
+            session_id: context.session_id.clone(),
+            session_update_versions: context.session_update_versions.clone(),
+        },
+    );
+}
+
 /// Reconciles a failed turn-metadata write by surfacing the error and forcing
 /// the next UI reload to prefer durable state.
-async fn handle_turn_persistence_failure(context: &SessionWorkerContext, error: &SessionError) {
+async fn handle_turn_persistence_failure(context: &PostTurnContext, error: &SessionError) {
     let message = TranscriptNotice::TurnMetadataError.format(format!(
         "Failed to persist completed turn metadata: {error}"
     ));

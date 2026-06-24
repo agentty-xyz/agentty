@@ -144,13 +144,15 @@ pub(super) async fn run_channel_turn(
                 prompt.local_image_paths().cloned().collect(),
             )
             .await;
+            let post_turn_context = post_turn::PostTurnContext::from_worker(context);
+            let finalizer_context = post_turn::TurnFinalizerContext::from_worker(context);
             let result = post_turn::apply_turn_result(
-                context,
+                &post_turn_context,
                 turn_metadata,
                 Err(AgentError::Backend(error.to_string())),
             )
             .await;
-            post_turn::finalize_channel_turn(context, &result).await;
+            post_turn::finalize_channel_turn(&finalizer_context, &result).await;
 
             return result.map(|_| ());
         }
@@ -213,8 +215,10 @@ pub(super) async fn run_channel_turn(
 
     let turn_result =
         add_main_checkout_warning(context, &main_checkout_snapshot, turn_result).await;
-    let result = post_turn::apply_turn_result(context, turn_metadata, turn_result).await;
-    post_turn::finalize_channel_turn(context, &result).await;
+    let post_turn_context = post_turn::PostTurnContext::from_worker(context);
+    let finalizer_context = post_turn::TurnFinalizerContext::from_worker(context);
+    let result = post_turn::apply_turn_result(&post_turn_context, turn_metadata, turn_result).await;
+    post_turn::finalize_channel_turn(&finalizer_context, &result).await;
 
     result.map(|_| ())
 }

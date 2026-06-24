@@ -9,7 +9,6 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use super::SessionTaskService;
-use super::worker::SessionWorkerContext;
 use crate::app::session::{
     Clock, SessionError, remote_branch_name_from_upstream_ref, unix_timestamp_from_system_time,
 };
@@ -21,52 +20,63 @@ use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::db::AppRepositories;
 use crate::infra::git::GitClient;
 
+/// Owned inputs required to start one detached published-branch auto-push.
+pub(super) struct PublishedBranchAutoPushStartInput {
+    /// Reducer event sender used to publish auto-push progress and completion.
+    pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    /// Clock used to timestamp optional review-request metadata refresh.
+    pub(super) clock: Arc<dyn Clock>,
+    /// Repository bundle used to resolve and persist branch-publish state.
+    pub(super) db: AppRepositories,
+    /// Session worktree folder pushed to its tracked upstream branch.
+    pub(super) folder: PathBuf,
+    /// Git boundary used for the remote push operation.
+    pub(super) git_client: Arc<dyn GitClient>,
+    /// Shared transcript buffer used to append push failure messages.
+    pub(super) output: Arc<Mutex<String>>,
+    /// Published upstream reference that provides the remote branch target.
+    pub(super) published_upstream_ref: String,
+    /// Forge boundary used for optional linked PR/MR metadata refresh.
+    pub(super) review_request_client: Arc<dyn forge::ReviewRequestClient>,
+    /// Optional auto-commit message used to refresh linked PR/MR metadata.
+    pub(super) review_request_commit_message: Option<String>,
+    /// Session id whose branch is being pushed.
+    pub(super) session_id: SessionId,
+    /// Per-app session update versions shared with the main runtime.
+    pub(super) session_update_versions: crate::app::service::SessionUpdateVersionMap,
+}
+
 /// Starts one detached auto-push task for a session that already tracks a
-/// published upstream branch and has no queued follow-up messages waiting.
-pub(super) fn start_published_branch_auto_push(
-    context: &SessionWorkerContext,
-    published_upstream_ref: Option<String>,
-    review_request_commit_message: Option<String>,
-) {
-    if context.has_queued_messages() {
-        return;
-    }
-
-    let Some(published_upstream_ref) = published_upstream_ref else {
-        return;
-    };
-
+/// published upstream branch.
+pub(super) fn start_published_branch_auto_push(input: PublishedBranchAutoPushStartInput) {
     let sync_operation_id = Uuid::new_v4().to_string();
-    let session_id = context.session_id.clone();
-    let app_event_tx = context.app_event_tx.clone();
-    let db = context.db.clone();
-    let folder = context.folder.clone();
-    let git_client = Arc::clone(&context.git_client);
-    let output = Arc::clone(&context.output);
     let review_request_metadata_sync =
-        review_request_commit_message.map(|commit_message| ReviewRequestMetadataSyncInput {
-            clock: Arc::clone(&context.clock),
-            commit_message,
-            review_request_client: Arc::clone(&context.review_request_client),
-        });
-    let session_update_versions = context.session_update_versions.clone();
+        input
+            .review_request_commit_message
+            .map(|commit_message| ReviewRequestMetadataSyncInput {
+                clock: Arc::clone(&input.clock),
+                commit_message,
+                review_request_client: Arc::clone(&input.review_request_client),
+            });
 
-    let _ = app_event_tx.send(AppEvent::PublishedBranchSyncUpdated {
-        session_id: session_id.clone(),
-        sync_operation_id: sync_operation_id.clone(),
-        sync_status: PublishedBranchSyncStatus::InProgress,
-    });
+    let _ = input
+        .app_event_tx
+        .send(AppEvent::PublishedBranchSyncUpdated {
+            session_id: input.session_id.clone(),
+            sync_operation_id: sync_operation_id.clone(),
+            sync_status: PublishedBranchSyncStatus::InProgress,
+        });
 
     let auto_push_input = PublishedBranchAutoPushInput {
-        app_event_tx,
-        db,
-        folder,
-        git_client,
-        output,
-        published_upstream_ref,
+        app_event_tx: input.app_event_tx,
+        db: input.db,
+        folder: input.folder,
+        git_client: input.git_client,
+        output: input.output,
+        published_upstream_ref: input.published_upstream_ref,
         review_request_metadata_sync,
-        session_id,
-        session_update_versions,
+        session_id: input.session_id,
+        session_update_versions: input.session_update_versions,
         sync_operation_id,
     };
     tokio::spawn(async move {
