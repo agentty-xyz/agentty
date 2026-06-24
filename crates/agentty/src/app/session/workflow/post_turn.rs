@@ -8,6 +8,7 @@ use ag_forge as forge;
 use serde_json;
 use tokio::sync::mpsc;
 
+use super::task::SessionOutputMessageAppend;
 use super::worker::{SessionWorkerContext, TurnMetadata};
 use super::{SessionTaskService, published_branch};
 use crate::app::AppEvent;
@@ -15,6 +16,7 @@ use crate::app::assist::AssistContext;
 use crate::app::service::SessionUpdateVersionMap;
 use crate::app::session::{Clock, SessionError, TurnAppliedState};
 use crate::domain::session::{SessionFollowUpTask, SessionId, SessionStats, Status};
+use crate::domain::session_message::SessionMessageKind;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::channel::{AgentError, TurnResult};
 use crate::infra::db::{AppRepositories, SessionTurnMetadata};
@@ -317,13 +319,17 @@ async fn apply_successful_turn_result(
     } = result;
 
     if let Some(message) = build_assistant_transcript_output(&assistant_message) {
-        SessionTaskService::append_session_output(
+        SessionTaskService::append_session_output_message(
             &context.output,
             &context.db,
             &context.app_event_tx,
             &context.session_update_versions,
             &context.session_id,
-            message.as_str(),
+            SessionOutputMessageAppend {
+                formatted_message: message.as_str(),
+                kind: SessionMessageKind::AssistantAnswer,
+                raw_content: message.as_str(),
+            },
         )
         .await;
     }

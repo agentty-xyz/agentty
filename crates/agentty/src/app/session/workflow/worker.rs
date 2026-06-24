@@ -13,12 +13,14 @@ use uuid::Uuid;
 use super::merge::{
     ExistingSessionRebaseAssistClient, RebaseAssistFuture, RebaseAssistMode, RebaseCommandInput,
 };
+use super::task::SessionOutputMessageAppend;
 use super::{SessionTaskService, turn};
 use crate::app::service::SessionUpdateVersionMap;
 use crate::app::session::{Clock, SessionError, unix_timestamp_from_system_time};
 use crate::app::{AppEvent, AppServices, SessionManager};
 use crate::domain::agent::AgentModel;
 use crate::domain::session::{SessionId, SessionStats, Status};
+use crate::domain::session_message::SessionMessageKind;
 use crate::infra::channel::{
     AgentChannel, AgentError, AgentRequestKind, TurnEvent, TurnPrompt, TurnRequest, TurnResult,
     create_agent_channel,
@@ -353,13 +355,17 @@ impl SessionWorkerRebaseAssistClient {
             return;
         }
 
-        SessionTaskService::append_session_output(
+        SessionTaskService::append_session_output_message(
             &self.output,
             &self.db,
             &self.app_event_tx,
             &self.session_update_versions,
             &self.session_id,
-            &answer_text,
+            SessionOutputMessageAppend {
+                formatted_message: &answer_text,
+                kind: SessionMessageKind::AssistantAnswer,
+                raw_content: &answer_text,
+            },
         )
         .await;
     }
@@ -962,14 +968,19 @@ async fn append_drained_prompt_to_output(context: &SessionWorkerContext, prompt:
     }
     let prompt_block = formatted_lines.join("\n");
     let message = format!("\n{prompt_block}\n\n");
+    let prompt_transcript_text = prompt.transcript_text();
 
-    SessionTaskService::append_session_output(
+    SessionTaskService::append_session_output_message(
         &context.output,
         &context.db,
         &context.app_event_tx,
         &context.session_update_versions,
         &context.session_id,
-        &message,
+        SessionOutputMessageAppend {
+            formatted_message: &message,
+            kind: SessionMessageKind::UserPrompt,
+            raw_content: &prompt_transcript_text,
+        },
     )
     .await;
 }

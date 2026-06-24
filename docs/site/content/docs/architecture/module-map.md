@@ -134,6 +134,9 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
 - `crates/agentty/src/domain/session.rs`: Session entities, statuses, sizes, stats,
   review-request linkage wrappers, and re-exports of shared forge review-request types
   from `ag-forge`.
+- `crates/agentty/src/domain/session_message.rs`: Typed raw conversation messages,
+  message-kind identifiers, and compatibility serialization back into legacy transcript
+  text.
 - `crates/agentty/src/domain/session_order.rs`: Pure grouped session-list ordering,
   selectable row navigation, and stack-child placement shared by app workflows and UI
   rendering.
@@ -162,7 +165,8 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
   connection and repository adapters.
 - `crates/agentty/src/infra/db/session.rs`: `SessionRepository`,
   `SqliteSessionRepository`, session row models, turn-metadata persistence,
-  focused-review cache persistence, and session query helpers.
+  session-message persistence, focused-review cache persistence, and session query
+  helpers.
 - `crates/agentty/src/infra/db/project.rs`: `ProjectRepository`,
   `SqliteProjectRepository`, project row models, and project list queries.
 - `crates/agentty/src/infra/db/review.rs`: `ReviewRepository`, `SqliteReviewRepository`,

@@ -178,25 +178,28 @@ exact lines printed inside the bordered output panel.
 
 The printed session-chat data comes from these sources:
 
-- `session.output` Loaded with the session row in
+- Formatted session transcript text is loaded from the legacy `session.output` column in
   `crates/agentty/src/app/session/workflow/load.rs`, then kept hot from the per-session
-  handle via `crates/agentty/src/app/session_state.rs`. Runtime workers append new
-  transcript text through `SessionTaskService::append_session_output()` in
-  `crates/agentty/src/app/session/workflow/task.rs`, which updates both the in-memory
-  handle buffer and the persisted database row.
+  handle via `crates/agentty/src/app/session_state.rs`. Runtime workers append formatted
+  transcript text through `SessionTaskService::append_session_output()` or
+  `SessionTaskService::append_session_output_message()` in
+  `crates/agentty/src/app/session/workflow/task.rs`, which updates the in-memory handle
+  buffer and `session.output`. When the append is a user prompt or assistant answer, the
+  same call also stores normalized raw content in the ordered `session_message` store
+  without TUI prompt markers or transcript padding.
 - `active_prompt_output` Cached by `SessionManager::set_active_prompt_output()` in
   `crates/agentty/src/app/session/core.rs` when a start or reply prompt is submitted.
   This stores the exact prompt-shaped transcript block that was just appended to
-  `session.output` so `SessionOutput` can split the transcript into completed-turn
-  content and the currently active turn without reparsing generic prompt-looking lines
-  from assistant output.
+  `session.output` so `SessionOutput` can split completed-turn content from the
+  currently active turn without reparsing generic prompt-looking lines from assistant
+  output.
 - `session.summary` Persisted by post-turn application in
   `crates/agentty/src/app/session/workflow/post_turn.rs` as the raw protocol `summary`
   payload. `App::apply_agent_response_received()` in `crates/agentty/src/app/core.rs`
   now applies that same raw payload to the in-memory session snapshot immediately, and
   `crates/agentty/src/ui/component/session_output.rs` renders the synthetic summary
-  block from `session.summary` instead of storing a second markdown copy inside
-  `session.output`. For merged/done flows, merge helpers can rewrite the stored value
+  block from `session.summary` instead of storing a second markdown copy inside the
+  durable transcript. For merged/done flows, merge helpers can rewrite the stored value
   into a display-oriented markdown form before the next reload.
 - `session.questions` Persisted by the worker alongside the latest turn metadata and
   applied immediately by the reducer, but these items do not render inside
@@ -220,8 +223,10 @@ The printed session-chat data comes from these sources:
 
 ### Output Assembly Diagram
 
-`SessionOutput` does not render one flat stored message list. Instead it assembles the
-panel from the persisted transcript plus synthetic metadata and transient view state:
+`SessionOutput` still renders from the formatted `session.output` transcript string.
+`session_message` rows are the raw conversation sidecar for user and assistant content,
+not the current UI transcript source. The component assembles the panel from
+`session.output` plus synthetic metadata and transient view state:
 
 ```mermaid
 flowchart TD
@@ -254,8 +259,10 @@ flowchart TD
   branch_sync --> final_row["Append final status row<br/>or done continuation hint"]
 ```
 
-This means `session.output` stays the durable transcript, while summary and focused
-review are layered on during render instead of being appended back into that transcript
+This means `session.output` remains the formatted durable transcript for rendering and
+replay compatibility, while `session_message` stores normalized raw user/assistant
+conversation rows for future message-oriented features. Summary and focused review are
+still layered on during render instead of being appended back into that transcript
 string.
 
 `App` owns one UI `RenderCacheStore` instead of individual concrete render caches and
@@ -366,7 +373,7 @@ narrow screens.
 
 #### Clarification answers
 
-- Comes from: a new reply prompt built by runtime and appended into `session.output`
+- Comes from: a new reply prompt built by runtime and appended into `session.output`.
 - Prints: when the user finishes all questions and submits the generated
   `Clarifications:` reply turn.
 - Hidden or removed: durable transcript entry. `SessionOutput` only adjusts spacing

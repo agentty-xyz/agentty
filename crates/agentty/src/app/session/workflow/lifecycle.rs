@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 use tracing::warn;
 use uuid::Uuid;
 
+use super::task::SessionOutputMessageAppend;
 use super::worker::{SessionCommand, TurnMetadata};
 use super::{
     SessionTaskService, draft, isolation, session_branch, session_folder,
@@ -24,6 +25,7 @@ use crate::domain::session::{
     can_mutate_session_branch_in_stack as stack_can_mutate_session_branch,
     can_start_staged_session_in_stack as stack_can_start_staged_session,
 };
+use crate::domain::session_message::SessionMessageKind;
 use crate::domain::session_order;
 use crate::domain::setting::SettingName;
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -862,14 +864,19 @@ impl SessionManager {
         self.persist_first_message_metadata(services, &persisted_session_id, &prompt.text, &title)
             .await;
 
+        let prompt_transcript_text = prompt.transcript_text();
         let initial_output = Self::formatted_prompt_output(&prompt, false);
-        SessionTaskService::append_session_output(
+        SessionTaskService::append_session_output_message(
             &output,
             services.db(),
             &app_event_tx,
             &services.session_update_versions(),
             &persisted_session_id,
-            &initial_output,
+            SessionOutputMessageAppend {
+                formatted_message: &initial_output,
+                kind: SessionMessageKind::UserPrompt,
+                raw_content: &prompt_transcript_text,
+            },
         )
         .await;
         self.set_active_prompt_output(&persisted_session_id, initial_output);
@@ -1725,14 +1732,19 @@ impl SessionManager {
         session_id: &str,
         prompt: &TurnPrompt,
     ) {
+        let prompt_transcript_text = prompt.transcript_text();
         let reply_line = Self::formatted_prompt_output(prompt, true);
-        SessionTaskService::append_session_output(
+        SessionTaskService::append_session_output_message(
             output,
             services.db(),
             app_event_tx,
             &services.session_update_versions(),
             session_id,
-            &reply_line,
+            SessionOutputMessageAppend {
+                formatted_message: &reply_line,
+                kind: SessionMessageKind::UserPrompt,
+                raw_content: &prompt_transcript_text,
+            },
         )
         .await;
         self.set_active_prompt_output(session_id, reply_line);

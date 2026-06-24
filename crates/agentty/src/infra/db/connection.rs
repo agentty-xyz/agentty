@@ -153,6 +153,7 @@ mod tests {
         DailyActivity, ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
         SessionStats,
     };
+    use crate::domain::session_message::SessionMessageKind;
     use crate::domain::setting::SettingName;
     use crate::infra::db::{
         SessionFocusedReviewRow, SessionJoinRow, SessionOperationRow, SessionRow,
@@ -354,6 +355,117 @@ WHERE id = ?
             Some("origin/wt/session-a")
         );
         assert_review_request_row(&session_row);
+    }
+
+    /// Verifies output appends preserve the legacy transcript while writing
+    /// ordered message rows for the new transcript store.
+    #[tokio::test]
+    async fn test_append_session_output_message_dual_writes_message_rows() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to insert project");
+        insert_session_fixture(&database, "session-a", "main", "Review", project_id).await;
+
+        // Act
+        database
+            .sessions()
+            .append_session_output_message(
+                "session-a",
+                SessionMessageKind::UserPrompt,
+                " › hi\n\n",
+                " hi ",
+            )
+            .await
+            .expect("failed to append prompt message");
+        database
+            .sessions()
+            .append_session_output_message(
+                "session-a",
+                SessionMessageKind::AssistantAnswer,
+                "Hello\n\n",
+                "\nHello\n",
+            )
+            .await
+            .expect("failed to append assistant message");
+
+        // Assert
+        let session_row = load_session_row(&database, "session-a").await;
+        let messages = database
+            .sessions()
+            .load_session_messages("session-a")
+            .await
+            .expect("failed to load session messages");
+        let detail = database
+            .sessions()
+            .load_session_detail("session-a")
+            .await
+            .expect("failed to load session detail")
+            .expect("session detail should exist");
+        assert_eq!(session_row.output, " › hi\n\nHello\n\n");
+        assert_eq!(detail.output, " › hi\n\nHello\n\n");
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].position, 0);
+        assert_eq!(messages[0].kind, SessionMessageKind::UserPrompt.as_str());
+        assert_eq!(messages[0].content, "hi");
+        assert_eq!(messages[1].position, 1);
+        assert_eq!(
+            messages[1].kind,
+            SessionMessageKind::AssistantAnswer.as_str()
+        );
+        assert_eq!(messages[1].content, "Hello");
+    }
+
+    /// Verifies session detail keeps using formatted `session.output` even when
+    /// raw message rows exist for the conversation store.
+    #[tokio::test]
+    async fn test_load_session_detail_keeps_formatted_transcript_with_raw_messages() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to insert project");
+        insert_session_fixture(&database, "session-a", "main", "Review", project_id).await;
+        database
+            .sessions()
+            .append_session_output_message(
+                "session-a",
+                SessionMessageKind::UserPrompt,
+                " › migrated prompt\n\n",
+                "migrated prompt",
+            )
+            .await
+            .expect("failed to append prompt message");
+        database
+            .sessions()
+            .append_session_output_message(
+                "session-a",
+                SessionMessageKind::AssistantAnswer,
+                "migrated answer\n\n",
+                "migrated answer",
+            )
+            .await
+            .expect("failed to append assistant message");
+
+        // Act
+        let detail = database
+            .sessions()
+            .load_session_detail("session-a")
+            .await
+            .expect("failed to load session detail")
+            .expect("session detail should exist");
+
+        // Assert
+        assert_eq!(detail.output, " › migrated prompt\n\nmigrated answer\n\n");
     }
 
     /// Builds an in-memory database with one session covering joined fields

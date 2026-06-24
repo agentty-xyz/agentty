@@ -28,7 +28,7 @@ pub(crate) use session::SessionJoinRow;
 pub(crate) use session::SqliteSessionRepository;
 pub use session::{
     SessionDetailRow, SessionFocusedReviewRow, SessionFollowUpTaskRow, SessionListRow,
-    SessionRepository, SessionRow, SessionTurnMetadata,
+    SessionMessageRow, SessionRepository, SessionRow, SessionTurnMetadata,
 };
 pub(crate) use setting::{SettingRepository, SqliteSettingRepository};
 pub(crate) use usage::SqliteUsageRepository;

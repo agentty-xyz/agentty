@@ -17,6 +17,7 @@ use crate::app::session::{Clock, SessionError, unix_timestamp_from_system_time};
 use crate::app::{AppEvent, SessionManager};
 use crate::domain::agent::AgentModel;
 use crate::domain::session::{COMMITTING_PROGRESS_LABEL, SessionId, SessionSize, Status};
+use crate::domain::session_message::SessionMessageKind;
 use crate::domain::setting::SettingName;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::agent;
@@ -85,6 +86,18 @@ pub(crate) struct RunAgentAssistTaskInput {
     pub(crate) session_model: AgentModel,
     /// Per-app session update versions shared with the main runtime.
     pub(crate) session_update_versions: SessionUpdateVersionMap,
+}
+
+/// Typed payload for appending formatted transcript text while storing raw
+/// conversation content in the message table.
+pub(crate) struct SessionOutputMessageAppend<'a> {
+    /// Formatted transcript chunk appended to the live output buffer and
+    /// legacy `session.output` column.
+    pub(crate) formatted_message: &'a str,
+    /// Raw conversation message kind persisted in `session_message`.
+    pub(crate) kind: SessionMessageKind,
+    /// Raw user or assistant content persisted without TUI formatting.
+    pub(crate) raw_content: &'a str,
 }
 
 impl SessionTaskService {
@@ -863,13 +876,17 @@ impl SessionTaskService {
 
         let answer_text = assist_submission.response.to_answer_display_text();
         if !answer_text.trim().is_empty() {
-            Self::append_session_output(
+            Self::append_session_output_message(
                 &output,
                 &db,
                 &app_event_tx,
                 &session_update_versions,
                 &id,
-                &answer_text,
+                SessionOutputMessageAppend {
+                    formatted_message: &answer_text,
+                    kind: SessionMessageKind::AssistantAnswer,
+                    raw_content: &answer_text,
+                },
             )
             .await;
         }
@@ -1007,6 +1024,45 @@ impl SessionTaskService {
             }
         }
         if let Err(error) = db.sessions().append_session_output(id, message).await {
+            warn!(
+                session_id = id,
+                error = %error,
+                "failed to persist session output"
+            );
+        }
+        Self::emit_session_updated(app_event_tx, session_update_versions, id);
+    }
+
+    /// Appends formatted output with a durable raw user/assistant message to
+    /// the in-memory handle buffer and database.
+    pub(crate) async fn append_session_output_message(
+        output: &Arc<Mutex<String>>,
+        db: &AppRepositories,
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+        session_update_versions: &SessionUpdateVersionMap,
+        id: &str,
+        message: SessionOutputMessageAppend<'_>,
+    ) {
+        match output.lock() {
+            Ok(mut buf) => buf.push_str(message.formatted_message),
+            Err(error) => {
+                warn!(
+                    session_id = id,
+                    error = %error,
+                    "failed to lock session output buffer"
+                );
+            }
+        }
+        if let Err(error) = db
+            .sessions()
+            .append_session_output_message(
+                id,
+                message.kind,
+                message.formatted_message,
+                message.raw_content,
+            )
+            .await
+        {
             warn!(
                 session_id = id,
                 error = %error,

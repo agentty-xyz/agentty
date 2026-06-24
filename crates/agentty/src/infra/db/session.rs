@@ -6,6 +6,7 @@ use sqlx::SqlitePool;
 use super::review::SessionReviewRequestRow;
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::session::{SessionFollowUpTask, SessionId, SessionStats};
+use crate::domain::session_message::{SessionMessageKind, normalized_message_content};
 use crate::infra::agent;
 use crate::infra::db::DbError;
 
@@ -116,7 +117,8 @@ pub struct SessionListRow {
 /// Transcript-detail row loaded lazily for the session being viewed.
 #[derive(sqlx::FromRow)]
 pub struct SessionDetailRow {
-    /// Captured provider transcript text.
+    /// Captured provider transcript text from the legacy `session.output`
+    /// compatibility column.
     pub output: String,
     /// Initial or staged prompt text.
     pub prompt: String,
@@ -124,6 +126,17 @@ pub struct SessionDetailRow {
     pub questions: Option<String>,
     /// Persisted structured summary text, when present.
     pub summary: Option<String>,
+}
+
+/// Row returned when loading one persisted `session_message`.
+#[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
+pub struct SessionMessageRow {
+    /// Canonical transcript text for this message.
+    pub content: String,
+    /// Stable message-kind string.
+    pub kind: String,
+    /// Monotonic position within the owning session transcript.
+    pub position: i64,
 }
 
 /// Row returned when loading one persisted `session_follow_up_task`.
@@ -169,6 +182,16 @@ impl SessionFollowUpTaskRow {
 pub trait SessionRepository: Send + Sync {
     /// Appends text to the saved output for a session row.
     async fn append_session_output(&self, id: &str, chunk: &str) -> Result<(), DbError>;
+
+    /// Appends formatted text to the saved output and writes the matching raw
+    /// typed conversation message in one transaction.
+    async fn append_session_output_message(
+        &self,
+        id: &str,
+        kind: SessionMessageKind,
+        formatted_chunk: &str,
+        raw_content: &str,
+    ) -> Result<(), DbError>;
 
     /// Sets `project_id` for sessions that do not yet reference a project.
     async fn backfill_session_project(&self, project_id: i64) -> Result<(), DbError>;
@@ -241,6 +264,12 @@ pub trait SessionRepository: Send + Sync {
         session_id: &str,
     ) -> Result<Option<SessionDetailRow>, DbError>;
 
+    /// Loads ordered transcript messages for one session.
+    async fn load_session_messages(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<SessionMessageRow>, DbError>;
+
     /// Loads all persisted session follow-up-task rows in stable display
     /// order.
     async fn load_session_follow_up_tasks(&self) -> Result<Vec<SessionFollowUpTaskRow>, DbError>;
@@ -302,7 +331,8 @@ pub trait SessionRepository: Send + Sync {
     ) -> Result<(), DbError>;
 
     #[cfg(test)]
-    /// Replaces the full output for a session row.
+    /// Replaces the full output for a session row and clears raw conversation
+    /// messages so test fixtures do not leave stale sidecar rows.
     async fn replace_session_output(&self, id: &str, output: &str) -> Result<(), DbError>;
 
     /// Replaces the persisted follow-up task list for one session inside one
@@ -803,6 +833,53 @@ WHERE id = ?
         Ok(())
     }
 
+    async fn append_session_output_message(
+        &self,
+        id: &str,
+        kind: SessionMessageKind,
+        formatted_chunk: &str,
+        raw_content: &str,
+    ) -> Result<(), DbError> {
+        let mut transaction = self.0.begin().await?;
+
+        let update_result = sqlx::query(
+            r"
+UPDATE session
+SET output = output || ?
+WHERE id = ?
+",
+        )
+        .bind(formatted_chunk)
+        .bind(id)
+        .execute(&mut *transaction)
+        .await?;
+
+        let content = normalized_message_content(raw_content);
+        if update_result.rows_affected() != 0
+            && kind.is_conversation_message()
+            && !content.is_empty()
+        {
+            sqlx::query(
+                r"
+INSERT INTO session_message (session_id, position, kind, content, created_at)
+SELECT ?, COALESCE(MAX(position), -1) + 1, ?, ?, CAST(strftime('%s', 'now') AS INTEGER)
+FROM session_message
+WHERE session_id = ?
+",
+            )
+            .bind(id)
+            .bind(kind.as_str())
+            .bind(content)
+            .bind(id)
+            .execute(&mut *transaction)
+            .await?;
+        }
+
+        transaction.commit().await?;
+
+        Ok(())
+    }
+
     async fn backfill_session_project(&self, project_id: i64) -> Result<(), DbError> {
         sqlx::query(
             r"
@@ -1077,6 +1154,27 @@ WHERE id = ?
         Ok(row)
     }
 
+    async fn load_session_messages(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<SessionMessageRow>, DbError> {
+        let rows = sqlx::query_as::<_, SessionMessageRow>(
+            r"
+SELECT content,
+       kind,
+       position
+FROM session_message
+WHERE session_id = ?
+ORDER BY position, id
+",
+        )
+        .bind(session_id)
+        .fetch_all(&self.0)
+        .await?;
+
+        Ok(rows)
+    }
+
     async fn load_session_follow_up_tasks(&self) -> Result<Vec<SessionFollowUpTaskRow>, DbError> {
         let rows = match sqlx::query_as::<_, SessionFollowUpTaskRow>(
             r"
@@ -1336,6 +1434,8 @@ ON CONFLICT(session_id, model) DO UPDATE SET
 
     #[cfg(test)]
     async fn replace_session_output(&self, id: &str, output: &str) -> Result<(), DbError> {
+        let mut transaction = self.0.begin().await?;
+
         sqlx::query(
             r"
 UPDATE session
@@ -1345,8 +1445,20 @@ WHERE id = ?
         )
         .bind(output)
         .bind(id)
-        .execute(&self.0)
+        .execute(&mut *transaction)
         .await?;
+
+        sqlx::query(
+            r"
+DELETE FROM session_message
+WHERE session_id = ?
+",
+        )
+        .bind(id)
+        .execute(&mut *transaction)
+        .await?;
+
+        transaction.commit().await?;
 
         Ok(())
     }
