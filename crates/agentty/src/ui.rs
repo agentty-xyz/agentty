@@ -10,6 +10,7 @@ pub mod page;
 pub mod prompt_format;
 pub mod question_format;
 mod render;
+mod render_cache;
 pub mod router;
 pub mod session_format;
 pub mod state;
@@ -25,3 +26,5 @@ pub use render::Page;
 pub use render::RenderContext;
 /// Renders a complete frame including status bar, content area, and footer.
 pub use render::render;
+/// UI-owned cache store shared by render and scroll-metric paths.
+pub use render_cache::RenderCacheStore;

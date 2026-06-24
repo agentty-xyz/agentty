@@ -258,13 +258,14 @@ This means `session.output` stays the durable transcript, while summary and focu
 review are layered on during render instead of being appended back into that transcript
 string.
 
-`App` owns one shared `MarkdownRenderCache` plus one shared `SessionOutputLayoutCache`
-and threads them through `RenderContext`, the router, overlay restore state, and
-`SessionChatPage`. The markdown cache deduplicates rendered markdown blocks, while the
-layout cache deduplicates the fully assembled `Line` list and line count for matching
-session id/update version, width, active prompt, review text/status, progress text, and
-markdown style version. Changes in this area should keep caches bounded and avoid
-introducing separate layout-only render passes that bypass the shared cache.
+`App` owns one UI `RenderCacheStore` instead of individual concrete render caches and
+threads that store's shared markdown, diff, and session-output caches through
+`RenderContext`, the router, overlay restore state, and `SessionChatPage`. The markdown
+cache deduplicates rendered markdown blocks, while the layout cache deduplicates the
+fully assembled `Line` list and line count for matching session id/update version,
+width, active prompt, review text/status, progress text, and markdown style version.
+Changes in this area should keep caches bounded and avoid introducing separate
+layout-only render passes that bypass the shared cache.
 
 ### Render Path
 

@@ -252,8 +252,8 @@ fn question_view_metrics(app: &App, terminal_size: Rect) -> QuestionViewMetrics 
                     review_text,
                     session_update_version: app.session_update_version(session_id),
                 },
-                app.markdown_render_cache(),
-                app.session_output_layout_cache(),
+                app.render_cache_store().markdown_render_cache(),
+                app.render_cache_store().session_output_layout_cache(),
             )
         });
 
@@ -1050,8 +1050,8 @@ mod tests {
                 review_text: None,
                 session_update_version: app.session_update_version(session_id),
             },
-            app.markdown_render_cache(),
-            app.session_output_layout_cache(),
+            app.render_cache_store().markdown_render_cache(),
+            app.render_cache_store().session_output_layout_cache(),
         );
 
         // Act

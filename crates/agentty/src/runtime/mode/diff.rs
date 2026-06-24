@@ -133,7 +133,7 @@ fn handle_navigation_key(app: &mut App, content_area: Rect, key: KeyEvent) {
 
     match key.code {
         KeyCode::Char('j') if is_plain_char_key(key, 'j') => {
-            let content = app.diff_layout_cache().content(&diff);
+            let content = app.render_cache_store().diff_layout_cache().content(&diff);
             let new_index = FileExplorer::next_selected_index(
                 file_explorer_selected_index,
                 content.item_count(),
@@ -146,7 +146,7 @@ fn handle_navigation_key(app: &mut App, content_area: Rect, key: KeyEvent) {
             }
         }
         KeyCode::Char('k') if is_plain_char_key(key, 'k') => {
-            let content = app.diff_layout_cache().content(&diff);
+            let content = app.render_cache_store().diff_layout_cache().content(&diff);
             let new_index = FileExplorer::previous_selected_index(
                 file_explorer_selected_index,
                 content.item_count(),
@@ -168,8 +168,8 @@ fn handle_navigation_key(app: &mut App, content_area: Rect, key: KeyEvent) {
                 file_explorer_selected_index,
                 &mut scroll_cache,
                 review_comment_snapshot.as_ref(),
-                app.markdown_render_cache(),
-                app.diff_layout_cache(),
+                app.render_cache_store().markdown_render_cache(),
+                app.render_cache_store().diff_layout_cache(),
             );
             let clamped_scroll_offset = scroll_offset.min(max_scroll_offset);
 
@@ -187,8 +187,8 @@ fn handle_navigation_key(app: &mut App, content_area: Rect, key: KeyEvent) {
                 file_explorer_selected_index,
                 &mut scroll_cache,
                 review_comment_snapshot.as_ref(),
-                app.markdown_render_cache(),
-                app.diff_layout_cache(),
+                app.render_cache_store().markdown_render_cache(),
+                app.render_cache_store().diff_layout_cache(),
             );
             let clamped_scroll_offset = scroll_offset.min(max_scroll_offset);
 

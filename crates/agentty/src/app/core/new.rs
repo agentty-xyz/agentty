@@ -181,11 +181,8 @@ impl App {
             review_cache,
             latest_available_version: None,
             last_seen_session_update_versions: std::collections::HashMap::new(),
-            diff_layout_cache: crate::ui::page::diff::DiffLayoutCache::default(),
-            markdown_render_cache: crate::ui::markdown::MarkdownRenderCache::default(),
+            render_cache_store: crate::ui::RenderCacheStore::default(),
             merge_queue: crate::app::merge_queue::MergeQueue::default(),
-            session_output_layout_cache:
-                crate::ui::component::session_output::SessionOutputLayoutCache::default(),
             session_progress_messages: std::collections::HashMap::new(),
             system_log_tail_offset: 0,
             system_logs,

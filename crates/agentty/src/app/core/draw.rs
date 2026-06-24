@@ -113,6 +113,7 @@ impl App {
         let requested_review_table_state = &mut self.requested_review_table_state;
         let project_render_parts = self.projects.render_parts();
         let session_render_parts = self.sessions.render_parts();
+        let render_cache_store = &self.render_cache_store;
         let settings = &mut self.settings;
         let _theme_scope = style::scoped_active_theme(settings.theme);
 
@@ -123,14 +124,14 @@ impl App {
                 available_agent_clis: &available_agent_clis,
                 current_tab,
                 git_branch: project_render_parts.git_branch,
-                diff_layout_cache: &self.diff_layout_cache,
+                diff_layout_cache: render_cache_store.diff_layout_cache(),
                 git_upstream_ref: project_render_parts.git_upstream_ref,
                 git_status: project_render_parts.git_status,
                 latest_available_version,
-                markdown_render_cache: &self.markdown_render_cache,
+                markdown_render_cache: render_cache_store.markdown_render_cache(),
                 update_status,
                 mode,
-                output_layout_cache: &self.session_output_layout_cache,
+                output_layout_cache: render_cache_store.session_output_layout_cache(),
                 project_table_state: project_render_parts.table_state,
                 projects: project_render_parts.project_items,
                 review_comment_cache: &review_comment_cache,

@@ -37,7 +37,6 @@ use tokio::sync::mpsc;
 use super::events::AppEvent;
 #[cfg(test)]
 use super::events::{AppEventBatch, ReviewRequestStatusUpdate};
-use crate::app;
 use crate::app::{AppError, RequestedReviewState, session};
 #[cfg(test)]
 use crate::domain::agent::AgentCliInfo;
@@ -57,8 +56,8 @@ use crate::infra::project_discovery::{ProjectDiscoveryClient, RealProjectDiscove
 use crate::infra::tmux::{RealTmuxClient, TmuxClient};
 use crate::infra::{agent, app_server};
 use crate::runtime::mode::{at_mention, question};
-use crate::ui::markdown;
 use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, QuestionFocus};
+use crate::{app, ui};
 
 /// Relative directory name used for session git worktrees within the
 /// `agentty` home directory.
@@ -283,17 +282,8 @@ pub struct App {
     pub(super) session_progress_messages: HashMap<SessionId, String>,
     /// Interacts with tmux panes for session-specific terminal workflows.
     pub(super) tmux_client: Arc<dyn TmuxClient>,
-    /// Caches rendered markdown output for the session transcript panel so
-    /// unchanged content is not re-parsed on every frame.
-    pub(super) markdown_render_cache: markdown::MarkdownRenderCache,
-    /// Caches parsed diff content and rendered diff layouts so diff scroll
-    /// metrics and frame rendering share the same derived rows.
-    pub(super) diff_layout_cache: crate::ui::page::diff::DiffLayoutCache,
-    /// Caches fully assembled session-output layouts so scroll metrics and
-    /// frame rendering reuse the same derived transcript lines for unchanged
-    /// session/update inputs.
-    pub(super) session_output_layout_cache:
-        crate::ui::component::session_output::SessionOutputLayoutCache,
+    /// Owns UI render caches used by frame rendering and scroll-metric paths.
+    pub(super) render_cache_store: ui::RenderCacheStore,
     /// Tracks the last reduced observable-handle version for each session so
     /// stale `SessionUpdated` events do not trigger redundant redraws.
     pub(super) last_seen_session_update_versions: HashMap<SessionId, u64>,
@@ -1040,24 +1030,10 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// Returns the shared session-output layout cache used by scroll metrics
-    /// and frame rendering.
-    pub(crate) fn session_output_layout_cache(
-        &self,
-    ) -> &crate::ui::component::session_output::SessionOutputLayoutCache {
-        &self.session_output_layout_cache
-    }
-
-    /// Returns the shared diff layout cache used by diff scroll metrics and
+    /// Returns the UI-owned render cache store used by scroll metrics and
     /// frame rendering.
-    pub(crate) fn diff_layout_cache(&self) -> &crate::ui::page::diff::DiffLayoutCache {
-        &self.diff_layout_cache
-    }
-
-    /// Returns the shared markdown render cache used by session scroll
-    /// metrics and frame rendering.
-    pub(crate) fn markdown_render_cache(&self) -> &crate::ui::markdown::MarkdownRenderCache {
-        &self.markdown_render_cache
+    pub(crate) fn render_cache_store(&self) -> &ui::RenderCacheStore {
+        &self.render_cache_store
     }
 
     /// Returns the selected follow-up task action for one session, if that

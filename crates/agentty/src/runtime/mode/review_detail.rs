@@ -25,7 +25,7 @@ pub(crate) fn handle(app: &mut App, content_area: Rect, key: KeyEvent) -> EventR
             comment_error.as_deref(),
             *is_loading_comments,
             content_area,
-            app.markdown_render_cache(),
+            app.render_cache_store().markdown_render_cache(),
         ),
         _ => 0,
     };
