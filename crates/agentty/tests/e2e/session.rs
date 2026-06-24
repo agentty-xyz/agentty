@@ -15,6 +15,7 @@ use agentty::domain::agent::ReasoningLevel;
 use agentty::domain::session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
 };
+use agentty::domain::session_message::SessionMessageKind;
 use agentty::test_support;
 use testty::assertion;
 use testty::region::Region;
@@ -70,8 +71,9 @@ fn seed_session_with_beautified_agent_error(
             .await?;
         database
             .sessions()
-            .append_session_output(
+            .append_session_message(
                 "agent-error-0001",
+                SessionMessageKind::LegacyTranscript,
                 "\
  › hi
 

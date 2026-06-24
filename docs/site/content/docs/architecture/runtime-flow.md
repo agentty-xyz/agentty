@@ -178,19 +178,21 @@ exact lines printed inside the bordered output panel.
 
 The printed session-chat data comes from these sources:
 
-- Formatted session transcript text is loaded from the legacy `session.output` column in
-  `crates/agentty/src/app/session/workflow/load.rs`, then kept hot from the per-session
-  handle via `crates/agentty/src/app/session_state.rs`. Runtime workers append formatted
-  transcript text through `SessionTaskService::append_session_output()` or
-  `SessionTaskService::append_session_output_message()` in
-  `crates/agentty/src/app/session/workflow/task.rs`, which updates the in-memory handle
-  buffer and `session.output`. When the append is a user prompt or assistant answer, the
-  same call also stores normalized raw content in the ordered `session_message` store
-  without TUI prompt markers or transcript padding.
+- Durable transcript text is loaded from ordered `session_message` rows in
+  `crates/agentty/src/app/session/workflow/load.rs`, converted through
+  `SessionTranscript::to_legacy_output()`, then kept hot in the render snapshot
+  `Session.output` field and per-session handle via
+  `crates/agentty/src/app/session_state.rs`. Runtime workers append user and assistant
+  content through `SessionTaskService::append_session_output_message()` and append
+  workflow notices through `SessionTaskService::append_session_output()` in
+  `crates/agentty/src/app/session/workflow/task.rs`; both paths insert typed
+  `session_message` rows, refresh `session.updated_at`, and update only the in-memory
+  handle buffer. The legacy `session.output` database column is retained as a migration
+  backup and is not a runtime read/write source.
 - `active_prompt_output` Cached by `SessionManager::set_active_prompt_output()` in
   `crates/agentty/src/app/session/core.rs` when a start or reply prompt is submitted.
-  This stores the exact prompt-shaped transcript block that was just appended to
-  `session.output` so `SessionOutput` can split completed-turn content from the
+  This stores the exact prompt-shaped render block for the typed `UserPrompt` row that
+  was just inserted, so `SessionOutput` can split completed-turn content from the
   currently active turn without reparsing generic prompt-looking lines from assistant
   output.
 - `session.summary` Persisted by post-turn application in
@@ -223,10 +225,9 @@ The printed session-chat data comes from these sources:
 
 ### Output Assembly Diagram
 
-`SessionOutput` still renders from the formatted `session.output` transcript string.
-`session_message` rows are the raw conversation sidecar for user and assistant content,
-not the current UI transcript source. The component assembles the panel from
-`session.output` plus synthetic metadata and transient view state:
+`SessionOutput` renders from the formatted `Session.output` render snapshot assembled
+from `session_message` rows. The component assembles the panel from that snapshot plus
+synthetic metadata and transient view state:
 
 ```mermaid
 flowchart TD
@@ -237,7 +238,7 @@ flowchart TD
   base["Choose base body text"]
   lines --> base
   base --> draft["Draft preview<br/>(draft-status session)"]
-  base --> transcript["session.output<br/>(all other statuses)"]
+  base --> transcript["Session.output render snapshot<br/>(all other statuses)"]
 
   split["Split transcript with active_prompt_output"]
   completed["Completed-turn text"]
@@ -259,11 +260,13 @@ flowchart TD
   branch_sync --> final_row["Append final status row<br/>or done continuation hint"]
 ```
 
-This means `session.output` remains the formatted durable transcript for rendering and
-replay compatibility, while `session_message` stores normalized raw user/assistant
-conversation rows for future message-oriented features. Summary and focused review are
-still layered on during render instead of being appended back into that transcript
-string.
+This means `session_message` is the durable transcript. `UserPrompt` and
+`AssistantAnswer` rows store normalized raw content, `WorkflowNotice` rows store exact
+formatted notice text, and `LegacyTranscript` rows preserve pre-migration transcript
+strings losslessly. When a legacy row appears after earlier canonical rows, it acts as a
+checkpoint for that prior history so render assembly does not duplicate the old
+transcript before later rows. Summary and focused review are still layered on during
+render instead of being appended back into that transcript string.
 
 `App` owns one UI `RenderCacheStore` instead of individual concrete render caches and
 threads that store's shared markdown, diff, and session-output caches through
@@ -287,8 +290,8 @@ The exact session-chat render path is:
 1. `SessionChatPage::render_session_header()` prints the single-line session header
    above the bordered output region.
 1. `SessionOutput::output_text()` in `crates/agentty/src/ui/component/session_output.rs`
-   selects the base text: staged draft preview for draft-status sessions, otherwise
-   `session.output`.
+   selects the base text: staged draft preview for draft-status sessions, otherwise the
+   `Session.output` render snapshot assembled from `session_message`.
 1. `SessionOutput::output_lines()` converts that source text into final panel lines: it
    optionally splits the transcript using `active_prompt_output`, normalizes prompt
    spacing, splits any trailing workflow notices, renders the completed-turn markdown,
@@ -309,7 +312,7 @@ The session output panel shows different data at different lifecycle points:
 ```mermaid
 flowchart TD
   submit["Start or reply submitted"]
-  submit --> append_prompt["Append prompt block to session.output"]
+  submit --> append_prompt["Insert UserPrompt row"]
   submit --> cache_prompt["Cache same block as active_prompt_output"]
   submit --> progress["Render loader row from active_progress"]
 
@@ -318,7 +321,7 @@ flowchart TD
   cache_prompt --> turn_done
   progress --> turn_done
 
-  turn_done --> answer["Append assistant transcript chunk to session.output"]
+  turn_done --> answer["Insert AssistantAnswer row"]
   answer --> answer_kind["Protocol answer<br/>or joined clarification-question text"]
   turn_done --> metadata["Persist and apply latest-turn metadata"]
   metadata --> summary_meta["session.summary"]
@@ -343,7 +346,8 @@ narrow screens.
 
 #### User prompt blocks
 
-- Comes from: `session.output` and `active_prompt_output`
+- Comes from: `UserPrompt` rows serialized into the `Session.output` render snapshot and
+  `active_prompt_output`
 - Prints: immediately after start or reply submission. The same block stays in the
   transcript after the turn finishes.
 - Hidden or removed: the transcript entry is durable. Only the transient
@@ -352,13 +356,15 @@ narrow screens.
 
 #### Assistant answer
 
-- Comes from: `session.output`
+- Comes from: `AssistantAnswer` rows serialized into the `Session.output` render
+  snapshot
 - Prints: after a successful turn when protocol `answer` is non-empty.
 - Hidden or removed: durable transcript entry; not removed by `SessionOutput`.
 
 #### Clarification question text from the assistant
 
-- Comes from: `session.output` fallback when no `answer` exists
+- Comes from: `AssistantAnswer` rows containing joined clarification text when no
+  protocol `answer` exists
 - Prints: after a successful turn with questions but without top-level `answer` text.
 - Hidden or removed: durable transcript entry once appended. Pending structured
   `session.questions` continue separately in question mode until answered.
@@ -373,7 +379,7 @@ narrow screens.
 
 #### Clarification answers
 
-- Comes from: a new reply prompt built by runtime and appended into `session.output`.
+- Comes from: a new reply prompt built by runtime and persisted as a `UserPrompt` row.
 - Prints: when the user finishes all questions and submits the generated
   `Clarifications:` reply turn.
 - Hidden or removed: durable transcript entry. `SessionOutput` only adjusts spacing
@@ -390,10 +396,10 @@ narrow screens.
 
 #### Trailing workflow notices
 
-- Comes from: trailing paragraphs in `session.output` that begin with known workflow
-  labels such as `[Commit]`, `[Commit Error]`, `[Commit Assist]`, `[Sync Assist]`,
-  `[Sync Error]`, or other bracketed workflow errors. Producers and the renderer share
-  these labels through `TranscriptNotice` in
+- Comes from: `WorkflowNotice` rows and any pre-migration `LegacyTranscript` paragraphs
+  that begin with known workflow labels such as `[Commit]`, `[Commit Error]`,
+  `[Commit Assist]`, `[Sync Assist]`, `[Sync Error]`, or other bracketed workflow
+  errors. Producers and the renderer share these labels through `TranscriptNotice` in
   `crates/agentty/src/domain/transcript_notice.rs`.
 - Prints: reattached after the synthetic summary so the summary stays at the completed
   agent-turn boundary and later workflow notices remain below it in transcript order.

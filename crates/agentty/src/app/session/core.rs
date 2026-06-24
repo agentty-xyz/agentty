@@ -2499,8 +2499,20 @@ mod tests {
             .load_session_activity_timestamps()
             .await
             .expect("failed to load session activity timestamps");
+        let messages = app
+            .services
+            .db()
+            .sessions()
+            .load_session_messages(db_sessions[0].id.as_str())
+            .await
+            .expect("failed to load session messages");
         assert_eq!(db_sessions[0].prompt, "Hello");
-        assert_eq!(db_sessions[0].output, " › Hello\n\n");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(
+            messages[0].kind,
+            crate::domain::session_message::SessionMessageKind::UserPrompt.as_str()
+        );
+        assert_eq!(messages[0].content, "Hello");
         assert_eq!(activity_timestamps.len(), 1);
     }
 
@@ -3228,9 +3240,13 @@ mod tests {
             .await
             .expect("failed to update prompt");
         db.sessions()
-            .append_session_output("12345678", "Output")
+            .append_session_message(
+                "12345678",
+                crate::domain::session_message::SessionMessageKind::LegacyTranscript,
+                "Output",
+            )
             .await
-            .expect("failed to update output");
+            .expect("failed to append message");
 
         // Act
         let app = new_test_app_with_db(

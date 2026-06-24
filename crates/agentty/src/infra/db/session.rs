@@ -6,7 +6,7 @@ use sqlx::SqlitePool;
 use super::review::SessionReviewRequestRow;
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::session::{SessionFollowUpTask, SessionId, SessionStats};
-use crate::domain::session_message::{SessionMessageKind, normalized_message_content};
+use crate::domain::session_message::{SessionMessageKind, stored_message_content};
 use crate::infra::agent;
 use crate::infra::db::DbError;
 
@@ -50,7 +50,6 @@ pub struct SessionRow {
     pub input_tokens: i64,
     pub is_draft: bool,
     pub model: String,
-    pub output: String,
     pub output_tokens: i64,
     pub parent_session_id: Option<String>,
     pub project_id: Option<i64>,
@@ -117,9 +116,6 @@ pub struct SessionListRow {
 /// Transcript-detail row loaded lazily for the session being viewed.
 #[derive(sqlx::FromRow)]
 pub struct SessionDetailRow {
-    /// Captured provider transcript text from the legacy `session.output`
-    /// compatibility column.
-    pub output: String,
     /// Initial or staged prompt text.
     pub prompt: String,
     /// Serialized clarification-question payload, when present.
@@ -180,17 +176,13 @@ impl SessionFollowUpTaskRow {
 /// Session-focused persistence boundary used by app orchestration and tests.
 #[async_trait]
 pub trait SessionRepository: Send + Sync {
-    /// Appends text to the saved output for a session row.
-    async fn append_session_output(&self, id: &str, chunk: &str) -> Result<(), DbError>;
-
-    /// Appends formatted text to the saved output and writes the matching raw
-    /// typed conversation message in one transaction.
-    async fn append_session_output_message(
+    /// Appends one typed transcript message and refreshes session ordering
+    /// metadata.
+    async fn append_session_message(
         &self,
         id: &str,
         kind: SessionMessageKind,
-        formatted_chunk: &str,
-        raw_content: &str,
+        content: &str,
     ) -> Result<(), DbError>;
 
     /// Sets `project_id` for sessions that do not yet reference a project.
@@ -331,9 +323,13 @@ pub trait SessionRepository: Send + Sync {
     ) -> Result<(), DbError>;
 
     #[cfg(test)]
-    /// Replaces the full output for a session row and clears raw conversation
-    /// messages so test fixtures do not leave stale sidecar rows.
-    async fn replace_session_output(&self, id: &str, output: &str) -> Result<(), DbError>;
+    /// Replaces the full message list for a session with one legacy
+    /// transcript row.
+    async fn replace_session_messages_with_legacy_transcript(
+        &self,
+        id: &str,
+        output: &str,
+    ) -> Result<(), DbError>;
 
     /// Replaces the persisted follow-up task list for one session inside one
     /// transaction so task deletion and reinsertion commit atomically.
@@ -507,6 +503,7 @@ struct SessionTimestampsRow {
 /// Row returned when loading one `session` plus aliased
 /// `session_review_request` join columns.
 #[cfg(test)]
+#[derive(sqlx::FromRow)]
 pub(crate) struct SessionJoinRow {
     added_lines: i64,
     base_branch: String,
@@ -518,7 +515,6 @@ pub(crate) struct SessionJoinRow {
     input_tokens: i64,
     is_draft: bool,
     model: String,
-    output: String,
     output_tokens: i64,
     parent_session_id: Option<String>,
     project_id: Option<i64>,
@@ -557,7 +553,6 @@ impl SessionJoinRow {
             input_tokens,
             is_draft,
             model,
-            output,
             output_tokens,
             parent_session_id,
             project_id,
@@ -605,7 +600,6 @@ impl SessionJoinRow {
             input_tokens,
             is_draft,
             model,
-            output,
             output_tokens,
             parent_session_id,
             project_id,
@@ -636,7 +630,6 @@ impl SessionJoinRow {
             input_tokens: 11,
             is_draft: false,
             model: "gpt-5.5".to_string(),
-            output: "Saved output".to_string(),
             output_tokens: 29,
             parent_session_id: Some("parent-session".to_string()),
             project_id: Some(7),
@@ -817,63 +810,50 @@ impl SessionReviewRequestJoinRow {
 
 #[async_trait]
 impl SessionRepository for SqliteSessionRepository {
-    async fn append_session_output(&self, id: &str, chunk: &str) -> Result<(), DbError> {
-        sqlx::query(
-            r"
-UPDATE session
-SET output = output || ?
-WHERE id = ?
-",
-        )
-        .bind(chunk)
-        .bind(id)
-        .execute(&self.0)
-        .await?;
-
-        Ok(())
-    }
-
-    async fn append_session_output_message(
+    async fn append_session_message(
         &self,
         id: &str,
         kind: SessionMessageKind,
-        formatted_chunk: &str,
-        raw_content: &str,
+        content: &str,
     ) -> Result<(), DbError> {
+        let content = stored_message_content(kind, content);
+        if content.trim().is_empty() {
+            return Ok(());
+        }
+
         let mut transaction = self.0.begin().await?;
 
         let update_result = sqlx::query(
             r"
 UPDATE session
-SET output = output || ?
+SET updated_at = CAST(strftime('%s', 'now') AS INTEGER)
 WHERE id = ?
 ",
         )
-        .bind(formatted_chunk)
         .bind(id)
         .execute(&mut *transaction)
         .await?;
 
-        let content = normalized_message_content(raw_content);
-        if update_result.rows_affected() != 0
-            && kind.is_conversation_message()
-            && !content.is_empty()
-        {
-            sqlx::query(
-                r"
+        if update_result.rows_affected() == 0 {
+            transaction.commit().await?;
+
+            return Ok(());
+        }
+
+        sqlx::query(
+            r"
 INSERT INTO session_message (session_id, position, kind, content, created_at)
 SELECT ?, COALESCE(MAX(position), -1) + 1, ?, ?, CAST(strftime('%s', 'now') AS INTEGER)
 FROM session_message
 WHERE session_id = ?
 ",
-            )
-            .bind(id)
-            .bind(kind.as_str())
-            .bind(content)
-            .bind(id)
-            .execute(&mut *transaction)
-            .await?;
-        }
+        )
+        .bind(id)
+        .bind(kind.as_str())
+        .bind(content)
+        .bind(id)
+        .execute(&mut *transaction)
+        .await?;
 
         transaction.commit().await?;
 
@@ -1030,46 +1010,44 @@ WHERE id = ?
 
     #[cfg(test)]
     async fn load_sessions(&self) -> Result<Vec<SessionRow>, DbError> {
-        let rows = sqlx::query_as!(
-            SessionJoinRow,
-            r#"
-SELECT session.base_branch AS "base_branch!",
-       session.added_lines AS "added_lines!",
-       session.created_at AS "created_at!",
-       session.deleted_lines AS "deleted_lines!",
-       session.id AS "id!",
+        let rows = sqlx::query_as::<_, SessionJoinRow>(
+            r"
+SELECT session.base_branch AS base_branch,
+       session.added_lines AS added_lines,
+       session.created_at AS created_at,
+       session.deleted_lines AS deleted_lines,
+       session.id AS id,
        session.in_progress_started_at,
-       session.in_progress_total_seconds AS "in_progress_total_seconds!",
-       session.input_tokens AS "input_tokens!",
-       session.is_draft AS "is_draft!: bool",
-       session.model AS "model!",
-       session.output AS "output!",
-       session.output_tokens AS "output_tokens!",
+       session.in_progress_total_seconds AS in_progress_total_seconds,
+       session.input_tokens AS input_tokens,
+       session.is_draft AS is_draft,
+       session.model AS model,
+       session.output_tokens AS output_tokens,
        session.parent_session_id,
        session.project_id,
-       session.prompt AS "prompt!",
-       session.reasoning_level AS "reasoning_level_override?",
+       session.prompt AS prompt,
+       session.reasoning_level AS reasoning_level_override,
        session.published_upstream_ref,
        session.questions,
-       session_review_request.display_id AS "review_request_display_id?",
-       session_review_request.forge_kind AS "review_request_forge_kind?",
-       session_review_request.last_refreshed_at AS "review_request_last_refreshed_at?",
-       session_review_request.source_branch AS "review_request_source_branch?",
-       session_review_request.state AS "review_request_state?",
-       session_review_request.status_summary AS "review_request_status_summary?",
-       session_review_request.target_branch AS "review_request_target_branch?",
-       session_review_request.title AS "review_request_title?",
-       session_review_request.web_url AS "review_request_web_url?",
-       session.size AS "size!",
-       session.status AS "status!",
+       session_review_request.display_id AS review_request_display_id,
+       session_review_request.forge_kind AS review_request_forge_kind,
+       session_review_request.last_refreshed_at AS review_request_last_refreshed_at,
+       session_review_request.source_branch AS review_request_source_branch,
+       session_review_request.state AS review_request_state,
+       session_review_request.status_summary AS review_request_status_summary,
+       session_review_request.target_branch AS review_request_target_branch,
+       session_review_request.title AS review_request_title,
+       session_review_request.web_url AS review_request_web_url,
+       session.size AS size,
+       session.status AS status,
        session.summary,
        session.title,
-       session.updated_at AS "updated_at!"
+       session.updated_at AS updated_at
 FROM session
 LEFT JOIN session_review_request
 ON session_review_request.session_id = session.id
 ORDER BY session.updated_at DESC, session.id
-"#
+",
         )
         .fetch_all(&self.0)
         .await?;
@@ -1136,18 +1114,16 @@ ORDER BY session.updated_at DESC, session.id
         &self,
         session_id: &str,
     ) -> Result<Option<SessionDetailRow>, DbError> {
-        let row = sqlx::query_as!(
-            SessionDetailRow,
-            r#"
-SELECT output AS "output!",
-       prompt AS "prompt!",
+        let row = sqlx::query_as::<_, SessionDetailRow>(
+            r"
+SELECT prompt,
        questions,
        summary
 FROM session
 WHERE id = ?
-"#,
-            session_id
+",
         )
+        .bind(session_id)
         .fetch_optional(&self.0)
         .await?;
 
@@ -1433,20 +1409,12 @@ ON CONFLICT(session_id, model) DO UPDATE SET
     }
 
     #[cfg(test)]
-    async fn replace_session_output(&self, id: &str, output: &str) -> Result<(), DbError> {
+    async fn replace_session_messages_with_legacy_transcript(
+        &self,
+        id: &str,
+        output: &str,
+    ) -> Result<(), DbError> {
         let mut transaction = self.0.begin().await?;
-
-        sqlx::query(
-            r"
-UPDATE session
-SET output = ?
-WHERE id = ?
-",
-        )
-        .bind(output)
-        .bind(id)
-        .execute(&mut *transaction)
-        .await?;
 
         sqlx::query(
             r"
@@ -1457,6 +1425,20 @@ WHERE session_id = ?
         .bind(id)
         .execute(&mut *transaction)
         .await?;
+
+        if !output.trim().is_empty() {
+            sqlx::query(
+                r"
+INSERT INTO session_message (session_id, position, kind, content, created_at)
+VALUES (?, 0, ?, ?, CAST(strftime('%s', 'now') AS INTEGER))
+",
+            )
+            .bind(id)
+            .bind(SessionMessageKind::LegacyTranscript.as_str())
+            .bind(output)
+            .execute(&mut *transaction)
+            .await?;
+        }
 
         transaction.commit().await?;
 

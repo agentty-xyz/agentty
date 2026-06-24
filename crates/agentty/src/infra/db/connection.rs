@@ -337,7 +337,6 @@ WHERE id = ?
         assert_eq!(session_row.in_progress_total_seconds, 120);
         assert_eq!(session_row.project_id, Some(project_id));
         assert_eq!(session_row.prompt, "Implement the feature");
-        assert_eq!(session_row.output, "First line\nSecond line");
         assert_eq!(session_row.added_lines, 14);
         assert_eq!(session_row.deleted_lines, 6);
         assert_eq!(session_row.input_tokens, 11);
@@ -357,10 +356,10 @@ WHERE id = ?
         assert_review_request_row(&session_row);
     }
 
-    /// Verifies output appends preserve the legacy transcript while writing
-    /// ordered message rows for the new transcript store.
+    /// Verifies message appends write ordered rows for the canonical
+    /// transcript store without updating the legacy backup column.
     #[tokio::test]
-    async fn test_append_session_output_message_dual_writes_message_rows() {
+    async fn test_append_session_message_writes_message_rows() {
         // Arrange
         let database = Database::open_in_memory()
             .await
@@ -375,27 +374,29 @@ WHERE id = ?
         // Act
         database
             .sessions()
-            .append_session_output_message(
-                "session-a",
-                SessionMessageKind::UserPrompt,
-                " › hi\n\n",
-                " hi ",
-            )
+            .append_session_message("session-a", SessionMessageKind::UserPrompt, " hi ")
             .await
             .expect("failed to append prompt message");
         database
             .sessions()
-            .append_session_output_message(
+            .append_session_message(
                 "session-a",
                 SessionMessageKind::AssistantAnswer,
-                "Hello\n\n",
                 "\nHello\n",
             )
             .await
             .expect("failed to append assistant message");
+        database
+            .sessions()
+            .append_session_message(
+                "session-a",
+                SessionMessageKind::WorkflowNotice,
+                "\n[Sync Error] failed\n",
+            )
+            .await
+            .expect("failed to append workflow notice");
 
         // Assert
-        let session_row = load_session_row(&database, "session-a").await;
         let messages = database
             .sessions()
             .load_session_messages("session-a")
@@ -407,9 +408,8 @@ WHERE id = ?
             .await
             .expect("failed to load session detail")
             .expect("session detail should exist");
-        assert_eq!(session_row.output, " › hi\n\nHello\n\n");
-        assert_eq!(detail.output, " › hi\n\nHello\n\n");
-        assert_eq!(messages.len(), 2);
+        assert!(detail.prompt.is_empty());
+        assert_eq!(messages.len(), 3);
         assert_eq!(messages[0].position, 0);
         assert_eq!(messages[0].kind, SessionMessageKind::UserPrompt.as_str());
         assert_eq!(messages[0].content, "hi");
@@ -419,12 +419,18 @@ WHERE id = ?
             SessionMessageKind::AssistantAnswer.as_str()
         );
         assert_eq!(messages[1].content, "Hello");
+        assert_eq!(messages[2].position, 2);
+        assert_eq!(
+            messages[2].kind,
+            SessionMessageKind::WorkflowNotice.as_str()
+        );
+        assert_eq!(messages[2].content, "\n[Sync Error] failed\n");
     }
 
-    /// Verifies session detail keeps using formatted `session.output` even when
-    /// raw message rows exist for the conversation store.
+    /// Verifies canonical transcript appends refresh session list ordering
+    /// metadata.
     #[tokio::test]
-    async fn test_load_session_detail_keeps_formatted_transcript_with_raw_messages() {
+    async fn test_append_session_message_refreshes_session_updated_at() {
         // Arrange
         let database = Database::open_in_memory()
             .await
@@ -437,24 +443,159 @@ WHERE id = ?
         insert_session_fixture(&database, "session-a", "main", "Review", project_id).await;
         database
             .sessions()
-            .append_session_output_message(
-                "session-a",
-                SessionMessageKind::UserPrompt,
-                " › migrated prompt\n\n",
-                "migrated prompt",
-            )
+            .update_session_updated_at("session-a", 10)
             .await
-            .expect("failed to append prompt message");
+            .expect("failed to backdate session updated_at");
+
+        // Act
         database
             .sessions()
-            .append_session_output_message(
+            .append_session_message(
                 "session-a",
                 SessionMessageKind::AssistantAnswer,
-                "migrated answer\n\n",
-                "migrated answer",
+                "current answer",
             )
             .await
             .expect("failed to append assistant message");
+
+        // Assert
+        let (_, updated_at) = database
+            .sessions()
+            .load_session_timestamps("session-a")
+            .await
+            .expect("failed to load session timestamps")
+            .expect("session timestamps should exist");
+        assert!(
+            updated_at > 10,
+            "expected updated_at refresh, got {updated_at}"
+        );
+    }
+
+    /// Verifies the legacy-output backfill appends to existing canonical
+    /// transcript rows instead of replacing them.
+    #[tokio::test]
+    async fn test_session_message_backfill_preserves_existing_messages() {
+        // Arrange
+        let options = SqliteConnectOptions::new().filename(":memory:");
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .expect("failed to open in-memory pool");
+        sqlx::query(
+            r"
+CREATE TABLE session (
+    id TEXT PRIMARY KEY NOT NULL,
+    output TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+)
+",
+        )
+        .execute(&pool)
+        .await
+        .expect("failed to create session table");
+        sqlx::query(
+            r"
+CREATE TABLE session_message (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT 0
+)
+",
+        )
+        .execute(&pool)
+        .await
+        .expect("failed to create session_message table");
+        sqlx::query(
+            r"
+INSERT INTO session (id, output, created_at)
+VALUES ('session-a', 'legacy transcript with workflow notice', 100)
+",
+        )
+        .execute(&pool)
+        .await
+        .expect("failed to insert session row");
+        sqlx::query(
+            r"
+INSERT INTO session_message (session_id, position, kind, content, created_at)
+VALUES
+    ('session-a', 0, 'user_prompt', 'Prompt text', 101),
+    ('session-a', 1, 'assistant_answer', 'Answer text', 102)
+",
+        )
+        .execute(&pool)
+        .await
+        .expect("failed to insert existing messages");
+
+        // Act
+        sqlx::query(include_str!(
+            "../../../migrations/050_backfill_session_message.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("failed to run session_message backfill");
+
+        // Assert
+        let messages: Vec<(i64, String, String)> = sqlx::query_as(
+            r"
+SELECT position, kind, content
+FROM session_message
+WHERE session_id = 'session-a'
+ORDER BY position
+",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("failed to load backfilled messages");
+        assert_eq!(
+            messages,
+            vec![
+                (
+                    0,
+                    SessionMessageKind::UserPrompt.as_str().to_string(),
+                    "Prompt text".to_string()
+                ),
+                (
+                    1,
+                    SessionMessageKind::AssistantAnswer.as_str().to_string(),
+                    "Answer text".to_string()
+                ),
+                (
+                    2,
+                    SessionMessageKind::LegacyTranscript.as_str().to_string(),
+                    "legacy transcript with workflow notice".to_string()
+                ),
+            ]
+        );
+    }
+
+    /// Verifies session detail loads transcript metadata without reading
+    /// legacy formatted output.
+    #[tokio::test]
+    async fn test_load_session_detail_omits_legacy_output() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to insert project");
+        insert_session_fixture(&database, "session-a", "main", "Review", project_id).await;
+        database
+            .sessions()
+            .update_session_prompt("session-a", "Do something")
+            .await
+            .expect("failed to update prompt");
+        database
+            .sessions()
+            .update_session_summary("session-a", "migrated summary")
+            .await
+            .expect("failed to update summary");
 
         // Act
         let detail = database
@@ -465,7 +606,8 @@ WHERE id = ?
             .expect("session detail should exist");
 
         // Assert
-        assert_eq!(detail.output, " › migrated prompt\n\nmigrated answer\n\n");
+        assert_eq!(detail.prompt, "Do something");
+        assert_eq!(detail.summary.as_deref(), Some("migrated summary"));
     }
 
     /// Builds an in-memory database with one session covering joined fields
@@ -483,7 +625,7 @@ WHERE id = ?
 
         insert_session_fixture(&database, "session-a", "main", "Review", project_id).await;
         persist_joined_session_metadata(&database, &review_request).await;
-        persist_joined_session_output(&database).await;
+        persist_joined_session_state(&database).await;
 
         (database, project_id)
     }
@@ -558,9 +700,8 @@ WHERE id = ?
             .expect("failed to update review request");
     }
 
-    /// Persists timing and output fields asserted by the joined-session
-    /// mapping test.
-    async fn persist_joined_session_output(database: &Database) {
+    /// Persists timing fields asserted by the joined-session mapping test.
+    async fn persist_joined_session_state(database: &Database) {
         database
             .sessions()
             .update_session_status_with_timing_at("session-a", "InProgress", 50)
@@ -571,16 +712,6 @@ WHERE id = ?
             .update_session_status_with_timing_at("session-a", "Review", 170)
             .await
             .expect("failed to close in-progress timing window");
-        database
-            .sessions()
-            .replace_session_output("session-a", "First line")
-            .await
-            .expect("failed to replace session output");
-        database
-            .sessions()
-            .append_session_output("session-a", "\nSecond line")
-            .await
-            .expect("failed to append session output");
         database
             .sessions()
             .update_session_updated_at("session-a", 200)
