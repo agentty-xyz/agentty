@@ -50,6 +50,19 @@ cargo install agentty
 
 </details>
 
+## Supported CLI Agents
+
+Agentty currently supports Codex, Claude, and Antigravity. Install and authenticate at
+least one provider CLI before starting a session:
+
+- Codex (`codex`): install the [Codex CLI](https://github.com/openai/codex) and run
+  `codex login`.
+- Claude (`claude`): install [Claude Code](https://github.com/anthropics/claude-code)
+  and run `claude auth login`.
+- Antigravity (`agy`): install the
+  [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli) and run `agy`
+  to sign in when prompted.
+
 ## Usage
 
 ```sh
