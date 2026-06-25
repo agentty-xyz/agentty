@@ -10,7 +10,8 @@ ci = "github"
 # Keep release CI marked as intentionally customized because the checked-in
 # workflow avoids blanket secret forwarding on custom jobs that do not need it,
 # and the generated `host` job is patched to require release checks before
-# creating the GitHub release announcement.
+# creating the GitHub release announcement. The workflow also keeps merge queue
+# validation wired to the release plan and custom release-check jobs.
 allow-dirty = ["ci"]
 # The installers to generate for each app
 installers = ["shell", "npm"]
