@@ -839,6 +839,30 @@ pub(crate) fn can_mutate_session_branch_in_stack(sessions: &[Session], session_i
     true
 }
 
+/// Returns whether a session can accept a chat reply under one-level stack
+/// constraints.
+///
+/// Replies are allowed when the stack has no other member actively running or
+/// reserving branch work. Unlike merge or sync gates, an idle review-ready
+/// materialized child does not block parent replies; the child can be synced
+/// again after the parent produces its next review state.
+pub(crate) fn can_reply_to_session_in_stack(sessions: &[Session], session_id: &str) -> bool {
+    let Some(session) = find_session(sessions, session_id) else {
+        return false;
+    };
+    if let Some(parent_session_id) = session.parent_session_id.as_ref()
+        && find_session(sessions, parent_session_id.as_str()).is_none()
+    {
+        return false;
+    }
+    let stack_root_session_id = session
+        .parent_session_id
+        .as_ref()
+        .map_or(session.id.as_str(), SessionId::as_str);
+
+    !stack_has_branch_mutating_session(sessions, stack_root_session_id, session_id)
+}
+
 /// Finds one loaded session by id.
 fn find_session<'a>(sessions: &'a [Session], session_id: &str) -> Option<&'a Session> {
     sessions
@@ -1287,6 +1311,52 @@ pub(crate) mod tests {
 
         // Assert
         assert!(!can_mutate_review_child);
+    }
+
+    #[test]
+    fn test_can_reply_to_session_in_stack_allows_parent_with_review_child() {
+        // Arrange
+        let parent_session = SessionFixtureBuilder::new()
+            .id("parent-session")
+            .draft(false)
+            .status(Status::Review)
+            .build();
+        let child_session = SessionFixtureBuilder::new()
+            .id("child-session")
+            .draft(true)
+            .status(Status::Review)
+            .parent_session_id(Some(SessionId::from("parent-session")))
+            .build();
+        let sessions = vec![parent_session, child_session];
+
+        // Act
+        let can_reply_to_parent = can_reply_to_session_in_stack(&sessions, "parent-session");
+
+        // Assert
+        assert!(can_reply_to_parent);
+    }
+
+    #[test]
+    fn test_can_reply_to_session_in_stack_blocks_active_stack_member() {
+        // Arrange
+        let parent_session = SessionFixtureBuilder::new()
+            .id("parent-session")
+            .draft(false)
+            .status(Status::Review)
+            .build();
+        let running_child_session = SessionFixtureBuilder::new()
+            .id("running-child")
+            .draft(true)
+            .status(Status::InProgress)
+            .parent_session_id(Some(SessionId::from("parent-session")))
+            .build();
+        let sessions = vec![parent_session, running_child_session];
+
+        // Act
+        let can_reply_to_parent = can_reply_to_session_in_stack(&sessions, "parent-session");
+
+        // Assert
+        assert!(!can_reply_to_parent);
     }
 
     /// Builds a minimal session fixture for reasoning-level tests.

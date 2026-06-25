@@ -106,23 +106,23 @@ session after confirmation, scroll, help | | **Review** | Agent finished; change
 ready for review. Linked pull requests / merge requests refresh in the background;
 merged requests move the session to `Done` and save the synced session branch `HEAD`
 hash for `c` continuation, and closed requests move it to `Canceled`. A parent with a
-materialized stacked child hides branch-mutating actions until that child is terminal or
-restacked. | `Enter` reply, `/` open slash-command composer, `m` add to merge queue, `r`
-sync, `o` open worktree, `p` create or refresh forge review request, `d` diff, `f`
-focused review, scroll, help | | **AgentReview** | Agentty is generating the focused
-review output in the background. Linked pull requests / merge requests continue
-refreshing in the background. | `Enter` reply, `/` open slash-command composer, `m` add
-to merge queue, `o` open worktree, `p` create or refresh forge review request, `d` diff,
-`f` focused review, scroll, help | | **Question** | Agent requested clarification before
-continuing. | question input mode (`Enter` submit, `Tab` toggle chat scroll, `Ctrl+C`
-end turn, `q` back to sessions list) | | **Queued** | Session is waiting in the merge
-queue. | read-only view (`q`, scroll, help) | | **Rebasing** | Worktree branch is
-rebasing onto the base branch. | read-only view (`q`, scroll, help) | | **Merging** |
-Changes are being merged into the base branch. | read-only view (`q`, scroll, help) | |
-**Done** | Session completed, merged, and its worktree checkout was removed. | `c`
-confirm continuation into a new draft, scroll, help | | **Canceled** | Session was
-canceled by the user and its worktree checkout was removed. | read-only view (`q`,
-scroll, help) |
+materialized stacked child can still accept `Enter` replies when the stack is idle, but
+hides branch workflow actions until that child is terminal or restacked. | `Enter`
+reply, `/` open slash-command composer, `m` add to merge queue, `r` sync, `o` open
+worktree, `p` create or refresh forge review request, `d` diff, `f` focused review,
+scroll, help | | **AgentReview** | Agentty is generating the focused review output in
+the background. Linked pull requests / merge requests continue refreshing in the
+background. | `Enter` reply, `/` open slash-command composer, `m` add to merge queue,
+`o` open worktree, `p` create or refresh forge review request, `d` diff, `f` focused
+review, scroll, help | | **Question** | Agent requested clarification before continuing.
+| question input mode (`Enter` submit, `Tab` toggle chat scroll, `Ctrl+C` end turn, `q`
+back to sessions list) | | **Queued** | Session is waiting in the merge queue. |
+read-only view (`q`, scroll, help) | | **Rebasing** | Worktree branch is rebasing onto
+the base branch. | read-only view (`q`, scroll, help) | | **Merging** | Changes are
+being merged into the base branch. | read-only view (`q`, scroll, help) | | **Done** |
+Session completed, merged, and its worktree checkout was removed. | `c` confirm
+continuation into a new draft, scroll, help | | **Canceled** | Session was canceled by
+the user and its worktree checkout was removed. | read-only view (`q`, scroll, help) |
 
 Settings values for models, reasoning, commit trailers, and open commands are stored per
 active project. Switching projects reloads that project's `Default Reasoning Level`,
@@ -321,10 +321,11 @@ itself create another stacked draft. While the child is still an unstarted draft
 keep staging local prompts, hides `m` merge queue and `r` sync, and only shows `s` start
 when the parent is in **Review** or **AgentReview** and no stack member is already
 running, queued, syncing, merging, or waiting on a question. After a stacked child has
-materialized, the parent hides branch-mutating actions such as reply, merge queue, and
-sync until the child is terminal or no longer linked. When the parent merges, Agentty
-clears the child parent link and retargets the child to the parent's base branch. When
-the parent is canceled, its stacked child is canceled too. If you decide not to start a
+materialized, the parent keeps `Enter` reply available whenever the stack is otherwise
+idle, but hides branch workflow actions such as slash commands, merge queue, and sync
+until the child is terminal or no longer linked. When the parent merges, Agentty clears
+the child parent link and retargets the child to the parent's base branch. When the
+parent is canceled, its stacked child is canceled too. If you decide not to start a
 staged bundle, return to the **Sessions** list and press `c` to cancel the
 still-unstarted draft session directly.
 

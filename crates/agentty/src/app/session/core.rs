@@ -3002,6 +3002,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_reply_to_parent_allows_review_ready_stacked_child() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        create_and_start_session(&mut app, "Initial").await;
+        let parent_session_id = app.sessions.sessions()[0].id.clone();
+        wait_for_status(&mut app, &parent_session_id, Status::Review).await;
+        let child_session_id = app
+            .create_draft_session()
+            .await
+            .expect("failed to create child session");
+        let child_session = app
+            .sessions
+            .sessions_mut()
+            .iter_mut()
+            .find(|session| session.id == child_session_id)
+            .expect("expected child session");
+        child_session.parent_session_id = Some(parent_session_id.clone());
+        child_session.status = Status::Review;
+
+        // Act
+        app.reply(&parent_session_id, "Parent follow-up").await;
+
+        // Assert
+        app.sessions.sync_from_handles();
+        let parent_session = app
+            .sessions
+            .sessions()
+            .iter()
+            .find(|session| session.id == parent_session_id)
+            .expect("expected parent session");
+        assert!(parent_session.output.contains("Parent follow-up"));
+    }
+
+    #[tokio::test]
     /// Verifies that submitting a chat message while the session is
     /// `InProgress` pushes the prompt onto the in-memory queue and mirrors
     /// it into the render snapshot so the row appears inline in the

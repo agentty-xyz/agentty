@@ -23,6 +23,7 @@ use crate::domain::agent::{AgentModel, ReasoningLevel};
 use crate::domain::session::{
     ReviewRequest, SESSION_DATA_DIR, Session, SessionHandles, SessionId, Status,
     can_mutate_session_branch_in_stack as stack_can_mutate_session_branch,
+    can_reply_to_session_in_stack as stack_can_reply_to_session,
     can_start_staged_session_in_stack as stack_can_start_staged_session,
 };
 use crate::domain::session_message::SessionMessageKind;
@@ -747,6 +748,12 @@ impl SessionManager {
     /// competing with another member of its one-level stack.
     pub(crate) fn can_mutate_session_branch_in_stack(&self, session_id: &str) -> bool {
         stack_can_mutate_session_branch(&self.state.sessions, session_id)
+    }
+
+    /// Returns whether a session can accept a reply without another stack
+    /// member already owning active branch work.
+    pub(crate) fn can_reply_to_session_in_stack(&self, session_id: &str) -> bool {
+        stack_can_reply_to_session(&self.state.sessions, session_id)
     }
 
     /// Starts a `Draft` session from its persisted staged draft bundle.
@@ -1636,11 +1643,9 @@ impl SessionManager {
         else {
             return Ok(None);
         };
-        if !self.can_mutate_session_branch_in_stack(session_id.as_str()) {
+        if !self.can_reply_to_session_in_stack(session_id.as_str()) {
             return Err(SessionError::Workflow(
-                "Stacked branch work can only run when no other stack session is active and \
-                 parent branch edits are not blocked by materialized children"
-                    .to_string(),
+                "Stacked replies can only run when no other stack session is active".to_string(),
             ));
         }
 

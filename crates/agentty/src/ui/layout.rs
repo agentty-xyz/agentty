@@ -335,6 +335,7 @@ mod tests {
     use crate::ui::question_format::*;
     use crate::ui::session_format::*;
     use crate::ui::state::app_mode::QuestionFocus;
+    use crate::ui::state::help_action::ViewActionAvailability;
     use crate::ui::state::prompt::{PromptAtMentionState, PromptSlashStage, PromptSlashState};
     use crate::ui::style;
 
@@ -348,6 +349,7 @@ mod tests {
         session_view_footer_line(
             session,
             can_open_worktree,
+            ViewActionAvailability::Enabled,
             session.can_start_staged_session(),
             true,
         )

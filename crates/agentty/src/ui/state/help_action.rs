@@ -63,6 +63,30 @@ pub enum ViewSessionState {
     Interactive,
 }
 
+/// Two-state availability for view-mode actions that need stronger typing
+/// than another raw boolean.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ViewActionAvailability {
+    Disabled,
+    Enabled,
+}
+
+impl ViewActionAvailability {
+    /// Returns an availability value for the provided boolean.
+    pub(crate) fn from_bool(is_enabled: bool) -> Self {
+        if is_enabled {
+            return Self::Enabled;
+        }
+
+        Self::Disabled
+    }
+
+    /// Returns whether the action is available.
+    fn is_enabled(self) -> bool {
+        self == Self::Enabled
+    }
+}
+
 /// Action availability snapshot for view-mode help projection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ViewHelpState {
@@ -72,6 +96,9 @@ pub(crate) struct ViewHelpState {
     /// Whether the current session currently has a local worktree directory
     /// available to open.
     pub(crate) can_open_worktree: bool,
+    /// Whether the current session can open the reply composer under stack
+    /// rules.
+    pub(crate) reply_to_session: ViewActionAvailability,
     /// Whether the current draft session has staged prompts and can launch.
     pub(crate) can_start_staged_session: bool,
     /// Pull-request publish action available for the current session, when
@@ -244,8 +271,9 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
                 | ViewSessionState::Review
                 | ViewSessionState::AgentReview
         );
-    let can_edit_session =
-        can_edit_view_session(state.session_state, state.can_mutate_session_branch);
+    let can_open_prompt = can_open_view_prompt(state.session_state, state.reply_to_session);
+    let can_open_command =
+        can_open_view_command(state.session_state, state.can_mutate_session_branch);
     let can_show_diff = matches!(
         state.session_state,
         ViewSessionState::Review | ViewSessionState::AgentReview
@@ -258,7 +286,12 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
     let can_stop_session = state.session_state == ViewSessionState::InProgress;
     let mut actions = vec![HelpAction::new("back", "q", "Back to list")];
 
-    append_view_prompt_actions(&mut actions, state.session_state, can_edit_session);
+    append_view_prompt_actions(
+        &mut actions,
+        state.session_state,
+        can_open_prompt,
+        can_open_command,
+    );
 
     if can_stop_session {
         actions.push(HelpAction::new(
@@ -290,7 +323,7 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
         ));
     }
 
-    if can_edit_session && state.session_state != ViewSessionState::StackedDraft {
+    if can_open_command && state.session_state != ViewSessionState::StackedDraft {
         actions.push(HelpAction::new(
             "add to merge queue",
             "m",
@@ -331,8 +364,9 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
                 | ViewSessionState::Review
                 | ViewSessionState::AgentReview
         );
-    let can_edit_session =
-        can_edit_view_session(state.session_state, state.can_mutate_session_branch);
+    let can_open_prompt = can_open_view_prompt(state.session_state, state.reply_to_session);
+    let can_open_command =
+        can_open_view_command(state.session_state, state.can_mutate_session_branch);
     let can_show_review = matches!(
         state.session_state,
         ViewSessionState::Review | ViewSessionState::AgentReview
@@ -346,7 +380,8 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
         &mut actions,
         state.can_start_staged_session,
         state.session_state,
-        can_edit_session,
+        can_open_prompt,
+        can_open_command,
     );
 
     if can_stop_session {
@@ -381,9 +416,30 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
     actions
 }
 
-/// Returns whether a session state can open prompt/command controls in view
-/// mode under stack branch-mutation constraints.
-fn can_edit_view_session(session_state: ViewSessionState, can_mutate_session_branch: bool) -> bool {
+/// Returns whether a session state can open the reply composer in view mode.
+fn can_open_view_prompt(
+    session_state: ViewSessionState,
+    reply_to_session: ViewActionAvailability,
+) -> bool {
+    if matches!(
+        session_state,
+        ViewSessionState::NewSession | ViewSessionState::StackedDraft
+    ) {
+        return true;
+    }
+
+    reply_to_session.is_enabled()
+        && matches!(
+            session_state,
+            ViewSessionState::Interactive
+                | ViewSessionState::Review
+                | ViewSessionState::AgentReview
+        )
+}
+
+/// Returns whether a session state can open slash commands in view mode under
+/// stack branch-mutation constraints.
+fn can_open_view_command(session_state: ViewSessionState, can_mutate_session_branch: bool) -> bool {
     if matches!(
         session_state,
         ViewSessionState::NewSession | ViewSessionState::StackedDraft
@@ -413,19 +469,20 @@ fn append_view_footer_edit_actions(
     actions: &mut Vec<HelpAction>,
     can_start_staged_session: bool,
     session_state: ViewSessionState,
-    can_edit_session: bool,
+    can_open_prompt: bool,
+    can_open_command: bool,
 ) {
-    if !can_edit_session {
+    if !can_open_prompt && !can_open_command {
         return;
     }
 
-    append_view_prompt_actions(actions, session_state, can_edit_session);
+    append_view_prompt_actions(actions, session_state, can_open_prompt, can_open_command);
 
     if can_start_staged_session {
         actions.push(HelpAction::new("start", "s", "Start staged session"));
     }
 
-    if session_state == ViewSessionState::StackedDraft {
+    if !can_open_command || session_state == ViewSessionState::StackedDraft {
         return;
     }
 
@@ -447,14 +504,15 @@ fn append_view_footer_edit_actions(
 fn append_view_prompt_actions(
     actions: &mut Vec<HelpAction>,
     session_state: ViewSessionState,
-    can_edit_session: bool,
+    can_open_prompt: bool,
+    can_open_command: bool,
 ) {
-    if !can_edit_session {
-        return;
+    if can_open_prompt {
+        actions.push(prompt_action_help_action(session_state));
     }
-
-    actions.push(prompt_action_help_action(session_state));
-    actions.push(HelpAction::new("commands menu", "/", "Open commands menu"));
+    if can_open_command {
+        actions.push(HelpAction::new("commands menu", "/", "Open commands menu"));
+    }
 }
 
 /// Returns the `Enter` prompt-entry action label appropriate for the current
@@ -651,6 +709,7 @@ mod tests {
         let state = ViewHelpState {
             can_mutate_session_branch: true,
             can_open_worktree: true,
+            reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: false,
             publish_pull_request_action: None,
             session_state: ViewSessionState::InProgress,
@@ -672,6 +731,7 @@ mod tests {
         let state = ViewHelpState {
             can_mutate_session_branch: true,
             can_open_worktree: false,
+            reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: false,
             publish_pull_request_action: None,
             session_state: ViewSessionState::Review,
@@ -690,6 +750,7 @@ mod tests {
         let state = ViewHelpState {
             can_mutate_session_branch: true,
             can_open_worktree: true,
+            reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: false,
             publish_pull_request_action: None,
             session_state: ViewSessionState::Rebasing,
@@ -711,6 +772,7 @@ mod tests {
         let state = ViewHelpState {
             can_mutate_session_branch: true,
             can_open_worktree: true,
+            reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: false,
             publish_pull_request_action: None,
             session_state: ViewSessionState::MergeQueue,
@@ -732,6 +794,7 @@ mod tests {
         let state = ViewHelpState {
             can_mutate_session_branch: true,
             can_open_worktree: true,
+            reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: false,
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
             session_state: ViewSessionState::Review,
@@ -765,11 +828,12 @@ mod tests {
     }
 
     #[test]
-    fn test_view_actions_review_hides_branch_mutation_when_stack_blocks() {
+    fn test_view_actions_review_keeps_reply_when_stack_blocks_branch_mutation() {
         // Arrange
         let state = ViewHelpState {
             can_mutate_session_branch: false,
             can_open_worktree: true,
+            reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: false,
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
             session_state: ViewSessionState::Review,
@@ -783,7 +847,7 @@ mod tests {
         assert!(actions.iter().any(|action| action.key == "f"));
         assert!(actions.iter().any(|action| action.key == "p"));
         assert!(actions.iter().any(|action| action.key == "o"));
-        assert!(!actions.iter().any(|action| action.key == "Enter"));
+        assert!(actions.iter().any(|action| action.key == "Enter"));
         assert!(!actions.iter().any(|action| action.key == "/"));
         assert!(!actions.iter().any(|action| action.key == "m"));
         assert!(!actions.iter().any(|action| action.key == "r"));
@@ -795,6 +859,7 @@ mod tests {
         let state = ViewHelpState {
             can_mutate_session_branch: true,
             can_open_worktree: true,
+            reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: false,
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
             session_state: ViewSessionState::AgentReview,
@@ -817,6 +882,7 @@ mod tests {
         let state = ViewHelpState {
             can_mutate_session_branch: true,
             can_open_worktree: true,
+            reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: false,
             publish_pull_request_action: None,
             session_state: ViewSessionState::Interactive,
@@ -838,6 +904,7 @@ mod tests {
         let state = ViewHelpState {
             can_mutate_session_branch: true,
             can_open_worktree: true,
+            reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: true,
             publish_pull_request_action: None,
             session_state: ViewSessionState::NewSession,
@@ -862,6 +929,7 @@ mod tests {
         let state = ViewHelpState {
             can_mutate_session_branch: true,
             can_open_worktree: true,
+            reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: true,
             publish_pull_request_action: None,
             session_state: ViewSessionState::StackedDraft,
@@ -888,6 +956,7 @@ mod tests {
         let state = ViewHelpState {
             can_mutate_session_branch: true,
             can_open_worktree: true,
+            reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: false,
             publish_pull_request_action: None,
             session_state: ViewSessionState::StackedDraft,
@@ -913,6 +982,7 @@ mod tests {
         let state = ViewHelpState {
             can_mutate_session_branch: true,
             can_open_worktree: true,
+            reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: false,
             publish_pull_request_action: None,
             session_state: ViewSessionState::Done,
@@ -937,6 +1007,7 @@ mod tests {
         let state = ViewHelpState {
             can_mutate_session_branch: true,
             can_open_worktree: true,
+            reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: false,
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
             session_state: ViewSessionState::Review,
@@ -957,11 +1028,12 @@ mod tests {
     }
 
     #[test]
-    fn test_view_footer_actions_review_hides_branch_mutation_when_stack_blocks() {
+    fn test_view_footer_actions_review_keeps_reply_when_stack_blocks_branch_mutation() {
         // Arrange
         let state = ViewHelpState {
             can_mutate_session_branch: false,
             can_open_worktree: true,
+            reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: false,
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
             session_state: ViewSessionState::Review,
@@ -974,7 +1046,7 @@ mod tests {
         assert!(actions.iter().any(|action| action.key == "o"));
         assert!(actions.iter().any(|action| action.key == "f"));
         assert!(actions.iter().any(|action| action.key == "p"));
-        assert!(!actions.iter().any(|action| action.key == "Enter"));
+        assert!(actions.iter().any(|action| action.key == "Enter"));
         assert!(!actions.iter().any(|action| action.key == "/"));
         assert!(!actions.iter().any(|action| action.key == "m"));
         assert!(!actions.iter().any(|action| action.key == "r"));
@@ -986,6 +1058,7 @@ mod tests {
         let state = ViewHelpState {
             can_mutate_session_branch: true,
             can_open_worktree: true,
+            reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: false,
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
             session_state: ViewSessionState::AgentReview,
@@ -1011,6 +1084,7 @@ mod tests {
         let state = ViewHelpState {
             can_mutate_session_branch: true,
             can_open_worktree: true,
+            reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: false,
             publish_pull_request_action: None,
             session_state: ViewSessionState::Rebasing,
@@ -1032,6 +1106,7 @@ mod tests {
         let state = ViewHelpState {
             can_mutate_session_branch: true,
             can_open_worktree: true,
+            reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: true,
             publish_pull_request_action: None,
             session_state: ViewSessionState::NewSession,
@@ -1051,6 +1126,7 @@ mod tests {
         let state = ViewHelpState {
             can_mutate_session_branch: true,
             can_open_worktree: true,
+            reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: true,
             publish_pull_request_action: None,
             session_state: ViewSessionState::StackedDraft,
@@ -1073,6 +1149,7 @@ mod tests {
         let state = ViewHelpState {
             can_mutate_session_branch: true,
             can_open_worktree: true,
+            reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: false,
             publish_pull_request_action: None,
             session_state: ViewSessionState::MergeQueue,
@@ -1095,6 +1172,7 @@ mod tests {
         let state = ViewHelpState {
             can_mutate_session_branch: true,
             can_open_worktree: true,
+            reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: false,
             publish_pull_request_action: None,
             session_state: ViewSessionState::Canceled,
@@ -1117,6 +1195,7 @@ mod tests {
         let state = ViewHelpState {
             can_mutate_session_branch: true,
             can_open_worktree: true,
+            reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: false,
             publish_pull_request_action: None,
             session_state: ViewSessionState::Done,
@@ -1136,6 +1215,7 @@ mod tests {
         let state = ViewHelpState {
             can_mutate_session_branch: true,
             can_open_worktree: true,
+            reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: false,
             publish_pull_request_action: None,
             session_state: ViewSessionState::Canceled,
@@ -1194,6 +1274,7 @@ mod tests {
         let state = ViewHelpState {
             can_mutate_session_branch: true,
             can_open_worktree: true,
+            reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: false,
             publish_pull_request_action: None,
             session_state: ViewSessionState::InProgress,
@@ -1215,6 +1296,7 @@ mod tests {
         let state = ViewHelpState {
             can_mutate_session_branch: true,
             can_open_worktree: true,
+            reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: false,
             publish_pull_request_action: None,
             session_state: ViewSessionState::Review,
@@ -1233,6 +1315,7 @@ mod tests {
         let state = ViewHelpState {
             can_mutate_session_branch: true,
             can_open_worktree: true,
+            reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: false,
             publish_pull_request_action: None,
             session_state: ViewSessionState::Review,

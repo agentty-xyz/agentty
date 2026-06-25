@@ -148,6 +148,61 @@ fn seed_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+/// Seeds a one-level stack where both parent and child are review-ready.
+fn seed_review_ready_parent_with_review_child(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let canonical_workdir = env.workdir.canonicalize()?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(async {
+        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
+        let database = Database::open(&db_path).await?;
+        let project_id = database
+            .projects()
+            .upsert_project(
+                &canonical_workdir.to_string_lossy(),
+                Some("main".to_string()),
+            )
+            .await?;
+
+        database
+            .projects()
+            .touch_project_last_opened(project_id)
+            .await?;
+        database
+            .sessions()
+            .insert_session("stack-parent-0001", "gpt-5.5", "main", "Review", project_id)
+            .await?;
+        database
+            .sessions()
+            .update_session_title("stack-parent-0001", "Parent stack review")
+            .await?;
+        database
+            .sessions()
+            .insert_stacked_draft_session(
+                "stack-child-0001",
+                "gpt-5.5",
+                "wt/stack-pa",
+                "Review",
+                "stack-parent-0001",
+                project_id,
+            )
+            .await?;
+        database
+            .sessions()
+            .update_session_title("stack-child-0001", "Child stack review")
+            .await
+    })?;
+
+    std::fs::create_dir_all(env.agentty_root.join("wt").join("stack-pa"))?;
+    std::fs::create_dir_all(env.agentty_root.join("wt").join("stack-ch"))?;
+
+    Ok(())
+}
+
 /// Seeds one review-ready session with a persisted reasoning-level override.
 fn seed_session_with_reasoning_level(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     seed_review_ready_session(env)?;
@@ -869,6 +924,41 @@ fn stacked_session_creation() -> E2eResult {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Review-ready ses", &full);
                 assertion::assert_text_in_region(frame, "└ [XS] Stacked draft", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that a review-ready parent can still open the reply composer after
+/// its stacked child has also reached review, while merge and sync remain
+/// hidden until the child is terminal or unlinked.
+#[test]
+fn stacked_parent_reply_remains_available_with_review_child() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("stacked_parent_reply_remains_available_with_review_child")
+        .with_git()
+        .setup(seed_review_ready_parent_with_review_child)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .wait_for_text("Parent stack review", 5000)
+                    .press_key("Up")
+                    .press_key("Enter")
+                    .wait_for_text("Enter: reply", 5000)
+                    .capture_labeled(
+                        "parent_review",
+                        "Parent review session with reply available",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Parent stack review", &full);
+                assertion::assert_text_in_region(frame, "Enter: reply", &full);
+                assertion::assert_not_visible(frame, "m: add to merge queue");
+                assertion::assert_not_visible(frame, "r: sync");
             },
         )?;
 

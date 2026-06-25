@@ -12,7 +12,7 @@ use crate::domain::session::{
 };
 use crate::icon::Icon;
 use crate::infra::agent::protocol::AgentResponseSummary;
-use crate::ui::state::help_action::{self, ViewHelpState};
+use crate::ui::state::help_action::{self, ViewActionAvailability, ViewHelpState};
 use crate::ui::{markdown, style, text_util};
 
 const CLARIFICATION_HEADER_LINE: &str = " › Clarifications:";
@@ -163,15 +163,17 @@ fn session_metadata_base_text(
 }
 
 /// Builds the footer help line shown in session view mode.
-pub fn session_view_footer_line(
+pub(crate) fn session_view_footer_line(
     session: &Session,
     can_open_worktree: bool,
+    reply_to_session: ViewActionAvailability,
     can_start_staged_session: bool,
     can_mutate_session_branch: bool,
 ) -> Line<'static> {
     help_action::footer_line(&session_view_footer_actions(
         session,
         can_open_worktree,
+        reply_to_session,
         can_start_staged_session,
         can_mutate_session_branch,
     ))
@@ -337,6 +339,7 @@ pub fn session_output_published_branch_sync_line(session: &Session) -> Option<Li
 fn session_view_footer_actions(
     session: &Session,
     can_open_worktree: bool,
+    reply_to_session: ViewActionAvailability,
     can_start_staged_session: bool,
     can_mutate_session_branch: bool,
 ) -> Vec<help_action::HelpAction> {
@@ -344,6 +347,7 @@ fn session_view_footer_actions(
     help_action::view_footer_actions(ViewHelpState {
         can_mutate_session_branch,
         can_open_worktree,
+        reply_to_session,
         can_start_staged_session,
         publish_pull_request_action: session.publish_pull_request_action(),
         session_state,

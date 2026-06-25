@@ -1,7 +1,9 @@
 use ag_forge::RequestedReview;
 use ratatui::layout::Rect;
 
-use super::help_action::{self, HelpAction, ViewHelpState, ViewSessionState};
+use super::help_action::{
+    self, HelpAction, ViewActionAvailability, ViewHelpState, ViewSessionState,
+};
 use super::prompt::{
     PromptAtMentionState, PromptAttachmentState, PromptHistoryState, PromptSlashState,
 };
@@ -322,6 +324,7 @@ pub enum HelpContext {
     View {
         can_mutate_session_branch: bool,
         can_open_worktree: bool,
+        can_reply_to_session: bool,
         can_start_staged_session: bool,
         review_status_message: Option<String>,
         review_text: Option<String>,
@@ -351,6 +354,7 @@ impl HelpContext {
             HelpContext::View {
                 can_mutate_session_branch,
                 can_open_worktree,
+                can_reply_to_session,
                 can_start_staged_session,
                 publish_pull_request_action,
                 session_state,
@@ -358,6 +362,7 @@ impl HelpContext {
             } => help_action::view_actions(ViewHelpState {
                 can_mutate_session_branch: *can_mutate_session_branch,
                 can_open_worktree: *can_open_worktree,
+                reply_to_session: ViewActionAvailability::from_bool(*can_reply_to_session),
                 can_start_staged_session: *can_start_staged_session,
                 publish_pull_request_action: *publish_pull_request_action,
                 session_state: *session_state,
@@ -449,6 +454,7 @@ mod tests {
         let context = HelpContext::View {
             can_mutate_session_branch: true,
             can_open_worktree: true,
+            can_reply_to_session: true,
             can_start_staged_session: false,
             review_status_message: None,
             review_text: None,
@@ -479,6 +485,7 @@ mod tests {
         let context = HelpContext::View {
             can_mutate_session_branch: true,
             can_open_worktree: true,
+            can_reply_to_session: true,
             can_start_staged_session: false,
             review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
             review_text: Some("Ready".to_string()),
@@ -512,6 +519,7 @@ mod tests {
         let context = HelpContext::View {
             can_mutate_session_branch: true,
             can_open_worktree: true,
+            can_reply_to_session: true,
             can_start_staged_session: false,
             review_status_message: None,
             review_text: None,

@@ -111,8 +111,10 @@ During **AgentReview**, Agentty keeps the same review-oriented shortcuts but hid
 until the background focused-review generation finishes and the session returns to
 **Review**.
 
-For stacked parents with a materialized child, branch-mutating shortcuts such as
-`Enter`, `/`, `m`, and `r` are hidden until the child is terminal or no longer linked.
+For stacked parents with a materialized child, `Enter` remains available when no stack
+member is actively running, queued, syncing, merging, or waiting on a question. Branch
+workflow shortcuts such as `/`, `m`, and `r` stay hidden until the child is terminal or
+no longer linked.
 
 <a id="usage-additional-keys"></a> Additional notes:
 

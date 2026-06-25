@@ -697,6 +697,7 @@ mod tests {
         let help_context = HelpContext::View {
             can_mutate_session_branch: true,
             can_open_worktree: true,
+            can_reply_to_session: true,
             can_start_staged_session: false,
             review_status_message: None,
             review_text: None,

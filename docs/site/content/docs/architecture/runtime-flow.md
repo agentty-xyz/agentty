@@ -525,9 +525,10 @@ restart-safe:
 Stacked-session branch gates are enforced before those transitions start branch work.
 `start_staged_session()` only materializes a stacked draft when its parent is
 review-ready and no sibling or parent stack member is running, queued, syncing, merging,
-or waiting on a question. `reply()`, session sync, and merge queue entry use the same
-loaded-session stack check, with parent branch edits blocked while a materialized child
-remains linked.
+or waiting on a question. Session sync and merge queue entry use the stricter
+branch-work stack check, with parent branch workflow actions blocked while a
+materialized child remains linked. `reply()` uses the reply-specific stack check, so a
+parent can accept another prompt once a materialized child is idle in review.
 
 ## Agent Channel Architecture
 

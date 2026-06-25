@@ -96,6 +96,7 @@ struct ViewSessionSnapshot {
     mutate_session_branch: ViewActionState,
     open_worktree: ViewActionState,
     publish_pull_request_action: Option<PublishBranchAction>,
+    reply_to_session: ViewActionState,
     session_state: ViewSessionState,
     session_status: Status,
     start_staged_session: ViewActionState,
@@ -133,6 +134,11 @@ impl ViewSessionSnapshot {
         self.open_worktree.is_enabled()
     }
 
+    /// Returns whether this session can accept a reply under stack rules.
+    fn can_reply_to_session(&self) -> bool {
+        self.reply_to_session.is_enabled()
+    }
+
     /// Returns whether this staged draft can start its first live turn.
     fn can_start_staged_session(&self) -> bool {
         self.start_staged_session.is_enabled()
@@ -144,7 +150,7 @@ impl ViewSessionSnapshot {
             return false;
         }
 
-        self.can_edit_without_branch_work() || self.can_mutate_session_branch()
+        self.can_edit_without_branch_work() || self.can_reply_to_session()
     }
 
     /// Returns whether `/` may open the slash-command composer from view mode.
@@ -565,6 +571,10 @@ fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSe
         ),
         open_worktree: ViewActionState::from_bool(can_open_worktree),
         publish_pull_request_action: session.publish_pull_request_action(),
+        reply_to_session: ViewActionState::from_bool(
+            app.sessions
+                .can_reply_to_session_in_stack(view_context.session_id.as_str()),
+        ),
         session_state: help_action::session_view_state(session),
         session_status,
         start_staged_session: ViewActionState::from_bool(
@@ -861,6 +871,7 @@ fn open_view_help_overlay(
         context: HelpContext::View {
             can_mutate_session_branch: view_session_snapshot.can_mutate_session_branch(),
             can_open_worktree: view_session_snapshot.can_open_worktree(),
+            can_reply_to_session: view_session_snapshot.can_reply_to_session(),
             can_start_staged_session: view_session_snapshot.can_start_staged_session(),
             review_status_message: view_context.review_status_message.clone(),
             review_text: view_context.review_text.clone(),
@@ -1703,7 +1714,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_view_session_snapshot_blocks_parent_branch_actions_with_materialized_child() {
+    async fn test_view_session_snapshot_keeps_parent_reply_with_review_child() {
         // Arrange
         let (mut app, _base_dir, parent_session_id) = new_test_app_with_session().await;
         let child_session_id = app
@@ -1725,6 +1736,47 @@ mod tests {
             .expect("expected child session");
         child_session.parent_session_id = Some(parent_session_id.clone().into());
         child_session.status = Status::Review;
+        app.mode = AppMode::View {
+            review_status_message: None,
+            review_text: None,
+            session_id: parent_session_id.clone().into(),
+            scroll_offset: Some(1),
+        };
+        let context = view_context(&mut app).expect("expected view context");
+
+        // Act
+        let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
+
+        // Assert
+        assert_eq!(snapshot.session_state, ViewSessionState::Review);
+        assert!(snapshot.can_open_prompt_composer());
+        assert!(!snapshot.can_merge_session());
+        assert!(!snapshot.can_rebase_session());
+    }
+
+    #[tokio::test]
+    async fn test_view_session_snapshot_blocks_parent_reply_with_running_child() {
+        // Arrange
+        let (mut app, _base_dir, parent_session_id) = new_test_app_with_session().await;
+        let child_session_id = app
+            .create_draft_session()
+            .await
+            .expect("failed to create draft session");
+        let parent_session = app
+            .sessions
+            .sessions_mut()
+            .iter_mut()
+            .find(|session| session.id == parent_session_id)
+            .expect("expected parent session");
+        parent_session.status = Status::Review;
+        let child_session = app
+            .sessions
+            .sessions_mut()
+            .iter_mut()
+            .find(|session| session.id == child_session_id)
+            .expect("expected child session");
+        child_session.parent_session_id = Some(parent_session_id.clone().into());
+        child_session.status = Status::InProgress;
         app.mode = AppMode::View {
             review_status_message: None,
             review_text: None,
@@ -2395,6 +2447,7 @@ mod tests {
             continue_terminal_session: ViewActionState::Disabled,
             mutate_session_branch: ViewActionState::Enabled,
             open_worktree: ViewActionState::Enabled,
+            reply_to_session: ViewActionState::Enabled,
             start_staged_session: ViewActionState::Disabled,
             follow_up_task_action: None,
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
@@ -2786,6 +2839,7 @@ mod tests {
             continue_terminal_session: ViewActionState::Disabled,
             mutate_session_branch: ViewActionState::Enabled,
             open_worktree: ViewActionState::Disabled,
+            reply_to_session: ViewActionState::Enabled,
             start_staged_session: ViewActionState::Disabled,
             follow_up_task_action: None,
             publish_pull_request_action: None,
@@ -2981,6 +3035,7 @@ mod tests {
             continue_terminal_session: ViewActionState::Disabled,
             mutate_session_branch: ViewActionState::Enabled,
             open_worktree: ViewActionState::Enabled,
+            reply_to_session: ViewActionState::Enabled,
             start_staged_session: ViewActionState::Disabled,
             follow_up_task_action: None,
             publish_pull_request_action: None,
@@ -3040,6 +3095,7 @@ mod tests {
             continue_terminal_session: ViewActionState::Disabled,
             mutate_session_branch: ViewActionState::Enabled,
             open_worktree: ViewActionState::Enabled,
+            reply_to_session: ViewActionState::Enabled,
             start_staged_session: ViewActionState::Disabled,
             follow_up_task_action: None,
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
@@ -3092,6 +3148,7 @@ mod tests {
             continue_terminal_session: ViewActionState::Disabled,
             mutate_session_branch: ViewActionState::Enabled,
             open_worktree: ViewActionState::Enabled,
+            reply_to_session: ViewActionState::Enabled,
             start_staged_session: ViewActionState::Disabled,
             follow_up_task_action: None,
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
@@ -3162,6 +3219,7 @@ mod tests {
                 continue_terminal_session: ViewActionState::Disabled,
                 mutate_session_branch: ViewActionState::Enabled,
                 open_worktree: ViewActionState::Disabled,
+                reply_to_session: ViewActionState::Enabled,
                 start_staged_session: ViewActionState::Disabled,
                 follow_up_task_action: None,
                 publish_pull_request_action: None,
