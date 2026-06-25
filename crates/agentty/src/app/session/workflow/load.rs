@@ -5,7 +5,7 @@ use std::path::Path;
 
 use super::{draft, session_folder};
 use crate::app::SessionManager;
-use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
+use crate::domain::agent::{AgentSelection, ReasoningLevel, parse_persisted_session_agent_model};
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
     DailyActivity, PublishedBranchSyncStatus, ReviewRequest, ReviewRequestSummary, Session,
@@ -44,7 +44,7 @@ struct LoadedSessionInput {
     reasoning_level_override: Option<ReasoningLevel>,
     review_request: Option<ReviewRequest>,
     row: SessionListRow,
-    session_model: AgentModel,
+    session_agent: AgentSelection,
     session_id: SessionId,
     session_output: String,
     session_prompt: String,
@@ -172,8 +172,7 @@ impl SessionManager {
             return;
         }
         session_worktree_availability.insert(session_id.clone(), has_session_folder);
-        let session_model = AgentModel::parse_persisted(&row.model)
-            .unwrap_or_else(|_| AgentKind::Antigravity.default_model());
+        let session_agent = parse_persisted_session_agent_model(Some(&row.agent), &row.model);
 
         let (session_detail, session_output) =
             load_active_session_detail(db, *active_session_id, &row.id).await;
@@ -223,7 +222,7 @@ impl SessionManager {
             reasoning_level_override,
             review_request,
             row,
-            session_model,
+            session_agent,
             session_id,
             session_output,
             session_prompt: session_detail
@@ -290,6 +289,7 @@ impl SessionManager {
     /// transient fields computed during reload.
     fn build_loaded_session(input: LoadedSessionInput) -> Session {
         Session {
+            agent: input.session_agent,
             base_branch: input.row.base_branch,
             created_at: input.row.created_at,
             draft_attachments: input.draft_attachments,
@@ -299,7 +299,6 @@ impl SessionManager {
             in_progress_started_at: input.row.in_progress_started_at,
             in_progress_total_seconds: input.row.in_progress_total_seconds,
             is_draft: input.row.is_draft,
-            model: input.session_model,
             output: input.session_output,
             parent_session_id: input.parent_session_id,
             project_name: input.project_name,
@@ -1196,6 +1195,7 @@ mod tests {
         // Arrange
         let row = SessionListRow {
             added_lines: 0,
+            agent: "codex".to_string(),
             base_branch: "main".to_string(),
             created_at: 0,
             deleted_lines: 0,

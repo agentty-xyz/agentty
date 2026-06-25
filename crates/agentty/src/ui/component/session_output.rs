@@ -318,7 +318,7 @@ impl<'a> SessionOutput<'a> {
             active_progress: None,
             markdown_render_cache: None,
             output_layout_cache: None,
-            review_model: session.model,
+            review_model: session.agent.model(),
             review_status_message: None,
             review_text: None,
             scroll_offset: None,

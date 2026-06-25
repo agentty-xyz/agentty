@@ -461,7 +461,7 @@ mod tests {
         let mut session = session_fixture();
         session.status = Status::InProgress;
         session.title = Some("This is a very long timer-aware session header title".to_string());
-        session.model = AgentModel::Gpt55;
+        session.agent = crate::domain::agent::AgentSelection::from_model(AgentModel::Gpt55);
         session.in_progress_started_at = Some(0);
 
         // Act
@@ -495,7 +495,7 @@ mod tests {
     fn test_session_metadata_text_ticks_live_in_progress_timer() {
         // Arrange
         let mut session = session_fixture();
-        session.model = AgentModel::Gpt55;
+        session.agent = crate::domain::agent::AgentSelection::from_model(AgentModel::Gpt55);
         session.stats.added_lines = 9;
         session.stats.deleted_lines = 3;
         session.status = Status::InProgress;

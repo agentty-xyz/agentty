@@ -179,7 +179,11 @@ pub(super) async fn run_channel_turn(
     let req = TurnRequest {
         folder: context.folder.clone(),
         live_session_output: Some(Arc::clone(&context.output)),
-        model: turn_metadata.session_model.provider_model_str().to_string(),
+        model: turn_metadata
+            .session_agent
+            .model()
+            .provider_model_str()
+            .to_string(),
         request_kind: request_kind.clone(),
         prompt: prompt.clone(),
         provider_conversation_id,
@@ -200,7 +204,7 @@ pub(super) async fn run_channel_turn(
         session_project_id,
         &request_kind,
         &prompt.text,
-        turn_metadata.session_model,
+        turn_metadata.session_agent.model(),
     )
     .await;
 

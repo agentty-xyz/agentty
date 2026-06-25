@@ -150,7 +150,7 @@ impl App {
     ) {
         let session_agent_kind = self
             .session_at(context.session_index)
-            .map_or(AgentKind::Codex, |session| session.model.kind());
+            .map_or(AgentKind::Codex, |session| session.agent.kind());
         let selection = match &self.mode {
             AppMode::Prompt {
                 input, slash_state, ..

@@ -18,7 +18,7 @@ use super::{SessionTaskService, turn};
 use crate::app::service::SessionUpdateVersionMap;
 use crate::app::session::{Clock, SessionError, unix_timestamp_from_system_time};
 use crate::app::{AppEvent, AppServices, SessionManager};
-use crate::domain::agent::AgentModel;
+use crate::domain::agent::AgentSelection;
 use crate::domain::session::{SessionId, SessionStats, Status};
 use crate::domain::session_message::SessionMessageKind;
 use crate::infra::channel::{
@@ -45,9 +45,9 @@ pub(super) struct TurnMetadata {
     /// Published-upstream reference captured when the turn was queued,
     /// consumed after turn completion by the auto-push workflow.
     pub(super) published_upstream_ref: Option<String>,
-    /// Session model used for stats, title generation, and post-turn
-    /// auto-commit model resolution.
-    pub(super) session_model: AgentModel,
+    /// Agent provider and model selected for the session when the turn was
+    /// queued.
+    pub(super) session_agent: AgentSelection,
 }
 
 /// Single command variant serialized per session worker.
@@ -136,7 +136,8 @@ pub(super) struct SessionWorkerContext {
     /// Per-app session update versions shared with the main runtime.
     pub(super) session_update_versions: SessionUpdateVersionMap,
     pub(super) session_id: SessionId,
-    pub(super) session_model: AgentModel,
+    /// Agent provider and model selected for this session.
+    pub(super) session_agent: AgentSelection,
     pub(super) status: Arc<Mutex<Status>>,
 }
 
@@ -205,8 +206,8 @@ struct SessionWorkerRebaseAssistClient {
     session_update_versions: SessionUpdateVersionMap,
     /// Session identifier whose provider conversation is reused.
     session_id: SessionId,
-    /// Model used for the rebase-assist utility prompt.
-    session_model: AgentModel,
+    /// Agent provider and model used for the rebase-assist utility prompt.
+    session_agent: AgentSelection,
 }
 
 impl SessionWorkerRebaseAssistClient {
@@ -222,7 +223,7 @@ impl SessionWorkerRebaseAssistClient {
             output: Arc::clone(&context.output),
             session_update_versions: context.session_update_versions.clone(),
             session_id: context.session_id.clone(),
-            session_model: context.session_model,
+            session_agent: context.session_agent,
         }
     }
 
@@ -254,7 +255,7 @@ impl SessionWorkerRebaseAssistClient {
         let req = TurnRequest {
             folder: self.folder.clone(),
             live_session_output: Some(Arc::clone(&self.output)),
-            model: self.session_model.provider_model_str().to_string(),
+            model: self.session_agent.model().provider_model_str().to_string(),
             request_kind: AgentRequestKind::UtilityPrompt,
             prompt: TurnPrompt::from_agent_data(prompt),
             provider_conversation_id,
@@ -401,14 +402,14 @@ impl SessionWorkerRebaseAssistClient {
             .usage()
             .upsert_session_usage(
                 &self.session_id,
-                self.session_model.as_str(),
+                self.session_agent.model().as_str(),
                 &token_usage_delta,
             )
             .await
         {
             tracing::warn!(
                 session_id = %self.session_id,
-                model = %self.session_model.as_str(),
+                model = %self.session_agent.model().as_str(),
                 error = %error,
                 "failed to persist session usage after rebase-assist turn"
             );
@@ -424,7 +425,7 @@ impl SessionWorkerRebaseAssistClient {
                 Some(provider_conversation_id.clone()),
             )
             .await?;
-        if agent::transport_mode(self.session_model.kind()).uses_app_server() {
+        if agent::transport_mode(self.session_agent.kind()).uses_app_server() {
             self.db
                 .sessions()
                 .update_session_instruction_conversation_id(
@@ -459,8 +460,9 @@ pub(super) struct SessionWorkerRuntime {
     review_request_client: Arc<dyn forge::ReviewRequestClient>,
     /// Per-app session update versions shared with the main runtime.
     session_update_versions: SessionUpdateVersionMap,
+    /// Agent provider and model selected for this session.
+    session_agent: AgentSelection,
     session_id: SessionId,
-    session_model: AgentModel,
     status: Arc<Mutex<Status>>,
 }
 
@@ -583,7 +585,7 @@ impl SessionWorkerService {
             .remove(&runtime.session_id)
             .unwrap_or_else(|| {
                 create_agent_channel(
-                    runtime.session_model.kind(),
+                    runtime.session_agent.kind(),
                     services.app_server_client_override(),
                 )
             });
@@ -603,7 +605,7 @@ impl SessionWorkerService {
             review_request_client: Arc::clone(&runtime.review_request_client),
             session_update_versions: Arc::clone(&runtime.session_update_versions),
             session_id: runtime.session_id.clone(),
-            session_model: runtime.session_model,
+            session_agent: runtime.session_agent,
             status: Arc::clone(&runtime.status),
         };
         let (sender, receiver) = mpsc::unbounded_channel();
@@ -741,7 +743,7 @@ impl SessionWorkerService {
                 prompt,
                 turn_metadata: TurnMetadata {
                     published_upstream_ref,
-                    session_model: context.session_model,
+                    session_agent: context.session_agent,
                 },
             };
             let result = Self::process_session_command(context, command).await;
@@ -808,7 +810,7 @@ impl SessionWorkerService {
             git_client: Arc::clone(&context.git_client),
             id: context.session_id.clone(),
             output: Arc::clone(&context.output),
-            session_model: context.session_model,
+            session_model: context.session_agent.model(),
             session_update_versions: context.session_update_versions.clone(),
             status: Arc::clone(&context.status),
         })
@@ -936,7 +938,7 @@ impl SessionManager {
             review_request_client: services.review_request_client(),
             session_update_versions: services.session_update_versions(),
             session_id: session.id.clone(),
-            session_model: session.model,
+            session_agent: session.agent,
             status: Arc::clone(&handles.status),
         })
     }
@@ -1001,7 +1003,7 @@ mod tests {
         consume_turn_events, run_channel_turn, run_turn_with_cancellation, terminate_child_process,
     };
     use super::*;
-    use crate::domain::agent::ReasoningLevel;
+    use crate::domain::agent::{AgentModel, ReasoningLevel};
     use crate::domain::question::QuestionItem;
     use crate::domain::session::{PublishedBranchSyncStatus, ReviewRequest, ReviewRequestState};
     use crate::infra::agent::AgentResponse;
@@ -1095,7 +1097,7 @@ mod tests {
             prompt: "prompt".into(),
             turn_metadata: TurnMetadata {
                 published_upstream_ref: None,
-                session_model: AgentModel::ClaudeSonnet46,
+                session_agent: AgentSelection::from_model(AgentModel::ClaudeSonnet46),
             },
         };
         let resume_command = SessionCommand::Run {
@@ -1106,7 +1108,7 @@ mod tests {
             prompt: "prompt".into(),
             turn_metadata: TurnMetadata {
                 published_upstream_ref: None,
-                session_model: AgentModel::ClaudeSonnet46,
+                session_agent: AgentSelection::from_model(AgentModel::ClaudeSonnet46),
             },
         };
         let account_read_command = SessionCommand::Run {
@@ -1115,7 +1117,7 @@ mod tests {
             prompt: "prompt".into(),
             turn_metadata: TurnMetadata {
                 published_upstream_ref: None,
-                session_model: AgentModel::ClaudeSonnet46,
+                session_agent: AgentSelection::from_model(AgentModel::ClaudeSonnet46),
             },
         };
 
@@ -1355,7 +1357,7 @@ mod tests {
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
-            session_model: AgentModel::AntigravityGemini3FlashPreview,
+            session_agent: AgentSelection::from_model(AgentModel::AntigravityGemini3FlashPreview),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
@@ -1493,7 +1495,7 @@ mod tests {
 
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
-            session_model: AgentModel::AntigravityGemini3FlashPreview,
+            session_agent: AgentSelection::from_model(AgentModel::AntigravityGemini3FlashPreview),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
@@ -1599,7 +1601,7 @@ mod tests {
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
-            session_model: AgentModel::AntigravityGemini3FlashPreview,
+            session_agent: AgentSelection::from_model(AgentModel::AntigravityGemini3FlashPreview),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
@@ -1624,7 +1626,7 @@ mod tests {
     fn default_turn_metadata() -> TurnMetadata {
         TurnMetadata {
             published_upstream_ref: None,
-            session_model: AgentModel::AntigravityGemini3FlashPreview,
+            session_agent: AgentSelection::from_model(AgentModel::AntigravityGemini3FlashPreview),
         }
     }
 
@@ -1665,7 +1667,7 @@ mod tests {
 
             session_update_versions: Arc::default(),
             session_id: "sess-preturn".into(),
-            session_model: AgentModel::AntigravityGemini3FlashPreview,
+            session_agent: AgentSelection::from_model(AgentModel::AntigravityGemini3FlashPreview),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
@@ -1734,7 +1736,7 @@ mod tests {
 
             session_update_versions: Arc::default(),
             session_id: "sess-timeout".into(),
-            session_model: AgentModel::AntigravityGemini3FlashPreview,
+            session_agent: AgentSelection::from_model(AgentModel::AntigravityGemini3FlashPreview),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
@@ -1800,7 +1802,7 @@ mod tests {
 
             session_update_versions: Arc::default(),
             session_id: "sess-term".into(),
-            session_model: AgentModel::AntigravityGemini3FlashPreview,
+            session_agent: AgentSelection::from_model(AgentModel::AntigravityGemini3FlashPreview),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
@@ -1841,7 +1843,7 @@ mod tests {
 
             session_update_versions: Arc::default(),
             session_id: "sess-nopid".into(),
-            session_model: AgentModel::AntigravityGemini3FlashPreview,
+            session_agent: AgentSelection::from_model(AgentModel::AntigravityGemini3FlashPreview),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
@@ -1934,7 +1936,7 @@ mod tests {
 
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
-            session_model: AgentModel::AntigravityGemini3FlashPreview,
+            session_agent: AgentSelection::from_model(AgentModel::AntigravityGemini3FlashPreview),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
         let turn_result = Ok(TurnResult {
@@ -1955,7 +1957,7 @@ mod tests {
         // Act
         let turn_metadata = TurnMetadata {
             published_upstream_ref: None,
-            session_model: AgentModel::AntigravityGemini3FlashPreview,
+            session_agent: AgentSelection::from_model(AgentModel::AntigravityGemini3FlashPreview),
         };
         let status = apply_worker_turn_result(&context, turn_metadata, turn_result)
             .await
@@ -2017,7 +2019,7 @@ mod tests {
             )),
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
-            session_model: AgentModel::AntigravityGemini3FlashPreview,
+            session_agent: AgentSelection::from_model(AgentModel::AntigravityGemini3FlashPreview),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
@@ -2026,7 +2028,9 @@ mod tests {
             &context,
             TurnMetadata {
                 published_upstream_ref: Some("origin/wt/session-id".to_string()),
-                session_model: AgentModel::AntigravityGemini3FlashPreview,
+                session_agent: AgentSelection::from_model(
+                    AgentModel::AntigravityGemini3FlashPreview,
+                ),
             },
             Ok(successful_turn_result("Implemented the change.")),
         )
@@ -2089,7 +2093,7 @@ mod tests {
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
-            session_model: AgentModel::AntigravityGemini3FlashPreview,
+            session_agent: AgentSelection::from_model(AgentModel::AntigravityGemini3FlashPreview),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
@@ -2098,7 +2102,9 @@ mod tests {
             &context,
             TurnMetadata {
                 published_upstream_ref: Some("origin/wt/session-id".to_string()),
-                session_model: AgentModel::AntigravityGemini3FlashPreview,
+                session_agent: AgentSelection::from_model(
+                    AgentModel::AntigravityGemini3FlashPreview,
+                ),
             },
             Ok(successful_turn_result("Implemented the change.")),
         )
@@ -2398,7 +2404,7 @@ mod tests {
 
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
-            session_model: AgentModel::AntigravityGemini3FlashPreview,
+            session_agent: AgentSelection::from_model(AgentModel::AntigravityGemini3FlashPreview),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
         let turn_result = Ok(TurnResult {
@@ -2416,7 +2422,7 @@ mod tests {
         // Act
         let turn_metadata = TurnMetadata {
             published_upstream_ref: Some("origin/wt/session-id".to_string()),
-            session_model: AgentModel::AntigravityGemini3FlashPreview,
+            session_agent: AgentSelection::from_model(AgentModel::AntigravityGemini3FlashPreview),
         };
         let status = apply_worker_turn_result(&context, turn_metadata, turn_result)
             .await
@@ -2498,7 +2504,7 @@ mod tests {
 
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
-            session_model: AgentModel::AntigravityGemini3FlashPreview,
+            session_agent: AgentSelection::from_model(AgentModel::AntigravityGemini3FlashPreview),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
         let turn_result = Ok(TurnResult {
@@ -2516,7 +2522,7 @@ mod tests {
         // Act
         let turn_metadata = TurnMetadata {
             published_upstream_ref: Some("origin/wt/session-id".to_string()),
-            session_model: AgentModel::AntigravityGemini3FlashPreview,
+            session_agent: AgentSelection::from_model(AgentModel::AntigravityGemini3FlashPreview),
         };
         let status = apply_worker_turn_result(&context, turn_metadata, turn_result)
             .await
@@ -2593,7 +2599,7 @@ mod tests {
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
-            session_model: AgentModel::AntigravityGemini3FlashPreview,
+            session_agent: AgentSelection::from_model(AgentModel::AntigravityGemini3FlashPreview),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
         let turn_result = Ok(TurnResult {
@@ -2611,7 +2617,7 @@ mod tests {
         // Act
         let turn_metadata = TurnMetadata {
             published_upstream_ref: Some("origin/wt/session-id".to_string()),
-            session_model: AgentModel::AntigravityGemini3FlashPreview,
+            session_agent: AgentSelection::from_model(AgentModel::AntigravityGemini3FlashPreview),
         };
         let status = apply_worker_turn_result(&context, turn_metadata, turn_result)
             .await
@@ -2687,7 +2693,7 @@ mod tests {
 
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
-            session_model: AgentModel::AntigravityGemini3FlashPreview,
+            session_agent: AgentSelection::from_model(AgentModel::AntigravityGemini3FlashPreview),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
         let turn_result = Ok(TurnResult {
@@ -2708,7 +2714,7 @@ mod tests {
         // Act
         let turn_metadata = TurnMetadata {
             published_upstream_ref: None,
-            session_model: AgentModel::AntigravityGemini3FlashPreview,
+            session_agent: AgentSelection::from_model(AgentModel::AntigravityGemini3FlashPreview),
         };
         let error = apply_worker_turn_result(&context, turn_metadata, turn_result)
             .await
@@ -2782,7 +2788,7 @@ mod tests {
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
-            session_model: AgentModel::AntigravityGemini3FlashPreview,
+            session_agent: AgentSelection::from_model(AgentModel::AntigravityGemini3FlashPreview),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
         let turn_result = Ok(TurnResult {
@@ -2803,7 +2809,7 @@ mod tests {
         // Act
         let turn_metadata = TurnMetadata {
             published_upstream_ref: None,
-            session_model: AgentModel::AntigravityGemini3FlashPreview,
+            session_agent: AgentSelection::from_model(AgentModel::AntigravityGemini3FlashPreview),
         };
         let status = apply_worker_turn_result(&context, turn_metadata, turn_result)
             .await
@@ -2857,7 +2863,7 @@ mod tests {
 
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
-            session_model: AgentModel::AntigravityGemini3FlashPreview,
+            session_agent: AgentSelection::from_model(AgentModel::AntigravityGemini3FlashPreview),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
         let turn_result = Ok(TurnResult {
@@ -2875,7 +2881,7 @@ mod tests {
         // Act
         let turn_metadata = TurnMetadata {
             published_upstream_ref: None,
-            session_model: AgentModel::Gpt55,
+            session_agent: AgentSelection::from_model(AgentModel::Gpt55),
         };
         let status = apply_worker_turn_result(&context, turn_metadata, turn_result)
             .await
@@ -3067,7 +3073,7 @@ mod tests {
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
-            session_model: AgentModel::Gpt55,
+            session_agent: AgentSelection::from_model(AgentModel::Gpt55),
             status: Arc::clone(&status),
         };
 
@@ -3222,7 +3228,7 @@ mod tests {
 
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
-            session_model: AgentModel::AntigravityGemini3FlashPreview,
+            session_agent: AgentSelection::from_model(AgentModel::AntigravityGemini3FlashPreview),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
@@ -3291,7 +3297,7 @@ mod tests {
 
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
-            session_model: AgentModel::AntigravityGemini3FlashPreview,
+            session_agent: AgentSelection::from_model(AgentModel::AntigravityGemini3FlashPreview),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
@@ -3374,7 +3380,7 @@ mod tests {
 
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
-            session_model: AgentModel::AntigravityGemini3FlashPreview,
+            session_agent: AgentSelection::from_model(AgentModel::AntigravityGemini3FlashPreview),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
@@ -3463,7 +3469,7 @@ mod tests {
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
-            session_model: AgentModel::AntigravityGemini3FlashPreview,
+            session_agent: AgentSelection::from_model(AgentModel::AntigravityGemini3FlashPreview),
             status: Arc::new(Mutex::new(status)),
         };
 
@@ -3489,7 +3495,7 @@ mod tests {
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
             session_id: "sess".into(),
-            session_model: AgentModel::AntigravityGemini3FlashPreview,
+            session_agent: AgentSelection::from_model(AgentModel::AntigravityGemini3FlashPreview),
             status: Arc::new(Mutex::new(Status::InProgress)),
         }
     }

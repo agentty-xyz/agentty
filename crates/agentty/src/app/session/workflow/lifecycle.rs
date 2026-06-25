@@ -19,7 +19,7 @@ use crate::app::session::SessionError;
 use crate::app::{
     AppEvent, AppServices, ProjectManager, SessionManager, agentty_home, review_request, setting,
 };
-use crate::domain::agent::{AgentModel, ReasoningLevel};
+use crate::domain::agent::{AgentModel, AgentSelection, ReasoningLevel};
 use crate::domain::session::{
     ReviewRequest, SESSION_DATA_DIR, Session, SessionHandles, SessionId, Status,
     can_mutate_session_branch_in_stack as stack_can_mutate_session_branch,
@@ -61,7 +61,7 @@ struct BuildSessionCommandInput {
     is_first_message: bool,
     published_upstream_ref: Option<String>,
     prompt: TurnPrompt,
-    session_model: AgentModel,
+    session_agent: AgentSelection,
     session_output: Option<String>,
 }
 
@@ -458,7 +458,7 @@ impl SessionManager {
         services: &AppServices,
         session_id: &str,
     ) -> Result<(), SessionError> {
-        let (base_branch, folder, persisted_session_id, session_model) = {
+        let (base_branch, folder, persisted_session_id, session_agent) = {
             let session = self.session_or_err(session_id)?;
             if !session.is_draft_session() {
                 return Ok(());
@@ -468,7 +468,7 @@ impl SessionManager {
                 session.base_branch.clone(),
                 session.folder.clone(),
                 session.id.clone(),
-                session.model,
+                session.agent,
             )
         };
 
@@ -481,7 +481,7 @@ impl SessionManager {
                 &persisted_session_id,
             )
             .await?;
-            agent::create_backend(session_model.kind())
+            agent::create_backend(session_agent.kind())
                 .setup(&folder)
                 .map_err(|error| {
                     SessionError::Workflow(format!("Failed to setup session backend: {error}"))
@@ -503,7 +503,7 @@ impl SessionManager {
         )
         .await?;
 
-        if let Err(error) = agent::create_backend(session_model.kind()).setup(&folder) {
+        if let Err(error) = agent::create_backend(session_agent.kind()).setup(&folder) {
             let cleanup_errors = Self::cleanup_session_worktree_resources(
                 services.fs_client().clone(),
                 services.git_client(),
@@ -668,7 +668,7 @@ impl SessionManager {
             (
                 session.folder.clone(),
                 session.id.clone(),
-                session.model,
+                session.agent.model(),
                 staged_attachments,
                 staged_prompt,
                 title_to_save,
@@ -856,7 +856,7 @@ impl SessionManager {
             .await?;
 
         let session_index = self.session_index_or_err(session_id)?;
-        let (persisted_session_id, session_model, title) = {
+        let (persisted_session_id, session_agent, title) = {
             let session = self
                 .session_at_mut(session_index)
                 .ok_or(SessionError::NotFound)?;
@@ -865,9 +865,9 @@ impl SessionManager {
 
             let title = prompt.text.clone();
             session.title = Some(title.clone());
-            let session_model = session.model;
+            let session_agent = session.agent;
 
-            (session.id.clone(), session_model, title)
+            (session.id.clone(), session_agent, title)
         };
 
         let handles = self.session_handles_or_err(&persisted_session_id)?;
@@ -919,7 +919,7 @@ impl SessionManager {
             prompt: prompt.clone(),
             turn_metadata: TurnMetadata {
                 published_upstream_ref: None,
-                session_model,
+                session_agent,
             },
         };
         if let Err(error) = self
@@ -946,8 +946,8 @@ impl SessionManager {
         let Ok(session) = self.session_or_err(session_id) else {
             return;
         };
-        let session_model = session.model;
-        self.reply_impl(services, session_id, prompt, session_model)
+        let session_agent = session.agent;
+        self.reply_impl(services, session_id, prompt, session_agent)
             .await;
     }
 
@@ -1025,7 +1025,7 @@ impl SessionManager {
         let session_index = self.session_index_or_err(session_id)?;
         let model_changed = self
             .session_at(session_index)
-            .is_some_and(|session| session.model != session_model);
+            .is_some_and(|session| session.agent.model() != session_model);
 
         services
             .db()
@@ -1537,24 +1537,23 @@ impl SessionManager {
         services: &AppServices,
         session_id: &str,
         prompt: TurnPrompt,
-        session_model: AgentModel,
+        session_agent: AgentSelection,
     ) {
         let Ok(session_index) = self.session_index_or_err(session_id) else {
             return;
         };
         let should_replay_history = self.should_replay_history(session_id);
-        let (session_output, is_first_message, persisted_session_id, title_to_save) = match self
-            .prepare_reply_context(session_index, &prompt, session_model, should_replay_history)
-        {
-            Ok(Some(reply_context)) => reply_context,
-            Ok(None) => return,
-            Err(error) => {
-                self.append_reply_status_error(services, session_id, &error)
-                    .await;
+        let (session_output, is_first_message, persisted_session_id, title_to_save) =
+            match self.prepare_reply_context(session_index, &prompt, should_replay_history) {
+                Ok(Some(reply_context)) => reply_context,
+                Ok(None) => return,
+                Err(error) => {
+                    self.append_reply_status_error(services, session_id, &error)
+                        .await;
 
-                return;
-            }
-        };
+                    return;
+                }
+            };
 
         if should_replay_history {
             self.clear_history_replay_pending(&persisted_session_id);
@@ -1615,7 +1614,7 @@ impl SessionManager {
             is_first_message,
             published_upstream_ref,
             prompt: effective_prompt.clone(),
-            session_model,
+            session_agent,
             session_output,
         });
         self.enqueue_reply_command(
@@ -1639,7 +1638,6 @@ impl SessionManager {
         &mut self,
         session_index: usize,
         prompt: &TurnPrompt,
-        session_model: AgentModel,
         should_replay_history: bool,
     ) -> Result<Option<ReplyContext>, SessionError> {
         let Some(session_id) = self
@@ -1680,7 +1678,7 @@ impl SessionManager {
 
         let session_output = if !is_first_message
             && (should_replay_history
-                || agent::transport_mode(session_model.kind()).uses_app_server())
+                || agent::transport_mode(session.agent.kind()).uses_app_server())
         {
             Some(session.output.clone())
         } else {
@@ -1850,7 +1848,7 @@ impl SessionManager {
             is_first_message,
             published_upstream_ref,
             prompt,
-            session_model,
+            session_agent,
             session_output,
         } = input;
         let operation_id = Uuid::new_v4().to_string();
@@ -1866,7 +1864,7 @@ impl SessionManager {
             prompt,
             turn_metadata: TurnMetadata {
                 published_upstream_ref,
-                session_model,
+                session_agent,
             },
         }
     }
@@ -2733,15 +2731,20 @@ mod test_support {
             session_model: AgentModel,
         ) {
             let prompt = prompt.into();
+            let session_agent = self
+                .session_or_err(session_id)
+                .map_or(AgentSelection::from_model(session_model), |session| {
+                    session.agent
+                });
             let channel: Arc<dyn crate::infra::channel::AgentChannel> =
                 Arc::new(crate::infra::channel::cli::CliAgentChannel::with_backend(
                     backend,
-                    session_model.kind(),
+                    session_agent.kind(),
                 ));
             self.worker_service
                 .test_agent_channels
                 .insert(session_id.to_string().into(), channel);
-            self.reply_impl(services, session_id, prompt, session_model)
+            self.reply_impl(services, session_id, prompt, session_agent)
                 .await;
         }
     }
@@ -2808,7 +2811,7 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            model: AgentModel::ClaudeSonnet46,
+            agent: crate::domain::agent::AgentSelection::from_model(AgentModel::ClaudeSonnet46),
             output: output.to_string(),
             parent_session_id: None,
             project_name: "project".to_string(),
@@ -2894,7 +2897,7 @@ mod tests {
                 .sessions()
                 .insert_draft_session(
                     &session.id,
-                    session.model.as_str(),
+                    session.agent.model().as_str(),
                     &session.base_branch,
                     &session.status.to_string(),
                     project_id,
@@ -2906,7 +2909,7 @@ mod tests {
                 .sessions()
                 .insert_session(
                     &session.id,
-                    session.model.as_str(),
+                    session.agent.model().as_str(),
                     &session.base_branch,
                     &session.status.to_string(),
                     project_id,
@@ -3930,7 +3933,7 @@ mod tests {
 
         // Act
         let context = session_manager
-            .prepare_reply_context(0, &turn_prompt, AgentModel::ClaudeSonnet46, false)
+            .prepare_reply_context(0, &turn_prompt, false)
             .expect("reply context should be available")
             .expect("session should produce reply context");
 
@@ -3961,7 +3964,7 @@ mod tests {
 
         // Act
         let context = session_manager
-            .prepare_reply_context(0, &prompt, AgentModel::ClaudeSonnet46, false)
+            .prepare_reply_context(0, &prompt, false)
             .expect("reply context should be available")
             .expect("session should produce reply context");
 
@@ -3987,8 +3990,7 @@ mod tests {
         let prompt = TurnPrompt::from_text("Another prompt".to_string());
 
         // Act
-        let result =
-            session_manager.prepare_reply_context(0, &prompt, AgentModel::ClaudeSonnet46, false);
+        let result = session_manager.prepare_reply_context(0, &prompt, false);
 
         // Assert
         let error = result.expect_err("in-progress session should block reply");
@@ -4354,7 +4356,8 @@ mod tests {
     async fn set_session_model_persists_new_model_and_clears_conversation_state() {
         // Arrange
         let mut session = test_session("Prompt", Status::Review, Some("Title"), "");
-        session.model = AgentModel::ClaudeSonnet46;
+        session.agent =
+            crate::domain::agent::AgentSelection::from_model(AgentModel::ClaudeSonnet46);
         let database = database_with_session(&session).await;
         database
             .sessions()
@@ -4423,7 +4426,8 @@ mod tests {
     async fn set_session_model_keeps_conversation_state_when_model_does_not_change() {
         // Arrange
         let mut session = test_session("Prompt", Status::InProgress, Some("Title"), "");
-        session.model = AgentModel::ClaudeSonnet46;
+        session.agent =
+            crate::domain::agent::AgentSelection::from_model(AgentModel::ClaudeSonnet46);
         let database = database_with_session(&session).await;
         database
             .sessions()

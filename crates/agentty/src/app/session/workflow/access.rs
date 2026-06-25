@@ -51,10 +51,9 @@ mod tests {
 
     use crate::app::session::{Clock, SessionDefaults, SessionError};
     use crate::app::{SessionManager, SessionState};
-    use crate::domain::agent::{AgentKind, AgentModel};
-    use crate::domain::session::{
-        Session, SessionHandles, SessionId, SessionSize, SessionStats, Status,
-    };
+    use crate::domain::agent::AgentKind;
+    use crate::domain::session::tests::SessionFixtureBuilder;
+    use crate::domain::session::{Session, SessionHandles, SessionId, Status};
     use crate::infra::git;
 
     /// Deterministic clock for test construction.
@@ -72,35 +71,11 @@ mod tests {
 
     /// Builds a minimal test session with the given identifier and status.
     fn test_session(session_id: &str, status: Status) -> Session {
-        Session {
-            base_branch: "main".to_string(),
-            created_at: 0,
-            draft_attachments: Vec::new(),
-            folder: PathBuf::from("/tmp/test"),
-            follow_up_tasks: Vec::new(),
-            id: session_id.into(),
-            in_progress_started_at: None,
-            in_progress_total_seconds: 0,
-            is_draft: false,
-            model: AgentModel::AntigravityGemini3FlashPreview,
-            output: String::new(),
-            parent_session_id: None,
-            project_name: "project".to_string(),
-            prompt: String::new(),
-            queued_messages: Vec::new(),
-            reasoning_level_override: None,
-            published_upstream_ref: None,
-            published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
-            questions: Vec::new(),
-            review_request: None,
-            size: SessionSize::Xs,
-            stats: SessionStats::default(),
-            status,
-            summary: None,
-            title: None,
-            updated_at: 0,
-            workflow_notice: None,
-        }
+        SessionFixtureBuilder::new()
+            .id(session_id)
+            .status(status)
+            .folder(PathBuf::from("/tmp/test"))
+            .build()
     }
 
     /// Builds a session manager with given sessions and optional handles.

@@ -1339,7 +1339,9 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            model: AgentModel::AntigravityGemini3FlashPreview,
+            agent: crate::domain::agent::AgentSelection::from_model(
+                AgentModel::AntigravityGemini3FlashPreview,
+            ),
             output: String::new(),
             parent_session_id: None,
             project_name: String::new(),
@@ -1415,7 +1417,9 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            model: AgentModel::AntigravityGemini3FlashPreview,
+            agent: crate::domain::agent::AgentSelection::from_model(
+                AgentModel::AntigravityGemini3FlashPreview,
+            ),
             output: String::new(),
             parent_session_id: None,
             project_name: String::new(),
@@ -2941,7 +2945,9 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            model: AgentModel::AntigravityGemini3FlashPreview,
+            agent: crate::domain::agent::AgentSelection::from_model(
+                AgentModel::AntigravityGemini3FlashPreview,
+            ),
             output: String::new(),
             parent_session_id: None,
             project_name: String::new(),

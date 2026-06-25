@@ -369,7 +369,7 @@ mod tests {
             .sessions()
             .insert_session(
                 &session.id,
-                session.model.as_str(),
+                session.agent.model().as_str(),
                 &session.base_branch,
                 &session.status.to_string(),
                 project_id,
@@ -446,7 +446,9 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            model: AgentModel::AntigravityGemini3FlashPreview,
+            agent: crate::domain::agent::AgentSelection::from_model(
+                AgentModel::AntigravityGemini3FlashPreview,
+            ),
             output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),

@@ -503,7 +503,7 @@ impl SessionMergeService {
             services.db().clone(),
             session.folder.clone(),
             session.id.clone(),
-            session.model,
+            session.agent.model(),
         );
         let (app_event_tx, clock, fs_client, git_client, session_update_versions) = (
             services.event_sender(),

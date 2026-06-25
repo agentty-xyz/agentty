@@ -331,6 +331,7 @@ WHERE id = ?
         assert_eq!(session_row.base_branch, "main");
         assert_eq!(session_row.created_at, 100);
         assert_eq!(session_row.updated_at, 200);
+        assert_eq!(session_row.agent, "claude");
         assert_eq!(session_row.model, "claude-opus-4.1");
         assert_eq!(session_row.status, "Review");
         assert_eq!(session_row.in_progress_started_at, None);
