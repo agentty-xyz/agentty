@@ -572,7 +572,7 @@ mod tests {
     fn test_render_detail_shows_missing_description_fallback() {
         // Arrange
         let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
-        let backend = TestBackend::new(80, 10);
+        let backend = TestBackend::new(80, 12);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let review = requested_review(None);
 
@@ -640,7 +640,7 @@ mod tests {
     fn test_render_detail_shows_comment_load_error() {
         // Arrange
         let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
-        let backend = TestBackend::new(120, 12);
+        let backend = TestBackend::new(120, 15);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let review = requested_review(Some("Implements the detail page."));
 
@@ -668,7 +668,7 @@ mod tests {
     fn test_render_detail_shows_comment_loading_state() {
         // Arrange
         let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
-        let backend = TestBackend::new(120, 12);
+        let backend = TestBackend::new(120, 15);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let review = requested_review(Some("Implements the detail page."));
 
@@ -693,7 +693,7 @@ mod tests {
     fn test_render_detail_renders_markdown_description() {
         // Arrange
         let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
-        let backend = TestBackend::new(80, 10);
+        let backend = TestBackend::new(80, 13);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let review = requested_review(Some("## Details\n- **Parser** uses `fast` mode."));
 
@@ -718,7 +718,7 @@ mod tests {
     fn test_render_detail_normalizes_common_html_description() {
         // Arrange
         let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
-        let backend = TestBackend::new(100, 14);
+        let backend = TestBackend::new(100, 16);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let review = requested_review(Some(
             "<details>\n<summary>Release notes</summary>\n<h2>v1.0.0</h2>\n<ul>\n<li>Fix <code>parser</code> by <a href=\"https://example.com\">alice</a></li>\n</ul>\n</details>",
@@ -755,7 +755,7 @@ mod tests {
         // Act
         terminal
             .draw(|frame| {
-                ReviewDetailPage::new(&review, &markdown::MarkdownRenderCache::default(), 5)
+                ReviewDetailPage::new(&review, &markdown::MarkdownRenderCache::default(), 6)
                     .render(frame, frame.area());
             })
             .expect("failed to draw");
@@ -783,7 +783,7 @@ mod tests {
         );
 
         // Assert
-        assert_eq!(max_scroll_offset, 9);
+        assert_eq!(max_scroll_offset, 12);
     }
 
     #[test]
