@@ -2056,7 +2056,7 @@ mod tests {
             result,
             Err(AppError::Workflow(message))
                 if message
-                    == "No supported backend CLI found on `PATH`. Install `agy`, `codex`, or `claude` and restart `agentty`."
+                    == "No supported backend CLI found on `PATH`. Install `agy`, `codex`, `claude`, or `gemini` and restart `agentty`."
         ));
     }
 

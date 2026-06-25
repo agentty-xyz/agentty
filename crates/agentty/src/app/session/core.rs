@@ -2221,7 +2221,7 @@ mod tests {
         assert_eq!(app.sessions.selected_session_index(), Some(0));
         assert_eq!(
             app.sessions.sessions()[0].agent.model(),
-            AgentKind::Antigravity.default_model()
+            AgentKind::Gemini.default_model()
         );
 
         // Check filesystem
@@ -2249,7 +2249,7 @@ mod tests {
         assert_eq!(db_sessions[0].base_branch, "main");
         assert_eq!(
             db_sessions[0].model,
-            AgentKind::Antigravity.default_model().as_str()
+            AgentKind::Gemini.default_model().as_str()
         );
         assert!(!db_sessions[0].is_draft);
         assert_eq!(db_sessions[0].status, "Draft");
@@ -2399,7 +2399,7 @@ mod tests {
             .expect("missing second session");
         assert_eq!(
             second_session.agent.model(),
-            AgentKind::Antigravity.default_model()
+            AgentKind::Gemini.default_model()
         );
         assert_eq!(default_smart_model_setting, None);
 
@@ -2416,7 +2416,7 @@ mod tests {
             .expect("missing second session in db");
         assert_eq!(
             db_second_session.model,
-            AgentKind::Antigravity.default_model().as_str()
+            AgentKind::Gemini.default_model().as_str()
         );
     }
 

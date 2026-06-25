@@ -11,6 +11,7 @@ mod backend;
 mod claude;
 pub(crate) mod cli;
 mod codex;
+mod gemini;
 mod instruction;
 mod prompt;
 pub(crate) mod protocol;

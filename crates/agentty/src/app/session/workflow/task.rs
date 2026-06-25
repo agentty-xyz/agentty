@@ -2119,7 +2119,7 @@ mod tests {
             .upsert_project_setting(
                 project_id,
                 SettingName::DefaultSmartModel,
-                AgentModel::AntigravityGemini31ProPreview.as_str(),
+                AgentModel::Gemini31ProPreview.as_str(),
             )
             .await
             .expect("failed to persist default smart model");
@@ -2168,10 +2168,7 @@ mod tests {
         .await;
 
         // Assert
-        assert_eq!(
-            smart_fallback_model,
-            AgentModel::AntigravityGemini31ProPreview
-        );
+        assert_eq!(smart_fallback_model, AgentModel::Gemini31ProPreview);
 
         // Arrange
         database

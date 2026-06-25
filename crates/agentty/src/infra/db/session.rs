@@ -1985,6 +1985,10 @@ fn persisted_agent_for_unknown_model(model: &str) -> AgentKind {
         return AgentKind::Codex;
     }
 
+    if model.starts_with("gemini-") {
+        return AgentKind::Gemini;
+    }
+
     AgentKind::Antigravity
 }
 
