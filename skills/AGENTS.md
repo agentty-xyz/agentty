@@ -7,7 +7,6 @@ Reusable skills available to agents in this repository.
 - `git-commit` covers commit-message and commit-preparation workflow.
 - `bump-version` covers version bump selection, package metadata updates, and baseline
   release-preparation validation.
-- `implementation-plan` owns roadmap authoring and roadmap hygiene.
 - `review` covers structured code-review workflow.
 - `security-audit` covers threat-model-driven project auditing.
 - `feature-test` covers E2E feature test creation with VHS GIF generation and Zola page

@@ -58,23 +58,9 @@ zola build --root docs/site
 ## Development Checks
 
 Use `.pre-commit-config.yaml` as the source of truth for all formatting, linting, test,
-coverage, migration, roadmap, docs-site, and dependency hygiene checks. Run the hook IDs
-from that file through `prek`; hook descriptions explain what each check covers and
-whether it is a manual or default hook.
-
-## Roadmap Maintenance
-
-Use the `ag-xtask` roadmap digest to keep planning current before revising
-`docs/plan/roadmap.md`. The roadmap quality check is the `check-roadmap` hook in
-`.pre-commit-config.yaml`.
-
-```sh
-# Print a read-only planning digest from git state and the roadmap
-cargo run -q -p ag-xtask -- roadmap context-digest
-```
-
-Run `roadmap context-digest` before promoting work into `Ready Now`, and keep only
-`Ready Now` items fully expanded in `docs/plan/roadmap.md`.
+coverage, migration, docs-site, and dependency hygiene checks. Run the hook IDs from
+that file through `prek`; hook descriptions explain what each check covers and whether
+it is a manual or default hook.
 
 ### SQLx Offline Query Metadata
 

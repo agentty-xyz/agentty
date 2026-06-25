@@ -39,8 +39,8 @@ TUI tool to manage agents.
   a pragmatic exception.
 - **Feature Test Gate:** Every user-visible feature must ship with a corresponding E2E
   feature test in `crates/agentty/tests/e2e/` using the `FeatureTest` builder from
-  `common.rs`. If infrastructure blocks the feature test, queue a feature-test card in
-  `docs/plan/roadmap.md`.
+  `common.rs`. If infrastructure blocks the feature test, report the blocker and the
+  missing coverage in the handoff.
 - **Legacy Retention Approval:** Prefer removing legacy code or behavior during
   development. If retaining legacy code or behavior for any reason, obtain explicit user
   approval first.
@@ -322,7 +322,6 @@ targeted checks cover the full impact, run the full repository suite instead.
   dependency impact is broad or uncertain.
 - **SQL migrations:** Run `prek run check-migrations --files <paths>` plus Rust checks
   and tests for crates that embed or query those migrations.
-- **Planning docs:** Run `prek run check-roadmap --all-files`.
 - **Hook catalog:** Run `prek run validate-prek-config --files .pre-commit-config.yaml`.
 - **User-visible UI behavior:** Add or update required `FeatureTest` coverage and run
   focused E2E tests for the changed workflows, such as
@@ -540,5 +539,4 @@ development checkout. Keep worktree lifecycle details aligned with
 - `crates/` contains all workspace crates.
 - `docs/site/content/docs/architecture/` contains the canonical module, runtime, and
   change-path references.
-- `docs/plan/` contains internal planning documents and roadmap workflow guidance.
 - `skills/` contains reusable workflow skills and their discovery notes.

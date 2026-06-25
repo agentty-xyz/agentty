@@ -171,12 +171,6 @@ repos:
         language: system
         types: [sql]
         pass_filenames: false
-      - id: check-roadmap
-        name: check roadmap
-        description: Verify that the planning roadmap matches the active workflow rules.
-        entry: cargo run -q --locked -p ag-xtask -- roadmap lint
-        language: system
-        pass_filenames: false
       - id: validate-prek-config
         name: validate prek config
         description: Validate the `prek` hook catalog whenever `.pre-commit-config.yaml` changes.
