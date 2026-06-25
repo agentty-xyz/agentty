@@ -47,6 +47,7 @@ if [ "$1" = "search" ] && [ "$2" = "prs" ] && [ "$3" = "--review-requested" ]; t
     "isDraft": false,
     "number": 42,
     "title": "Review personal parser",
+    "author": {"login": "octocat"},
     "body": "## Details\n- **Personal parser** review description.\n<details>\n<summary>Release notes</summary>\n<h2>v1.0.0</h2>\n<ul>\n<li>Fix <code>parser</code> output.</li>\n</ul>\n</details>",
     "updatedAt": "2026-04-27T21:30:00Z",
     "url": "https://github.com/agentty-xyz/agentty/pull/42"
@@ -55,6 +56,7 @@ if [ "$1" = "search" ] && [ "$2" = "prs" ] && [ "$3" = "--review-requested" ]; t
     "isDraft": false,
     "number": 43,
     "title": "Review team parser",
+    "author": {"login": "team-lead"},
     "body": "Team parser review description.",
     "updatedAt": "2026-04-28T21:30:00Z",
     "url": "https://github.com/agentty-xyz/agentty/pull/43"
@@ -71,6 +73,7 @@ if [ "$1" = "search" ] && [ "$2" = "prs" ] && [ "$3" = "user-review-requested:@m
     "isDraft": false,
     "number": 42,
     "title": "Review personal parser",
+    "author": {"login": "octocat"},
     "body": "## Details\n- **Personal parser** review description.\n<details>\n<summary>Release notes</summary>\n<h2>v1.0.0</h2>\n<ul>\n<li>Fix <code>parser</code> output.</li>\n</ul>\n</details>",
     "updatedAt": "2026-04-27T21:30:00Z",
     "url": "https://github.com/agentty-xyz/agentty/pull/42"
@@ -297,6 +300,8 @@ fn review_tab_shows_requested_reviews_page() -> E2eResult {
                 assertion::assert_text_in_region(frame, "Review Request", &full);
                 assertion::assert_text_in_region(frame, "Title", &full);
                 assertion::assert_text_in_region(frame, "Review personal parser", &full);
+                assertion::assert_text_in_region(frame, "Author", &full);
+                assertion::assert_text_in_region(frame, "octocat", &full);
                 assertion::assert_text_in_region(frame, "Description", &full);
                 assertion::assert_text_in_region(
                     frame,
@@ -329,6 +334,7 @@ fn review_tab_shows_requested_reviews_page() -> E2eResult {
                     "PR #42 Review personal parser",
                     &review_full,
                 );
+                assertion::assert_text_in_region(&review_frame, "octocat", &review_full);
                 assertion::assert_text_in_region(
                     &review_frame,
                     "Requested from your groups",
@@ -339,6 +345,7 @@ fn review_tab_shows_requested_reviews_page() -> E2eResult {
                     "PR #43 Review team parser",
                     &review_full,
                 );
+                assertion::assert_text_in_region(&review_frame, "team-lead", &review_full);
 
                 let loading_frame = common::frame_from_capture(&report.captures[1]);
                 let loading_full = Region::full(loading_frame.cols(), loading_frame.rows());

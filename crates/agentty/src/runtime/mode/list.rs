@@ -1611,6 +1611,7 @@ mod tests {
     ) -> RequestedReview {
         RequestedReview {
             audience,
+            author: "octocat".to_string(),
             body: Some(body.to_string()),
             comment_snapshot: None,
             display_id: "#42".to_string(),

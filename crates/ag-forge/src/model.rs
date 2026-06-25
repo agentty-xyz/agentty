@@ -195,6 +195,8 @@ pub struct RequestedReview {
     /// Whether the review request targets the user directly or through a
     /// group membership.
     pub audience: RequestedReviewAudience,
+    /// Login or display name of the user who opened the review request.
+    pub author: String,
     /// Optional PR body or MR description text for detail rendering.
     pub body: Option<String>,
     /// Optional review-request comments fetched for detail rendering.

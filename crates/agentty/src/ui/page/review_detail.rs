@@ -127,6 +127,9 @@ fn detail_lines(
         section_label("Title"),
         Line::from(review.title.clone()),
         Line::from(""),
+        section_label("Author"),
+        Line::from(review.author.clone()),
+        Line::from(""),
         section_label("Description"),
     ];
 
@@ -541,7 +544,7 @@ mod tests {
     fn test_render_detail_shows_title_and_description() {
         // Arrange
         let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
-        let backend = TestBackend::new(80, 10);
+        let backend = TestBackend::new(80, 14);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let review = requested_review(Some("Implements the detail page."));
 
@@ -558,6 +561,8 @@ mod tests {
         assert!(text.contains("Review Request"));
         assert!(text.contains("Title"));
         assert!(text.contains("Add review detail page"));
+        assert!(text.contains("Author"));
+        assert!(text.contains("octocat"));
         assert!(text.contains("Description"));
         assert!(text.contains("Implements the detail page."));
         assert!(text.contains("q: back"));
@@ -797,6 +802,7 @@ mod tests {
     fn requested_review(body: Option<&str>) -> RequestedReview {
         RequestedReview {
             audience: RequestedReviewAudience::Personal,
+            author: "octocat".to_string(),
             body: body.map(str::to_string),
             comment_snapshot: None,
             display_id: "#42".to_string(),

@@ -193,6 +193,7 @@ mod tests {
     fn requested_review(body: &str) -> RequestedReview {
         RequestedReview {
             audience: RequestedReviewAudience::Personal,
+            author: "octocat".to_string(),
             body: Some(body.to_string()),
             comment_snapshot: None,
             display_id: "#42".to_string(),

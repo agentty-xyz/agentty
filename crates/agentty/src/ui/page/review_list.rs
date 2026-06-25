@@ -96,7 +96,7 @@ fn render_review_table(
         .bg(style::palette::surface())
         .fg(style::palette::text_muted())
         .add_modifier(Modifier::BOLD);
-    let header_cells = ["Review", "Repository", "Status", "Updated"]
+    let header_cells = ["Review", "Author", "Repository", "Status", "Updated"]
         .iter()
         .map(|header| Cell::from(*header));
     let header = Row::new(header_cells).style(header_style).height(1);
@@ -104,6 +104,7 @@ fn render_review_table(
     let block = review_block();
     let constraints = [
         Constraint::Fill(1),
+        author_column_width(items),
         repository_column_width(items),
         status_column_width(items),
         Constraint::Length(12),
@@ -272,6 +273,7 @@ fn section_row(label: &'static str) -> Row<'static> {
         Cell::from(""),
         Cell::from(""),
         Cell::from(""),
+        Cell::from(""),
     ];
 
     Row::new(cells).height(1)
@@ -297,6 +299,7 @@ fn review_row(item: &RequestedReview, title_column_width: usize) -> Row<'static>
 
     Row::new(vec![
         Cell::from(review_line),
+        Cell::from(item.author.clone()),
         Cell::from(item.repository.clone()),
         Cell::from(status),
         Cell::from(updated_display(item.updated_at.as_deref())),
@@ -322,6 +325,19 @@ fn repository_column_width(items: &[RequestedReview]) -> Constraint {
         .unwrap_or("Repository".len())
         .max("Repository".len());
     let width = u16::try_from(width).unwrap_or(u16::MAX).min(32);
+
+    Constraint::Length(width)
+}
+
+/// Returns a bounded author column width for the rendered items.
+fn author_column_width(items: &[RequestedReview]) -> Constraint {
+    let width = items
+        .iter()
+        .map(|item| item.author.chars().count())
+        .max()
+        .unwrap_or("Author".len())
+        .max("Author".len());
+    let width = u16::try_from(width).unwrap_or(u16::MAX).min(20);
 
     Constraint::Length(width)
 }
@@ -390,6 +406,7 @@ mod tests {
         assert!(text.contains("Review Requests"));
         assert!(text.contains("Requested from you"));
         assert!(text.contains("PR #42 Add review tab"));
+        assert!(text.contains("octocat"));
         assert!(text.contains("Requested from your groups"));
         assert!(text.contains("MR !7 Polish merge request"));
 
@@ -638,6 +655,7 @@ mod tests {
     ) -> RequestedReview {
         RequestedReview {
             audience,
+            author: "octocat".to_string(),
             body: Some("Review body".to_string()),
             comment_snapshot: None,
             display_id: display_id.to_string(),

@@ -28,11 +28,11 @@ merge requests in the active project that request the current forge user's revie
 including drafts marked with a `Draft` status. GitHub rows are split between requests
 sent directly to the user and requests sent to a team the user belongs to. The tab is a
 read-only forge list; press `s` to refresh, use `j` / `k` to select a request, and press
-`Enter` to open a read-only detail page with the title, rendered description,
+`Enter` to open a read-only detail page with the title, author, rendered description,
 review-request-wide comments, and inline comment threads. The detail page opens
 immediately while comments load in the background; if comment loading fails, it keeps
-the title and description visible and shows the comment-load failure in the comments
-section. If the list reaches the provider cap, the footer shows that Agentty is
+the title, author, and description visible and shows the comment-load failure in the
+comments section. If the list reaches the provider cap, the footer shows that Agentty is
 displaying the first matching requests. | | **Settings** | Configure the color theme,
 default reasoning level, smart/fast/review model defaults, the optional
 `Last used model as default` smart-model mode, the session commit coauthor trailer, and

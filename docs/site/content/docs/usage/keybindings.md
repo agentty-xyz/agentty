@@ -81,7 +81,7 @@ active project | | `Tab` | Switch tab | | `?` | Help |
 The **Review** tab is read-only: it lists matching GitHub pull requests and GitLab merge
 requests, including drafts marked with `Draft`. GitHub rows are separated into direct
 review requests and team-sourced review requests. Use `j` / `k` to select a review, then
-press `Enter` to open a read-only detail page with the review title, rendered
+press `Enter` to open a read-only detail page with the review title, author, rendered
 description, review-request-wide comments, and inline comment threads. The detail page
 opens immediately and shows a comment loading message until the background forge request
 finishes. On the detail page, use `j` / `k` or `Up` / `Down` to scroll, `Ctrl+d` /

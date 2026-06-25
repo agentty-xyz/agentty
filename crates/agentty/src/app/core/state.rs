@@ -5706,6 +5706,7 @@ mod tests {
     fn requested_review() -> RequestedReview {
         RequestedReview {
             audience: RequestedReviewAudience::Personal,
+            author: "octocat".to_string(),
             body: Some("Review body".to_string()),
             comment_snapshot: None,
             display_id: "#42".to_string(),

@@ -424,7 +424,7 @@ fn requested_reviews_command(remote: &ForgeRemote) -> ForgeCommand {
             "--limit".to_string(),
             REQUESTED_REVIEW_LIMIT.to_string(),
             "--json".to_string(),
-            "number,title,body,url,isDraft,updatedAt".to_string(),
+            "number,title,body,url,isDraft,updatedAt,author".to_string(),
         ],
     )
 }
@@ -445,7 +445,7 @@ fn personal_requested_reviews_command(remote: &ForgeRemote) -> ForgeCommand {
             "--limit".to_string(),
             REQUESTED_REVIEW_LIMIT.to_string(),
             "--json".to_string(),
-            "number,title,body,url,isDraft,updatedAt".to_string(),
+            "number,title,body,url,isDraft,updatedAt,author".to_string(),
         ],
     )
 }
@@ -570,6 +570,9 @@ fn parse_requested_reviews_response(
 
             RequestedReview {
                 audience: RequestedReviewAudience::Personal,
+                author: pull_request
+                    .author
+                    .map_or_else(|| "ghost".to_string(), |author| author.login),
                 body: pull_request.body,
                 comment_snapshot: None,
                 display_id: format!("#{}", pull_request.number),
@@ -778,6 +781,7 @@ struct GitHubLookupResponse {
 /// GitHub search row returned by `gh search prs --json`.
 #[derive(Deserialize)]
 struct GitHubRequestedReviewResponse {
+    author: Option<GitHubRequestedReviewAuthor>,
     #[serde(default)]
     body: Option<String>,
     #[serde(rename = "isDraft")]
@@ -787,6 +791,12 @@ struct GitHubRequestedReviewResponse {
     #[serde(rename = "updatedAt")]
     updated_at: Option<String>,
     url: String,
+}
+
+/// GitHub search author node for the user who opened a requested review.
+#[derive(Deserialize)]
+struct GitHubRequestedReviewAuthor {
+    login: String,
 }
 
 /// GraphQL response envelope for review-threads queries.
@@ -1255,6 +1265,7 @@ mod tests {
             vec![
                 RequestedReview {
                     audience: RequestedReviewAudience::Personal,
+                    author: "octocat".to_string(),
                     body: Some("Implements the GitHub provider.".to_string()),
                     comment_snapshot: None,
                     display_id: "#42".to_string(),
@@ -1267,6 +1278,7 @@ mod tests {
                 },
                 RequestedReview {
                     audience: RequestedReviewAudience::Group,
+                    author: "team-lead".to_string(),
                     body: Some("Adds team-owned parser coverage.".to_string()),
                     comment_snapshot: None,
                     display_id: "#43".to_string(),
@@ -1279,6 +1291,7 @@ mod tests {
                 },
                 RequestedReview {
                     audience: RequestedReviewAudience::Personal,
+                    author: "reviewer".to_string(),
                     body: Some("Adds direct-only parser coverage.".to_string()),
                     comment_snapshot: None,
                     display_id: "#44".to_string(),
@@ -1629,6 +1642,7 @@ mod tests {
                 "isDraft": true,
                 "number": 42,
                 "title": "Add forge review support",
+                "author": {"login": "octocat"},
                 "body": "Implements the GitHub provider.",
                 "updatedAt": "2026-04-27T21:30:00Z",
                 "url": "https://github.com/agentty-xyz/agentty/pull/42"
@@ -1637,6 +1651,7 @@ mod tests {
                 "isDraft": false,
                 "number": 43,
                 "title": "Review team-owned parser",
+                "author": {"login": "team-lead"},
                 "body": "Adds team-owned parser coverage.",
                 "updatedAt": "2026-04-28T21:30:00Z",
                 "url": "https://github.com/agentty-xyz/agentty/pull/43"
@@ -1652,6 +1667,7 @@ mod tests {
                 "isDraft": true,
                 "number": 42,
                 "title": "Add forge review support",
+                "author": {"login": "octocat"},
                 "body": "Implements the GitHub provider.",
                 "updatedAt": "2026-04-27T21:30:00Z",
                 "url": "https://github.com/agentty-xyz/agentty/pull/42"
@@ -1660,6 +1676,7 @@ mod tests {
                 "isDraft": false,
                 "number": 44,
                 "title": "Review direct-only parser",
+                "author": {"login": "reviewer"},
                 "body": "Adds direct-only parser coverage.",
                 "updatedAt": "2026-04-29T21:30:00Z",
                 "url": "https://github.com/agentty-xyz/agentty/pull/44"

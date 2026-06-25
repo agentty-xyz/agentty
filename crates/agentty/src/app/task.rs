@@ -923,6 +923,7 @@ mod tests {
     fn requested_review(display_id: &str) -> RequestedReview {
         RequestedReview {
             audience: RequestedReviewAudience::Personal,
+            author: "octocat".to_string(),
             body: Some("Implements requested-review detail comments.".to_string()),
             comment_snapshot: None,
             display_id: display_id.to_string(),

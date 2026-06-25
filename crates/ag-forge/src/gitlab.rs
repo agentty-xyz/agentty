@@ -567,6 +567,15 @@ fn parse_requested_reviews_response(
 
             RequestedReview {
                 audience: RequestedReviewAudience::Personal,
+                author: merge_request.author.map_or_else(
+                    || "unknown".to_string(),
+                    |author| {
+                        author
+                            .username
+                            .or(author.name)
+                            .unwrap_or_else(|| "unknown".to_string())
+                    },
+                ),
                 body: merge_request.description,
                 comment_snapshot: None,
                 display_id: format!("!{}", merge_request.iid),
@@ -730,6 +739,7 @@ struct GitLabLookupResponse {
 /// GitLab list row returned by `glab mr list --output json`.
 #[derive(Deserialize)]
 struct GitLabRequestedReviewResponse {
+    author: Option<GitLabRequestedReviewAuthor>,
     #[serde(default)]
     description: Option<String>,
     #[serde(default)]
@@ -740,6 +750,13 @@ struct GitLabRequestedReviewResponse {
     updated_at: Option<String>,
     #[serde(rename = "web_url")]
     web_url: String,
+}
+
+/// GitLab list author data for the user who opened a requested review.
+#[derive(Deserialize)]
+struct GitLabRequestedReviewAuthor {
+    name: Option<String>,
+    username: Option<String>,
 }
 
 /// GitLab merge-request JSON payload returned by `glab mr view --output json`.
@@ -1195,6 +1212,7 @@ mod tests {
             requested_reviews,
             vec![RequestedReview {
                 audience: RequestedReviewAudience::Personal,
+                author: "octocat".to_string(),
                 body: Some("Implements the GitLab provider.".to_string()),
                 comment_snapshot: None,
                 display_id: "!42".to_string(),
@@ -1396,6 +1414,7 @@ mod tests {
             {
                 "draft": true,
                 "description": "Implements the GitLab provider.",
+                "author": {"name": "Octo Cat", "username": "octocat"},
                 "iid": 42,
                 "title": "Add forge review support",
                 "updated_at": "2026-04-27T21:30:00Z",
