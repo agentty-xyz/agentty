@@ -383,7 +383,7 @@ impl SessionManager {
             .iter_mut()
             .find(|session| session.id == session_id)
         {
-            session.model = session_model;
+            session.agent = crate::domain::agent::AgentSelection::from_model(session_model);
         }
     }
 
@@ -1434,7 +1434,9 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            model: AgentModel::AntigravityGemini3FlashPreview,
+            agent: crate::domain::agent::AgentSelection::from_model(
+                AgentModel::AntigravityGemini3FlashPreview,
+            ),
             output: String::new(),
             parent_session_id: None,
             project_name: String::new(),
@@ -1491,7 +1493,7 @@ mod tests {
                 in_progress_started_at: None,
                 in_progress_total_seconds: 0,
                 is_draft: false,
-                model: AgentModel::Gpt55,
+                agent: crate::domain::agent::AgentSelection::from_model(AgentModel::Gpt55),
                 output: String::new(),
                 parent_session_id: None,
                 project_name: "project".to_string(),
@@ -2218,7 +2220,7 @@ mod tests {
         assert_eq!(app.sessions.sessions()[0].status, Status::Draft);
         assert_eq!(app.sessions.selected_session_index(), Some(0));
         assert_eq!(
-            app.sessions.sessions()[0].model,
+            app.sessions.sessions()[0].agent.model(),
             AgentKind::Antigravity.default_model()
         );
 
@@ -2395,7 +2397,10 @@ mod tests {
             .iter()
             .find(|session| session.id == second_session_id)
             .expect("missing second session");
-        assert_eq!(second_session.model, AgentKind::Antigravity.default_model());
+        assert_eq!(
+            second_session.agent.model(),
+            AgentKind::Antigravity.default_model()
+        );
         assert_eq!(default_smart_model_setting, None);
 
         let db_sessions = app
@@ -2467,7 +2472,7 @@ mod tests {
             .iter()
             .find(|session| session.id == second_session_id)
             .expect("missing second session");
-        assert_eq!(second_session.model, AgentModel::Gpt55);
+        assert_eq!(second_session.agent.model(), AgentModel::Gpt55);
     }
 
     #[tokio::test]
@@ -2500,7 +2505,10 @@ mod tests {
             .iter()
             .find(|session| session.id == session_id)
             .expect("missing created session");
-        assert_eq!(created_session.model, AgentModel::ClaudeHaiku4520251001);
+        assert_eq!(
+            created_session.agent.model(),
+            AgentModel::ClaudeHaiku4520251001
+        );
     }
 
     #[tokio::test]
@@ -3390,7 +3398,10 @@ mod tests {
         // Assert
         assert_eq!(app.sessions.sessions().len(), 1);
         assert_eq!(app.sessions.sessions()[0].id, "12345678");
-        assert_eq!(app.sessions.sessions()[0].model, AgentModel::ClaudeOpus48);
+        assert_eq!(
+            app.sessions.sessions()[0].agent.model(),
+            AgentModel::ClaudeOpus48
+        );
         assert_eq!(app.sessions.sessions()[0].prompt, "Existing");
         let output = app.sessions.sessions()[0].output.clone();
         assert_eq!(output, "Output");
@@ -3464,7 +3475,10 @@ mod tests {
             .iter()
             .find(|session| session.id == created_session_id)
             .expect("missing created session");
-        assert_eq!(created_session.model, AgentModel::ClaudeHaiku4520251001);
+        assert_eq!(
+            created_session.agent.model(),
+            AgentModel::ClaudeHaiku4520251001
+        );
     }
 
     #[tokio::test]

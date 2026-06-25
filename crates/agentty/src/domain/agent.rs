@@ -100,6 +100,13 @@ pub enum AgentModel {
     ClaudeHaiku4520251001,
 }
 
+/// Session-level agent selection that keeps provider kind and model together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentSelection {
+    kind: AgentKind,
+    model: AgentModel,
+}
+
 /// Supported reasoning-effort levels for task execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ReasoningLevel {
@@ -112,6 +119,45 @@ pub enum ReasoningLevel {
     High,
     /// Extra-high reasoning effort for deeper analysis.
     XHigh,
+}
+
+impl AgentSelection {
+    /// Creates a coherent session agent selection.
+    ///
+    /// If `model` does not belong to `kind`, the provider's default model is
+    /// used so the selection never carries unrelated provider/model values.
+    #[must_use]
+    pub fn new(kind: AgentKind, model: AgentModel) -> Self {
+        let model = if model.kind() == kind {
+            model
+        } else {
+            kind.default_model()
+        };
+
+        Self { kind, model }
+    }
+
+    /// Creates a selection from a model whose current owner is the selected
+    /// provider.
+    #[must_use]
+    pub fn from_model(model: AgentModel) -> Self {
+        Self {
+            kind: model.kind(),
+            model,
+        }
+    }
+
+    /// Returns the selected agent provider kind.
+    #[must_use]
+    pub fn kind(self) -> AgentKind {
+        self.kind
+    }
+
+    /// Returns the selected agent model.
+    #[must_use]
+    pub fn model(self) -> AgentModel {
+        self.model
+    }
 }
 
 /// Human-readable metadata for slash-menu selectable items.
@@ -189,6 +235,46 @@ impl AgentModel {
             _ => None,
         }
     }
+}
+
+/// Parses one persisted session agent/model pair without deriving the agent
+/// from the model when the saved agent kind is available.
+///
+/// Existing databases did not persist `agent`, so rows with a missing or
+/// invalid agent value fall back to the model-owned provider only as a legacy
+/// compatibility path.
+pub(crate) fn parse_persisted_session_agent_model(
+    agent_value: Option<&str>,
+    model_value: &str,
+) -> AgentSelection {
+    let parsed_agent = agent_value
+        .filter(|value| !value.trim().is_empty())
+        .and_then(|value| value.parse::<AgentKind>().ok());
+
+    if let Some(agent_kind) = parsed_agent {
+        return parse_model_for_persisted_agent(agent_kind, model_value);
+    }
+
+    let model = AgentModel::parse_persisted(model_value)
+        .unwrap_or_else(|_| AgentKind::Antigravity.default_model());
+
+    AgentSelection::from_model(model)
+}
+
+/// Parses a persisted model using the already persisted agent kind as the
+/// source of truth for provider ownership.
+fn parse_model_for_persisted_agent(agent_kind: AgentKind, model_value: &str) -> AgentSelection {
+    if let Some(model) = agent_kind.parse_model(model_value) {
+        return AgentSelection::new(agent_kind, model);
+    }
+
+    if let Ok(model) = AgentModel::parse_persisted(model_value)
+        && model.kind() == agent_kind
+    {
+        return AgentSelection::new(agent_kind, model);
+    }
+
+    AgentSelection::new(agent_kind, agent_kind.default_model())
 }
 
 /// Returns all selectable models owned by the provided agent kinds in stable
@@ -599,6 +685,34 @@ mod tests {
             parsed_gemini_35_flash,
             Ok(AgentModel::AntigravityGemini35Flash)
         );
+    }
+
+    #[test]
+    /// Ensures persisted session agent values constrain model parsing instead
+    /// of deriving provider ownership from the model string.
+    fn test_parse_persisted_session_agent_model_prefers_saved_agent() {
+        // Arrange
+
+        // Act
+        let selection = parse_persisted_session_agent_model(Some("codex"), "gemini-3.5-flash");
+
+        // Assert
+        assert_eq!(selection.kind(), AgentKind::Codex);
+        assert_eq!(selection.model(), AgentKind::Codex.default_model());
+    }
+
+    #[test]
+    /// Ensures older persisted rows without `agent` still load through the
+    /// legacy model-derived compatibility path.
+    fn test_parse_persisted_session_agent_model_supports_legacy_rows() {
+        // Arrange
+
+        // Act
+        let selection = parse_persisted_session_agent_model(None, "claude-opus-4-6");
+
+        // Assert
+        assert_eq!(selection.kind(), AgentKind::Claude);
+        assert_eq!(selection.model(), AgentModel::ClaudeOpus48);
     }
 
     #[test]

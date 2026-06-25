@@ -494,7 +494,7 @@ mod tests {
                 in_progress_started_at: None,
                 in_progress_total_seconds: 0,
                 is_draft: false,
-                model: AgentModel::Gpt55,
+                agent: crate::domain::agent::AgentSelection::from_model(AgentModel::Gpt55),
                 output: String::new(),
                 parent_session_id: None,
                 project_name: "project".to_string(),
