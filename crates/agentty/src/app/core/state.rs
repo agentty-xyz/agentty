@@ -1924,6 +1924,7 @@ mod tests {
     /// Builds one deterministic session snapshot rooted at `session_folder`.
     fn test_session(session_folder: PathBuf) -> Session {
         Session {
+            agent: crate::domain::agent::AgentKind::Antigravity,
             base_branch: "main".to_string(),
             created_at: 0,
             draft_attachments: Vec::new(),

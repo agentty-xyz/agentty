@@ -68,6 +68,7 @@ mod tests {
     /// Builds a minimal test session with the given identifier and status.
     fn test_session(session_id: &str, status: Status) -> Session {
         Session {
+            agent: crate::domain::agent::AgentKind::Antigravity,
             base_branch: "main".to_string(),
             created_at: 0,
             draft_attachments: Vec::new(),

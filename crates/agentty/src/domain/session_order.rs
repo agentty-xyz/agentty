@@ -215,6 +215,7 @@ mod tests {
     /// Returns one session snapshot with a custom id and status.
     fn test_session(id: &str, status: Status) -> Session {
         Session {
+            agent: crate::domain::agent::AgentKind::Antigravity,
             base_branch: "main".to_string(),
             created_at: 0,
             draft_attachments: Vec::new(),

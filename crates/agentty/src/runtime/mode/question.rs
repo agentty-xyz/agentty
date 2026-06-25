@@ -1330,6 +1330,7 @@ mod tests {
         let mut app = new_test_app().await;
         let session_id = "session-review-check";
         app.sessions.push_session(Session {
+            agent: crate::domain::agent::AgentKind::Antigravity,
             base_branch: "main".to_string(),
             created_at: 0,
             draft_attachments: Vec::new(),
@@ -1408,6 +1409,7 @@ mod tests {
         let mut app = new_test_app().await;
         let session_id = "session-handle-review";
         app.sessions.push_session(Session {
+            agent: crate::domain::agent::AgentKind::Antigravity,
             base_branch: "main".to_string(),
             created_at: 0,
             draft_attachments: Vec::new(),
@@ -2936,6 +2938,7 @@ mod tests {
         // produce an error message — which counts as non-empty content).
         let session_dir = tempdir().expect("failed to create session dir");
         app.sessions.push_session(Session {
+            agent: crate::domain::agent::AgentKind::Antigravity,
             base_branch: "main".to_string(),
             created_at: 0,
             draft_attachments: Vec::new(),

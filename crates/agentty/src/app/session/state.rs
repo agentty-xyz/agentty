@@ -467,6 +467,7 @@ mod tests {
         // Arrange
         let session_id = "sess-1".to_string();
         let session = Session {
+            agent: crate::domain::agent::AgentKind::Antigravity,
             base_branch: "main".to_string(),
             created_at: 0,
             draft_attachments: Vec::new(),
@@ -523,6 +524,7 @@ mod tests {
     fn sync_session_with_handles_equal_length_sync() {
         // Arrange
         let mut session = Session {
+            agent: crate::domain::agent::AgentKind::Antigravity,
             base_branch: "main".to_string(),
             created_at: 0,
             draft_attachments: Vec::new(),
@@ -568,6 +570,7 @@ mod tests {
     fn sync_session_with_handles_appends_suffix_for_extended_output() {
         // Arrange
         let mut session = Session {
+            agent: crate::domain::agent::AgentKind::Antigravity,
             base_branch: "main".to_string(),
             created_at: 0,
             draft_attachments: Vec::new(),
@@ -615,6 +618,7 @@ mod tests {
         // Arrange
         let session_id = "session-3".to_string();
         let session = Session {
+            agent: crate::domain::agent::AgentKind::Antigravity,
             base_branch: "main".to_string(),
             created_at: 0,
             draft_attachments: Vec::new(),
@@ -668,6 +672,7 @@ mod tests {
     fn replace_sessions_rebuilds_session_id_index() {
         // Arrange
         let initial_session = Session {
+            agent: crate::domain::agent::AgentKind::Antigravity,
             base_branch: "main".to_string(),
             created_at: 0,
             draft_attachments: Vec::new(),
@@ -699,6 +704,7 @@ mod tests {
             workflow_notice: None,
         };
         let replacement_session = Session {
+            agent: crate::domain::agent::AgentKind::Antigravity,
             base_branch: "main".to_string(),
             created_at: 0,
             draft_attachments: Vec::new(),
@@ -752,6 +758,7 @@ mod tests {
     fn remove_session_at_rebuilds_session_id_index() {
         // Arrange
         let first_session = Session {
+            agent: crate::domain::agent::AgentKind::Antigravity,
             base_branch: "main".to_string(),
             created_at: 0,
             draft_attachments: Vec::new(),
@@ -783,6 +790,7 @@ mod tests {
             workflow_notice: None,
         };
         let second_session = Session {
+            agent: crate::domain::agent::AgentKind::Antigravity,
             base_branch: "main".to_string(),
             created_at: 0,
             draft_attachments: Vec::new(),
@@ -840,6 +848,7 @@ mod tests {
     fn sync_session_with_handles_replaces_output_when_prefix_changes() {
         // Arrange
         let mut session = Session {
+            agent: crate::domain::agent::AgentKind::Antigravity,
             base_branch: "main".to_string(),
             created_at: 0,
             draft_attachments: Vec::new(),
@@ -932,6 +941,7 @@ mod tests {
     fn retain_follow_up_task_positions_clamps_and_drops_invalid_entries() {
         // Arrange
         let mut surviving_session = Session {
+            agent: crate::domain::agent::AgentKind::Antigravity,
             base_branch: "main".to_string(),
             created_at: 0,
             draft_attachments: Vec::new(),
@@ -976,6 +986,7 @@ mod tests {
                 text: "Add the regression test.".to_string(),
             });
         let taskless_session = Session {
+            agent: crate::domain::agent::AgentKind::Antigravity,
             base_branch: "main".to_string(),
             created_at: 0,
             draft_attachments: Vec::new(),

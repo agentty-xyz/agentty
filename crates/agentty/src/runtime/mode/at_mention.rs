@@ -485,6 +485,7 @@ mod tests {
         let state = SessionState::new(
             handles,
             vec![Session {
+                agent: crate::domain::agent::AgentKind::Antigravity,
                 base_branch: "main".to_string(),
                 created_at: 0,
                 draft_attachments: Vec::new(),
