@@ -3,11 +3,10 @@ Return the full response as the required protocol JSON object and put the plain-
 commit message in the `answer` field only. Before writing the message, inspect
 repository commit-message guidance from relevant agent instruction files (`AGENTS.md`,
 `CLAUDE.md`, `GEMINI.md`) and relevant skills under shared or agent-specific skill
-directories (for example `skills/`, `.claude/skills/`, `.gemini/skills/`,
-`.codex/skills/`, `.agents/skills/`). Check the skill files that appear relevant to
-commit-message conventions when those paths exist. Use the most specific applicable
-repository guidance you find unless explicit user instructions in the diff request a
-different format.
+directories (for example `skills/`, `.agents/skills/`, `.claude/skills/`, and
+`.codex/skills/`). Check the skill files that appear relevant to commit-message
+conventions when those paths exist. Use the most specific applicable repository guidance
+you find unless explicit user instructions in the diff request a different format.
 
 Rules:
 

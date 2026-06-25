@@ -56,6 +56,13 @@ This repository keeps `CLAUDE.md` and `GEMINI.md` as symlinks to the canonical r
 This gives all backends shared repo-wide instructions plus a small amount of
 higher-signal local guidance without maintaining per-directory file inventories.
 
+Shared reusable skills live under `skills/`. For backends that support workspace skills,
+the preferred project-local alias is `.agents/skills`; Gemini CLI documents this as an
+alias for `.gemini/skills`. Claude Code still documents project-specific commands,
+agents, settings, and skills under `.claude`, while Codex still documents project
+configuration under `.codex`, so Agentty keeps those backend-specific directories
+available when compatibility requires them instead of renaming them wholesale.
+
 ## Claude Authentication
 
 <a id="backends-claude-authentication"></a> If Claude session turns or utility prompts

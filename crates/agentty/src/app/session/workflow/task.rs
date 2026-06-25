@@ -1502,8 +1502,8 @@ mod tests {
     }
 
     #[test]
-    /// Verifies session commit-message prompts include both the continuity
-    /// input and the cumulative diff.
+    /// Verifies session commit-message prompts include continuity, the
+    /// cumulative diff, and current skill-directory guidance.
     fn test_session_commit_message_prompt_includes_continuity_and_diff() {
         // Arrange
         let diff = "diff --git a/a.rs b/a.rs";
@@ -1518,6 +1518,8 @@ mod tests {
         assert!(prompt.contains("Keep session commit accurate"));
         assert!(prompt.contains(diff));
         assert!(prompt.contains("required protocol JSON object"));
+        assert!(prompt.contains("`.agents/skills/`"));
+        assert!(!prompt.contains("`.gemini/skills/`"));
         assert!(!prompt.contains("Return one plain-text commit message"));
         assert!(!prompt.contains(SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER));
         let fenced_diff = format!("```diff\n{diff}\n```");
