@@ -9,6 +9,8 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
+    cooldown:
+      default-days: 7
     assignees:
       - "minev-dev"
       - "andagaev"
@@ -28,6 +30,8 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
+    cooldown:
+      default-days: 7
     assignees:
       - "minev-dev"
       - "andagaev"
@@ -40,6 +44,8 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
+    cooldown:
+      default-days: 7
     assignees:
       - "minev-dev"
       - "andagaev"

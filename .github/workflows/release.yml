@@ -65,10 +65,24 @@ jobs:
           persist-credentials: false
           submodules: recursive
       - name: Install dist
-        # we specify bash to get pipefail; it guards against the `curl` command
-        # failing. otherwise `sh` won't catch that `curl` returned non-0
         shell: bash
-        run: "curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.31.0/cargo-dist-installer.sh | sh"
+        run: |
+          # Download a checksummed release archive instead of piping the installer
+          # script into the shell.
+          set -euo pipefail
+
+          cargo_dist_version="0.31.0"
+          cargo_dist_target="x86_64-unknown-linux-gnu"
+          cargo_dist_archive="cargo-dist-${cargo_dist_target}.tar.xz"
+          cargo_dist_url="https://github.com/axodotdev/cargo-dist/releases/download/v${cargo_dist_version}"
+
+          curl --proto '=https' --tlsv1.2 -LsSf -O "${cargo_dist_url}/${cargo_dist_archive}"
+          curl --proto '=https' --tlsv1.2 -LsSf -O "${cargo_dist_url}/${cargo_dist_archive}.sha256"
+          shasum -a 256 --check "${cargo_dist_archive}.sha256"
+
+          tar -xJf "$cargo_dist_archive"
+          mkdir -p "$HOME/.cargo/bin"
+          install -m 755 "cargo-dist-${cargo_dist_target}/dist" "$HOME/.cargo/bin/dist"
       - name: Cache dist
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -80,8 +94,14 @@ jobs:
       # (PRs run on the *source* but secrets are usually on the *target* -- that's *good*
       # but also really annoying to build CI around when it needs secrets to work right.)
       - id: plan
+        env:
+          DIST_TAG: ${{ github.ref_name }}
         run: |
-          dist ${{ (github.event_name == 'push' && format('host --steps=create --tag={0}', github.ref_name)) || 'plan' }} --output-format=json > plan-dist-manifest.json
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            dist host --steps=create "--tag=$DIST_TAG" --output-format=json > plan-dist-manifest.json
+          else
+            dist plan --output-format=json > plan-dist-manifest.json
+          fi
           echo "dist ran successfully"
           cat plan-dist-manifest.json
           echo "manifest=$(jq -c "." plan-dist-manifest.json)" >> "$GITHUB_OUTPUT"
@@ -116,7 +136,6 @@ jobs:
       # - N "local" tasks that build each platform's binaries and platform-specific installers
       matrix: ${{ fromJson(needs.plan.outputs.val).ci.github.artifacts_matrix }}
     runs-on: ${{ matrix.runner }}
-    container: ${{ matrix.container && matrix.container.image || null }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       BUILD_MANIFEST_NAME: target/distrib/${{ join(matrix.targets, '-') }}-dist-manifest.json
@@ -128,15 +147,43 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
-      - name: Install Rust non-interactively if not already installed
-        if: ${{ matrix.container }}
-        run: |
-          if ! command -v cargo > /dev/null 2>&1; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-            echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-          fi
       - name: Install dist
-        run: ${{ matrix.install_dist.run }}
+        shell: bash
+        run: |
+          # Download a checksummed release archive instead of piping the installer
+          # script into the shell.
+          set -euo pipefail
+
+          cargo_dist_version="0.31.0"
+          cargo_dist_url="https://github.com/axodotdev/cargo-dist/releases/download/v${cargo_dist_version}"
+
+          case "$(uname -s)-$(uname -m)" in
+            Darwin-arm64)
+              cargo_dist_target="aarch64-apple-darwin"
+              ;;
+            Darwin-x86_64)
+              cargo_dist_target="x86_64-apple-darwin"
+              ;;
+            Linux-aarch64)
+              cargo_dist_target="aarch64-unknown-linux-gnu"
+              ;;
+            Linux-x86_64)
+              cargo_dist_target="x86_64-unknown-linux-gnu"
+              ;;
+            *)
+              echo "unsupported cargo-dist host: $(uname -s)-$(uname -m)" >&2
+              exit 1
+              ;;
+          esac
+
+          cargo_dist_archive="cargo-dist-${cargo_dist_target}.tar.xz"
+          curl --proto '=https' --tlsv1.2 -LsSf -O "${cargo_dist_url}/${cargo_dist_archive}"
+          curl --proto '=https' --tlsv1.2 -LsSf -O "${cargo_dist_url}/${cargo_dist_archive}.sha256"
+          shasum -a 256 --check "${cargo_dist_archive}.sha256"
+
+          tar -xJf "$cargo_dist_archive"
+          mkdir -p "$HOME/.cargo/bin"
+          install -m 755 "cargo-dist-${cargo_dist_target}/dist" "$HOME/.cargo/bin/dist"
       # Get the dist-manifest
       - name: Fetch local artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -144,13 +191,23 @@ jobs:
           pattern: artifacts-*
           path: target/distrib/
           merge-multiple: true
-      - name: Install dependencies
-        run: |
-          ${{ matrix.packages_install }}
       - name: Build artifacts
+        env:
+          DIST_TAG: ${{ needs.plan.outputs.tag }}
+          DIST_TARGETS: ${{ join(matrix.targets, ' ') }}
         run: |
           # Actually do builds and make zips and whatnot
-          dist build ${{ needs.plan.outputs.tag-flag }} --print=linkage --output-format=json ${{ matrix.dist_args }} > dist-manifest.json
+          tag_args=()
+          if [ -n "$DIST_TAG" ]; then
+            tag_args=("--tag=$DIST_TAG")
+          fi
+
+          dist_args=("--artifacts=local")
+          for target in $DIST_TARGETS; do
+            dist_args+=("--target=$target")
+          done
+
+          dist build "${tag_args[@]}" --print=linkage --output-format=json "${dist_args[@]}" > dist-manifest.json
           echo "dist ran successfully"
       - id: cargo-dist
         name: Post-build
@@ -202,8 +259,15 @@ jobs:
           merge-multiple: true
       - id: cargo-dist
         shell: bash
+        env:
+          DIST_TAG: ${{ needs.plan.outputs.tag }}
         run: |
-          dist build ${{ needs.plan.outputs.tag-flag }} --output-format=json "--artifacts=global" > dist-manifest.json
+          tag_args=()
+          if [ -n "$DIST_TAG" ]; then
+            tag_args=("--tag=$DIST_TAG")
+          fi
+
+          dist build "${tag_args[@]}" --output-format=json "--artifacts=global" > dist-manifest.json
           echo "dist ran successfully"
 
           # Parse out what we just built and upload it to scratch storage
@@ -255,8 +319,10 @@ jobs:
           merge-multiple: true
       - id: host
         shell: bash
+        env:
+          DIST_TAG: ${{ needs.plan.outputs.tag }}
         run: |
-          dist host ${{ needs.plan.outputs.tag-flag }} --steps=upload --steps=release --output-format=json > dist-manifest.json
+          dist host "--tag=$DIST_TAG" --steps=upload --steps=release --output-format=json > dist-manifest.json
           echo "artifacts uploaded and released successfully"
           cat dist-manifest.json
           echo "manifest=$(jq -c "." dist-manifest.json)" >> "$GITHUB_OUTPUT"
@@ -283,11 +349,17 @@ jobs:
           ANNOUNCEMENT_TITLE: "${{ fromJson(steps.host.outputs.manifest).announcement_title }}"
           ANNOUNCEMENT_BODY: "${{ fromJson(steps.host.outputs.manifest).announcement_github_body }}"
           RELEASE_COMMIT: "${{ github.sha }}"
+          RELEASE_TAG: "${{ needs.plan.outputs.tag }}"
         run: |
           # Write and read notes from a file to avoid quoting breaking things
           echo "$ANNOUNCEMENT_BODY" > $RUNNER_TEMP/notes.txt
 
-          gh release create "${{ needs.plan.outputs.tag }}" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
+          release_args=()
+          if [ -n "$PRERELEASE_FLAG" ]; then
+            release_args+=("$PRERELEASE_FLAG")
+          fi
+
+          gh release create "$RELEASE_TAG" --target "$RELEASE_COMMIT" "${release_args[@]}" --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
 
   custom-publish-npm-oidc:
     needs:
