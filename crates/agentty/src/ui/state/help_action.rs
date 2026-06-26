@@ -469,11 +469,20 @@ fn can_open_view_command(
 
 /// Returns whether a session state can start sync in view mode under stack
 /// sync constraints.
+///
+/// Regular drafts, interactive sessions, and review-ready sessions expose
+/// sync when the stack is idle. Stacked drafts hide sync until they launch,
+/// and focused review generation hides sync until the session returns to
+/// `Review`.
 fn can_rebase_view_session(
     session_state: ViewSessionState,
     can_rebase_session_branch: ViewActionAvailability,
 ) -> bool {
-    can_rebase_session_branch.is_enabled() && matches!(session_state, ViewSessionState::Review)
+    can_rebase_session_branch.is_enabled()
+        && matches!(
+            session_state,
+            ViewSessionState::NewSession | ViewSessionState::Interactive | ViewSessionState::Review
+        )
 }
 
 /// Appends footer actions that operate on an editable session in their
@@ -957,6 +966,8 @@ mod tests {
         );
         assert!(actions.iter().any(|action| action.key == "/"));
         assert!(actions.iter().any(|action| action.key == "s"));
+        assert!(actions.iter().any(|action| action.key == "m"));
+        assert!(actions.iter().any(|action| action.key == "r"));
     }
 
     #[test]
