@@ -6,8 +6,8 @@ use ratatui::widgets::Paragraph;
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
-    Session, can_mutate_session_branch_in_stack, can_reply_to_session_in_stack,
-    can_start_staged_session_in_stack,
+    Session, can_mutate_session_branch_in_stack, can_rebase_session_branch_in_stack,
+    can_reply_to_session_in_stack, can_start_staged_session_in_stack,
 };
 use crate::domain::{input, review};
 use crate::ui::component::chat_input::{ChatInput, SuggestionList};
@@ -18,7 +18,7 @@ use crate::ui::input_layout::{
     calculate_input_height, overlay_area_above, suggestion_dropdown_height,
 };
 use crate::ui::state::app_mode::{AppMode, QuestionFocus};
-use crate::ui::state::help_action::ViewActionAvailability;
+use crate::ui::state::help_action::{self, ViewActionAvailability, ViewHelpState};
 use crate::ui::state::prompt::PromptAtMentionState;
 use crate::ui::{
     Component, Page, layout, markdown, prompt_format, question_format, session_format,
@@ -425,13 +425,19 @@ impl<'a> SessionChatPage<'a> {
             can_reply_to_session_in_stack(self.sessions, session.id.as_str());
         let can_mutate_session_branch =
             can_mutate_session_branch_in_stack(self.sessions, session.id.as_str());
-        let help_message = Paragraph::new(session_format::session_view_footer_line(
-            session,
-            self.can_open_worktree,
-            ViewActionAvailability::from_bool(can_reply_to_session),
-            can_start_staged_session,
-            can_mutate_session_branch,
-        ));
+        let can_rebase_session_branch =
+            can_rebase_session_branch_in_stack(self.sessions, session.id.as_str());
+        let view_help_state = ViewHelpState {
+            can_mutate_session_branch: ViewActionAvailability::from_bool(can_mutate_session_branch),
+            can_open_worktree: ViewActionAvailability::from_bool(self.can_open_worktree),
+            can_rebase_session_branch: ViewActionAvailability::from_bool(can_rebase_session_branch),
+            reply_to_session: ViewActionAvailability::from_bool(can_reply_to_session),
+            can_start_staged_session: ViewActionAvailability::from_bool(can_start_staged_session),
+            publish_pull_request_action: session.publish_pull_request_action(),
+            session_state: help_action::session_view_state(session),
+        };
+        let help_message =
+            Paragraph::new(session_format::session_view_footer_line(view_help_state));
         f.render_widget(help_message, bottom_area);
     }
 }

@@ -930,9 +930,9 @@ fn stacked_session_creation() -> E2eResult {
     Ok(())
 }
 
-/// Verify that a review-ready parent can still open the reply composer after
-/// its stacked child has also reached review, while merge and sync remain
-/// hidden until the child is terminal or unlinked.
+/// Verify that a review-ready parent can still open the reply composer and
+/// sync the stack after its stacked child has also reached review, while merge
+/// remains hidden until the child is terminal or unlinked.
 #[test]
 fn stacked_parent_reply_remains_available_with_review_child() -> E2eResult {
     // Arrange, Act, Assert
@@ -950,7 +950,7 @@ fn stacked_parent_reply_remains_available_with_review_child() -> E2eResult {
                     .wait_for_text("Enter: reply", 5000)
                     .capture_labeled(
                         "parent_review",
-                        "Parent review session with reply available",
+                        "Parent review session with reply and sync available",
                     )
             },
             |frame, _report| {
@@ -958,7 +958,7 @@ fn stacked_parent_reply_remains_available_with_review_child() -> E2eResult {
                 assertion::assert_text_in_region(frame, "Parent stack review", &full);
                 assertion::assert_text_in_region(frame, "Enter: reply", &full);
                 assertion::assert_not_visible(frame, "m: add to merge queue");
-                assertion::assert_not_visible(frame, "r: sync");
+                assertion::assert_text_in_region(frame, "r: sync", &full);
             },
         )?;
 

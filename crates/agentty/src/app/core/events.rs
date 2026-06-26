@@ -163,6 +163,9 @@ pub(crate) enum AppEvent {
     /// Indicates one review-ready parent turn finished and any materialized
     /// stacked child branches should sync onto the refreshed parent branch.
     StackedParentTurnCompleted { session_id: SessionId },
+    /// Indicates one review-ready parent sync finished and any materialized
+    /// stacked child branches should sync onto the refreshed parent branch.
+    StackedParentSyncCompleted { session_id: SessionId },
     /// Indicates a transient workflow notice changed for one session.
     SessionWorkflowNoticeUpdated {
         notice: String,
@@ -210,6 +213,7 @@ pub(super) struct AppEventBatch {
         HashMap<SessionId, Option<crate::domain::agent::ReasoningLevel>>,
     pub(super) session_progress_updates: HashMap<SessionId, Option<String>>,
     pub(super) session_size_updates: HashMap<SessionId, (u64, u64, SessionSize)>,
+    pub(super) stacked_parent_syncs_completed: HashSet<SessionId>,
     pub(super) stacked_parent_turns_completed: HashSet<SessionId>,
     pub(super) session_title_generation_finished: HashMap<SessionId, u64>,
     pub(super) session_workflow_notice_updates: HashMap<SessionId, Vec<String>>,
@@ -382,6 +386,9 @@ impl AppEventBatch {
             } => self.collect_agent_response_received(session_id, turn_applied_state),
             AppEvent::StackedParentTurnCompleted { session_id } => {
                 self.collect_stacked_parent_turn_completed(session_id);
+            }
+            AppEvent::StackedParentSyncCompleted { session_id } => {
+                self.collect_stacked_parent_sync_completed(session_id);
             }
             AppEvent::SessionWorkflowNoticeUpdated { notice, session_id } => {
                 self.collect_session_workflow_notice_updated(session_id, notice);
@@ -686,6 +693,11 @@ impl AppEventBatch {
         self.stacked_parent_turns_completed.insert(session_id);
     }
 
+    /// Stores one completed parent sync for stacked-child auto-sync fan-out.
+    fn collect_stacked_parent_sync_completed(&mut self, session_id: SessionId) {
+        self.stacked_parent_syncs_completed.insert(session_id);
+    }
+
     /// Collects one structured system log event for ordered reducer
     /// application.
     fn collect_system_log(&mut self, event: SystemLogEvent) {
@@ -799,6 +811,11 @@ impl App {
                 self.sessions.append_workflow_notice(&session_id, notice);
             }
         }
+        event_batch
+            .stacked_parent_turns_completed
+            .extend(std::mem::take(
+                &mut event_batch.stacked_parent_syncs_completed,
+            ));
         let auto_rebase_log_events = self
             .start_stacked_child_rebases_after_parent_turns(std::mem::take(
                 &mut event_batch.stacked_parent_turns_completed,
@@ -1132,6 +1149,8 @@ impl App {
             || !event_batch.session_size_updates.is_empty()
             || !event_batch.session_title_generation_finished.is_empty()
             || !event_batch.session_workflow_notice_updates.is_empty()
+            || !event_batch.stacked_parent_syncs_completed.is_empty()
+            || !event_batch.stacked_parent_turns_completed.is_empty()
             || event_batch.sync_main_result.is_some()
             || !event_batch.system_log_events.is_empty()
     }

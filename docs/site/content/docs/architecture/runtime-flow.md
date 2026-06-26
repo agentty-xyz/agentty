@@ -530,12 +530,14 @@ restart-safe:
 Stacked-session branch gates are enforced before those transitions start branch work.
 `start_staged_session()` only materializes a stacked draft when its parent is
 review-ready and no sibling or parent stack member is running, queued, syncing, merging,
-or waiting on a question. Session sync and merge queue entry use the stricter
-branch-work stack check, with parent branch workflow actions blocked while a
-materialized child remains linked. `reply()` uses the reply-specific stack check, so a
-parent can accept another prompt once a materialized child is idle in review. When that
-parent prompt finishes in `Review`, the reducer starts automatic child sync rebases
-through the same per-session worker command used by manual session sync.
+or waiting on a question. Merge queue entry and slash-command branch work use the
+stricter branch-work stack check, with parent branch workflow actions blocked while a
+materialized child remains linked. Session sync uses the sync-specific stack check, so a
+parent can refresh itself when materialized children are idle and then fan out child
+rebases. `reply()` uses the reply-specific stack check, so a parent can accept another
+prompt once a materialized child is idle in review. When that parent prompt finishes in
+`Review`, the reducer starts automatic child sync rebases through the same per-session
+worker command used by manual session sync.
 
 ## Agent Channel Architecture
 
@@ -872,8 +874,8 @@ paths and their trigger conditions:
 
 ### Session sync task
 
-- Trigger: Session sync action in view mode, or a completed stacked-parent turn that
-  returned to `Review`
+- Trigger: Session sync action in view mode, a completed stacked-parent sync that
+  returned to `Review`, or a completed stacked-parent turn that returned to `Review`
 - Spawn site: `SessionMergeService::rebase_session` and stacked-parent auto-sync both
   enqueue `SessionCommand::Rebase`
 - Emits or writes: Output append and status updates
@@ -882,7 +884,9 @@ paths and their trigger conditions:
   ref from the published upstream's remote; unpublished sessions use the local base
   branch. Rebase-conflict prompts run through the existing session channel so the
   provider keeps conversation context while Agentty owns staging and
-  `git rebase --continue`.
+  `git rebase --continue`. When a stacked parent sync completes successfully, the
+  reducer reuses the child auto-sync fan-out so review-ready materialized children are
+  replayed onto the refreshed parent branch.
 
 ## Sync, Merge, and Rebase Flows
 

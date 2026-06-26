@@ -911,11 +911,9 @@ impl SessionMergeService {
                 "Session must be in review status".to_string(),
             ));
         }
-        if !manager.can_mutate_session_branch_in_stack(session_id) {
+        if !manager.can_rebase_session_branch_in_stack(session_id) {
             return Err(SessionError::Workflow(
-                "Stacked branch work can only run when no other stack session is active and \
-                 parent branch edits are not blocked by materialized children"
-                    .to_string(),
+                "Stacked sync can only run when no other stack session is active".to_string(),
             ));
         }
 
@@ -1788,6 +1786,7 @@ impl SessionManager {
             status,
         } = input;
 
+        let rebase_succeeded = rebase_result.is_ok();
         match rebase_result {
             Ok(message) => {
                 let rebase_message = TranscriptNotice::Rebase.format(message);
@@ -1827,7 +1826,7 @@ impl SessionManager {
             }
         }
 
-        if !SessionTaskService::update_status(
+        let restored_review_status = SessionTaskService::update_status(
             status,
             clock,
             db,
@@ -1836,13 +1835,18 @@ impl SessionManager {
             id,
             Status::Review,
         )
-        .await
-        {
+        .await;
+        if !restored_review_status {
             warn!(
                 session_id = id,
                 "skipped restoring review status after rebase because the in-memory status was \
                  already current"
             );
+        }
+        if rebase_succeeded && restored_review_status {
+            let _ = app_event_tx.send(AppEvent::StackedParentSyncCompleted {
+                session_id: SessionId::from(id),
+            });
         }
     }
 
@@ -4480,18 +4484,26 @@ mod tests {
         })
         .await;
 
-        // Assert — no PublishedBranchSyncUpdated events should be emitted.
-        // Drain remaining events and check that none are sync events.
+        // Assert — no PublishedBranchSyncUpdated events should be emitted,
+        // but the stack-sync fan-out event should still be available.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         let mut sync_event_count = 0;
+        let mut stack_sync_event_count = 0;
         while let Ok(event) = app_event_rx.try_recv() {
-            if matches!(event, AppEvent::PublishedBranchSyncUpdated { .. }) {
+            if matches!(&event, AppEvent::PublishedBranchSyncUpdated { .. }) {
                 sync_event_count += 1;
+            }
+            if matches!(&event, AppEvent::StackedParentSyncCompleted { .. }) {
+                stack_sync_event_count += 1;
             }
         }
         assert_eq!(
             sync_event_count, 0,
             "should not emit sync events without published branch"
+        );
+        assert_eq!(
+            stack_sync_event_count, 1,
+            "should emit one stacked parent sync completion event"
         );
 
         let output_text = output.lock().expect("output lock poisoned").clone();

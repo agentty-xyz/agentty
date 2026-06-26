@@ -96,6 +96,7 @@ struct ViewSessionSnapshot {
     mutate_session_branch: ViewActionState,
     open_worktree: ViewActionState,
     publish_pull_request_action: Option<PublishBranchAction>,
+    rebase_session_branch: ViewActionState,
     reply_to_session: ViewActionState,
     session_state: ViewSessionState,
     session_status: Status,
@@ -115,7 +116,7 @@ impl ViewSessionSnapshot {
     /// from view mode.
     fn can_rebase_session(&self) -> bool {
         is_view_rebase_allowed(self.session_status)
-            && self.can_mutate_session_branch()
+            && self.can_rebase_session_branch()
             && self.session_state != ViewSessionState::StackedDraft
     }
 
@@ -132,6 +133,11 @@ impl ViewSessionSnapshot {
     /// Returns whether this session's local worktree can be opened.
     fn can_open_worktree(&self) -> bool {
         self.open_worktree.is_enabled()
+    }
+
+    /// Returns whether this session can start sync work under stack rules.
+    fn can_rebase_session_branch(&self) -> bool {
+        self.rebase_session_branch.is_enabled()
     }
 
     /// Returns whether this session can accept a reply under stack rules.
@@ -571,6 +577,10 @@ fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSe
         ),
         open_worktree: ViewActionState::from_bool(can_open_worktree),
         publish_pull_request_action: session.publish_pull_request_action(),
+        rebase_session_branch: ViewActionState::from_bool(
+            app.sessions
+                .can_rebase_session_branch_in_stack(view_context.session_id.as_str()),
+        ),
         reply_to_session: ViewActionState::from_bool(
             app.sessions
                 .can_reply_to_session_in_stack(view_context.session_id.as_str()),
@@ -871,6 +881,7 @@ fn open_view_help_overlay(
         context: HelpContext::View {
             can_mutate_session_branch: view_session_snapshot.can_mutate_session_branch(),
             can_open_worktree: view_session_snapshot.can_open_worktree(),
+            can_rebase_session_branch: view_session_snapshot.can_rebase_session_branch(),
             can_reply_to_session: view_session_snapshot.can_reply_to_session(),
             can_start_staged_session: view_session_snapshot.can_start_staged_session(),
             review_status_message: view_context.review_status_message.clone(),
@@ -1751,7 +1762,7 @@ mod tests {
         assert_eq!(snapshot.session_state, ViewSessionState::Review);
         assert!(snapshot.can_open_prompt_composer());
         assert!(!snapshot.can_merge_session());
-        assert!(!snapshot.can_rebase_session());
+        assert!(snapshot.can_rebase_session());
     }
 
     #[tokio::test]
@@ -2446,6 +2457,7 @@ mod tests {
         let view_session_snapshot = ViewSessionSnapshot {
             continue_terminal_session: ViewActionState::Disabled,
             mutate_session_branch: ViewActionState::Enabled,
+            rebase_session_branch: ViewActionState::Enabled,
             open_worktree: ViewActionState::Enabled,
             reply_to_session: ViewActionState::Enabled,
             start_staged_session: ViewActionState::Disabled,
@@ -2838,6 +2850,7 @@ mod tests {
         let view_session_snapshot = ViewSessionSnapshot {
             continue_terminal_session: ViewActionState::Disabled,
             mutate_session_branch: ViewActionState::Enabled,
+            rebase_session_branch: ViewActionState::Enabled,
             open_worktree: ViewActionState::Disabled,
             reply_to_session: ViewActionState::Enabled,
             start_staged_session: ViewActionState::Disabled,
@@ -3034,6 +3047,7 @@ mod tests {
         let view_session_snapshot = ViewSessionSnapshot {
             continue_terminal_session: ViewActionState::Disabled,
             mutate_session_branch: ViewActionState::Enabled,
+            rebase_session_branch: ViewActionState::Enabled,
             open_worktree: ViewActionState::Enabled,
             reply_to_session: ViewActionState::Enabled,
             start_staged_session: ViewActionState::Disabled,
@@ -3094,6 +3108,7 @@ mod tests {
         let view_session_snapshot = ViewSessionSnapshot {
             continue_terminal_session: ViewActionState::Disabled,
             mutate_session_branch: ViewActionState::Enabled,
+            rebase_session_branch: ViewActionState::Enabled,
             open_worktree: ViewActionState::Enabled,
             reply_to_session: ViewActionState::Enabled,
             start_staged_session: ViewActionState::Disabled,
@@ -3147,6 +3162,7 @@ mod tests {
         let view_session_snapshot = ViewSessionSnapshot {
             continue_terminal_session: ViewActionState::Disabled,
             mutate_session_branch: ViewActionState::Enabled,
+            rebase_session_branch: ViewActionState::Enabled,
             open_worktree: ViewActionState::Enabled,
             reply_to_session: ViewActionState::Enabled,
             start_staged_session: ViewActionState::Disabled,
@@ -3218,6 +3234,7 @@ mod tests {
             let view_session_snapshot = ViewSessionSnapshot {
                 continue_terminal_session: ViewActionState::Disabled,
                 mutate_session_branch: ViewActionState::Enabled,
+                rebase_session_branch: ViewActionState::Enabled,
                 open_worktree: ViewActionState::Disabled,
                 reply_to_session: ViewActionState::Enabled,
                 start_staged_session: ViewActionState::Disabled,

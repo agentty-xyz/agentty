@@ -111,11 +111,13 @@ During **AgentReview**, Agentty keeps the same review-oriented shortcuts but hid
 until the background focused-review generation finishes and the session returns to
 **Review**.
 
-For stacked parents with a materialized child, `Enter` remains available when no stack
-member is actively running, queued, syncing, merging, or waiting on a question. Branch
-workflow shortcuts such as `/`, `m`, and `r` stay hidden until the child is terminal or
-no longer linked. When a parent reply completes in **Review**, Agentty automatically
-rebases review-ready materialized children onto the refreshed parent branch.
+For stacked parents with a materialized child, `Enter` and `r` remain available when no
+stack member is actively running, queued, syncing, merging, or waiting on a question.
+Slash-command and merge shortcuts such as `/` and `m` stay hidden until the child is
+terminal or no longer linked. Pressing `r` on the parent syncs the parent first, then
+rebases review-ready materialized children onto the refreshed parent branch. When a
+parent reply completes in **Review**, Agentty performs the same child rebase fan-out
+automatically.
 
 <a id="usage-additional-keys"></a> Additional notes:
 

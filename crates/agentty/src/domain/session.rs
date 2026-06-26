@@ -839,6 +839,30 @@ pub(crate) fn can_mutate_session_branch_in_stack(sessions: &[Session], session_i
     true
 }
 
+/// Returns whether a session can start session sync while preserving stack
+/// consistency.
+///
+/// Unlike merge and slash-command branch edits, syncing a parent with idle
+/// materialized children is allowed because the successful parent sync fans out
+/// child syncs afterward. Active stack members still block the request so the
+/// stack does not run competing branch work.
+pub(crate) fn can_rebase_session_branch_in_stack(sessions: &[Session], session_id: &str) -> bool {
+    let Some(session) = find_session(sessions, session_id) else {
+        return false;
+    };
+    if let Some(parent_session_id) = session.parent_session_id.as_ref()
+        && find_session(sessions, parent_session_id.as_str()).is_none()
+    {
+        return false;
+    }
+    let stack_root_session_id = session
+        .parent_session_id
+        .as_ref()
+        .map_or(session.id.as_str(), SessionId::as_str);
+
+    !stack_has_branch_mutating_session(sessions, stack_root_session_id, session_id)
+}
+
 /// Returns whether a session can accept a chat reply under one-level stack
 /// constraints.
 ///
@@ -1311,6 +1335,58 @@ pub(crate) mod tests {
 
         // Assert
         assert!(!can_mutate_review_child);
+    }
+
+    #[test]
+    fn test_can_rebase_session_branch_in_stack_allows_parent_with_review_child() {
+        // Arrange
+        let parent_session = SessionFixtureBuilder::new()
+            .id("parent-session")
+            .draft(false)
+            .status(Status::Review)
+            .build();
+        let child_session = SessionFixtureBuilder::new()
+            .id("child-session")
+            .draft(true)
+            .status(Status::Review)
+            .parent_session_id(Some(SessionId::from("parent-session")))
+            .build();
+        let sessions = vec![parent_session, child_session];
+
+        // Act
+        let can_rebase_parent = can_rebase_session_branch_in_stack(&sessions, "parent-session");
+
+        // Assert
+        assert!(can_rebase_parent);
+    }
+
+    #[test]
+    fn test_can_rebase_session_branch_in_stack_blocks_concurrent_stack_member() {
+        // Arrange
+        let parent_session = SessionFixtureBuilder::new()
+            .id("parent-session")
+            .draft(false)
+            .status(Status::Review)
+            .build();
+        let running_child_session = SessionFixtureBuilder::new()
+            .id("running-child")
+            .draft(true)
+            .status(Status::InProgress)
+            .parent_session_id(Some(SessionId::from("parent-session")))
+            .build();
+        let review_child_session = SessionFixtureBuilder::new()
+            .id("review-child")
+            .draft(true)
+            .status(Status::Review)
+            .parent_session_id(Some(SessionId::from("parent-session")))
+            .build();
+        let sessions = vec![parent_session, running_child_session, review_child_session];
+
+        // Act
+        let can_rebase_review_child = can_rebase_session_branch_in_stack(&sessions, "review-child");
+
+        // Assert
+        assert!(!can_rebase_review_child);
     }
 
     #[test]

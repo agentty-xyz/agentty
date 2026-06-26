@@ -335,7 +335,7 @@ mod tests {
     use crate::ui::question_format::*;
     use crate::ui::session_format::*;
     use crate::ui::state::app_mode::QuestionFocus;
-    use crate::ui::state::help_action::ViewActionAvailability;
+    use crate::ui::state::help_action::{self, ViewActionAvailability, ViewHelpState};
     use crate::ui::state::prompt::{PromptAtMentionState, PromptSlashStage, PromptSlashState};
     use crate::ui::style;
 
@@ -346,13 +346,17 @@ mod tests {
     }
 
     fn view_footer_text(session: &Session, can_open_worktree: bool) -> String {
-        session_view_footer_line(
-            session,
-            can_open_worktree,
-            ViewActionAvailability::Enabled,
-            session.can_start_staged_session(),
-            true,
-        )
+        session_view_footer_line(ViewHelpState {
+            can_mutate_session_branch: ViewActionAvailability::Enabled,
+            can_open_worktree: ViewActionAvailability::from_bool(can_open_worktree),
+            can_rebase_session_branch: ViewActionAvailability::Enabled,
+            reply_to_session: ViewActionAvailability::Enabled,
+            can_start_staged_session: ViewActionAvailability::from_bool(
+                session.can_start_staged_session(),
+            ),
+            publish_pull_request_action: session.publish_pull_request_action(),
+            session_state: help_action::session_view_state(session),
+        })
         .to_string()
     }
 
