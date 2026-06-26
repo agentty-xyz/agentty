@@ -493,6 +493,11 @@ narrow screens.
    and persist the refreshed review-request summary. If the push fails, the linked
    review request is left unchanged so its stored summary still matches the remote
    branch state.
+1. When the completed turn returns to `Review`, emit
+   `AppEvent::StackedParentTurnCompleted`; after the reducer syncs touched session
+   handles, it asks `SessionMergeService` to enqueue `SessionCommand::Rebase` for each
+   review-ready materialized child so child branches replay onto the latest parent
+   branch.
 1. Refresh persisted session size.
 1. Update final status (`Review` or `Question`; on failure -> `Review`).
 
@@ -528,7 +533,9 @@ review-ready and no sibling or parent stack member is running, queued, syncing, 
 or waiting on a question. Session sync and merge queue entry use the stricter
 branch-work stack check, with parent branch workflow actions blocked while a
 materialized child remains linked. `reply()` uses the reply-specific stack check, so a
-parent can accept another prompt once a materialized child is idle in review.
+parent can accept another prompt once a materialized child is idle in review. When that
+parent prompt finishes in `Review`, the reducer starts automatic child sync rebases
+through the same per-session worker command used by manual session sync.
 
 ## Agent Channel Architecture
 
@@ -865,8 +872,10 @@ paths and their trigger conditions:
 
 ### Session sync task
 
-- Trigger: Session sync action in view mode
-- Spawn site: `SessionMergeService::rebase_session` enqueues `SessionCommand::Rebase`
+- Trigger: Session sync action in view mode, or a completed stacked-parent turn that
+  returned to `Review`
+- Spawn site: `SessionMergeService::rebase_session` and stacked-parent auto-sync both
+  enqueue `SessionCommand::Rebase`
 - Emits or writes: Output append and status updates
 - What it does: Runs the assisted rebase flow on the session worker and returns the
   session to `Review`. Published sessions fetch first and rebase onto the remote base

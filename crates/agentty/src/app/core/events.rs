@@ -160,6 +160,9 @@ pub(crate) enum AppEvent {
         session_id: SessionId,
         turn_applied_state: TurnAppliedState,
     },
+    /// Indicates one review-ready parent turn finished and any materialized
+    /// stacked child branches should sync onto the refreshed parent branch.
+    StackedParentTurnCompleted { session_id: SessionId },
     /// Indicates a transient workflow notice changed for one session.
     SessionWorkflowNoticeUpdated {
         notice: String,
@@ -207,6 +210,7 @@ pub(super) struct AppEventBatch {
         HashMap<SessionId, Option<crate::domain::agent::ReasoningLevel>>,
     pub(super) session_progress_updates: HashMap<SessionId, Option<String>>,
     pub(super) session_size_updates: HashMap<SessionId, (u64, u64, SessionSize)>,
+    pub(super) stacked_parent_turns_completed: HashSet<SessionId>,
     pub(super) session_title_generation_finished: HashMap<SessionId, u64>,
     pub(super) session_workflow_notice_updates: HashMap<SessionId, Vec<String>>,
     pub(super) should_refresh_git_status: bool,
@@ -376,6 +380,9 @@ impl AppEventBatch {
                 session_id,
                 turn_applied_state,
             } => self.collect_agent_response_received(session_id, turn_applied_state),
+            AppEvent::StackedParentTurnCompleted { session_id } => {
+                self.collect_stacked_parent_turn_completed(session_id);
+            }
             AppEvent::SessionWorkflowNoticeUpdated { notice, session_id } => {
                 self.collect_session_workflow_notice_updated(session_id, notice);
             }
@@ -674,6 +681,11 @@ impl AppEventBatch {
         }
     }
 
+    /// Stores one completed parent turn for stacked-child auto-sync fan-out.
+    fn collect_stacked_parent_turn_completed(&mut self, session_id: SessionId) {
+        self.stacked_parent_turns_completed.insert(session_id);
+    }
+
     /// Collects one structured system log event for ordered reducer
     /// application.
     fn collect_system_log(&mut self, event: SystemLogEvent) {
@@ -775,6 +787,11 @@ impl App {
         for (session_id, turn_applied_state) in event_batch.applied_turns {
             self.apply_agent_response_received(&session_id, &turn_applied_state);
         }
+        for (session_id, sync_update) in event_batch.published_branch_sync_updates {
+            self.apply_published_branch_sync_update(&session_id, sync_update);
+        }
+
+        self.sync_touched_sessions(&event_batch.session_ids);
         for (session_id, notices) in
             std::mem::take(&mut event_batch.session_workflow_notice_updates)
         {
@@ -782,11 +799,15 @@ impl App {
                 self.sessions.append_workflow_notice(&session_id, notice);
             }
         }
-        for (session_id, sync_update) in event_batch.published_branch_sync_updates {
-            self.apply_published_branch_sync_update(&session_id, sync_update);
+        let auto_rebase_log_events = self
+            .start_stacked_child_rebases_after_parent_turns(std::mem::take(
+                &mut event_batch.stacked_parent_turns_completed,
+            ))
+            .await;
+        if !auto_rebase_log_events.is_empty() {
+            should_mark_dirty = true;
+            self.apply_system_log_events(auto_rebase_log_events);
         }
-
-        self.sync_touched_sessions(&event_batch.session_ids);
 
         auto_start_reviews(
             &mut self.review_cache,
@@ -824,6 +845,36 @@ impl App {
         if should_mark_dirty {
             self.mark_dirty();
         }
+    }
+
+    /// Starts automatic sync rebases for stacked children after their parent
+    /// has returned to a review-ready state.
+    async fn start_stacked_child_rebases_after_parent_turns(
+        &mut self,
+        parent_session_ids: HashSet<SessionId>,
+    ) -> Vec<SystemLogEvent> {
+        let mut events = Vec::new();
+        for parent_session_id in parent_session_ids {
+            let failures = self
+                .sessions
+                .rebase_stacked_children_after_parent_turn(
+                    &self.services,
+                    parent_session_id.as_str(),
+                )
+                .await;
+            for (child_session_id, error) in failures {
+                events.push(
+                    SystemLogEvent::new(
+                        SystemLogLevel::Warning,
+                        SystemLogCategory::Session,
+                        "Stacked child auto-sync failed",
+                    )
+                    .with_detail(format!("{child_session_id}: {error}")),
+                );
+            }
+        }
+
+        events
     }
 
     /// Clears the diff scroll limit cache when review comments change for the

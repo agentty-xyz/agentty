@@ -1756,7 +1756,6 @@ mod tests {
         retries: usize,
     ) {
         for _ in 0..retries {
-            app.process_pending_app_events().await;
             app.sessions.sync_from_handles();
             let Some(session) = app
                 .sessions
@@ -1840,6 +1839,46 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
 
+        app.sessions.sync_from_handles();
+        let session = app
+            .sessions
+            .sessions()
+            .iter()
+            .find(|session| session.id == session_id)
+            .expect("missing session while waiting for output");
+        assert!(
+            session.output.contains(expected_output),
+            "expected output to contain: {expected_output}, actual output: {}",
+            session.output
+        );
+    }
+
+    /// Waits for output while draining app events that may start follow-up
+    /// background work.
+    async fn wait_for_output_contains_after_events(
+        app: &mut App,
+        session_id: &str,
+        expected_output: &str,
+        retries: usize,
+    ) {
+        for _ in 0..retries {
+            app.process_pending_app_events().await;
+            app.sessions.sync_from_handles();
+            let Some(session) = app
+                .sessions
+                .sessions()
+                .iter()
+                .find(|session| session.id == session_id)
+            else {
+                break;
+            };
+            if session.output.contains(expected_output) {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        app.process_pending_app_events().await;
         app.sessions.sync_from_handles();
         let session = app
             .sessions
@@ -3034,6 +3073,62 @@ mod tests {
             .find(|session| session.id == parent_session_id)
             .expect("expected parent session");
         assert!(parent_session.output.contains("Parent follow-up"));
+    }
+
+    #[tokio::test]
+    async fn test_parent_turn_completion_rebases_review_ready_stacked_child() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        create_and_start_session(&mut app, "Initial").await;
+        let parent_session_id = app.sessions.sessions()[0].id.clone();
+        wait_for_status(&mut app, &parent_session_id, Status::Review).await;
+        let child_session_id = app
+            .create_stacked_draft_session(&parent_session_id)
+            .await
+            .expect("failed to create stacked child");
+        let child_folder = app
+            .sessions
+            .sessions()
+            .iter()
+            .find(|session| session.id == child_session_id)
+            .expect("expected child session")
+            .folder
+            .clone();
+        app.services
+            .fs_client()
+            .create_dir_all(child_folder)
+            .await
+            .expect("failed to materialize child worktree folder");
+        set_session_status_for_test(&mut app, &child_session_id, Status::Review);
+        app.services
+            .db()
+            .sessions()
+            .update_session_status_with_timing_at(&child_session_id, "Review", 0)
+            .await
+            .expect("failed to persist review status for child session");
+
+        // Act
+        app.reply(&parent_session_id, "Parent follow-up").await;
+        wait_for_status(&mut app, &parent_session_id, Status::Review).await;
+        wait_for_output_contains_after_events(
+            &mut app,
+            &child_session_id,
+            "[Sync] Successfully synced",
+            200,
+        )
+        .await;
+
+        // Assert
+        app.sessions.sync_from_handles();
+        let child_session = app
+            .sessions
+            .sessions()
+            .iter()
+            .find(|session| session.id == child_session_id)
+            .expect("expected child session");
+        assert_eq!(child_session.status, Status::Review);
+        assert!(child_session.output.contains("onto wt/"));
     }
 
     #[tokio::test]
@@ -4389,6 +4484,8 @@ mod tests {
 
         // Act — wait for agent to finish and auto-commit
         wait_for_status(&mut app, &session_id, Status::Review).await;
+        app.process_pending_app_events().await;
+        app.sessions.sync_from_handles();
 
         // Assert — commit completion details are transient workflow notice
         // state, not persisted transcript output.
@@ -4550,6 +4647,8 @@ mod tests {
 
         // Act — wait for agent to finish
         wait_for_status(&mut app, &session_id, Status::Review).await;
+        app.process_pending_app_events().await;
+        app.sessions.sync_from_handles();
 
         // Assert — no-op commit output is visible as transient workflow state.
         let session = &app.sessions.sessions()[0];

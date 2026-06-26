@@ -323,11 +323,13 @@ when the parent is in **Review** or **AgentReview** and no stack member is alrea
 running, queued, syncing, merging, or waiting on a question. After a stacked child has
 materialized, the parent keeps `Enter` reply available whenever the stack is otherwise
 idle, but hides branch workflow actions such as slash commands, merge queue, and sync
-until the child is terminal or no longer linked. When the parent merges, Agentty clears
-the child parent link and retargets the child to the parent's base branch. When the
-parent is canceled, its stacked child is canceled too. If you decide not to start a
-staged bundle, return to the **Sessions** list and press `c` to cancel the
-still-unstarted draft session directly.
+until the child is terminal or no longer linked. When a later parent turn finishes back
+in **Review**, Agentty automatically moves each review-ready materialized child through
+**Rebasing** so the child branch is replayed onto the latest parent branch state. When
+the parent merges, Agentty clears the child parent link and retargets the child to the
+parent's base branch. When the parent is canceled, its stacked child is canceled too. If
+you decide not to start a staged bundle, return to the **Sessions** list and press `c`
+to cancel the still-unstarted draft session directly.
 
 ### Typical Transitions
 

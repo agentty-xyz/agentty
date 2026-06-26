@@ -114,7 +114,8 @@ until the background focused-review generation finishes and the session returns 
 For stacked parents with a materialized child, `Enter` remains available when no stack
 member is actively running, queued, syncing, merging, or waiting on a question. Branch
 workflow shortcuts such as `/`, `m`, and `r` stay hidden until the child is terminal or
-no longer linked.
+no longer linked. When a parent reply completes in **Review**, Agentty automatically
+rebases review-ready materialized children onto the refreshed parent branch.
 
 <a id="usage-additional-keys"></a> Additional notes:
 

@@ -755,6 +755,143 @@ impl SessionMergeService {
         Ok(())
     }
 
+    /// Starts automatic rebase commands for review-ready stacked children
+    /// after their parent branch receives a completed turn.
+    ///
+    /// Draft children are skipped because they do not have a materialized
+    /// branch yet, and active children are skipped so an existing turn,
+    /// question, merge, or sync is never interrupted. All eligible review
+    /// children are moved to `Rebasing` before enqueueing so the stack
+    /// maintenance fan-out is treated as one automatic parent-turn effect
+    /// instead of separate user branch actions.
+    async fn rebase_stacked_children_after_parent_turn(
+        &self,
+        manager: &mut SessionManager,
+        services: &AppServices,
+        parent_session_id: &str,
+    ) -> Vec<(SessionId, SessionError)> {
+        let child_session_ids =
+            Self::rebaseable_stacked_child_session_ids(manager, parent_session_id);
+        let mut failures = Vec::new();
+        for child_session_id in child_session_ids {
+            if let Err(error) = Self::enqueue_stacked_child_auto_rebase(
+                manager,
+                services,
+                child_session_id.as_str(),
+            )
+            .await
+            {
+                failures.push((child_session_id, error));
+            }
+        }
+
+        failures
+    }
+
+    /// Returns the materialized stacked children that should sync after the
+    /// parent reaches a review-ready state.
+    fn rebaseable_stacked_child_session_ids(
+        manager: &SessionManager,
+        parent_session_id: &str,
+    ) -> Vec<SessionId> {
+        let Some(parent_session) = manager
+            .sessions()
+            .iter()
+            .find(|session| session.id.as_str() == parent_session_id)
+        else {
+            return Vec::new();
+        };
+        if !parent_session.status.allows_review_actions() {
+            return Vec::new();
+        }
+
+        manager
+            .sessions()
+            .iter()
+            .filter(|session| {
+                session
+                    .parent_session_id
+                    .as_ref()
+                    .is_some_and(|parent_id| parent_id.as_str() == parent_session_id)
+                    && session.status.allows_review_actions()
+            })
+            .map(|session| session.id.clone())
+            .collect()
+    }
+
+    /// Moves one stacked child into `Rebasing` and enqueues the existing
+    /// worker-backed rebase command.
+    async fn enqueue_stacked_child_auto_rebase(
+        manager: &mut SessionManager,
+        services: &AppServices,
+        child_session_id: &str,
+    ) -> Result<(), SessionError> {
+        let (base_branch, previous_status, persisted_session_id) = {
+            let session = manager
+                .session_or_err(child_session_id)
+                .map_err(|_| SessionError::NotFound)?;
+            let base_branch = services
+                .db()
+                .sessions()
+                .get_session_base_branch(&session.id)
+                .await?
+                .ok_or_else(|| {
+                    SessionError::Workflow("No git worktree for this session".to_string())
+                })?;
+
+            (base_branch, session.status, session.id.clone())
+        };
+
+        let handles = manager
+            .session_handles_or_err(child_session_id)
+            .map_err(|_| SessionError::HandlesNotFound)?;
+        let status = Arc::clone(&handles.status);
+        let db = services.db().clone();
+        let app_event_tx = services.event_sender();
+        let clock = services.clock();
+        let session_update_versions = services.session_update_versions();
+
+        if !SessionTaskService::update_status(
+            &status,
+            clock.as_ref(),
+            &db,
+            &app_event_tx,
+            &session_update_versions,
+            &persisted_session_id,
+            Status::Rebasing,
+        )
+        .await
+        {
+            return Err(SessionError::Workflow(
+                "Invalid status transition to Rebasing".to_string(),
+            ));
+        }
+
+        let command = SessionCommand::Rebase {
+            base_branch,
+            operation_id: uuid::Uuid::new_v4().to_string(),
+        };
+        if let Err(error) = manager
+            .enqueue_session_command(services, &persisted_session_id, command)
+            .await
+        {
+            let _ = SessionTaskService::update_status(
+                &status,
+                clock.as_ref(),
+                &db,
+                &app_event_tx,
+                &session_update_versions,
+                &persisted_session_id,
+                previous_status,
+            )
+            .await;
+
+            return Err(error);
+        }
+
+        Ok(())
+    }
+
     /// Loads and validates the immutable inputs needed to enqueue a session
     /// rebase command.
     ///
@@ -1171,6 +1308,18 @@ impl SessionManager {
     ) -> Result<(), SessionError> {
         SessionMergeService
             .rebase_session(self, services, session_id)
+            .await
+    }
+
+    /// Starts automatic rebase commands for materialized stacked children
+    /// after a parent session turn finishes in review.
+    pub(crate) async fn rebase_stacked_children_after_parent_turn(
+        &mut self,
+        services: &AppServices,
+        parent_session_id: &str,
+    ) -> Vec<(SessionId, SessionError)> {
+        SessionMergeService
+            .rebase_stacked_children_after_parent_turn(self, services, parent_session_id)
             .await
     }
 

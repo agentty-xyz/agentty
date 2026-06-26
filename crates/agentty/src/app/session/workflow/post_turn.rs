@@ -383,8 +383,47 @@ async fn apply_successful_turn_result(
     .await;
     let review_request_commit_message = commit_outcome.map(|outcome| outcome.commit_message);
     start_published_branch_auto_push(context, turn_metadata, review_request_commit_message);
+    if target_status.allows_review_actions() && has_review_ready_stacked_children(context).await {
+        let _ = context
+            .app_event_tx
+            .send(AppEvent::StackedParentTurnCompleted {
+                session_id: context.session_id.clone(),
+            });
+    }
 
     Ok(target_status)
+}
+
+/// Returns whether the completed session has materialized stacked children
+/// whose persisted statuses parse to review-action-ready states.
+async fn has_review_ready_stacked_children(context: &PostTurnContext) -> bool {
+    let Ok(Some(project_id)) = context
+        .db
+        .sessions()
+        .load_session_project_id(&context.session_id)
+        .await
+    else {
+        return false;
+    };
+    let Ok(sessions) = context
+        .db
+        .sessions()
+        .load_sessions_for_project(project_id)
+        .await
+    else {
+        return false;
+    };
+
+    sessions.into_iter().any(|session| {
+        session
+            .parent_session_id
+            .as_deref()
+            .is_some_and(|parent_session_id| parent_session_id == context.session_id.as_str())
+            && session
+                .status
+                .parse::<Status>()
+                .is_ok_and(Status::allows_review_actions)
+    })
 }
 
 /// Starts the optional published-branch auto-push effect from explicit
