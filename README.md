@@ -55,19 +55,53 @@ cargo install agentty
 Agentty currently supports Codex, Claude, and Antigravity. Install and authenticate at
 least one provider CLI before starting a session:
 
-- Codex (`codex`): install the [Codex CLI](https://github.com/openai/codex) and run
-  `codex login`.
+- Codex (`codex`, recommended; supports subscription usage): install the
+  [Codex CLI](https://github.com/openai/codex) and run `codex login`.
+
+> [!NOTE]
+>
+> Codex is the recommended CLI agent for Agentty when you want subscription-backed
+> usage. Codex supports signing in with ChatGPT for subscription access, including in
+> the CLI, and Agentty uses the Codex `app-server` integration surface. Usage remains
+> subject to the [OpenAI Terms of Use](https://openai.com/policies/terms-of-use/).
+> OpenClaw documents ChatGPT/Codex subscription sign-in as the normal
+> [Codex harness](https://docs.openclaw.ai/plugins/codex-harness) path, and opencode
+> recommends ChatGPT Plus or Pro authentication for its
+> [OpenAI provider](https://opencode.ai/docs/providers/#openai).
+
 - Claude (`claude`): install [Claude Code](https://github.com/anthropics/claude-code)
   and run `claude auth login`.
+
+> [!WARNING]
+>
+> For Agentty usage through `claude -p`, use API key authentication through Claude
+> Console or a supported cloud provider instead of a Claude Free, Pro, or Max
+> subscription sign-in. Anthropic's
+> [Claude Code legal and compliance docs](https://code.claude.com/docs/en/legal-and-compliance)
+> describe subscription OAuth as intended for ordinary use of Claude Code and native
+> Anthropic applications, while developer integrations should use API keys or supported
+> cloud providers. Theo's
+> [explanation video](https://www.youtube.com/watch?v=RIkSlHgQYog) discusses the same
+> uncertainty, but commentary does not guarantee that subscription-backed usage is safe
+> for third-party tool invocation.
+
 - Antigravity (`agy`): install the
   [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli) and run `agy`
   to sign in when prompted.
 
+> [!WARNING]
+>
+> For Agentty usage through `agy --print`, use authentication backed by a Google Cloud
+> project or an API key when available for your Antigravity setup, rather than a Google
+> Account subscription sign-in. The
+> [Antigravity terms](https://antigravity.google/terms) do not yet clearly describe how
+> subscription access applies when `agy --print` is invoked by third-party tools.
+
 Agentty uses each provider's official non-interactive CLI or app-server surface
 (`claude -p`, `agy --print`, or `codex app-server`) after you authenticate with that
 provider's CLI. It does not implement OAuth flows, read provider OAuth tokens directly,
-or call private provider APIs; it delegates to the installed tools in a way that does
-not violate their terms of service.
+or call private provider APIs. You are responsible for choosing an authentication method
+that is permitted for your account, plan, and usage pattern.
 
 ## Usage
 
