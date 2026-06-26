@@ -127,7 +127,7 @@ fn append_group_rows<'a>(
 
     let mut group_has_sessions = false;
     for (index, session) in sessions_for_group(sessions, group) {
-        if has_loaded_parent_session(sessions, session) {
+        if has_loaded_parent_session_in_group(sessions, session, group) {
             continue;
         }
 
@@ -136,7 +136,7 @@ fn append_group_rows<'a>(
             session,
             tree_position: SessionTreePosition::Root,
         });
-        append_stacked_child_rows(rows, sessions, session.id.as_str());
+        append_stacked_child_rows(rows, sessions, session.id.as_str(), group);
         group_has_sessions = true;
     }
 
@@ -145,20 +145,23 @@ fn append_group_rows<'a>(
     }
 }
 
-/// Adds the one-level stacked children for a parent session row.
+/// Adds the one-level stacked children that belong in the parent's current
+/// display group.
 fn append_stacked_child_rows<'a>(
     rows: &mut Vec<GroupedSessionRow<'a>>,
     sessions: &'a [Session],
     parent_session_id: &str,
+    group: SessionGroup,
 ) {
     let children = sessions
         .iter()
         .enumerate()
         .filter(|(_, session)| {
-            session
-                .parent_session_id
-                .as_ref()
-                .is_some_and(|parent_id| parent_id.as_str() == parent_session_id)
+            session_group(session) == group
+                && session
+                    .parent_session_id
+                    .as_ref()
+                    .is_some_and(|parent_id| parent_id.as_str() == parent_session_id)
         })
         .collect::<Vec<_>>();
 
@@ -174,12 +177,17 @@ fn append_stacked_child_rows<'a>(
     }
 }
 
-/// Returns whether a session should be nested under a loaded parent row.
-fn has_loaded_parent_session(sessions: &[Session], session: &Session) -> bool {
+/// Returns whether a session should be nested under a loaded parent row in
+/// the same display group.
+fn has_loaded_parent_session_in_group(
+    sessions: &[Session],
+    session: &Session,
+    group: SessionGroup,
+) -> bool {
     match session.parent_session_id.as_ref() {
-        Some(parent_session_id) => sessions
-            .iter()
-            .any(|candidate| candidate.id.as_str() == parent_session_id.as_str()),
+        Some(parent_session_id) => sessions.iter().any(|candidate| {
+            candidate.id.as_str() == parent_session_id.as_str() && session_group(candidate) == group
+        }),
         None => false,
     }
 }
@@ -511,6 +519,79 @@ mod tests {
                     "child-2".to_string(),
                     SessionTreePosition::Child { is_last: true },
                 ),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_grouped_session_rows_archives_canceled_child_below_active_parent() {
+        // Arrange
+        let mut child_session = test_session("child-1", Status::Canceled);
+        child_session.parent_session_id = Some("parent-1".into());
+        let sessions = vec![child_session, test_session("parent-1", Status::Review)];
+
+        // Act
+        let rows = grouped_session_rows(&sessions);
+        let labels_positions_and_ids = rows
+            .into_iter()
+            .map(|row| match row {
+                GroupedSessionRow::GroupLabel(group) => format!("{group:?}"),
+                GroupedSessionRow::EmptyGroupPlaceholder => "empty".to_string(),
+                GroupedSessionRow::Session {
+                    session,
+                    tree_position,
+                    ..
+                } => format!("{}:{tree_position:?}", session.id),
+            })
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(
+            labels_positions_and_ids,
+            vec![
+                "MergeQueue".to_string(),
+                "empty".to_string(),
+                "Active".to_string(),
+                "parent-1:Root".to_string(),
+                "Archive".to_string(),
+                "child-1:Root".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_grouped_session_rows_keeps_canceled_child_below_canceled_parent() {
+        // Arrange
+        let mut child_session = test_session("child-1", Status::Canceled);
+        child_session.parent_session_id = Some("parent-1".into());
+        let sessions = vec![child_session, test_session("parent-1", Status::Canceled)];
+
+        // Act
+        let rows = grouped_session_rows(&sessions);
+        let labels_positions_and_ids = rows
+            .into_iter()
+            .map(|row| match row {
+                GroupedSessionRow::GroupLabel(group) => format!("{group:?}"),
+                GroupedSessionRow::EmptyGroupPlaceholder => "empty".to_string(),
+                GroupedSessionRow::Session {
+                    session,
+                    tree_position,
+                    ..
+                } => format!("{}:{tree_position:?}", session.id),
+            })
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(
+            labels_positions_and_ids,
+            vec![
+                "MergeQueue".to_string(),
+                "empty".to_string(),
+                "Active".to_string(),
+                "empty".to_string(),
+                "Archive".to_string(),
+                "parent-1:Root".to_string(),
+                "child-1:Child { is_last: true }".to_string(),
             ]
         );
     }

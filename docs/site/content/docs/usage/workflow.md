@@ -331,7 +331,8 @@ onto the latest parent branch state. When a later parent turn finishes back in
 merges, Agentty clears the child parent link and retargets the child to the parent's
 base branch. When the parent is canceled, its stacked child is canceled too. If you
 decide not to start a staged bundle, return to the **Sessions** list and press `c` to
-cancel the still-unstarted draft session directly.
+cancel the still-unstarted draft session directly; when no lower stacked child keeps it
+visually attached, the canceled child moves into **Archive** immediately.
 
 ### Typical Transitions
 

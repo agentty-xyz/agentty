@@ -89,6 +89,60 @@ fn seed_cancelable_running_session(env: &BuilderEnv) -> E2eResult {
     Ok(())
 }
 
+/// Seeds a review-ready parent with one cancelable stacked draft child.
+fn seed_cancelable_stacked_child_session(env: &BuilderEnv) -> E2eResult {
+    let parent_session_id = "parentca-0001";
+    let child_session_id = "childcan-0001";
+    let canonical_workdir = env.workdir.canonicalize()?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(async {
+        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
+        let database = Database::open(&db_path).await?;
+        let project_id = database
+            .projects()
+            .upsert_project(
+                &canonical_workdir.to_string_lossy(),
+                Some("main".to_string()),
+            )
+            .await?;
+
+        database
+            .projects()
+            .touch_project_last_opened(project_id)
+            .await?;
+        database
+            .sessions()
+            .insert_session(parent_session_id, "gpt-5.5", "main", "Review", project_id)
+            .await?;
+        database
+            .sessions()
+            .update_session_title(parent_session_id, "Parent for child cancel")
+            .await?;
+        database
+            .sessions()
+            .insert_stacked_draft_session(
+                child_session_id,
+                "gpt-5.5",
+                "wt/parentca",
+                "Draft",
+                parent_session_id,
+                project_id,
+            )
+            .await?;
+        database
+            .sessions()
+            .update_session_title(child_session_id, "Stacked child cancel archive")
+            .await
+    })?;
+
+    std::fs::create_dir_all(env.agentty_root.join("wt").join("parentca"))?;
+
+    Ok(())
+}
+
 /// Verify that confirming quit with `y` causes the process to exit with
 /// code 0.
 ///
@@ -314,6 +368,74 @@ fn running_session_cancel_confirmation() -> E2eResult {
                 let final_full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Archive", &final_full);
                 assertion::assert_text_in_region(frame, "Canceled", &final_full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that canceling a stacked child moves it into the archive group when
+/// its parent remains active.
+#[test]
+fn stacked_child_cancel_confirmation_archives_child() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("stacked_child_cancel_archive")
+        .with_git()
+        .setup(seed_cancelable_stacked_child_session)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .wait_for_text("Stacked child cancel archive", 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "stacked_child_row",
+                        "Stacked child visible beneath its active parent",
+                    )
+                    .press_key("c")
+                    .wait_for_text("Confirm Cancel", 3000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "confirm_cancel",
+                        "Cancel confirmation for the selected stacked child",
+                    )
+                    .press_key("y")
+                    .wait_for_text("Canceled", 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "archived_child",
+                        "Canceled stacked child rendered as an archive row",
+                    )
+            },
+            |frame, report| {
+                let list_frame = common::frame_from_capture(&report.captures[0]);
+                let list_full = Region::full(list_frame.cols(), list_frame.rows());
+                assertion::assert_text_in_region(
+                    &list_frame,
+                    "Parent for child cancel",
+                    &list_full,
+                );
+                assertion::assert_text_in_region(&list_frame, "└ [XS] Stacked child", &list_full);
+
+                let confirmation_frame = common::frame_from_capture(&report.captures[1]);
+                let confirmation_full =
+                    Region::full(confirmation_frame.cols(), confirmation_frame.rows());
+                assertion::assert_text_in_region(
+                    &confirmation_frame,
+                    "Confirm Cancel",
+                    &confirmation_full,
+                );
+
+                let final_full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Archive", &final_full);
+                assertion::assert_text_in_region(frame, "Canceled", &final_full);
+                assertion::assert_text_in_region(
+                    frame,
+                    "Stacked child cancel archive",
+                    &final_full,
+                );
+                assertion::assert_not_visible(frame, "└ [XS] Stacked child");
             },
         )?;
 

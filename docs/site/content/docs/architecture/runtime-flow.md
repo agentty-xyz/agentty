@@ -537,7 +537,9 @@ parent can refresh itself when materialized children are idle and then fan out c
 rebases. `reply()` uses the reply-specific stack check, so a parent can accept another
 prompt once a materialized child is idle in review. When that parent prompt finishes in
 `Review`, the reducer starts automatic child sync rebases through the same per-session
-worker command used by manual session sync.
+worker command used by manual session sync. Session-list grouping only nests a stacked
+child below its loaded parent while both rows belong to the same display group, so a
+directly canceled child under an active parent moves to the archive group immediately.
 
 ## Agent Channel Architecture
 
