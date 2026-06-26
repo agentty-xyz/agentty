@@ -6,8 +6,8 @@ use testty::region::Region;
 use crate::common;
 use crate::common::FeatureTest;
 
-/// Verify that the Projects tab lists the registered git project name from
-/// the temp workdir and shows dashboard activity plus work stats.
+/// Verify that the Projects tab lists the registered git project name and
+/// branch from the temp workdir and shows dashboard activity plus work stats.
 ///
 /// Agentty auto-registers the current git working directory as a project on
 /// startup. The test creates a `test-project` repository and asserts that
@@ -34,7 +34,6 @@ fn projects_page_shows_cwd() {
                 assertion::assert_text_in_region(frame, "Activity", &full);
                 assertion::assert_text_in_region(frame, "Branch", &full);
                 assertion::assert_text_in_region(frame, "Sessions", &full);
-                assertion::assert_text_in_region(frame, "Last Opened", &full);
                 assertion::assert_text_in_region(frame, "Work Pace", &full);
                 assertion::assert_text_in_region(frame, "Agent CLIs", &full);
                 assertion::assert_text_in_region(frame, "claude", &full);
@@ -43,8 +42,10 @@ fn projects_page_shows_cwd() {
                 assertion::assert_text_in_region(frame, "Out", &full);
                 assertion::assert_not_visible(frame, "Version");
                 assertion::assert_not_visible(frame, "Agentty is an ADE");
+                assertion::assert_not_visible(frame, "Last Opened");
                 assertion::assert_text_in_region(frame, "Active", &full);
                 assertion::assert_text_in_region(frame, "test-project", &full);
+                assertion::assert_text_in_region(frame, "main", &full);
             },
         )
         .expect("feature test failed");

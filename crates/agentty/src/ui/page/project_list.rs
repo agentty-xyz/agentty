@@ -1,9 +1,10 @@
+use std::path::Path;
+
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap};
-use time::OffsetDateTime;
 
 use crate::domain::agent::{AgentCliInfo, AgentCliVersion};
 use crate::domain::project::ProjectListItem;
@@ -108,7 +109,10 @@ impl Page for ProjectListPage<'_> {
             .wrap(Wrap { trim: true });
 
         let selected_style = Style::default().bg(style::palette::surface());
-        let header = Row::new(["Project", "Branch", "Sessions", "Last Opened", "Path"])
+        let header_cells = ["Project", "Branch", "Sessions", "Path"]
+            .iter()
+            .map(|header| left_aligned_cell(*header));
+        let header = Row::new(header_cells)
             .style(
                 Style::default()
                     .bg(style::palette::surface())
@@ -118,10 +122,10 @@ impl Page for ProjectListPage<'_> {
             .height(1)
             .bottom_margin(1);
         let active_project_id = self.active_project_id;
-        let rows = self
-            .projects
-            .iter()
-            .map(|project_item| render_project_row(project_item, active_project_id));
+        let home_directory = dirs::home_dir();
+        let rows = self.projects.iter().map(|project_item| {
+            render_project_row(project_item, active_project_id, home_directory.as_deref())
+        });
         let table = Table::new(rows, project_table_column_constraints())
             .column_spacing(TABLE_COLUMN_SPACING)
             .header(header)
@@ -288,30 +292,32 @@ fn project_dashboard_panel_constraints() -> [Constraint; 3] {
 }
 
 /// Renders one project metadata row.
-fn render_project_row(project_item: &ProjectListItem, active_project_id: i64) -> Row<'static> {
-    let (title, branch, last_opened, path) = project_row_values(project_item, active_project_id);
+fn render_project_row(
+    project_item: &ProjectListItem,
+    active_project_id: i64,
+    home_directory: Option<&Path>,
+) -> Row<'static> {
+    let (title, branch, path) = project_row_values(project_item, active_project_id, home_directory);
 
     Row::new(vec![
-        Cell::from(title),
-        Cell::from(branch),
-        Cell::from(session_count_line(
+        left_aligned_cell(title),
+        left_aligned_cell(branch),
+        left_aligned_cell(session_count_line(
             project_item.session_count,
             project_item.active_session_count,
         )),
-        Cell::from(last_opened),
-        Cell::from(path),
+        left_aligned_cell(path),
     ])
     .style(project_row_style(project_item, active_project_id))
 }
 
 /// Returns responsive column widths for the Projects metadata table.
-fn project_table_column_constraints() -> [Constraint; 5] {
+fn project_table_column_constraints() -> [Constraint; 4] {
     [
-        Constraint::Fill(2),
-        Constraint::Fill(2),
-        Constraint::Length(8),
-        Constraint::Length(12),
         Constraint::Fill(3),
+        Constraint::Fill(2),
+        Constraint::Fill(1),
+        Constraint::Fill(4),
     ]
 }
 
@@ -408,14 +414,34 @@ fn project_list_footer_line() -> Line<'static> {
 fn project_row_values(
     project_item: &ProjectListItem,
     active_project_id: i64,
-) -> (String, String, String, String) {
+    home_directory: Option<&Path>,
+) -> (Line<'static>, Line<'static>, Line<'static>) {
     let project = &project_item.project;
     let title = project_title(project_item, active_project_id);
-    let branch = project.git_branch.as_deref().unwrap_or("-");
-    let last_opened = format_last_opened(project.last_opened_at);
-    let path = project.path.to_string_lossy().to_string();
+    let branch = project_branch_line(project_item);
+    let path = display_project_path(project.path.as_path(), home_directory);
 
-    (title, branch.to_string(), last_opened, path)
+    (
+        left_aligned_line(title),
+        left_aligned_line(branch),
+        left_aligned_line(path),
+    )
+}
+
+/// Returns a project path label using `~` for paths inside the home directory.
+fn display_project_path(project_path: &Path, home_directory: Option<&Path>) -> String {
+    let Some(home_directory) = home_directory else {
+        return project_path.to_string_lossy().to_string();
+    };
+    let Ok(relative_path) = project_path.strip_prefix(home_directory) else {
+        return project_path.to_string_lossy().to_string();
+    };
+
+    if relative_path.as_os_str().is_empty() {
+        return "~".to_string();
+    }
+
+    format!("~/{}", relative_path.display())
 }
 
 /// Returns style for one project row, emphasizing the active project.
@@ -428,13 +454,22 @@ fn project_row_style(project_item: &ProjectListItem, active_project_id: i64) -> 
 }
 
 /// Returns the visible project title, marking the active project in the list.
-fn project_title(project_item: &ProjectListItem, active_project_id: i64) -> String {
-    let display_label = project_item.project.display_label();
+fn project_title(project_item: &ProjectListItem, active_project_id: i64) -> Line<'static> {
+    let mut spans = Vec::new();
     if project_item.project.id == active_project_id {
-        return format!("{ACTIVE_PROJECT_MARKER}{display_label}");
+        spans.push(Span::raw(ACTIVE_PROJECT_MARKER));
     }
 
-    display_label
+    spans.push(Span::raw(project_item.project.display_label()));
+
+    Line::from(spans)
+}
+
+/// Returns the branch label for the branch column.
+fn project_branch_line(project_item: &ProjectListItem) -> Line<'static> {
+    let branch = project_item.project.git_branch.as_deref().unwrap_or("-");
+
+    Line::from(branch.to_string())
 }
 
 /// Builds a styled line for the session count column, coloring the active
@@ -453,20 +488,14 @@ fn session_count_line(total: u32, active: u32) -> Line<'static> {
     Line::from(total.to_string())
 }
 
-/// Formats the project last-opened timestamp for table display.
-fn format_last_opened(last_opened_at: Option<i64>) -> String {
-    let Some(last_opened_at) = last_opened_at else {
-        return "Never".to_string();
-    };
-    let Ok(last_opened_datetime) = OffsetDateTime::from_unix_timestamp(last_opened_at) else {
-        return "Unknown".to_string();
-    };
+/// Builds a table cell whose text is explicitly left-aligned.
+fn left_aligned_cell(content: impl Into<Line<'static>>) -> Cell<'static> {
+    Cell::from(left_aligned_line(content))
+}
 
-    let year = last_opened_datetime.year();
-    let month = u8::from(last_opened_datetime.month());
-    let day = last_opened_datetime.day();
-
-    format!("{year:04}-{month:02}-{day:02}")
+/// Returns table content with explicit left alignment.
+fn left_aligned_line(content: impl Into<Line<'static>>) -> Line<'static> {
+    content.into().alignment(Alignment::Left)
 }
 
 #[cfg(test)]
@@ -506,11 +535,10 @@ mod tests {
     fn test_project_table_descriptive_columns_use_flexible_widths() {
         // Arrange
         let expected_constraints = [
-            Constraint::Fill(2),
-            Constraint::Fill(2),
-            Constraint::Length(8),
-            Constraint::Length(12),
             Constraint::Fill(3),
+            Constraint::Fill(2),
+            Constraint::Fill(1),
+            Constraint::Fill(4),
         ];
 
         // Act
@@ -581,43 +609,7 @@ mod tests {
     }
 
     #[test]
-    fn test_format_last_opened_uses_iso_like_date() {
-        // Arrange
-        let last_opened_at = Some(1_700_000_000);
-
-        // Act
-        let formatted = format_last_opened(last_opened_at);
-
-        // Assert
-        assert_eq!(formatted, "2023-11-14");
-    }
-
-    #[test]
-    fn test_format_last_opened_returns_never_without_timestamp() {
-        // Arrange
-        let last_opened_at = None;
-
-        // Act
-        let formatted = format_last_opened(last_opened_at);
-
-        // Assert
-        assert_eq!(formatted, "Never");
-    }
-
-    #[test]
-    fn test_format_last_opened_returns_unknown_for_invalid_timestamp() {
-        // Arrange
-        let last_opened_at = Some(i64::MAX);
-
-        // Act
-        let formatted = format_last_opened(last_opened_at);
-
-        // Assert
-        assert_eq!(formatted, "Unknown");
-    }
-
-    #[test]
-    fn test_project_row_values_show_dashboard_metadata() {
+    fn test_project_row_values_show_project_name_and_branch() {
         // Arrange
         let project_item = ProjectListItem {
             active_session_count: 0,
@@ -638,17 +630,45 @@ mod tests {
         };
 
         // Act
-        let values = project_row_values(&project_item, 99);
+        let values = project_row_values(&project_item, 99, None);
 
         // Assert
-        assert_eq!(values.0, "agentty");
-        assert_eq!(values.1, "main");
-        assert_eq!(values.2, "2023-11-14");
-        assert_eq!(values.3, "/tmp/agentty");
+        assert_eq!(values.0.to_string(), "agentty");
+        assert_eq!(values.1.to_string(), "main");
+        assert_eq!(values.2.to_string(), "/tmp/agentty");
     }
 
     #[test]
-    fn test_project_row_values_use_fallbacks_for_missing_branch_and_timestamp() {
+    fn test_project_row_values_keep_branch_column_plain() {
+        // Arrange
+        let project_item = ProjectListItem {
+            active_session_count: 0,
+            input_tokens: 0,
+            last_session_updated_at: Some(20),
+            output_tokens: 0,
+            project: Project {
+                created_at: 1,
+                display_name: Some("agentty".to_string()),
+                git_branch: Some("main".to_string()),
+                id: 1,
+                is_favorite: true,
+                last_opened_at: Some(1_700_000_000),
+                path: PathBuf::from("/tmp/agentty"),
+                updated_at: 2,
+            },
+            session_count: 3,
+        };
+
+        // Act
+        let values = project_row_values(&project_item, 99, None);
+
+        // Assert
+        assert_eq!(values.1.spans[0].content.as_ref(), "main");
+        assert_eq!(values.1.spans[0].style.fg, None);
+    }
+
+    #[test]
+    fn test_project_row_values_use_fallback_for_missing_branch() {
         // Arrange
         let project_item = ProjectListItem {
             active_session_count: 0,
@@ -669,13 +689,66 @@ mod tests {
         };
 
         // Act
-        let values = project_row_values(&project_item, 99);
+        let values = project_row_values(&project_item, 99, None);
 
         // Assert
-        assert_eq!(values.0, "agentty");
-        assert_eq!(values.1, "-");
-        assert_eq!(values.2, "Never");
-        assert_eq!(values.3, "/tmp/agentty");
+        assert_eq!(values.0.to_string(), "agentty");
+        assert_eq!(values.1.to_string(), "-");
+        assert_eq!(values.2.to_string(), "/tmp/agentty");
+    }
+
+    #[test]
+    fn test_project_row_values_shortens_home_directory_path() {
+        // Arrange
+        let home_directory = PathBuf::from("/home/test-user");
+        let project_item = ProjectListItem {
+            active_session_count: 0,
+            input_tokens: 0,
+            last_session_updated_at: None,
+            output_tokens: 0,
+            project: Project {
+                created_at: 1,
+                display_name: Some("agentty".to_string()),
+                git_branch: Some("main".to_string()),
+                id: 1,
+                is_favorite: false,
+                last_opened_at: None,
+                path: home_directory.join("workspace").join("agentty"),
+                updated_at: 2,
+            },
+            session_count: 0,
+        };
+
+        // Act
+        let values = project_row_values(&project_item, 99, Some(home_directory.as_path()));
+
+        // Assert
+        assert_eq!(values.2.to_string(), "~/workspace/agentty");
+    }
+
+    #[test]
+    fn test_display_project_path_uses_tilde_for_home_directory() {
+        // Arrange
+        let home_directory = PathBuf::from("/home/test-user");
+
+        // Act
+        let display_path = display_project_path(home_directory.as_path(), Some(&home_directory));
+
+        // Assert
+        assert_eq!(display_path, "~");
+    }
+
+    #[test]
+    fn test_display_project_path_keeps_paths_outside_home_absolute() {
+        // Arrange
+        let home_directory = PathBuf::from("/home/test-user");
+        let project_path = PathBuf::from("/home/test-user-other/agentty");
+
+        // Act
+        let display_path = display_project_path(project_path.as_path(), Some(&home_directory));
+
+        // Assert
+        assert_eq!(display_path, "/home/test-user-other/agentty");
     }
 
     #[test]
@@ -722,10 +795,22 @@ mod tests {
         };
 
         // Act
-        let values = project_row_values(&project_item, 42);
+        let values = project_row_values(&project_item, 42, None);
 
         // Assert
-        assert_eq!(values.0, "* agentty");
+        assert_eq!(values.0.to_string(), "* agentty");
+    }
+
+    #[test]
+    fn test_left_aligned_line_marks_table_content_left() {
+        // Arrange
+        let line = Line::from("Project");
+
+        // Act
+        let aligned_line = left_aligned_line(line);
+
+        // Assert
+        assert_eq!(aligned_line.alignment, Some(Alignment::Left));
     }
 
     #[test]

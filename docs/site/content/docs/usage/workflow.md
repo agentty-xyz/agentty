@@ -494,7 +494,9 @@ sessions load.
 
 The Projects tab summarizes the runnable agent CLI executables detected at startup,
 shows their versions as loading while background `--version` checks run, and then
-replaces the loaders with reported versions when checks succeed.
+replaces the loaders with reported versions when checks succeed. Project rows show the
+repository name, branch, session counts, and project path. Paths inside your home
+directory are shortened with a `~` prefix.
 
 ## Auto-Update
 
