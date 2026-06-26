@@ -63,6 +63,12 @@ least one provider CLI before starting a session:
   [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli) and run `agy`
   to sign in when prompted.
 
+Agentty uses each provider's official non-interactive CLI or app-server surface
+(`claude -p`, `agy --print`, or `codex app-server`) after you authenticate with that
+provider's CLI. It does not implement OAuth flows, read provider OAuth tokens directly,
+or call private provider APIs; it delegates to the installed tools in a way that does
+not violate their terms of service.
+
 ## Usage
 
 ```sh
