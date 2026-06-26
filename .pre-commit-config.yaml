@@ -90,7 +90,9 @@ repos:
       - id: test-agentty-src
         name: cargo nextest agentty src
         description: Source tests for `crates/agentty/src`.
-        entry: cargo nextest run --locked --profile ci -p agentty --lib --bin agentty
+        entry: >-
+          cargo nextest run --locked --profile ci -p agentty --lib --bin agentty
+          -E 'not (package(agentty) and kind(test))'
         language: system
         always_run: true
         pass_filenames: false
