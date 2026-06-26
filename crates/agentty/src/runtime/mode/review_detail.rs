@@ -126,31 +126,43 @@ mod tests {
         ));
     }
 
+    /// Verifies `G` moves the requested-review detail page to its rendered
+    /// bottom offset.
     #[tokio::test]
     async fn test_handle_scrolls_detail_page_to_bottom() {
         // Arrange
         let mut app = new_test_app().await;
+        let content_area = Rect::new(0, 0, 80, 8);
+        let review = requested_review("line 1\nline 2\nline 3\nline 4\nline 5\nline 6");
+        let expected_scroll_offset = page::review_detail::review_detail_max_scroll_offset(
+            &review,
+            None,
+            false,
+            content_area,
+            app.render_cache_store().markdown_render_cache(),
+        );
         app.mode = AppMode::ReviewDetail {
             comment_error: None,
             is_loading_comments: false,
-            review: requested_review("line 1\nline 2\nline 3\nline 4\nline 5\nline 6"),
+            review,
             scroll_offset: 0,
         };
 
         // Act
         handle(
             &mut app,
-            Rect::new(0, 0, 80, 8),
+            content_area,
             KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT),
         );
 
         // Assert
+        assert!(expected_scroll_offset > 0);
         assert!(matches!(
             app.mode,
             AppMode::ReviewDetail {
-                scroll_offset: 9,
+                scroll_offset,
                 ..
-            }
+            } if scroll_offset == expected_scroll_offset
         ));
     }
 

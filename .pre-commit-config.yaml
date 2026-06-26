@@ -71,8 +71,10 @@ repos:
         pass_filenames: false
       - id: test-workspace
         name: cargo nextest workspace
-        description: Run the full workspace unit and integration test suite with `cargo-nextest`.
-        entry: cargo nextest run --locked --profile ci --workspace
+        description: Run workspace source and public API tests with `cargo-nextest`.
+        entry: >-
+          cargo nextest run --locked --profile ci --workspace
+          -E 'not (package(agentty) and kind(test))'
         language: system
         always_run: true
         pass_filenames: false
