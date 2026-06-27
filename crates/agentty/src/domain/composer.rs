@@ -3,7 +3,9 @@
 
 use std::path::PathBuf;
 
-use crate::domain::agent::{self, AgentKind, AgentModel, AgentSelectionMetadata, ReasoningLevel};
+use crate::domain::agent::{
+    self, AgentKind, AgentSelection, AgentSelectionMetadata, ReasoningLevel,
+};
 use crate::domain::input::{InputState, is_at_mention_boundary, is_at_mention_query_character};
 
 /// One selectable row in the prompt slash-command menu.
@@ -37,8 +39,8 @@ pub enum PromptSuggestionSelection {
     Command(&'static str),
     /// Agent selected during `/model` agent selection.
     Agent(AgentKind),
-    /// Model selected during `/model` model selection.
-    Model(AgentModel),
+    /// Agent and model selected during `/model` model selection.
+    Model(AgentSelection),
     /// Session-scoped reasoning selection chosen during `/reasoning`.
     Reasoning(ReasoningLevel),
 }
@@ -800,7 +802,10 @@ fn selected_slash_action(
                 .get(clamp_selected_index(selected_index, models.len()))
                 .copied()?;
 
-            Some(PromptSuggestionSelection::Model(selected_model))
+            Some(PromptSuggestionSelection::Model(AgentSelection::new(
+                selected_agent_kind,
+                selected_model,
+            )))
         }
         PromptSlashStage::Reasoning => {
             let options = reasoning_options();
@@ -912,6 +917,7 @@ fn image_token_end_index(characters: &[char], start_index: usize) -> Option<usiz
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::agent::AgentModel;
 
     #[test]
     fn test_prompt_attachment_state_registers_images_in_placeholder_order() {
@@ -1059,7 +1065,10 @@ mod tests {
         // Assert
         assert_eq!(
             selection,
-            Some(PromptSuggestionSelection::Model(AgentModel::ClaudeOpus48))
+            Some(PromptSuggestionSelection::Model(AgentSelection::new(
+                AgentKind::Claude,
+                AgentModel::ClaudeOpus48,
+            )))
         );
     }
 

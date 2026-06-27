@@ -51,7 +51,7 @@ mod tests {
 
     use crate::app::session::{Clock, SessionDefaults, SessionError};
     use crate::app::{SessionManager, SessionState};
-    use crate::domain::agent::{AgentKind, AgentModel};
+    use crate::domain::agent::AgentKind;
     use crate::domain::session::{
         Session, SessionHandles, SessionId, SessionSize, SessionStats, Status,
     };
@@ -82,7 +82,10 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            model: AgentModel::AntigravityGemini3FlashPreview,
+            agent: crate::domain::agent::AgentSelection::new(
+                crate::domain::agent::AgentKind::Antigravity,
+                crate::domain::agent::AgentModel::Gemini3FlashPreview,
+            ),
             output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),

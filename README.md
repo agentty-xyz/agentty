@@ -52,8 +52,8 @@ cargo install agentty
 
 ## Supported CLI Agents
 
-Agentty currently supports Codex, Claude, and Antigravity. Install and authenticate at
-least one provider CLI before starting a session:
+Agentty currently supports Codex, Claude, Antigravity, and Gemini. Install and
+authenticate at least one provider CLI before starting a session:
 
 - Codex (`codex`, recommended; supports subscription usage): install the
   [Codex CLI](https://github.com/openai/codex) and run `codex login`.
@@ -97,11 +97,23 @@ least one provider CLI before starting a session:
 > [Antigravity terms](https://antigravity.google/terms) do not yet clearly describe how
 > subscription access applies when `agy --print` is invoked by third-party tools.
 
+- Gemini (`gemini`): install the
+  [Gemini CLI](https://github.com/google-gemini/gemini-cli) and authenticate with an API
+  key or Vertex AI.
+
+> [!WARNING]
+>
+> "Sign in with Google" (Google Account OAuth) no longer works for the Gemini CLI after
+> Google's
+> [transition of the Gemini CLI to the Antigravity CLI](https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/).
+> API key (`GEMINI_API_KEY`) and Vertex AI authentication still work, so use one of
+> those for the Gemini backend, or use the Antigravity (`agy`) backend instead.
+
 Agentty uses each provider's official non-interactive CLI or app-server surface
-(`claude -p`, `agy --print`, or `codex app-server`) after you authenticate with that
-provider's CLI. It does not implement OAuth flows, read provider OAuth tokens directly,
-or call private provider APIs. You are responsible for choosing an authentication method
-that is permitted for your account, plan, and usage pattern.
+(`claude -p`, `agy --print`, `codex app-server`, or `gemini --acp`) after you
+authenticate with that provider's CLI. It does not implement OAuth flows, read provider
+OAuth tokens directly, or call private provider APIs. You are responsible for choosing
+an authentication method that is permitted for your account, plan, and usage pattern.
 
 ## Usage
 

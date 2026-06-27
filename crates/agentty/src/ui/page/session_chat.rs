@@ -237,7 +237,7 @@ impl<'a> SessionChatPage<'a> {
                 input,
                 slash_state,
                 at_mention_state.as_ref(),
-                session.model.kind(),
+                session.agent.kind(),
                 allow_apply_command,
             )
         };
@@ -256,7 +256,7 @@ impl<'a> SessionChatPage<'a> {
                 attachment_state.attachments.len(),
             ),
             suggestion_list,
-            title: format!(" [{}] ", session.model.as_str()),
+            title: format!(" [{}] ", session.agent.model().as_str()),
             total_height: desired_bottom_height.min(max_bottom_height),
         })
     }

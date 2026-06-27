@@ -24,6 +24,9 @@ use crate::infra::channel::AgentRequestKind;
 /// output.
 #[derive(Clone, Debug)]
 pub(crate) struct OneShotRequest<'a> {
+    /// Provider backend used for command construction, stdin shaping, and
+    /// response parsing.
+    pub(crate) agent_kind: AgentKind,
     /// Optional PID slot used by cancel/stop flows to terminate the spawned
     /// subprocess while a one-shot prompt is running.
     pub(crate) child_pid: Option<&'a Mutex<Option<u32>>>,
@@ -82,15 +85,15 @@ pub(crate) async fn submit_one_shot_with_stats_and_app_server_client(
     request: OneShotRequest<'_>,
     app_server_client_override: Option<Arc<dyn AppServerClient>>,
 ) -> Result<OneShotSubmission, String> {
-    let backend = create_backend(request.model.kind());
+    let backend = create_backend(request.agent_kind);
 
-    if transport_mode(request.model.kind()).uses_app_server() {
+    if transport_mode(request.agent_kind).uses_app_server() {
         let app_server_client =
-            create_app_server_client(request.model.kind(), app_server_client_override).ok_or_else(
+            create_app_server_client(request.agent_kind, app_server_client_override).ok_or_else(
                 || {
                     format!(
                         "{} provider did not provide an app-server client",
-                        request.model.kind()
+                        request.agent_kind
                     )
                 },
             )?;
@@ -325,7 +328,7 @@ async fn execute_one_shot_command(
     let command = backend
         .build_command(build_request)
         .map_err(|error| format!("Failed to build one-shot agent command: {error}"))?;
-    let stdin_payload = super::build_command_stdin_payload(request.model.kind(), build_request)
+    let stdin_payload = super::build_command_stdin_payload(request.agent_kind, build_request)
         .map_err(|error| format!("Failed to build one-shot agent stdin payload: {error}"))?;
     let mut tokio_command = tokio::process::Command::from(command);
     tokio_command
@@ -365,14 +368,14 @@ async fn execute_one_shot_command(
     let stderr_text = String::from_utf8_lossy(&output.stderr).into_owned();
     if !output.status.success() {
         return Err(format_one_shot_exit_error(
-            request.model.kind(),
+            request.agent_kind,
             output.status.code(),
             &stdout_text,
             &stderr_text,
         ));
     }
 
-    let parsed_response = parse_response(request.model.kind(), &stdout_text, &stderr_text);
+    let parsed_response = parse_response(request.agent_kind, &stdout_text, &stderr_text);
 
     Ok(parsed_response)
 }
@@ -508,6 +511,7 @@ mod tests {
         let response = submit_one_shot_with_backend(
             &backend,
             OneShotRequest {
+                agent_kind: AgentKind::Claude,
                 child_pid: None,
                 folder: temp_directory.path(),
                 model: AgentModel::ClaudeSonnet46,
@@ -549,6 +553,7 @@ mod tests {
         let error = submit_one_shot_with_backend(
             &backend,
             OneShotRequest {
+                agent_kind: AgentKind::Codex,
                 child_pid: None,
                 folder: temp_directory.path(),
                 model: AgentModel::Gpt55,
@@ -594,6 +599,7 @@ mod tests {
         let error = submit_one_shot_with_backend(
             &backend,
             OneShotRequest {
+                agent_kind: AgentKind::Claude,
                 child_pid: None,
                 folder: temp_directory.path(),
                 model: AgentModel::ClaudeSonnet46,
@@ -643,6 +649,7 @@ mod tests {
         let response = submit_one_shot_with_backend(
             &backend,
             OneShotRequest {
+                agent_kind: AgentKind::Claude,
                 child_pid: None,
                 folder: temp_directory.path(),
                 model: AgentModel::ClaudeSonnet46,
@@ -691,6 +698,7 @@ mod tests {
         let response = submit_one_shot_with_backend(
             &backend,
             OneShotRequest {
+                agent_kind: AgentKind::Codex,
                 child_pid: None,
                 folder: temp_directory.path(),
                 model: AgentModel::Gpt55,
@@ -729,6 +737,7 @@ mod tests {
         let error = submit_one_shot_with_backend(
             &backend,
             OneShotRequest {
+                agent_kind: AgentKind::Codex,
                 child_pid: None,
                 folder: temp_directory.path(),
                 model: AgentModel::Gpt55,
@@ -772,6 +781,7 @@ mod tests {
             submit_one_shot_with_backend(
                 &backend,
                 OneShotRequest {
+                    agent_kind: AgentKind::Claude,
                     child_pid: None,
                     folder: temp_directory.path(),
                     model: AgentModel::ClaudeSonnet46,
@@ -807,6 +817,7 @@ mod tests {
         let response = submit_one_shot_with_backend(
             &backend,
             OneShotRequest {
+                agent_kind: AgentKind::Claude,
                 child_pid: None,
                 folder: temp_directory.path(),
                 model: AgentModel::ClaudeSonnet46,
@@ -847,6 +858,7 @@ mod tests {
         let error = submit_one_shot_with_backend(
             &backend,
             OneShotRequest {
+                agent_kind: AgentKind::Claude,
                 child_pid: None,
                 folder: temp_directory.path(),
                 model: AgentModel::ClaudeSonnet46,
@@ -886,6 +898,7 @@ mod tests {
         let error = submit_one_shot_with_backend(
             &backend,
             OneShotRequest {
+                agent_kind: AgentKind::Claude,
                 child_pid: None,
                 folder: temp_directory.path(),
                 model: AgentModel::ClaudeSonnet46,
@@ -945,6 +958,7 @@ mod tests {
         let response = submit_one_shot_with_app_server_client(
             &app_server_client,
             OneShotRequest {
+                agent_kind: AgentKind::Codex,
                 child_pid: None,
                 folder: temp_directory.path(),
                 model: AgentModel::Gpt55,
@@ -999,6 +1013,7 @@ mod tests {
         let error = submit_one_shot_with_app_server_client(
             &app_server_client,
             OneShotRequest {
+                agent_kind: AgentKind::Codex,
                 child_pid: None,
                 folder: temp_directory.path(),
                 model: AgentModel::Gpt55,
@@ -1053,6 +1068,7 @@ mod tests {
         let error = submit_one_shot_with_app_server_client(
             &app_server_client,
             OneShotRequest {
+                agent_kind: AgentKind::Codex,
                 child_pid: None,
                 folder: temp_directory.path(),
                 model: AgentModel::Gpt55,

@@ -309,7 +309,11 @@ fn session_model_and_reasoning_level(
 ) -> String {
     let reasoning_level = session.effective_reasoning_level(default_reasoning_level);
 
-    format!("{} [{}]", session.model.as_str(), reasoning_level.as_str())
+    format!(
+        "{} [{}]",
+        session.agent.model().as_str(),
+        reasoning_level.as_str()
+    )
 }
 
 /// Builds a styled model column cell where the reasoning label is colorized.
@@ -321,7 +325,7 @@ fn session_model_and_reasoning_level_line(
     let color = reasoning_level_color(reasoning_level);
 
     Line::from(vec![
-        Span::raw(session.model.as_str()),
+        Span::raw(session.agent.model().as_str()),
         Span::raw(" ["),
         Span::styled(reasoning_level.as_str(), Style::default().fg(color)),
         Span::raw("]"),
@@ -447,7 +451,10 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            model: AgentModel::AntigravityGemini3FlashPreview,
+            agent: crate::domain::agent::AgentSelection::new(
+                crate::domain::agent::AgentKind::Antigravity,
+                crate::domain::agent::AgentModel::Gemini3FlashPreview,
+            ),
             output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),
@@ -674,9 +681,15 @@ mod tests {
         let expected_width =
             u16::try_from("claude-sonnet-4-6 [low]".chars().count()).unwrap_or(u16::MAX);
         let mut default_session = test_session("active-1", Status::Review);
-        default_session.model = AgentModel::ClaudeSonnet46;
+        default_session.agent = crate::domain::agent::AgentSelection::new(
+            crate::domain::agent::AgentKind::Claude,
+            AgentModel::ClaudeSonnet46,
+        );
         let mut medium_session = test_session("active-2", Status::Review);
-        medium_session.model = AgentModel::Gpt55;
+        medium_session.agent = crate::domain::agent::AgentSelection::new(
+            crate::domain::agent::AgentKind::Codex,
+            AgentModel::Gpt55,
+        );
         medium_session.reasoning_level_override = Some(ReasoningLevel::Medium);
         let sessions = vec![default_session, medium_session];
 
@@ -712,7 +725,10 @@ mod tests {
         let mut table_state = TableState::default();
         table_state.select(Some(0));
         let mut session = test_session("session-1", Status::Review);
-        session.model = AgentModel::Gpt55;
+        session.agent = crate::domain::agent::AgentSelection::new(
+            crate::domain::agent::AgentKind::Codex,
+            AgentModel::Gpt55,
+        );
         session.reasoning_level_override = Some(ReasoningLevel::High);
         let sessions = vec![session];
         let expected_reasoning_color = reasoning_level_color(ReasoningLevel::High);
@@ -743,7 +759,10 @@ mod tests {
         let mut table_state = TableState::default();
         table_state.select(Some(0));
         let mut session = test_session("session-1", Status::Review);
-        session.model = AgentModel::Gpt55;
+        session.agent = crate::domain::agent::AgentSelection::new(
+            crate::domain::agent::AgentKind::Codex,
+            AgentModel::Gpt55,
+        );
         let sessions = vec![session];
 
         // Act
@@ -802,7 +821,10 @@ mod tests {
         let mut table_state = TableState::default();
         table_state.select(Some(0));
         let mut session = test_session("session-1", Status::Review);
-        session.model = AgentModel::Gpt55;
+        session.agent = crate::domain::agent::AgentSelection::new(
+            crate::domain::agent::AgentKind::Codex,
+            AgentModel::Gpt55,
+        );
         session.reasoning_level_override = Some(ReasoningLevel::High);
         let sessions = vec![session];
 

@@ -964,7 +964,7 @@ mod tests {
         };
         let (events_tx, mut events_rx) = mpsc::unbounded_channel();
         let mut req = make_turn_request(dir.path().to_path_buf());
-        req.model = AgentModel::AntigravityGemini31ProPreview
+        req.model = AgentModel::Gemini31ProPreview
             .provider_model_str()
             .to_string();
 

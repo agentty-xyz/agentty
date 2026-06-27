@@ -434,7 +434,6 @@ mod tests {
     use ratatui::widgets::TableState;
 
     use super::*;
-    use crate::domain::agent::AgentKind;
     use crate::domain::session::{Session, SessionHandles, SessionSize, SessionStats, Status};
 
     struct FixedClock {
@@ -476,7 +475,10 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            model: AgentKind::Antigravity.default_model(),
+            agent: crate::domain::agent::AgentSelection::new(
+                crate::domain::agent::AgentKind::Antigravity,
+                crate::domain::agent::AgentKind::Antigravity.default_model(),
+            ),
             output: "old".to_string(),
             parent_session_id: None,
             project_name: "project".to_string(),
@@ -530,7 +532,10 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            model: AgentKind::Antigravity.default_model(),
+            agent: crate::domain::agent::AgentSelection::new(
+                crate::domain::agent::AgentKind::Antigravity,
+                crate::domain::agent::AgentKind::Antigravity.default_model(),
+            ),
             output: "Old".to_string(),
             parent_session_id: None,
             project_name: "project".to_string(),
@@ -573,7 +578,10 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            model: AgentKind::Antigravity.default_model(),
+            agent: crate::domain::agent::AgentSelection::new(
+                crate::domain::agent::AgentKind::Antigravity,
+                crate::domain::agent::AgentKind::Antigravity.default_model(),
+            ),
             output: "first line\n".to_string(),
             parent_session_id: None,
             project_name: "project".to_string(),
@@ -618,7 +626,10 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            model: AgentKind::Antigravity.default_model(),
+            agent: crate::domain::agent::AgentSelection::new(
+                crate::domain::agent::AgentKind::Antigravity,
+                crate::domain::agent::AgentKind::Antigravity.default_model(),
+            ),
             output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),
@@ -669,7 +680,10 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            model: AgentKind::Antigravity.default_model(),
+            agent: crate::domain::agent::AgentSelection::new(
+                crate::domain::agent::AgentKind::Antigravity,
+                crate::domain::agent::AgentKind::Antigravity.default_model(),
+            ),
             output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),
@@ -698,7 +712,10 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            model: AgentKind::Antigravity.default_model(),
+            agent: crate::domain::agent::AgentSelection::new(
+                crate::domain::agent::AgentKind::Antigravity,
+                crate::domain::agent::AgentKind::Antigravity.default_model(),
+            ),
             output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),
@@ -749,7 +766,10 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            model: AgentKind::Antigravity.default_model(),
+            agent: crate::domain::agent::AgentSelection::new(
+                crate::domain::agent::AgentKind::Antigravity,
+                crate::domain::agent::AgentKind::Antigravity.default_model(),
+            ),
             output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),
@@ -778,7 +798,10 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            model: AgentKind::Antigravity.default_model(),
+            agent: crate::domain::agent::AgentSelection::new(
+                crate::domain::agent::AgentKind::Antigravity,
+                crate::domain::agent::AgentKind::Antigravity.default_model(),
+            ),
             output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),
@@ -833,7 +856,10 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            model: AgentKind::Antigravity.default_model(),
+            agent: crate::domain::agent::AgentSelection::new(
+                crate::domain::agent::AgentKind::Antigravity,
+                crate::domain::agent::AgentKind::Antigravity.default_model(),
+            ),
             output: "abc".to_string(),
             parent_session_id: None,
             project_name: "project".to_string(),
@@ -928,7 +954,10 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            model: AgentKind::Antigravity.default_model(),
+            agent: crate::domain::agent::AgentSelection::new(
+                crate::domain::agent::AgentKind::Antigravity,
+                crate::domain::agent::AgentKind::Antigravity.default_model(),
+            ),
             output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),
@@ -965,7 +994,10 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            model: AgentKind::Antigravity.default_model(),
+            agent: crate::domain::agent::AgentSelection::new(
+                crate::domain::agent::AgentKind::Antigravity,
+                crate::domain::agent::AgentKind::Antigravity.default_model(),
+            ),
             output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),

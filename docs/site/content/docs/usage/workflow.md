@@ -486,12 +486,12 @@ to inspect repository readiness rules and report recommendations without changin
 current effective level preselected from settings or any existing session override. | |
 `/stats` | Show token usage statistics for the session. |
 
-Agentty requires at least one supported backend CLI (`agy`, `codex`, or `claude`) on
-`PATH` at startup. Once launched, `/model` only offers runnable backends, and stored
-default-model settings still fall back to the first available backend default when the
-saved backend is missing locally. Retired stored model ids such as `claude-opus-4-6` and
-`claude-opus-4-7` are upgraded to the current supported replacement when projects and
-sessions load.
+Agentty requires at least one supported backend CLI (`agy`, `codex`, `claude`, or
+`gemini`) on `PATH` at startup. Once launched, `/model` only offers runnable backends,
+and stored default-model settings still fall back to the first available backend default
+when the saved backend is missing locally. Retired stored model ids such as
+`claude-opus-4-6` and `claude-opus-4-7` are upgraded to the current supported
+replacement when projects and sessions load.
 
 The Projects tab summarizes the runnable agent CLI executables detected at startup,
 shows their versions as loading while background `--version` checks run, and then

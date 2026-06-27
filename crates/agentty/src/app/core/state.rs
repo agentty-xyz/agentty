@@ -40,7 +40,9 @@ use super::events::{AppEventBatch, ReviewRequestStatusUpdate};
 use crate::app::{AppError, RequestedReviewState, session};
 #[cfg(test)]
 use crate::domain::agent::AgentCliInfo;
-use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
+#[cfg(test)]
+use crate::domain::agent::AgentSelection;
+use crate::domain::agent::{AgentKind, ReasoningLevel};
 use crate::domain::input::InputState;
 use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, Session, SessionId, Status};
 use crate::domain::system_log::{
@@ -961,17 +963,17 @@ impl App {
         )
     }
 
-    /// Persists and applies a model selection for a session.
+    /// Persists and applies an agent/model selection for a session.
     ///
     /// # Errors
     /// Returns an error if persistence fails.
     pub async fn set_session_model(
         &mut self,
         session_id: &str,
-        session_model: AgentModel,
+        session_agent: crate::domain::agent::AgentSelection,
     ) -> Result<(), AppError> {
         self.sessions
-            .set_session_model(&self.services, session_id, session_model)
+            .set_session_model(&self.services, session_id, session_agent)
             .await?;
         self.process_pending_app_events().await;
 
@@ -1933,7 +1935,10 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            model: AgentModel::AntigravityGemini3FlashPreview,
+            agent: crate::domain::agent::AgentSelection::new(
+                crate::domain::agent::AgentKind::Antigravity,
+                crate::domain::agent::AgentModel::Gemini3FlashPreview,
+            ),
             output: String::new(),
             parent_session_id: None,
             project_name: "test-project".to_string(),
@@ -2053,7 +2058,7 @@ mod tests {
             result,
             Err(AppError::Workflow(message))
                 if message
-                    == "No supported backend CLI found on `PATH`. Install `agy`, `codex`, or `claude` and restart `agentty`."
+                    == "No supported backend CLI found on `PATH`. Install `agy`, `codex`, `claude`, or `gemini` and restart `agentty`."
         ));
     }
 
@@ -3937,11 +3942,11 @@ mod tests {
         // Act
         event_batch.collect_event(AppEvent::SessionModelUpdated {
             session_id: "session-a".into(),
-            session_model: AgentModel::AntigravityGemini3FlashPreview,
+            session_agent: AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini3FlashPreview),
         });
         event_batch.collect_event(AppEvent::SessionModelUpdated {
             session_id: "session-a".into(),
-            session_model: AgentModel::AntigravityGemini31ProPreview,
+            session_agent: AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31ProPreview),
         });
         event_batch.collect_event(AppEvent::SessionProgressUpdated {
             progress_message: Some("first".to_string()),
@@ -4001,7 +4006,10 @@ mod tests {
         // Assert
         assert_eq!(
             event_batch.session_model_updates.get("session-a"),
-            Some(&AgentModel::AntigravityGemini31ProPreview)
+            Some(&AgentSelection::new(
+                AgentKind::Gemini,
+                AgentModel::Gemini31ProPreview
+            ))
         );
         assert_eq!(
             event_batch.session_progress_updates.get("session-a"),
@@ -4383,7 +4391,7 @@ mod tests {
             .sessions()
             .insert_session(
                 session_id,
-                AgentModel::AntigravityGemini3FlashPreview.as_str(),
+                AgentModel::Gemini3FlashPreview.as_str(),
                 "main",
                 &Status::Review.to_string(),
                 project_id,
@@ -5160,7 +5168,7 @@ mod tests {
             .sessions()
             .insert_session(
                 "session-1",
-                AgentModel::AntigravityGemini3FlashPreview.as_str(),
+                AgentModel::Gemini3FlashPreview.as_str(),
                 "main",
                 &Status::Merging.to_string(),
                 project_id,

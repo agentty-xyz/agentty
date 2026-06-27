@@ -7,6 +7,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- agentty: restore direct Gemini CLI/backend support alongside Antigravity.
+
 ### Removed
 
 - ag-xtask: remove repository roadmap lint and digest commands.

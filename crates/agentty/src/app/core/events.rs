@@ -69,10 +69,10 @@ pub(crate) enum AppEvent {
     UpdateStatusChanged { update_status: UpdateStatus },
     /// Records one process-local system log event.
     SystemLog { event: SystemLogEvent },
-    /// Indicates a session model selection has been persisted.
+    /// Indicates a session agent/model selection has been persisted.
     SessionModelUpdated {
         session_id: SessionId,
-        session_model: crate::domain::agent::AgentModel,
+        session_agent: crate::domain::agent::AgentSelection,
     },
     /// Indicates a session reasoning override selection has been persisted.
     SessionReasoningLevelUpdated {
@@ -208,7 +208,7 @@ pub(super) struct AppEventBatch {
     pub(super) session_git_status_updates: HashMap<SessionId, SessionGitStatus>,
     pub(super) session_ids: HashSet<SessionId>,
     pub(super) session_update_versions: HashMap<SessionId, u64>,
-    pub(super) session_model_updates: HashMap<SessionId, crate::domain::agent::AgentModel>,
+    pub(super) session_model_updates: HashMap<SessionId, crate::domain::agent::AgentSelection>,
     pub(super) session_reasoning_level_updates:
         HashMap<SessionId, Option<crate::domain::agent::ReasoningLevel>>,
     pub(super) session_progress_updates: HashMap<SessionId, Option<String>>,
@@ -309,8 +309,8 @@ impl AppEventBatch {
             AppEvent::SystemLog { event } => self.collect_system_log(event),
             AppEvent::SessionModelUpdated {
                 session_id,
-                session_model,
-            } => self.collect_session_model_updated(session_id, session_model),
+                session_agent,
+            } => self.collect_session_model_updated(session_id, session_agent),
             AppEvent::SessionReasoningLevelUpdated {
                 reasoning_level_override,
                 session_id,
@@ -452,13 +452,13 @@ impl AppEventBatch {
             });
     }
 
-    /// Stores a session model update for reducer application.
+    /// Stores a session agent/model update for reducer application.
     fn collect_session_model_updated(
         &mut self,
         session_id: SessionId,
-        session_model: crate::domain::agent::AgentModel,
+        session_agent: crate::domain::agent::AgentSelection,
     ) {
-        self.session_model_updates.insert(session_id, session_model);
+        self.session_model_updates.insert(session_id, session_agent);
     }
 
     /// Stores a session reasoning-level update for reducer application.
@@ -1277,9 +1277,9 @@ impl App {
     /// Applies reducer batch updates that mutate cached session snapshots or
     /// auxiliary session-view lookup state.
     fn apply_batch_session_snapshot_updates(&mut self, event_batch: &mut AppEventBatch) {
-        for (session_id, session_model) in std::mem::take(&mut event_batch.session_model_updates) {
+        for (session_id, session_agent) in std::mem::take(&mut event_batch.session_model_updates) {
             self.sessions
-                .apply_session_model_updated(&session_id, session_model);
+                .apply_session_model_updated(&session_id, session_agent);
         }
 
         for (session_id, reasoning_level_override) in

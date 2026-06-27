@@ -1324,7 +1324,6 @@ mod tests {
         // should revert it to Review.
         use std::path::PathBuf;
 
-        use crate::domain::agent::AgentModel;
         use crate::domain::session::{Session, SessionSize, SessionStats};
 
         let mut app = new_test_app().await;
@@ -1339,7 +1338,10 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            model: AgentModel::AntigravityGemini3FlashPreview,
+            agent: crate::domain::agent::AgentSelection::new(
+                crate::domain::agent::AgentKind::Antigravity,
+                crate::domain::agent::AgentModel::Gemini3FlashPreview,
+            ),
             output: String::new(),
             parent_session_id: None,
             project_name: String::new(),
@@ -1400,7 +1402,6 @@ mod tests {
         // the snapshot status back to Question.
         use std::path::PathBuf;
 
-        use crate::domain::agent::AgentModel;
         use crate::domain::session::{Session, SessionHandles, SessionSize, SessionStats};
 
         let mut app = new_test_app().await;
@@ -1415,7 +1416,10 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            model: AgentModel::AntigravityGemini3FlashPreview,
+            agent: crate::domain::agent::AgentSelection::new(
+                crate::domain::agent::AgentKind::Antigravity,
+                crate::domain::agent::AgentModel::Gemini3FlashPreview,
+            ),
             output: String::new(),
             parent_session_id: None,
             project_name: String::new(),
@@ -2922,7 +2926,6 @@ mod tests {
     async fn test_d_key_in_chat_focus_opens_diff_with_question_snapshot() {
         // Arrange — question mode with chat focused in a git worktree
         // session that has a non-empty diff.
-        use crate::domain::agent::AgentModel;
         use crate::domain::session::{Session, SessionSize, SessionStats};
 
         let mut app = new_test_app().await;
@@ -2941,7 +2944,10 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            model: AgentModel::AntigravityGemini3FlashPreview,
+            agent: crate::domain::agent::AgentSelection::new(
+                crate::domain::agent::AgentKind::Antigravity,
+                crate::domain::agent::AgentModel::Gemini3FlashPreview,
+            ),
             output: String::new(),
             parent_session_id: None,
             project_name: String::new(),

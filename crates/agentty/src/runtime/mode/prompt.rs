@@ -522,7 +522,7 @@ fn advance_prompt_slash_selection(app: &mut App) {
             slash_state.selected_agent,
             slash_state.selected_index,
             app.selected_session()
-                .map_or(AgentKind::Codex, |session| session.model.kind()),
+                .map_or(AgentKind::Codex, |session| session.agent.kind()),
             slash_state.stage,
         ),
         _ => return,
@@ -1719,7 +1719,7 @@ mod tests {
             assert_eq!(input.text(), "");
             assert_eq!(*slash_state, PromptSlashState::default());
         }
-        assert_eq!(app.sessions.sessions()[0].model, expected_model);
+        assert_eq!(app.sessions.sessions()[0].agent.model(), expected_model);
     }
 
     #[tokio::test]
@@ -2531,7 +2531,10 @@ mod tests {
     async fn test_handle_prompt_submit_key_drains_supported_image_turn() {
         // Arrange
         let (mut app, _base_dir) = new_test_draft_prompt_app("Review ", None).await;
-        app.sessions.sessions_mut()[0].model = crate::domain::agent::AgentModel::ClaudeSonnet46;
+        app.sessions.sessions_mut()[0].agent = crate::domain::agent::AgentSelection::new(
+            crate::domain::agent::AgentKind::Claude,
+            crate::domain::agent::AgentModel::ClaudeSonnet46,
+        );
         app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
@@ -2556,7 +2559,10 @@ mod tests {
     async fn test_handle_prompt_submit_key_starts_regular_session_with_image_turn() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
-        app.sessions.sessions_mut()[0].model = crate::domain::agent::AgentModel::ClaudeSonnet46;
+        app.sessions.sessions_mut()[0].agent = crate::domain::agent::AgentSelection::new(
+            crate::domain::agent::AgentKind::Claude,
+            crate::domain::agent::AgentModel::ClaudeSonnet46,
+        );
         app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 

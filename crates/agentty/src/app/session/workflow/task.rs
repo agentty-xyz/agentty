@@ -15,7 +15,7 @@ use crate::app::assist::{
 use crate::app::service::SessionUpdateVersionMap;
 use crate::app::session::{Clock, SessionError, unix_timestamp_from_system_time};
 use crate::app::{AppEvent, SessionManager};
-use crate::domain::agent::AgentModel;
+use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::{COMMITTING_PROGRESS_LABEL, SessionId, SessionSize, Status};
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::setting::SettingName;
@@ -82,8 +82,8 @@ pub(crate) struct RunAgentAssistTaskInput {
     pub(crate) output: Arc<Mutex<String>>,
     /// One-shot assist prompt submitted to the agent.
     pub(crate) prompt: String,
-    /// Session model used for agent metadata and parsing.
-    pub(crate) session_model: AgentModel,
+    /// Session agent/model selection used for agent metadata and parsing.
+    pub(crate) session_agent: AgentSelection,
     /// Per-app session update versions shared with the main runtime.
     pub(crate) session_update_versions: SessionUpdateVersionMap,
 }
@@ -468,15 +468,23 @@ impl SessionTaskService {
             .ok_or_else(|| {
                 SessionError::Workflow("Missing session base branch for auto-commit".to_string())
             })?;
-        let auto_commit_model =
-            Self::load_auto_commit_model_setting(&context.db, &context.id, context.session_model)
-                .await;
+        let auto_commit_model = Self::load_auto_commit_model_setting(
+            &context.db,
+            &context.id,
+            context.session_agent.model(),
+        )
+        .await;
+        let auto_commit_agent = crate::agent::resolve_agent_selection_for_model(
+            auto_commit_model,
+            context.session_agent.kind(),
+            AgentKind::ALL,
+        );
 
         Self::commit_session_changes(
             context.git_client.as_ref(),
             &context.folder,
             &base_branch,
-            auto_commit_model,
+            auto_commit_agent,
             no_verify,
             Self::load_include_coauthored_by_agentty_setting(&context.db, &context.id).await,
         )
@@ -561,7 +569,7 @@ impl SessionTaskService {
             git_client: Arc::clone(&context.git_client),
             id: context.id.clone(),
             output: Arc::clone(&context.output),
-            session_model: context.session_model,
+            session_agent: context.session_agent,
             session_update_versions: context.session_update_versions.clone(),
         };
 
@@ -625,7 +633,7 @@ impl SessionTaskService {
         git_client: &dyn GitClient,
         folder: &Path,
         base_branch: &str,
-        session_model: AgentModel,
+        session_agent: AgentSelection,
         no_verify: bool,
         include_coauthored_by_agentty: bool,
     ) -> Result<SessionCommitOutcome, SessionError> {
@@ -680,13 +688,13 @@ impl SessionTaskService {
             });
         }
 
-        let backend = agent::create_backend(session_model.kind());
+        let backend = agent::create_backend(session_agent.kind());
 
         Self::commit_session_changes_with_backend(
             git_client,
             folder,
             base_branch,
-            session_model,
+            session_agent,
             backend.as_ref(),
             no_verify,
             include_coauthored_by_agentty,
@@ -705,7 +713,7 @@ impl SessionTaskService {
         git_client: &dyn GitClient,
         folder: &Path,
         base_branch: &str,
-        session_model: AgentModel,
+        session_agent: AgentSelection,
         backend: &dyn agent::AgentBackend,
         no_verify: bool,
         include_coauthored_by_agentty: bool,
@@ -730,7 +738,7 @@ impl SessionTaskService {
         };
         let generated_commit_message = Self::generate_session_commit_message_with_backend(
             folder.as_path(),
-            session_model,
+            session_agent,
             diff.as_str(),
             current_commit_message.as_deref(),
             backend,
@@ -766,7 +774,7 @@ impl SessionTaskService {
     /// context-window error.
     async fn generate_session_commit_message_with_backend(
         folder: &Path,
-        session_model: AgentModel,
+        session_agent: AgentSelection,
         diff: &str,
         current_commit_message: Option<&str>,
         backend: &dyn agent::AgentBackend,
@@ -774,12 +782,13 @@ impl SessionTaskService {
     ) -> Result<String, SessionError> {
         let prompt = Self::session_commit_message_prompt(diff, current_commit_message)?;
         let submission = match Self::submit_utility_prompt_with_backend(
-            session_model,
+            session_agent,
             backend,
             agent::OneShotRequest {
+                agent_kind: session_agent.kind(),
                 child_pid: None,
                 folder,
-                model: session_model,
+                model: session_agent.model(),
                 prompt: &prompt,
                 request_kind: crate::infra::channel::AgentRequestKind::UtilityPrompt,
                 reasoning_level: crate::domain::agent::ReasoningLevel::default(),
@@ -796,12 +805,13 @@ impl SessionTaskService {
                     Self::session_commit_message_prompt(&truncated_diff, current_commit_message)?;
 
                 Self::submit_utility_prompt_with_backend(
-                    session_model,
+                    session_agent,
                     backend,
                     agent::OneShotRequest {
+                        agent_kind: session_agent.kind(),
                         child_pid: None,
                         folder,
-                        model: session_model,
+                        model: session_agent.model(),
                         prompt: &truncated_prompt,
                         request_kind: crate::infra::channel::AgentRequestKind::UtilityPrompt,
                         reasoning_level: crate::domain::agent::ReasoningLevel::default(),
@@ -835,7 +845,7 @@ impl SessionTaskService {
     pub(crate) async fn run_agent_assist_task(
         input: RunAgentAssistTaskInput,
     ) -> Result<(), SessionError> {
-        let backend = agent::create_backend(input.session_model.kind());
+        let backend = agent::create_backend(input.session_agent.kind());
 
         Self::run_agent_assist_task_with_backend(input, backend.as_ref()).await
     }
@@ -857,16 +867,17 @@ impl SessionTaskService {
             id,
             output,
             prompt,
-            session_model,
+            session_agent,
             session_update_versions,
         } = input;
         let assist_submission = Self::submit_utility_prompt_with_backend(
-            session_model,
+            session_agent,
             backend,
             agent::OneShotRequest {
+                agent_kind: session_agent.kind(),
                 child_pid: Some(child_pid.as_ref()),
                 folder: &folder,
-                model: session_model,
+                model: session_agent.model(),
                 prompt: &prompt,
                 request_kind: crate::infra::channel::AgentRequestKind::UtilityPrompt,
                 reasoning_level: crate::domain::agent::ReasoningLevel::default(),
@@ -905,12 +916,16 @@ impl SessionTaskService {
 
         if let Err(error) = db
             .usage()
-            .upsert_session_usage(&id, session_model.as_str(), &assist_submission.stats)
+            .upsert_session_usage(
+                &id,
+                session_agent.model().as_str(),
+                &assist_submission.stats,
+            )
             .await
         {
             warn!(
                 session_id = id,
-                model = %session_model.as_str(),
+                model = %session_agent.model().as_str(),
                 error = %error,
                 "failed to persist session usage after utility prompt"
             );
@@ -927,16 +942,16 @@ impl SessionTaskService {
     /// Returns an error when the one-shot prompt fails or the response does
     /// not satisfy the structured protocol schema.
     async fn submit_utility_prompt_with_backend(
-        session_model: AgentModel,
+        session_agent: AgentSelection,
         backend: &dyn agent::AgentBackend,
         request: agent::OneShotRequest<'_>,
     ) -> Result<agent::OneShotSubmission, SessionError> {
-        if agent::transport_mode(session_model.kind()).uses_app_server() {
-            let app_server_client = agent::create_app_server_client(session_model.kind(), None)
+        if agent::transport_mode(session_agent.kind()).uses_app_server() {
+            let app_server_client = agent::create_app_server_client(session_agent.kind(), None)
                 .ok_or_else(|| {
                     SessionError::Workflow(format!(
                         "{} provider did not provide an app-server client",
-                        session_model.kind()
+                        session_agent.kind()
                     ))
                 })?;
 
@@ -1616,7 +1631,7 @@ mod tests {
         // Act
         let error = SessionTaskService::generate_session_commit_message_with_backend(
             temp_directory.path(),
-            AgentModel::ClaudeSonnet46,
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet46),
             "diff --git a/a.rs b/a.rs",
             None,
             &backend,
@@ -1664,7 +1679,7 @@ mod tests {
         // Act
         let generated_message = SessionTaskService::generate_session_commit_message_with_backend(
             temp_directory.path(),
-            AgentModel::ClaudeSonnet46,
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet46),
             "diff --git a/a.rs b/a.rs",
             Some("Keep session commit accurate\n\n- Preserve existing behavior"),
             &backend,
@@ -1720,7 +1735,7 @@ mod tests {
         // Act
         let generated_message = SessionTaskService::generate_session_commit_message_with_backend(
             temp_directory.path(),
-            AgentModel::ClaudeSonnet46,
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet46),
             diff.as_str(),
             None,
             &backend,
@@ -1889,7 +1904,7 @@ mod tests {
             git_client: Arc::new(mock_git_client),
             id: "session-id".to_string(),
             output: Arc::clone(&output),
-            session_model: AgentModel::Gpt55,
+            session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
             session_update_versions: Arc::default(),
         };
 
@@ -1926,7 +1941,7 @@ mod tests {
             git_client: Arc::new(mock_git_client),
             id: "session-id".to_string(),
             output: Arc::clone(&output),
-            session_model: AgentModel::Gpt55,
+            session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
             session_update_versions: Arc::default(),
         };
 
@@ -2057,7 +2072,7 @@ mod tests {
             git_client: Arc::new(mock_git_client),
             id: "session-id".to_string(),
             output: Arc::clone(&output),
-            session_model: AgentModel::Gpt55,
+            session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
             session_update_versions: Arc::default(),
         };
 
@@ -2119,7 +2134,7 @@ mod tests {
             .upsert_project_setting(
                 project_id,
                 SettingName::DefaultSmartModel,
-                AgentModel::AntigravityGemini31ProPreview.as_str(),
+                AgentModel::Gemini31ProPreview.as_str(),
             )
             .await
             .expect("failed to persist default smart model");
@@ -2154,7 +2169,7 @@ mod tests {
             .upsert_project_setting(
                 project_id,
                 SettingName::DefaultSmartModel,
-                AgentModel::AntigravityGemini31ProPreview.as_str(),
+                AgentModel::Gemini31ProPreview.as_str(),
             )
             .await
             .expect("failed to persist default smart model");
@@ -2168,10 +2183,7 @@ mod tests {
         .await;
 
         // Assert
-        assert_eq!(
-            smart_fallback_model,
-            AgentModel::AntigravityGemini31ProPreview
-        );
+        assert_eq!(smart_fallback_model, AgentModel::Gemini31ProPreview);
 
         // Arrange
         database
@@ -2228,7 +2240,7 @@ mod tests {
                 id: "session-id".to_string(),
                 output: Arc::clone(&output),
                 prompt: "Resolve conflict".to_string(),
-                session_model: AgentModel::ClaudeOpus48,
+                session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus48),
                 session_update_versions: Arc::default(),
             },
             &backend,
@@ -2291,7 +2303,7 @@ mod tests {
                 id: "session-id".to_string(),
                 output: Arc::clone(&output),
                 prompt: "Resolve conflict".to_string(),
-                session_model: AgentModel::ClaudeOpus48,
+                session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus48),
                 session_update_versions: Arc::default(),
             },
             &backend,
@@ -2342,7 +2354,7 @@ mod tests {
                 id: "session-id".to_string(),
                 output: Arc::new(Mutex::new(String::new())),
                 prompt: "Resolve conflict".to_string(),
-                session_model: AgentModel::ClaudeOpus48,
+                session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus48),
                 session_update_versions: Arc::default(),
             },
             &backend,

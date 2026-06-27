@@ -556,9 +556,10 @@ flowchart TD
   cli_channel["CliAgentChannel<br/>Antigravity/Claude; subprocess per turn"]
   app_server_mode["transport_mode() -> AppServer"]
   app_server_client["create_app_server_client()"]
-  app_server_channel["AppServerAgentChannel<br/>Codex; persistent runtime per session"]
+  app_server_channel["AppServerAgentChannel<br/>Codex/Gemini; persistent runtime per session"]
   client_trait["AppServerClient"]
   codex_client["RealCodexAppServerClient"]
+  gemini_client["RealGeminiAcpClient"]
 
   worker --> turn
   turn --> factory
@@ -570,6 +571,7 @@ flowchart TD
   app_server_mode --> app_server_channel
   app_server_channel --> client_trait
   client_trait --> codex_client
+  client_trait --> gemini_client
 ```
 
 <a id="architecture-key-types"></a> Key types (`infra/channel/contract.rs`, re-exported
@@ -610,6 +612,9 @@ by `infra/channel.rs`, with prompt payloads owned by `domain/turn_prompt.rs`):
   non-interactive `never` approval policy plus a workspace-write sandbox. If Codex still
   emits pre-action requests, command approvals are accepted under that sandbox and
   file-change approvals are accepted only for paths inside the session folder.
+- Gemini ACP permission responses are scoped in `app_server/gemini/policy.rs`: Agentty
+  selects one-shot allow options when Gemini offers them and cancels permission requests
+  when no allow option is available.
 - Antigravity and Claude subprocess turns run from the session worktree process
   directory and rely on the main-checkout tracked-file guard for isolation.
 - Antigravity command construction passes the session worktree as the first

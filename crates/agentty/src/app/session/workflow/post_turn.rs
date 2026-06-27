@@ -129,7 +129,7 @@ impl TurnFinalizerContext {
 /// corresponding reducer projection.
 struct TurnPersistence<'a> {
     context: &'a PostTurnContext,
-    session_model: crate::domain::agent::AgentModel,
+    session_agent: crate::domain::agent::AgentSelection,
 }
 
 impl TurnPersistence<'_> {
@@ -161,11 +161,12 @@ impl TurnPersistence<'_> {
             output_tokens,
         };
         let instruction_conversation_id =
-            if agent::transport_mode(self.session_model.kind()).uses_app_server() {
+            if agent::transport_mode(self.session_agent.kind()).uses_app_server() {
                 agent::normalize_instruction_conversation_id(provider_conversation_id)
             } else {
                 None
             };
+        let session_model = self.session_agent.model();
         self.context
             .db
             .sessions()
@@ -173,7 +174,7 @@ impl TurnPersistence<'_> {
                 &self.context.session_id,
                 &SessionTurnMetadata {
                     instruction_conversation_id,
-                    model: self.session_model.as_str().to_string(),
+                    model: session_model.as_str().to_string(),
                     provider_conversation_id: provider_conversation_id.map(str::to_string),
                     questions_json,
                     summary: summary.clone(),
@@ -335,7 +336,7 @@ async fn apply_successful_turn_result(
     }
     let turn_applied_state = match (TurnPersistence {
         context,
-        session_model: turn_metadata.session_model,
+        session_agent: turn_metadata.session_agent,
     }
     .apply(
         &assistant_message,
@@ -362,13 +363,6 @@ async fn apply_successful_turn_result(
         session_id: context.session_id.clone(),
         turn_applied_state,
     });
-    let auto_commit_model = SessionTaskService::load_auto_commit_model_setting(
-        &context.db,
-        &context.session_id,
-        turn_metadata.session_model,
-    )
-    .await;
-
     let commit_outcome = SessionTaskService::handle_auto_commit(AssistContext {
         app_event_tx: context.app_event_tx.clone(),
         child_pid: Arc::clone(&context.child_pid),
@@ -377,7 +371,7 @@ async fn apply_successful_turn_result(
         git_client: Arc::clone(&context.git_client),
         id: context.session_id.to_string(),
         output: Arc::clone(&context.output),
-        session_model: auto_commit_model,
+        session_agent: turn_metadata.session_agent,
         session_update_versions: context.session_update_versions.clone(),
     })
     .await;

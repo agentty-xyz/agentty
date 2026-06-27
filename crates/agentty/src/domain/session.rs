@@ -11,7 +11,7 @@ use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
-use super::agent::{AgentModel, ReasoningLevel};
+use super::agent::{AgentSelection, ReasoningLevel};
 use crate::domain::question::QuestionItem;
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment};
 
@@ -491,6 +491,8 @@ impl SessionFollowUpTask {
 /// In-memory snapshot of one persisted session row used by the UI and app
 /// orchestration layers.
 pub struct Session {
+    /// Agent provider and model selected for this session.
+    pub agent: AgentSelection,
     /// Base branch used to create the session worktree.
     pub base_branch: String,
     /// Session creation timestamp (Unix seconds).
@@ -513,8 +515,6 @@ pub struct Session {
     /// Whether the session was created through the explicit draft workflow
     /// from the sessions list.
     pub is_draft: bool,
-    /// Agent model selected for this session.
-    pub model: AgentModel,
     /// Captured output transcript.
     pub output: String,
     /// Parent session this stacked session is based on while its parent branch
@@ -1000,6 +1000,7 @@ pub(crate) mod tests {
     use std::collections::HashMap;
 
     use super::*;
+    use crate::domain::agent::AgentModel;
 
     /// Chainable builder that produces deterministic `Session` values for unit
     /// tests. Consolidates the session struct-literal previously duplicated
@@ -1015,6 +1016,10 @@ pub(crate) mod tests {
         pub(crate) fn new() -> Self {
             Self {
                 session: Session {
+                    agent: AgentSelection::new(
+                        crate::domain::agent::AgentKind::Antigravity,
+                        AgentModel::Gemini3FlashPreview,
+                    ),
                     base_branch: "main".to_string(),
                     created_at: 0,
                     draft_attachments: Vec::new(),
@@ -1024,7 +1029,6 @@ pub(crate) mod tests {
                     in_progress_started_at: None,
                     in_progress_total_seconds: 0,
                     is_draft: false,
-                    model: AgentModel::AntigravityGemini3FlashPreview,
                     output: String::new(),
                     parent_session_id: None,
                     project_name: "project".to_string(),
@@ -1083,7 +1087,7 @@ pub(crate) mod tests {
 
         /// Overrides the agent model.
         pub(crate) fn model(mut self, model: AgentModel) -> Self {
-            self.session.model = model;
+            self.session.agent = AgentSelection::new(self.session.agent.kind(), model);
 
             self
         }
@@ -1833,7 +1837,10 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            model: AgentModel::AntigravityGemini3FlashPreview,
+            agent: AgentSelection::new(
+                crate::domain::agent::AgentKind::Antigravity,
+                AgentModel::Gemini3FlashPreview,
+            ),
             output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),
@@ -1873,7 +1880,10 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            model: AgentModel::AntigravityGemini3FlashPreview,
+            agent: AgentSelection::new(
+                crate::domain::agent::AgentKind::Antigravity,
+                AgentModel::Gemini3FlashPreview,
+            ),
             output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),
@@ -1913,7 +1923,10 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             in_progress_started_at: Some(60),
             in_progress_total_seconds: 120,
             is_draft: false,
-            model: AgentModel::AntigravityGemini3FlashPreview,
+            agent: AgentSelection::new(
+                crate::domain::agent::AgentKind::Antigravity,
+                AgentModel::Gemini3FlashPreview,
+            ),
             output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),
@@ -1953,7 +1966,10 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             in_progress_started_at: None,
             in_progress_total_seconds: 180,
             is_draft: false,
-            model: AgentModel::AntigravityGemini3FlashPreview,
+            agent: AgentSelection::new(
+                crate::domain::agent::AgentKind::Antigravity,
+                AgentModel::Gemini3FlashPreview,
+            ),
             output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),
@@ -1993,7 +2009,10 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             in_progress_started_at: Some(120),
             in_progress_total_seconds: 0,
             is_draft: false,
-            model: AgentModel::AntigravityGemini3FlashPreview,
+            agent: AgentSelection::new(
+                crate::domain::agent::AgentKind::Antigravity,
+                AgentModel::Gemini3FlashPreview,
+            ),
             output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),
@@ -2033,7 +2052,10 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             in_progress_started_at: Some(200),
             in_progress_total_seconds: 90,
             is_draft: false,
-            model: AgentModel::AntigravityGemini3FlashPreview,
+            agent: AgentSelection::new(
+                crate::domain::agent::AgentKind::Antigravity,
+                AgentModel::Gemini3FlashPreview,
+            ),
             output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),

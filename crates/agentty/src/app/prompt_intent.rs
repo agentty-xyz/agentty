@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use tracing::warn;
 
 use crate::app::{App, ReviewCacheEntry, SessionStatsUsage, diff_content_hash};
-use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
+use crate::domain::agent::{AgentKind, ReasoningLevel};
 use crate::domain::review;
 use crate::domain::session::{SessionId, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -150,7 +150,7 @@ impl App {
     ) {
         let session_agent_kind = self
             .session_at(context.session_index)
-            .map_or(AgentKind::Codex, |session| session.model.kind());
+            .map_or(AgentKind::Codex, |session| session.agent.kind());
         let selection = match &self.mode {
             AppMode::Prompt {
                 input, slash_state, ..
@@ -210,9 +210,9 @@ impl App {
                     slash_state.selected_index = 0;
                 }
             }
-            Some(PromptSuggestionSelection::Model(selected_model)) => {
+            Some(PromptSuggestionSelection::Model(selected_agent)) => {
                 self.reset_prompt_slash_input();
-                self.update_prompt_session_model(context, selected_model)
+                self.update_prompt_session_model(context, selected_agent)
                     .await;
             }
             Some(PromptSuggestionSelection::Reasoning(reasoning_level)) => {
@@ -387,15 +387,16 @@ impl App {
     async fn update_prompt_session_model(
         &mut self,
         context: &PromptIntentContext,
-        selected_model: AgentModel,
+        selected_agent: crate::domain::agent::AgentSelection,
     ) {
         if let Err(error) = self
-            .set_session_model(&context.session_id, selected_model)
+            .set_session_model(&context.session_id, selected_agent)
             .await
         {
             warn!(
                 session_id = %context.session_id,
-                model = %selected_model.as_str(),
+                agent = %selected_agent.kind(),
+                model = %selected_agent.model().as_str(),
                 error = %error,
                 "failed to switch session model from prompt slash command"
             );

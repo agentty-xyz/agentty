@@ -157,7 +157,7 @@ fn session_metadata_base_text(
         "Size: {}  Lines: +{added_lines} / -{deleted_lines}  Timer: {timer}  Model: {}  \
          Reasoning: {}  Tokens: {input_tokens}/{output_tokens}",
         session.size,
-        session.model.as_str(),
+        session.agent.model().as_str(),
         reasoning_level.as_str(),
     )
 }

@@ -375,7 +375,7 @@ impl SessionManager {
     pub(crate) fn apply_session_model_updated(
         &mut self,
         session_id: &str,
-        session_model: AgentModel,
+        session_agent: crate::domain::agent::AgentSelection,
     ) {
         if let Some(session) = self
             .state
@@ -383,7 +383,7 @@ impl SessionManager {
             .iter_mut()
             .find(|session| session.id == session_id)
         {
-            session.model = session_model;
+            session.agent = session_agent;
         }
     }
 
@@ -823,7 +823,7 @@ mod tests {
 
     use super::*;
     use crate::app::{App, AppEvent, SyncSessionStartError, Tab};
-    use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
+    use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel};
     use crate::domain::session::{
         DailyActivity, SESSION_DATA_DIR, Session, SessionHandles, SessionSize, SessionStats, Status,
     };
@@ -1434,7 +1434,10 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            model: AgentModel::AntigravityGemini3FlashPreview,
+            agent: crate::domain::agent::AgentSelection::new(
+                crate::domain::agent::AgentKind::Antigravity,
+                crate::domain::agent::AgentModel::Gemini3FlashPreview,
+            ),
             output: String::new(),
             parent_session_id: None,
             project_name: String::new(),
@@ -1491,7 +1494,10 @@ mod tests {
                 in_progress_started_at: None,
                 in_progress_total_seconds: 0,
                 is_draft: false,
-                model: AgentModel::Gpt55,
+                agent: crate::domain::agent::AgentSelection::new(
+                    crate::domain::agent::AgentKind::Codex,
+                    AgentModel::Gpt55,
+                ),
                 output: String::new(),
                 parent_session_id: None,
                 project_name: "project".to_string(),
@@ -2218,8 +2224,8 @@ mod tests {
         assert_eq!(app.sessions.sessions()[0].status, Status::Draft);
         assert_eq!(app.sessions.selected_session_index(), Some(0));
         assert_eq!(
-            app.sessions.sessions()[0].model,
-            AgentKind::Antigravity.default_model()
+            app.sessions.sessions()[0].agent.model(),
+            AgentKind::Gemini.default_model()
         );
 
         // Check filesystem
@@ -2247,7 +2253,7 @@ mod tests {
         assert_eq!(db_sessions[0].base_branch, "main");
         assert_eq!(
             db_sessions[0].model,
-            AgentKind::Antigravity.default_model().as_str()
+            AgentKind::Gemini.default_model().as_str()
         );
         assert!(!db_sessions[0].is_draft);
         assert_eq!(db_sessions[0].status, "Draft");
@@ -2370,9 +2376,12 @@ mod tests {
             .create_session()
             .await
             .expect("failed to create first session");
-        app.set_session_model(&first_session_id, AgentModel::Gpt55)
-            .await
-            .expect("failed to set session model");
+        app.set_session_model(
+            &first_session_id,
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+        )
+        .await
+        .expect("failed to set session model");
         let active_project_id = app.active_project_id();
         let default_smart_model_setting = app
             .services
@@ -2395,7 +2404,10 @@ mod tests {
             .iter()
             .find(|session| session.id == second_session_id)
             .expect("missing second session");
-        assert_eq!(second_session.model, AgentKind::Antigravity.default_model());
+        assert_eq!(
+            second_session.agent.model(),
+            AgentKind::Gemini.default_model()
+        );
         assert_eq!(default_smart_model_setting, None);
 
         let db_sessions = app
@@ -2411,7 +2423,7 @@ mod tests {
             .expect("missing second session in db");
         assert_eq!(
             db_second_session.model,
-            AgentKind::Antigravity.default_model().as_str()
+            AgentKind::Gemini.default_model().as_str()
         );
     }
 
@@ -2439,9 +2451,12 @@ mod tests {
             .expect("failed to create first session");
 
         // Act
-        app.set_session_model(&first_session_id, AgentModel::Gpt55)
-            .await
-            .expect("failed to set session model");
+        app.set_session_model(
+            &first_session_id,
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+        )
+        .await
+        .expect("failed to set session model");
         let default_smart_model_setting = app
             .services
             .db()
@@ -2467,7 +2482,7 @@ mod tests {
             .iter()
             .find(|session| session.id == second_session_id)
             .expect("missing second session");
-        assert_eq!(second_session.model, AgentModel::Gpt55);
+        assert_eq!(second_session.agent.model(), AgentModel::Gpt55);
     }
 
     #[tokio::test]
@@ -2500,7 +2515,10 @@ mod tests {
             .iter()
             .find(|session| session.id == session_id)
             .expect("missing created session");
-        assert_eq!(created_session.model, AgentModel::ClaudeHaiku4520251001);
+        assert_eq!(
+            created_session.agent.model(),
+            AgentModel::ClaudeHaiku4520251001
+        );
     }
 
     #[tokio::test]
@@ -2966,7 +2984,7 @@ mod tests {
                 &session_id,
                 prompt,
                 Arc::new(backend),
-                AgentModel::AntigravityGemini3FlashPreview,
+                AgentModel::Gemini3FlashPreview,
             )
             .await;
 
@@ -3390,7 +3408,10 @@ mod tests {
         // Assert
         assert_eq!(app.sessions.sessions().len(), 1);
         assert_eq!(app.sessions.sessions()[0].id, "12345678");
-        assert_eq!(app.sessions.sessions()[0].model, AgentModel::ClaudeOpus48);
+        assert_eq!(
+            app.sessions.sessions()[0].agent.model(),
+            AgentModel::ClaudeOpus48
+        );
         assert_eq!(app.sessions.sessions()[0].prompt, "Existing");
         let output = app.sessions.sessions()[0].output.clone();
         assert_eq!(output, "Output");
@@ -3464,7 +3485,10 @@ mod tests {
             .iter()
             .find(|session| session.id == created_session_id)
             .expect("missing created session");
-        assert_eq!(created_session.model, AgentModel::ClaudeHaiku4520251001);
+        assert_eq!(
+            created_session.agent.model(),
+            AgentModel::ClaudeHaiku4520251001
+        );
     }
 
     #[tokio::test]
@@ -4229,9 +4253,12 @@ mod tests {
             .await
             .expect("failed to persist initial prompt");
 
-        app.set_session_model(&session_id, AgentModel::ClaudeSonnet46)
-            .await
-            .expect("failed to switch model");
+        app.set_session_model(
+            &session_id,
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet46),
+        )
+        .await
+        .expect("failed to switch model");
 
         // Shared state to capture session_output from each turn's TurnRequest.
         let captured_session_outputs: Arc<Mutex<Vec<Option<String>>>> =
@@ -4545,7 +4572,7 @@ mod tests {
             &mock_git_client,
             &session_folder,
             "main",
-            AgentModel::ClaudeSonnet46,
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet46),
             false,
             false,
         )
@@ -5303,7 +5330,7 @@ mod tests {
             app.projects.git_branch().map(str::to_string),
             app.projects.working_dir().to_path_buf(),
             Arc::new(mock_git_client),
-            AgentModel::AntigravityGemini3FlashPreview,
+            AgentModel::Gemini3FlashPreview,
         )
         .await;
 
@@ -5340,7 +5367,7 @@ mod tests {
             app.projects.git_branch().map(str::to_string),
             app.projects.working_dir().to_path_buf(),
             Arc::new(mock_git_client),
-            AgentModel::AntigravityGemini3FlashPreview,
+            AgentModel::Gemini3FlashPreview,
         )
         .await;
 
@@ -5364,7 +5391,7 @@ mod tests {
             app.projects.git_branch().map(str::to_string),
             app.projects.working_dir().to_path_buf(),
             app.services.git_client(),
-            AgentModel::AntigravityGemini3FlashPreview,
+            AgentModel::Gemini3FlashPreview,
         )
         .await;
 
@@ -5426,7 +5453,7 @@ mod tests {
             Some("main".to_string()),
             dir.path().to_path_buf(),
             Arc::new(mock_git_client),
-            AgentModel::AntigravityGemini3FlashPreview,
+            AgentModel::Gemini3FlashPreview,
         )
         .await;
 
@@ -5720,9 +5747,12 @@ mod tests {
             .create_session()
             .await
             .expect("failed to create session");
-        app.set_session_model(&session_id, AgentModel::Gpt55)
-            .await
-            .expect("failed to set app-server model");
+        app.set_session_model(
+            &session_id,
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+        )
+        .await
+        .expect("failed to set app-server model");
 
         // Act
         app.sessions
@@ -5791,9 +5821,12 @@ mod tests {
             .create_session()
             .await
             .expect("failed to create session");
-        app.set_session_model(&session_id, AgentModel::Gpt55)
-            .await
-            .expect("failed to set app-server model");
+        app.set_session_model(
+            &session_id,
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+        )
+        .await
+        .expect("failed to set app-server model");
 
         // Act
         app.sessions

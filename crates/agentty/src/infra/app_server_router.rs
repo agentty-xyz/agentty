@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 
 use crate::domain::agent::AgentKind;
 use crate::infra::agent;
-use crate::infra::agent::app_server::RealCodexAppServerClient;
+use crate::infra::agent::app_server::{RealCodexAppServerClient, RealGeminiAcpClient};
 use crate::infra::app_server::{
     AppServerClient, AppServerError, AppServerFuture, AppServerStreamEvent, AppServerTurnRequest,
     AppServerTurnResponse,
@@ -15,17 +15,27 @@ use crate::infra::app_server::{
 /// Production router that dispatches app-server turns by model provider.
 pub struct RoutingAppServerClient {
     codex_client: Arc<dyn AppServerClient>,
+    gemini_client: Arc<dyn AppServerClient>,
 }
 
 impl RoutingAppServerClient {
-    /// Creates a router backed by the production Codex app-server client.
+    /// Creates a router backed by production Codex and Gemini clients.
     pub fn new() -> Self {
-        Self::new_with_client(Arc::new(RealCodexAppServerClient::new()))
+        Self::new_with_clients(
+            Arc::new(RealCodexAppServerClient::new()),
+            Arc::new(RealGeminiAcpClient::new()),
+        )
     }
 
-    /// Creates a router with an injected Codex provider client.
-    pub fn new_with_client(codex_client: Arc<dyn AppServerClient>) -> Self {
-        Self { codex_client }
+    /// Creates a router with injected provider clients.
+    pub fn new_with_clients(
+        codex_client: Arc<dyn AppServerClient>,
+        gemini_client: Arc<dyn AppServerClient>,
+    ) -> Self {
+        Self {
+            codex_client,
+            gemini_client,
+        }
     }
 }
 
@@ -42,6 +52,7 @@ impl AppServerClient for RoutingAppServerClient {
         stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
     ) -> AppServerFuture<Result<AppServerTurnResponse, AppServerError>> {
         let codex_client = Arc::clone(&self.codex_client);
+        let gemini_client = Arc::clone(&self.gemini_client);
         let model = request.model.clone();
 
         Box::pin(async move {
@@ -51,6 +62,7 @@ impl AppServerClient for RoutingAppServerClient {
 
             match provider_kind {
                 AgentKind::Codex => codex_client.run_turn(request, stream_tx).await,
+                AgentKind::Gemini => gemini_client.run_turn(request, stream_tx).await,
                 AgentKind::Antigravity => Err(AppServerError::Provider(
                     "Antigravity does not support app-server session execution".to_string(),
                 )),
@@ -61,12 +73,17 @@ impl AppServerClient for RoutingAppServerClient {
         })
     }
 
-    /// Shuts down the session on the Codex app-server client.
+    /// Shuts down the session on both provider clients concurrently so one
+    /// slow backend cannot block cleanup of the other.
     fn shutdown_session(&self, session_id: String) -> AppServerFuture<()> {
         let codex_client = Arc::clone(&self.codex_client);
+        let gemini_client = Arc::clone(&self.gemini_client);
 
         Box::pin(async move {
-            codex_client.shutdown_session(session_id).await;
+            tokio::join!(
+                codex_client.shutdown_session(session_id.clone()),
+                gemini_client.shutdown_session(session_id),
+            );
         })
     }
 }
@@ -93,7 +110,12 @@ mod tests {
                 })
             })
         });
-        let app_server_client = RoutingAppServerClient::new_with_client(Arc::new(codex_client));
+        let mut gemini_client = MockAppServerClient::new();
+        gemini_client.expect_run_turn().times(0);
+        let app_server_client = RoutingAppServerClient::new_with_clients(
+            Arc::new(codex_client),
+            Arc::new(gemini_client),
+        );
         let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
         let request = AppServerTurnRequest {
             folder: std::env::temp_dir(),
@@ -118,11 +140,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_turn_routes_gemini_models_to_gemini_client() {
+        // Arrange
+        let mut codex_client = MockAppServerClient::new();
+        codex_client.expect_run_turn().times(0);
+        let mut gemini_client = MockAppServerClient::new();
+        gemini_client.expect_run_turn().times(1).returning(|_, _| {
+            Box::pin(async {
+                Ok(AppServerTurnResponse {
+                    assistant_message: "gemini".to_string(),
+                    context_reset: false,
+                    input_tokens: 3,
+                    output_tokens: 4,
+                    pid: Some(222),
+                    provider_conversation_id: Some("thread-gemini".to_string()),
+                })
+            })
+        });
+        let app_server_client = RoutingAppServerClient::new_with_clients(
+            Arc::new(codex_client),
+            Arc::new(gemini_client),
+        );
+        let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
+        let request = AppServerTurnRequest {
+            folder: std::env::temp_dir(),
+            live_session_output: None,
+            model: AgentModel::Gemini3FlashPreview.as_str().to_string(),
+            prompt: "prompt".into(),
+            request_kind: crate::infra::channel::AgentRequestKind::SessionStart,
+            provider_conversation_id: None,
+            persisted_instruction_conversation_id: None,
+            reasoning_level: ReasoningLevel::default(),
+            session_id: "session-1".to_string(),
+        };
+
+        // Act
+        let response = app_server_client
+            .run_turn(request, stream_tx)
+            .await
+            .expect("run_turn should succeed");
+
+        // Assert
+        assert_eq!(response.assistant_message, "gemini");
+    }
+
+    #[tokio::test]
     async fn run_turn_returns_error_for_unknown_model() {
         // Arrange
         let mut codex_client = MockAppServerClient::new();
         codex_client.expect_run_turn().times(0);
-        let app_server_client = RoutingAppServerClient::new_with_client(Arc::new(codex_client));
+        let mut gemini_client = MockAppServerClient::new();
+        gemini_client.expect_run_turn().times(0);
+        let app_server_client = RoutingAppServerClient::new_with_clients(
+            Arc::new(codex_client),
+            Arc::new(gemini_client),
+        );
         let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
         let request = AppServerTurnRequest {
             folder: std::env::temp_dir(),
@@ -155,7 +227,15 @@ mod tests {
             .expect_shutdown_session()
             .times(1)
             .returning(|_| Box::pin(async {}));
-        let app_server_client = RoutingAppServerClient::new_with_client(Arc::new(codex_client));
+        let mut gemini_client = MockAppServerClient::new();
+        gemini_client
+            .expect_shutdown_session()
+            .times(1)
+            .returning(|_| Box::pin(async {}));
+        let app_server_client = RoutingAppServerClient::new_with_clients(
+            Arc::new(codex_client),
+            Arc::new(gemini_client),
+        );
 
         // Act
         app_server_client

@@ -19,7 +19,7 @@ use crate::app::session::SessionError;
 use crate::app::{
     AppEvent, AppServices, ProjectManager, SessionManager, agentty_home, review_request, setting,
 };
-use crate::domain::agent::{AgentModel, ReasoningLevel};
+use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel};
 use crate::domain::session::{
     ReviewRequest, SESSION_DATA_DIR, Session, SessionHandles, SessionId, Status,
     can_mutate_session_branch_in_stack as stack_can_mutate_session_branch,
@@ -61,7 +61,7 @@ struct BuildSessionCommandInput {
     is_first_message: bool,
     published_upstream_ref: Option<String>,
     prompt: TurnPrompt,
-    session_model: AgentModel,
+    session_agent: AgentSelection,
     session_output: Option<String>,
 }
 
@@ -244,9 +244,10 @@ impl SessionManager {
         base_branch: &str,
         parent_session_id: Option<&str>,
     ) -> Result<String, SessionError> {
-        let session_model = self
-            .resolve_default_session_model(services, project_id)
+        let session_agent = self
+            .resolve_default_session_agent(services, project_id)
             .await;
+        let session_model = session_agent.model();
         self.default_session_model = session_model;
 
         let session_id = Uuid::new_v4().to_string();
@@ -258,12 +259,16 @@ impl SessionManager {
         }
 
         let insert_result = if let Some(parent_session_id) = parent_session_id {
+            let session_agent_kind = session_agent.kind().to_string();
             services
                 .db()
                 .sessions()
-                .insert_stacked_draft_session(
+                .insert_stacked_draft_session_with_agent(
                     &session_id,
-                    session_model.as_str(),
+                    db::PersistedSessionAgentModel {
+                        agent: &session_agent_kind,
+                        model: session_model.as_str(),
+                    },
                     base_branch,
                     &Status::Draft.to_string(),
                     parent_session_id,
@@ -271,11 +276,13 @@ impl SessionManager {
                 )
                 .await
         } else {
+            let session_agent_kind = session_agent.kind().to_string();
             services
                 .db()
                 .sessions()
-                .insert_draft_session(
+                .insert_draft_session_with_agent(
                     &session_id,
+                    &session_agent_kind,
                     session_model.as_str(),
                     base_branch,
                     &Status::Draft.to_string(),
@@ -308,9 +315,10 @@ impl SessionManager {
         let base_branch = projects.git_branch().ok_or_else(|| {
             SessionError::Workflow("Git branch is required to create a session".to_string())
         })?;
-        let session_model = self
-            .resolve_default_session_model(services, projects.active_project_id())
+        let session_agent = self
+            .resolve_default_session_agent(services, projects.active_project_id())
             .await;
+        let session_model = session_agent.model();
         self.default_session_model = session_model;
 
         let session_id = Uuid::new_v4().to_string();
@@ -342,11 +350,13 @@ impl SessionManager {
         )
         .await?;
 
+        let session_agent_kind = session_agent.kind().to_string();
         if let Err(error) = services
             .db()
             .sessions()
-            .insert_session(
+            .insert_session_with_agent(
                 &session_id,
+                &session_agent_kind,
                 session_model.as_str(),
                 base_branch,
                 &Status::Draft.to_string(),
@@ -371,7 +381,7 @@ impl SessionManager {
 
         Self::record_session_creation_activity(services, &session_id).await;
 
-        if let Err(error) = agent::create_backend(session_model.kind()).setup(&folder) {
+        if let Err(error) = agent::create_backend(session_agent.kind()).setup(&folder) {
             self.rollback_failed_session_creation(
                 services,
                 &folder,
@@ -458,7 +468,7 @@ impl SessionManager {
         services: &AppServices,
         session_id: &str,
     ) -> Result<(), SessionError> {
-        let (base_branch, folder, persisted_session_id, session_model) = {
+        let (base_branch, folder, persisted_session_id, session_agent) = {
             let session = self.session_or_err(session_id)?;
             if !session.is_draft_session() {
                 return Ok(());
@@ -468,7 +478,7 @@ impl SessionManager {
                 session.base_branch.clone(),
                 session.folder.clone(),
                 session.id.clone(),
-                session.model,
+                session.agent,
             )
         };
 
@@ -481,7 +491,7 @@ impl SessionManager {
                 &persisted_session_id,
             )
             .await?;
-            agent::create_backend(session_model.kind())
+            agent::create_backend(session_agent.kind())
                 .setup(&folder)
                 .map_err(|error| {
                     SessionError::Workflow(format!("Failed to setup session backend: {error}"))
@@ -503,7 +513,7 @@ impl SessionManager {
         )
         .await?;
 
-        if let Err(error) = agent::create_backend(session_model.kind()).setup(&folder) {
+        if let Err(error) = agent::create_backend(session_agent.kind()).setup(&folder) {
             let cleanup_errors = Self::cleanup_session_worktree_resources(
                 services.fs_client().clone(),
                 services.git_client(),
@@ -636,7 +646,7 @@ impl SessionManager {
         let (
             folder,
             persisted_session_id,
-            session_model,
+            session_agent,
             staged_attachments,
             staged_prompt,
             title_to_save,
@@ -668,7 +678,7 @@ impl SessionManager {
             (
                 session.folder.clone(),
                 session.id.clone(),
-                session.model,
+                session.agent,
                 staged_attachments,
                 staged_prompt,
                 title_to_save,
@@ -684,15 +694,9 @@ impl SessionManager {
                     "Session project is required to stage draft prompts".to_string(),
                 )
             })?;
-        let project_working_dir = self.load_project_path(services, project_id).await?;
-        let title_generation_model =
-            setting::load_default_fast_model_setting(services, Some(project_id), session_model)
-                .await;
-        let title_generation_folder = if services.fs_client().is_dir(folder.clone()) {
-            folder.clone()
-        } else {
-            project_working_dir
-        };
+        let (title_generation_folder, title_generation_agent) = self
+            .draft_title_generation_context(services, project_id, session_agent, folder)
+            .await?;
 
         Self::persist_staged_draft(
             services,
@@ -721,7 +725,7 @@ impl SessionManager {
             &persisted_session_id,
             &title_generation_folder,
             &title_generation_prompt,
-            title_generation_model,
+            title_generation_agent,
             Some(title_generation_task_generation),
         );
         self.replace_title_generation_task(
@@ -737,6 +741,36 @@ impl SessionManager {
         );
 
         Ok(())
+    }
+
+    /// Loads the folder and agent/model selection used for draft title
+    /// generation.
+    async fn draft_title_generation_context(
+        &self,
+        services: &AppServices,
+        project_id: i64,
+        session_agent: AgentSelection,
+        session_folder: PathBuf,
+    ) -> Result<(PathBuf, AgentSelection), SessionError> {
+        let project_working_dir = self.load_project_path(services, project_id).await?;
+        let title_generation_model = setting::load_default_fast_model_setting(
+            services,
+            Some(project_id),
+            session_agent.model(),
+        )
+        .await;
+        let title_generation_agent = crate::agent::resolve_agent_selection_for_model(
+            title_generation_model,
+            session_agent.kind(),
+            &services.available_agent_kinds(),
+        );
+        let title_generation_folder = if services.fs_client().is_dir(session_folder.clone()) {
+            session_folder
+        } else {
+            project_working_dir
+        };
+
+        Ok((title_generation_folder, title_generation_agent))
     }
 
     /// Returns whether a staged draft can start under the current one-level
@@ -856,7 +890,7 @@ impl SessionManager {
             .await?;
 
         let session_index = self.session_index_or_err(session_id)?;
-        let (persisted_session_id, session_model, title) = {
+        let (persisted_session_id, session_agent, title) = {
             let session = self
                 .session_at_mut(session_index)
                 .ok_or(SessionError::NotFound)?;
@@ -865,9 +899,9 @@ impl SessionManager {
 
             let title = prompt.text.clone();
             session.title = Some(title.clone());
-            let session_model = session.model;
+            let session_agent = session.agent;
 
-            (session.id.clone(), session_model, title)
+            (session.id.clone(), session_agent, title)
         };
 
         let handles = self.session_handles_or_err(&persisted_session_id)?;
@@ -919,7 +953,7 @@ impl SessionManager {
             prompt: prompt.clone(),
             turn_metadata: TurnMetadata {
                 published_upstream_ref: None,
-                session_model,
+                session_agent,
             },
         };
         if let Err(error) = self
@@ -946,8 +980,8 @@ impl SessionManager {
         let Ok(session) = self.session_or_err(session_id) else {
             return;
         };
-        let session_model = session.model;
-        self.reply_impl(services, session_id, prompt, session_model)
+        let session_agent = session.agent;
+        self.reply_impl(services, session_id, prompt, session_agent)
             .await;
     }
 
@@ -1004,7 +1038,7 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Updates and persists the model for a single session.
+    /// Updates and persists the agent/model selection for a single session.
     ///
     /// When `LastUsedModelAsDefault` is enabled, this also persists the chosen
     /// session model as `DefaultSmartModel`.
@@ -1020,19 +1054,24 @@ impl SessionManager {
         &mut self,
         services: &AppServices,
         session_id: &str,
-        session_model: AgentModel,
+        session_agent: AgentSelection,
     ) -> Result<(), SessionError> {
+        let session_model = session_agent.model();
         let session_index = self.session_index_or_err(session_id)?;
+        let agent_changed = self
+            .session_at(session_index)
+            .is_some_and(|session| session.agent != session_agent);
         let model_changed = self
             .session_at(session_index)
-            .is_some_and(|session| session.model != session_model);
+            .is_some_and(|session| session.agent.model() != session_model);
+        let session_agent_kind = session_agent.kind().to_string();
 
         services
             .db()
             .sessions()
-            .update_session_model(session_id, session_model.as_str())
+            .update_session_agent_model(session_id, &session_agent_kind, session_model.as_str())
             .await?;
-        if model_changed {
+        if agent_changed {
             services
                 .db()
                 .sessions()
@@ -1069,10 +1108,10 @@ impl SessionManager {
 
         services.emit_app_event(AppEvent::SessionModelUpdated {
             session_id: SessionId::from(session_id),
-            session_model,
+            session_agent,
         });
 
-        if model_changed {
+        if agent_changed || model_changed {
             self.mark_history_replay_pending(session_id);
         }
 
@@ -1537,24 +1576,23 @@ impl SessionManager {
         services: &AppServices,
         session_id: &str,
         prompt: TurnPrompt,
-        session_model: AgentModel,
+        session_agent: AgentSelection,
     ) {
         let Ok(session_index) = self.session_index_or_err(session_id) else {
             return;
         };
         let should_replay_history = self.should_replay_history(session_id);
-        let (session_output, is_first_message, persisted_session_id, title_to_save) = match self
-            .prepare_reply_context(session_index, &prompt, session_model, should_replay_history)
-        {
-            Ok(Some(reply_context)) => reply_context,
-            Ok(None) => return,
-            Err(error) => {
-                self.append_reply_status_error(services, session_id, &error)
-                    .await;
+        let (session_output, is_first_message, persisted_session_id, title_to_save) =
+            match self.prepare_reply_context(session_index, &prompt, should_replay_history) {
+                Ok(Some(reply_context)) => reply_context,
+                Ok(None) => return,
+                Err(error) => {
+                    self.append_reply_status_error(services, session_id, &error)
+                        .await;
 
-                return;
-            }
-        };
+                    return;
+                }
+            };
 
         if should_replay_history {
             self.clear_history_replay_pending(&persisted_session_id);
@@ -1615,7 +1653,7 @@ impl SessionManager {
             is_first_message,
             published_upstream_ref,
             prompt: effective_prompt.clone(),
-            session_model,
+            session_agent,
             session_output,
         });
         self.enqueue_reply_command(
@@ -1639,7 +1677,6 @@ impl SessionManager {
         &mut self,
         session_index: usize,
         prompt: &TurnPrompt,
-        session_model: AgentModel,
         should_replay_history: bool,
     ) -> Result<Option<ReplyContext>, SessionError> {
         let Some(session_id) = self
@@ -1680,7 +1717,7 @@ impl SessionManager {
 
         let session_output = if !is_first_message
             && (should_replay_history
-                || agent::transport_mode(session_model.kind()).uses_app_server())
+                || agent::transport_mode(session.agent.kind()).uses_app_server())
         {
             Some(session.output.clone())
         } else {
@@ -1850,7 +1887,7 @@ impl SessionManager {
             is_first_message,
             published_upstream_ref,
             prompt,
-            session_model,
+            session_agent,
             session_output,
         } = input;
         let operation_id = Uuid::new_v4().to_string();
@@ -1866,7 +1903,7 @@ impl SessionManager {
             prompt,
             turn_metadata: TurnMetadata {
                 published_upstream_ref,
-                session_model,
+                session_agent,
             },
         }
     }
@@ -1938,7 +1975,7 @@ impl SessionManager {
         session_id: &str,
         folder: &Path,
         prompt: &str,
-        session_model: AgentModel,
+        session_agent: AgentSelection,
         tracked_generation: Option<u64>,
     ) -> tokio::task::JoinHandle<()> {
         let folder = folder.to_path_buf();
@@ -1964,7 +2001,7 @@ impl SessionManager {
             let Some(title_response) = SessionManager::run_title_generation_command(
                 folder.as_path(),
                 &title_generation_prompt,
-                session_model,
+                session_agent,
             )
             .await
             else {
@@ -2053,12 +2090,13 @@ impl SessionManager {
     async fn run_title_generation_command(
         folder: &Path,
         prompt: &str,
-        model: AgentModel,
+        session_agent: AgentSelection,
     ) -> Option<String> {
         let response = agent::submit_one_shot(agent::OneShotRequest {
+            agent_kind: session_agent.kind(),
             child_pid: None,
             folder,
-            model,
+            model: session_agent.model(),
             prompt,
             request_kind: AgentRequestKind::UtilityPrompt,
             reasoning_level: ReasoningLevel::default(),
@@ -2196,6 +2234,32 @@ impl SessionManager {
         GENERATED_SESSION_TITLE_PROGRESS_PREFIXES
             .iter()
             .any(|prefix| lower_title.starts_with(prefix))
+    }
+
+    /// Resolves the default agent/model selection for a new session.
+    ///
+    /// Default model settings are still model-only, so available provider order
+    /// decides ownership for shared Gemini model ids.
+    async fn resolve_default_session_agent(
+        &self,
+        services: &AppServices,
+        project_id: i64,
+    ) -> AgentSelection {
+        let session_model = self
+            .resolve_default_session_model(services, project_id)
+            .await;
+        let available_agent_kinds = services.available_agent_kinds();
+        let fallback_agent_kind = available_agent_kinds
+            .first()
+            .copied()
+            .unwrap_or(AgentKind::Antigravity);
+        let agent_kind = crate::agent::resolve_agent_kind_for_model(
+            session_model,
+            &available_agent_kinds,
+            fallback_agent_kind,
+        );
+
+        AgentSelection::new(agent_kind, session_model)
     }
 
     async fn resolve_default_session_model(
@@ -2733,15 +2797,19 @@ mod test_support {
             session_model: AgentModel,
         ) {
             let prompt = prompt.into();
+            let session_agent = self.session_or_err(session_id).map_or(
+                AgentSelection::new(AgentKind::Antigravity, session_model),
+                |session| session.agent,
+            );
             let channel: Arc<dyn crate::infra::channel::AgentChannel> =
                 Arc::new(crate::infra::channel::cli::CliAgentChannel::with_backend(
                     backend,
-                    session_model.kind(),
+                    session_agent.kind(),
                 ));
             self.worker_service
                 .test_agent_channels
                 .insert(session_id.to_string().into(), channel);
-            self.reply_impl(services, session_id, prompt, session_model)
+            self.reply_impl(services, session_id, prompt, session_agent)
                 .await;
         }
     }
@@ -2808,7 +2876,10 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            model: AgentModel::ClaudeSonnet46,
+            agent: crate::domain::agent::AgentSelection::new(
+                crate::domain::agent::AgentKind::Claude,
+                AgentModel::ClaudeSonnet46,
+            ),
             output: output.to_string(),
             parent_session_id: None,
             project_name: "project".to_string(),
@@ -2894,7 +2965,7 @@ mod tests {
                 .sessions()
                 .insert_draft_session(
                     &session.id,
-                    session.model.as_str(),
+                    session.agent.model().as_str(),
                     &session.base_branch,
                     &session.status.to_string(),
                     project_id,
@@ -2906,7 +2977,7 @@ mod tests {
                 .sessions()
                 .insert_session(
                     &session.id,
-                    session.model.as_str(),
+                    session.agent.model().as_str(),
                     &session.base_branch,
                     &session.status.to_string(),
                     project_id,
@@ -3930,7 +4001,7 @@ mod tests {
 
         // Act
         let context = session_manager
-            .prepare_reply_context(0, &turn_prompt, AgentModel::ClaudeSonnet46, false)
+            .prepare_reply_context(0, &turn_prompt, false)
             .expect("reply context should be available")
             .expect("session should produce reply context");
 
@@ -3961,7 +4032,7 @@ mod tests {
 
         // Act
         let context = session_manager
-            .prepare_reply_context(0, &prompt, AgentModel::ClaudeSonnet46, false)
+            .prepare_reply_context(0, &prompt, false)
             .expect("reply context should be available")
             .expect("session should produce reply context");
 
@@ -3987,8 +4058,7 @@ mod tests {
         let prompt = TurnPrompt::from_text("Another prompt".to_string());
 
         // Act
-        let result =
-            session_manager.prepare_reply_context(0, &prompt, AgentModel::ClaudeSonnet46, false);
+        let result = session_manager.prepare_reply_context(0, &prompt, false);
 
         // Assert
         let error = result.expect_err("in-progress session should block reply");
@@ -4354,7 +4424,7 @@ mod tests {
     async fn set_session_model_persists_new_model_and_clears_conversation_state() {
         // Arrange
         let mut session = test_session("Prompt", Status::Review, Some("Title"), "");
-        session.model = AgentModel::ClaudeSonnet46;
+        session.agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet46);
         let database = database_with_session(&session).await;
         database
             .sessions()
@@ -4381,7 +4451,11 @@ mod tests {
 
         // Act
         session_manager
-            .set_session_model(&services, "session-id", AgentModel::Gpt55)
+            .set_session_model(
+                &services,
+                "session-id",
+                AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+            )
             .await
             .expect("set session model should succeed");
         let persisted_model = database
@@ -4413,7 +4487,7 @@ mod tests {
             emitted_event,
             AppEvent::SessionModelUpdated {
                 session_id: "session-id".into(),
-                session_model: AgentModel::Gpt55,
+                session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
             }
         );
         assert!(session_manager.should_replay_history("session-id"));
@@ -4423,7 +4497,7 @@ mod tests {
     async fn set_session_model_keeps_conversation_state_when_model_does_not_change() {
         // Arrange
         let mut session = test_session("Prompt", Status::InProgress, Some("Title"), "");
-        session.model = AgentModel::ClaudeSonnet46;
+        session.agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet46);
         let database = database_with_session(&session).await;
         database
             .sessions()
@@ -4442,7 +4516,11 @@ mod tests {
 
         // Act
         session_manager
-            .set_session_model(&services, "session-id", AgentModel::ClaudeSonnet46)
+            .set_session_model(
+                &services,
+                "session-id",
+                AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet46),
+            )
             .await
             .expect("set session model should succeed");
         let preserved_provider = database
@@ -4458,7 +4536,7 @@ mod tests {
             emitted_event,
             AppEvent::SessionModelUpdated {
                 session_id: "session-id".into(),
-                session_model: AgentModel::ClaudeSonnet46,
+                session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet46),
             }
         );
         assert!(!session_manager.should_replay_history("session-id"));
@@ -4478,7 +4556,11 @@ mod tests {
 
         // Act
         let result = session_manager
-            .set_session_model(&services, "missing", AgentModel::Gpt55)
+            .set_session_model(
+                &services,
+                "missing",
+                AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+            )
             .await;
 
         // Assert

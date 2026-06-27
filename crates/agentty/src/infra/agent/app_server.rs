@@ -5,5 +5,7 @@
 //! top-level `infra/` modules.
 
 mod codex;
+mod gemini;
 
 pub(crate) use codex::RealCodexAppServerClient;
+pub(crate) use gemini::RealGeminiAcpClient;

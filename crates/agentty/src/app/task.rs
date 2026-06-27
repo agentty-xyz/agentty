@@ -327,7 +327,13 @@ impl TaskService {
             session_summary,
             |review_folder, review_model, review_prompt| {
                 Box::pin(async move {
+                    let agent_kind = crate::agent::resolve_agent_kind_for_model(
+                        review_model,
+                        AgentKind::ALL,
+                        AgentKind::Antigravity,
+                    );
                     agent::submit_one_shot(agent::OneShotRequest {
+                        agent_kind,
                         child_pid: None,
                         folder: review_folder,
                         model: review_model,

@@ -11,7 +11,9 @@ use super::worker::{SessionWorkerContext, TurnMetadata};
 use super::{SessionTaskService, isolation, post_turn};
 use crate::app::session::SessionError;
 use crate::app::{AppEvent, SessionManager};
-use crate::domain::agent::{AgentModel, ReasoningLevel};
+use crate::domain::agent::{
+    AgentKind, AgentModel, AgentSelection, ReasoningLevel, resolve_agent_selection_for_model,
+};
 use crate::domain::session::{SessionId, Status};
 use crate::domain::setting::SettingName;
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -179,7 +181,11 @@ pub(super) async fn run_channel_turn(
     let req = TurnRequest {
         folder: context.folder.clone(),
         live_session_output: Some(Arc::clone(&context.output)),
-        model: turn_metadata.session_model.provider_model_str().to_string(),
+        model: turn_metadata
+            .session_agent
+            .model()
+            .provider_model_str()
+            .to_string(),
         request_kind: request_kind.clone(),
         prompt: prompt.clone(),
         provider_conversation_id,
@@ -200,7 +206,7 @@ pub(super) async fn run_channel_turn(
         session_project_id,
         &request_kind,
         &prompt.text,
-        turn_metadata.session_model,
+        turn_metadata.session_agent,
     )
     .await;
 
@@ -463,7 +469,7 @@ async fn spawn_start_turn_title_generation(
     session_project_id: Option<i64>,
     request_kind: &AgentRequestKind,
     prompt: &str,
-    session_model: AgentModel,
+    session_agent: AgentSelection,
 ) {
     if !matches!(request_kind, AgentRequestKind::SessionStart) {
         return;
@@ -475,7 +481,9 @@ async fn spawn_start_turn_title_generation(
         SettingName::DefaultFastModel,
     )
     .await
-    .unwrap_or(session_model);
+    .unwrap_or(session_agent.model());
+    let title_agent =
+        resolve_agent_selection_for_model(title_model, session_agent.kind(), AgentKind::ALL);
 
     let _title_generation_task = SessionManager::spawn_session_title_generation_task(
         context.app_event_tx.clone(),
@@ -483,7 +491,7 @@ async fn spawn_start_turn_title_generation(
         &context.session_id,
         &context.folder,
         prompt,
-        title_model,
+        title_agent,
         None,
     );
 }

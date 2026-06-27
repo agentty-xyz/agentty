@@ -21,7 +21,7 @@ use crate::app::assist::{
 use crate::app::service::SessionUpdateVersionMap;
 use crate::app::session::{Clock, SessionError};
 use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager};
-use crate::domain::agent::{AgentModel, ReasoningLevel};
+use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel};
 use crate::domain::session::{PublishedBranchSyncStatus, SessionId, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::agent;
@@ -98,7 +98,7 @@ struct MergeTaskInput {
     id: SessionId,
     output: Arc<Mutex<String>>,
     repo_root: PathBuf,
-    session_model: AgentModel,
+    session_agent: AgentSelection,
     session_update_versions: SessionUpdateVersionMap,
     source_branch: String,
     status: Arc<Mutex<Status>>,
@@ -116,7 +116,7 @@ struct RebaseAssistInput {
     id: SessionId,
     output: Arc<Mutex<String>>,
     rebase_target: String,
-    session_model: AgentModel,
+    session_agent: AgentSelection,
     session_update_versions: SessionUpdateVersionMap,
 }
 
@@ -144,8 +144,8 @@ pub(super) struct RebaseCommandInput {
     pub(super) id: SessionId,
     /// Shared transcript buffer mirrored to persistence and UI.
     pub(super) output: Arc<Mutex<String>>,
-    /// Model used by agent-assisted conflict prompts.
-    pub(super) session_model: AgentModel,
+    /// Agent/model selection used by agent-assisted conflict prompts.
+    pub(super) session_agent: AgentSelection,
     /// Per-app update versions for targeted session refresh events.
     pub(super) session_update_versions: SessionUpdateVersionMap,
     /// Shared session lifecycle status.
@@ -184,7 +184,7 @@ struct SyncRebaseAssistInput {
     folder: PathBuf,
     fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
-    session_model: AgentModel,
+    session_agent: AgentSelection,
     sync_assist_client: Arc<dyn SyncAssistClient>,
 }
 
@@ -352,7 +352,7 @@ trait SyncAssistClient: Send + Sync {
         &self,
         folder: PathBuf,
         prompt: String,
-        session_model: AgentModel,
+        session_agent: AgentSelection,
     ) -> SyncAssistFuture<Result<(), SessionError>>;
 }
 
@@ -368,13 +368,14 @@ impl RealSyncAssistClient {
     async fn run_assist_command(
         folder: PathBuf,
         prompt: String,
-        session_model: AgentModel,
+        session_agent: AgentSelection,
     ) -> Result<(), SessionError> {
         // Success payload unused; run for side effects only.
         let _ = agent::submit_one_shot(agent::OneShotRequest {
+            agent_kind: session_agent.kind(),
             child_pid: None,
             folder: &folder,
-            model: session_model,
+            model: session_agent.model(),
             prompt: &prompt,
             request_kind: crate::infra::channel::AgentRequestKind::UtilityPrompt,
             reasoning_level: ReasoningLevel::default(),
@@ -391,9 +392,9 @@ impl SyncAssistClient for RealSyncAssistClient {
         &self,
         folder: PathBuf,
         prompt: String,
-        session_model: AgentModel,
+        session_agent: AgentSelection,
     ) -> SyncAssistFuture<Result<(), SessionError>> {
-        Box::pin(async move { Self::run_assist_command(folder, prompt, session_model).await })
+        Box::pin(async move { Self::run_assist_command(folder, prompt, session_agent).await })
     }
 }
 
@@ -499,11 +500,11 @@ impl SessionMergeService {
             ));
         }
 
-        let (db, folder, id, session_model) = (
+        let (db, folder, id, session_agent) = (
             services.db().clone(),
             session.folder.clone(),
             session.id.clone(),
-            session.model,
+            session.agent,
         );
         let (app_event_tx, clock, fs_client, git_client, session_update_versions) = (
             services.event_sender(),
@@ -572,7 +573,7 @@ impl SessionMergeService {
             id: id.clone(),
             output,
             repo_root,
-            session_model,
+            session_agent,
             session_update_versions,
             source_branch: session_branch(&id),
             status,
@@ -1170,7 +1171,7 @@ impl SessionManager {
             id: input.id.clone(),
             output: Arc::clone(&input.output),
             rebase_target: input.base_branch.clone(),
-            session_model: input.session_model,
+            session_agent: input.session_agent,
             session_update_versions: input.session_update_versions.clone(),
         }
     }
@@ -1338,13 +1339,18 @@ impl SessionManager {
     ) -> Result<SyncMainOutcome, SyncSessionStartError> {
         let fs_client: Arc<dyn FsClient> = Arc::new(fs::RealFsClient);
         let sync_assist_client: Arc<dyn SyncAssistClient> = Arc::new(RealSyncAssistClient);
+        let session_agent = crate::agent::resolve_agent_selection_for_model(
+            session_model,
+            AgentKind::Antigravity,
+            AgentKind::ALL,
+        );
 
         Self::sync_main_for_project_with_assist_client(
             default_branch,
             working_dir,
             fs_client,
             git_client,
-            session_model,
+            session_agent,
             sync_assist_client,
         )
         .await
@@ -1362,7 +1368,7 @@ impl SessionManager {
         working_dir: PathBuf,
         fs_client: Arc<dyn FsClient>,
         git_client: Arc<dyn GitClient>,
-        session_model: AgentModel,
+        session_agent: AgentSelection,
         sync_assist_client: Arc<dyn SyncAssistClient>,
     ) -> Result<SyncMainOutcome, SyncSessionStartError> {
         let default_branch = default_branch.ok_or_else(|| {
@@ -1403,7 +1409,7 @@ impl SessionManager {
                 folder: working_dir.clone(),
                 fs_client: Arc::clone(&fs_client),
                 git_client: Arc::clone(&git_client),
-                session_model,
+                session_agent,
                 sync_assist_client,
             };
             resolved_conflict_files =
@@ -1512,7 +1518,7 @@ impl SessionManager {
         let prompt = Self::rebase_assist_prompt(&input.base_branch, conflicted_files)?;
         input
             .sync_assist_client
-            .resolve_rebase_conflicts(input.folder.clone(), prompt, input.session_model)
+            .resolve_rebase_conflicts(input.folder.clone(), prompt, input.session_agent)
             .await
             .map_err(|error| error.with_context("Sync rebase assistance failed"))
     }
@@ -1586,7 +1592,7 @@ impl SessionManager {
             git_client,
             id,
             output,
-            session_model,
+            session_agent,
             session_update_versions,
             status,
         } = input;
@@ -1611,7 +1617,7 @@ impl SessionManager {
                 id: id.clone(),
                 output: Arc::clone(&output),
                 rebase_target,
-                session_model,
+                session_agent,
                 session_update_versions: session_update_versions.clone(),
             };
 
@@ -1706,14 +1712,19 @@ impl SessionManager {
         let auto_commit_model = SessionTaskService::load_auto_commit_model_setting(
             &input.db,
             &input.id,
-            input.session_model,
+            input.session_agent.model(),
         )
         .await;
+        let auto_commit_agent = crate::agent::resolve_agent_selection_for_model(
+            auto_commit_model,
+            input.session_agent.kind(),
+            AgentKind::ALL,
+        );
         match SessionTaskService::commit_session_changes(
             input.git_client.as_ref(),
             &input.folder,
             &input.rebase_target,
-            auto_commit_model,
+            auto_commit_agent,
             true,
             include_coauthored_by_agentty,
         )
@@ -2574,7 +2585,7 @@ impl SessionManager {
             git_client: Arc::clone(&input.git_client),
             id: input.id.to_string(),
             output: Arc::clone(&input.output),
-            session_model: input.session_model,
+            session_agent: input.session_agent,
             session_update_versions: input.session_update_versions.clone(),
         }
     }
@@ -2711,7 +2722,10 @@ mod tests {
                 id: "session-123".into(),
                 output: Arc::new(Mutex::new(String::new())),
                 rebase_target: "main".to_string(),
-                session_model: AgentModel::AntigravityGemini3FlashPreview,
+                session_agent: AgentSelection::new(
+                    AgentKind::Antigravity,
+                    AgentModel::Gemini3FlashPreview,
+                ),
                 session_update_versions: Arc::default(),
             },
         )
@@ -2743,7 +2757,10 @@ mod tests {
                 output: Arc::new(Mutex::new(String::new())),
                 repo_root,
                 session_update_versions: Arc::default(),
-                session_model: AgentModel::AntigravityGemini3FlashPreview,
+                session_agent: AgentSelection::new(
+                    AgentKind::Antigravity,
+                    AgentModel::Gemini3FlashPreview,
+                ),
                 source_branch: "wt/session-123".to_string(),
                 status: Arc::new(Mutex::new(Status::Merging)),
             },
@@ -2762,7 +2779,10 @@ mod tests {
             folder,
             fs_client: test_fs_client(),
             git_client,
-            session_model: AgentModel::AntigravityGemini3FlashPreview,
+            session_agent: AgentSelection::new(
+                AgentKind::Antigravity,
+                AgentModel::Gemini3FlashPreview,
+            ),
             sync_assist_client,
         }
     }
@@ -3232,7 +3252,10 @@ mod tests {
             id: "session-123".into(),
             output: Arc::new(Mutex::new(String::new())),
             rebase_target: "origin/main".to_string(),
-            session_model: AgentModel::AntigravityGemini3FlashPreview,
+            session_agent: AgentSelection::new(
+                AgentKind::Antigravity,
+                AgentModel::Gemini3FlashPreview,
+            ),
             session_update_versions: Arc::default(),
         };
 
@@ -3243,7 +3266,7 @@ mod tests {
         assert_eq!(input.id, cloned_input.id);
         assert_eq!(input.folder, cloned_input.folder);
         assert_eq!(input.rebase_target, cloned_input.rebase_target);
-        assert_eq!(input.session_model, cloned_input.session_model);
+        assert_eq!(input.session_agent, cloned_input.session_agent);
     }
 
     #[tokio::test]
@@ -3962,7 +3985,7 @@ mod tests {
             working_dir,
             test_fs_client(),
             Arc::new(mock_git_client),
-            AgentModel::AntigravityGemini3FlashPreview,
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini3FlashPreview),
             Arc::new(mock_sync_assist_client),
         )
         .await;
@@ -4051,7 +4074,7 @@ mod tests {
             working_dir,
             test_fs_client(),
             Arc::new(mock_git_client),
-            AgentModel::AntigravityGemini3FlashPreview,
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini3FlashPreview),
             Arc::new(mock_sync_assist_client),
         )
         .await;

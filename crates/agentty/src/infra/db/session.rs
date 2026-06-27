@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use sqlx::SqlitePool;
 
 use super::review::SessionReviewRequestRow;
-use crate::domain::agent::ReasoningLevel;
+use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
 use crate::domain::session::{SessionFollowUpTask, SessionId, SessionStats};
 use crate::domain::session_message::{SessionMessageKind, stored_message_content};
 use crate::infra::agent;
@@ -34,6 +34,14 @@ pub struct SessionTurnMetadata {
     pub(crate) token_usage_delta: SessionStats,
 }
 
+/// Borrowed persisted agent/model pair for newly inserted session rows.
+pub struct PersistedSessionAgentModel<'a> {
+    /// Persisted agent provider kind for the session.
+    pub agent: &'a str,
+    /// Persisted model identifier for the session.
+    pub model: &'a str,
+}
+
 /// Row returned when loading a session from the `session` table.
 ///
 /// Includes optional normalized forge review-request linkage metadata loaded
@@ -41,6 +49,8 @@ pub struct SessionTurnMetadata {
 /// published for remote review.
 pub struct SessionRow {
     pub added_lines: i64,
+    /// Persisted agent provider kind selected for this session.
+    pub agent: String,
     pub base_branch: String,
     pub created_at: i64,
     pub deleted_lines: i64,
@@ -73,6 +83,8 @@ pub struct SessionRow {
 pub struct SessionListRow {
     /// Persisted added-line count from the latest diff stats refresh.
     pub added_lines: i64,
+    /// Persisted agent provider kind for this session.
+    pub agent: String,
     /// Base branch used to create the session worktree.
     pub base_branch: String,
     /// Session creation timestamp in Unix seconds.
@@ -218,6 +230,18 @@ pub trait SessionRepository: Send + Sync {
         project_id: i64,
     ) -> Result<(), DbError>;
 
+    /// Inserts a newly created draft-session row with explicit provider
+    /// identity.
+    async fn insert_draft_session_with_agent(
+        &self,
+        id: &str,
+        agent: &str,
+        model: &str,
+        base_branch: &str,
+        status: &str,
+        project_id: i64,
+    ) -> Result<(), DbError>;
+
     /// Inserts a newly created stacked draft-session row.
     async fn insert_stacked_draft_session(
         &self,
@@ -229,10 +253,33 @@ pub trait SessionRepository: Send + Sync {
         project_id: i64,
     ) -> Result<(), DbError>;
 
+    /// Inserts a newly created stacked draft-session row with explicit provider
+    /// identity.
+    async fn insert_stacked_draft_session_with_agent(
+        &self,
+        id: &str,
+        agent_model: PersistedSessionAgentModel<'_>,
+        base_branch: &str,
+        status: &str,
+        parent_session_id: &str,
+        project_id: i64,
+    ) -> Result<(), DbError>;
+
     /// Inserts a newly created session row.
     async fn insert_session(
         &self,
         id: &str,
+        model: &str,
+        base_branch: &str,
+        status: &str,
+        project_id: i64,
+    ) -> Result<(), DbError>;
+
+    /// Inserts a newly created session row with explicit provider identity.
+    async fn insert_session_with_agent(
+        &self,
+        id: &str,
+        agent: &str,
         model: &str,
         base_branch: &str,
         status: &str,
@@ -368,6 +415,14 @@ pub trait SessionRepository: Send + Sync {
 
     /// Updates the persisted model for a session.
     async fn update_session_model(&self, id: &str, model: &str) -> Result<(), DbError>;
+
+    /// Updates the persisted agent provider and model for a session.
+    async fn update_session_agent_model(
+        &self,
+        id: &str,
+        agent: &str,
+        model: &str,
+    ) -> Result<(), DbError>;
 
     /// Updates the persisted merged commit hash for a session row.
     async fn update_session_merged_commit_hash(
@@ -506,6 +561,7 @@ struct SessionTimestampsRow {
 #[derive(sqlx::FromRow)]
 pub(crate) struct SessionJoinRow {
     added_lines: i64,
+    agent: String,
     base_branch: String,
     created_at: i64,
     deleted_lines: i64,
@@ -544,6 +600,7 @@ impl SessionJoinRow {
     pub(crate) fn into_session_row(self) -> SessionRow {
         let Self {
             added_lines,
+            agent,
             base_branch,
             created_at,
             deleted_lines,
@@ -591,6 +648,7 @@ impl SessionJoinRow {
 
         SessionRow {
             added_lines,
+            agent,
             base_branch,
             created_at,
             deleted_lines,
@@ -621,6 +679,7 @@ impl SessionJoinRow {
     pub(crate) fn fixture_for_test() -> Self {
         Self {
             added_lines: 14,
+            agent: "codex".to_string(),
             base_branch: "main".to_string(),
             created_at: 100,
             deleted_lines: 6,
@@ -662,6 +721,7 @@ impl SessionJoinRow {
 #[derive(sqlx::FromRow)]
 struct SessionListJoinRow {
     added_lines: i64,
+    agent: String,
     base_branch: String,
     created_at: i64,
     deleted_lines: i64,
@@ -697,6 +757,7 @@ impl SessionListJoinRow {
     fn into_session_list_row(self) -> SessionListRow {
         let Self {
             added_lines,
+            agent,
             base_branch,
             created_at,
             deleted_lines,
@@ -741,6 +802,7 @@ impl SessionListJoinRow {
 
         SessionListRow {
             added_lines,
+            agent,
             base_branch,
             created_at,
             deleted_lines,
@@ -946,9 +1008,37 @@ WHERE id = ?
         status: &str,
         project_id: i64,
     ) -> Result<(), DbError> {
+        let agent = persisted_agent_for_model(model);
+
         insert_session_with_draft_mode(
             &self.0,
             InsertSessionRow {
+                agent: &agent,
+                base_branch,
+                id,
+                is_draft: true,
+                model,
+                parent_session_id: None,
+                project_id,
+                status,
+            },
+        )
+        .await
+    }
+
+    async fn insert_draft_session_with_agent(
+        &self,
+        id: &str,
+        agent: &str,
+        model: &str,
+        base_branch: &str,
+        status: &str,
+        project_id: i64,
+    ) -> Result<(), DbError> {
+        insert_session_with_draft_mode(
+            &self.0,
+            InsertSessionRow {
+                agent,
                 base_branch,
                 id,
                 is_draft: true,
@@ -970,9 +1060,39 @@ WHERE id = ?
         parent_session_id: &str,
         project_id: i64,
     ) -> Result<(), DbError> {
+        let agent = persisted_agent_for_model(model);
+
         insert_session_with_draft_mode(
             &self.0,
             InsertSessionRow {
+                agent: &agent,
+                base_branch,
+                id,
+                is_draft: true,
+                model,
+                parent_session_id: Some(parent_session_id),
+                project_id,
+                status,
+            },
+        )
+        .await
+    }
+
+    async fn insert_stacked_draft_session_with_agent(
+        &self,
+        id: &str,
+        agent_model: PersistedSessionAgentModel<'_>,
+        base_branch: &str,
+        status: &str,
+        parent_session_id: &str,
+        project_id: i64,
+    ) -> Result<(), DbError> {
+        let PersistedSessionAgentModel { agent, model } = agent_model;
+
+        insert_session_with_draft_mode(
+            &self.0,
+            InsertSessionRow {
+                agent,
                 base_branch,
                 id,
                 is_draft: true,
@@ -993,9 +1113,37 @@ WHERE id = ?
         status: &str,
         project_id: i64,
     ) -> Result<(), DbError> {
+        let agent = persisted_agent_for_model(model);
+
         insert_session_with_draft_mode(
             &self.0,
             InsertSessionRow {
+                agent: &agent,
+                base_branch,
+                id,
+                is_draft: false,
+                model,
+                parent_session_id: None,
+                project_id,
+                status,
+            },
+        )
+        .await
+    }
+
+    async fn insert_session_with_agent(
+        &self,
+        id: &str,
+        agent: &str,
+        model: &str,
+        base_branch: &str,
+        status: &str,
+        project_id: i64,
+    ) -> Result<(), DbError> {
+        insert_session_with_draft_mode(
+            &self.0,
+            InsertSessionRow {
+                agent,
                 base_branch,
                 id,
                 is_draft: false,
@@ -1014,6 +1162,7 @@ WHERE id = ?
             r"
 SELECT session.base_branch AS base_branch,
        session.added_lines AS added_lines,
+       session.agent AS agent,
        session.created_at AS created_at,
        session.deleted_lines AS deleted_lines,
        session.id AS id,
@@ -1067,6 +1216,7 @@ ORDER BY session.updated_at DESC, session.id
             r#"
 SELECT session.base_branch AS "base_branch!",
        session.added_lines AS "added_lines!",
+       session.agent AS "agent!",
        session.created_at AS "created_at!",
        session.deleted_lines AS "deleted_lines!",
        session.id AS "id!",
@@ -1575,13 +1725,40 @@ WHERE id = ?
     }
 
     async fn update_session_model(&self, id: &str, model: &str) -> Result<(), DbError> {
+        let agent = persisted_agent_for_model(model);
+
         sqlx::query(
             r"
 UPDATE session
-SET model = ?
+SET agent = ?,
+    model = ?
 WHERE id = ?
 ",
         )
+        .bind(agent)
+        .bind(model)
+        .bind(id)
+        .execute(&self.0)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn update_session_agent_model(
+        &self,
+        id: &str,
+        agent: &str,
+        model: &str,
+    ) -> Result<(), DbError> {
+        sqlx::query(
+            r"
+UPDATE session
+SET agent = ?,
+    model = ?
+WHERE id = ?
+",
+        )
+        .bind(agent)
         .bind(model)
         .bind(id)
         .execute(&self.0)
@@ -1872,6 +2049,8 @@ WHERE id = ?
 
 /// Borrowed values used to insert one newly created session row.
 struct InsertSessionRow<'a> {
+    /// Agent provider kind persisted alongside the model for this session.
+    agent: &'a str,
     /// Base branch or parent branch used for future worktree materialization.
     base_branch: &'a str,
     /// Stable session identifier.
@@ -1895,6 +2074,7 @@ async fn insert_session_with_draft_mode(
     row: InsertSessionRow<'_>,
 ) -> Result<(), DbError> {
     let InsertSessionRow {
+        agent,
         base_branch,
         id,
         is_draft,
@@ -1908,6 +2088,7 @@ async fn insert_session_with_draft_mode(
         r"
 INSERT INTO session (
     id,
+    agent,
     model,
     base_branch,
     status,
@@ -1917,10 +2098,11 @@ INSERT INTO session (
     prompt,
     output
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ",
     )
     .bind(id)
+    .bind(agent)
     .bind(model)
     .bind(base_branch)
     .bind(status)
@@ -1933,6 +2115,54 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     .await?;
 
     Ok(())
+}
+
+/// Returns the persisted agent value paired with a newly saved model string.
+fn persisted_agent_for_model(model: &str) -> String {
+    AgentModel::parse_persisted(model).map_or_else(
+        |_| persisted_agent_for_unknown_model(model).to_string(),
+        |agent_model| persisted_agent_for_known_model(model, agent_model).to_string(),
+    )
+}
+
+/// Returns a compatibility agent value for known model strings passed through
+/// model-only legacy persistence helpers.
+fn persisted_agent_for_known_model(model: &str, agent_model: AgentModel) -> AgentKind {
+    if model.starts_with("claude-") {
+        return AgentKind::Claude;
+    }
+
+    if model.starts_with("gpt-") {
+        return AgentKind::Codex;
+    }
+
+    if model.starts_with("gemini-") {
+        return AgentKind::Antigravity;
+    }
+
+    AgentKind::ALL
+        .iter()
+        .copied()
+        .find(|agent_kind| agent_kind.supports_model(agent_model))
+        .unwrap_or(AgentKind::Antigravity)
+}
+
+/// Returns a compatibility agent value for tests or older callers that pass
+/// model strings outside the current curated model set.
+fn persisted_agent_for_unknown_model(model: &str) -> AgentKind {
+    if model.starts_with("claude-") {
+        return AgentKind::Claude;
+    }
+
+    if model.starts_with("gpt-") {
+        return AgentKind::Codex;
+    }
+
+    if model.starts_with("gemini-") {
+        return AgentKind::Antigravity;
+    }
+
+    AgentKind::Antigravity
 }
 
 /// Returns whether one `SQLx` error indicates the optional follow-up-task table

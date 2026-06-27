@@ -202,7 +202,7 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
 - `crates/agentty/src/infra/channel/cli.rs`: `CliAgentChannel`, the CLI subprocess
   adapter for Antigravity and Claude.
 - `crates/agentty/src/infra/channel/app_server.rs`: `AppServerAgentChannel`, the
-  app-server RPC adapter for Codex.
+  app-server RPC adapter for Codex and Gemini.
 - `crates/agentty/src/infra/agent/`: Per-provider backend command builders and response
   parsing.
 - `crates/agentty/src/infra/agent/availability.rs`: `AgentAvailabilityProbe` plus
@@ -222,10 +222,12 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
 - `crates/agentty/src/infra/agent/claude.rs`: Claude backend implementation.
 - `crates/agentty/src/infra/agent/app_server.rs` and
   `crates/agentty/src/infra/agent/app_server/`: Router plus provider-specific app-server
-  client trees kept private to the agent backend module. The Codex tree splits
-  `client.rs` orchestration from focused `lifecycle.rs`, `transport.rs`,
+  client trees kept private to the agent backend module. The Codex and Gemini trees
+  split `client.rs` orchestration from focused `lifecycle.rs`, `transport.rs`,
   `stream_parser.rs`, `policy.rs`, and `usage.rs` helpers.
 - `crates/agentty/src/infra/agent/codex.rs`: Codex backend runtime command construction.
+- `crates/agentty/src/infra/agent/gemini.rs`: Gemini ACP backend runtime command
+  construction.
 - `crates/agentty/src/infra/agent/prompt.rs`: Shared prompt preparation via
   `prepare_prompt_text()` for transcript replay and protocol preamble injection.
 - `crates/agentty/src/infra/agent/protocol.rs` and
@@ -234,7 +236,8 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
   `schema.rs` owns prompt and transport schema generation; `parse.rs` owns final and
   stream parsing plus shared debug diagnostics for schema mismatches.
 - `crates/agentty/src/infra/agent/response_parser.rs`: Provider-specific final and
-  stream output parsing plus usage extraction for Antigravity, Claude, and Codex.
+  stream output parsing plus usage extraction for Antigravity, Gemini, Claude, and
+  Codex.
 - `crates/agentty/src/infra/agent/submission.rs`: Shared one-shot prompt execution and
   strict protocol validation for generated titles, session commit messages, assist
   prompts, and review text. Concrete backends provide either an app-server client or a

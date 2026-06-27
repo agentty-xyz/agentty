@@ -2032,7 +2032,10 @@ mod tests {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.settings.default_review_model = AgentModel::ClaudeHaiku4520251001;
-        app.sessions.sessions_mut()[0].model = AgentModel::Gpt55;
+        app.sessions.sessions_mut()[0].agent = crate::domain::agent::AgentSelection::new(
+            crate::domain::agent::AgentKind::Codex,
+            AgentModel::Gpt55,
+        );
         app.sessions.sessions_mut()[0].status = Status::AgentReview;
         let output_width = 14;
         let session = &app.sessions.sessions()[0];

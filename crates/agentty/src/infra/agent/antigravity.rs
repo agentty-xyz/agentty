@@ -622,7 +622,7 @@ mod tests {
         let temp_directory = visible_tempdir();
         create_standard_git_directory(temp_directory.path());
         let backend = AntigravityBackend;
-        let requested_model = AgentModel::AntigravityGemini31ProPreview.provider_model_str();
+        let requested_model = AgentModel::Gemini31ProPreview.provider_model_str();
 
         // Act
         let command = AgentBackend::build_command(
@@ -679,7 +679,7 @@ mod tests {
         create_standard_git_directory(&session_folder);
         let _alias_cleanup = AliasCleanup::new(&session_folder);
         let backend = AntigravityBackend;
-        let requested_model = AgentModel::AntigravityGemini31ProPreview.provider_model_str();
+        let requested_model = AgentModel::Gemini31ProPreview.provider_model_str();
 
         // Act
         let command = AgentBackend::build_command(
@@ -954,7 +954,7 @@ mod tests {
                 folder: temp_directory.path(),
                 prompt: "continue work",
                 request_kind: &request_kind,
-                model: AgentModel::AntigravityGemini31ProPreview.provider_model_str(),
+                model: AgentModel::Gemini31ProPreview.provider_model_str(),
                 reasoning_level: ReasoningLevel::default(),
             },
             ProtocolSchemaInstructionMode::PromptSchema,

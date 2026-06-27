@@ -331,6 +331,7 @@ WHERE id = ?
         assert_eq!(session_row.base_branch, "main");
         assert_eq!(session_row.created_at, 100);
         assert_eq!(session_row.updated_at, 200);
+        assert_eq!(session_row.agent, "claude");
         assert_eq!(session_row.model, "claude-opus-4.1");
         assert_eq!(session_row.status, "Review");
         assert_eq!(session_row.in_progress_started_at, None);
@@ -1546,7 +1547,7 @@ WHERE model = ?
             .settings()
             .upsert_setting(
                 SettingName::DefaultSmartModel,
-                AgentModel::AntigravityGemini31ProPreview.as_str(),
+                AgentModel::Gemini31ProPreview.as_str(),
             )
             .await
             .expect("failed to persist default smart model");
@@ -1584,11 +1585,7 @@ WHERE model = ?
         // Assert
         assert_eq!(
             default_smart_model,
-            Some(
-                AgentModel::AntigravityGemini31ProPreview
-                    .as_str()
-                    .to_string()
-            )
+            Some(AgentModel::Gemini31ProPreview.as_str().to_string())
         );
         assert_eq!(
             default_fast_model,

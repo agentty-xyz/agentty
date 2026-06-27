@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 use crate::app::AppEvent;
 use crate::app::service::SessionUpdateVersionMap;
 use crate::app::session::{RunAgentAssistTaskInput, SessionError, SessionTaskService};
-use crate::domain::agent::AgentModel;
+use crate::domain::agent::AgentSelection;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::db::AppRepositories;
 use crate::infra::git::GitClient;
@@ -38,8 +38,8 @@ pub(super) struct AssistContext {
     pub(super) id: String,
     /// Shared output buffer mirrored to persistence and UI.
     pub(super) output: Arc<Mutex<String>>,
-    /// Model used when invoking agent-assisted recovery.
-    pub(super) session_model: AgentModel,
+    /// Agent/model selection used when invoking agent-assisted recovery.
+    pub(super) session_agent: AgentSelection,
     /// Per-app session update versions shared with the main runtime.
     pub(super) session_update_versions: SessionUpdateVersionMap,
 }
@@ -134,7 +134,7 @@ pub(super) async fn run_agent_assist(
         id: context.id.clone(),
         output: Arc::clone(&context.output),
         prompt: prompt.to_string(),
-        session_model: context.session_model,
+        session_agent: context.session_agent,
         session_update_versions: context.session_update_versions.clone(),
     })
     .await

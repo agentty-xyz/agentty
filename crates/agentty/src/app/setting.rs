@@ -507,12 +507,17 @@ impl SettingsManager {
                 if self.use_last_used_model_as_default {
                     "Last used model as default".to_string()
                 } else {
-                    display_model_selector_value(self.default_smart_model)
+                    display_model_selector_value(
+                        self.default_smart_model,
+                        &self.available_agent_kinds,
+                    )
                 }
             }
-            SettingRow::DefaultFastModel => display_model_selector_value(self.default_fast_model),
+            SettingRow::DefaultFastModel => {
+                display_model_selector_value(self.default_fast_model, &self.available_agent_kinds)
+            }
             SettingRow::DefaultReviewModel => {
-                display_model_selector_value(self.default_review_model)
+                display_model_selector_value(self.default_review_model, &self.available_agent_kinds)
             }
             SettingRow::IncludeCoauthoredByAgentty => {
                 bool_setting_display(self.include_coauthored_by_agentty)
@@ -823,9 +828,19 @@ fn bool_setting_display(setting_value: bool) -> String {
     }
 }
 
-/// Returns a model selector value prefixed with its owning agent.
-fn display_model_selector_value(model: AgentModel) -> String {
-    format!("{}/{}", model.kind(), model.as_str())
+/// Returns a model selector value prefixed with one available supporting agent.
+fn display_model_selector_value(model: AgentModel, available_agent_kinds: &[AgentKind]) -> String {
+    let fallback_agent_kind = available_agent_kinds
+        .first()
+        .copied()
+        .unwrap_or(AgentKind::Antigravity);
+    let agent_kind = crate::agent::resolve_agent_kind_for_model(
+        model,
+        available_agent_kinds,
+        fallback_agent_kind,
+    );
+
+    format!("{}/{}", agent_kind, model.as_str())
 }
 
 /// Renders `text` with a `|` cursor marker at `cursor_char_index`.
@@ -1554,13 +1569,13 @@ mod tests {
     fn settings_rows_show_default_smart_model_with_agent_prefix() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.default_smart_model = AgentModel::AntigravityGemini31ProPreview;
+        manager.default_smart_model = AgentModel::Gemini31ProPreview;
 
         // Act
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[2].1, "antigravity/gemini-3.1-pro-preview");
+        assert_eq!(rows[2].1, "gemini/gemini-3.1-pro-preview");
     }
 
     #[test]
@@ -1890,7 +1905,7 @@ mod tests {
             .upsert_project_setting(
                 project_id,
                 SettingName::DefaultSmartModel,
-                AgentModel::AntigravityGemini31ProPreview.as_str(),
+                AgentModel::Gemini31ProPreview.as_str(),
             )
             .await
             .expect("failed to persist unavailable smart model");
