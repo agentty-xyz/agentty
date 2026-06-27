@@ -12,7 +12,7 @@ use crate::app::session::SessionManager;
 use crate::app::setting::SettingsManager;
 use crate::app::startup::{AppStartup, StartupProjectContext, StartupSessionLoadContext};
 use crate::app::{AppError, review, session, sync, task};
-use crate::domain::agent::{AgentCliInfo, AgentKind};
+use crate::domain::agent::{AgentCliInfo, AgentKind, AgentModel};
 use crate::domain::system_log::{
     SystemLogBuffer, SystemLogCategory, SystemLogEvent, SystemLogLevel,
 };
@@ -122,6 +122,8 @@ impl App {
         .await?;
         SessionManager::fail_unfinished_operations_from_previous_run(
             repositories.clone(),
+            base_path.clone(),
+            services.git_client(),
             Arc::clone(&clock),
         )
         .await;
@@ -140,13 +142,12 @@ impl App {
             AgentKind::Antigravity.default_model(),
         )
         .await;
-        let sessions = AppStartup::load_startup_sessions(
+        let sessions = Self::load_and_restack_startup_sessions(
             &services,
-            StartupSessionLoadContext {
-                active_project_id,
-                default_session_model,
-                startup_working_dir: startup_working_dir.as_path(),
-            },
+            &event_tx,
+            active_project_id,
+            default_session_model,
+            startup_working_dir.as_path(),
         )
         .await;
         let focused_review_rows = repositories
@@ -191,6 +192,49 @@ impl App {
             sync_main_runner,
             tmux_client: clients.tmux_client,
         })
+    }
+
+    /// Loads startup sessions and requeues durable post-merge stack restacks
+    /// that were interrupted after persistence had recorded the stack base.
+    async fn load_and_restack_startup_sessions(
+        services: &AppServices,
+        event_tx: &mpsc::UnboundedSender<AppEvent>,
+        active_project_id: i64,
+        default_session_model: AgentModel,
+        startup_working_dir: &Path,
+    ) -> SessionManager {
+        let mut sessions = AppStartup::load_startup_sessions(
+            services,
+            StartupSessionLoadContext {
+                active_project_id,
+                default_session_model,
+                startup_working_dir,
+            },
+        )
+        .await;
+        let pending_stack_restack_failures = sessions
+            .rebase_pending_stack_restacks_for_project(services, active_project_id)
+            .await;
+        Self::emit_pending_stack_restack_failures(event_tx, pending_stack_restack_failures);
+
+        sessions
+    }
+
+    /// Emits startup system-log entries for pending stack restacks that could
+    /// not be re-enqueued.
+    fn emit_pending_stack_restack_failures(
+        event_tx: &mpsc::UnboundedSender<AppEvent>,
+        failures: Vec<(crate::domain::session::SessionId, session::SessionError)>,
+    ) {
+        for (session_id, error) in failures {
+            let event = SystemLogEvent::new(
+                SystemLogLevel::Warning,
+                SystemLogCategory::Session,
+                "Pending stacked child sync failed",
+            )
+            .with_detail(format!("{session_id}: {error}"));
+            let _ = event_tx.send(AppEvent::SystemLog { event });
+        }
     }
 
     /// Returns the optional agent availability probe used by the background

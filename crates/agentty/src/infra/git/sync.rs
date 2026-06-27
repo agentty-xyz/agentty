@@ -175,6 +175,38 @@ pub async fn head_hash(repo_path: PathBuf) -> Result<String, GitError> {
     Ok(hash)
 }
 
+/// Returns the full commit hash for a git reference.
+///
+/// # Arguments
+/// * `repo_path` - Path to the git repository or worktree.
+/// * `reference` - Branch, tag, or commit-ish to resolve.
+///
+/// # Returns
+/// The full commit hash as a string.
+///
+/// # Errors
+/// Returns a [`GitError`] if the reference cannot be resolved to a commit.
+pub async fn ref_hash(repo_path: PathBuf, reference: String) -> Result<String, GitError> {
+    let hash = run_git_command(
+        repo_path,
+        vec![
+            "rev-parse".to_string(),
+            "--verify".to_string(),
+            format!("{reference}^{{commit}}"),
+        ],
+        format!("Failed to resolve `{reference}` hash"),
+    )
+    .await?;
+    let hash = hash.trim().to_string();
+    if hash.is_empty() {
+        return Err(GitError::OutputParse(format!(
+            "Failed to resolve `{reference}` hash: empty output"
+        )));
+    }
+
+    Ok(hash)
+}
+
 /// Returns the full `HEAD` commit message, or `None` when no commits exist.
 ///
 /// # Errors

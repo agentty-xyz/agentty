@@ -18,8 +18,8 @@ use super::{
     is_worktree_clean, list_conflicted_files, list_local_commit_titles,
     list_staged_conflict_marker_files, list_upstream_commit_titles, main_repo_root, pull_rebase,
     push_current_branch, push_current_branch_to_remote_branch, rebase, rebase_continue,
-    rebase_start, remote_branch_exists, remove_worktree, repo_url, squash_merge, squash_merge_diff,
-    stage_all, tracked_worktree_status, worktree_status,
+    rebase_onto_start, rebase_start, ref_hash, remote_branch_exists, remove_worktree, repo_url,
+    squash_merge, squash_merge_diff, stage_all, tracked_worktree_status, worktree_status,
 };
 
 /// Boxed async result used by [`GitClient`] trait methods.
@@ -103,6 +103,17 @@ pub trait GitClient: Send + Sync {
         &self,
         repo_path: PathBuf,
         target_branch: String,
+    ) -> GitFuture<Result<RebaseStepResult, GitError>>;
+
+    /// Starts `git rebase --onto new_base old_base` in `repo_path`.
+    ///
+    /// # Errors
+    /// Returns an error when rebase cannot be started.
+    fn rebase_onto_start(
+        &self,
+        repo_path: PathBuf,
+        new_base: String,
+        old_base: String,
     ) -> GitFuture<Result<RebaseStepResult, GitError>>;
 
     /// Continues an in-progress rebase in `repo_path`.
@@ -194,6 +205,16 @@ pub trait GitClient: Send + Sync {
     /// # Errors
     /// Returns an error when `HEAD` cannot be resolved.
     fn head_hash(&self, repo_path: PathBuf) -> GitFuture<Result<String, GitError>>;
+
+    /// Returns the full commit hash for a branch, tag, or commit-ish ref.
+    ///
+    /// # Errors
+    /// Returns an error when the reference cannot be resolved to a commit.
+    fn ref_hash(
+        &self,
+        repo_path: PathBuf,
+        reference: String,
+    ) -> GitFuture<Result<String, GitError>>;
 
     /// Returns the full `HEAD` commit message for `repo_path`, or `None` when
     /// no commits exist.
@@ -430,6 +451,15 @@ impl GitClient for RealGitClient {
         Box::pin(async move { rebase_start(repo_path, target_branch).await })
     }
 
+    fn rebase_onto_start(
+        &self,
+        repo_path: PathBuf,
+        new_base: String,
+        old_base: String,
+    ) -> GitFuture<Result<RebaseStepResult, GitError>> {
+        Box::pin(async move { rebase_onto_start(repo_path, new_base, old_base).await })
+    }
+
     fn rebase_continue(&self, repo_path: PathBuf) -> GitFuture<Result<RebaseStepResult, GitError>> {
         Box::pin(async move { rebase_continue(repo_path).await })
     }
@@ -500,6 +530,14 @@ impl GitClient for RealGitClient {
 
     fn head_hash(&self, repo_path: PathBuf) -> GitFuture<Result<String, GitError>> {
         Box::pin(async move { head_hash(repo_path).await })
+    }
+
+    fn ref_hash(
+        &self,
+        repo_path: PathBuf,
+        reference: String,
+    ) -> GitFuture<Result<String, GitError>> {
+        Box::pin(async move { ref_hash(repo_path, reference).await })
     }
 
     fn head_commit_message(
@@ -1103,6 +1141,58 @@ mod tests {
 
         // Assert
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_ref_hash_resolves_branch_head() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path());
+        let expected_hash = run_git_command_stdout(dir.path(), &["rev-parse", "main"]);
+
+        // Act
+        let resolved_hash = ref_hash(dir.path().to_path_buf(), "main".to_string())
+            .await
+            .expect("failed to resolve main hash");
+
+        // Assert
+        assert_eq!(resolved_hash, expected_hash);
+    }
+
+    #[tokio::test]
+    async fn test_rebase_onto_start_replays_commits_after_old_base() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path());
+        run_git_command(dir.path(), &["checkout", "-b", "parent"]);
+        fs::write(dir.path().join("parent.txt"), "parent").expect("failed to write parent file");
+        run_git_command(dir.path(), &["add", "parent.txt"]);
+        run_git_command(dir.path(), &["commit", "-m", "Parent change"]);
+        let parent_tip = run_git_command_stdout(dir.path(), &["rev-parse", "HEAD"]);
+        run_git_command(dir.path(), &["checkout", "-b", "child"]);
+        fs::write(dir.path().join("child.txt"), "child").expect("failed to write child file");
+        run_git_command(dir.path(), &["add", "child.txt"]);
+        run_git_command(dir.path(), &["commit", "-m", "Child change"]);
+        run_git_command(dir.path(), &["checkout", "main"]);
+        fs::write(dir.path().join("main.txt"), "main").expect("failed to write main file");
+        run_git_command(dir.path(), &["add", "main.txt"]);
+        run_git_command(dir.path(), &["commit", "-m", "Main change"]);
+        run_git_command(dir.path(), &["checkout", "child"]);
+
+        // Act
+        let result = rebase_onto_start(dir.path().to_path_buf(), "main".to_string(), parent_tip)
+            .await
+            .expect("failed to start rebase --onto");
+        let child_only_subjects = run_git_command_stdout(
+            dir.path(),
+            &["log", "--format=%s", "--reverse", "main..HEAD"],
+        );
+
+        // Assert
+        assert_eq!(result, RebaseStepResult::Completed);
+        assert_eq!(child_only_subjects, "Child change");
+        assert!(!dir.path().join("parent.txt").exists());
+        assert!(dir.path().join("child.txt").exists());
     }
 
     #[tokio::test]

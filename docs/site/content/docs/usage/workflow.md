@@ -289,8 +289,9 @@ GitLab `!42`. | | `✓ <id>` | Review request `<id>` was merged. | | `✗ <id>` 
 request `<id>` was closed. |
 
 When a sync detects that the review request was merged, Agentty transitions the session
-straight to **Done**. Any stacked draft linked to that parent is restacked onto the
-parent's base branch so it can be started as a normal draft.
+straight to **Done**. Any stacked child linked to that parent is restacked onto the
+parent's base branch. Draft children can then be started as normal drafts, and
+review-ready materialized children are automatically synced onto the base branch.
 
 <a id="usage-review-comments-preview"></a> While in **Review** or **AgentReview**, press
 `d` to open the diff page. Its right panel starts on the git diff and renders cached
@@ -328,11 +329,16 @@ or no longer linked. Pressing `r` on the parent syncs the parent first, then mov
 review-ready materialized child through **Rebasing** so the child branch is replayed
 onto the latest parent branch state. When a later parent turn finishes back in
 **Review**, Agentty runs the same child rebase fan-out automatically. When the parent
-merges, Agentty clears the child parent link and retargets the child to the parent's
-base branch. When the parent is canceled, its stacked child is canceled too. If you
-decide not to start a staged bundle, return to the **Sessions** list and press `c` to
-cancel the still-unstarted draft session directly; when no lower stacked child keeps it
-visually attached, the canceled child moves into **Archive** immediately.
+merges, Agentty records the parent commit that the child was based on, clears the child
+parent link, retargets the child to the parent's base branch, and automatically syncs
+review-ready materialized children. That post-merge sync uses `git rebase --onto` so the
+child replays only its own commits after the parent's squash-merged commits have landed
+on the base branch. If Agentty restarts during a child sync, startup recovery aborts any
+stale in-progress rebase metadata and requeues pending post-merge child syncs. When the
+parent is canceled, its stacked child is canceled too. If you decide not to start a
+staged bundle, return to the **Sessions** list and press `c` to cancel the
+still-unstarted draft session directly; when no lower stacked child keeps it visually
+attached, the canceled child moves into **Archive** immediately.
 
 ### Typical Transitions
 

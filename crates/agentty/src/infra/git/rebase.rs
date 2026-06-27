@@ -127,6 +127,48 @@ pub async fn rebase_start(
     .await?
 }
 
+/// Starts a rebase that moves commits after `old_base` onto `new_base`.
+///
+/// This is used for stacked sessions to drop commits that came from a parent
+/// branch after that parent has moved or squash-merged into its own base.
+///
+/// # Arguments
+/// * `repo_path` - Path to the git repository or worktree.
+/// * `new_base` - Ref that should become the new base of replayed commits.
+/// * `old_base` - Commit/ref whose ancestors should be left behind.
+///
+/// # Returns
+/// A [`RebaseStepResult`] describing whether the rebase completed or
+/// encountered conflicts.
+///
+/// # Errors
+/// Returns a [`GitError`] for non-conflict git failures.
+pub async fn rebase_onto_start(
+    repo_path: PathBuf,
+    new_base: String,
+    old_base: String,
+) -> Result<RebaseStepResult, GitError> {
+    spawn_blocking(move || {
+        let rebase_args = ["rebase", "--onto", new_base.as_str(), old_base.as_str()];
+        let output = run_git_command_with_index_lock_retry(&repo_path, &rebase_args, &[])?;
+
+        if output.status.success() {
+            return Ok(RebaseStepResult::Completed);
+        }
+
+        let detail = command_output_detail(&output.stdout, &output.stderr);
+        if is_rebase_conflict(&detail) {
+            return Ok(RebaseStepResult::Conflict { detail });
+        }
+
+        Err(GitError::CommandFailed {
+            command: "git rebase --onto".to_string(),
+            stderr: format!("Failed to rebase onto {new_base} after {old_base}: {detail}."),
+        })
+    })
+    .await?
+}
+
 /// Continues an in-progress rebase.
 ///
 /// # Arguments

@@ -75,6 +75,48 @@ pub(super) enum RebaseAssistMode {
     OneShot,
 }
 
+/// Git rebase shape for one assisted session rebase.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum RebasePlan {
+    /// Runs a standard `git rebase <target>` workflow.
+    Target {
+        /// Branch or ref that receives the current branch commits.
+        target: String,
+    },
+    /// Runs `git rebase --onto <new_base> <old_base>` to replay only commits
+    /// after a recorded stack base.
+    Onto {
+        /// Ref that receives the replayed commits.
+        new_base: String,
+        /// Recorded parent/base commit that should be left behind.
+        old_base: String,
+    },
+}
+
+impl RebasePlan {
+    /// Builds a standard target rebase plan.
+    fn target(target: String) -> Self {
+        Self::Target { target }
+    }
+
+    /// Returns the destination ref shown to users and used for pre-rebase
+    /// auto-commit base detection.
+    fn target_label(&self) -> &str {
+        match self {
+            Self::Target { target } => target,
+            Self::Onto { new_base, .. } => new_base,
+        }
+    }
+
+    /// Returns the recorded stack base for `--onto` rebases, when present.
+    fn old_base(&self) -> Option<&str> {
+        match self {
+            Self::Target { .. } => None,
+            Self::Onto { old_base, .. } => Some(old_base),
+        }
+    }
+}
+
 /// Shared context needed to restore a failed merge-start attempt back to
 /// `Review`.
 struct MergeStartRestoreContext<'a> {
@@ -104,6 +146,30 @@ struct MergeTaskInput {
     status: Arc<Mutex<Status>>,
 }
 
+/// Metadata needed to finish a successful merge after git work completes.
+struct SuccessfulMergeCompletion<'a> {
+    /// Event channel used for status and stacked-child rebase notifications.
+    app_event_tx: &'a mpsc::UnboundedSender<AppEvent>,
+    /// Branch that received the squash merge.
+    base_branch: &'a str,
+    /// Clock boundary used when updating session status timing.
+    clock: &'a dyn Clock,
+    /// Repository boundary for session metadata updates.
+    db: &'a AppRepositories,
+    /// Session that finished merging.
+    id: &'a SessionId,
+    /// Canonical session commit message used for title and summary sync.
+    authoritative_commit_message: Option<&'a str>,
+    /// Commit hash created on the target branch, when the merge produced one.
+    merged_commit_hash: Option<&'a str>,
+    /// Pre-merge parent tip used as the old base for child restacks.
+    parent_commit_hash: String,
+    /// Per-session update versions used to reject stale status writes.
+    session_update_versions: &'a SessionUpdateVersionMap,
+    /// Live status handle for the merging session.
+    status: &'a Arc<Mutex<Status>>,
+}
+
 #[derive(Clone)]
 struct RebaseAssistInput {
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
@@ -115,7 +181,7 @@ struct RebaseAssistInput {
     git_client: Arc<dyn GitClient>,
     id: SessionId,
     output: Arc<Mutex<String>>,
-    rebase_target: String,
+    rebase_plan: RebasePlan,
     session_agent: AgentSelection,
     session_update_versions: SessionUpdateVersionMap,
 }
@@ -789,6 +855,39 @@ impl SessionMergeService {
         failures
     }
 
+    /// Starts automatic deterministic rebases for children retargeted by a
+    /// completed parent merge.
+    async fn rebase_sessions_after_parent_merge(
+        &self,
+        manager: &mut SessionManager,
+        services: &AppServices,
+        child_session_ids: Vec<SessionId>,
+    ) -> Vec<(SessionId, SessionError)> {
+        let mut failures = Vec::new();
+        for child_session_id in child_session_ids {
+            let should_rebase_child = manager
+                .sessions()
+                .iter()
+                .find(|session| session.id == child_session_id)
+                .is_some_and(|session| session.status.allows_review_actions());
+            if !should_rebase_child {
+                continue;
+            }
+
+            if let Err(error) = Self::enqueue_stacked_child_auto_rebase(
+                manager,
+                services,
+                child_session_id.as_str(),
+            )
+            .await
+            {
+                failures.push((child_session_id, error));
+            }
+        }
+
+        failures
+    }
+
     /// Returns the materialized stacked children that should sync after the
     /// parent reaches a review-ready state.
     fn rebaseable_stacked_child_session_ids(
@@ -1005,6 +1104,7 @@ impl SessionManager {
                 "Merge failed during rebase step: {error}"
             )));
         }
+        let parent_commit_hash = git_client.head_hash(folder.clone()).await?;
 
         let squash_diff = Self::load_squash_diff(
             git_client.as_ref(),
@@ -1054,36 +1154,69 @@ impl SessionManager {
             ))
         })?;
 
-        Self::persist_merged_session_metadata(
-            &db,
-            &id,
-            authoritative_commit_message.as_deref(),
-            merged_commit_hash.as_deref(),
-            &app_event_tx,
-        )
+        Self::complete_successful_merge(SuccessfulMergeCompletion {
+            app_event_tx: &app_event_tx,
+            authoritative_commit_message: authoritative_commit_message.as_deref(),
+            base_branch: &base_branch,
+            clock: clock.as_ref(),
+            db: &db,
+            id: &id,
+            merged_commit_hash: merged_commit_hash.as_deref(),
+            parent_commit_hash,
+            session_update_versions: &session_update_versions,
+            status: &status,
+        })
         .await?;
-        Self::restack_child_sessions_after_parent_merge(&db, &id, &base_branch).await?;
-
-        if !SessionTaskService::update_status(
-            &status,
-            clock.as_ref(),
-            &db,
-            &app_event_tx,
-            &session_update_versions,
-            &id,
-            Status::Done,
-        )
-        .await
-        {
-            return Err(SessionError::Workflow(
-                "Invalid status transition to Done".to_string(),
-            ));
-        }
 
         Ok(Self::merge_success_message(
             &source_branch,
             &base_branch,
             merge_outcome,
+        ))
+    }
+
+    /// Persists merge metadata, retargets stacked children, emits follow-up
+    /// restack events, and moves the parent session to `Done`.
+    ///
+    /// # Errors
+    /// Returns an error when metadata persistence, child restacking, or the
+    /// final status transition fails.
+    async fn complete_successful_merge(
+        input: SuccessfulMergeCompletion<'_>,
+    ) -> Result<(), SessionError> {
+        Self::persist_merged_session_metadata(
+            input.db,
+            input.id,
+            input.authoritative_commit_message,
+            input.merged_commit_hash,
+            input.app_event_tx,
+        )
+        .await?;
+        let restacked_child_session_ids = Self::restack_child_sessions_after_parent_merge(
+            input.db,
+            input.id,
+            input.base_branch,
+            Some(input.parent_commit_hash),
+        )
+        .await?;
+        Self::emit_stacked_parent_merge_completed(input.app_event_tx, restacked_child_session_ids);
+
+        if SessionTaskService::update_status(
+            input.status,
+            input.clock,
+            input.db,
+            input.app_event_tx,
+            input.session_update_versions,
+            input.id,
+            Status::Done,
+        )
+        .await
+        {
+            return Ok(());
+        }
+
+        Err(SessionError::Workflow(
+            "Invalid status transition to Done".to_string(),
         ))
     }
 
@@ -1098,12 +1231,41 @@ impl SessionManager {
         db: &AppRepositories,
         parent_session_id: &str,
         base_branch: &str,
-    ) -> Result<(), SessionError> {
-        db.sessions()
-            .restack_child_sessions_after_parent_merge(parent_session_id, base_branch)
-            .await?;
+        parent_commit_hash: Option<String>,
+    ) -> Result<Vec<SessionId>, SessionError> {
+        let child_session_ids = db
+            .sessions()
+            .restack_child_sessions_after_parent_merge(
+                parent_session_id,
+                base_branch,
+                parent_commit_hash,
+            )
+            .await?
+            .into_iter()
+            .map(SessionId::from)
+            .collect();
 
-        Ok(())
+        Ok(child_session_ids)
+    }
+
+    /// Emits the reducer event that starts post-merge child restack rebases.
+    pub(crate) fn emit_stacked_parent_merge_completed(
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+        child_session_ids: Vec<SessionId>,
+    ) {
+        if child_session_ids.is_empty() {
+            return;
+        }
+
+        if app_event_tx
+            .send(AppEvent::StackedParentMergeCompleted { child_session_ids })
+            .is_err()
+        {
+            warn!(
+                "failed to enqueue post-merge stacked child restacks because the app event \
+                 receiver is closed"
+            );
+        }
     }
 
     /// Persists post-merge metadata derived from the authoritative session
@@ -1170,7 +1332,7 @@ impl SessionManager {
             git_client: Arc::clone(&input.git_client),
             id: input.id.clone(),
             output: Arc::clone(&input.output),
-            rebase_target: input.base_branch.clone(),
+            rebase_plan: RebasePlan::target(input.base_branch.clone()),
             session_agent: input.session_agent,
             session_update_versions: input.session_update_versions.clone(),
         }
@@ -1319,6 +1481,38 @@ impl SessionManager {
     ) -> Vec<(SessionId, SessionError)> {
         SessionMergeService
             .rebase_stacked_children_after_parent_turn(self, services, parent_session_id)
+            .await
+    }
+
+    /// Starts deterministic restack rebases for children whose parent merged.
+    pub(crate) async fn rebase_sessions_after_parent_merge(
+        &mut self,
+        services: &AppServices,
+        child_session_ids: Vec<SessionId>,
+    ) -> Vec<(SessionId, SessionError)> {
+        SessionMergeService
+            .rebase_sessions_after_parent_merge(self, services, child_session_ids)
+            .await
+    }
+
+    /// Re-enqueues durable post-merge stack restacks that were interrupted
+    /// after persistence had already recorded the stack-base hash.
+    pub(crate) async fn rebase_pending_stack_restacks_for_project(
+        &mut self,
+        services: &AppServices,
+        project_id: i64,
+    ) -> Vec<(SessionId, SessionError)> {
+        let child_session_ids = services
+            .db()
+            .sessions()
+            .load_pending_stack_restack_session_ids(project_id)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(SessionId::from)
+            .collect();
+
+        self.rebase_sessions_after_parent_merge(services, child_session_ids)
             .await
     }
 
@@ -1598,7 +1792,7 @@ impl SessionManager {
         } = input;
 
         let rebase_result: Result<String, SessionError> = async {
-            let rebase_target = Self::resolve_session_rebase_target(
+            let rebase_plan = Self::resolve_session_rebase_plan(
                 &db,
                 git_client.as_ref(),
                 &folder,
@@ -1616,7 +1810,7 @@ impl SessionManager {
                 git_client: Arc::clone(&git_client),
                 id: id.clone(),
                 output: Arc::clone(&output),
-                rebase_target,
+                rebase_plan,
                 session_agent,
                 session_update_versions: session_update_versions.clone(),
             };
@@ -1647,12 +1841,44 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Resolves the git ref used for rebasing one session branch.
+    /// Resolves the git rebase plan used for one session branch.
     ///
     /// Unpublished sessions rebase against the stored local base branch. Once
     /// a session branch is published, the rebase first fetches and targets the
     /// remote base ref from the same remote as the published upstream so the
-    /// pull request comparison is updated against the forge-visible base.
+    /// pull request comparison is updated against the forge-visible base. When
+    /// the session has a recorded stack-base commit, the plan uses
+    /// `git rebase --onto` so parent commits are left behind deterministically.
+    ///
+    /// # Errors
+    /// Returns an error when the published-session fetch fails or stack-base
+    /// metadata cannot be loaded.
+    async fn resolve_session_rebase_plan(
+        db: &AppRepositories,
+        git_client: &dyn GitClient,
+        folder: &Path,
+        session_id: &str,
+        base_branch: &str,
+    ) -> Result<RebasePlan, SessionError> {
+        let rebase_target =
+            Self::resolve_session_rebase_target(db, git_client, folder, session_id, base_branch)
+                .await?;
+        let stack_base_commit_hash = db
+            .sessions()
+            .get_session_stack_base_commit_hash(session_id)
+            .await
+            .map_err(SessionError::Db)?;
+
+        Ok(match stack_base_commit_hash {
+            Some(old_base) => RebasePlan::Onto {
+                new_base: rebase_target,
+                old_base,
+            },
+            None => RebasePlan::target(rebase_target),
+        })
+    }
+
+    /// Resolves the git ref used as the destination for one session rebase.
     ///
     /// # Errors
     /// Returns an error when the published-session fetch fails.
@@ -1723,7 +1949,7 @@ impl SessionManager {
         match SessionTaskService::commit_session_changes(
             input.git_client.as_ref(),
             &input.folder,
-            &input.rebase_target,
+            input.rebase_plan.target_label(),
             auto_commit_agent,
             true,
             include_coauthored_by_agentty,
@@ -1768,13 +1994,63 @@ impl SessionManager {
 
             return Err(SessionError::Workflow(format!("Failed to sync: {error}")));
         }
+        Self::persist_stack_base_after_successful_rebase(&input).await?;
 
         let source_branch = session_branch(&input.id);
-        let rebase_target = &input.rebase_target;
+        let rebase_target = input.rebase_plan.target_label();
 
         Ok(format!(
             "Successfully synced {source_branch} onto {rebase_target}"
         ))
+    }
+
+    /// Updates stack-base metadata after a successful child rebase.
+    ///
+    /// Stacked children keep the resolved target hash so the next parent
+    /// movement can use `git rebase --onto <new-parent> <old-parent-tip>`.
+    /// Restacked children whose parent link has already been cleared drop the
+    /// hash after the deterministic `--onto` completes.
+    ///
+    /// # Errors
+    /// Returns an error when stack metadata cannot be loaded or persisted.
+    async fn persist_stack_base_after_successful_rebase(
+        input: &RebaseAssistInput,
+    ) -> Result<(), SessionError> {
+        let parent_session_id = input
+            .db
+            .sessions()
+            .get_session_parent_session_id(&input.id)
+            .await
+            .map_err(SessionError::Db)?;
+
+        if parent_session_id.is_some() {
+            let target_hash = input
+                .git_client
+                .ref_hash(
+                    input.folder.clone(),
+                    input.rebase_plan.target_label().to_string(),
+                )
+                .await?;
+            input
+                .db
+                .sessions()
+                .update_session_stack_base_commit_hash(&input.id, Some(target_hash))
+                .await
+                .map_err(SessionError::Db)?;
+
+            return Ok(());
+        }
+
+        if input.rebase_plan.old_base().is_some() {
+            input
+                .db
+                .sessions()
+                .update_session_stack_base_commit_hash(&input.id, None)
+                .await
+                .map_err(SessionError::Db)?;
+        }
+
+        Ok(())
     }
 
     /// Finalizes one rebase task by appending the outcome and restoring the
@@ -2337,11 +2613,8 @@ impl SessionManager {
         input: &RebaseAssistInput,
     ) -> Result<git::RebaseStepResult, SessionError> {
         let folder = input.folder.clone();
-        let rebase_target = input.rebase_target.clone();
-        match input
-            .git_client
-            .rebase_start(folder.clone(), rebase_target.clone())
-            .await
+        let rebase_plan = input.rebase_plan.clone();
+        match Self::start_git_rebase(input.git_client.as_ref(), folder.clone(), &rebase_plan).await
         {
             Ok(result) => Ok(result),
             Err(error) => {
@@ -2352,11 +2625,28 @@ impl SessionManager {
 
                 Self::recover_from_stale_rebase_start_error(input, &error_string).await?;
 
-                input
-                    .git_client
-                    .rebase_start(folder, rebase_target)
+                Self::start_git_rebase(input.git_client.as_ref(), folder, &rebase_plan)
                     .await
                     .map_err(SessionError::Git)
+            }
+        }
+    }
+
+    /// Starts the concrete git rebase command described by `rebase_plan`.
+    ///
+    /// # Errors
+    /// Returns an error when git cannot start the requested rebase.
+    async fn start_git_rebase(
+        git_client: &dyn GitClient,
+        folder: PathBuf,
+        rebase_plan: &RebasePlan,
+    ) -> Result<git::RebaseStepResult, git::GitError> {
+        match rebase_plan {
+            RebasePlan::Target { target } => git_client.rebase_start(folder, target.clone()).await,
+            RebasePlan::Onto { new_base, old_base } => {
+                git_client
+                    .rebase_onto_start(folder, new_base.clone(), old_base.clone())
+                    .await
             }
         }
     }
@@ -2458,7 +2748,8 @@ impl SessionManager {
         input: &RebaseAssistInput,
         conflicted_files: &[String],
     ) -> Result<(), SessionError> {
-        let prompt = Self::rebase_assist_prompt(&input.rebase_target, conflicted_files)?;
+        let prompt =
+            Self::rebase_assist_prompt(input.rebase_plan.target_label(), conflicted_files)?;
         match &input.assist_mode {
             RebaseAssistMode::ExistingSession(assist_client) => assist_client
                 .resolve_rebase_conflicts(prompt)
@@ -2721,7 +3012,7 @@ mod tests {
                 git_client,
                 id: "session-123".into(),
                 output: Arc::new(Mutex::new(String::new())),
-                rebase_target: "main".to_string(),
+                rebase_plan: RebasePlan::target("main".to_string()),
                 session_agent: AgentSelection::new(
                     AgentKind::Antigravity,
                     AgentModel::Gemini3FlashPreview,
@@ -3077,6 +3368,11 @@ mod tests {
             .in_sequence(&mut sequence)
             .returning(|_, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
         mock_git_client
+            .expect_head_hash()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Box::pin(async { Ok("parent-tip".to_string()) }));
+        mock_git_client
             .expect_squash_merge_diff()
             .times(1)
             .in_sequence(&mut sequence)
@@ -3115,14 +3411,10 @@ mod tests {
             .expect_head_hash()
             .times(1)
             .in_sequence(&mut sequence)
-            .returning({
+            .returning(move |_| {
                 let expected_merged_commit_hash = expected_merged_commit_hash.to_string();
 
-                move |_| {
-                    let expected_merged_commit_hash = expected_merged_commit_hash.clone();
-
-                    Box::pin(async move { Ok(expected_merged_commit_hash) })
-                }
+                Box::pin(async move { Ok(expected_merged_commit_hash) })
             });
         mock_git_client
             .expect_remove_worktree()
@@ -3186,6 +3478,11 @@ mod tests {
             .times(1)
             .in_sequence(&mut sequence)
             .returning(|_, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
+        mock_git_client
+            .expect_head_hash()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Box::pin(async { Ok("parent-tip".to_string()) }));
         mock_git_client
             .expect_squash_merge_diff()
             .times(1)
@@ -3251,7 +3548,7 @@ mod tests {
             git_client: Arc::new(git::RealGitClient),
             id: "session-123".into(),
             output: Arc::new(Mutex::new(String::new())),
-            rebase_target: "origin/main".to_string(),
+            rebase_plan: RebasePlan::target("origin/main".to_string()),
             session_agent: AgentSelection::new(
                 AgentKind::Antigravity,
                 AgentModel::Gemini3FlashPreview,
@@ -3265,7 +3562,7 @@ mod tests {
         // Assert
         assert_eq!(input.id, cloned_input.id);
         assert_eq!(input.folder, cloned_input.folder);
-        assert_eq!(input.rebase_target, cloned_input.rebase_target);
+        assert_eq!(input.rebase_plan, cloned_input.rebase_plan);
         assert_eq!(input.session_agent, cloned_input.session_agent);
     }
 
@@ -3346,6 +3643,50 @@ mod tests {
 
         // Assert
         assert_eq!(rebase_target, "origin/main");
+    }
+
+    #[tokio::test]
+    async fn test_resolve_session_rebase_plan_uses_recorded_stack_base() {
+        // Arrange
+        let db = AppRepositories::in_memory().await;
+        let temp_dir = tempdir().expect("failed to create temporary test directory");
+        let project_path = temp_dir.path().to_string_lossy().to_string();
+        let project_id = db
+            .projects()
+            .upsert_project(&project_path, Some("main".to_string()))
+            .await
+            .expect("failed to upsert project");
+        db.sessions()
+            .insert_session("child-session", "gpt-5.5", "main", "Review", project_id)
+            .await
+            .expect("failed to insert session");
+        db.sessions()
+            .update_session_stack_base_commit_hash("child-session", Some("parent-tip".to_string()))
+            .await
+            .expect("failed to set stack base hash");
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client.expect_fetch_remote().times(0);
+        let folder = temp_dir.path().join("child-session");
+
+        // Act
+        let rebase_plan = SessionManager::resolve_session_rebase_plan(
+            &db,
+            &mock_git_client,
+            &folder,
+            "child-session",
+            "main",
+        )
+        .await
+        .expect("failed to resolve rebase plan");
+
+        // Assert
+        assert_eq!(
+            rebase_plan,
+            RebasePlan::Onto {
+                new_base: "main".to_string(),
+                old_base: "parent-tip".to_string(),
+            }
+        );
     }
 
     #[tokio::test]
@@ -3443,7 +3784,7 @@ mod tests {
             .returning(|_| Box::pin(async { Ok(()) }));
         let (_temp_dir, mut input) =
             build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
-        input.rebase_target = "origin/main".to_string();
+        input.rebase_plan = RebasePlan::target("origin/main".to_string());
 
         // Act
         let result = SessionManager::execute_rebase_workflow(input).await;
@@ -3740,7 +4081,32 @@ mod tests {
             .returning(|_, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
         let (_temp_dir, mut input) =
             build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
-        input.rebase_target = "origin/main".to_string();
+        input.rebase_plan = RebasePlan::target("origin/main".to_string());
+
+        // Act
+        let result = SessionManager::run_rebase_start(&input).await;
+
+        // Assert
+        let step_result = result.expect("rebase start should succeed");
+        assert_eq!(step_result, git::RebaseStepResult::Completed);
+    }
+
+    #[tokio::test]
+    async fn test_run_rebase_start_uses_onto_plan() {
+        // Arrange
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client.expect_rebase_start().times(0);
+        mock_git_client
+            .expect_rebase_onto_start()
+            .once()
+            .withf(|_, new_base, old_base| new_base == "main" && old_base == "parent-tip")
+            .returning(|_, _, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
+        let (_temp_dir, mut input) =
+            build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
+        input.rebase_plan = RebasePlan::Onto {
+            new_base: "main".to_string(),
+            old_base: "parent-tip".to_string(),
+        };
 
         // Act
         let result = SessionManager::run_rebase_start(&input).await;

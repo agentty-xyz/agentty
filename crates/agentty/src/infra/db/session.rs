@@ -206,6 +206,14 @@ pub trait SessionRepository: Send + Sync {
     /// Returns the persisted base branch for a session, when present.
     async fn get_session_base_branch(&self, id: &str) -> Result<Option<String>, DbError>;
 
+    /// Returns the parent session id for a stacked session, when present.
+    async fn get_session_parent_session_id(&self, id: &str) -> Result<Option<String>, DbError>;
+
+    /// Returns the parent/base commit hash that a stacked child branch was
+    /// last known to contain.
+    async fn get_session_stack_base_commit_hash(&self, id: &str)
+    -> Result<Option<String>, DbError>;
+
     /// Returns the persisted app-server instruction bootstrap marker for a
     /// session, when present.
     async fn get_session_instruction_conversation_id(
@@ -325,6 +333,13 @@ pub trait SessionRepository: Send + Sync {
     /// Loads the project identifier associated with one session.
     async fn load_session_project_id(&self, session_id: &str) -> Result<Option<i64>, DbError>;
 
+    /// Loads parentless review-ready sessions that still need their recorded
+    /// stack-base commit replayed onto their current base branch.
+    async fn load_pending_stack_restack_session_ids(
+        &self,
+        project_id: i64,
+    ) -> Result<Vec<String>, DbError>;
+
     /// Returns the persisted upstream reference for a published session
     /// branch, when present.
     async fn load_session_published_upstream_ref(
@@ -338,13 +353,15 @@ pub trait SessionRepository: Send + Sync {
         session_id: &str,
     ) -> Result<Option<String>, DbError>;
 
-    /// Clears parent links for draft children after their parent session
-    /// merges into its base branch.
+    /// Clears parent links for children after their parent session merges
+    /// into its base branch, returning materialized children that may need a
+    /// follow-up branch restack.
     async fn restack_child_sessions_after_parent_merge(
         &self,
         parent_session_id: &str,
         base_branch: &str,
-    ) -> Result<(), DbError>;
+        parent_commit_hash: Option<String>,
+    ) -> Result<Vec<String>, DbError>;
 
     /// Loads the persisted session-specific reasoning override, when present.
     async fn load_session_reasoning_level_override(
@@ -429,6 +446,14 @@ pub trait SessionRepository: Send + Sync {
         &self,
         id: &str,
         merged_commit_hash: Option<String>,
+    ) -> Result<(), DbError>;
+
+    /// Persists or clears the parent/base commit hash used for deterministic
+    /// stacked-child rebases.
+    async fn update_session_stack_base_commit_hash(
+        &self,
+        id: &str,
+        stack_base_commit_hash: Option<String>,
     ) -> Result<(), DbError>;
 
     /// Updates the saved prompt for a session row.
@@ -938,6 +963,28 @@ WHERE project_id IS NULL
     }
 
     async fn delete_session(&self, id: &str) -> Result<(), DbError> {
+        let mut transaction = self.0.begin().await?;
+
+        // Retarget any stacked children onto this session's base branch before
+        // the row is removed. The `ON DELETE SET NULL` foreign key clears the
+        // child parent link automatically, but it leaves children pointing at
+        // the deleted parent's worktree branch, which no longer exists. Mirror
+        // the post-merge restack so a surviving child rebases against the
+        // parent's base branch instead of an orphaned `wt/<parent>` ref.
+        sqlx::query(
+            r"
+UPDATE session
+SET parent_session_id = NULL,
+    base_branch = COALESCE((SELECT base_branch FROM session WHERE id = ?), base_branch)
+WHERE parent_session_id = ?
+  AND status <> 'Canceled'
+",
+        )
+        .bind(id)
+        .bind(id)
+        .execute(&mut *transaction)
+        .await?;
+
         sqlx::query(
             r"
 DELETE FROM session
@@ -945,8 +992,10 @@ WHERE id = ?
 ",
         )
         .bind(id)
-        .execute(&self.0)
+        .execute(&mut *transaction)
         .await?;
+
+        transaction.commit().await?;
 
         Ok(())
     }
@@ -965,6 +1014,41 @@ WHERE id = ?
         .await?;
 
         Ok(row.map(|row| row.value))
+    }
+
+    async fn get_session_parent_session_id(&self, id: &str) -> Result<Option<String>, DbError> {
+        let value = sqlx::query_scalar::<_, Option<String>>(
+            r"
+SELECT parent_session_id
+FROM session
+WHERE id = ?
+",
+        )
+        .bind(id)
+        .fetch_optional(&self.0)
+        .await?
+        .flatten();
+
+        Ok(value)
+    }
+
+    async fn get_session_stack_base_commit_hash(
+        &self,
+        id: &str,
+    ) -> Result<Option<String>, DbError> {
+        let value = sqlx::query_scalar::<_, Option<String>>(
+            r"
+SELECT stack_base_commit_hash
+FROM session
+WHERE id = ?
+",
+        )
+        .bind(id)
+        .fetch_optional(&self.0)
+        .await?
+        .flatten();
+
+        Ok(value)
     }
 
     async fn get_session_instruction_conversation_id(
@@ -1386,6 +1470,28 @@ WHERE id = ?
         Ok(row.and_then(|row| row.value))
     }
 
+    async fn load_pending_stack_restack_session_ids(
+        &self,
+        project_id: i64,
+    ) -> Result<Vec<String>, DbError> {
+        let session_ids = sqlx::query_scalar::<_, String>(
+            r"
+SELECT id
+FROM session
+WHERE project_id = ?
+  AND parent_session_id IS NULL
+  AND stack_base_commit_hash IS NOT NULL
+  AND status IN ('Review', 'AgentReview')
+ORDER BY updated_at ASC, id ASC
+",
+        )
+        .bind(project_id)
+        .fetch_all(&self.0)
+        .await?;
+
+        Ok(session_ids)
+    }
+
     async fn load_session_published_upstream_ref(
         &self,
         id: &str,
@@ -1438,22 +1544,44 @@ WHERE id = ?
         &self,
         parent_session_id: &str,
         base_branch: &str,
-    ) -> Result<(), DbError> {
+        parent_commit_hash: Option<String>,
+    ) -> Result<Vec<String>, DbError> {
+        let mut transaction = self.0.begin().await?;
+        let materialized_child_ids = sqlx::query_scalar::<_, String>(
+            r"
+SELECT id
+FROM session
+WHERE parent_session_id = ?
+  AND status NOT IN ('Canceled', 'Draft')
+ORDER BY created_at ASC, id ASC
+",
+        )
+        .bind(parent_session_id)
+        .fetch_all(&mut *transaction)
+        .await?;
+
         sqlx::query(
             r"
 UPDATE session
 SET parent_session_id = NULL,
-    base_branch = ?
+    base_branch = ?,
+    stack_base_commit_hash = CASE
+        WHEN status = 'Draft' THEN NULL
+        ELSE COALESCE(stack_base_commit_hash, ?)
+    END
 WHERE parent_session_id = ?
   AND status <> 'Canceled'
 ",
         )
         .bind(base_branch)
+        .bind(parent_commit_hash)
         .bind(parent_session_id)
-        .execute(&self.0)
+        .execute(&mut *transaction)
         .await?;
 
-        Ok(())
+        transaction.commit().await?;
+
+        Ok(materialized_child_ids)
     }
 
     async fn load_session_summary(&self, session_id: &str) -> Result<Option<String>, DbError> {
@@ -1780,6 +1908,27 @@ WHERE id = ?
 ",
         )
         .bind(merged_commit_hash.as_deref())
+        .bind(id)
+        .execute(&self.0)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn update_session_stack_base_commit_hash(
+        &self,
+        id: &str,
+        stack_base_commit_hash: Option<String>,
+    ) -> Result<(), DbError> {
+        sqlx::query(
+            r"
+UPDATE session
+SET stack_base_commit_hash = ?,
+    updated_at = CAST(strftime('%s', 'now') AS INTEGER)
+WHERE id = ?
+",
+        )
+        .bind(stack_base_commit_hash)
         .bind(id)
         .execute(&self.0)
         .await?;

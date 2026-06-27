@@ -1023,6 +1023,9 @@ mod tests {
         mock.expect_squash_merge_diff()
             .times(expected_merge_count)
             .returning(|_, _, _| Box::pin(async { Ok(String::new()) }));
+        mock.expect_head_hash()
+            .times(expected_merge_count)
+            .returning(|_| Box::pin(async { Ok("parent-tip".to_string()) }));
         mock.expect_remove_worktree()
             .times(expected_merge_count)
             .returning(|worktree_path| {
@@ -1171,6 +1174,9 @@ mod tests {
         mock.expect_rebase_start()
             .times(0..)
             .returning(|_, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
+        mock.expect_rebase_onto_start()
+            .times(0..)
+            .returning(|_, _, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
         mock.expect_rebase_continue()
             .times(0..)
             .returning(|_| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
@@ -1283,6 +1289,12 @@ mod tests {
         mock.expect_head_short_hash()
             .times(0..)
             .returning(|_| Box::pin(async { Ok("abc1234".to_string()) }));
+        mock.expect_head_hash()
+            .times(0..)
+            .returning(|_| Box::pin(async { Ok("parent-tip".to_string()) }));
+        mock.expect_ref_hash()
+            .times(0..)
+            .returning(|_, _| Box::pin(async { Ok("parent-tip".to_string()) }));
         mock.expect_delete_branch()
             .times(0..)
             .returning(|_, _| Box::pin(async { Ok(()) }));

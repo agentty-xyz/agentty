@@ -1499,6 +1499,7 @@ impl App {
             .sessions()
             .iter()
             .filter(|session| !matches!(session.status, Status::Canceled | Status::Done))
+            .filter(|session| Self::session_has_git_status_target(sessions, session))
             .map(|session| sync::SessionGitStatusTarget {
                 base_branch: session.base_branch.clone(),
                 branch_name: sessions
@@ -1507,6 +1508,20 @@ impl App {
                 session_id: session.id.clone(),
             })
             .collect()
+    }
+
+    /// Returns whether a session has a materialized branch that can be polled
+    /// for git-status comparisons.
+    fn session_has_git_status_target(
+        sessions: &SessionManager,
+        session: &crate::domain::session::Session,
+    ) -> bool {
+        !session.is_draft_session()
+            || sessions
+                .session_worktree_availability()
+                .get(&session.id)
+                .copied()
+                .unwrap_or(false)
     }
 
     /// Builds review-request polling targets for active session branches in
@@ -2108,6 +2123,33 @@ mod tests {
                 base_branch: "main".to_string(),
                 branch_name: "agentty/session-".to_string(),
                 session_id: "session-1".into(),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn session_git_status_targets_skip_unmaterialized_drafts() {
+        // Arrange
+        let mut app = new_test_app().await;
+        let mut draft_session = test_session(PathBuf::from("/tmp/session-draft"));
+        draft_session.id = "draft-1".into();
+        draft_session.is_draft = true;
+        draft_session.status = Status::Draft;
+        app.sessions.push_session(draft_session);
+
+        // Act
+        let targets_before_materialization = App::session_git_status_targets(&app.sessions);
+        app.sessions.set_session_worktree_available("draft-1", true);
+        let targets_after_materialization = App::session_git_status_targets(&app.sessions);
+
+        // Assert
+        assert!(targets_before_materialization.is_empty());
+        assert_eq!(
+            targets_after_materialization,
+            vec![sync::SessionGitStatusTarget {
+                base_branch: "main".to_string(),
+                branch_name: "wt/draft-1".to_string(),
+                session_id: "draft-1".into(),
             }]
         );
     }

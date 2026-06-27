@@ -166,6 +166,9 @@ pub(crate) enum AppEvent {
     /// Indicates one review-ready parent sync finished and any materialized
     /// stacked child branches should sync onto the refreshed parent branch.
     StackedParentSyncCompleted { session_id: SessionId },
+    /// Indicates a parent session merged and its materialized children should
+    /// run deterministic restack rebases against the parent's former base.
+    StackedParentMergeCompleted { child_session_ids: Vec<SessionId> },
     /// Indicates a transient workflow notice changed for one session.
     SessionWorkflowNoticeUpdated {
         notice: String,
@@ -213,6 +216,7 @@ pub(super) struct AppEventBatch {
         HashMap<SessionId, Option<crate::domain::agent::ReasoningLevel>>,
     pub(super) session_progress_updates: HashMap<SessionId, Option<String>>,
     pub(super) session_size_updates: HashMap<SessionId, (u64, u64, SessionSize)>,
+    pub(super) stacked_parent_merge_child_rebases: HashSet<SessionId>,
     pub(super) stacked_parent_syncs_completed: HashSet<SessionId>,
     pub(super) stacked_parent_turns_completed: HashSet<SessionId>,
     pub(super) session_title_generation_finished: HashMap<SessionId, u64>,
@@ -389,6 +393,9 @@ impl AppEventBatch {
             }
             AppEvent::StackedParentSyncCompleted { session_id } => {
                 self.collect_stacked_parent_sync_completed(session_id);
+            }
+            AppEvent::StackedParentMergeCompleted { child_session_ids } => {
+                self.collect_stacked_parent_merge_completed(child_session_ids);
             }
             AppEvent::SessionWorkflowNoticeUpdated { notice, session_id } => {
                 self.collect_session_workflow_notice_updated(session_id, notice);
@@ -698,6 +705,13 @@ impl AppEventBatch {
         self.stacked_parent_syncs_completed.insert(session_id);
     }
 
+    /// Stores child sessions that need post-merge deterministic restack
+    /// rebases after their parent link has been cleared in persistence.
+    fn collect_stacked_parent_merge_completed(&mut self, child_session_ids: Vec<SessionId>) {
+        self.stacked_parent_merge_child_rebases
+            .extend(child_session_ids);
+    }
+
     /// Collects one structured system log event for ordered reducer
     /// application.
     fn collect_system_log(&mut self, event: SystemLogEvent) {
@@ -811,21 +825,17 @@ impl App {
                 self.sessions.append_workflow_notice(&session_id, notice);
             }
         }
-        event_batch
-            .stacked_parent_turns_completed
-            .extend(std::mem::take(
-                &mut event_batch.stacked_parent_syncs_completed,
-            ));
-        let auto_rebase_log_events = self
-            .start_stacked_child_rebases_after_parent_turns(std::mem::take(
-                &mut event_batch.stacked_parent_turns_completed,
+        should_mark_dirty |= self
+            .apply_stacked_parent_merge_child_rebases(std::mem::take(
+                &mut event_batch.stacked_parent_merge_child_rebases,
             ))
             .await;
-        if !auto_rebase_log_events.is_empty() {
-            should_mark_dirty = true;
-            self.apply_system_log_events(auto_rebase_log_events);
-        }
-
+        should_mark_dirty |= self
+            .apply_stacked_parent_turn_child_rebases(
+                std::mem::take(&mut event_batch.stacked_parent_syncs_completed),
+                std::mem::take(&mut event_batch.stacked_parent_turns_completed),
+            )
+            .await;
         auto_start_reviews(
             &mut self.review_cache,
             &event_batch.session_ids,
@@ -864,6 +874,44 @@ impl App {
         }
     }
 
+    /// Applies queued stacked-parent sync and turn completion events, then
+    /// records warnings for children that could not be auto-synced.
+    async fn apply_stacked_parent_turn_child_rebases(
+        &mut self,
+        synced_parent_session_ids: HashSet<SessionId>,
+        mut turned_parent_session_ids: HashSet<SessionId>,
+    ) -> bool {
+        turned_parent_session_ids.extend(synced_parent_session_ids);
+        let auto_rebase_log_events = self
+            .start_stacked_child_rebases_after_parent_turns(turned_parent_session_ids)
+            .await;
+        if auto_rebase_log_events.is_empty() {
+            return false;
+        }
+
+        self.apply_system_log_events(auto_rebase_log_events);
+
+        true
+    }
+
+    /// Applies queued post-merge stacked-child rebase events and records
+    /// warnings for children that could not be enqueued.
+    async fn apply_stacked_parent_merge_child_rebases(
+        &mut self,
+        child_session_ids: HashSet<SessionId>,
+    ) -> bool {
+        let post_merge_rebase_log_events = self
+            .start_stacked_child_rebases_after_parent_merge(child_session_ids)
+            .await;
+        if post_merge_rebase_log_events.is_empty() {
+            return false;
+        }
+
+        self.apply_system_log_events(post_merge_rebase_log_events);
+
+        true
+    }
+
     /// Starts automatic sync rebases for stacked children after their parent
     /// has returned to a review-ready state.
     async fn start_stacked_child_rebases_after_parent_turns(
@@ -892,6 +940,37 @@ impl App {
         }
 
         events
+    }
+
+    /// Starts deterministic sync rebases for children retargeted by a parent
+    /// merge.
+    async fn start_stacked_child_rebases_after_parent_merge(
+        &mut self,
+        child_session_ids: HashSet<SessionId>,
+    ) -> Vec<SystemLogEvent> {
+        if child_session_ids.is_empty() {
+            return Vec::new();
+        }
+
+        let mut child_session_ids = child_session_ids.into_iter().collect::<Vec<_>>();
+        child_session_ids.sort();
+
+        let failures = self
+            .sessions
+            .rebase_sessions_after_parent_merge(&self.services, child_session_ids)
+            .await;
+
+        failures
+            .into_iter()
+            .map(|(child_session_id, error)| {
+                SystemLogEvent::new(
+                    SystemLogLevel::Warning,
+                    SystemLogCategory::Session,
+                    "Stacked child post-merge sync failed",
+                )
+                .with_detail(format!("{child_session_id}: {error}"))
+            })
+            .collect()
     }
 
     /// Clears the diff scroll limit cache when review comments change for the
@@ -1149,6 +1228,7 @@ impl App {
             || !event_batch.session_size_updates.is_empty()
             || !event_batch.session_title_generation_finished.is_empty()
             || !event_batch.session_workflow_notice_updates.is_empty()
+            || !event_batch.stacked_parent_merge_child_rebases.is_empty()
             || !event_batch.stacked_parent_syncs_completed.is_empty()
             || !event_batch.stacked_parent_turns_completed.is_empty()
             || event_batch.sync_main_result.is_some()
@@ -1739,11 +1819,11 @@ impl App {
 
         let mut warnings = Vec::new();
 
-        let commit_hash_persistence_error = if let Some(session_head_hash) = session_head_hash {
+        let commit_hash_persistence_error = if let Some(session_head_hash) = &session_head_hash {
             self.services
                 .db()
                 .sessions()
-                .update_session_merged_commit_hash(session_id, Some(session_head_hash))
+                .update_session_merged_commit_hash(session_id, Some(session_head_hash.clone()))
                 .await
                 .err()
         } else {
@@ -1756,6 +1836,7 @@ impl App {
         let folder = session.folder.clone();
         let base_branch = session.base_branch.clone();
         let source_branch = crate::app::session::session_branch(session_id);
+        let app_event_tx = self.services.event_sender();
 
         if let Err(error) = crate::app::session::SessionManager::cleanup_merged_session_worktree(
             folder,
@@ -1768,18 +1849,24 @@ impl App {
         {
             warnings.push(format!("Worktree cleanup failed: {error}"));
         }
-        if let Err(error) =
-            crate::app::session::SessionManager::restack_child_sessions_after_parent_merge(
-                self.services.db(),
-                session_id,
-                &base_branch,
-            )
-            .await
+        match crate::app::session::SessionManager::restack_child_sessions_after_parent_merge(
+            self.services.db(),
+            session_id,
+            &base_branch,
+            session_head_hash,
+        )
+        .await
         {
-            warnings.push(format!("Stacked child restack failed: {error}"));
+            Ok(child_session_ids) => {
+                crate::app::session::SessionManager::emit_stacked_parent_merge_completed(
+                    &app_event_tx,
+                    child_session_ids,
+                );
+            }
+            Err(error) => {
+                warnings.push(format!("Stacked child restack failed: {error}"));
+            }
         }
-
-        let app_event_tx = self.services.event_sender();
 
         SessionTaskService::update_status(
             handles.status.as_ref(),

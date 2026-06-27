@@ -29,7 +29,7 @@ pub use merge::{SquashMergeOutcome, squash_merge, squash_merge_diff};
 pub use rebase::{
     RebaseStepResult, abort_rebase, has_unmerged_paths, is_rebase_in_progress,
     list_conflicted_files, list_staged_conflict_marker_files, rebase, rebase_continue,
-    rebase_start,
+    rebase_onto_start, rebase_start,
 };
 /// Re-exported repository metadata APIs.
 pub use repo::{main_repo_root, repo_url};
@@ -40,8 +40,8 @@ pub use sync::{
     diff, fetch_remote, get_ahead_behind, get_ref_ahead_behind, has_commits_since,
     head_commit_message, head_hash, head_short_hash, is_worktree_clean, list_local_commit_titles,
     list_upstream_commit_titles, pull_rebase, push_current_branch,
-    push_current_branch_to_remote_branch, remote_branch_exists, stage_all, tracked_worktree_status,
-    worktree_status,
+    push_current_branch_to_remote_branch, ref_hash, remote_branch_exists, stage_all,
+    tracked_worktree_status, worktree_status,
 };
 /// Re-exported worktree and branch-detection APIs.
 pub use worktree::{create_worktree, detect_git_info, find_git_repo_root, remove_worktree};

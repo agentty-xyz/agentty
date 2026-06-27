@@ -1,5 +1,7 @@
 //! Pure grouped ordering for session-list selection and rendering.
 
+use std::collections::HashMap;
+
 use crate::domain::session::{Session, Status};
 
 /// Group bucket used to organize sessions in the list before rendering.
@@ -110,17 +112,48 @@ pub fn selectable_session_indexes(sessions: &[Session]) -> Vec<usize> {
 /// sessions.
 pub fn grouped_session_rows(sessions: &[Session]) -> Vec<GroupedSessionRow<'_>> {
     let mut rows = Vec::with_capacity(sessions.len() + 6);
-    append_group_rows(&mut rows, sessions, SessionGroup::MergeQueue);
-    append_group_rows(&mut rows, sessions, SessionGroup::Active);
-    append_group_rows(&mut rows, sessions, SessionGroup::Archive);
+    let stacked_children = stacked_child_index(sessions);
+    append_group_rows(
+        &mut rows,
+        sessions,
+        &stacked_children,
+        SessionGroup::MergeQueue,
+    );
+    append_group_rows(&mut rows, sessions, &stacked_children, SessionGroup::Active);
+    append_group_rows(
+        &mut rows,
+        sessions,
+        &stacked_children,
+        SessionGroup::Archive,
+    );
 
     rows
+}
+
+/// Lookup of one-level stacked children by parent session id.
+type StackedChildIndex<'a> = HashMap<&'a str, Vec<(usize, &'a Session)>>;
+
+/// Builds a per-render child lookup so grouped rows do not rescan every
+/// session for every loaded parent row.
+fn stacked_child_index(sessions: &[Session]) -> StackedChildIndex<'_> {
+    let mut children_by_parent = HashMap::new();
+    for (index, session) in sessions.iter().enumerate() {
+        if let Some(parent_session_id) = session.parent_session_id.as_ref() {
+            children_by_parent
+                .entry(parent_session_id.as_str())
+                .or_insert_with(Vec::new)
+                .push((index, session));
+        }
+    }
+
+    children_by_parent
 }
 
 /// Adds one group label row and either its sessions or an empty placeholder.
 fn append_group_rows<'a>(
     rows: &mut Vec<GroupedSessionRow<'a>>,
     sessions: &'a [Session],
+    stacked_children: &StackedChildIndex<'a>,
     group: SessionGroup,
 ) {
     rows.push(GroupedSessionRow::GroupLabel(group));
@@ -136,7 +169,7 @@ fn append_group_rows<'a>(
             session,
             tree_position: SessionTreePosition::Root,
         });
-        append_stacked_child_rows(rows, sessions, session.id.as_str(), group);
+        append_stacked_child_rows(rows, stacked_children, session.id.as_str(), group);
         group_has_sessions = true;
     }
 
@@ -149,20 +182,17 @@ fn append_group_rows<'a>(
 /// display group.
 fn append_stacked_child_rows<'a>(
     rows: &mut Vec<GroupedSessionRow<'a>>,
-    sessions: &'a [Session],
+    stacked_children: &StackedChildIndex<'a>,
     parent_session_id: &str,
     group: SessionGroup,
 ) {
-    let children = sessions
+    let Some(children) = stacked_children.get(parent_session_id) else {
+        return;
+    };
+    let children = children
         .iter()
-        .enumerate()
-        .filter(|(_, session)| {
-            session_group(session) == group
-                && session
-                    .parent_session_id
-                    .as_ref()
-                    .is_some_and(|parent_id| parent_id.as_str() == parent_session_id)
-        })
+        .copied()
+        .filter(|(_, session)| session_group(session) == group)
         .collect::<Vec<_>>();
 
     let child_count = children.len();

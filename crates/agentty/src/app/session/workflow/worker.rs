@@ -1,7 +1,7 @@
 //! Per-session async worker orchestration for serialized command execution.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -14,7 +14,7 @@ use super::merge::{
     ExistingSessionRebaseAssistClient, RebaseAssistFuture, RebaseAssistMode, RebaseCommandInput,
 };
 use super::task::SessionOutputMessageAppend;
-use super::{SessionTaskService, turn};
+use super::{SessionTaskService, session_folder, turn};
 use crate::app::service::SessionUpdateVersionMap;
 use crate::app::session::{Clock, SessionError, unix_timestamp_from_system_time};
 use crate::app::{AppEvent, AppServices, SessionManager};
@@ -25,7 +25,7 @@ use crate::infra::channel::{
     AgentChannel, AgentError, AgentRequestKind, TurnEvent, TurnPrompt, TurnRequest, TurnResult,
     create_agent_channel,
 };
-use crate::infra::db::AppRepositories;
+use crate::infra::db::{AppRepositories, SessionOperationRow};
 use crate::infra::fs::FsClient;
 use crate::infra::git::GitClient;
 use crate::infra::{agent, process};
@@ -491,13 +491,23 @@ impl SessionWorkerService {
     /// closes any open active-work timing window at `timestamp_seconds`.
     pub(super) async fn fail_unfinished_operations_from_previous_run_at(
         db: &AppRepositories,
+        base_path: &Path,
+        git_client: Arc<dyn GitClient>,
         timestamp_seconds: i64,
     ) {
-        let interrupted_session_ids: HashSet<String> = db
+        let unfinished_operations = db
             .operations()
             .load_unfinished_session_operations()
             .await
-            .unwrap_or_default()
+            .unwrap_or_default();
+        Self::abort_rebase_operations_from_previous_run(
+            base_path,
+            git_client.as_ref(),
+            &unfinished_operations,
+        )
+        .await;
+
+        let interrupted_session_ids: HashSet<String> = unfinished_operations
             .into_iter()
             .map(|operation| operation.session_id)
             .collect();
@@ -519,6 +529,35 @@ impl SessionWorkerService {
             .operations()
             .fail_unfinished_session_operations(RESTART_FAILURE_REASON)
             .await;
+    }
+
+    /// Aborts stale git rebase state left by interrupted worker operations.
+    ///
+    /// Only worker-backed rebase operations are handled here because merge
+    /// tasks are not yet persisted in `session_operation`.
+    async fn abort_rebase_operations_from_previous_run(
+        base_path: &Path,
+        git_client: &dyn GitClient,
+        unfinished_operations: &[SessionOperationRow],
+    ) {
+        let mut rebase_session_ids = unfinished_operations
+            .iter()
+            .filter(|operation| operation.kind == "rebase")
+            .map(|operation| operation.session_id.as_str())
+            .collect::<Vec<_>>();
+        rebase_session_ids.sort_unstable();
+        rebase_session_ids.dedup();
+
+        for session_id in rebase_session_ids {
+            let folder = session_folder(base_path, session_id);
+            let Ok(is_rebase_in_progress) = git_client.is_rebase_in_progress(folder.clone()).await
+            else {
+                continue;
+            };
+            if is_rebase_in_progress {
+                let _ = git_client.abort_rebase(folder).await;
+            }
+        }
     }
 
     /// Persists and enqueues a command on the per-session worker queue.
@@ -857,12 +896,16 @@ impl SessionManager {
     /// Marks unfinished operations from previous process runs as failed.
     pub(crate) async fn fail_unfinished_operations_from_previous_run(
         db: AppRepositories,
+        base_path: PathBuf,
+        git_client: Arc<dyn GitClient>,
         clock: Arc<dyn Clock>,
     ) {
         let timestamp_seconds = unix_timestamp_from_system_time(clock.now_system_time());
 
         SessionWorkerService::fail_unfinished_operations_from_previous_run_at(
             &db,
+            base_path.as_path(),
+            git_client,
             timestamp_seconds,
         )
         .await;
@@ -3212,6 +3255,7 @@ mod tests {
     /// restores affected sessions to `Review`.
     async fn test_fail_unfinished_operations_from_previous_run_restores_session_review_status() {
         // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
         let db = AppRepositories::in_memory().await;
         let project_id = db
             .projects()
@@ -3236,9 +3280,18 @@ mod tests {
             .insert_session_operation("op-1", "sess1", "reply")
             .await
             .expect("failed to insert session operation");
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client.expect_is_rebase_in_progress().times(0);
+        mock_git_client.expect_abort_rebase().times(0);
 
         // Act
-        SessionWorkerService::fail_unfinished_operations_from_previous_run_at(&db, 300).await;
+        SessionWorkerService::fail_unfinished_operations_from_previous_run_at(
+            &db,
+            base_dir.path(),
+            Arc::new(mock_git_client),
+            300,
+        )
+        .await;
         let sessions = db
             .sessions()
             .load_sessions()
@@ -3256,6 +3309,62 @@ mod tests {
         assert_eq!(sessions[0].in_progress_started_at, None);
         assert_eq!(sessions[0].in_progress_total_seconds, 300);
         assert!(!operation_is_unfinished);
+    }
+
+    #[tokio::test]
+    /// Verifies restart recovery aborts stale rebase metadata for interrupted
+    /// rebase operations before restoring review state.
+    async fn test_fail_unfinished_operations_from_previous_run_aborts_interrupted_rebase() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let db = AppRepositories::in_memory().await;
+        let project_id = db
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to upsert project");
+        db.sessions()
+            .insert_session(
+                "sess1",
+                "gemini-3-flash-preview",
+                "main",
+                "Rebasing",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        db.operations()
+            .insert_session_operation("op-1", "sess1", "rebase")
+            .await
+            .expect("failed to insert session operation");
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client
+            .expect_is_rebase_in_progress()
+            .once()
+            .withf(|repo_path| repo_path.ends_with("sess1"))
+            .returning(|_| Box::pin(async { Ok(true) }));
+        mock_git_client
+            .expect_abort_rebase()
+            .once()
+            .withf(|repo_path| repo_path.ends_with("sess1"))
+            .returning(|_| Box::pin(async { Ok(()) }));
+
+        // Act
+        SessionWorkerService::fail_unfinished_operations_from_previous_run_at(
+            &db,
+            base_dir.path(),
+            Arc::new(mock_git_client),
+            300,
+        )
+        .await;
+        let sessions = db
+            .sessions()
+            .load_sessions()
+            .await
+            .expect("failed to load sessions");
+
+        // Assert
+        assert_eq!(sessions[0].status, "Review");
     }
 
     #[tokio::test]

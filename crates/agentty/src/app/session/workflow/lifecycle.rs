@@ -468,7 +468,7 @@ impl SessionManager {
         services: &AppServices,
         session_id: &str,
     ) -> Result<(), SessionError> {
-        let (base_branch, folder, persisted_session_id, session_agent) = {
+        let (base_branch, folder, parent_session_id, persisted_session_id, session_agent) = {
             let session = self.session_or_err(session_id)?;
             if !session.is_draft_session() {
                 return Ok(());
@@ -477,6 +477,7 @@ impl SessionManager {
             (
                 session.base_branch.clone(),
                 session.folder.clone(),
+                session.parent_session_id.clone(),
                 session.id.clone(),
                 session.agent,
             )
@@ -496,6 +497,13 @@ impl SessionManager {
                 .map_err(|error| {
                     SessionError::Workflow(format!("Failed to setup session backend: {error}"))
                 })?;
+            self.persist_stack_base_for_stacked_draft_worktree(
+                services,
+                &folder,
+                parent_session_id.as_ref(),
+                &persisted_session_id,
+            )
+            .await?;
             self.set_session_worktree_available(session_id, true);
 
             return Ok(());
@@ -535,7 +543,50 @@ impl SessionManager {
                 "Failed to setup session backend: {error}"
             )));
         }
+        self.persist_stack_base_for_stacked_draft_worktree(
+            services,
+            &folder,
+            parent_session_id.as_ref(),
+            &persisted_session_id,
+        )
+        .await?;
         self.set_session_worktree_available(session_id, true);
+
+        Ok(())
+    }
+
+    /// Persists the parent tip used by a stacked draft's newly materialized
+    /// worktree.
+    ///
+    /// The stored hash lets later stacked-child rebases use
+    /// `git rebase --onto` to replay only the child's commits when the parent
+    /// branch moves or squash-merges.
+    ///
+    /// # Errors
+    /// Returns an error when the worktree `HEAD` cannot be resolved or stack
+    /// metadata cannot be persisted.
+    async fn persist_stack_base_for_stacked_draft_worktree(
+        &self,
+        services: &AppServices,
+        folder: &Path,
+        parent_session_id: Option<&SessionId>,
+        session_id: &str,
+    ) -> Result<(), SessionError> {
+        if parent_session_id.is_none() {
+            return Ok(());
+        }
+
+        let stack_base_commit_hash = services
+            .git_client()
+            .head_hash(folder.to_path_buf())
+            .await
+            .map_err(SessionError::Git)?;
+        services
+            .db()
+            .sessions()
+            .update_session_stack_base_commit_hash(session_id, Some(stack_base_commit_hash))
+            .await
+            .map_err(SessionError::Db)?;
 
         Ok(())
     }

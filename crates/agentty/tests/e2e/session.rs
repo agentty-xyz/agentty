@@ -203,6 +203,86 @@ fn seed_review_ready_parent_with_review_child(
     Ok(())
 }
 
+/// Seeds a parentless child session that still has pending post-merge stack
+/// restack metadata and a real git branch requiring `git rebase --onto`.
+fn seed_pending_post_merge_restack_child(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let canonical_workdir = env.workdir.canonicalize()?;
+    let child_worktree = env.agentty_root.join("wt").join("stack-re");
+    let parent_tip = seed_child_worktree_for_onto_rebase(&child_worktree)?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(async {
+        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
+        let database = Database::open(&db_path).await?;
+        let project_id = database
+            .projects()
+            .upsert_project(
+                &canonical_workdir.to_string_lossy(),
+                Some("main".to_string()),
+            )
+            .await?;
+
+        database
+            .projects()
+            .touch_project_last_opened(project_id)
+            .await?;
+        database
+            .sessions()
+            .insert_session(
+                "stack-restack-child-0001",
+                "gpt-5.5",
+                "main",
+                "Review",
+                project_id,
+            )
+            .await?;
+        database
+            .sessions()
+            .update_session_title("stack-restack-child-0001", "Pending post-merge child sync")
+            .await?;
+        database
+            .sessions()
+            .update_session_stack_base_commit_hash("stack-restack-child-0001", Some(parent_tip))
+            .await
+    })?;
+
+    Ok(())
+}
+
+/// Creates a child branch with one parent commit and one child commit so the
+/// app can recover it using `git rebase --onto main <parent-tip>`.
+fn seed_child_worktree_for_onto_rebase(
+    child_worktree: &Path,
+) -> Result<String, Box<dyn std::error::Error>> {
+    std::fs::create_dir_all(child_worktree)?;
+    run_git(child_worktree, &["init", "-b", "main"])?;
+    run_git(child_worktree, &["config", "user.email", "test@test.com"])?;
+    run_git(child_worktree, &["config", "user.name", "Test"])?;
+    std::fs::write(child_worktree.join("base.txt"), "base\n")?;
+    run_git(child_worktree, &["add", "."])?;
+    run_git(child_worktree, &["commit", "-m", "base"])?;
+    run_git(child_worktree, &["checkout", "-b", "parent"])?;
+    std::fs::write(child_worktree.join("parent.txt"), "parent\n")?;
+    run_git(child_worktree, &["add", "."])?;
+    run_git(child_worktree, &["commit", "-m", "parent change"])?;
+    let parent_tip = run_git_stdout(child_worktree, &["rev-parse", "HEAD"])?;
+    run_git(child_worktree, &["checkout", "-b", "child"])?;
+    std::fs::write(child_worktree.join("child.txt"), "child\n")?;
+    run_git(child_worktree, &["add", "."])?;
+    run_git(child_worktree, &["commit", "-m", "child change"])?;
+    run_git(child_worktree, &["checkout", "main"])?;
+    std::fs::write(child_worktree.join("merged-parent.txt"), "merged parent\n")?;
+    run_git(child_worktree, &["add", "."])?;
+    run_git(child_worktree, &["commit", "-m", "merged parent"])?;
+    run_git(child_worktree, &["checkout", "child"])?;
+
+    Ok(parent_tip)
+}
+
 /// Seeds one review-ready session with a persisted reasoning-level override.
 fn seed_session_with_reasoning_level(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     seed_review_ready_session(env)?;
@@ -445,6 +525,27 @@ fn run_git(working_directory: &Path, args: &[&str]) -> Result<(), Box<dyn std::e
     }
 
     Ok(())
+}
+
+/// Runs one git command in `working_directory` and returns trimmed stdout.
+fn run_git_stdout(
+    working_directory: &Path,
+    args: &[&str],
+) -> Result<String, Box<dyn std::error::Error>> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(working_directory)
+        .output()?;
+    if !output.status.success() {
+        return Err(std::io::Error::other(format!(
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        ))
+        .into());
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 /// Installs a deterministic `gh` stub that returns review-request status and
@@ -974,6 +1075,38 @@ fn stacked_parent_reply_remains_available_with_review_child() -> E2eResult {
                 assertion::assert_text_in_region(frame, "Enter: reply", &full);
                 assertion::assert_not_visible(frame, "m: add to merge queue");
                 assertion::assert_text_in_region(frame, "r: sync", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that startup recovery requeues a pending post-merge stacked child
+/// restack and completes the deterministic sync in the child session view.
+#[test]
+fn stacked_pending_post_merge_restack_recovers_on_startup() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("stacked_pending_post_merge_restack_recovers_on_startup")
+        .with_git()
+        .setup(seed_pending_post_merge_restack_child)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .wait_for_text("Pending post-merge child sync", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Successfully synced", 10000)
+                    .capture_labeled(
+                        "pending_restack_recovered",
+                        "Pending post-merge stacked child sync recovered after startup",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Pending post-merge child sync", &full);
+                assertion::assert_text_in_region(frame, "Successfully synced", &full);
+                assertion::assert_not_visible(frame, "[Sync Error]");
             },
         )?;
 

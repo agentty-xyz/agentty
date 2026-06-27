@@ -27,18 +27,20 @@ unit-test forge adapters without live `gh` or `glab` binaries. | | `GitClient` |
 `infra/git/client.rs` | Git/process operations (worktree, merge, rebase, diff, push,
 pull, upstream-ref resolution, porcelain status snapshots for isolation checks, and
 ahead/behind comparisons for both upstream-tracking and session-vs-base-branch status).
-| | `FsClient` | `infra/fs.rs` | Async filesystem operations and path probes used by app
-or runtime orchestration, including non-blocking file reads, existence checks,
-canonicalization, session worktree cleanup, and prompt-image temp file or directory
-removal. | | `ClipboardImageClient` | `infra/clipboard_image.rs` | Host clipboard image
-capture, PNG encoding, injected-clock file naming, filesystem persistence, and
-paste-error normalization for prompt attachments. | | `TmuxClient` | `infra/tmux.rs` |
-Tmux subprocess operations for opening session worktrees and dispatching open commands.
-| | `TmuxCommandRunner` | `infra/tmux.rs` | Internal tmux command boundary that keeps
-multi-command `send-keys` flows deterministic in unit tests. | | `AgentChannel` |
-`infra/channel.rs` | Provider-agnostic turn execution (session init, run turn,
-shutdown). | | `AgentBackend` | `infra/agent/backend.rs` | Per-provider setup and
-transport command construction. | | `AgentAvailabilityProbe` |
+Stacked-session restacking also uses this boundary to resolve commit hashes, start
+deterministic `git rebase --onto` flows, and abort stale in-progress rebases during
+restart recovery. | | `FsClient` | `infra/fs.rs` | Async filesystem operations and path
+probes used by app or runtime orchestration, including non-blocking file reads,
+existence checks, canonicalization, session worktree cleanup, and prompt-image temp file
+or directory removal. | | `ClipboardImageClient` | `infra/clipboard_image.rs` | Host
+clipboard image capture, PNG encoding, injected-clock file naming, filesystem
+persistence, and paste-error normalization for prompt attachments. | | `TmuxClient` |
+`infra/tmux.rs` | Tmux subprocess operations for opening session worktrees and
+dispatching open commands. | | `TmuxCommandRunner` | `infra/tmux.rs` | Internal tmux
+command boundary that keeps multi-command `send-keys` flows deterministic in unit tests.
+| | `AgentChannel` | `infra/channel.rs` | Provider-agnostic turn execution (session
+init, run turn, shutdown). | | `AgentBackend` | `infra/agent/backend.rs` | Per-provider
+setup and transport command construction. | | `AgentAvailabilityProbe` |
 `infra/agent/availability.rs` | Machine-scoped backend discovery and startup CLI
 update/version refresh used to filter settings defaults and `/model` without shelling
 out directly from app or runtime orchestration. | | `AppServerClient` |

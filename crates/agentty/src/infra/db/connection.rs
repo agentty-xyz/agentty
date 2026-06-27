@@ -940,6 +940,94 @@ ORDER BY position
         database
             .sessions()
             .insert_stacked_draft_session(
+                "review-child",
+                "gpt-5.5",
+                "wt/parent-session",
+                "Review",
+                "parent-session",
+                project_id,
+            )
+            .await
+            .expect("failed to insert review stacked child");
+        database
+            .sessions()
+            .insert_stacked_draft_session(
+                "canceled-child",
+                "gpt-5.5",
+                "wt/parent-session",
+                "Canceled",
+                "parent-session",
+                project_id,
+            )
+            .await
+            .expect("failed to insert canceled stacked child");
+
+        // Act
+        let restacked_child_session_ids = database
+            .sessions()
+            .restack_child_sessions_after_parent_merge(
+                "parent-session",
+                "main",
+                Some("parent-tip".to_string()),
+            )
+            .await
+            .expect("failed to restack child sessions");
+        let child_session = load_session_row(&database, "child-session").await;
+        let review_child = load_session_row(&database, "review-child").await;
+        let review_child_stack_base = database
+            .sessions()
+            .get_session_stack_base_commit_hash("review-child")
+            .await
+            .expect("failed to load review child stack base");
+        let canceled_child = load_session_row(&database, "canceled-child").await;
+
+        // Assert
+        assert_eq!(
+            restacked_child_session_ids,
+            vec!["review-child".to_string()]
+        );
+        assert_eq!(child_session.parent_session_id, None);
+        assert_eq!(child_session.base_branch, "main");
+        assert_eq!(review_child.parent_session_id, None);
+        assert_eq!(review_child.base_branch, "main");
+        assert_eq!(review_child_stack_base.as_deref(), Some("parent-tip"));
+        assert_eq!(
+            canceled_child.parent_session_id.as_deref(),
+            Some("parent-session")
+        );
+        assert_eq!(canceled_child.base_branch, "wt/parent-session");
+    }
+
+    /// Verifies deleting a parent retargets surviving children onto the
+    /// parent's base branch instead of leaving them on the orphaned worktree
+    /// branch.
+    #[tokio::test]
+    async fn test_delete_session_retargets_children_base_branch() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to insert project");
+        insert_session_fixture(&database, "parent-session", "main", "Review", project_id).await;
+        database
+            .sessions()
+            .insert_stacked_draft_session(
+                "child-session",
+                "gpt-5.5",
+                "wt/parent-session",
+                "Draft",
+                "parent-session",
+                project_id,
+            )
+            .await
+            .expect("failed to insert active stacked child");
+        database
+            .sessions()
+            .insert_stacked_draft_session(
                 "canceled-child",
                 "gpt-5.5",
                 "wt/parent-session",
@@ -953,20 +1041,64 @@ ORDER BY position
         // Act
         database
             .sessions()
-            .restack_child_sessions_after_parent_merge("parent-session", "main")
+            .delete_session("parent-session")
             .await
-            .expect("failed to restack child sessions");
+            .expect("failed to delete parent session");
         let child_session = load_session_row(&database, "child-session").await;
         let canceled_child = load_session_row(&database, "canceled-child").await;
 
         // Assert
         assert_eq!(child_session.parent_session_id, None);
         assert_eq!(child_session.base_branch, "main");
-        assert_eq!(
-            canceled_child.parent_session_id.as_deref(),
-            Some("parent-session")
-        );
+        assert_eq!(canceled_child.parent_session_id, None);
         assert_eq!(canceled_child.base_branch, "wt/parent-session");
+    }
+
+    #[tokio::test]
+    async fn test_load_pending_stack_restack_session_ids_returns_only_review_ready_parentless_rows()
+    {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to insert project");
+        insert_session_fixture(&database, "ready-child", "main", "Review", project_id).await;
+        insert_session_fixture(&database, "draft-child", "main", "Draft", project_id).await;
+        insert_session_fixture(&database, "plain-review", "main", "Review", project_id).await;
+        insert_session_fixture(&database, "parent-session", "main", "Review", project_id).await;
+        database
+            .sessions()
+            .insert_stacked_draft_session(
+                "still-stacked",
+                "gpt-5.5",
+                "wt/parent-session",
+                "Review",
+                "parent-session",
+                project_id,
+            )
+            .await
+            .expect("failed to insert stacked child");
+        for session_id in ["ready-child", "draft-child", "still-stacked"] {
+            database
+                .sessions()
+                .update_session_stack_base_commit_hash(session_id, Some("parent-tip".to_string()))
+                .await
+                .expect("failed to set stack base hash");
+        }
+
+        // Act
+        let pending_session_ids = database
+            .sessions()
+            .load_pending_stack_restack_session_ids(project_id)
+            .await
+            .expect("failed to load pending restacks");
+
+        // Assert
+        assert_eq!(pending_session_ids, vec!["ready-child".to_string()]);
     }
 
     /// Verifies `load_sessions_metadata()` returns session count and max

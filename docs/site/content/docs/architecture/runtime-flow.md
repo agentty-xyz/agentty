@@ -498,6 +498,11 @@ narrow screens.
    handles, it asks `SessionMergeService` to enqueue `SessionCommand::Rebase` for each
    review-ready materialized child so child branches replay onto the latest parent
    branch.
+1. When a parent session merges, emit `AppEvent::StackedParentMergeCompleted` with the
+   review-ready materialized children that were retargeted to the parent's base branch.
+   The reducer enqueues the same `SessionCommand::Rebase` worker flow for those
+   children, but the rebase plan uses the recorded parent commit as the old base so the
+   child drops the parent's pre-squash commits deterministically.
 1. Refresh persisted session size.
 1. Update final status (`Review` or `Question`; on failure -> `Review`).
 
@@ -510,7 +515,11 @@ restart-safe:
 - Worker transitions: `queued -> running -> done/failed/canceled`.
 - Cancel requests are persisted and checked before command execution.
 - On startup, unfinished operations are failed with reason `Interrupted by app restart`,
-  and impacted sessions are reset to `Review`.
+  interrupted rebase operations abort any stale in-progress git rebase metadata in the
+  session worktree, and impacted sessions are reset to `Review`.
+- Startup also loads parentless review-ready stacked children that still have a recorded
+  stack base commit and requeues their post-merge sync, so a restart during stack
+  restacking converges through the normal worker flow.
 
 ### Status Transition Rules
 
@@ -535,11 +544,13 @@ stricter branch-work stack check, with parent branch workflow actions blocked wh
 materialized child remains linked. Session sync uses the sync-specific stack check, so a
 parent can refresh itself when materialized children are idle and then fan out child
 rebases. `reply()` uses the reply-specific stack check, so a parent can accept another
-prompt once a materialized child is idle in review. When that parent prompt finishes in
-`Review`, the reducer starts automatic child sync rebases through the same per-session
-worker command used by manual session sync. Session-list grouping only nests a stacked
-child below its loaded parent while both rows belong to the same display group, so a
-directly canceled child under an active parent moves to the archive group immediately.
+prompt once a materialized child is idle in review. The checks are computed from one
+stack snapshot so parent, child, and sibling branch-work decisions share the same busy
+state. When that parent prompt finishes in `Review`, the reducer starts automatic child
+sync rebases through the same per-session worker command used by manual session sync.
+Session-list grouping only nests a stacked child below its loaded parent while both rows
+belong to the same display group, so a directly canceled child under an active parent
+moves to the archive group immediately.
 
 ## Agent Channel Architecture
 
@@ -882,15 +893,19 @@ paths and their trigger conditions:
 ### Session sync task
 
 - Trigger: Session sync action in view mode, a completed stacked-parent sync that
-  returned to `Review`, or a completed stacked-parent turn that returned to `Review`
+  returned to `Review`, a completed stacked-parent turn that returned to `Review`, or a
+  completed parent merge that restacked review-ready materialized children onto the
+  parent base branch
 - Spawn site: `SessionMergeService::rebase_session` and stacked-parent auto-sync both
   enqueue `SessionCommand::Rebase`
 - Emits or writes: Output append and status updates
 - What it does: Runs the assisted rebase flow on the session worker and returns the
   session to `Review`. Published sessions fetch first and rebase onto the remote base
   ref from the published upstream's remote; unpublished sessions use the local base
-  branch. Rebase-conflict prompts run through the existing session channel so the
-  provider keeps conversation context while Agentty owns staging and
+  branch. Post-merge stacked-child syncs use `git rebase --onto` with the recorded
+  parent commit as the old base so the child keeps its own commits while dropping the
+  parent's pre-squash commits. Rebase-conflict prompts run through the existing session
+  channel so the provider keeps conversation context while Agentty owns staging and
   `git rebase --continue`. When a stacked parent sync completes successfully, the
   reducer reuses the child auto-sync fan-out so review-ready materialized children are
   replayed onto the refreshed parent branch.

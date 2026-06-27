@@ -786,24 +786,22 @@ impl Session {
 /// require a review-ready parent and no sibling/parent branch work already
 /// running or queued in the same stack.
 pub(crate) fn can_start_staged_session_in_stack(sessions: &[Session], session_id: &str) -> bool {
-    let Some(session) = find_session(sessions, session_id) else {
+    let Some(stack) = SessionStack::for_session(sessions, session_id) else {
         return false;
     };
+    let session = stack.requested_session();
     if !session.can_start_staged_session() {
         return false;
     }
 
-    let Some(parent_session_id) = session.parent_session_id.as_ref() else {
+    if session.parent_session_id.is_none() {
         return true;
-    };
-    let Some(parent_session) = find_session(sessions, parent_session_id.as_str()) else {
-        return false;
-    };
-    if !parent_session.status.allows_stacked_child_start() {
+    }
+    if !stack.root_allows_stacked_child_start() {
         return false;
     }
 
-    !stack_has_branch_mutating_session(sessions, parent_session_id.as_str(), session_id)
+    !stack.has_branch_mutating_member_except(session_id)
 }
 
 /// Returns whether the session identified by `session_id` can start branch
@@ -813,26 +811,15 @@ pub(crate) fn can_start_staged_session_in_stack(sessions: &[Session], session_id
 /// blocks any stack member from starting branch work while a different member
 /// is already running, queued, rebasing, merging, or waiting on a question.
 pub(crate) fn can_mutate_session_branch_in_stack(sessions: &[Session], session_id: &str) -> bool {
-    let Some(session) = find_session(sessions, session_id) else {
+    let Some(stack) = SessionStack::for_session(sessions, session_id) else {
         return false;
     };
-    if let Some(parent_session_id) = session.parent_session_id.as_ref()
-        && find_session(sessions, parent_session_id.as_str()).is_none()
-    {
-        return false;
-    }
-    let stack_root_session_id = session
-        .parent_session_id
-        .as_ref()
-        .map_or(session.id.as_str(), SessionId::as_str);
 
-    if stack_has_branch_mutating_session(sessions, stack_root_session_id, session_id) {
+    if stack.has_branch_mutating_member_except(session_id) {
         return false;
     }
 
-    if session.parent_session_id.is_none()
-        && stack_has_materialized_child(sessions, stack_root_session_id)
-    {
+    if stack.requested_session_is_root() && stack.has_materialized_child() {
         return false;
     }
 
@@ -847,20 +834,11 @@ pub(crate) fn can_mutate_session_branch_in_stack(sessions: &[Session], session_i
 /// child syncs afterward. Active stack members still block the request so the
 /// stack does not run competing branch work.
 pub(crate) fn can_rebase_session_branch_in_stack(sessions: &[Session], session_id: &str) -> bool {
-    let Some(session) = find_session(sessions, session_id) else {
+    let Some(stack) = SessionStack::for_session(sessions, session_id) else {
         return false;
     };
-    if let Some(parent_session_id) = session.parent_session_id.as_ref()
-        && find_session(sessions, parent_session_id.as_str()).is_none()
-    {
-        return false;
-    }
-    let stack_root_session_id = session
-        .parent_session_id
-        .as_ref()
-        .map_or(session.id.as_str(), SessionId::as_str);
 
-    !stack_has_branch_mutating_session(sessions, stack_root_session_id, session_id)
+    !stack.has_branch_mutating_member_except(session_id)
 }
 
 /// Returns whether a session can accept a chat reply under one-level stack
@@ -871,20 +849,86 @@ pub(crate) fn can_rebase_session_branch_in_stack(sessions: &[Session], session_i
 /// materialized child does not block parent replies; the child can be synced
 /// again after the parent produces its next review state.
 pub(crate) fn can_reply_to_session_in_stack(sessions: &[Session], session_id: &str) -> bool {
-    let Some(session) = find_session(sessions, session_id) else {
+    let Some(stack) = SessionStack::for_session(sessions, session_id) else {
         return false;
     };
-    if let Some(parent_session_id) = session.parent_session_id.as_ref()
-        && find_session(sessions, parent_session_id.as_str()).is_none()
-    {
-        return false;
-    }
-    let stack_root_session_id = session
-        .parent_session_id
-        .as_ref()
-        .map_or(session.id.as_str(), SessionId::as_str);
 
-    !stack_has_branch_mutating_session(sessions, stack_root_session_id, session_id)
+    !stack.has_branch_mutating_member_except(session_id)
+}
+
+/// Snapshot of a loaded one-level stack for branch-work policy checks.
+struct SessionStack<'a> {
+    members: Vec<&'a Session>,
+    requested_session: &'a Session,
+    root_session: &'a Session,
+}
+
+impl<'a> SessionStack<'a> {
+    /// Builds the stack containing `session_id` from the loaded session list.
+    fn for_session(sessions: &'a [Session], session_id: &str) -> Option<Self> {
+        let requested_session = find_session(sessions, session_id)?;
+        let root_session = match requested_session.parent_session_id.as_ref() {
+            Some(parent_session_id) => find_session(sessions, parent_session_id.as_str())?,
+            None => requested_session,
+        };
+        let members = sessions
+            .iter()
+            .filter(|session| Self::session_belongs_to_root(session, root_session.id.as_str()))
+            .collect();
+
+        Some(Self {
+            members,
+            requested_session,
+            root_session,
+        })
+    }
+
+    /// Returns the session whose action is being evaluated.
+    fn requested_session(&self) -> &'a Session {
+        self.requested_session
+    }
+
+    /// Returns whether the requested session is the stack root.
+    fn requested_session_is_root(&self) -> bool {
+        self.requested_session.parent_session_id.is_none()
+    }
+
+    /// Returns whether another stack member is currently reserving or
+    /// performing branch-mutating work.
+    fn has_branch_mutating_member_except(&self, ignored_session_id: &str) -> bool {
+        self.members
+            .iter()
+            .filter(|session| session.id.as_str() != ignored_session_id)
+            .any(|session| session.status.is_stack_branch_mutating())
+    }
+
+    /// Returns whether the root already has a non-terminal child branch that
+    /// has started at least one live turn.
+    fn has_materialized_child(&self) -> bool {
+        self.members.iter().any(|session| {
+            session.parent_session_id.is_some()
+                && !matches!(
+                    session.status,
+                    Status::Draft | Status::Done | Status::Canceled
+                )
+        })
+    }
+
+    /// Returns whether the root is in a state that lets a stacked draft child
+    /// materialize.
+    fn root_allows_stacked_child_start(&self) -> bool {
+        self.root_session.status.allows_stacked_child_start()
+    }
+
+    /// Returns whether `session` belongs to the one-level stack rooted at
+    /// `root_session_id`.
+    fn session_belongs_to_root(session: &Session, root_session_id: &str) -> bool {
+        session.id.as_str() == root_session_id
+            || session
+                .parent_session_id
+                .as_ref()
+                .is_some_and(|parent_session_id| parent_session_id.as_str() == root_session_id)
+    }
 }
 
 /// Finds one loaded session by id.
@@ -892,45 +936,6 @@ fn find_session<'a>(sessions: &'a [Session], session_id: &str) -> Option<&'a Ses
     sessions
         .iter()
         .find(|session| session.id.as_str() == session_id)
-}
-
-/// Returns whether another member of the one-level stack is currently
-/// performing or reserving branch-mutating work.
-fn stack_has_branch_mutating_session(
-    sessions: &[Session],
-    stack_root_session_id: &str,
-    ignored_session_id: &str,
-) -> bool {
-    sessions
-        .iter()
-        .filter(|session| session.id.as_str() != ignored_session_id)
-        .filter(|session| session_belongs_to_stack(session, stack_root_session_id))
-        .any(|session| session.status.is_stack_branch_mutating())
-}
-
-/// Returns whether a loaded session is the root or a child of the one-level
-/// stack rooted at `stack_root_session_id`.
-fn session_belongs_to_stack(session: &Session, stack_root_session_id: &str) -> bool {
-    session.id.as_str() == stack_root_session_id
-        || session
-            .parent_session_id
-            .as_ref()
-            .is_some_and(|parent_session_id| parent_session_id.as_str() == stack_root_session_id)
-}
-
-/// Returns whether the stack root already has a child branch that has started
-/// at least one live turn and has not reached a terminal state.
-fn stack_has_materialized_child(sessions: &[Session], stack_root_session_id: &str) -> bool {
-    sessions.iter().any(|session| {
-        session
-            .parent_session_id
-            .as_ref()
-            .is_some_and(|parent_session_id| parent_session_id.as_str() == stack_root_session_id)
-            && !matches!(
-                session.status,
-                Status::Draft | Status::Done | Status::Canceled
-            )
-    })
 }
 
 /// Shared runtime handles for one active session worker.
