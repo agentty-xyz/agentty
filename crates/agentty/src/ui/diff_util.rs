@@ -463,94 +463,173 @@ fn is_protocol_summary_heading(line: &str) -> bool {
 
 /// Returns scored review highlights from unified diff text.
 fn review_highlights(diff: &str) -> Vec<ReviewHighlight> {
-    let mut highlights = Vec::new();
-    let mut fallback_highlights = Vec::new();
-    let mut current_file = "unknown".to_string();
-    let mut old_line = 0_u32;
-    let mut new_line = 0_u32;
+    let mut cursor = DiffReviewCursor::default();
+    let mut highlight_state = ReviewHighlightCollection::default();
     let mut order = 0_usize;
 
     for raw_line in diff.lines() {
-        if let Some(file_path) = parse_diff_file_path(raw_line) {
-            current_file = file_path;
+        if cursor.advance_metadata(raw_line) {
+            continue;
+        }
+
+        if let Some(changed_line) = cursor.changed_line(raw_line) {
+            highlight_state.push_changed_line(&changed_line, order);
+            order = order.saturating_add(1);
 
             continue;
+        }
+
+        cursor.advance_context(raw_line);
+    }
+
+    highlight_state.into_ranked_highlights()
+}
+
+/// Tracks the current file and line numbers while scanning a unified diff.
+struct DiffReviewCursor {
+    current_file: String,
+    new_line: u32,
+    old_line: u32,
+}
+
+impl Default for DiffReviewCursor {
+    fn default() -> Self {
+        Self {
+            current_file: "unknown".to_string(),
+            new_line: 0,
+            old_line: 0,
+        }
+    }
+}
+
+impl DiffReviewCursor {
+    /// Advances through file headers, hunk headers, and diff metadata.
+    fn advance_metadata(&mut self, raw_line: &str) -> bool {
+        if let Some(file_path) = parse_diff_file_path(raw_line) {
+            self.current_file = file_path;
+
+            return true;
         }
 
         if let Some((old_start, _, new_start, _)) = parse_hunk_header(raw_line) {
-            old_line = old_start;
-            new_line = new_start;
+            self.old_line = old_start;
+            self.new_line = new_start;
 
-            continue;
+            return true;
         }
 
-        if raw_line.starts_with("index ")
+        raw_line.starts_with("index ")
             || raw_line.starts_with("--- ")
             || raw_line.starts_with("+++ ")
-        {
-            continue;
-        }
+    }
 
+    /// Returns changed-line data and advances the matching line counter.
+    fn changed_line<'line>(&mut self, raw_line: &'line str) -> Option<ChangedReviewLine<'line>> {
         if let Some(content) = raw_line.strip_prefix('+') {
-            let line_number = Some(new_line);
-            new_line = new_line.saturating_add(1);
+            let line_number = self.new_line;
+            self.new_line = self.new_line.saturating_add(1);
 
-            if let Some(highlight) =
-                review_highlight(&current_file, line_number, '+', content, order)
-            {
-                highlights.push(highlight);
-            } else if let Some(fallback_highlight) =
-                review_fallback_highlight(&current_file, line_number, '+', content, order)
-            {
-                fallback_highlights.push(fallback_highlight);
-            }
-
-            order = order.saturating_add(1);
-
-            continue;
+            return Some(self.review_line(line_number, '+', content));
         }
 
         if let Some(content) = raw_line.strip_prefix('-') {
-            let line_number = Some(old_line);
-            old_line = old_line.saturating_add(1);
+            let line_number = self.old_line;
+            self.old_line = self.old_line.saturating_add(1);
 
-            if let Some(highlight) =
-                review_highlight(&current_file, line_number, '-', content, order)
-            {
-                highlights.push(highlight);
-            } else if let Some(fallback_highlight) =
-                review_fallback_highlight(&current_file, line_number, '-', content, order)
-            {
-                fallback_highlights.push(fallback_highlight);
-            }
-
-            order = order.saturating_add(1);
-
-            continue;
+            return Some(self.review_line(line_number, '-', content));
         }
 
-        if !raw_line.starts_with('\\') {
-            old_line = old_line.saturating_add(1);
-            new_line = new_line.saturating_add(1);
+        None
+    }
+
+    /// Advances both counters for an unchanged context line.
+    fn advance_context(&mut self, raw_line: &str) {
+        if raw_line.starts_with('\\') {
+            return;
+        }
+
+        self.old_line = self.old_line.saturating_add(1);
+        self.new_line = self.new_line.saturating_add(1);
+    }
+
+    /// Builds changed-line data for scoring.
+    fn review_line<'line>(
+        &self,
+        line_number: u32,
+        sign: char,
+        content: &'line str,
+    ) -> ChangedReviewLine<'line> {
+        ChangedReviewLine {
+            content,
+            file_path: self.current_file.clone(),
+            line_number,
+            sign,
+        }
+    }
+}
+
+/// Borrowed data for one added or removed diff line.
+struct ChangedReviewLine<'line> {
+    content: &'line str,
+    file_path: String,
+    line_number: u32,
+    sign: char,
+}
+
+/// Collects high-signal and fallback review highlights during diff scanning.
+#[derive(Default)]
+struct ReviewHighlightCollection {
+    fallback_highlights: Vec<ReviewHighlight>,
+    highlights: Vec<ReviewHighlight>,
+}
+
+impl ReviewHighlightCollection {
+    /// Scores one changed line and stores it in the best matching collection.
+    fn push_changed_line(&mut self, changed_line: &ChangedReviewLine<'_>, order: usize) {
+        let line_number = Some(changed_line.line_number);
+        if let Some(highlight) = review_highlight(
+            &changed_line.file_path,
+            line_number,
+            changed_line.sign,
+            changed_line.content,
+            order,
+        ) {
+            self.highlights.push(highlight);
+
+            return;
+        }
+
+        if let Some(fallback_highlight) = review_fallback_highlight(
+            &changed_line.file_path,
+            line_number,
+            changed_line.sign,
+            changed_line.content,
+            order,
+        ) {
+            self.fallback_highlights.push(fallback_highlight);
         }
     }
 
-    if highlights.is_empty() {
-        fallback_highlights.truncate(MAX_REVIEW_FALLBACK_COUNT);
+    /// Returns ranked high-signal highlights, falling back to representative
+    /// lines.
+    fn into_ranked_highlights(mut self) -> Vec<ReviewHighlight> {
+        if self.highlights.is_empty() {
+            self.fallback_highlights.truncate(MAX_REVIEW_FALLBACK_COUNT);
 
-        return fallback_highlights;
+            return self.fallback_highlights;
+        }
+
+        self.highlights.sort_by(|left, right| {
+            right
+                .score
+                .cmp(&left.score)
+                .then(left.order.cmp(&right.order))
+        });
+        self.highlights.truncate(MAX_REVIEW_HIGHLIGHT_COUNT);
+        self.highlights.sort_by_key(|highlight| highlight.order);
+
+        self.highlights
     }
-
-    highlights.sort_by(|left, right| {
-        right
-            .score
-            .cmp(&left.score)
-            .then(left.order.cmp(&right.order))
-    });
-    highlights.truncate(MAX_REVIEW_HIGHLIGHT_COUNT);
-    highlights.sort_by_key(|highlight| highlight.order);
-
-    highlights
 }
 
 /// Builds one markdown list item for a review highlight.
@@ -583,82 +662,67 @@ fn review_highlight(
 
     let normalized_content = content.to_lowercase();
     let normalized_path = file_path.to_lowercase();
-    let mut score = 0_u16;
-    let mut comment = DEFAULT_COMMENT;
-    let mut matched_runtime = false;
+    let mut classification = ReviewHighlightClassification::new(DEFAULT_COMMENT);
 
-    if contains_any(
-        &normalized_content,
-        &["unsafe", "unwrap(", "expect(", "panic!("],
-    ) {
-        score = score.saturating_add(5);
-        comment = RUNTIME_COMMENT;
-        matched_runtime = true;
-    }
+    classification.add_runtime_score(
+        contains_any(
+            &normalized_content,
+            &["unsafe", "unwrap(", "expect(", "panic!("],
+        ),
+        RUNTIME_COMMENT,
+    );
+    classification.add_category_score(
+        contains_any(
+            &normalized_content,
+            &[
+                "auth",
+                "permission",
+                "token",
+                "secret",
+                "password",
+                "admin",
+                "role",
+                "acl",
+            ],
+        ) || contains_any(&normalized_path, &["auth", "permission", "security"]),
+        4,
+        SECURITY_COMMENT,
+    );
+    classification.add_category_score(
+        contains_any(
+            &normalized_content,
+            &[
+                "select ", "insert ", "update ", "delete ", "drop ", "alter ",
+            ],
+        ) || contains_any(&normalized_path, &["migration", ".sql"]),
+        4,
+        DATABASE_COMMENT,
+    );
+    classification.add_category_score(
+        contains_any(
+            &normalized_content,
+            &["command", "shell", "process", "exec(", "spawn(", "system("],
+        ),
+        3,
+        PROCESS_COMMENT,
+    );
+    classification.add_category_score(
+        contains_any(
+            &normalized_path,
+            &[
+                "cargo.toml",
+                ".github/workflows",
+                "dockerfile",
+                ".yaml",
+                ".yml",
+                ".toml",
+            ],
+        ),
+        2,
+        CONFIG_COMMENT,
+    );
 
-    if contains_any(
-        &normalized_content,
-        &[
-            "auth",
-            "permission",
-            "token",
-            "secret",
-            "password",
-            "admin",
-            "role",
-            "acl",
-        ],
-    ) || contains_any(&normalized_path, &["auth", "permission", "security"])
-    {
-        score = score.saturating_add(4);
-        if !matched_runtime {
-            comment = SECURITY_COMMENT;
-        }
-    }
-
-    if contains_any(
-        &normalized_content,
-        &[
-            "select ", "insert ", "update ", "delete ", "drop ", "alter ",
-        ],
-    ) || contains_any(&normalized_path, &["migration", ".sql"])
-    {
-        score = score.saturating_add(4);
-        if !matched_runtime {
-            comment = DATABASE_COMMENT;
-        }
-    }
-
-    if contains_any(
-        &normalized_content,
-        &["command", "shell", "process", "exec(", "spawn(", "system("],
-    ) {
-        score = score.saturating_add(3);
-        if !matched_runtime {
-            comment = PROCESS_COMMENT;
-        }
-    }
-
-    if contains_any(
-        &normalized_path,
-        &[
-            "cargo.toml",
-            ".github/workflows",
-            "dockerfile",
-            ".yaml",
-            ".yml",
-            ".toml",
-        ],
-    ) {
-        score = score.saturating_add(2);
-        if !matched_runtime {
-            comment = CONFIG_COMMENT;
-        }
-    }
-
-    if score == 0 {
-        return None;
-    }
+    let (score, comment) = classification.finish()?;
 
     Some(ReviewHighlight {
         comment,
@@ -669,6 +733,56 @@ fn review_highlight(
         sign,
         snippet: review_snippet(content),
     })
+}
+
+/// Accumulates review-highlight category scoring for one changed line.
+struct ReviewHighlightClassification {
+    comment: &'static str,
+    matched_runtime: bool,
+    score: u16,
+}
+
+impl ReviewHighlightClassification {
+    /// Creates a score accumulator with the default comment.
+    fn new(comment: &'static str) -> Self {
+        Self {
+            comment,
+            matched_runtime: false,
+            score: 0,
+        }
+    }
+
+    /// Adds the runtime category, which keeps comment precedence.
+    fn add_runtime_score(&mut self, matched: bool, comment: &'static str) {
+        if !matched {
+            return;
+        }
+
+        self.score = self.score.saturating_add(5);
+        self.comment = comment;
+        self.matched_runtime = true;
+    }
+
+    /// Adds a non-runtime category score and comment when matched.
+    fn add_category_score(&mut self, matched: bool, score: u16, comment: &'static str) {
+        if !matched {
+            return;
+        }
+
+        self.score = self.score.saturating_add(score);
+        if !self.matched_runtime {
+            self.comment = comment;
+        }
+    }
+
+    /// Returns the accumulated score and comment when a category matched.
+    fn finish(self) -> Option<(u16, &'static str)> {
+        if self.score == 0 {
+            return None;
+        }
+
+        Some((self.score, self.comment))
+    }
 }
 
 /// Creates an unscored fallback highlight when no criticality heuristic

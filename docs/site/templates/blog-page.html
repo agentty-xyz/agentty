@@ -47,7 +47,8 @@
         docs-layout
     {% endblock main_extra_classes %}
     {% block content %}
-        <aside class="docs-sidebar docs-sidebar--global">
+        <aside class="docs-sidebar docs-sidebar--global"
+               aria-label="Blog navigation">
             <h2 class="docs-sidebar-title">Blog</h2>
             {{ self::render_blog_nav(section_path="blog/_index.md", current_permalink=page.permalink) }}
         </aside>
@@ -58,7 +59,8 @@
             {% endif %}
             <div class="docs-content">{{ page.content | safe }}</div>
         </article>
-        <aside class="docs-sidebar docs-sidebar--page">
+        <aside class="docs-sidebar docs-sidebar--page"
+               aria-label="Post table of contents">
             <h2 class="docs-sidebar-title">On this page</h2>
             {% if page.toc and page.toc | length > 0 %}
                 {{ self::render_page_toc(items=page.toc) }}

@@ -166,26 +166,14 @@ pub fn render_markdown(text: &str, width: usize) -> Vec<Line<'static>> {
     let mut active_prompt_block_kind = PromptBlockKind::UserPrompt;
 
     for raw_line in text.split('\n') {
-        let starts_user_prompt_block = raw_line.starts_with(USER_PROMPT_PREFIX);
-        if let Some(prompt_line) = user_prompt_block_line(raw_line, &mut is_user_prompt_block) {
-            if starts_user_prompt_block {
-                // Prompt lines are session metadata, not markdown content.
-                active_prompt_block_kind = prompt_block_kind(raw_line);
-                block_state = BlockState::Paragraph;
-                rendered_lines.push(prompt_block_padding_line(width, active_prompt_block_kind));
-            }
-
-            let closes_user_prompt_block = prompt_line.is_empty() && !is_user_prompt_block;
-            rendered_lines.extend(render_prompt_block_line(
-                prompt_line,
-                starts_user_prompt_block,
-                width,
-                active_prompt_block_kind,
-            ));
-            if closes_user_prompt_block {
-                rendered_lines.push(Line::from(""));
-            }
-
+        if handle_prompt_block_line(
+            raw_line,
+            width,
+            &mut block_state,
+            &mut is_user_prompt_block,
+            &mut active_prompt_block_kind,
+            &mut rendered_lines,
+        ) {
             continue;
         }
 
@@ -214,6 +202,41 @@ pub fn render_markdown(text: &str, width: usize) -> Vec<Line<'static>> {
     }
 
     rendered_lines
+}
+
+/// Renders prompt-block lines and returns whether the line was consumed.
+fn handle_prompt_block_line(
+    raw_line: &str,
+    width: usize,
+    block_state: &mut BlockState,
+    is_user_prompt_block: &mut bool,
+    active_prompt_block_kind: &mut PromptBlockKind,
+    rendered_lines: &mut Vec<Line<'static>>,
+) -> bool {
+    let starts_user_prompt_block = raw_line.starts_with(USER_PROMPT_PREFIX);
+    let Some(prompt_line) = user_prompt_block_line(raw_line, is_user_prompt_block) else {
+        return false;
+    };
+
+    if starts_user_prompt_block {
+        // Prompt lines are session metadata, not markdown content.
+        *active_prompt_block_kind = prompt_block_kind(raw_line);
+        *block_state = BlockState::Paragraph;
+        rendered_lines.push(prompt_block_padding_line(width, *active_prompt_block_kind));
+    }
+
+    let closes_user_prompt_block = prompt_line.is_empty() && !*is_user_prompt_block;
+    rendered_lines.extend(render_prompt_block_line(
+        prompt_line,
+        starts_user_prompt_block,
+        width,
+        *active_prompt_block_kind,
+    ));
+    if closes_user_prompt_block {
+        rendered_lines.push(Line::from(""));
+    }
+
+    true
 }
 
 /// Resolves one prompt block style from the first prefixed line.

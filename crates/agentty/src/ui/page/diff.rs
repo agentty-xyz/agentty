@@ -575,71 +575,19 @@ impl<'a> DiffPage<'a> {
         let mut current_old_path: Option<&str> = None;
 
         for diff_line in parsed {
-            let (sign, content_style) = match diff_line.kind {
-                DiffLineKind::FileHeader => {
-                    if diff_line.content.starts_with("diff ") && !lines.is_empty() {
-                        lines.push(Line::from(""));
-                    }
-                    if diff_line.content.starts_with("diff ") {
-                        current_new_path = diff_header_new_path(diff_line.content);
-                        current_old_path = diff_header_old_path(diff_line.content);
-                    }
-                    lines.push(Line::from(Span::styled(
-                        diff_line.content.to_string(),
-                        Style::default().fg(style::palette::warning()),
-                    )));
-                    append_inline_comments_for_diff_line(
-                        &mut lines,
-                        comment_index,
-                        markdown_render_cache,
-                        layout.content_width,
-                        current_new_path,
-                        current_old_path,
-                        diff_line,
-                    );
-
-                    continue;
-                }
-                DiffLineKind::HunkHeader => {
-                    lines.push(Line::from(Span::styled(
-                        diff_line.content.to_string(),
-                        Style::default().fg(style::palette::accent()),
-                    )));
-
-                    continue;
-                }
-                DiffLineKind::Addition => ("+", Self::addition_line_style()),
-                DiffLineKind::Deletion => ("-", Self::deletion_line_style()),
-                DiffLineKind::Context => (" ", Style::default().fg(style::palette::text_muted())),
-            };
-
-            let old_str = match diff_line.old_line {
-                Some(num) => format!("{num:>width$}", width = layout.gutter_width),
-                None => " ".repeat(layout.gutter_width),
-            };
-            let new_str = match diff_line.new_line {
-                Some(num) => format!("{num:>width$}", width = layout.gutter_width),
-                None => " ".repeat(layout.gutter_width),
-            };
-
-            let gutter_text = format!("{old_str}│{new_str} ");
-            let content_available = layout.content_width.saturating_sub(layout.prefix_width);
-            let chunks = diff_util::wrap_diff_content(diff_line.content, content_available);
-
-            for (idx, chunk) in chunks.iter().enumerate() {
-                if idx == WRAPPED_CHUNK_START_INDEX {
-                    lines.push(Line::from(vec![
-                        Span::styled(gutter_text.clone(), gutter_style),
-                        Span::styled(sign, content_style),
-                        Span::styled((*chunk).to_string(), content_style),
-                    ]));
-                } else {
-                    lines.push(Line::from(vec![
-                        Span::styled(" ".repeat(layout.prefix_width), gutter_style),
-                        Span::styled((*chunk).to_string(), content_style),
-                    ]));
-                }
+            if Self::append_special_diff_line(
+                &mut lines,
+                diff_line,
+                layout,
+                comment_index,
+                markdown_render_cache,
+                &mut current_new_path,
+                &mut current_old_path,
+            ) {
+                continue;
             }
+
+            Self::append_body_diff_line(&mut lines, diff_line, layout, gutter_style);
             append_inline_comments_for_diff_line(
                 &mut lines,
                 comment_index,
@@ -656,6 +604,129 @@ impl<'a> DiffPage<'a> {
         }
 
         lines
+    }
+
+    /// Appends file and hunk headers, returning whether the line was consumed.
+    fn append_special_diff_line<'diff>(
+        lines: &mut Vec<Line<'static>>,
+        diff_line: &DiffLine<'diff>,
+        layout: diff_util::DiffRenderLayout,
+        comment_index: &InlineCommentIndex<'_>,
+        markdown_render_cache: &markdown::MarkdownRenderCache,
+        current_new_path: &mut Option<&'diff str>,
+        current_old_path: &mut Option<&'diff str>,
+    ) -> bool {
+        match diff_line.kind {
+            DiffLineKind::FileHeader => {
+                Self::append_file_header_diff_line(
+                    lines,
+                    diff_line,
+                    layout,
+                    comment_index,
+                    markdown_render_cache,
+                    current_new_path,
+                    current_old_path,
+                );
+
+                true
+            }
+            DiffLineKind::HunkHeader => {
+                lines.push(Line::from(Span::styled(
+                    diff_line.content.to_string(),
+                    Style::default().fg(style::palette::accent()),
+                )));
+
+                true
+            }
+            DiffLineKind::Addition | DiffLineKind::Deletion | DiffLineKind::Context => false,
+        }
+    }
+
+    /// Appends one file-header diff line and any comments attached to it.
+    fn append_file_header_diff_line<'diff>(
+        lines: &mut Vec<Line<'static>>,
+        diff_line: &DiffLine<'diff>,
+        layout: diff_util::DiffRenderLayout,
+        comment_index: &InlineCommentIndex<'_>,
+        markdown_render_cache: &markdown::MarkdownRenderCache,
+        current_new_path: &mut Option<&'diff str>,
+        current_old_path: &mut Option<&'diff str>,
+    ) {
+        if diff_line.content.starts_with("diff ") && !lines.is_empty() {
+            lines.push(Line::from(""));
+        }
+        if diff_line.content.starts_with("diff ") {
+            *current_new_path = diff_header_new_path(diff_line.content);
+            *current_old_path = diff_header_old_path(diff_line.content);
+        }
+
+        lines.push(Line::from(Span::styled(
+            diff_line.content.to_string(),
+            Style::default().fg(style::palette::warning()),
+        )));
+        append_inline_comments_for_diff_line(
+            lines,
+            comment_index,
+            markdown_render_cache,
+            layout.content_width,
+            *current_new_path,
+            *current_old_path,
+            diff_line,
+        );
+    }
+
+    /// Appends one addition, deletion, or context line with wrapped content.
+    fn append_body_diff_line(
+        lines: &mut Vec<Line<'static>>,
+        diff_line: &DiffLine<'_>,
+        layout: diff_util::DiffRenderLayout,
+        gutter_style: Style,
+    ) {
+        let (sign, content_style) = Self::body_diff_line_style(diff_line.kind);
+        let gutter_text = Self::body_diff_line_gutter(diff_line, layout.gutter_width);
+        let content_available = layout.content_width.saturating_sub(layout.prefix_width);
+        let chunks = diff_util::wrap_diff_content(diff_line.content, content_available);
+
+        for (index, chunk) in chunks.iter().enumerate() {
+            if index == WRAPPED_CHUNK_START_INDEX {
+                lines.push(Line::from(vec![
+                    Span::styled(gutter_text.clone(), gutter_style),
+                    Span::styled(sign, content_style),
+                    Span::styled((*chunk).to_string(), content_style),
+                ]));
+            } else {
+                lines.push(Line::from(vec![
+                    Span::styled(" ".repeat(layout.prefix_width), gutter_style),
+                    Span::styled((*chunk).to_string(), content_style),
+                ]));
+            }
+        }
+    }
+
+    /// Returns the sign and style for one body diff line.
+    fn body_diff_line_style(kind: DiffLineKind) -> (&'static str, Style) {
+        match kind {
+            DiffLineKind::Addition => ("+", Self::addition_line_style()),
+            DiffLineKind::Deletion => ("-", Self::deletion_line_style()),
+            DiffLineKind::Context => (" ", Style::default().fg(style::palette::text_muted())),
+            DiffLineKind::FileHeader | DiffLineKind::HunkHeader => {
+                (" ", Style::default().fg(style::palette::text_muted()))
+            }
+        }
+    }
+
+    /// Builds the old/new line-number gutter for one body diff line.
+    fn body_diff_line_gutter(diff_line: &DiffLine<'_>, gutter_width: usize) -> String {
+        let old_str = match diff_line.old_line {
+            Some(num) => format!("{num:>gutter_width$}"),
+            None => " ".repeat(gutter_width),
+        };
+        let new_str = match diff_line.new_line {
+            Some(num) => format!("{num:>gutter_width$}"),
+            None => " ".repeat(gutter_width),
+        };
+
+        format!("{old_str}│{new_str} ")
     }
 
     /// Renders a slim scrollbar inside the diff panel so users can see their
@@ -1094,43 +1165,61 @@ impl DiffPage<'_> {
                 ));
             }
             (Some(review_request), Some(snapshot)) => {
-                if review_request.summary.state != ReviewRequestState::Open {
-                    lines.push(empty_closed_review_request_line(
-                        review_request.summary.state,
-                    ));
-                    lines.push(Line::default());
-                }
-
-                let has_pr_level = !snapshot.pr_level_comments.is_empty();
-                let has_threads = snapshot.threads.iter().any(is_visible_thread);
-
-                if !has_pr_level && !has_threads {
-                    lines.push(empty_muted_line("No unresolved review comments."));
-                } else {
-                    if has_pr_level {
-                        append_pr_level_comments(
-                            &mut lines,
-                            &snapshot.pr_level_comments,
-                            self.markdown_render_cache,
-                            width,
-                        );
-                    }
-                    for (index, thread) in snapshot
-                        .threads
-                        .iter()
-                        .filter(|thread| is_visible_thread(thread))
-                        .enumerate()
-                    {
-                        if index > 0 || has_pr_level {
-                            lines.push(Line::default());
-                        }
-                        append_thread_lines(&mut lines, thread, self.markdown_render_cache, width);
-                    }
-                }
+                self.append_review_comment_snapshot_lines(
+                    &mut lines,
+                    review_request,
+                    snapshot,
+                    width,
+                );
             }
         }
 
         lines
+    }
+
+    /// Appends comment details for a synced review-comment snapshot.
+    fn append_review_comment_snapshot_lines(
+        &self,
+        lines: &mut Vec<Line<'static>>,
+        review_request: &ReviewRequest,
+        snapshot: &ReviewCommentSnapshot,
+        width: u16,
+    ) {
+        if review_request.summary.state != ReviewRequestState::Open {
+            lines.push(empty_closed_review_request_line(
+                review_request.summary.state,
+            ));
+            lines.push(Line::default());
+        }
+
+        let has_pr_level = !snapshot.pr_level_comments.is_empty();
+        let visible_threads = snapshot
+            .threads
+            .iter()
+            .filter(|thread| is_visible_thread(thread))
+            .collect::<Vec<_>>();
+
+        if !has_pr_level && visible_threads.is_empty() {
+            lines.push(empty_muted_line("No unresolved review comments."));
+
+            return;
+        }
+
+        if has_pr_level {
+            append_pr_level_comments(
+                lines,
+                &snapshot.pr_level_comments,
+                self.markdown_render_cache,
+                width,
+            );
+        }
+
+        for (index, thread) in visible_threads.iter().enumerate() {
+            if index > 0 || has_pr_level {
+                lines.push(Line::default());
+            }
+            append_thread_lines(lines, thread, self.markdown_render_cache, width);
+        }
     }
 }
 

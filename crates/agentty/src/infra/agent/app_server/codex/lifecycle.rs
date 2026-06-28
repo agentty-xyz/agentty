@@ -472,104 +472,186 @@ pub(super) async fn execute_turn_event_loop_with_timeout<Transport: CodexRuntime
     input: CodexTurnEventLoopInput<'_>,
 ) -> Result<(String, u64, u64), AppServerError> {
     let turn_start_id = write_turn_start_request(transport, &input).await?;
-    let CodexTurnEventLoopInput {
-        stream_tx,
-        turn_timeout,
-        ..
-    } = input;
+    let folder = input.folder;
+    let turn_timeout = input.turn_timeout;
+    let mut state = CodexTurnEventLoopState::new(input.stream_tx);
 
-    let mut assistant_messages = Vec::new();
-    let mut active_turn_id: Option<String> = None;
-    let mut active_phase: Option<String> = None;
-    let mut waiting_for_handoff_turn_completion = false;
-    let mut latest_stream_usage: Option<(u64, u64)> = None;
-    let mut completed_turn_usage: Option<(u64, u64)> = None;
     tokio::time::timeout(turn_timeout, async {
         loop {
-            let stdout_line =
-                read_required_stdout_line(transport, " before `turn/completed` was received")
-                    .await?;
-
-            if stdout_line.trim().is_empty() {
+            let Some(response_value) = read_turn_response_value(transport).await? else {
                 continue;
-            }
+            };
 
-            if let Ok(response_value) = serde_json::from_str::<Value>(&stdout_line) {
-                if response_id_matches(&response_value, &turn_start_id) {
-                    if response_value.get("error").is_some() {
-                        return Err(AppServerError::Provider(
-                            extract_json_error_message(&response_value).unwrap_or_else(|| {
-                                "Codex app-server returned an error for `turn/start`".to_string()
-                            }),
-                        ));
-                    }
-                    if active_turn_id.is_none() {
-                        active_turn_id = stream_parser::extract_turn_id_from_turn_start_response(
-                            &response_value,
-                        );
-                        if active_turn_id.is_some() {
-                            waiting_for_handoff_turn_completion = false;
-                        }
-                    }
-
-                    continue;
-                }
-
-                if let Some(approval_response) =
-                    policy::build_pre_action_approval_response(&response_value, input.folder)
-                {
-                    transport.write_json_line(approval_response).await?;
-
-                    continue;
-                }
-
-                update_active_turn_tracking_for_response(
-                    &response_value,
-                    &mut active_turn_id,
-                    &mut waiting_for_handoff_turn_completion,
-                );
-                stream_turn_content_from_response(
-                    &response_value,
-                    &stream_tx,
-                    &mut assistant_messages,
-                    &mut active_phase,
-                );
-                usage::update_turn_usage_from_response(
-                    &response_value,
-                    active_turn_id.as_deref(),
-                    &mut completed_turn_usage,
-                    &mut latest_stream_usage,
-                );
-
-                if stream_parser::is_interrupted_turn_completion_without_error(
-                    &response_value,
-                    active_turn_id.as_deref(),
-                ) {
-                    active_turn_id = None;
-                    waiting_for_handoff_turn_completion = true;
-
-                    continue;
-                }
-
-                if let Some(turn_result) =
-                    stream_parser::parse_turn_completed(&response_value, active_turn_id.as_deref())
-                {
-                    let (input_tokens, output_tokens) =
-                        usage::resolve_turn_usage(completed_turn_usage, latest_stream_usage);
-
-                    return finalize_turn_completion(
-                        turn_result,
-                        &assistant_messages,
-                        &stream_tx,
-                        input_tokens,
-                        output_tokens,
-                    );
-                }
+            if let Some(turn_completion) = state
+                .process_response(transport, folder, &turn_start_id, response_value)
+                .await?
+            {
+                return Ok(turn_completion);
             }
         }
     })
     .await
     .map_err(|_| turn_completed_timeout_error(turn_timeout))?
+}
+
+/// Mutable state carried across Codex app-server turn events.
+struct CodexTurnEventLoopState {
+    active_phase: Option<String>,
+    active_turn_id: Option<String>,
+    assistant_messages: Vec<String>,
+    completed_turn_usage: Option<(u64, u64)>,
+    latest_stream_usage: Option<(u64, u64)>,
+    stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
+    waiting_for_handoff_turn_completion: bool,
+}
+
+impl CodexTurnEventLoopState {
+    /// Creates empty turn-event state for one active app-server turn.
+    fn new(stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>) -> Self {
+        Self {
+            active_phase: None,
+            active_turn_id: None,
+            assistant_messages: Vec::new(),
+            completed_turn_usage: None,
+            latest_stream_usage: None,
+            stream_tx,
+            waiting_for_handoff_turn_completion: false,
+        }
+    }
+
+    /// Processes one app-server response and returns a completed turn when
+    /// ready.
+    async fn process_response<Transport: CodexRuntimeTransport>(
+        &mut self,
+        transport: &mut Transport,
+        folder: &Path,
+        turn_start_id: &str,
+        response_value: Value,
+    ) -> Result<Option<(String, u64, u64)>, AppServerError> {
+        if response_id_matches(&response_value, turn_start_id) {
+            self.process_turn_start_response(&response_value)?;
+
+            return Ok(None);
+        }
+
+        if let Some(approval_response) =
+            policy::build_pre_action_approval_response(&response_value, folder)
+        {
+            transport.write_json_line(approval_response).await?;
+
+            return Ok(None);
+        }
+
+        self.process_stream_response(&response_value)
+    }
+
+    /// Updates state from the original `turn/start` response.
+    fn process_turn_start_response(
+        &mut self,
+        response_value: &Value,
+    ) -> Result<(), AppServerError> {
+        if response_value.get("error").is_some() {
+            return Err(AppServerError::Provider(
+                extract_json_error_message(response_value).unwrap_or_else(|| {
+                    "Codex app-server returned an error for `turn/start`".to_string()
+                }),
+            ));
+        }
+
+        if self.active_turn_id.is_none() {
+            self.active_turn_id =
+                stream_parser::extract_turn_id_from_turn_start_response(response_value);
+            if self.active_turn_id.is_some() {
+                self.waiting_for_handoff_turn_completion = false;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Updates state from one stream event and returns the turn result when
+    /// complete.
+    fn process_stream_response(
+        &mut self,
+        response_value: &Value,
+    ) -> Result<Option<(String, u64, u64)>, AppServerError> {
+        update_active_turn_tracking_for_response(
+            response_value,
+            &mut self.active_turn_id,
+            &mut self.waiting_for_handoff_turn_completion,
+        );
+        stream_turn_content_from_response(
+            response_value,
+            &self.stream_tx,
+            &mut self.assistant_messages,
+            &mut self.active_phase,
+        );
+        usage::update_turn_usage_from_response(
+            response_value,
+            self.active_turn_id.as_deref(),
+            &mut self.completed_turn_usage,
+            &mut self.latest_stream_usage,
+        );
+
+        if self.record_interrupted_completion(response_value) {
+            return Ok(None);
+        }
+
+        self.completed_turn(response_value)
+    }
+
+    /// Records interrupted handoff completion events that are followed by
+    /// another turn.
+    fn record_interrupted_completion(&mut self, response_value: &Value) -> bool {
+        if !stream_parser::is_interrupted_turn_completion_without_error(
+            response_value,
+            self.active_turn_id.as_deref(),
+        ) {
+            return false;
+        }
+
+        self.active_turn_id = None;
+        self.waiting_for_handoff_turn_completion = true;
+
+        true
+    }
+
+    /// Builds the final turn result when the runtime reports completion.
+    fn completed_turn(
+        &self,
+        response_value: &Value,
+    ) -> Result<Option<(String, u64, u64)>, AppServerError> {
+        let Some(turn_result) =
+            stream_parser::parse_turn_completed(response_value, self.active_turn_id.as_deref())
+        else {
+            return Ok(None);
+        };
+        let (input_tokens, output_tokens) =
+            usage::resolve_turn_usage(self.completed_turn_usage, self.latest_stream_usage);
+
+        finalize_turn_completion(
+            turn_result,
+            &self.assistant_messages,
+            &self.stream_tx,
+            input_tokens,
+            output_tokens,
+        )
+        .map(Some)
+    }
+}
+
+/// Reads the next non-empty JSON response from Codex app-server stdout.
+async fn read_turn_response_value<Transport: CodexRuntimeTransport>(
+    transport: &mut Transport,
+) -> Result<Option<Value>, AppServerError> {
+    let stdout_line =
+        read_required_stdout_line(transport, " before `turn/completed` was received").await?;
+    let trimmed_line = stdout_line.trim();
+    if trimmed_line.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(serde_json::from_str::<Value>(trimmed_line).ok())
 }
 
 /// Writes the initial `turn/start` request and returns its request id.

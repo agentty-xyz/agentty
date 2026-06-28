@@ -154,43 +154,19 @@ fn parse_claude_response(stdout: &str) -> Option<ParsedResponse> {
     let mut latest_non_empty_result: Option<ParsedResponse> = None;
     let mut latest_stream_message_content: Option<String> = None;
 
-    if let Some(parsed_response) = parse_claude_response_payload(trimmed_stdout) {
-        latest_result_stats = Some(parsed_response.stats.clone());
-        if !parsed_response.content.trim().is_empty() {
-            latest_non_empty_result = Some(parsed_response);
-        }
-    }
-    if let Some(parsed_response) = parse_claude_response_array_payload(trimmed_stdout) {
-        latest_result_stats = Some(parsed_response.stats.clone());
-        if !parsed_response.content.trim().is_empty() {
-            latest_non_empty_result = Some(parsed_response);
-        }
-    }
+    record_claude_complete_payload(
+        trimmed_stdout,
+        &mut latest_result_stats,
+        &mut latest_non_empty_result,
+    );
 
     for line in stdout.lines() {
         let trimmed_line = line.trim();
-        if trimmed_line.is_empty() {
-            continue;
-        }
-
-        if let Some(parsed_response) = parse_claude_response_payload(trimmed_line) {
-            latest_result_stats = Some(parsed_response.stats.clone());
-            if !parsed_response.content.trim().is_empty() {
-                latest_non_empty_result = Some(parsed_response);
-            }
-
-            continue;
-        }
-        if let Some(parsed_response) = parse_claude_response_array_payload(trimmed_line) {
-            latest_result_stats = Some(parsed_response.stats.clone());
-            if !parsed_response.content.trim().is_empty() {
-                latest_non_empty_result = Some(parsed_response);
-            }
-
-            continue;
-        }
-
-        let Ok(stream_event) = serde_json::from_str::<serde_json::Value>(trimmed_line) else {
+        let Some(stream_event) = record_claude_line_payload(
+            trimmed_line,
+            &mut latest_result_stats,
+            &mut latest_non_empty_result,
+        ) else {
             continue;
         };
 
@@ -215,6 +191,75 @@ fn parse_claude_response(stdout: &str) -> Option<ParsedResponse> {
     let stats = latest_result_stats.unwrap_or_default();
 
     Some(ParsedResponse { content, stats })
+}
+
+/// Records complete Claude payload formats from one stdout segment.
+fn record_claude_complete_payload(
+    payload: &str,
+    latest_result_stats: &mut Option<SessionStats>,
+    latest_non_empty_result: &mut Option<ParsedResponse>,
+) {
+    if let Some(parsed_response) = parse_claude_response_payload(payload) {
+        record_claude_parsed_response(
+            parsed_response,
+            latest_result_stats,
+            latest_non_empty_result,
+        );
+    }
+
+    if let Some(parsed_response) = parse_claude_response_array_payload(payload) {
+        record_claude_parsed_response(
+            parsed_response,
+            latest_result_stats,
+            latest_non_empty_result,
+        );
+    }
+}
+
+/// Records a Claude line payload and returns stream JSON that still needs
+/// parsing.
+fn record_claude_line_payload(
+    trimmed_line: &str,
+    latest_result_stats: &mut Option<SessionStats>,
+    latest_non_empty_result: &mut Option<ParsedResponse>,
+) -> Option<serde_json::Value> {
+    if trimmed_line.is_empty() {
+        return None;
+    }
+
+    if let Some(parsed_response) = parse_claude_response_payload(trimmed_line) {
+        record_claude_parsed_response(
+            parsed_response,
+            latest_result_stats,
+            latest_non_empty_result,
+        );
+
+        return None;
+    }
+
+    if let Some(parsed_response) = parse_claude_response_array_payload(trimmed_line) {
+        record_claude_parsed_response(
+            parsed_response,
+            latest_result_stats,
+            latest_non_empty_result,
+        );
+
+        return None;
+    }
+
+    serde_json::from_str::<serde_json::Value>(trimmed_line).ok()
+}
+
+/// Updates latest Claude result state from one parsed complete response.
+fn record_claude_parsed_response(
+    parsed_response: ParsedResponse,
+    latest_result_stats: &mut Option<SessionStats>,
+    latest_non_empty_result: &mut Option<ParsedResponse>,
+) {
+    latest_result_stats.replace(parsed_response.stats.clone());
+    if !parsed_response.content.trim().is_empty() {
+        latest_non_empty_result.replace(parsed_response);
+    }
 }
 
 /// Parses one Claude stream line into display text and content/progress type.
@@ -327,12 +372,7 @@ fn parse_codex_response(stdout: &str) -> Option<ParsedResponse> {
             continue;
         };
 
-        if event.event_type.as_deref() == Some("turn.completed")
-            && let Some(usage) = event.usage
-        {
-            total_input_tokens += usage.input_tokens.unwrap_or(0).cast_unsigned();
-            total_output_tokens += usage.output_tokens.unwrap_or(0).cast_unsigned();
-        }
+        record_codex_turn_usage(&event, &mut total_input_tokens, &mut total_output_tokens);
 
         if event.event_type.as_deref() != Some("item.completed") {
             continue;
@@ -342,22 +382,7 @@ fn parse_codex_response(stdout: &str) -> Option<ParsedResponse> {
             continue;
         };
 
-        let item_type = item.item_type.as_deref().unwrap_or_default();
-        if let Some(text) = item.text.or(item.delta) {
-            if is_codex_completion_status_message(&text) {
-                continue;
-            }
-
-            if item_type == "agent_message" || item_type == "agentmessage" {
-                last_agent_message = Some(text);
-
-                continue;
-            }
-
-            if item_type == "reasoning" || item_type == "thought" {
-                last_reasoning_message = Some(text);
-            }
-        }
+        record_codex_completed_item(item, &mut last_agent_message, &mut last_reasoning_message);
     }
 
     let stats = SessionStats {
@@ -370,6 +395,49 @@ fn parse_codex_response(stdout: &str) -> Option<ParsedResponse> {
     last_agent_message
         .or(last_reasoning_message)
         .map(|content| ParsedResponse { content, stats })
+}
+
+/// Adds token usage from one Codex turn completion event.
+fn record_codex_turn_usage(
+    event: &CodexEvent,
+    total_input_tokens: &mut u64,
+    total_output_tokens: &mut u64,
+) {
+    if event.event_type.as_deref() != Some("turn.completed") {
+        return;
+    }
+
+    let Some(usage) = event.usage.as_ref() else {
+        return;
+    };
+
+    *total_input_tokens += usage.input_tokens.unwrap_or(0).cast_unsigned();
+    *total_output_tokens += usage.output_tokens.unwrap_or(0).cast_unsigned();
+}
+
+/// Records visible content from one completed Codex item event.
+fn record_codex_completed_item(
+    item: CodexItem,
+    last_agent_message: &mut Option<String>,
+    last_reasoning_message: &mut Option<String>,
+) {
+    let Some(text) = item.text.or(item.delta) else {
+        return;
+    };
+    if is_codex_completion_status_message(&text) {
+        return;
+    }
+
+    let item_type = item.item_type.as_deref().unwrap_or_default();
+    if item_type == "agent_message" || item_type == "agentmessage" {
+        last_agent_message.replace(text);
+
+        return;
+    }
+
+    if item_type == "reasoning" || item_type == "thought" {
+        last_reasoning_message.replace(text);
+    }
 }
 
 /// Parses one Codex stream line into display text and content/progress type.

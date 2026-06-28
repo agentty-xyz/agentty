@@ -181,57 +181,97 @@ fn fuzzy_score(
     query_lower: &str,
     append_trailing_slash: bool,
 ) -> Option<i32> {
-    let mut score: i32 = 0;
-    let mut query_index = 0;
-    let mut prev_matched = false;
-    let mut prev_path_char = None;
+    let mut state = FuzzyScoreState::new();
 
     for path_char_orig in path.chars().chain(append_trailing_slash.then_some('/')) {
-        if query_index >= query_chars.len() {
+        if state.query_is_complete(query_chars) {
             break;
         }
 
-        let mut matched = false;
-        for path_char in path_char_orig.to_lowercase() {
-            if query_index >= query_chars.len() {
-                break;
-            }
-
-            if path_char == query_chars[query_index] {
-                score += 1;
-
-                // Bonus for consecutive matches.
-                if prev_matched {
-                    score += 3;
-                }
-
-                // Bonus for match at start of a path segment.
-                if prev_path_char.is_none_or(|previous_path_char| {
-                    matches!(previous_path_char, '/' | '.' | '_' | '-')
-                }) {
-                    score += 5;
-                }
-
-                query_index += 1;
-                matched = true;
-                prev_matched = true;
-            } else {
-                matched = false;
-                prev_matched = false;
-            }
-        }
-
-        if !matched {
-            prev_matched = false;
-        }
-        prev_path_char = Some(path_char_orig);
+        state.score_path_character(path_char_orig, query_chars);
     }
 
-    if query_index == query_chars.len() {
-        Some(score + basename_match_bonus(path, query_lower))
+    if state.query_is_complete(query_chars) {
+        Some(state.score + basename_match_bonus(path, query_lower))
     } else {
         None
     }
+}
+
+/// Tracks fuzzy-match scoring state while walking a candidate path.
+struct FuzzyScoreState {
+    prev_matched: bool,
+    prev_path_char: Option<char>,
+    query_index: usize,
+    score: i32,
+}
+
+impl FuzzyScoreState {
+    /// Creates an empty scoring state for one candidate path.
+    fn new() -> Self {
+        Self {
+            prev_matched: false,
+            prev_path_char: None,
+            query_index: 0,
+            score: 0,
+        }
+    }
+
+    /// Returns whether every query character has already matched.
+    fn query_is_complete(&self, query_chars: &[char]) -> bool {
+        self.query_index >= query_chars.len()
+    }
+
+    /// Scores one original path character, including lowercase expansions.
+    fn score_path_character(&mut self, path_char_orig: char, query_chars: &[char]) {
+        let mut matched = false;
+        for path_char in path_char_orig.to_lowercase() {
+            if self.query_is_complete(query_chars) {
+                break;
+            }
+
+            matched = self.score_lowercase_character(path_char, query_chars);
+        }
+
+        self.prev_matched = matched;
+        self.prev_path_char = Some(path_char_orig);
+    }
+
+    /// Scores one lowercase path character against the next query character.
+    fn score_lowercase_character(&mut self, path_char: char, query_chars: &[char]) -> bool {
+        if path_char != query_chars[self.query_index] {
+            self.prev_matched = false;
+
+            return false;
+        }
+
+        self.score += 1;
+        self.add_consecutive_match_bonus();
+        self.add_segment_start_bonus();
+        self.query_index += 1;
+        self.prev_matched = true;
+
+        true
+    }
+
+    /// Adds a score bonus when the previous path character was also matched.
+    fn add_consecutive_match_bonus(&mut self) {
+        if self.prev_matched {
+            self.score += 3;
+        }
+    }
+
+    /// Adds a score bonus when a match starts a visible path segment.
+    fn add_segment_start_bonus(&mut self) {
+        if self.prev_path_char.is_none_or(is_segment_boundary) {
+            self.score += 5;
+        }
+    }
+}
+
+/// Returns whether a path character marks the start of a new fuzzy segment.
+fn is_segment_boundary(path_char: char) -> bool {
+    matches!(path_char, '/' | '.' | '_' | '-')
 }
 
 /// Returns an extra score when the query text is found in the basename.

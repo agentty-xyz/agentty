@@ -249,121 +249,209 @@ fn move_input_cursor_vertical(
 
 /// Build wrapped chat input lines with cursor mapping and token-level styling.
 fn compute_input_layout_data(input: &str, width: u16) -> InputLayout {
-    let inner_width = width.saturating_sub(2) as usize;
-    let prefix = " › ";
-    let prefix_span = Span::styled(
-        prefix,
-        Style::default()
-            .fg(style::palette::accent())
-            .add_modifier(Modifier::BOLD),
-    );
-    let prefix_width = prefix_span.width();
-    let continuation_padding = " ".repeat(prefix_width);
-
-    let mut display_lines = Vec::new();
-    let mut cursor_positions = Vec::with_capacity(input.chars().count() + 1);
-    let mut current_line_spans = vec![prefix_span];
-    let mut current_width = prefix_width;
-    let mut line_index: usize = 0;
-
-    let mut in_mention = false;
-    let mut image_token_end: Option<usize> = None;
-    let mut last_ch = None;
-
     let input_chars = input.chars().collect::<Vec<_>>();
+    let mut builder = InputLayoutBuilder::new(width, input_chars.len());
+
     for (character_index, ch) in input_chars.iter().copied().enumerate() {
-        if image_token_end.is_some_and(|end_index| character_index >= end_index) {
-            image_token_end = None;
-        }
+        builder.push_character(&input_chars, character_index, ch);
+    }
 
+    builder.finish()
+}
+
+/// Incrementally builds wrapped input lines and cursor positions.
+struct InputLayoutBuilder {
+    continuation_padding: String,
+    current_line_spans: Vec<Span<'static>>,
+    current_width: usize,
+    cursor_positions: Vec<(usize, usize)>,
+    display_lines: Vec<Line<'static>>,
+    image_token_end: Option<usize>,
+    in_mention: bool,
+    inner_width: usize,
+    last_ch: Option<char>,
+    line_index: usize,
+    prefix_width: usize,
+}
+
+impl InputLayoutBuilder {
+    /// Creates a builder initialized with the prompt prefix span.
+    fn new(width: u16, input_char_count: usize) -> Self {
+        let prefix_span = Span::styled(
+            " › ",
+            Style::default()
+                .fg(style::palette::accent())
+                .add_modifier(Modifier::BOLD),
+        );
+        let prefix_width = prefix_span.width();
+
+        Self {
+            continuation_padding: " ".repeat(prefix_width),
+            current_line_spans: vec![prefix_span],
+            current_width: prefix_width,
+            cursor_positions: Vec::with_capacity(input_char_count + 1),
+            display_lines: Vec::new(),
+            image_token_end: None,
+            in_mention: false,
+            inner_width: width.saturating_sub(2) as usize,
+            last_ch: None,
+            line_index: 0,
+            prefix_width,
+        }
+    }
+
+    /// Adds one input character, applying explicit and automatic wrapping.
+    fn push_character(&mut self, input_chars: &[char], character_index: usize, ch: char) {
+        self.expire_image_token(character_index);
         if ch == '\n' {
-            in_mention = false;
-            image_token_end = None;
-            cursor_positions.push((current_width, line_index));
-            display_lines.push(Line::from(std::mem::take(&mut current_line_spans)));
-            current_line_spans = vec![Span::raw(continuation_padding.clone())];
-            current_width = prefix_width;
-            line_index += 1;
-            last_ch = Some(ch);
+            self.push_explicit_newline(ch);
 
-            continue;
+            return;
         }
 
-        let is_word_start = !ch.is_whitespace()
-            && (character_index == 0 || input_chars[character_index - 1].is_whitespace());
-        if is_word_start {
-            let word_width = input_chars
-                .iter()
-                .skip(character_index)
-                .take_while(|next_ch| !next_ch.is_whitespace())
-                .map(|next_ch| Span::raw(next_ch.to_string()).width())
-                .sum::<usize>();
-            let line_has_content = current_width > prefix_width;
+        self.wrap_before_word_if_needed(input_chars, character_index, ch);
+        self.update_token_state(input_chars, character_index, ch);
+        self.push_styled_character(ch, self.character_style(character_index));
+        self.last_ch = Some(ch);
+    }
 
-            if line_has_content && current_width + word_width > inner_width {
-                display_lines.push(Line::from(std::mem::take(&mut current_line_spans)));
-                current_line_spans = vec![Span::raw(continuation_padding.clone())];
-                current_width = prefix_width;
-                line_index += 1;
-            }
-        }
-
-        if ch == '@' && is_at_mention_boundary(last_ch) {
-            in_mention = true;
-        } else if in_mention && !is_at_mention_query_character(ch) {
-            in_mention = false;
-        }
-
-        if image_token_end.is_none() && ch == '[' {
-            image_token_end = image_token_end_index(&input_chars, character_index);
-        }
-
-        let is_image_token = image_token_end.is_some_and(|end_index| character_index < end_index);
-
-        let style = if is_image_token {
-            Style::default()
-                .fg(style::palette::warning())
-                .add_modifier(Modifier::BOLD)
-        } else if in_mention {
-            Style::default().fg(style::palette::info())
+    /// Finishes the last line and returns the complete render layout.
+    fn finish(mut self) -> InputLayout {
+        if self.current_width >= self.inner_width {
+            self.cursor_positions
+                .push((self.prefix_width, self.line_index + 1));
         } else {
-            Style::default()
-        };
+            self.cursor_positions
+                .push((self.current_width, self.line_index));
+        }
 
+        if !self.current_line_spans.is_empty() {
+            self.display_lines.push(Line::from(self.current_line_spans));
+        }
+
+        if self.display_lines.is_empty() {
+            self.display_lines.push(Line::from(""));
+        }
+
+        InputLayout {
+            cursor_positions: self.cursor_positions,
+            display_lines: self.display_lines,
+        }
+    }
+
+    /// Clears stale image-token state once the cursor has advanced beyond it.
+    fn expire_image_token(&mut self, character_index: usize) {
+        if self
+            .image_token_end
+            .is_some_and(|end_index| character_index >= end_index)
+        {
+            self.image_token_end = None;
+        }
+    }
+
+    /// Records an explicit newline and starts a continuation line.
+    fn push_explicit_newline(&mut self, ch: char) {
+        self.in_mention = false;
+        self.image_token_end = None;
+        self.cursor_positions
+            .push((self.current_width, self.line_index));
+        self.start_new_line();
+        self.last_ch = Some(ch);
+    }
+
+    /// Wraps before a whole word when it would overflow the current line.
+    fn wrap_before_word_if_needed(
+        &mut self,
+        input_chars: &[char],
+        character_index: usize,
+        ch: char,
+    ) {
+        if !is_word_start(input_chars, character_index, ch) {
+            return;
+        }
+
+        let word_width = input_chars
+            .iter()
+            .skip(character_index)
+            .take_while(|next_ch| !next_ch.is_whitespace())
+            .map(|next_ch| Span::raw(next_ch.to_string()).width())
+            .sum::<usize>();
+
+        if self.current_width > self.prefix_width
+            && self.current_width + word_width > self.inner_width
+        {
+            self.start_new_line();
+        }
+    }
+
+    /// Updates mention and image-token tracking before styling a character.
+    fn update_token_state(&mut self, input_chars: &[char], character_index: usize, ch: char) {
+        if ch == '@' && is_at_mention_boundary(self.last_ch) {
+            self.in_mention = true;
+        } else if self.in_mention && !is_at_mention_query_character(ch) {
+            self.in_mention = false;
+        }
+
+        if self.image_token_end.is_none() && ch == '[' {
+            self.image_token_end = image_token_end_index(input_chars, character_index);
+        }
+    }
+
+    /// Returns the display style for the current token state.
+    fn character_style(&self, character_index: usize) -> Style {
+        if self
+            .image_token_end
+            .is_some_and(|end_index| character_index < end_index)
+        {
+            return Style::default()
+                .fg(style::palette::warning())
+                .add_modifier(Modifier::BOLD);
+        }
+
+        if self.in_mention {
+            return Style::default().fg(style::palette::info());
+        }
+
+        Style::default()
+    }
+
+    /// Appends one styled character, wrapping a too-wide character to the next
+    /// line.
+    fn push_styled_character(&mut self, ch: char, style: Style) {
         let char_span = Span::styled(ch.to_string(), style);
         let char_width = char_span.width();
 
-        if current_width + char_width > inner_width {
-            display_lines.push(Line::from(std::mem::take(&mut current_line_spans)));
-            current_line_spans = vec![Span::raw(continuation_padding.clone())];
-            current_width = prefix_width;
-            line_index += 1;
+        if self.current_width + char_width > self.inner_width {
+            self.start_new_line();
         }
 
-        cursor_positions.push((current_width, line_index));
-        current_line_spans.push(char_span);
-        current_width += char_width;
-        last_ch = Some(ch);
+        self.cursor_positions
+            .push((self.current_width, self.line_index));
+        self.current_line_spans.push(char_span);
+        self.current_width += char_width;
     }
 
-    if current_width >= inner_width {
-        cursor_positions.push((prefix_width, line_index + 1));
-    } else {
-        cursor_positions.push((current_width, line_index));
+    /// Closes the current line and starts a padded continuation line.
+    fn start_new_line(&mut self) {
+        self.display_lines
+            .push(Line::from(std::mem::take(&mut self.current_line_spans)));
+        self.current_line_spans = vec![Span::raw(self.continuation_padding.clone())];
+        self.current_width = self.prefix_width;
+        self.line_index += 1;
+    }
+}
+
+/// Returns whether `ch` starts a word in `input_chars`.
+fn is_word_start(input_chars: &[char], character_index: usize, ch: char) -> bool {
+    if ch.is_whitespace() {
+        return false;
     }
 
-    if !current_line_spans.is_empty() {
-        display_lines.push(Line::from(current_line_spans));
+    if character_index == 0 {
+        return true;
     }
 
-    if display_lines.is_empty() {
-        display_lines.push(Line::from(""));
-    }
-
-    InputLayout {
-        cursor_positions,
-        display_lines,
-    }
+    input_chars[character_index - 1].is_whitespace()
 }
 
 /// Returns the exclusive end index for an `[Image #n]` placeholder token that

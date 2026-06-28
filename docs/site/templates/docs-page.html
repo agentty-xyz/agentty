@@ -46,23 +46,14 @@
     {% endblock main_extra_classes %}
     {% block extra_scripts %}
         <script type="module">
-/**
- * Replace Mermaid fenced code blocks in docs pages with rendered SVG diagrams.
- *
- * The docs content is already server-rendered by Zola, so this enhancer scans
- * the generated HTML for `mermaid` code fences, preserves the source text in
- * data attributes, renders diagrams with Mermaid on the client, and re-renders
- * them whenever the site theme changes.
- */
-(async function () {
-  var mermaidCodeBlockSelector = '.docs-content pre';
-  var mermaidModuleUrl = 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
-  var mermaidModulePromise = null;
-  var mermaidPanStep = 56;
-  var mermaidZoomStep = 0.2;
-  var mermaidMinScale = 0.4;
-  var mermaidMaxScale = 2.4;
-  var renderCounter = 0;
+var mermaidCodeBlockSelector = '.docs-content pre';
+var mermaidModuleUrl = 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+var mermaidModulePromise = null;
+var mermaidPanStep = 56;
+var mermaidZoomStep = 0.2;
+var mermaidMinScale = 0.4;
+var mermaidMaxScale = 2.4;
+var renderCounter = 0;
 
   /**
    * Return `true` when a fenced code block was emitted from a `mermaid` code
@@ -74,13 +65,13 @@
       return false;
     }
 
-    var preLang = pre.getAttribute('data-lang');
-    var codeLang = code.getAttribute('data-lang');
+    var preLang = pre.dataset.lang;
+    var codeLang = code.dataset.lang;
     var codeClassName = code.className || '';
 
     return preLang === 'mermaid'
       || codeLang === 'mermaid'
-      || codeClassName.indexOf('language-mermaid') !== -1;
+      || codeClassName.includes('language-mermaid');
   }
 
   /** Read the current docs theme colors from CSS custom properties. */
@@ -492,42 +483,47 @@
   function attachMermaidThemeSync() {
     var rerenderTimer = null;
 
-    window.addEventListener('agentty-themechange', function () {
+    globalThis.addEventListener('agentty-themechange', function () {
       if (rerenderTimer) {
-        window.clearTimeout(rerenderTimer);
+        globalThis.clearTimeout(rerenderTimer);
       }
 
-      rerenderTimer = window.setTimeout(function () {
+      rerenderTimer = globalThis.setTimeout(function () {
         void renderMermaidDiagrams();
       }, 0);
     });
+  }
+
+  /** Re-fit one Mermaid host when it has not been manually zoomed. */
+  function fitAutomaticMermaidHost(host) {
+    if (host.dataset.zoomMode === 'manual') {
+      return;
+    }
+
+    fitMermaidHost(host);
+  }
+
+  /** Re-fit every Mermaid diagram that should still track the viewport. */
+  function refitAutomaticMermaidHosts() {
+    document.querySelectorAll('.docs-mermaid__diagram').forEach(fitAutomaticMermaidHost);
   }
 
   /** Re-fit Mermaid diagrams on resize unless the reader has zoomed manually. */
   function attachMermaidResizeSync() {
     var resizeTimer = null;
 
-    window.addEventListener('resize', function () {
+    globalThis.addEventListener('resize', function () {
       if (resizeTimer) {
-        window.clearTimeout(resizeTimer);
+        globalThis.clearTimeout(resizeTimer);
       }
 
-      resizeTimer = window.setTimeout(function () {
-        document.querySelectorAll('.docs-mermaid__diagram').forEach(function (host) {
-          if (host.dataset.zoomMode === 'manual') {
-            return;
-          }
-
-          fitMermaidHost(host);
-        });
-      }, 0);
+      resizeTimer = globalThis.setTimeout(refitAutomaticMermaidHosts, 0);
     });
   }
 
   await renderMermaidDiagrams();
   attachMermaidThemeSync();
   attachMermaidResizeSync();
-})();
         </script>
         <script>
 (function () {
@@ -542,13 +538,13 @@
       return false;
     }
 
-    var preLang = pre.getAttribute('data-lang');
-    var codeLang = code.getAttribute('data-lang');
+    var preLang = pre.dataset.lang;
+    var codeLang = code.dataset.lang;
     var codeClassName = code.className || '';
 
     return preLang === 'mermaid'
       || codeLang === 'mermaid'
-      || codeClassName.indexOf('language-mermaid') !== -1;
+      || codeClassName.includes('language-mermaid');
   }
 
   /**
@@ -558,7 +554,7 @@
    * `document.execCommand('copy')` for older browser support.
    */
   function copyTextToClipboard(text) {
-    if (navigator.clipboard && window.isSecureContext) {
+    if (navigator.clipboard && globalThis.isSecureContext) {
       return navigator.clipboard.writeText(text).then(function () { return true; }, function () { return false; });
     }
 
@@ -574,46 +570,100 @@
     try {
       copied = document.execCommand('copy');
     } catch (error) {
+      console.debug('Clipboard fallback copy failed.', error);
       copied = false;
     }
 
-    document.body.removeChild(textArea);
+    textArea.remove();
 
     return Promise.resolve(copied);
   }
 
+  /** Reset one copy button label after its copied confirmation delay. */
+  function resetCodeCopyButtonLabel(btn) {
+    btn.textContent = 'copy';
+  }
+
+  /** Copy one fenced code block and show a short success state. */
+  function copyCodeBlock(pre, btn) {
+    var code = pre.querySelector('code');
+    var text = code ? code.innerText : pre.innerText;
+
+    copyTextToClipboard(text).then(function (copied) {
+      if (!copied) {
+        return;
+      }
+
+      btn.textContent = 'copied!';
+      setTimeout(function () { resetCodeCopyButtonLabel(btn); }, 2000);
+    });
+  }
+
+  /** Attach one copy button to a fenced code block. */
+  function attachCodeCopyButton(pre) {
+    if (isMermaidCodeBlock(pre) || pre.querySelector('.docs-copy-btn')) {
+      return;
+    }
+
+    var btn = document.createElement('button');
+    btn.className = 'docs-copy-btn';
+    btn.textContent = 'copy';
+    btn.title = 'Copy to clipboard';
+    btn.setAttribute('aria-label', 'Copy code');
+    btn.addEventListener('click', function () { copyCodeBlock(pre, btn); });
+
+    pre.appendChild(btn);
+  }
+
   /** Attach a copy button to every fenced code block in `.docs-content`. */
   function attachCodeCopyButtons() {
-    document.querySelectorAll('.docs-content pre').forEach(function (pre) {
-      if (isMermaidCodeBlock(pre)) {
+    document.querySelectorAll('.docs-content pre').forEach(attachCodeCopyButton);
+  }
+
+  /** Reset one paragraph anchor label after its copied confirmation delay. */
+  function resetParagraphAnchorLinkLabel(anchorLink) {
+    anchorLink.textContent = '#';
+  }
+
+  /** Copy one paragraph deep link and show a short success state. */
+  function copyParagraphAnchorLink(anchorId, anchorLink) {
+    var paragraphUrl = new URL(globalThis.location.href);
+    paragraphUrl.hash = anchorId;
+
+    copyTextToClipboard(paragraphUrl.toString()).then(function (copied) {
+      if (!copied) {
         return;
       }
 
-      if (pre.querySelector('.docs-copy-btn')) {
-        return;
-      }
-
-      var btn = document.createElement('button');
-      btn.className = 'docs-copy-btn';
-      btn.textContent = 'copy';
-      btn.title = 'Copy to clipboard';
-      btn.setAttribute('aria-label', 'Copy code');
-
-      btn.addEventListener('click', function () {
-        var code = pre.querySelector('code');
-        var text = code ? code.innerText : pre.innerText;
-        copyTextToClipboard(text).then(function (copied) {
-          if (!copied) {
-            return;
-          }
-
-          btn.textContent = 'copied!';
-          setTimeout(function () { btn.textContent = 'copy'; }, 2000);
-        });
-      });
-
-      pre.appendChild(btn);
+      anchorLink.textContent = 'copied!';
+      setTimeout(function () { resetParagraphAnchorLinkLabel(anchorLink); }, 2000);
     });
+  }
+
+  /** Attach one copyable deep link to an explicitly anchored paragraph. */
+  function attachParagraphAnchorLink(anchor) {
+    var anchorId = anchor.id;
+    var paragraph = anchor.nextElementSibling;
+
+    if (!anchorId || !paragraph || paragraph.tagName !== 'P') {
+      return;
+    }
+
+    if (paragraph.querySelector('.docs-paragraph-anchor-link')) {
+      return;
+    }
+
+    var anchorLink = document.createElement('a');
+    anchorLink.className = 'docs-paragraph-anchor-link';
+    anchorLink.dataset.anchorId = anchorId;
+    anchorLink.href = '#' + anchorId;
+    anchorLink.textContent = '#';
+    anchorLink.title = 'Copy link to this paragraph';
+    anchorLink.setAttribute('aria-label', 'Copy link to this paragraph');
+    anchorLink.addEventListener('click', function () { copyParagraphAnchorLink(anchorId, anchorLink); });
+
+    paragraph.classList.add('docs-paragraph-anchored');
+    paragraph.appendChild(anchorLink);
   }
 
   /**
@@ -623,43 +673,7 @@
    * to copy a deep link with the paragraph hash.
    */
   function attachParagraphAnchorLinks() {
-    document.querySelectorAll('.docs-content a[id]:not([href]):not(.zola-anchor)').forEach(function (anchor) {
-      var anchorId = anchor.getAttribute('id');
-      var paragraph = anchor.nextElementSibling;
-
-      if (!anchorId || !paragraph || paragraph.tagName !== 'P') {
-        return;
-      }
-
-      if (paragraph.querySelector('.docs-paragraph-anchor-link')) {
-        return;
-      }
-
-      var anchorLink = document.createElement('a');
-      anchorLink.className = 'docs-paragraph-anchor-link';
-      anchorLink.dataset.anchorId = anchorId;
-      anchorLink.href = '#' + anchorId;
-      anchorLink.textContent = '#';
-      anchorLink.title = 'Copy link to this paragraph';
-      anchorLink.setAttribute('aria-label', 'Copy link to this paragraph');
-
-      anchorLink.addEventListener('click', function () {
-        var paragraphUrl = new URL(window.location.href);
-        paragraphUrl.hash = anchorId;
-
-        copyTextToClipboard(paragraphUrl.toString()).then(function (copied) {
-          if (!copied) {
-            return;
-          }
-
-          anchorLink.textContent = 'copied!';
-          setTimeout(function () { anchorLink.textContent = '#'; }, 2000);
-        });
-      });
-
-      paragraph.classList.add('docs-paragraph-anchored');
-      paragraph.appendChild(anchorLink);
-    });
+    document.querySelectorAll('.docs-content a[id]:not([href]):not(.zola-anchor)').forEach(attachParagraphAnchorLink);
   }
 
   attachCodeCopyButtons();
@@ -668,7 +682,8 @@
         </script>
     {% endblock extra_scripts %}
     {% block content %}
-        <aside class="docs-sidebar docs-sidebar--global">
+        <aside class="docs-sidebar docs-sidebar--global"
+               aria-label="Documentation navigation">
             <h2 class="docs-sidebar-title">Documentation</h2>
             {{ self::render_docs_nav(section_path="docs/_index.md", current_permalink=page.permalink) }}
         </aside>
@@ -676,7 +691,8 @@
             <h1 class="docs-page-title">{{ page.title }}</h1>
             <div class="docs-content">{{ page.content | safe }}</div>
         </article>
-        <aside class="docs-sidebar docs-sidebar--page">
+        <aside class="docs-sidebar docs-sidebar--page"
+               aria-label="Page table of contents">
             <h2 class="docs-sidebar-title">On this page</h2>
             {% if page.toc and page.toc | length > 0 %}
                 {{ self::render_page_toc(items=page.toc) }}

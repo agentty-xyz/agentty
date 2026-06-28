@@ -127,7 +127,7 @@
           btn.setAttribute('aria-pressed', String(active));
         });
         localStorage.setItem(STORAGE_KEY, theme);
-        window.dispatchEvent(new CustomEvent('agentty-themechange', {
+        globalThis.dispatchEvent(new CustomEvent('agentty-themechange', {
           detail: { theme: theme }
         }));
       }
@@ -178,7 +178,7 @@
             }
           }
         } catch (error) {
-          // Keep default badge text when GitHub API requests fail.
+          console.debug('GitHub metadata request failed; keeping default badge text.', error);
         }
       }
 

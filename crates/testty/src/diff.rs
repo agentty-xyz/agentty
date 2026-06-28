@@ -115,29 +115,16 @@ impl FrameDiff {
                 let col = u16::try_from(col_index).unwrap_or(0);
 
                 if change == CellChange::Unchanged {
-                    if let Some((start_col, change_type)) = span_start.take() {
-                        regions.push(ChangedRegion {
-                            region: Region::new(start_col, row, col - start_col, 1),
-                            change_type,
-                        });
-                    }
-                } else if let Some((_, ref mut current_type)) = span_start {
-                    // Merge adjacent changes; upgrade to BothChanged if types differ.
-                    if *current_type != change {
-                        *current_type = CellChange::BothChanged;
-                    }
+                    close_changed_span(&mut regions, &mut span_start, row, col);
+                } else if let Some((_, current_type)) = span_start.as_mut() {
+                    merge_changed_span_type(current_type, change);
                 } else {
                     span_start = Some((col, change));
                 }
             }
 
             // Close any trailing span.
-            if let Some((start_col, change_type)) = span_start {
-                regions.push(ChangedRegion {
-                    region: Region::new(start_col, row, self.cols - start_col, 1),
-                    change_type,
-                });
-            }
+            close_changed_span(&mut regions, &mut span_start, row, self.cols);
         }
 
         regions
@@ -174,6 +161,30 @@ impl FrameDiff {
                 description
             })
             .collect()
+    }
+}
+
+/// Closes an active changed span at `end_col` and appends its region.
+fn close_changed_span(
+    regions: &mut Vec<ChangedRegion>,
+    span_start: &mut Option<(u16, CellChange)>,
+    row: u16,
+    end_col: u16,
+) {
+    let Some((start_col, change_type)) = span_start.take() else {
+        return;
+    };
+
+    regions.push(ChangedRegion {
+        region: Region::new(start_col, row, end_col - start_col, 1),
+        change_type,
+    });
+}
+
+/// Upgrades an active span when adjacent changed cells have different types.
+fn merge_changed_span_type(current_type: &mut CellChange, change: CellChange) {
+    if *current_type != change {
+        *current_type = CellChange::BothChanged;
     }
 }
 
