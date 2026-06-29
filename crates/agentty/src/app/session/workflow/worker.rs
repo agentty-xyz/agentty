@@ -1968,6 +1968,43 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Verifies ready thought-delta bursts enqueue only the latest progress
+    /// update before the final clear event.
+    async fn test_consume_turn_events_coalesces_ready_thought_delta_bursts() {
+        // Arrange
+        let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let child_pid = Arc::new(Mutex::new(None));
+
+        for thought in ["first", "second", "third"] {
+            event_tx
+                .send(TurnEvent::ThoughtDelta(thought.to_string()))
+                .expect("failed to send thought delta");
+        }
+        drop(event_tx);
+
+        // Act
+        consume_turn_events(event_rx, app_event_tx, "session-1".into(), child_pid).await;
+
+        let events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(
+            events,
+            vec![
+                AppEvent::SessionProgressUpdated {
+                    progress_message: Some("third".to_string()),
+                    session_id: "session-1".into(),
+                },
+                AppEvent::SessionProgressUpdated {
+                    progress_message: None,
+                    session_id: "session-1".into(),
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
     /// Verifies turn summaries are persisted to the database when the agent
     /// returns them.
     async fn test_apply_turn_result_persists_summary_to_database() {

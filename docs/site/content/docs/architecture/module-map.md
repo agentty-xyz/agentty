@@ -54,7 +54,7 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
   initial session hydration, and project catalog refresh helpers.
 - `crates/agentty/src/app/sync.rs`: `SyncOrchestrator`, `SyncHandle`, `SyncMainRunner`,
   and active-project git/forge status refresh coordination.
-- `crates/agentty/src/app/reducer.rs`: `AppEventReducer` and `AppEventBatch` for
+- `crates/agentty/src/app/reducer.rs`: `AppEventReducer` and `AppEventBatch` for bounded
   app-event draining and batch coalescing during one runtime tick.
 - `crates/agentty/src/app/review.rs`: Focused review cache updates plus background
   review-assist orchestration helpers.

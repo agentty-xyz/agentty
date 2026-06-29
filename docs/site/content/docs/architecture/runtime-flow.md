@@ -76,11 +76,13 @@ flowchart TD
 
 <a id="architecture-runtime-flow-notes"></a> Foreground loop details:
 
-- `run_main_loop()` drains queued app events before draw so touched sessions sync from
-  their live handles without a full list-wide sweep every frame.
-- `process_events()` waits on terminal events, app events, or tick (`tokio::select!`).
-- After one event, it drains queued terminal events immediately to avoid
-  one-key-per-frame lag.
+- `run_main_loop()` drains one bounded batch of queued app events before draw so touched
+  sessions sync from their live handles without a full list-wide sweep every frame.
+- `process_events()` waits on terminal events, app events, or tick with Tokio's default
+  fair `select!` polling order.
+- After one event, it drains a bounded batch of queued terminal events immediately to
+  avoid one-key-per-frame lag while still yielding to redraw/tick cycles under input
+  floods.
 - Tick interval is `50ms`; metadata-based session reload fallback is `5s`
   (`SESSION_REFRESH_INTERVAL`).
 
@@ -132,7 +134,8 @@ single reducer path for async app events.
 
 Flow:
 
-1. Drain queued events (`first_event` + `try_recv` loop).
+1. Drain queued events up to the per-cycle budget (`first_event` + bounded `try_recv`
+   loop).
 1. Reduce into `AppEventBatch` (coalesces refresh, git status, model, and
    loader-thinking updates).
 1. Apply side effects in stable order.
@@ -794,7 +797,8 @@ paths and their trigger conditions:
 - Trigger: Every queued turn execution
 - Spawn site: `run_channel_turn`
 - Emits or writes: Loader updates and pid slot updates
-- What it does: Consumes the `TurnEvent` stream and applies immediate side effects.
+- What it does: Consumes the `TurnEvent` stream, coalesces ready loader-thought bursts
+  before app-event enqueue, and applies immediate side effects.
 
 ### CLI stdout and stderr readers
 

@@ -722,9 +722,10 @@ impl AppEventBatch {
 impl App {
     /// Applies one or more queued app events through a single reducer path.
     ///
-    /// This method drains currently queued app events, coalesces refresh and
-    /// git-status updates, then applies session-handle sync for touched
-    /// sessions.
+    /// This method drains one bounded batch of currently queued app events,
+    /// coalesces refresh and git-status updates within that batch, then applies
+    /// session-handle sync for touched sessions. Events beyond the per-cycle
+    /// budget remain queued so foreground redraws are not starved.
     pub(crate) async fn apply_app_events(&mut self, first_event: AppEvent) {
         let drained_events = AppEventReducer::drain(&mut self.event_rx, first_event);
         let mut event_batch = AppEventBatch::default();
@@ -735,7 +736,8 @@ impl App {
         self.apply_app_event_batch(event_batch).await;
     }
 
-    /// Processes currently queued app events without waiting.
+    /// Processes one bounded batch of currently queued app events without
+    /// waiting.
     ///
     /// The foreground runtime calls this before draw so queued
     /// `SessionUpdated` events can synchronize only the touched sessions into

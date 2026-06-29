@@ -9,10 +9,17 @@ use crossterm::event::{Event, KeyEvent, KeyEventKind};
 use ratatui::Terminal;
 use ratatui::backend::Backend;
 use tokio::sync::mpsc;
+use tracing::debug;
 
 use crate::app::{App, AppEvent};
 use crate::runtime::{EventResult, FRAME_INTERVAL, key_handler, mode};
 use crate::ui::state::app_mode::AppMode;
+
+/// Maximum terminal input events processed in one foreground cycle.
+///
+/// Additional queued events remain buffered for the next runtime cycle so the
+/// render loop can redraw between large paste/key-repeat bursts.
+const TERMINAL_EVENT_DRAIN_BUDGET: usize = 64;
 
 /// Reads terminal events from an underlying event backend.
 #[cfg_attr(test, mockall::automock)]
@@ -122,11 +129,11 @@ where
     // This yields to tokio so spawned tasks (agent output, git status) can
     // make progress on this worker thread.
     let signal = tokio::select! {
-        biased;
         event = event_rx.recv() => LoopSignal::Event(event),
         app_event = app.next_app_event() => LoopSignal::AppEvent(Box::new(app_event)),
         _ = tick.tick() => LoopSignal::Tick,
     };
+    let mut handled_terminal_events = 0;
     let maybe_event = match signal {
         LoopSignal::AppEvent(app_event) => {
             if let Some(event) = *app_event {
@@ -135,7 +142,13 @@ where
 
             None
         }
-        LoopSignal::Event(event) => event,
+        LoopSignal::Event(event) => {
+            if event.is_some() {
+                handled_terminal_events += 1;
+            }
+
+            event
+        }
         LoopSignal::Tick => {
             if app.refresh_sessions_if_needed().await {
                 app.mark_dirty();
@@ -152,15 +165,32 @@ where
         return Ok(EventResult::Quit);
     }
 
-    // Drain remaining queued events before re-rendering so rapid key
-    // presses are processed immediately instead of one-per-frame.
-    while let Ok(event) = event_rx.try_recv() {
+    // Drain a bounded number of remaining queued events before re-rendering so
+    // rapid key presses stay responsive without starving the next frame.
+    let remaining_terminal_event_budget =
+        TERMINAL_EVENT_DRAIN_BUDGET.saturating_sub(handled_terminal_events);
+    for _ in 0..remaining_terminal_event_budget {
+        let Ok(event) = event_rx.try_recv() else {
+            break;
+        };
+
+        handled_terminal_events += 1;
         if matches!(
             handle_event(app, terminal, Some(event)).await?,
             EventResult::Quit
         ) {
             return Ok(EventResult::Quit);
         }
+    }
+
+    let remaining_events = event_rx.len();
+    if remaining_events > 0 {
+        debug!(
+            budget = TERMINAL_EVENT_DRAIN_BUDGET,
+            handled_terminal_events,
+            remaining_events,
+            "terminal event drain budget exhausted with queued events remaining"
+        );
     }
 
     Ok(EventResult::Continue)
@@ -240,6 +270,7 @@ fn process_paste_event(app: &mut App, pasted_text: &str) {
 #[cfg(test)]
 mod tests {
     use std::io::ErrorKind;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
     use mockall::Sequence;
@@ -606,5 +637,48 @@ mod tests {
             .err()
             .expect("handler error should exit the event loop");
         assert_eq!(error.to_string(), "handler failed");
+    }
+
+    /// Verifies queued terminal events beyond the foreground budget stay in
+    /// the channel for the next render cycle.
+    #[tokio::test]
+    async fn test_process_events_with_handler_keeps_events_over_budget_queued() {
+        // Arrange
+        let mut app = new_test_app().await;
+        let mut terminal = ();
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        for _ in 0..(TERMINAL_EVENT_DRAIN_BUDGET + 2) {
+            event_tx
+                .send(Event::Key(KeyEvent::new(
+                    KeyCode::Char('x'),
+                    KeyModifiers::NONE,
+                )))
+                .expect("failed to queue event");
+        }
+        let handled_events = Arc::new(AtomicUsize::new(0));
+        let mut tick = tokio::time::interval(Duration::from_mins(1));
+
+        // Act
+        let result =
+            process_events_with_handler(&mut app, &mut terminal, &mut event_rx, &mut tick, {
+                let handled_events = Arc::clone(&handled_events);
+
+                move |_, (), event| {
+                    if event.is_some() {
+                        handled_events.fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    Box::pin(async { Ok(EventResult::Continue) })
+                }
+            })
+            .await;
+
+        // Assert
+        assert!(matches!(result, Ok(EventResult::Continue)));
+        assert_eq!(
+            handled_events.load(Ordering::Relaxed),
+            TERMINAL_EVENT_DRAIN_BUDGET
+        );
+        assert_eq!(event_rx.len(), 2);
     }
 }

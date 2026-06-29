@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use ag_forge::ReviewRequestClient;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::app::AppEvent;
 use crate::db::AppRepositories;
@@ -147,10 +147,22 @@ impl AppServices {
         Arc::clone(&self.clipboard_image_client)
     }
 
-    /// Enqueues an app event onto the internal event bus.
+    /// Enqueues an app event onto the internal event bus with debug
+    /// instrumentation for producer-side event volume.
     pub(crate) fn emit_app_event(&self, event: AppEvent) {
+        let event_label = app_event_label(&event);
+        debug!(
+            event = event_label,
+            "enqueueing app event through app services"
+        );
+
         // Fire-and-forget: receiver may be dropped during shutdown.
-        let _ = self.event_tx.send(event);
+        if self.event_tx.send(event).is_err() {
+            warn!(
+                event = event_label,
+                "failed to send app event because the receiver is closed"
+            );
+        }
     }
 
     /// Enqueues refresh events for workflows that changed both session
@@ -231,5 +243,42 @@ impl AppServices {
     /// injected environments.
     pub(crate) fn app_server_client_override(&self) -> Option<Arc<dyn AppServerClient>> {
         self.app_server_client_override.as_ref().map(Arc::clone)
+    }
+}
+
+/// Returns a stable instrumentation label for one app event variant.
+fn app_event_label(event: &AppEvent) -> &'static str {
+    match event {
+        AppEvent::AtMentionEntriesLoaded { .. } => "AtMentionEntriesLoaded",
+        AppEvent::GitStatusUpdated { .. } => "GitStatusUpdated",
+        AppEvent::VersionAvailabilityUpdated { .. } => "VersionAvailabilityUpdated",
+        AppEvent::AgentCliVersionsUpdated { .. } => "AgentCliVersionsUpdated",
+        AppEvent::UpdateStatusChanged { .. } => "UpdateStatusChanged",
+        AppEvent::SystemLog { .. } => "SystemLog",
+        AppEvent::SessionModelUpdated { .. } => "SessionModelUpdated",
+        AppEvent::SessionReasoningLevelUpdated { .. } => "SessionReasoningLevelUpdated",
+        AppEvent::RefreshSessions => "RefreshSessions",
+        AppEvent::RefreshProjects => "RefreshProjects",
+        AppEvent::RefreshGitStatus => "RefreshGitStatus",
+        AppEvent::RequestedReviewsLoaded { .. } => "RequestedReviewsLoaded",
+        AppEvent::RequestedReviewCommentSnapshotLoaded { .. } => {
+            "RequestedReviewCommentSnapshotLoaded"
+        }
+        AppEvent::SessionProgressUpdated { .. } => "SessionProgressUpdated",
+        AppEvent::SyncMainCompleted { .. } => "SyncMainCompleted",
+        AppEvent::SessionSizeUpdated { .. } => "SessionSizeUpdated",
+        AppEvent::SessionTitleGenerationFinished { .. } => "SessionTitleGenerationFinished",
+        AppEvent::BranchPublishActionCompleted { .. } => "BranchPublishActionCompleted",
+        AppEvent::ReviewPrepared { .. } => "ReviewPrepared",
+        AppEvent::ReviewPreparationFailed { .. } => "ReviewPreparationFailed",
+        AppEvent::SessionUpdated { .. } => "SessionUpdated",
+        AppEvent::AgentResponseReceived { .. } => "AgentResponseReceived",
+        AppEvent::StackedParentTurnCompleted { .. } => "StackedParentTurnCompleted",
+        AppEvent::StackedParentSyncCompleted { .. } => "StackedParentSyncCompleted",
+        AppEvent::StackedParentMergeCompleted { .. } => "StackedParentMergeCompleted",
+        AppEvent::SessionWorkflowNoticeUpdated { .. } => "SessionWorkflowNoticeUpdated",
+        AppEvent::PublishedBranchSyncUpdated { .. } => "PublishedBranchSyncUpdated",
+        AppEvent::ReviewRequestStatusUpdated { .. } => "ReviewRequestStatusUpdated",
+        AppEvent::ReviewCommentsUpdated { .. } => "ReviewCommentsUpdated",
     }
 }

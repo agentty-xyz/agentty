@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+use tracing::debug;
 
 use super::worker::{SessionWorkerContext, TurnMetadata};
 use super::{SessionTaskService, isolation, post_turn};
@@ -22,6 +23,13 @@ use crate::infra::channel::{
 };
 use crate::infra::db::AppRepositories;
 use crate::infra::process;
+
+/// Maximum ready turn events folded into one progress app-event emission.
+///
+/// The cap prevents a chatty provider stream from turning coalescing itself
+/// into an unbounded drain. Events beyond this budget remain queued for the
+/// consumer's next await/try-receive cycle.
+const TURN_EVENT_PROGRESS_COALESCE_BUDGET: usize = 64;
 
 /// Main-checkout tracked-file status captured before one provider turn.
 struct MainCheckoutSnapshot {
@@ -349,7 +357,8 @@ pub(super) async fn load_session_reasoning_level(
 
 /// Consumes [`TurnEvent`]s from `event_rx` and applies their side effects.
 ///
-/// - [`TurnEvent::ThoughtDelta`]: updates the transient thinking loader text.
+/// - [`TurnEvent::ThoughtDelta`]: coalesces immediately ready thought bursts
+///   and updates the transient thinking loader text with the latest message.
 /// - [`TurnEvent::PidUpdate`]: writes the new PID into `child_pid`.
 /// - [`TurnEvent::Completed`] / [`TurnEvent::Failed`]: reserved; ignored here
 ///   because completion is signalled by `run_turn`'s return value.
@@ -367,6 +376,12 @@ pub(super) async fn consume_turn_events(
                 let Some(thought) = normalize_thinking_stream_text(&thought) else {
                     continue;
                 };
+                let thought = coalesce_ready_turn_progress_events(
+                    &mut event_rx,
+                    child_pid.as_ref(),
+                    thought,
+                    &session_id,
+                );
                 if active_progress.as_deref() == Some(thought.as_str()) {
                     continue;
                 }
@@ -375,12 +390,7 @@ pub(super) async fn consume_turn_events(
                 SessionTaskService::set_session_progress(&app_event_tx, &session_id, Some(thought));
             }
             TurnEvent::PidUpdate(pid) => {
-                // Sync critical section (single assignment, no `.await`);
-                // `std::sync::Mutex` is the correct choice per CLAUDE.md
-                // §"Mutex Selection".
-                if let Ok(mut guard) = child_pid.lock() {
-                    *guard = pid;
-                }
+                set_child_pid(child_pid.as_ref(), pid);
             }
             TurnEvent::Completed { .. } | TurnEvent::Failed(_) => {
                 // Completion is signalled by run_turn's return value; these
@@ -391,6 +401,61 @@ pub(super) async fn consume_turn_events(
 
     if active_progress.take().is_some() {
         SessionTaskService::clear_session_progress(&app_event_tx, &session_id);
+    }
+}
+
+/// Coalesces immediately ready turn progress events before app-event enqueue.
+///
+/// PID updates are still applied as they are encountered, while repeated
+/// thought deltas collapse to the newest normalized message. Completion events
+/// remain ignored here because turn completion is handled by the channel
+/// result.
+fn coalesce_ready_turn_progress_events(
+    event_rx: &mut mpsc::UnboundedReceiver<TurnEvent>,
+    child_pid: &Mutex<Option<u32>>,
+    initial_thought: String,
+    session_id: &SessionId,
+) -> String {
+    let mut latest_thought = initial_thought;
+    let mut coalesced_events = 0;
+
+    for _ in 1..TURN_EVENT_PROGRESS_COALESCE_BUDGET {
+        let Ok(event) = event_rx.try_recv() else {
+            break;
+        };
+
+        coalesced_events += 1;
+        match event {
+            TurnEvent::ThoughtDelta(thought) => {
+                if let Some(thought) = normalize_thinking_stream_text(&thought) {
+                    latest_thought = thought;
+                }
+            }
+            TurnEvent::PidUpdate(pid) => set_child_pid(child_pid, pid),
+            TurnEvent::Completed { .. } | TurnEvent::Failed(_) => {}
+        }
+    }
+
+    let remaining_events = event_rx.len();
+    if remaining_events > 0 {
+        debug!(
+            budget = TURN_EVENT_PROGRESS_COALESCE_BUDGET,
+            coalesced_events,
+            remaining_events,
+            session_id = session_id.as_str(),
+            "turn event progress coalesce budget exhausted with queued events remaining"
+        );
+    }
+
+    latest_thought
+}
+
+/// Records the latest child process id observed from a provider turn stream.
+fn set_child_pid(child_pid: &Mutex<Option<u32>>, pid: Option<u32>) {
+    // Sync critical section (single assignment, no `.await`);
+    // `std::sync::Mutex` is the correct choice per CLAUDE.md §"Mutex Selection".
+    if let Ok(mut guard) = child_pid.lock() {
+        *guard = pid;
     }
 }
 
