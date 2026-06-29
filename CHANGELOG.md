@@ -7,14 +7,44 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.11.0] - 2026-06-28
+
+### Added
+
+- agentty: store raw session conversation messages in durable transcripts.
+- agentty: show review request authors.
+- agentty: show sync status for draft and interactive sessions.
+- agentty: show project branch names in project rows.
+- ci: add merge queue validation for release workflows and GitHub Actions analysis with
+  zizmor.
+
 ### Changed
 
+- agentty: centralize UI render caches and narrow post-turn workflow dependencies.
+- agentty: support stacked parent sync and replies when review-ready children are
+  present, including restacking children after parent merges and archiving canceled
+  children by display group.
 - agentty: restore direct Gemini CLI/backend support alongside Antigravity.
+- agentty: prefer `.agents` skills in session commit prompts.
+- docs: clarify provider CLI authentication and delegation guidance, including supported
+  CLI agents.
+- ci: scope workspace source tests and exclude agentty integration test targets from
+  source hooks.
+- Bump workspace crate metadata and lockfile package versions to `0.11.0`.
 
 ### Removed
 
 - ag-xtask: remove repository roadmap lint and digest commands.
 - skills: remove the `implementation-plan` skill and repository planning roadmap.
+
+### Security
+
+- ci: harden GitHub workflow security.
+
+### Contributors
+
+- @dependabot
+- @minev-dev
 
 ## [v0.10.6] - 2026-06-21
 
