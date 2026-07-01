@@ -679,11 +679,11 @@ mod tests {
     fn test_model_column_width_uses_longest_model_value() {
         // Arrange
         let expected_width =
-            u16::try_from("claude-sonnet-4-6 [low]".chars().count()).unwrap_or(u16::MAX);
+            u16::try_from("claude-sonnet-5 [low]".chars().count()).unwrap_or(u16::MAX);
         let mut default_session = test_session("active-1", Status::Review);
         default_session.agent = crate::domain::agent::AgentSelection::new(
             crate::domain::agent::AgentKind::Claude,
-            AgentModel::ClaudeSonnet46,
+            AgentModel::ClaudeSonnet5,
         );
         let mut medium_session = test_session("active-2", Status::Review);
         medium_session.agent = crate::domain::agent::AgentSelection::new(

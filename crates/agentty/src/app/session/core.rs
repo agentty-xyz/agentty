@@ -4267,7 +4267,7 @@ mod tests {
 
         app.set_session_model(
             &session_id,
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet46),
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
         )
         .await
         .expect("failed to switch model");
@@ -4365,7 +4365,7 @@ mod tests {
                 &session_id,
                 "Initial prompt",
                 Arc::new(start_backend),
-                AgentModel::ClaudeSonnet46,
+                AgentModel::ClaudeSonnet5,
             )
             .await;
         wait_for_status(&mut first_app, &session_id, Status::Review).await;
@@ -4420,7 +4420,7 @@ mod tests {
                 &session_id,
                 "Restart reply",
                 Arc::new(resume_backend),
-                AgentModel::ClaudeSonnet46,
+                AgentModel::ClaudeSonnet5,
             )
             .await;
 
@@ -4517,7 +4517,7 @@ mod tests {
                 &session_id,
                 "AutoCommit",
                 Arc::new(mock),
-                AgentModel::ClaudeSonnet46,
+                AgentModel::ClaudeSonnet5,
             )
             .await;
 
@@ -4584,7 +4584,7 @@ mod tests {
             &mock_git_client,
             &session_folder,
             "main",
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet46),
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
             false,
             false,
         )

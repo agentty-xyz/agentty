@@ -746,7 +746,7 @@ mod tests {
     async fn review_assist_text_with_submitter_returns_workflow_error_on_submit_failure() {
         // Arrange
         let session_folder = Path::new("/tmp/review-assist-submit-error");
-        let review_model = AgentModel::ClaudeSonnet46;
+        let review_model = AgentModel::ClaudeSonnet5;
         let review_diff = "diff --git a/src/lib.rs b/src/lib.rs";
 
         // Act

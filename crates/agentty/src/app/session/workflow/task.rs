@@ -1631,7 +1631,7 @@ mod tests {
         // Act
         let error = SessionTaskService::generate_session_commit_message_with_backend(
             temp_directory.path(),
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet46),
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
             "diff --git a/a.rs b/a.rs",
             None,
             &backend,
@@ -1679,7 +1679,7 @@ mod tests {
         // Act
         let generated_message = SessionTaskService::generate_session_commit_message_with_backend(
             temp_directory.path(),
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet46),
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
             "diff --git a/a.rs b/a.rs",
             Some("Keep session commit accurate\n\n- Preserve existing behavior"),
             &backend,
@@ -1735,7 +1735,7 @@ mod tests {
         // Act
         let generated_message = SessionTaskService::generate_session_commit_message_with_backend(
             temp_directory.path(),
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet46),
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
             diff.as_str(),
             None,
             &backend,

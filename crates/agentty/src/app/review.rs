@@ -582,12 +582,12 @@ mod tests {
 
         // Act
         let (review_status_message, review_text) =
-            review_view_state(&review_cache, "session-id", AgentModel::ClaudeSonnet46);
+            review_view_state(&review_cache, "session-id", AgentModel::ClaudeSonnet5);
 
         // Assert
         assert_eq!(
             review_status_message.as_deref(),
-            Some("Reviewing changes with claude-sonnet-4-6")
+            Some("Reviewing changes with claude-sonnet-5")
         );
         assert_eq!(review_text, None);
     }
@@ -603,7 +603,7 @@ mod tests {
 
         // Act
         let (review_status_message, review_text) =
-            review_view_state(&review_cache, "session-id", AgentModel::ClaudeSonnet46);
+            review_view_state(&review_cache, "session-id", AgentModel::ClaudeSonnet5);
 
         // Assert
         assert_eq!(review_status_message, None);

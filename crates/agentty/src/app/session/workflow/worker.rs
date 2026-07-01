@@ -1142,7 +1142,7 @@ mod tests {
                 published_upstream_ref: None,
                 session_agent: AgentSelection::new(
                     crate::domain::agent::AgentKind::Claude,
-                    AgentModel::ClaudeSonnet46,
+                    AgentModel::ClaudeSonnet5,
                 ),
             },
         };
@@ -1156,7 +1156,7 @@ mod tests {
                 published_upstream_ref: None,
                 session_agent: AgentSelection::new(
                     crate::domain::agent::AgentKind::Claude,
-                    AgentModel::ClaudeSonnet46,
+                    AgentModel::ClaudeSonnet5,
                 ),
             },
         };
@@ -1168,7 +1168,7 @@ mod tests {
                 published_upstream_ref: None,
                 session_agent: AgentSelection::new(
                     crate::domain::agent::AgentKind::Claude,
-                    AgentModel::ClaudeSonnet46,
+                    AgentModel::ClaudeSonnet5,
                 ),
             },
         };

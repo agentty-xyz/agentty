@@ -187,7 +187,7 @@ async fn seed_database(agentty_root: &Path, workdir: &Path) -> ShowcaseResult {
         ),
         (
             "a1b2c3d4-0002",
-            "claude-sonnet-4-6",
+            "claude-sonnet-5",
             "InProgress",
             "Add dark mode toggle to settings page",
             "L",
@@ -208,7 +208,7 @@ async fn seed_database(agentty_root: &Path, workdir: &Path) -> ShowcaseResult {
         ),
         (
             "a1b2c3d4-0005",
-            "claude-sonnet-4-6",
+            "claude-sonnet-5",
             "Done",
             "Update README with new install steps",
             "XS",

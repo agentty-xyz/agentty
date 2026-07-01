@@ -2929,7 +2929,7 @@ mod tests {
             is_draft: false,
             agent: crate::domain::agent::AgentSelection::new(
                 crate::domain::agent::AgentKind::Claude,
-                AgentModel::ClaudeSonnet46,
+                AgentModel::ClaudeSonnet5,
             ),
             output: output.to_string(),
             parent_session_id: None,
@@ -4475,7 +4475,7 @@ mod tests {
     async fn set_session_model_persists_new_model_and_clears_conversation_state() {
         // Arrange
         let mut session = test_session("Prompt", Status::Review, Some("Title"), "");
-        session.agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet46);
+        session.agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5);
         let database = database_with_session(&session).await;
         database
             .sessions()
@@ -4548,7 +4548,7 @@ mod tests {
     async fn set_session_model_keeps_conversation_state_when_model_does_not_change() {
         // Arrange
         let mut session = test_session("Prompt", Status::InProgress, Some("Title"), "");
-        session.agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet46);
+        session.agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5);
         let database = database_with_session(&session).await;
         database
             .sessions()
@@ -4570,7 +4570,7 @@ mod tests {
             .set_session_model(
                 &services,
                 "session-id",
-                AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet46),
+                AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
             )
             .await
             .expect("set session model should succeed");
@@ -4587,7 +4587,7 @@ mod tests {
             emitted_event,
             AppEvent::SessionModelUpdated {
                 session_id: "session-id".into(),
-                session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet46),
+                session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
             }
         );
         assert!(!session_manager.should_replay_history("session-id"));

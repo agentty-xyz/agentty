@@ -99,7 +99,7 @@ fn settings_tab_shows_content() {
 /// selection down, then `k` to move back up. The test confirms the selected
 /// row by seeding deterministic retired Opus model values, observing startup
 /// migration to `claude-opus-4-8`, and then checking which selector advances
-/// to the next current Claude model after each `Enter` press.
+/// through the current Claude model list after each `Enter` press.
 #[test]
 fn settings_jk_navigation() {
     // Arrange, Act, Assert
@@ -131,6 +131,9 @@ fn settings_jk_navigation() {
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(1500)
+                    .press_key("Enter")
+                    .wait_for_stable_frame(200, 3000)
+                    .viewing_pause_ms(1500)
                     .capture_labeled("moved_down", "Selection moved down three rows")
                     .press_key("k")
                     .wait_for_stable_frame(200, 3000)
@@ -157,12 +160,14 @@ fn settings_jk_navigation() {
                 let moved_down_frame = common::frame_from_capture(&report.captures[1]);
                 assertion::assert_match_count(&moved_down_frame, "claude-opus-4-6", 0);
                 assertion::assert_match_count(&moved_down_frame, "claude/claude-opus-4-8", 2);
-                assertion::assert_match_count(&moved_down_frame, "claude/claude-sonnet-4-6", 1);
+                assertion::assert_match_count(&moved_down_frame, "claude/claude-sonnet-5", 0);
+                assertion::assert_match_count(&moved_down_frame, "claude/claude-fable-5", 1);
 
                 let moved_up_frame = common::frame_from_capture(&report.captures[2]);
                 assertion::assert_match_count(&moved_up_frame, "claude-opus-4-6", 0);
                 assertion::assert_match_count(&moved_up_frame, "claude/claude-opus-4-8", 1);
-                assertion::assert_match_count(&moved_up_frame, "claude/claude-sonnet-4-6", 2);
+                assertion::assert_match_count(&moved_up_frame, "claude/claude-sonnet-5", 1);
+                assertion::assert_match_count(&moved_up_frame, "claude/claude-fable-5", 1);
             },
         )
         .expect("feature test failed");

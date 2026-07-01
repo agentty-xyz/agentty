@@ -360,7 +360,7 @@ async fn seed_pre_existing_sessions(
         (
             "cccc3333-cccc-3333-cccc-333333333333",
             "Fix auth token refresh",
-            "claude-sonnet-4-6",
+            "claude-sonnet-5",
             "Done",
             "main",
             42,

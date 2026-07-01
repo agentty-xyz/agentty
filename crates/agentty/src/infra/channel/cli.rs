@@ -495,7 +495,7 @@ mod tests {
         TurnRequest {
             folder,
             live_session_output: None,
-            model: "claude-sonnet-4-6".to_string(),
+            model: "claude-sonnet-5".to_string(),
             request_kind: AgentRequestKind::SessionStart,
             prompt: "Write a test".into(),
             provider_conversation_id: None,
@@ -531,7 +531,7 @@ mod tests {
         let request = TurnRequest {
             folder: PathBuf::from("/tmp/session"),
             live_session_output: None,
-            model: "claude-sonnet-4-6".to_string(),
+            model: "claude-sonnet-5".to_string(),
             request_kind: AgentRequestKind::SessionStart,
             prompt: TurnPrompt::from("Review @src/main.rs"),
             provider_conversation_id: None,

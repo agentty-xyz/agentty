@@ -3252,7 +3252,7 @@ mod tests {
             .sessions()
             .insert_session(
                 "session-id",
-                AgentModel::ClaudeSonnet46.as_str(),
+                AgentModel::ClaudeSonnet5.as_str(),
                 "main",
                 "Review",
                 project_id,
@@ -3307,7 +3307,7 @@ mod tests {
             .sessions()
             .insert_session(
                 "session-id",
-                AgentModel::ClaudeSonnet46.as_str(),
+                AgentModel::ClaudeSonnet5.as_str(),
                 "main",
                 "Review",
                 project_id,

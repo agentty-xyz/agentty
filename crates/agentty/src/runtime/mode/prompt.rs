@@ -2533,7 +2533,7 @@ mod tests {
         let (mut app, _base_dir) = new_test_draft_prompt_app("Review ", None).await;
         app.sessions.sessions_mut()[0].agent = crate::domain::agent::AgentSelection::new(
             crate::domain::agent::AgentKind::Claude,
-            crate::domain::agent::AgentModel::ClaudeSonnet46,
+            crate::domain::agent::AgentModel::ClaudeSonnet5,
         );
         app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
@@ -2561,7 +2561,7 @@ mod tests {
         let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
         app.sessions.sessions_mut()[0].agent = crate::domain::agent::AgentSelection::new(
             crate::domain::agent::AgentKind::Claude,
-            crate::domain::agent::AgentModel::ClaudeSonnet46,
+            crate::domain::agent::AgentModel::ClaudeSonnet5,
         );
         app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");

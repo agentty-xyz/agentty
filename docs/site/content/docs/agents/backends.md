@@ -321,11 +321,13 @@ entries with different trade-offs between speed, quality, and cost.
 ### Claude Models
 
 - `claude-opus-4-8` (default): Latest Claude Opus model for complex tasks.
-- `claude-sonnet-4-6`: Balanced Claude model for quality and latency.
+- `claude-sonnet-5`: Balanced Claude model for quality and latency.
+- `claude-fable-5`: Claude Fable model for creative, narrative-heavy tasks.
 - `claude-haiku-4-5-20251001`: Fast Claude model for lighter tasks.
 
 Stored project defaults or session rows that still reference `claude-opus-4-6` or
-`claude-opus-4-7` are upgraded to `claude-opus-4-8` when Agentty loads them.
+`claude-opus-4-7` are upgraded to `claude-opus-4-8` when Agentty loads them. Stored rows
+that reference `claude-sonnet-4-6` are upgraded to `claude-sonnet-5`.
 
 ### Codex Models
 
