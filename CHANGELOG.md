@@ -7,6 +7,24 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.11.1] - 2026-07-01
+
+### Added
+
+- agentty: persist default agent and model selections across sessions.
+- agentty: rename the Claude Sonnet model identifier to `claude-sonnet-5` and migrate
+  existing settings.
+
+### Changed
+
+- agentty: bound foreground event drains to keep UI event processing responsive.
+- docs: add Umami analytics to the documentation site template.
+- Bump workspace crate metadata and lockfile package versions to `0.11.1`.
+
+### Contributors
+
+- @minev-dev
+
 ## [v0.11.0] - 2026-06-28
 
 ### Added
