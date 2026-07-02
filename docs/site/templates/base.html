@@ -13,6 +13,10 @@
               href="{% block canonical %}{{ config.base_url }}{% endblock canonical %}">
         <link rel="icon" href="{{ config.base_url }}/favicon.ico">
         <link rel="stylesheet" href="{{ get_url(path='site.css') }}">
+        {# Track aggregate website visits through Umami analytics. #}
+        <script defer
+                src="https://cloud.umami.is/script.js"
+                data-website-id="fc933378-d31f-49c5-ad6a-0f38730c36e4"></script>
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
         <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap"
