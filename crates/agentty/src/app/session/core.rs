@@ -823,7 +823,9 @@ mod tests {
 
     use super::*;
     use crate::app::{App, AppEvent, SyncSessionStartError, Tab};
-    use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel};
+    use crate::domain::agent::{
+        AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ReasoningLevel,
+    };
     use crate::domain::session::{
         DailyActivity, SESSION_DATA_DIR, Session, SessionHandles, SessionSize, SessionStats, Status,
     };
@@ -2402,6 +2404,13 @@ mod tests {
             .get_project_setting(active_project_id, SettingName::DefaultSmartModel)
             .await
             .expect("failed to load setting");
+        let default_smart_agent_setting = app
+            .services
+            .db()
+            .settings()
+            .get_project_setting(active_project_id, SettingName::DefaultSmartAgent)
+            .await
+            .expect("failed to load agent setting");
 
         // Act
         let second_session_id = app
@@ -2421,6 +2430,7 @@ mod tests {
             AgentKind::Gemini.default_model()
         );
         assert_eq!(default_smart_model_setting, None);
+        assert_eq!(default_smart_agent_setting, None);
 
         let db_sessions = app
             .services
@@ -2476,6 +2486,13 @@ mod tests {
             .get_project_setting(active_project_id, SettingName::DefaultSmartModel)
             .await
             .expect("failed to load setting");
+        let default_smart_agent_setting = app
+            .services
+            .db()
+            .settings()
+            .get_project_setting(active_project_id, SettingName::DefaultSmartAgent)
+            .await
+            .expect("failed to load agent setting");
         drop(app);
         let mut restarted_app = new_test_app_with_git_and_db(dir.path(), db).await;
         let second_session_id = restarted_app
@@ -2488,12 +2505,17 @@ mod tests {
             default_smart_model_setting,
             Some(AgentModel::Gpt55.as_str().to_string())
         );
+        assert_eq!(
+            default_smart_agent_setting,
+            Some(AgentKind::Codex.name().to_string())
+        );
         let second_session = restarted_app
             .sessions
             .sessions()
             .iter()
             .find(|session| session.id == second_session_id)
             .expect("missing second session");
+        assert_eq!(second_session.agent.kind(), AgentKind::Codex);
         assert_eq!(second_session.agent.model(), AgentModel::Gpt55);
     }
 
@@ -2531,6 +2553,7 @@ mod tests {
             created_session.agent.model(),
             AgentModel::ClaudeHaiku4520251001
         );
+        assert_eq!(created_session.agent.kind(), AgentKind::Claude);
     }
 
     #[tokio::test]

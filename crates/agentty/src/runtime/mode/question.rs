@@ -247,7 +247,7 @@ fn question_view_metrics(app: &App, terminal_size: Rect) -> QuestionViewMetrics 
                 SessionOutputLineContext {
                     active_prompt_output,
                     active_progress,
-                    review_model: app.settings.default_review_model,
+                    review_model: app.settings.default_review_selection.model(),
                     review_status_message,
                     review_text,
                     session_update_version: app.session_update_version(session_id),
@@ -1015,7 +1015,10 @@ mod tests {
         // Arrange
         let mut app = new_test_app().await;
         let session_id = "session-review-model";
-        app.settings.default_review_model = AgentModel::ClaudeHaiku4520251001;
+        app.settings.default_review_selection = crate::domain::agent::AgentSelection::new(
+            crate::domain::agent::AgentKind::Claude,
+            AgentModel::ClaudeHaiku4520251001,
+        );
         app.sessions.push_session(
             crate::domain::session::tests::SessionFixtureBuilder::new()
                 .id(session_id)

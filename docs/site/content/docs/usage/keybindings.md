@@ -55,8 +55,8 @@ The page is split into `Global settings` for the app-wide `Theme` row and
 - `Default Reasoning Level` (`low`, `medium`, `high`, `xhigh`) for Codex and Claude
   turns in the active project.
 - `Default Smart Model`, `Default Fast Model`, and `Default Review Model` for the active
-  project. Explicit model values display as `agent/model`, and `Default Smart Model` can
-  also cycle to `Last used model as default`.
+  project. Explicit model values display and persist as `agent/model`, and
+  `Default Smart Model` can also cycle to `Last used model as default`.
 - `Coauthored by Agentty` to enable or disable the `Co-Authored-By` trailer on generated
   session commit messages for the active project. New projects start with this disabled.
 - `Open Commands` for launching session worktrees in the active project (one command per

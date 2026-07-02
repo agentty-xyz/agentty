@@ -56,6 +56,13 @@ pub(crate) trait SettingRepository: Send + Sync {
         value: &str,
     ) -> Result<(), DbError>;
 
+    /// Inserts or updates project-scoped settings as one transaction.
+    async fn upsert_project_settings(
+        &self,
+        project_id: i64,
+        settings: Vec<(SettingName, String)>,
+    ) -> Result<(), DbError>;
+
     /// Inserts or updates a setting by name.
     async fn upsert_setting(&self, name: SettingName, value: &str) -> Result<(), DbError>;
 }
@@ -199,6 +206,34 @@ SET value = excluded.value
         Ok(())
     }
 
+    async fn upsert_project_settings(
+        &self,
+        project_id: i64,
+        settings: Vec<(SettingName, String)>,
+    ) -> Result<(), DbError> {
+        let mut transaction = self.0.begin().await?;
+
+        for (name, value) in settings {
+            sqlx::query(
+                r"
+INSERT INTO project_setting (project_id, name, value)
+VALUES (?, ?, ?)
+ON CONFLICT(project_id, name) DO UPDATE
+SET value = excluded.value
+",
+            )
+            .bind(project_id)
+            .bind(name.as_str())
+            .bind(value)
+            .execute(&mut *transaction)
+            .await?;
+        }
+
+        transaction.commit().await?;
+
+        Ok(())
+    }
+
     async fn upsert_setting(&self, name: SettingName, value: &str) -> Result<(), DbError> {
         sqlx::query(
             r"
@@ -214,5 +249,71 @@ SET value = excluded.value
         .await?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::agent::AgentModel;
+    use crate::infra::db::AppRepositories;
+
+    #[tokio::test]
+    /// Verifies project setting batches roll back when any setting write fails.
+    async fn test_upsert_project_settings_rolls_back_partial_batch() {
+        // Arrange
+        let (repositories, pool) = AppRepositories::in_memory_with_pool().await;
+        let project_id = repositories
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to insert project");
+        sqlx::query(
+            r"
+CREATE TRIGGER fail_default_fast_agent_insert
+BEFORE INSERT ON project_setting
+WHEN NEW.name = 'DefaultFastAgent'
+BEGIN
+    SELECT RAISE(FAIL, 'forced setting failure');
+END;
+",
+        )
+        .execute(&pool)
+        .await
+        .expect("failed to install failure trigger");
+
+        // Act
+        let result = repositories
+            .settings()
+            .upsert_project_settings(
+                project_id,
+                vec![
+                    (
+                        SettingName::DefaultFastModel,
+                        AgentModel::Gemini31ProPreview.as_str().to_string(),
+                    ),
+                    (SettingName::DefaultFastAgent, "antigravity".to_string()),
+                ],
+            )
+            .await;
+
+        // Assert
+        assert!(result.is_err());
+        assert_eq!(
+            repositories
+                .settings()
+                .get_project_setting(project_id, SettingName::DefaultFastModel)
+                .await
+                .expect("failed to load fast model setting"),
+            None
+        );
+        assert_eq!(
+            repositories
+                .settings()
+                .get_project_setting(project_id, SettingName::DefaultFastAgent)
+                .await
+                .expect("failed to load fast agent setting"),
+            None
+        );
     }
 }

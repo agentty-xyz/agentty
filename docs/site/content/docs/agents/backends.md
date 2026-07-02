@@ -287,9 +287,11 @@ current version. Rows show `updating...` until that refresh completes.
 
 <a id="backends-persistent-defaults"></a> For persistent defaults, choose a default
 model in the **Settings** tab (`Tab` to navigate, `Enter` to edit). The selected model
-determines which backend is used for new sessions. Stored defaults that point at an
-unavailable backend automatically fall back to the first available backend default
-instead of leaving the selector on a hidden choice.
+is stored with its backend as `agent/model`, which keeps shared Gemini model ids tied to
+the selected Gemini or Antigravity provider instead of deriving the backend from the raw
+model name. Stored defaults that point at an unavailable backend automatically fall back
+to the first available backend default instead of leaving the selector on a hidden
+choice.
 
 <a id="backends-reasoning-level"></a> For Codex and Claude sessions, the **Settings**
 tab also exposes `Default Reasoning Level` (`low`, `medium`, `high`, `xhigh`). The

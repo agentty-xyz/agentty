@@ -959,7 +959,7 @@ impl App {
         review_view_state(
             &self.review_cache,
             session_id,
-            self.settings.default_review_model,
+            self.settings.default_review_selection.model(),
         )
     }
 
@@ -1405,7 +1405,7 @@ impl App {
 
         spawn_review_assist(
             self.services.event_sender(),
-            self.settings.default_review_model,
+            self.settings.default_review_selection.model(),
             session_id,
             session_folder,
             diff_hash,
@@ -2220,7 +2220,10 @@ mod tests {
             .expect("failed to switch project");
 
         // Assert
-        assert_eq!(app.settings.default_smart_model, AgentModel::Gpt55);
+        assert_eq!(
+            app.settings.default_smart_selection.model(),
+            AgentModel::Gpt55
+        );
         assert_eq!(app.settings.open_command, "cargo test");
     }
 
@@ -5019,7 +5022,9 @@ mod tests {
                 session_id: ref mode_session_id,
                 ..
             } if review_status_message.as_deref()
-                == Some(review_loading_message(app.settings.default_review_model).as_str())
+                == Some(
+                    review_loading_message(app.settings.default_review_selection.model()).as_str()
+                )
                 && mode_session_id == session_id
         ));
     }

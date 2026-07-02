@@ -620,7 +620,7 @@ async fn handle_regenerate_review_confirmation(
     }
 
     let diff_hash = diff_content_hash(&diff);
-    let review_model = app.settings.default_review_model;
+    let review_model = app.settings.default_review_selection.model();
     app.review_cache
         .insert(session_id.clone(), ReviewCacheEntry::Loading { diff_hash });
     let _ = app

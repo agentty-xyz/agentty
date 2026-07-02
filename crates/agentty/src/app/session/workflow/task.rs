@@ -14,8 +14,10 @@ use crate::app::assist::{
 };
 use crate::app::service::SessionUpdateVersionMap;
 use crate::app::session::{Clock, SessionError, unix_timestamp_from_system_time};
-use crate::app::{AppEvent, SessionManager};
-use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
+use crate::app::{AppEvent, SessionManager, setting};
+use crate::domain::agent::{AgentKind, AgentSelection};
+#[cfg(test)]
+use crate::domain::agent::{AgentModel, AgentSelectionMetadata};
 use crate::domain::session::{COMMITTING_PROGRESS_LABEL, SessionId, SessionSize, Status};
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::setting::SettingName;
@@ -360,16 +362,17 @@ impl SessionTaskService {
         }
     }
 
-    /// Loads the model used by auto-commit utility prompts for one session.
+    /// Loads the agent/model selection used by auto-commit utility prompts for
+    /// one session.
     ///
-    /// This prefers the active project's `DefaultFastModel`, falls back to
-    /// `DefaultSmartModel`, and finally returns `fallback_model` when no
-    /// persisted setting can be parsed.
-    pub(crate) async fn load_auto_commit_model_setting(
+    /// This prefers the active project's `DefaultFastAgent` and
+    /// `DefaultFastModel`, falls back through the smart defaults, and finally
+    /// returns `fallback_selection` when no persisted setting can be parsed.
+    pub(crate) async fn load_auto_commit_agent_setting(
         db: &AppRepositories,
         session_id: &str,
-        fallback_model: AgentModel,
-    ) -> AgentModel {
+        fallback_selection: AgentSelection,
+    ) -> AgentSelection {
         let project_id = match db.sessions().load_session_project_id(session_id).await {
             Ok(project_id) => project_id,
             Err(error) => {
@@ -379,23 +382,17 @@ impl SessionTaskService {
                     "failed to load session project while resolving auto-commit model"
                 );
 
-                return fallback_model;
+                return fallback_selection;
             }
         };
 
-        if let Some(model) =
-            Self::load_project_model_setting(db, project_id, SettingName::DefaultFastModel).await
-        {
-            return model;
-        }
-
-        if let Some(model) =
-            Self::load_project_model_setting(db, project_id, SettingName::DefaultSmartModel).await
-        {
-            return model;
-        }
-
-        fallback_model
+        setting::load_default_fast_agent_selection_from_repositories(
+            db,
+            project_id,
+            fallback_selection,
+            AgentKind::ALL,
+        )
+        .await
     }
 
     async fn commit_changes_with_assist(
@@ -468,17 +465,9 @@ impl SessionTaskService {
             .ok_or_else(|| {
                 SessionError::Workflow("Missing session base branch for auto-commit".to_string())
             })?;
-        let auto_commit_model = Self::load_auto_commit_model_setting(
-            &context.db,
-            &context.id,
-            context.session_agent.model(),
-        )
-        .await;
-        let auto_commit_agent = crate::agent::resolve_agent_selection_for_model(
-            auto_commit_model,
-            context.session_agent.kind(),
-            AgentKind::ALL,
-        );
+        let auto_commit_agent =
+            Self::load_auto_commit_agent_setting(&context.db, &context.id, context.session_agent)
+                .await;
 
         Self::commit_session_changes(
             context.git_client.as_ref(),
@@ -489,53 +478,6 @@ impl SessionTaskService {
             Self::load_include_coauthored_by_agentty_setting(&context.db, &context.id).await,
         )
         .await
-    }
-
-    /// Loads one project-scoped model setting and parses it into an
-    /// [`AgentModel`].
-    ///
-    /// Retired persisted model ids are upgraded to their current replacement
-    /// models before the setting is returned.
-    async fn load_project_model_setting(
-        db: &AppRepositories,
-        project_id: Option<i64>,
-        setting_name: SettingName,
-    ) -> Option<AgentModel> {
-        let project_id = project_id?;
-
-        let persisted_value = match db
-            .settings()
-            .get_project_setting(project_id, setting_name)
-            .await
-        {
-            Ok(persisted_value) => persisted_value,
-            Err(error) => {
-                warn!(
-                    project_id,
-                    setting = ?setting_name,
-                    error = %error,
-                    "failed to load persisted agent model setting"
-                );
-
-                return None;
-            }
-        };
-        let setting_value = persisted_value?;
-
-        match AgentModel::parse_persisted(&setting_value) {
-            Ok(model) => Some(model),
-            Err(error) => {
-                warn!(
-                    project_id,
-                    setting = ?setting_name,
-                    value = setting_value,
-                    error = %error,
-                    "failed to parse persisted agent model setting"
-                );
-
-                None
-            }
-        }
     }
 
     async fn append_commit_assist_header(
@@ -2108,9 +2050,9 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies auto-commit prefers the project fast model before other
-    /// fallback settings.
-    async fn test_load_auto_commit_model_setting_prefers_project_fast_model() {
+    /// Verifies auto-commit prefers the project fast agent/model selection
+    /// before other fallback settings.
+    async fn test_load_auto_commit_agent_setting_prefers_project_fast_selection() {
         // Arrange
         let database = AppRepositories::in_memory().await;
         insert_review_session(&database, AgentModel::Gpt55.as_str()).await;
@@ -2125,10 +2067,19 @@ mod tests {
             .upsert_project_setting(
                 project_id,
                 SettingName::DefaultFastModel,
-                AgentModel::ClaudeHaiku4520251001.as_str(),
+                AgentModel::Gemini31ProPreview.as_str(),
             )
             .await
             .expect("failed to persist default fast model");
+        database
+            .settings()
+            .upsert_project_setting(
+                project_id,
+                SettingName::DefaultFastAgent,
+                AgentKind::Antigravity.name(),
+            )
+            .await
+            .expect("failed to persist default fast agent");
         database
             .settings()
             .upsert_project_setting(
@@ -2140,21 +2091,24 @@ mod tests {
             .expect("failed to persist default smart model");
 
         // Act
-        let auto_commit_model = SessionTaskService::load_auto_commit_model_setting(
+        let auto_commit_agent = SessionTaskService::load_auto_commit_agent_setting(
             &database,
             "session-id",
-            AgentModel::Gpt55,
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
         )
         .await;
 
         // Assert
-        assert_eq!(auto_commit_model, AgentModel::ClaudeHaiku4520251001);
+        assert_eq!(
+            auto_commit_agent,
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31ProPreview)
+        );
     }
 
     #[tokio::test]
-    /// Verifies auto-commit falls back through smart and session defaults
+    /// Verifies auto-commit falls back through smart and session selections
     /// when the fast-model setting is absent.
-    async fn test_load_auto_commit_model_setting_falls_back_through_defaults() {
+    async fn test_load_auto_commit_agent_setting_falls_back_through_defaults() {
         // Arrange
         let database = AppRepositories::in_memory().await;
         insert_review_session(&database, AgentModel::Gpt55.as_str()).await;
@@ -2173,17 +2127,29 @@ mod tests {
             )
             .await
             .expect("failed to persist default smart model");
+        database
+            .settings()
+            .upsert_project_setting(
+                project_id,
+                SettingName::DefaultSmartAgent,
+                AgentKind::Antigravity.name(),
+            )
+            .await
+            .expect("failed to persist default smart agent");
 
         // Act
-        let smart_fallback_model = SessionTaskService::load_auto_commit_model_setting(
+        let smart_fallback_agent = SessionTaskService::load_auto_commit_agent_setting(
             &database,
             "session-id",
-            AgentModel::Gpt55,
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
         )
         .await;
 
         // Assert
-        assert_eq!(smart_fallback_model, AgentModel::Gemini31ProPreview);
+        assert_eq!(
+            smart_fallback_agent,
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31ProPreview)
+        );
 
         // Arrange
         database
@@ -2193,15 +2159,18 @@ mod tests {
             .expect("failed to persist invalid smart model");
 
         // Act
-        let session_fallback_model = SessionTaskService::load_auto_commit_model_setting(
+        let session_fallback_agent = SessionTaskService::load_auto_commit_agent_setting(
             &database,
             "session-id",
-            AgentModel::Gpt55,
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
         )
         .await;
 
         // Assert
-        assert_eq!(session_fallback_model, AgentModel::Gpt55);
+        assert_eq!(
+            session_fallback_agent,
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55)
+        );
     }
 
     #[tokio::test]

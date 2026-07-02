@@ -11,12 +11,9 @@ use tracing::debug;
 use super::worker::{SessionWorkerContext, TurnMetadata};
 use super::{SessionTaskService, isolation, post_turn};
 use crate::app::session::SessionError;
-use crate::app::{AppEvent, SessionManager};
-use crate::domain::agent::{
-    AgentKind, AgentModel, AgentSelection, ReasoningLevel, resolve_agent_selection_for_model,
-};
+use crate::app::{AppEvent, SessionManager, setting};
+use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel};
 use crate::domain::session::{SessionId, Status};
-use crate::domain::setting::SettingName;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::channel::{
     AgentError, AgentRequestKind, TurnEvent, TurnPrompt, TurnRequest, TurnResult,
@@ -540,15 +537,13 @@ async fn spawn_start_turn_title_generation(
         return;
     }
 
-    let title_model = load_project_model_setting(
+    let title_agent = setting::load_default_fast_agent_selection_from_repositories(
         &context.db,
         session_project_id,
-        SettingName::DefaultFastModel,
+        session_agent,
+        AgentKind::ALL,
     )
-    .await
-    .unwrap_or(session_agent.model());
-    let title_agent =
-        resolve_agent_selection_for_model(title_model, session_agent.kind(), AgentKind::ALL);
+    .await;
 
     let _title_generation_task = SessionManager::spawn_session_title_generation_task(
         context.app_event_tx.clone(),
@@ -559,25 +554,6 @@ async fn spawn_start_turn_title_generation(
         title_agent,
         None,
     );
-}
-
-/// Loads one project-scoped model setting and parses it into an [`AgentModel`].
-///
-/// Retired persisted model ids are upgraded to their current replacement
-/// models before the setting is returned.
-async fn load_project_model_setting(
-    db: &AppRepositories,
-    project_id: Option<i64>,
-    setting_name: SettingName,
-) -> Option<AgentModel> {
-    let project_id = project_id?;
-
-    db.settings()
-        .get_project_setting(project_id, setting_name)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|setting_value| AgentModel::parse_persisted(&setting_value).ok())
 }
 
 /// Returns one normalized thinking text line.

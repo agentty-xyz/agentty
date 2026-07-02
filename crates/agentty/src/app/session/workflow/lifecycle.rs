@@ -19,7 +19,7 @@ use crate::app::session::SessionError;
 use crate::app::{
     AppEvent, AppServices, ProjectManager, SessionManager, agentty_home, review_request, setting,
 };
-use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel};
+use crate::domain::agent::{AgentKind, AgentSelection, AgentSelectionMetadata, ReasoningLevel};
 use crate::domain::session::{
     ReviewRequest, SESSION_DATA_DIR, Session, SessionHandles, SessionId, Status,
     can_mutate_session_branch_in_stack as stack_can_mutate_session_branch,
@@ -804,17 +804,9 @@ impl SessionManager {
         session_folder: PathBuf,
     ) -> Result<(PathBuf, AgentSelection), SessionError> {
         let project_working_dir = self.load_project_path(services, project_id).await?;
-        let title_generation_model = setting::load_default_fast_model_setting(
-            services,
-            Some(project_id),
-            session_agent.model(),
-        )
-        .await;
-        let title_generation_agent = crate::agent::resolve_agent_selection_for_model(
-            title_generation_model,
-            session_agent.kind(),
-            &services.available_agent_kinds(),
-        );
+        let title_generation_agent =
+            setting::load_default_fast_agent_setting(services, Some(project_id), session_agent)
+                .await;
         let title_generation_folder = if services.fs_client().is_dir(session_folder.clone()) {
             session_folder
         } else {
@@ -1092,7 +1084,8 @@ impl SessionManager {
     /// Updates and persists the agent/model selection for a single session.
     ///
     /// When `LastUsedModelAsDefault` is enabled, this also persists the chosen
-    /// session model as `DefaultSmartModel`.
+    /// session agent/model pair as `DefaultSmartAgent` and
+    /// `DefaultSmartModel`.
     ///
     /// When the model changes, this also clears any persisted provider-native
     /// conversation identifier so incompatible runtimes do not attempt resume
@@ -1151,6 +1144,15 @@ impl SessionManager {
                 .settings()
                 .upsert_project_setting(
                     project_id,
+                    SettingName::DefaultSmartAgent,
+                    session_agent.kind().name(),
+                )
+                .await?;
+            services
+                .db()
+                .settings()
+                .upsert_project_setting(
+                    project_id,
                     SettingName::DefaultSmartModel,
                     session_model.as_str(),
                 )
@@ -1202,8 +1204,8 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Returns whether session model switches should also persist
-    /// `DefaultSmartModel`.
+    /// Returns whether session model switches should also persist the
+    /// `DefaultSmartAgent` and `DefaultSmartModel` setting pair.
     async fn should_persist_last_used_model_as_default(
         services: &AppServices,
         project_id: Option<i64>,
@@ -2288,42 +2290,24 @@ impl SessionManager {
     }
 
     /// Resolves the default agent/model selection for a new session.
-    ///
-    /// Default model settings are still model-only, so available provider order
-    /// decides ownership for shared Gemini model ids.
     async fn resolve_default_session_agent(
         &self,
         services: &AppServices,
         project_id: i64,
     ) -> AgentSelection {
-        let session_model = self
-            .resolve_default_session_model(services, project_id)
-            .await;
         let available_agent_kinds = services.available_agent_kinds();
         let fallback_agent_kind = available_agent_kinds
             .first()
             .copied()
             .unwrap_or(AgentKind::Antigravity);
-        let agent_kind = crate::agent::resolve_agent_kind_for_model(
-            session_model,
-            &available_agent_kinds,
+        let fallback_selection = crate::agent::resolve_agent_selection_for_model(
+            self.default_session_model,
             fallback_agent_kind,
+            &available_agent_kinds,
         );
 
-        AgentSelection::new(agent_kind, session_model)
-    }
-
-    async fn resolve_default_session_model(
-        &self,
-        services: &AppServices,
-        project_id: i64,
-    ) -> AgentModel {
-        setting::load_default_smart_model_setting(
-            services,
-            Some(project_id),
-            self.default_session_model,
-        )
-        .await
+        setting::load_default_smart_agent_setting(services, Some(project_id), fallback_selection)
+            .await
     }
 
     /// Reverts filesystem and database changes after session creation failure.
@@ -2829,6 +2813,7 @@ mod test_support {
     use std::sync::Arc;
 
     use super::*;
+    use crate::domain::agent::AgentModel;
 
     impl SessionManager {
         /// Submits a follow-up prompt using a pre-built backend for
@@ -2878,7 +2863,7 @@ mod tests {
     use super::*;
     use crate::app::session::SessionDefaults;
     use crate::app::{AppEvent, AppServices, SessionState};
-    use crate::domain::agent::{AgentKind, ReasoningLevel};
+    use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
     use crate::domain::session::{
         ForgeKind, ReviewRequestState, ReviewRequestSummary, SessionHandles, SessionSize,
         SessionStats,

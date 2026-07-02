@@ -1,52 +1,134 @@
 use ratatui::widgets::TableState;
+use tracing::warn;
 
-use crate::agent::{AgentKind, AgentModel, ReasoningLevel};
+use crate::agent::{AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ReasoningLevel};
 use crate::app::AppServices;
 use crate::domain::input::InputState;
 use crate::domain::setting::SettingName;
 use crate::domain::theme::ColorTheme;
+use crate::infra::db::AppRepositories;
 
 /// Loads the persisted smart-model default used for new sessions.
 ///
-/// This prefers the project-scoped `DefaultSmartModel` key and otherwise falls
-/// back to `fallback_model`.
+/// This returns the model from the project-scoped smart agent/model selection
+/// and otherwise falls back to `fallback_model`.
 pub(crate) async fn load_default_smart_model_setting(
     services: &AppServices,
     project_id: Option<i64>,
     fallback_model: AgentModel,
 ) -> AgentModel {
     let available_agent_kinds = services.available_agent_kinds();
-    let fallback_model =
-        resolve_available_model(fallback_model, &available_agent_kinds, fallback_model);
 
-    if let Some(model) =
-        load_model_setting(services, project_id, SettingName::DefaultSmartModel).await
-    {
-        return resolve_available_model(model, &available_agent_kinds, fallback_model);
-    }
-
-    fallback_model
+    load_default_smart_agent_setting(
+        services,
+        project_id,
+        fallback_selection_for_available_model(fallback_model, &available_agent_kinds),
+    )
+    .await
+    .model()
 }
 
-/// Loads the persisted fast-model default used by lightweight background
-/// workflows.
+/// Loads the persisted smart-model default as an agent/model selection.
 ///
-/// This prefers `DefaultFastModel` and falls back to the resolved smart-model
-/// default when the fast-model setting is missing.
-pub(crate) async fn load_default_fast_model_setting(
+/// This prefers the project-scoped `DefaultSmartAgent` and
+/// `DefaultSmartModel` keys, then falls back to `fallback_selection`. Legacy
+/// projects that only have `DefaultSmartModel` still resolve the owning agent
+/// from the currently available provider list.
+pub(crate) async fn load_default_smart_agent_setting(
     services: &AppServices,
     project_id: Option<i64>,
-    fallback_model: AgentModel,
-) -> AgentModel {
+    fallback_selection: AgentSelection,
+) -> AgentSelection {
     let available_agent_kinds = services.available_agent_kinds();
+    load_default_smart_agent_selection_from_repositories(
+        services.db(),
+        project_id,
+        fallback_selection,
+        &available_agent_kinds,
+    )
+    .await
+}
 
-    if let Some(model) =
-        load_model_setting(services, project_id, SettingName::DefaultFastModel).await
+/// Loads the persisted fast-model default as an agent/model selection.
+///
+/// This prefers `DefaultFastAgent` and `DefaultFastModel`, then falls back to
+/// the resolved smart-model default when the fast-model setting is missing.
+pub(crate) async fn load_default_fast_agent_setting(
+    services: &AppServices,
+    project_id: Option<i64>,
+    fallback_selection: AgentSelection,
+) -> AgentSelection {
+    let available_agent_kinds = services.available_agent_kinds();
+    load_default_fast_agent_selection_from_repositories(
+        services.db(),
+        project_id,
+        fallback_selection,
+        &available_agent_kinds,
+    )
+    .await
+}
+
+/// Loads the persisted fast-model default from repositories as an agent/model
+/// selection.
+///
+/// This is used by background workflows that only have repository access.
+/// Legacy model-only settings still resolve ownership from the fallback
+/// selection and available-provider order.
+pub(crate) async fn load_default_fast_agent_selection_from_repositories(
+    repositories: &AppRepositories,
+    project_id: Option<i64>,
+    fallback_selection: AgentSelection,
+    available_agent_kinds: &[AgentKind],
+) -> AgentSelection {
+    let fallback_selection = resolve_available_selection(fallback_selection, available_agent_kinds);
+
+    if let Some(selection) = load_model_selection_setting(
+        repositories,
+        project_id,
+        SettingName::DefaultFastAgent,
+        SettingName::DefaultFastModel,
+        fallback_selection,
+    )
+    .await
     {
-        return resolve_available_model(model, &available_agent_kinds, fallback_model);
+        return resolve_available_selection(selection, available_agent_kinds);
     }
 
-    load_default_smart_model_setting(services, project_id, fallback_model).await
+    load_default_smart_agent_selection_from_repositories(
+        repositories,
+        project_id,
+        fallback_selection,
+        available_agent_kinds,
+    )
+    .await
+}
+
+/// Loads the persisted smart-model default from repositories as an agent/model
+/// selection.
+///
+/// This preserves explicit provider settings for shared model ids while
+/// retaining model-only fallback behavior for older projects.
+pub(crate) async fn load_default_smart_agent_selection_from_repositories(
+    repositories: &AppRepositories,
+    project_id: Option<i64>,
+    fallback_selection: AgentSelection,
+    available_agent_kinds: &[AgentKind],
+) -> AgentSelection {
+    let fallback_selection = resolve_available_selection(fallback_selection, available_agent_kinds);
+
+    if let Some(selection) = load_model_selection_setting(
+        repositories,
+        project_id,
+        SettingName::DefaultSmartAgent,
+        SettingName::DefaultSmartModel,
+        fallback_selection,
+    )
+    .await
+    {
+        return resolve_available_selection(selection, available_agent_kinds);
+    }
+
+    fallback_selection
 }
 
 /// Declares how a settings row is edited.
@@ -141,12 +223,12 @@ impl SettingRow {
 
 /// Manages user-configurable application settings.
 pub struct SettingsManager {
-    /// Default fast model used by fast-path workflows.
-    pub default_fast_model: AgentModel,
-    /// Default model used by review workflows.
-    pub default_review_model: AgentModel,
-    /// Default smart model used when creating new sessions.
-    pub default_smart_model: AgentModel,
+    /// Default agent/model selection used by fast-path workflows.
+    pub default_fast_selection: AgentSelection,
+    /// Default agent/model selection used by review workflows.
+    pub default_review_selection: AgentSelection,
+    /// Default agent/model selection used when creating new sessions.
+    pub default_smart_selection: AgentSelection,
     /// Optional command run in tmux when opening a session worktree.
     pub open_command: String,
     /// Default reasoning effort preference for models that support this
@@ -176,22 +258,28 @@ impl SettingsManager {
     /// Creates a settings manager and loads persisted values from the database.
     pub async fn new(services: &AppServices, project_id: i64) -> Self {
         let available_agent_kinds = services.available_agent_kinds();
-        let default_smart_model = load_default_smart_model_setting(
-            services,
-            Some(project_id),
+        let default_smart_fallback = fallback_selection_for_available_model(
             AgentKind::Antigravity.default_model(),
+            &available_agent_kinds,
+        );
+        let default_smart_agent =
+            load_default_smart_agent_setting(services, Some(project_id), default_smart_fallback)
+                .await;
+
+        let default_fast_agent =
+            load_default_fast_agent_setting(services, Some(project_id), default_smart_agent).await;
+
+        let default_review_agent = load_model_selection_setting(
+            services.db(),
+            Some(project_id),
+            SettingName::DefaultReviewAgent,
+            SettingName::DefaultReviewModel,
+            default_smart_agent,
         )
-        .await;
-
-        let default_fast_model =
-            load_default_fast_model_setting(services, Some(project_id), default_smart_model).await;
-
-        let default_review_model =
-            load_model_setting(services, Some(project_id), SettingName::DefaultReviewModel)
-                .await
-                .map_or(default_smart_model, |model| {
-                    resolve_available_model(model, &available_agent_kinds, default_smart_model)
-                });
+        .await
+        .map_or(default_smart_agent, |selection| {
+            resolve_available_selection(selection, &available_agent_kinds)
+        });
         let reasoning_level = load_reasoning_level_setting(services, Some(project_id)).await;
 
         let open_command = services
@@ -222,9 +310,9 @@ impl SettingsManager {
         table_state.select(Some(0));
 
         Self {
-            default_fast_model,
-            default_review_model,
-            default_smart_model,
+            default_fast_selection: default_fast_agent,
+            default_review_selection: default_review_agent,
+            default_smart_selection: default_smart_agent,
             open_command,
             reasoning_level,
             table_state,
@@ -507,17 +595,14 @@ impl SettingsManager {
                 if self.use_last_used_model_as_default {
                     "Last used model as default".to_string()
                 } else {
-                    display_model_selector_value(
-                        self.default_smart_model,
-                        &self.available_agent_kinds,
-                    )
+                    display_model_selector_value(self.default_smart_selection)
                 }
             }
             SettingRow::DefaultFastModel => {
-                display_model_selector_value(self.default_fast_model, &self.available_agent_kinds)
+                display_model_selector_value(self.default_fast_selection)
             }
             SettingRow::DefaultReviewModel => {
-                display_model_selector_value(self.default_review_model, &self.available_agent_kinds)
+                display_model_selector_value(self.default_review_selection)
             }
             SettingRow::IncludeCoauthoredByAgentty => {
                 bool_setting_display(self.include_coauthored_by_agentty)
@@ -569,6 +654,9 @@ impl SettingsManager {
                 self.cycle_theme_selector(services).await;
             }
             SettingName::ActiveProjectId
+            | SettingName::DefaultFastAgent
+            | SettingName::DefaultReviewAgent
+            | SettingName::DefaultSmartAgent
             | SettingName::OpenCommand
             | SettingName::LastUsedModelAsDefault => {}
         }
@@ -595,8 +683,11 @@ impl SettingsManager {
             }
             SettingName::ReasoningLevel
             | SettingName::ActiveProjectId
+            | SettingName::DefaultFastAgent
             | SettingName::DefaultFastModel
+            | SettingName::DefaultReviewAgent
             | SettingName::DefaultReviewModel
+            | SettingName::DefaultSmartAgent
             | SettingName::DefaultSmartModel
             | SettingName::IncludeCoauthoredByAgentty
             | SettingName::LastUsedModelAsDefault
@@ -619,14 +710,20 @@ impl SettingsManager {
     /// Cycles the smart-model selector through all explicit models and the
     /// `Last used model as default` option.
     async fn cycle_default_smart_model_selector(&mut self, services: &AppServices) {
-        let all_models = self.selectable_models();
-        let explicit_model_count = all_models.len();
+        let all_options = self.selectable_model_options();
+        let explicit_model_count = all_options.len();
+        let current_selection = self.default_smart_selection;
         let current_index = if self.use_last_used_model_as_default {
             explicit_model_count
         } else {
-            all_models
+            all_options
                 .iter()
-                .position(|model| *model == self.default_smart_model)
+                .position(|option| option.matches(current_selection))
+                .or_else(|| {
+                    all_options
+                        .iter()
+                        .position(|option| option.model == self.default_smart_selection.model())
+                })
                 .unwrap_or(0)
         };
         let next_index = (current_index + 1) % (explicit_model_count + 1);
@@ -634,7 +731,8 @@ impl SettingsManager {
         if next_index == explicit_model_count {
             self.use_last_used_model_as_default = true;
         } else {
-            self.default_smart_model = all_models[next_index];
+            let next_option = all_options[next_index];
+            self.default_smart_selection = next_option.selection();
             self.use_last_used_model_as_default = false;
         }
 
@@ -643,29 +741,32 @@ impl SettingsManager {
 
     /// Cycles the fast-model selector through all explicit models.
     async fn cycle_default_fast_model_selector(&mut self, services: &AppServices) {
-        let Some(next_model) = next_model(self.default_fast_model, &self.available_agent_kinds)
+        let Some(next_option) =
+            next_model_option(self.default_fast_selection, &self.available_agent_kinds)
         else {
             return;
         };
-        self.default_fast_model = next_model;
+        self.default_fast_selection = next_option.selection();
 
         self.persist_default_fast_model_setting(services).await;
     }
 
     /// Cycles the review-model selector through all explicit models.
     async fn cycle_default_review_model_selector(&mut self, services: &AppServices) {
-        let Some(next_model) = next_model(self.default_review_model, &self.available_agent_kinds)
+        let Some(next_option) =
+            next_model_option(self.default_review_selection, &self.available_agent_kinds)
         else {
             return;
         };
-        self.default_review_model = next_model;
+        self.default_review_selection = next_option.selection();
 
         self.persist_default_review_model_setting(services).await;
     }
 
-    /// Returns all selectable models whose provider is locally runnable.
-    fn selectable_models(&self) -> Vec<AgentModel> {
-        selectable_models(&self.available_agent_kinds)
+    /// Returns all selectable model options whose provider is locally
+    /// runnable.
+    fn selectable_model_options(&self) -> Vec<ModelSelectorOption> {
+        selectable_model_options(&self.available_agent_kinds)
     }
 
     /// Toggles whether generated session commit messages include the
@@ -684,31 +785,39 @@ impl SettingsManager {
         self.persist_theme_setting(services).await;
     }
 
-    /// Persists smart-model selector values (`DefaultSmartModel` and
-    /// `LastUsedModelAsDefault`).
+    /// Atomically persists smart-model selector values (`DefaultSmartAgent`,
+    /// `DefaultSmartModel`, and `LastUsedModelAsDefault`).
     async fn persist_default_smart_model_settings(&self, services: &AppServices) {
         let last_used_model_as_default_value = self.use_last_used_model_as_default.to_string();
 
-        // Best-effort: settings persistence failure is non-critical.
-        let _ = services
+        if let Err(error) = services
             .db()
             .settings()
-            .upsert_project_setting(
+            .upsert_project_settings(
                 self.project_id,
-                SettingName::DefaultSmartModel,
-                self.default_smart_model.as_str(),
+                vec![
+                    (
+                        SettingName::DefaultSmartModel,
+                        self.default_smart_selection.model().as_str().to_string(),
+                    ),
+                    (
+                        SettingName::DefaultSmartAgent,
+                        self.default_smart_selection.kind().name().to_string(),
+                    ),
+                    (
+                        SettingName::LastUsedModelAsDefault,
+                        last_used_model_as_default_value,
+                    ),
+                ],
             )
-            .await;
-        // Best-effort: settings persistence failure is non-critical.
-        let _ = services
-            .db()
-            .settings()
-            .upsert_project_setting(
-                self.project_id,
-                SettingName::LastUsedModelAsDefault,
-                &last_used_model_as_default_value,
-            )
-            .await;
+            .await
+        {
+            warn!(
+                project_id = self.project_id,
+                error = %error,
+                "failed to persist default smart model settings"
+            );
+        }
     }
 
     /// Persists the reasoning-level selector value (`ReasoningLevel`).
@@ -721,32 +830,62 @@ impl SettingsManager {
             .await;
     }
 
-    /// Persists the fast-model selector value (`DefaultFastModel`).
+    /// Atomically persists the fast-model selector values (`DefaultFastAgent`
+    /// and `DefaultFastModel`).
     async fn persist_default_fast_model_setting(&self, services: &AppServices) {
-        // Best-effort: settings persistence failure is non-critical.
-        let _ = services
+        if let Err(error) = services
             .db()
             .settings()
-            .upsert_project_setting(
+            .upsert_project_settings(
                 self.project_id,
-                SettingName::DefaultFastModel,
-                self.default_fast_model.as_str(),
+                vec![
+                    (
+                        SettingName::DefaultFastModel,
+                        self.default_fast_selection.model().as_str().to_string(),
+                    ),
+                    (
+                        SettingName::DefaultFastAgent,
+                        self.default_fast_selection.kind().name().to_string(),
+                    ),
+                ],
             )
-            .await;
+            .await
+        {
+            warn!(
+                project_id = self.project_id,
+                error = %error,
+                "failed to persist default fast model settings"
+            );
+        }
     }
 
-    /// Persists the review-model selector value (`DefaultReviewModel`).
+    /// Atomically persists the review-model selector values
+    /// (`DefaultReviewAgent` and `DefaultReviewModel`).
     async fn persist_default_review_model_setting(&self, services: &AppServices) {
-        // Best-effort: settings persistence failure is non-critical.
-        let _ = services
+        if let Err(error) = services
             .db()
             .settings()
-            .upsert_project_setting(
+            .upsert_project_settings(
                 self.project_id,
-                SettingName::DefaultReviewModel,
-                self.default_review_model.as_str(),
+                vec![
+                    (
+                        SettingName::DefaultReviewModel,
+                        self.default_review_selection.model().as_str().to_string(),
+                    ),
+                    (
+                        SettingName::DefaultReviewAgent,
+                        self.default_review_selection.kind().name().to_string(),
+                    ),
+                ],
             )
-            .await;
+            .await
+        {
+            warn!(
+                project_id = self.project_id,
+                error = %error,
+                "failed to persist default review model settings"
+            );
+        }
     }
 
     /// Persists the coauthor-trailer toggle for generated session commit
@@ -784,6 +923,27 @@ enum TextCursorDirection {
     Left,
     Right,
     Up,
+}
+
+/// One provider-owned model option shown by settings selectors.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ModelSelectorOption {
+    agent_kind: AgentKind,
+    model: AgentModel,
+}
+
+impl ModelSelectorOption {
+    /// Returns whether this option exactly matches the selected provider and
+    /// model.
+    fn matches(self, selection: AgentSelection) -> bool {
+        self.agent_kind == selection.kind() && self.model == selection.model()
+    }
+
+    /// Returns this provider-owned option as a coherent agent/model
+    /// selection.
+    fn selection(self) -> AgentSelection {
+        AgentSelection::new(self.agent_kind, self.model)
+    }
 }
 
 /// Parses the settings text field into executable open-command entries.
@@ -828,19 +988,9 @@ fn bool_setting_display(setting_value: bool) -> String {
     }
 }
 
-/// Returns a model selector value prefixed with one available supporting agent.
-fn display_model_selector_value(model: AgentModel, available_agent_kinds: &[AgentKind]) -> String {
-    let fallback_agent_kind = available_agent_kinds
-        .first()
-        .copied()
-        .unwrap_or(AgentKind::Antigravity);
-    let agent_kind = crate::agent::resolve_agent_kind_for_model(
-        model,
-        available_agent_kinds,
-        fallback_agent_kind,
-    );
-
-    format!("{}/{}", agent_kind, model.as_str())
+/// Returns a model selector value prefixed with the option's real agent.
+fn display_model_selector_value(selection: AgentSelection) -> String {
+    format!("{}/{}", selection.kind(), selection.model().as_str())
 }
 
 /// Renders `text` with a `|` cursor marker at `cursor_char_index`.
@@ -864,29 +1014,45 @@ fn display_open_command_with_cursor(text: &str, cursor_char_index: usize) -> Str
     rendered_text
 }
 
-/// Returns all selectable models in settings display order for the locally
-/// available providers.
-fn selectable_models(available_agent_kinds: &[AgentKind]) -> Vec<AgentModel> {
-    crate::agent::selectable_models_for_agent_kinds(available_agent_kinds)
+/// Returns all selectable model options in settings display order for the
+/// locally available providers.
+fn selectable_model_options(available_agent_kinds: &[AgentKind]) -> Vec<ModelSelectorOption> {
+    available_agent_kinds
+        .iter()
+        .copied()
+        .flat_map(|agent_kind| {
+            agent_kind
+                .models()
+                .iter()
+                .copied()
+                .map(move |model| ModelSelectorOption { agent_kind, model })
+        })
+        .collect()
 }
 
-/// Returns the next model from the explicit selectable model list.
-fn next_model(
-    current_model: AgentModel,
+/// Returns the next provider-owned model option from the explicit selectable
+/// list.
+fn next_model_option(
+    current_selection: AgentSelection,
     available_agent_kinds: &[AgentKind],
-) -> Option<AgentModel> {
-    let models = selectable_models(available_agent_kinds);
-    if models.is_empty() {
+) -> Option<ModelSelectorOption> {
+    let options = selectable_model_options(available_agent_kinds);
+    if options.is_empty() {
         return None;
     }
 
-    let current_index = models
+    let current_index = options
         .iter()
-        .position(|model| *model == current_model)
+        .position(|option| option.matches(current_selection))
+        .or_else(|| {
+            options
+                .iter()
+                .position(|option| option.model == current_selection.model())
+        })
         .unwrap_or(0);
-    let next_index = (current_index + 1) % models.len();
+    let next_index = (current_index + 1) % options.len();
 
-    Some(models[next_index])
+    Some(options[next_index])
 }
 
 /// Resolves one stored model against the currently available agent kinds.
@@ -902,24 +1068,115 @@ fn resolve_available_model(
     )
 }
 
+/// Resolves one stored agent/model selection against the currently available
+/// agent kinds.
+fn resolve_available_selection(
+    selection: AgentSelection,
+    available_agent_kinds: &[AgentKind],
+) -> AgentSelection {
+    if available_agent_kinds.contains(&selection.kind())
+        && selection.kind().supports_model(selection.model())
+    {
+        return selection;
+    }
+
+    let model =
+        resolve_available_model(selection.model(), available_agent_kinds, selection.model());
+    let fallback_agent_kind = available_agent_kinds
+        .first()
+        .copied()
+        .unwrap_or(selection.kind());
+    let agent_kind = crate::agent::resolve_agent_kind_for_model(
+        model,
+        available_agent_kinds,
+        fallback_agent_kind,
+    );
+
+    AgentSelection::new(agent_kind, model)
+}
+
 /// Loads a model setting and parses it into an [`AgentModel`].
 ///
 /// Retired persisted model ids are upgraded to their current replacement
 /// models before the value is returned.
 async fn load_model_setting(
-    services: &AppServices,
+    repositories: &AppRepositories,
     project_id: Option<i64>,
     setting_name: SettingName,
 ) -> Option<AgentModel> {
     let project_id = project_id?;
 
-    services
-        .db()
+    repositories
         .settings()
         .get_project_setting(project_id, setting_name)
         .await
         .unwrap_or(None)
         .and_then(|setting_value| AgentModel::parse_persisted(&setting_value).ok())
+}
+
+/// Loads one project-scoped model setting and its owning agent setting.
+///
+/// Older projects may only have a model key; in that case the fallback
+/// selection and available-provider resolution decide ownership.
+async fn load_model_selection_setting(
+    repositories: &AppRepositories,
+    project_id: Option<i64>,
+    agent_setting_name: SettingName,
+    model_setting_name: SettingName,
+    fallback_selection: AgentSelection,
+) -> Option<AgentSelection> {
+    let model = load_model_setting(repositories, project_id, model_setting_name).await?;
+    let agent_kind = load_agent_setting(repositories, project_id, agent_setting_name)
+        .await
+        .filter(|agent_kind| agent_kind.supports_model(model))
+        .unwrap_or_else(|| fallback_agent_kind_for_model(model, fallback_selection.kind()));
+
+    Some(AgentSelection::new(agent_kind, model))
+}
+
+/// Loads one project-scoped agent setting.
+async fn load_agent_setting(
+    repositories: &AppRepositories,
+    project_id: Option<i64>,
+    setting_name: SettingName,
+) -> Option<AgentKind> {
+    let project_id = project_id?;
+
+    repositories
+        .settings()
+        .get_project_setting(project_id, setting_name)
+        .await
+        .unwrap_or(None)
+        .and_then(|setting_value| setting_value.parse::<AgentKind>().ok())
+}
+
+/// Returns a compatible provider for model-only legacy settings.
+fn fallback_agent_kind_for_model(model: AgentModel, fallback_agent_kind: AgentKind) -> AgentKind {
+    if fallback_agent_kind.supports_model(model) {
+        return fallback_agent_kind;
+    }
+
+    AgentKind::ALL
+        .iter()
+        .copied()
+        .find(|agent_kind| agent_kind.supports_model(model))
+        .unwrap_or(fallback_agent_kind)
+}
+
+/// Returns a coherent fallback selection for one model-only caller using
+/// available provider order.
+fn fallback_selection_for_available_model(
+    model: AgentModel,
+    available_agent_kinds: &[AgentKind],
+) -> AgentSelection {
+    let fallback_agent_kind = fallback_agent_kind_for_model(model, AgentKind::Antigravity);
+    let agent_kind = crate::agent::resolve_agent_kind_for_model(
+        model,
+        available_agent_kinds,
+        fallback_agent_kind,
+    );
+
+    AgentSelection::new(agent_kind, model)
 }
 
 /// Loads the persisted reasoning-level setting.
@@ -1008,9 +1265,18 @@ mod tests {
         table_state.select(Some(0));
 
         SettingsManager {
-            default_fast_model: AgentKind::Antigravity.default_model(),
-            default_review_model: AgentKind::Antigravity.default_model(),
-            default_smart_model: AgentKind::Antigravity.default_model(),
+            default_fast_selection: AgentSelection::new(
+                AgentKind::Antigravity,
+                AgentKind::Antigravity.default_model(),
+            ),
+            default_review_selection: AgentSelection::new(
+                AgentKind::Antigravity,
+                AgentKind::Antigravity.default_model(),
+            ),
+            default_smart_selection: AgentSelection::new(
+                AgentKind::Antigravity,
+                AgentKind::Antigravity.default_model(),
+            ),
             open_command: String::new(),
             reasoning_level: ReasoningLevel::High,
             table_state,
@@ -1036,6 +1302,17 @@ mod tests {
     }
 
     #[test]
+    fn setting_name_as_str_returns_default_fast_agent() {
+        // Arrange
+
+        // Act
+        let setting_name = SettingName::DefaultFastAgent.as_str();
+
+        // Assert
+        assert_eq!(setting_name, "DefaultFastAgent");
+    }
+
+    #[test]
     fn setting_name_as_str_returns_reasoning_level() {
         // Arrange
 
@@ -1058,6 +1335,17 @@ mod tests {
     }
 
     #[test]
+    fn setting_name_as_str_returns_default_smart_agent() {
+        // Arrange
+
+        // Act
+        let setting_name = SettingName::DefaultSmartAgent.as_str();
+
+        // Assert
+        assert_eq!(setting_name, "DefaultSmartAgent");
+    }
+
+    #[test]
     fn setting_name_as_str_returns_default_review_model() {
         // Arrange
 
@@ -1066,6 +1354,17 @@ mod tests {
 
         // Assert
         assert_eq!(setting_name, "DefaultReviewModel");
+    }
+
+    #[test]
+    fn setting_name_as_str_returns_default_review_agent() {
+        // Arrange
+
+        // Act
+        let setting_name = SettingName::DefaultReviewAgent.as_str();
+
+        // Assert
+        assert_eq!(setting_name, "DefaultReviewAgent");
     }
 
     #[test]
@@ -1140,6 +1439,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn load_default_smart_agent_setting_prefers_persisted_agent() {
+        // Arrange
+        let (services, project_id) = test_services().await;
+        services
+            .db()
+            .settings()
+            .upsert_project_setting(project_id, SettingName::DefaultSmartAgent, "gemini")
+            .await
+            .expect("failed to persist smart agent");
+        services
+            .db()
+            .settings()
+            .upsert_project_setting(
+                project_id,
+                SettingName::DefaultSmartModel,
+                AgentModel::Gemini31ProPreview.as_str(),
+            )
+            .await
+            .expect("failed to persist smart model");
+
+        // Act
+        let loaded_selection = load_default_smart_agent_setting(
+            &services,
+            Some(project_id),
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini35Flash),
+        )
+        .await;
+
+        // Assert
+        assert_eq!(
+            loaded_selection,
+            AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31ProPreview)
+        );
+    }
+
+    #[tokio::test]
     async fn load_default_smart_model_setting_falls_back_to_default() {
         // Arrange
         let (services, project_id) = test_services().await;
@@ -1167,7 +1502,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn load_default_fast_model_setting_migrates_retired_claude_opus_46_setting() {
+    async fn load_default_fast_agent_setting_migrates_retired_claude_opus_46_setting() {
         // Arrange
         let (services, project_id) = test_services().await;
         services
@@ -1182,15 +1517,18 @@ mod tests {
             .expect("failed to persist smart model");
 
         // Act
-        let fallback_fast_model = load_default_fast_model_setting(
+        let fallback_fast_selection = load_default_fast_agent_setting(
             &services,
             Some(project_id),
-            AgentModel::Gpt53CodexSpark,
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt53CodexSpark),
         )
         .await;
 
         // Assert
-        assert_eq!(fallback_fast_model, AgentModel::ClaudeOpus48);
+        assert_eq!(
+            fallback_fast_selection,
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus48)
+        );
 
         // Arrange
         services
@@ -1205,15 +1543,18 @@ mod tests {
             .expect("failed to persist fast model");
 
         // Act
-        let explicit_fast_model = load_default_fast_model_setting(
+        let explicit_fast_selection = load_default_fast_agent_setting(
             &services,
             Some(project_id),
-            AgentModel::Gpt53CodexSpark,
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt53CodexSpark),
         )
         .await;
 
         // Assert
-        assert_eq!(explicit_fast_model, AgentModel::Gpt55);
+        assert_eq!(
+            explicit_fast_selection,
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55)
+        );
     }
 
     #[tokio::test]
@@ -1285,9 +1626,18 @@ mod tests {
         let manager = SettingsManager::new(&services, project_id).await;
 
         // Assert
-        assert_eq!(manager.default_smart_model, AgentModel::Gpt55);
-        assert_eq!(manager.default_fast_model, AgentModel::Gpt53CodexSpark);
-        assert_eq!(manager.default_review_model, AgentModel::ClaudeOpus48);
+        assert_eq!(
+            manager.default_smart_selection,
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55)
+        );
+        assert_eq!(
+            manager.default_fast_selection,
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt53CodexSpark)
+        );
+        assert_eq!(
+            manager.default_review_selection,
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus48)
+        );
         assert_eq!(manager.open_command, "nvim .");
         assert_eq!(manager.reasoning_level, ReasoningLevel::Low);
         assert_eq!(manager.theme, ColorTheme::Hacker);
@@ -1569,7 +1919,23 @@ mod tests {
     fn settings_rows_show_default_smart_model_with_agent_prefix() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.default_smart_model = AgentModel::Gemini31ProPreview;
+        manager.default_smart_selection =
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31ProPreview);
+
+        // Act
+        let rows = manager.settings_rows();
+
+        // Assert
+        assert_eq!(rows[2].1, "antigravity/gemini-3.1-pro-preview");
+    }
+
+    #[test]
+    fn settings_rows_show_default_smart_model_with_real_gemini_agent() {
+        // Arrange
+        let mut manager = new_settings_manager();
+        manager.available_agent_kinds = vec![AgentKind::Gemini];
+        manager.default_smart_selection =
+            AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31ProPreview);
 
         // Act
         let rows = manager.settings_rows();
@@ -1582,7 +1948,7 @@ mod tests {
     fn settings_rows_show_default_fast_model_value() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.default_fast_model = AgentModel::Gpt55;
+        manager.default_fast_selection = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55);
 
         // Act
         let rows = manager.settings_rows();
@@ -1595,7 +1961,8 @@ mod tests {
     fn settings_rows_show_default_review_model_value() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.default_review_model = AgentModel::ClaudeOpus48;
+        manager.default_review_selection =
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus48);
 
         // Act
         let rows = manager.settings_rows();
@@ -1833,8 +2200,9 @@ mod tests {
         // Arrange
         let (services, project_id) = test_services().await;
         let mut manager = SettingsManager::new(&services, project_id).await;
-        let models = selectable_models(AgentKind::ALL);
-        manager.default_smart_model = *models.last().expect("models should not be empty");
+        let options = selectable_model_options(AgentKind::ALL);
+        let last_option = *options.last().expect("model options should not be empty");
+        manager.default_smart_selection = last_option.selection();
         manager.use_last_used_model_as_default = false;
         select_row(&mut manager, 2);
 
@@ -1858,7 +2226,7 @@ mod tests {
 
         // Assert
         assert!(!manager.use_last_used_model_as_default);
-        assert_eq!(manager.default_smart_model, models[0]);
+        assert_eq!(manager.default_smart_selection, options[0].selection());
         assert_eq!(
             services
                 .db()
@@ -1866,7 +2234,16 @@ mod tests {
                 .get_project_setting(project_id, SettingName::DefaultSmartModel)
                 .await
                 .expect("failed to load smart model"),
-            Some(models[0].as_str().to_string())
+            Some(options[0].model.as_str().to_string())
+        );
+        assert_eq!(
+            services
+                .db()
+                .settings()
+                .get_project_setting(project_id, SettingName::DefaultSmartAgent)
+                .await
+                .expect("failed to load smart agent"),
+            Some(options[0].agent_kind.name().to_string())
         );
         assert_eq!(
             services

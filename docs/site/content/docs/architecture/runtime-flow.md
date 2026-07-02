@@ -448,6 +448,12 @@ narrow screens.
 
 ## Session Turn Data Flow
 
+Default session agent/model resolution happens before the first prompt turn starts.
+`SessionManager` loads the active project's `DefaultSmartAgent` and `DefaultSmartModel`
+settings as a pair, falling back through legacy model-only settings by using the
+available provider order. When `LastUsedModelAsDefault` is enabled, session model
+switches persist both keys so shared Gemini model ids keep their selected provider.
+
 <a id="architecture-runtime-flow-turn"></a> From prompt submit to persisted result:
 
 1. Prompt mode converts a submit key into an app-layer prompt intent.

@@ -9,10 +9,16 @@ pub(crate) enum SettingName {
     ActiveProjectId,
     /// Persists the selected reasoning-effort level.
     ReasoningLevel,
+    /// Persists the provider that owns the fast-model default.
+    DefaultFastAgent,
     /// Persists the project or global fast-model selection.
     DefaultFastModel,
+    /// Persists the provider that owns the review-model default.
+    DefaultReviewAgent,
     /// Persists the project or global review-model selection.
     DefaultReviewModel,
+    /// Persists the provider that owns the smart-model default.
+    DefaultSmartAgent,
     /// Persists the project or global smart-model selection.
     DefaultSmartModel,
     /// Persists whether generated session commits append the Agentty coauthor
@@ -32,8 +38,11 @@ impl SettingName {
         match self {
             Self::ActiveProjectId => "ActiveProjectId",
             Self::ReasoningLevel => "ReasoningLevel",
+            Self::DefaultFastAgent => "DefaultFastAgent",
             Self::DefaultFastModel => "DefaultFastModel",
+            Self::DefaultReviewAgent => "DefaultReviewAgent",
             Self::DefaultReviewModel => "DefaultReviewModel",
+            Self::DefaultSmartAgent => "DefaultSmartAgent",
             Self::DefaultSmartModel => "DefaultSmartModel",
             Self::IncludeCoauthoredByAgentty => "IncludeCoauthoredByAgentty",
             Self::OpenCommand => "OpenCommand",
@@ -60,8 +69,11 @@ mod tests {
         let settings = [
             (SettingName::ActiveProjectId, "ActiveProjectId"),
             (SettingName::ReasoningLevel, "ReasoningLevel"),
+            (SettingName::DefaultFastAgent, "DefaultFastAgent"),
             (SettingName::DefaultFastModel, "DefaultFastModel"),
+            (SettingName::DefaultReviewAgent, "DefaultReviewAgent"),
             (SettingName::DefaultReviewModel, "DefaultReviewModel"),
+            (SettingName::DefaultSmartAgent, "DefaultSmartAgent"),
             (SettingName::DefaultSmartModel, "DefaultSmartModel"),
             (
                 SettingName::IncludeCoauthoredByAgentty,
@@ -88,8 +100,11 @@ mod tests {
         let settings = [
             SettingName::ActiveProjectId,
             SettingName::ReasoningLevel,
+            SettingName::DefaultFastAgent,
             SettingName::DefaultFastModel,
+            SettingName::DefaultReviewAgent,
             SettingName::DefaultReviewModel,
+            SettingName::DefaultSmartAgent,
             SettingName::DefaultSmartModel,
             SettingName::IncludeCoauthoredByAgentty,
             SettingName::OpenCommand,

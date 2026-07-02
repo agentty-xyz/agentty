@@ -845,7 +845,7 @@ impl App {
             &mut self.mode,
             self.services.git_client(),
             self.services.event_sender(),
-            self.settings.default_review_model,
+            self.settings.default_review_selection.model(),
         )
         .await;
 
@@ -1690,7 +1690,7 @@ impl App {
             &mut self.mode,
             self.services.git_client(),
             self.services.event_sender(),
-            self.settings.default_review_model,
+            self.settings.default_review_selection.model(),
         )
         .await;
     }

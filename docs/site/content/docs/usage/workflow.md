@@ -129,11 +129,13 @@ Settings values for models, reasoning, commit trailers, and open commands are st
 active project. Switching projects reloads that project's `Default Reasoning Level`,
 `Default Smart Model` mode (explicit model or `Last used model as default`),
 `Default Fast Model`, `Default Review Model`, `Coauthored by Agentty` toggle, and
-`Open Commands`. Explicit model values display as `agent/model`. The global `Theme`
-setting switches between `Agentty Default`, `Agentty Green`, and `Dark Horizon`, with
-`Agentty Default` used by default. The Settings tab renders these scopes separately as
-`Global settings` and `'<project>' settings`. New projects default the coauthor toggle
-to disabled until you enable it.
+`Open Commands`. Explicit model values display as `agent/model`, and Agentty persists
+that agent value so shared Gemini model ids stay attached to the selected Gemini or
+Antigravity backend. The global `Theme` setting switches between `Agentty Default`,
+`Agentty Green`, and `Dark Horizon`, with `Agentty Default` used by default. The
+Settings tab renders these scopes separately as `Global settings` and
+`'<project>' settings`. New projects default the coauthor toggle to disabled until you
+enable it.
 
 When a session enters **Review**, Agentty starts generating the focused review in the
 background. While that review-assist job is running, the session temporarily shows
@@ -162,21 +164,21 @@ session stays closed while the new draft session carries the follow-on work.
 
 After each successful turn with file changes, Agentty keeps the session branch at one
 evolving commit. It regenerates that commit message from the cumulative session diff
-using the active project's `Default Fast Model`, applies the active project's
-`Coauthored by Agentty` setting to the final commit trailer, amends `HEAD`, and
-refreshes the session title from the same commit text before merge begins. If the
-session already has a linked open review request, Agentty also checks the remote title
-and description after the updated branch is pushed, then updates them from the latest
-commit message only when they differ. Successful commit and no-change notices appear as
-transient session-output status rows rather than persisted transcript messages. If a
-later turn reverts every file change from the session commit, Agentty drops the
-now-empty session commit and reports the same no-change notice instead of sending Git's
-empty-amend diagnostic through commit assistance. If the auto-commit needs agent
-assistance to recover from a git failure, that recovery prompt also uses the
-`Default Fast Model`. Once the session reaches **Done**, Agentty rewrites the persisted
-summary into markdown with a `# Summary` section sourced from the final agent
-`summary.session` value and a `# Commit` section sourced from the canonical squash-merge
-commit message.
+using the active project's `Default Fast Model` agent/model selection, applies the
+active project's `Coauthored by Agentty` setting to the final commit trailer, amends
+`HEAD`, and refreshes the session title from the same commit text before merge begins.
+If the session already has a linked open review request, Agentty also checks the remote
+title and description after the updated branch is pushed, then updates them from the
+latest commit message only when they differ. Successful commit and no-change notices
+appear as transient session-output status rows rather than persisted transcript
+messages. If a later turn reverts every file change from the session commit, Agentty
+drops the now-empty session commit and reports the same no-change notice instead of
+sending Git's empty-amend diagnostic through commit assistance. If the auto-commit needs
+agent assistance to recover from a git failure, that recovery prompt also uses the same
+`Default Fast Model` agent/model selection. Once the session reaches **Done**, Agentty
+rewrites the persisted summary into markdown with a `# Summary` section sourced from the
+final agent `summary.session` value and a `# Commit` section sourced from the canonical
+squash-merge commit message.
 
 When a session enters **Merging**, Agentty reuses the session branch `HEAD` commit
 message for the final squash commit on the base branch. Merge first requires the main
@@ -437,11 +439,11 @@ lifetime between creation and the latest update.
 
 <a id="usage-title-refinement"></a> When the first prompt is submitted for a new
 session, Agentty stores that prompt as the initial title and starts one background
-title-generation task using the configured **Default Fast Model**. Draft sessions follow
-the same pattern for staged bundles: the first staged draft seeds the fallback title,
-and each later staged draft keeps the current visible title in place while Agentty
-cancels any superseded in-flight draft-title task and queues one fresh background
-title-generation pass for the full updated bundle.
+title-generation task using the configured **Default Fast Model** agent/model selection.
+Draft sessions follow the same pattern for staged bundles: the first staged draft seeds
+the fallback title, and each later staged draft keeps the current visible title in place
+while Agentty cancels any superseded in-flight draft-title task and queues one fresh
+background title-generation pass for the full updated bundle.
 
 ## Clarification Interaction Loop
 

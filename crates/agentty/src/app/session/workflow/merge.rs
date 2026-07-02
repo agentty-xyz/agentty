@@ -1926,26 +1926,21 @@ impl SessionManager {
     ///
     /// Emits user-visible commit output before sync starts so users can see
     /// whether pending changes were committed or there was nothing to commit.
-    /// The pre-sync auto-commit reuses the active project's fast-model
-    /// default when generating or repairing the session commit message, and a
-    /// successful commit requests an immediate git-status refresh.
+    /// The pre-sync auto-commit reuses the active project's fast agent/model
+    /// default when generating or repairing the session commit message, and
+    /// a successful commit requests an immediate git-status refresh.
     async fn execute_rebase_workflow(input: RebaseAssistInput) -> Result<String, SessionError> {
         // Auto-commit any pending changes before rebasing to avoid
         // "cannot rebase: You have unstaged changes".
         let include_coauthored_by_agentty =
             SessionTaskService::load_include_coauthored_by_agentty_setting(&input.db, &input.id)
                 .await;
-        let auto_commit_model = SessionTaskService::load_auto_commit_model_setting(
+        let auto_commit_agent = SessionTaskService::load_auto_commit_agent_setting(
             &input.db,
             &input.id,
-            input.session_agent.model(),
+            input.session_agent,
         )
         .await;
-        let auto_commit_agent = crate::agent::resolve_agent_selection_for_model(
-            auto_commit_model,
-            input.session_agent.kind(),
-            AgentKind::ALL,
-        );
         match SessionTaskService::commit_session_changes(
             input.git_client.as_ref(),
             &input.folder,

@@ -1,11 +1,29 @@
 //! Settings page E2E tests: content rendering, navigation, and editing.
 
+use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use agentty::db::{DB_DIR, DB_FILE, Database};
 use testty::assertion;
 use testty::region::Region;
 
 use crate::common;
 use crate::common::{BuilderEnv, FeatureTest};
+
+/// Adds a Gemini CLI stub so the settings page exposes a real Gemini-owned
+/// model option.
+fn seed_gemini_settings_cli_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    let stub_agent_path = env.stub_bin.join("gemini");
+    fs::write(&stub_agent_path, "#!/bin/sh\nexit 1\n")?;
+
+    #[cfg(unix)]
+    {
+        fs::set_permissions(&stub_agent_path, fs::Permissions::from_mode(0o755))?;
+    }
+
+    Ok(())
+}
 
 /// Seeds deterministic selector values for the settings navigation test.
 ///
@@ -62,6 +80,8 @@ SET value = excluded.value
 fn settings_tab_shows_content() {
     // Arrange, Act, Assert
     FeatureTest::new("settings_content")
+        .setup(seed_gemini_settings_cli_stub)
+        .with_stub_only_path()
         .zola(
             "Settings tab",
             "View and configure agent settings like reasoning level and models.",
@@ -84,6 +104,7 @@ fn settings_tab_shows_content() {
                 assertion::assert_text_in_region(frame, "Global settings", &full);
                 assertion::assert_text_in_region(frame, "Default Reasoning Level", &full);
                 assertion::assert_text_in_region(frame, "Default Smart Model", &full);
+                assertion::assert_text_in_region(frame, "gemini/gemini-3.1-pro-preview", &full);
                 assertion::assert_text_in_region(frame, "Disabled", &full);
                 assertion::assert_text_in_region(frame, "Open Commands", &full);
                 assertion::assert_text_in_region(frame, "Theme", &full);

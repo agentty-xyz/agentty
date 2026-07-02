@@ -403,6 +403,14 @@ impl FeatureTest {
         self
     }
 
+    /// Run the PTY proof and VHS tape with only deterministic stub
+    /// executables on `PATH`.
+    pub(crate) fn with_stub_only_path(mut self) -> Self {
+        self.inherit_system_path = false;
+
+        self
+    }
+
     /// Configure Zola feature page auto-generation.
     ///
     /// When set, the test runner writes a minimal `.md` frontmatter page
