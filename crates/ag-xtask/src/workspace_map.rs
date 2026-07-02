@@ -13,12 +13,13 @@ const ARCHITECTURE_DOCS: [&str; 4] = [
     "docs/site/content/docs/architecture/change-recipes.md",
     "docs/site/content/docs/architecture/testability-boundaries.md",
 ];
-const AGENT_GUIDES: [&str; 14] = [
+const AGENT_GUIDES: [&str; 15] = [
     "AGENTS.md",
     "skills/AGENTS.md",
     "crates/AGENTS.md",
     "crates/ag-forge/AGENTS.md",
     "crates/ag-git/AGENTS.md",
+    "crates/ag-protocol/AGENTS.md",
     "crates/ag-xtask/AGENTS.md",
     "crates/testty/AGENTS.md",
     "crates/agentty/AGENTS.md",
@@ -369,11 +370,15 @@ mod tests {
         let dir = tempdir().expect("Failed to create temp dir");
         let crate_root = dir.path().join("crates/example");
         let source_root = crate_root.join("src");
+        let ag_protocol_root = dir.path().join("crates/ag-protocol");
         fs::create_dir_all(&source_root).expect("Failed to create source root");
+        fs::create_dir_all(&ag_protocol_root).expect("Failed to create ag-protocol root");
         fs::create_dir_all(dir.path().join("docs/site/content/docs/architecture"))
             .expect("Failed to create architecture docs");
         fs::write(crate_root.join("Cargo.toml"), "").expect("Failed to write Cargo.toml");
         fs::write(source_root.join("lib.rs"), "").expect("Failed to write lib.rs");
+        fs::write(ag_protocol_root.join("AGENTS.md"), "")
+            .expect("Failed to write ag-protocol guide");
         fs::write(
             dir.path()
                 .join("docs/site/content/docs/architecture/module-map.md"),
@@ -420,6 +425,10 @@ mod tests {
         assert!(rendered_map.contains("\"agent_guides\""), "{rendered_map}");
         assert!(
             rendered_map.contains("\"crates/ag-git/AGENTS.md\""),
+            "{rendered_map}"
+        );
+        assert!(
+            rendered_map.contains("\"crates/ag-protocol/AGENTS.md\""),
             "{rendered_map}"
         );
     }

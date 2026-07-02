@@ -52,6 +52,8 @@ claude auth login
 claude auth status
 ```
 
+For SSO-backed accounts, use `claude auth login --sso`.
+
 ## Selecting a Backend
 
 <a id="backends-selecting-a-backend"></a> Choose the backend from the `/model` picker:

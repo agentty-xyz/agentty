@@ -3,10 +3,12 @@
 
 use std::path::PathBuf;
 
+pub use ag_protocol::render_prompt_text_for_agent;
+
 use crate::domain::agent::{
     self, AgentKind, AgentSelection, AgentSelectionMetadata, ReasoningLevel,
 };
-use crate::domain::input::{InputState, is_at_mention_boundary, is_at_mention_query_character};
+use crate::domain::input::InputState;
 
 /// One selectable row in the prompt slash-command menu.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -592,51 +594,6 @@ pub fn drain_prompt_submission(
     attachment_state.reset();
 
     PromptComposerSubmission { attachments, text }
-}
-
-/// Rewrites user-entered `@` lookups into quoted agent-facing path tokens.
-///
-/// File and directory lookups like `@path/to/file` are rewritten to
-/// `"path/to/file"`. Non-lookup uses of `@`, including email-like tokens and
-/// lone `@`, are preserved so the UI and persisted transcript can continue
-/// storing the original user input unchanged.
-#[must_use]
-pub fn render_prompt_text_for_agent(text: &str) -> String {
-    let characters = text.chars().collect::<Vec<char>>();
-    let mut output = String::with_capacity(text.len());
-    let mut index = 0;
-
-    while let Some(&character) = characters.get(index) {
-        if character != '@'
-            || !is_at_mention_boundary(characters.get(index.wrapping_sub(1)).copied())
-            || index + 1 >= characters.len()
-        {
-            output.push(character);
-            index += 1;
-
-            continue;
-        }
-
-        let mut scan_index = index + 1;
-        while scan_index < characters.len() && is_at_mention_query_character(characters[scan_index])
-        {
-            scan_index += 1;
-        }
-
-        if scan_index == index + 1 {
-            output.push(character);
-            index += 1;
-
-            continue;
-        }
-
-        output.push('"');
-        output.extend(characters[index + 1..scan_index].iter());
-        output.push('"');
-        index = scan_index;
-    }
-
-    output
 }
 
 /// Builds the render-ready prompt slash suggestion list for the provided

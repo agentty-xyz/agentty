@@ -16,10 +16,11 @@ mod instruction;
 mod prompt;
 pub(crate) mod protocol;
 mod provider;
-pub(crate) mod repair;
 mod response_parser;
 mod submission;
 
+pub(crate) use ag_protocol::AgentResponse;
+pub use ag_protocol::ProtocolRequestProfile;
 pub use availability::{
     AgentAvailabilityProbe, RealAgentAvailabilityProbe, StaticAgentAvailabilityProbe,
     executable_name,
@@ -32,8 +33,6 @@ pub(crate) use instruction::{
 pub(crate) use prompt::{
     PromptPreparationRequest, ProtocolSchemaInstructionMode, diff_fence, prepare_prompt_text,
 };
-pub(crate) use protocol::AgentResponse;
-pub use protocol::ProtocolRequestProfile;
 pub(crate) use provider::{
     build_command_stdin_payload, cleanup_session_worktree_artifacts, create_app_server_client,
     is_app_server_thought_chunk, parse_stream_output_line, parse_turn_response,

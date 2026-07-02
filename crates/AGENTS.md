@@ -8,6 +8,9 @@ Contains the workspace member crates.
   across the workspace.
 - `crates/ag-git/` holds reusable git, worktree, sync, rebase, and squash-merge
   operations shared across the workspace.
+- `crates/ag-protocol/` holds structured agent response contracts, protocol parsing,
+  schema generation, and transport-neutral turn prompt payloads shared across frontends
+  and agent adapters.
 - `crates/ag-xtask/` holds workspace maintenance utilities, including migration checks
   and generated workspace-map output.
 - `crates/agentty/` is the main TUI application crate with `app`, `domain`, `infra`,

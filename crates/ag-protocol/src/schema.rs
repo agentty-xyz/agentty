@@ -10,7 +10,7 @@ use super::model::{AgentResponse, questions_field_description};
 /// The returned value is passed directly to providers that support enforced
 /// output schemas. It starts from the self-descriptive response schema and then
 /// applies compatibility normalization required by schema-enforcing agents.
-pub(crate) fn agent_response_output_schema() -> Value {
+pub fn agent_response_output_schema() -> Value {
     let mut value = agent_response_json_schema();
     normalize_schema_for_transport(&mut value);
 
@@ -22,7 +22,7 @@ pub(crate) fn agent_response_output_schema() -> Value {
 ///
 /// This keeps the raw `schemars` metadata intact so inline prompt guidance can
 /// show a fully self-descriptive schema document.
-pub(crate) fn agent_response_json_schema_json() -> String {
+pub fn agent_response_json_schema_json() -> String {
     let schema = agent_response_json_schema();
 
     stringify_schema_json(&schema)
@@ -35,7 +35,7 @@ pub(crate) fn agent_response_json_schema_json() -> String {
 /// `outputSchema` at transport level and must be guided by in-prompt schema
 /// text instead, or by native schema-validation flags that accept a serialized
 /// schema document.
-pub(crate) fn agent_response_output_schema_json() -> String {
+pub fn agent_response_output_schema_json() -> String {
     let schema = agent_response_output_schema();
 
     stringify_schema_json(&schema)
@@ -357,9 +357,9 @@ mod tests {
         // Act
         inject_additional_properties_false(&mut schema);
 
-        // Assert — top-level gets injected (was absent)
+        // Assert - top-level gets injected (was absent)
         assert_eq!(schema["additionalProperties"], Value::Bool(false));
-        // Assert — nested keeps its original map-type constraint (was present)
+        // Assert - nested keeps its original map-type constraint (was present)
         assert_eq!(
             schema["properties"]["extra"]["additionalProperties"],
             serde_json::json!({ "type": "string" })
