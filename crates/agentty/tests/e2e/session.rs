@@ -1290,7 +1290,7 @@ fn terminal_session_continue_opens_seeded_prompt() -> E2eResult {
         .setup(seed_done_session_for_continuation)
         .zola(
             "Continue terminal session",
-            "Confirm continuation from a done session and stage a merged-commit summary message \
+            "Confirm continuation from a done session and stage a merged-commit context message \
              before focusing an empty draft composer.",
             45,
         )
@@ -1313,7 +1313,7 @@ fn terminal_session_continue_opens_seeded_prompt() -> E2eResult {
                     .viewing_pause_ms(1500)
                     .capture_labeled(
                         "terminal_session_continue",
-                        "Continuation draft composer with the staged merged-commit summary",
+                        "Continuation draft composer with the staged merged-commit context",
                     )
             },
             |frame, report| {
@@ -1333,9 +1333,9 @@ fn terminal_session_continue_opens_seeded_prompt() -> E2eResult {
 
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Enter: stage draft", &full);
-                assertion::assert_text_in_region(frame, "Summarize changes from", &full);
+                assertion::assert_text_in_region(frame, "Use 704de31d0f4b5a12", &full);
                 assertion::assert_text_in_region(frame, "704de31d0f4b5a12", &full);
-                assertion::assert_text_in_region(frame, "as an initial context", &full);
+                assertion::assert_text_in_region(frame, "commit as an initial context", &full);
                 assertion::assert_text_in_region(frame, "Type your message", &full);
             },
         )?;

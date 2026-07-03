@@ -843,16 +843,13 @@ impl App {
         })
     }
 
-    /// Builds the initial continuation draft message for one merged session
-    /// commit hash.
+    /// Builds the initial continuation draft message that asks the agent to use
+    /// one merged session commit as context.
     fn merged_commit_continuation_prompt(
         _source_session: &Session,
         merged_commit_hash: &str,
     ) -> String {
-        format!(
-            "Summarize changes from {merged_commit_hash} to use it as an initial context for this \
-             session"
-        )
+        format!("Use {merged_commit_hash} commit as an initial context for this session")
     }
 
     /// Submits the initial prompt for a newly created session.
@@ -5942,10 +5939,7 @@ mod tests {
         assert_eq!(continued_session.status, Status::Draft);
         assert_eq!(
             continued_session.prompt,
-            format!(
-                "Summarize changes from {merged_commit_hash} to use it as an initial context for \
-                 this session"
-            )
+            format!("Use {merged_commit_hash} commit as an initial context for this session")
         );
         assert!(matches!(
             app.selected_session(),

@@ -1078,10 +1078,7 @@ mod tests {
             .expect("expected created continuation draft");
         assert_eq!(
             continued_session.prompt,
-            format!(
-                "Summarize changes from {merged_commit_hash} to use it as an initial context for \
-                 this session"
-            )
+            format!("Use {merged_commit_hash} commit as an initial context for this session")
         );
     }
 
