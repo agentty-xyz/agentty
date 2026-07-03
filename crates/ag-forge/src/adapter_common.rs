@@ -5,7 +5,242 @@
 //! provider label casing, and spawn-time error mapping. Keeping these in one
 //! module avoids divergence between adapters.
 
-use super::{ForgeCommandError, ForgeKind, ForgeRemote, ReviewRequestError};
+use std::sync::Arc;
+
+use super::{
+    ForgeCommand, ForgeCommandError, ForgeCommandOutput, ForgeCommandRunner, ForgeFuture,
+    ForgeKind, ForgeRemote, RequestedReview, ReviewCommentSnapshot, ReviewRequestError,
+    ReviewRequestSummary, UpdateReviewRequestInput, command_output_detail,
+};
+
+/// Shared command runner and operation flow used by forge adapters.
+#[derive(Clone)]
+pub(crate) struct ReviewRequestOperations {
+    command_runner: Arc<dyn ForgeCommandRunner>,
+}
+
+impl ReviewRequestOperations {
+    /// Builds shared review-request operations from one command runner.
+    pub(crate) fn new(command_runner: Arc<dyn ForgeCommandRunner>) -> Self {
+        Self { command_runner }
+    }
+
+    /// Verifies CLI authentication and normalizes common auth failures.
+    pub(crate) async fn ensure_authenticated(
+        &self,
+        remote: &ForgeRemote,
+        command: ForgeCommand,
+    ) -> Result<(), ReviewRequestError> {
+        let output = self
+            .command_runner
+            .run(command)
+            .await
+            .map_err(|error| map_spawn_error(remote, error))?;
+        if output.success() {
+            return Ok(());
+        }
+
+        let detail = command_output_detail(&output);
+        if looks_like_host_resolution_failure(&detail) {
+            return Err(ReviewRequestError::HostResolutionFailed {
+                forge_kind: remote.forge_kind,
+                host: remote.host.clone(),
+            });
+        }
+
+        Err(ReviewRequestError::AuthenticationRequired {
+            detail: Some(detail),
+            forge_kind: remote.forge_kind,
+            host: remote.host.clone(),
+        })
+    }
+
+    /// Runs one authenticated forge CLI command and normalizes common
+    /// failures.
+    pub(crate) async fn run_review_command(
+        &self,
+        remote: &ForgeRemote,
+        command: ForgeCommand,
+        operation: &str,
+    ) -> Result<ForgeCommandOutput, ReviewRequestError> {
+        let output = self
+            .command_runner
+            .run(command)
+            .await
+            .map_err(|error| map_spawn_error(remote, error))?;
+        if output.success() {
+            return Ok(output);
+        }
+
+        let detail = command_output_detail(&output);
+        if looks_like_host_resolution_failure(&detail) {
+            return Err(ReviewRequestError::HostResolutionFailed {
+                forge_kind: remote.forge_kind,
+                host: remote.host.clone(),
+            });
+        }
+
+        if looks_like_authentication_failure(&detail, remote.forge_kind) {
+            return Err(ReviewRequestError::AuthenticationRequired {
+                detail: Some(detail),
+                forge_kind: remote.forge_kind,
+                host: remote.host.clone(),
+            });
+        }
+
+        Err(operation_failed(
+            remote.forge_kind,
+            format!("{operation}: {detail}"),
+        ))
+    }
+
+    /// Finds one review request by source branch, then refreshes its full
+    /// summary.
+    pub(crate) async fn find_by_source_branch(
+        &self,
+        remote: ForgeRemote,
+        lookup_command: ForgeCommand,
+        operation: &str,
+        parse_lookup_display_id: impl FnOnce(&str) -> Result<Option<String>, String>,
+        refresh_review_request: impl FnOnce(
+            ForgeRemote,
+            String,
+        ) -> ForgeFuture<
+            Result<ReviewRequestSummary, ReviewRequestError>,
+        >,
+    ) -> Result<Option<ReviewRequestSummary>, ReviewRequestError> {
+        let output = self
+            .run_review_command(&remote, lookup_command, operation)
+            .await?;
+        let display_id =
+            map_parse_error(remote.forge_kind, parse_lookup_display_id(&output.stdout))?;
+
+        let Some(display_id) = display_id else {
+            return Ok(None);
+        };
+
+        refresh_review_request(remote, display_id).await.map(Some)
+    }
+
+    /// Refreshes one review request by provider display id.
+    pub(crate) async fn refresh_review_request(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+        parse_display_id: impl FnOnce(&str) -> Result<String, ReviewRequestError>,
+        view_command: impl FnOnce(&ForgeRemote, &str) -> ForgeCommand,
+        operation: &str,
+        parse_view_response: impl FnOnce(&str) -> Result<ReviewRequestSummary, String>,
+    ) -> Result<ReviewRequestSummary, ReviewRequestError> {
+        let command_display_id = parse_display_id(&display_id)?;
+        let output = self
+            .run_review_command(
+                &remote,
+                view_command(&remote, &command_display_id),
+                operation,
+            )
+            .await?;
+
+        map_parse_error(remote.forge_kind, parse_view_response(&output.stdout))
+    }
+
+    /// Synchronizes review-request metadata when the remote values differ
+    /// from `input`, then refreshes the full summary.
+    pub(crate) async fn sync_review_request_metadata<Metadata>(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+        input: UpdateReviewRequestInput,
+        config: SyncReviewRequestMetadataConfig<Metadata>,
+        refresh_review_request: impl FnOnce(
+            ForgeRemote,
+            String,
+        ) -> ForgeFuture<
+            Result<ReviewRequestSummary, ReviewRequestError>,
+        >,
+    ) -> Result<ReviewRequestSummary, ReviewRequestError> {
+        let command_display_id = (config.parse_display_id)(&display_id)?;
+        let output = self
+            .run_review_command(
+                &remote,
+                (config.view_metadata_command)(&remote, &command_display_id),
+                config.view_operation,
+            )
+            .await?;
+        let metadata = map_parse_error(
+            remote.forge_kind,
+            (config.parse_metadata_response)(&output.stdout),
+        )?;
+
+        if (config.requires_update)(&metadata, &input) {
+            self.run_review_command(
+                &remote,
+                (config.edit_metadata_command)(&remote, &command_display_id, &input),
+                config.edit_operation,
+            )
+            .await?;
+        }
+
+        refresh_review_request(remote, display_id).await
+    }
+
+    /// Fetches and parses one review-comment snapshot.
+    pub(crate) async fn fetch_review_comment_snapshot(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+        parse_display_id: impl FnOnce(&str) -> Result<String, ReviewRequestError>,
+        snapshot_command: impl FnOnce(&ForgeRemote, &str) -> ForgeCommand,
+        operation: &str,
+        parse_snapshot_response: impl FnOnce(&str) -> Result<ReviewCommentSnapshot, String>,
+    ) -> Result<ReviewCommentSnapshot, ReviewRequestError> {
+        let command_display_id = parse_display_id(&display_id)?;
+        let output = self
+            .run_review_command(
+                &remote,
+                snapshot_command(&remote, &command_display_id),
+                operation,
+            )
+            .await?;
+
+        map_parse_error(remote.forge_kind, parse_snapshot_response(&output.stdout))
+    }
+
+    /// Runs one requested-review list command and parses normalized rows.
+    pub(crate) async fn list_requested_reviews(
+        &self,
+        remote: ForgeRemote,
+        command: ForgeCommand,
+        operation: &str,
+        parse_requested_reviews: impl FnOnce(&str, &ForgeRemote) -> Result<Vec<RequestedReview>, String>,
+    ) -> Result<Vec<RequestedReview>, ReviewRequestError> {
+        let output = self.run_review_command(&remote, command, operation).await?;
+
+        map_parse_error(
+            remote.forge_kind,
+            parse_requested_reviews(&output.stdout, &remote),
+        )
+    }
+}
+
+/// Configuration for provider-specific metadata synchronization.
+pub(crate) struct SyncReviewRequestMetadataConfig<Metadata> {
+    /// Builds the edit command when metadata differs from desired input.
+    pub(crate) edit_metadata_command:
+        fn(&ForgeRemote, &str, &UpdateReviewRequestInput) -> ForgeCommand,
+    /// User-facing operation prefix for edit failures.
+    pub(crate) edit_operation: &'static str,
+    /// Parses one provider display id into a CLI argument.
+    pub(crate) parse_display_id: fn(&str) -> Result<String, ReviewRequestError>,
+    /// Parses provider metadata JSON.
+    pub(crate) parse_metadata_response: fn(&str) -> Result<Metadata, String>,
+    /// Returns whether the remote metadata differs from desired input.
+    pub(crate) requires_update: fn(&Metadata, &UpdateReviewRequestInput) -> bool,
+    /// Builds the metadata view command.
+    pub(crate) view_metadata_command: fn(&ForgeRemote, &str) -> ForgeCommand,
+    /// User-facing operation prefix for metadata view failures.
+    pub(crate) view_operation: &'static str,
+}
 
 /// Returns whether `detail` looks like a forge CLI authentication failure.
 ///
@@ -56,6 +291,25 @@ pub(crate) fn normalize_provider_label(label: &str) -> String {
     normalized.push_str(characters.as_str());
 
     normalized
+}
+
+/// Wraps a provider operation failure with its forge kind.
+pub(crate) fn operation_failed(
+    forge_kind: ForgeKind,
+    message: impl Into<String>,
+) -> ReviewRequestError {
+    ReviewRequestError::OperationFailed {
+        forge_kind,
+        message: message.into(),
+    }
+}
+
+/// Maps provider parser failures into a normalized operation error.
+pub(crate) fn map_parse_error<T>(
+    forge_kind: ForgeKind,
+    result: Result<T, String>,
+) -> Result<T, ReviewRequestError> {
+    result.map_err(|message| operation_failed(forge_kind, message))
 }
 
 /// Maps one spawn-time failure into a normalized review-request error for the

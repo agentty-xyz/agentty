@@ -6,12 +6,12 @@ use std::sync::Arc;
 use serde::Deserialize;
 
 use super::{
-    CreateReviewRequestInput, ForgeCommand, ForgeCommandOutput, ForgeCommandRunner, ForgeFuture,
-    ForgeKind, ForgeRemote, RequestedReview, RequestedReviewAudience, ReviewComment,
-    ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread, ReviewRequestAdapter,
-    ReviewRequestError, ReviewRequestState, ReviewRequestSummary, UpdateReviewRequestInput,
-    command_output_detail, looks_like_authentication_failure, looks_like_host_resolution_failure,
-    map_spawn_error, normalize_provider_label, parse_remote_url, status_summary_parts, strip_port,
+    CreateReviewRequestInput, ForgeCommand, ForgeCommandRunner, ForgeFuture, ForgeKind,
+    ForgeRemote, RequestedReview, RequestedReviewAudience, ReviewComment, ReviewCommentAnchorSide,
+    ReviewCommentSnapshot, ReviewCommentThread, ReviewRequestAdapter, ReviewRequestError,
+    ReviewRequestOperations, ReviewRequestState, ReviewRequestSummary,
+    SyncReviewRequestMetadataConfig, UpdateReviewRequestInput, map_parse_error,
+    normalize_provider_label, operation_failed, parse_remote_url, status_summary_parts, strip_port,
 };
 
 /// Maximum requested-review rows loaded from `gh` for one refresh.
@@ -20,13 +20,15 @@ const REQUESTED_REVIEW_LIMIT: usize = 100;
 /// GitHub pull-request adapter that normalizes `gh` command output.
 #[derive(Clone)]
 pub(crate) struct GitHubReviewRequestAdapter {
-    command_runner: Arc<dyn ForgeCommandRunner>,
+    operations: ReviewRequestOperations,
 }
 
 impl GitHubReviewRequestAdapter {
     /// Builds one GitHub adapter from a forge command runner.
     pub(crate) fn new(command_runner: Arc<dyn ForgeCommandRunner>) -> Self {
-        Self { command_runner }
+        Self {
+            operations: ReviewRequestOperations::new(command_runner),
+        }
     }
 
     /// Returns normalized GitHub remote metadata when `repo_url` is supported.
@@ -38,44 +40,6 @@ impl GitHubReviewRequestAdapter {
 
         Some(parsed_remote.into_forge_remote(ForgeKind::GitHub))
     }
-
-    /// Runs one authenticated `gh` command and normalizes common failures.
-    async fn run_review_command(
-        &self,
-        remote: &ForgeRemote,
-        command: ForgeCommand,
-        operation: &str,
-    ) -> Result<ForgeCommandOutput, ReviewRequestError> {
-        let output = self
-            .command_runner
-            .run(command)
-            .await
-            .map_err(|error| map_spawn_error(remote, error))?;
-        if output.success() {
-            return Ok(output);
-        }
-
-        let detail = command_output_detail(&output);
-        if looks_like_host_resolution_failure(&detail) {
-            return Err(ReviewRequestError::HostResolutionFailed {
-                forge_kind: ForgeKind::GitHub,
-                host: remote.host.clone(),
-            });
-        }
-
-        if looks_like_authentication_failure(&detail, ForgeKind::GitHub) {
-            return Err(ReviewRequestError::AuthenticationRequired {
-                detail: Some(detail),
-                forge_kind: ForgeKind::GitHub,
-                host: remote.host.clone(),
-            });
-        }
-
-        Err(ReviewRequestError::OperationFailed {
-            forge_kind: ForgeKind::GitHub,
-            message: format!("{operation}: {detail}"),
-        })
-    }
 }
 
 impl ReviewRequestAdapter for GitHubReviewRequestAdapter {
@@ -83,30 +47,13 @@ impl ReviewRequestAdapter for GitHubReviewRequestAdapter {
         &self,
         remote: &ForgeRemote,
     ) -> ForgeFuture<Result<(), ReviewRequestError>> {
-        let command_runner = Arc::clone(&self.command_runner);
+        let operations = self.operations.clone();
         let remote = remote.clone();
 
         Box::pin(async move {
-            let output = command_runner
-                .run(auth_status_command(&remote))
+            operations
+                .ensure_authenticated(&remote, auth_status_command(&remote))
                 .await
-                .map_err(|error| map_spawn_error(&remote, error))?;
-            if output.success() {
-                return Ok(());
-            }
-
-            if looks_like_host_resolution_failure(&command_output_detail(&output)) {
-                return Err(ReviewRequestError::HostResolutionFailed {
-                    forge_kind: ForgeKind::GitHub,
-                    host: remote.host.clone(),
-                });
-            }
-
-            Err(ReviewRequestError::AuthenticationRequired {
-                detail: Some(command_output_detail(&output)),
-                forge_kind: ForgeKind::GitHub,
-                host: remote.host.clone(),
-            })
         })
     }
 
@@ -117,30 +64,20 @@ impl ReviewRequestAdapter for GitHubReviewRequestAdapter {
         source_branch: String,
     ) -> ForgeFuture<Result<Option<ReviewRequestSummary>, ReviewRequestError>> {
         let adapter = self.clone();
+        let operations = self.operations.clone();
 
         Box::pin(async move {
-            let output = adapter
-                .run_review_command(
-                    &remote,
-                    lookup_command(&remote, &source_branch),
+            let lookup_command = lookup_command(&remote, &source_branch);
+
+            operations
+                .find_by_source_branch(
+                    remote,
+                    lookup_command,
                     "find pull request",
+                    parse_lookup_display_id,
+                    move |remote, display_id| adapter.refresh_review_request(remote, display_id),
                 )
-                .await?;
-            let display_id = parse_lookup_display_id(&output.stdout).map_err(|message| {
-                ReviewRequestError::OperationFailed {
-                    forge_kind: ForgeKind::GitHub,
-                    message,
-                }
-            })?;
-
-            let Some(display_id) = display_id else {
-                return Ok(None);
-            };
-
-            adapter
-                .refresh_review_request(remote, display_id)
                 .await
-                .map(Some)
         })
     }
 
@@ -151,24 +88,23 @@ impl ReviewRequestAdapter for GitHubReviewRequestAdapter {
         input: CreateReviewRequestInput,
     ) -> ForgeFuture<Result<ReviewRequestSummary, ReviewRequestError>> {
         let adapter = self.clone();
+        let operations = self.operations.clone();
 
         Box::pin(async move {
             let source_branch = input.source_branch.clone();
-            adapter
-                .run_review_command(
-                    &remote,
-                    create_command(&remote, &input),
-                    "create pull request",
-                )
+            let create_command = create_command(&remote, &input);
+            operations
+                .run_review_command(&remote, create_command, "create pull request")
                 .await?;
 
             adapter
                 .find_by_source_branch(remote, source_branch)
                 .await?
-                .ok_or_else(|| ReviewRequestError::OperationFailed {
-                    forge_kind: ForgeKind::GitHub,
-                    message: "GitHub pull request was created but could not be reloaded"
-                        .to_string(),
+                .ok_or_else(|| {
+                    operation_failed(
+                        ForgeKind::GitHub,
+                        "GitHub pull request was created but could not be reloaded",
+                    )
                 })
         })
     }
@@ -179,24 +115,19 @@ impl ReviewRequestAdapter for GitHubReviewRequestAdapter {
         remote: ForgeRemote,
         display_id: String,
     ) -> ForgeFuture<Result<ReviewRequestSummary, ReviewRequestError>> {
-        let adapter = self.clone();
+        let operations = self.operations.clone();
 
         Box::pin(async move {
-            let pull_request_number = parse_display_id(&display_id)?;
-            let output = adapter
-                .run_review_command(
-                    &remote,
-                    view_command(&remote, &pull_request_number),
+            operations
+                .refresh_review_request(
+                    remote,
+                    display_id,
+                    parse_display_id,
+                    view_command,
                     "refresh pull request",
+                    parse_view_response,
                 )
-                .await?;
-
-            parse_view_response(&output.stdout).map_err(|message| {
-                ReviewRequestError::OperationFailed {
-                    forge_kind: ForgeKind::GitHub,
-                    message,
-                }
-            })
+                .await
         })
     }
 
@@ -209,34 +140,28 @@ impl ReviewRequestAdapter for GitHubReviewRequestAdapter {
         input: UpdateReviewRequestInput,
     ) -> ForgeFuture<Result<ReviewRequestSummary, ReviewRequestError>> {
         let adapter = self.clone();
+        let operations = self.operations.clone();
 
         Box::pin(async move {
-            let pull_request_number = parse_display_id(&display_id)?;
-            let output = adapter
-                .run_review_command(
-                    &remote,
-                    view_metadata_command(&remote, &pull_request_number),
-                    "view pull-request metadata",
+            let config = SyncReviewRequestMetadataConfig {
+                edit_metadata_command,
+                edit_operation: "update pull-request metadata",
+                parse_display_id,
+                parse_metadata_response,
+                requires_update: GitHubMetadataResponse::requires_update,
+                view_metadata_command,
+                view_operation: "view pull-request metadata",
+            };
+
+            operations
+                .sync_review_request_metadata(
+                    remote,
+                    display_id,
+                    input,
+                    config,
+                    move |remote, display_id| adapter.refresh_review_request(remote, display_id),
                 )
-                .await?;
-            let metadata = parse_metadata_response(&output.stdout).map_err(|message| {
-                ReviewRequestError::OperationFailed {
-                    forge_kind: ForgeKind::GitHub,
-                    message,
-                }
-            })?;
-
-            if metadata.requires_update(&input) {
-                adapter
-                    .run_review_command(
-                        &remote,
-                        edit_metadata_command(&remote, &pull_request_number, &input),
-                        "update pull-request metadata",
-                    )
-                    .await?;
-            }
-
-            adapter.refresh_review_request(remote, display_id).await
+                .await
         })
     }
 
@@ -251,24 +176,19 @@ impl ReviewRequestAdapter for GitHubReviewRequestAdapter {
         remote: ForgeRemote,
         display_id: String,
     ) -> ForgeFuture<Result<ReviewCommentSnapshot, ReviewRequestError>> {
-        let adapter = self.clone();
+        let operations = self.operations.clone();
 
         Box::pin(async move {
-            let pull_request_number = parse_display_id(&display_id)?;
-            let output = adapter
-                .run_review_command(
-                    &remote,
-                    review_threads_command(&remote, &pull_request_number),
+            operations
+                .fetch_review_comment_snapshot(
+                    remote,
+                    display_id,
+                    parse_display_id,
+                    review_threads_command,
                     "fetch review comments",
+                    parse_review_comment_snapshot_response,
                 )
-                .await?;
-
-            parse_review_comment_snapshot_response(&output.stdout).map_err(|message| {
-                ReviewRequestError::OperationFailed {
-                    forge_kind: ForgeKind::GitHub,
-                    message,
-                }
-            })
+                .await
         })
     }
 
@@ -279,27 +199,30 @@ impl ReviewRequestAdapter for GitHubReviewRequestAdapter {
         &self,
         remote: ForgeRemote,
     ) -> ForgeFuture<Result<Vec<RequestedReview>, ReviewRequestError>> {
-        let adapter = self.clone();
+        let operations = self.operations.clone();
 
         Box::pin(async move {
             let (all_output, personal_output) = tokio::try_join!(
-                adapter.run_review_command(
+                operations.run_review_command(
                     &remote,
                     requested_reviews_command(&remote),
                     "list requested pull-request reviews",
                 ),
-                adapter.run_review_command(
+                operations.run_review_command(
                     &remote,
                     personal_requested_reviews_command(&remote),
                     "list personally requested pull-request reviews",
                 )
             )?;
 
-            let all_reviews = parse_requested_reviews_response(&all_output.stdout, &remote)
-                .map_err(requested_reviews_parse_error)?;
-            let personal_reviews =
-                parse_requested_reviews_response(&personal_output.stdout, &remote)
-                    .map_err(requested_reviews_parse_error)?;
+            let all_reviews = map_parse_error(
+                remote.forge_kind,
+                parse_requested_reviews_response(&all_output.stdout, &remote),
+            )?;
+            let personal_reviews = map_parse_error(
+                remote.forge_kind,
+                parse_requested_reviews_response(&personal_output.stdout, &remote),
+            )?;
 
             Ok(categorize_requested_reviews(all_reviews, &personal_reviews))
         })
@@ -572,15 +495,6 @@ fn parse_requested_reviews_response(
             }
         })
         .collect())
-}
-
-/// Maps a GitHub requested-review JSON parse failure into the adapter error
-/// shape used by authenticated operations.
-fn requested_reviews_parse_error(message: String) -> ReviewRequestError {
-    ReviewRequestError::OperationFailed {
-        forge_kind: ForgeKind::GitHub,
-        message,
-    }
 }
 
 /// Merges requested-review rows from both GitHub searches, marking rows as
@@ -935,7 +849,7 @@ mod tests {
     use mockall::Sequence;
 
     use super::*;
-    use crate::command::MockForgeCommandRunner;
+    use crate::command::{ForgeCommandOutput, MockForgeCommandRunner};
 
     #[tokio::test]
     async fn find_by_source_branch_builds_lookup_and_refresh_commands() {
