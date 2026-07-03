@@ -6,10 +6,7 @@ use std::process::{Command, Stdio};
 use std::{fs, io};
 
 use super::backend::{AgentBackend, AgentBackendError, BuildCommandRequest};
-use super::prompt::{PromptPreparationRequest, ProtocolSchemaInstructionMode, prepare_prompt_text};
-use crate::domain::turn_prompt::{
-    TurnPromptAttachment, TurnPromptContentPart, split_turn_prompt_content,
-};
+use super::prompt::{self as shared_prompt, CliPromptAccessRootMode};
 
 /// Wall-clock limit passed with `agy --print` for one Agentty turn.
 ///
@@ -60,7 +57,12 @@ impl AgentBackend for AntigravityBackend {
 
         ensure_antigravity_project_state_ignored(folder)?;
         let workspace_folder = ensure_antigravity_workspace_alias(folder)?;
-        append_workspace_access_directories(&mut command, &workspace_folder, attachments);
+        shared_prompt::append_cli_prompt_access_directories(
+            &mut command,
+            &workspace_folder,
+            attachments,
+            CliPromptAccessRootMode::WorkspaceThenAttachments,
+        );
 
         command
             .arg("--sandbox")
@@ -409,145 +411,19 @@ fn append_git_exclude_pattern(exclude_path: &Path, pattern: &str) -> Result<(), 
     })
 }
 
-/// Renders the full Antigravity prompt text that Agentty streams through
-/// stdin.
-///
-/// # Errors
-/// Returns an error when image placeholder rendering or protocol prompt
-/// rendering fails.
-pub(super) fn build_prompt_stdin_payload(
-    request: BuildCommandRequest<'_>,
-    schema_instruction_mode: ProtocolSchemaInstructionMode,
-) -> Result<Vec<u8>, AgentBackendError> {
-    let prompt = render_prompt_with_local_images(request.prompt, request.attachments)?;
-    let prompt = prepare_prompt_text(PromptPreparationRequest {
-        instruction_delivery_mode: if request.request_kind.is_resume() {
-            super::instruction::InstructionDeliveryMode::BootstrapWithReplay
-        } else {
-            super::instruction::InstructionDeliveryMode::BootstrapFull
-        },
-        prompt: &prompt,
-        protocol_profile: request.request_kind.protocol_profile(),
-        replay_session_output: request.request_kind.session_output(),
-        schema_instruction_mode,
-    })?;
-
-    Ok(prompt.into_bytes())
-}
-
-/// Adds Antigravity workspace roots for the session folder and prompt
-/// attachments.
-///
-/// `agy --print` uses `--add-dir` rather than the process working directory to
-/// decide which folders tools can read and write. Agentty keeps the
-/// Antigravity-mountable session worktree path as the first workspace root,
-/// then adds pasted-image parent directories that live under Agentty's temp
-/// directory so Antigravity can inspect those local files without replacing
-/// the active editable workspace.
-fn append_workspace_access_directories(
-    command: &mut Command,
-    folder: &Path,
-    attachments: &[TurnPromptAttachment],
-) {
-    for workspace_directory in workspace_access_directories(folder, attachments) {
-        command.arg("--add-dir").arg(workspace_directory);
-    }
-}
-
-/// Returns the Antigravity workspace roots required by one turn.
-///
-/// The session worktree path Antigravity can mount is always first because
-/// Antigravity derives editable workspace behavior from the ordered
-/// `--add-dir` roots. Attachment directories are sorted after the session root
-/// for deterministic arguments.
-fn workspace_access_directories(
-    folder: &Path,
-    attachments: &[TurnPromptAttachment],
-) -> Vec<PathBuf> {
-    let folder = folder.to_path_buf();
-    let mut attachment_directories = attachments
-        .iter()
-        .filter_map(|attachment| attachment.local_image_path.parent())
-        .map(std::path::Path::to_path_buf)
-        .filter(|attachment_directory| attachment_directory != &folder)
-        .collect::<Vec<_>>();
-    attachment_directories.sort();
-    attachment_directories.dedup();
-
-    let mut workspace_directories = Vec::with_capacity(attachment_directories.len() + 1);
-    workspace_directories.push(folder);
-    workspace_directories.extend(attachment_directories);
-
-    workspace_directories
-}
-
-/// Replaces inline prompt-image placeholders with Antigravity-readable local
-/// image paths while preserving attachment order.
-///
-/// # Errors
-/// Returns an error when any attachment path is not valid UTF-8, because the
-/// prompt protocol can only carry UTF-8 text and lossy conversion could point
-/// Antigravity at the wrong file.
-fn render_prompt_with_local_images(
-    prompt: &str,
-    attachments: &[TurnPromptAttachment],
-) -> Result<String, AgentBackendError> {
-    if attachments.is_empty() {
-        return Ok(prompt.to_string());
-    }
-
-    let mut rendered_prompt = String::new();
-
-    for content_part in split_turn_prompt_content(prompt, attachments) {
-        match content_part {
-            TurnPromptContentPart::Text(text) => rendered_prompt.push_str(text),
-            TurnPromptContentPart::Attachment(attachment) => {
-                let attachment_path = attachment_path_for_prompt(attachment)?;
-                rendered_prompt.push_str(&attachment_path);
-            }
-            TurnPromptContentPart::OrphanAttachment(attachment) => {
-                if !rendered_prompt.is_empty()
-                    && rendered_prompt
-                        .chars()
-                        .last()
-                        .is_some_and(|character| !character.is_whitespace())
-                {
-                    rendered_prompt.push('\n');
-                }
-
-                rendered_prompt.push_str(&attachment_path_for_prompt(attachment)?);
-                rendered_prompt.push('\n');
-            }
-        }
-    }
-
-    Ok(rendered_prompt)
-}
-
-/// Returns one prompt attachment path as strict UTF-8 for Antigravity stdin
-/// rendering.
-fn attachment_path_for_prompt(
-    attachment: &TurnPromptAttachment,
-) -> Result<String, AgentBackendError> {
-    attachment
-        .local_image_path
-        .to_str()
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| {
-            AgentBackendError::CommandBuild(
-                "Antigravity prompt image path is not valid UTF-8".to_string(),
-            )
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
     use tempfile::{TempDir, tempdir};
 
+    use super::shared_prompt::{
+        CliPromptAccessRootMode, ProtocolSchemaInstructionMode, build_prompt_stdin_payload,
+        cli_prompt_access_directories,
+    };
     use super::*;
     use crate::domain::agent::{AgentModel, ReasoningLevel};
+    use crate::domain::turn_prompt::TurnPromptAttachment;
     use crate::infra::channel::AgentRequestKind;
 
     struct AliasCleanup {
@@ -930,7 +806,11 @@ mod tests {
         };
 
         // Act
-        let workspace_directories = workspace_access_directories(&session_folder, &[attachment]);
+        let workspace_directories = cli_prompt_access_directories(
+            &session_folder,
+            &[attachment],
+            CliPromptAccessRootMode::WorkspaceThenAttachments,
+        );
 
         // Assert
         assert_eq!(
@@ -958,6 +838,7 @@ mod tests {
                 reasoning_level: ReasoningLevel::default(),
             },
             ProtocolSchemaInstructionMode::PromptSchema,
+            "Antigravity",
         )
         .expect("stdin payload should build");
         let prompt = String::from_utf8(payload).expect("prompt should be utf8");
@@ -966,30 +847,5 @@ mod tests {
         assert!(prompt.contains("Structured response protocol:"));
         assert!(prompt.contains("previous answer"));
         assert!(prompt.contains("continue work"));
-    }
-
-    #[test]
-    /// Verifies image placeholders are replaced before the prompt is sent to
-    /// Antigravity.
-    fn test_render_prompt_with_local_images_replaces_placeholders_in_order() {
-        // Arrange
-        let attachments = vec![
-            TurnPromptAttachment {
-                placeholder: "[Image #1]".to_string(),
-                local_image_path: PathBuf::from("/tmp/one.png"),
-            },
-            TurnPromptAttachment {
-                placeholder: "[Image #2]".to_string(),
-                local_image_path: PathBuf::from("/tmp/two.png"),
-            },
-        ];
-
-        // Act
-        let rendered_prompt =
-            render_prompt_with_local_images("Compare [Image #2] with [Image #1]", &attachments)
-                .expect("prompt should render");
-
-        // Assert
-        assert_eq!(rendered_prompt, "Compare /tmp/two.png with /tmp/one.png");
     }
 }

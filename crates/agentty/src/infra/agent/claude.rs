@@ -2,10 +2,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use super::backend::{AgentBackend, AgentBackendError, BuildCommandRequest};
-use super::prompt::{PromptPreparationRequest, ProtocolSchemaInstructionMode, prepare_prompt_text};
-use crate::domain::turn_prompt::{
-    TurnPromptAttachment, TurnPromptContentPart, split_turn_prompt_content,
-};
+use super::prompt::{CliPromptAccessRootMode, append_cli_prompt_access_directories};
 use crate::infra::agent::protocol::agent_response_output_schema_json;
 
 /// Lists the Claude tools Agentty enables for unattended sessions.
@@ -35,7 +32,7 @@ impl AgentBackend for ClaudeBackend {
         request: BuildCommandRequest<'request>,
     ) -> Result<Command, AgentBackendError> {
         let BuildCommandRequest {
-            attachments: _attachments,
+            attachments,
             folder,
             request_kind,
             model,
@@ -48,7 +45,12 @@ impl AgentBackend for ClaudeBackend {
             command.arg("-c");
         }
 
-        append_attachment_access_directories(&mut command, request.attachments);
+        append_cli_prompt_access_directories(
+            &mut command,
+            folder,
+            attachments,
+            CliPromptAccessRootMode::AttachmentsOnly,
+        );
 
         command.arg("-p");
         command.arg("--allowedTools").arg(CLAUDE_ALLOWED_TOOLS);
@@ -70,122 +72,6 @@ impl AgentBackend for ClaudeBackend {
     }
 }
 
-/// Renders the full Claude prompt text that Agentty streams through stdin.
-///
-/// # Errors
-/// Returns an error when resume or protocol prompt rendering fails.
-pub(super) fn build_prompt_stdin_payload(
-    request: BuildCommandRequest<'_>,
-    schema_instruction_mode: ProtocolSchemaInstructionMode,
-) -> Result<Vec<u8>, AgentBackendError> {
-    let prompt = render_prompt_with_local_images(request.prompt, request.attachments)?;
-    let prompt = prepare_prompt_text(PromptPreparationRequest {
-        instruction_delivery_mode: if request.request_kind.is_resume() {
-            super::instruction::InstructionDeliveryMode::BootstrapWithReplay
-        } else {
-            super::instruction::InstructionDeliveryMode::BootstrapFull
-        },
-        prompt: &prompt,
-        protocol_profile: request.request_kind.protocol_profile(),
-        replay_session_output: request.request_kind.session_output(),
-        schema_instruction_mode,
-    })?;
-
-    Ok(prompt.into_bytes())
-}
-
-/// Adds Claude file-access roots for prompt attachments that live outside the
-/// current worktree.
-///
-/// Claude Code restricts filesystem access to the current working directory
-/// unless extra roots are granted explicitly. Pasted prompt images are stored
-/// under the Agentty temp directory, so their parent directories must be added
-/// with `--add-dir` for Claude to inspect them.
-fn append_attachment_access_directories(
-    command: &mut Command,
-    attachments: &[TurnPromptAttachment],
-) {
-    let mut attachment_directories = attachments
-        .iter()
-        .filter_map(|attachment| attachment.local_image_path.parent())
-        .map(std::path::Path::to_path_buf)
-        .collect::<Vec<_>>();
-
-    attachment_directories.sort();
-    attachment_directories.dedup();
-
-    for attachment_directory in attachment_directories {
-        command.arg("--add-dir").arg(attachment_directory);
-    }
-}
-
-/// Replaces inline prompt-image placeholders with Claude-readable local image
-/// paths while preserving attachment order.
-///
-/// Claude Code accepts image paths embedded directly in the prompt text, so
-/// Agentty rewrites `[Image #n]` placeholders to the persisted local file
-/// paths before streaming the prompt over stdin.
-///
-/// # Errors
-/// Returns an error when any attachment path is not valid UTF-8, because the
-/// prompt protocol can only carry UTF-8 text and lossy conversion could point
-/// Claude at the wrong file.
-fn render_prompt_with_local_images(
-    prompt: &str,
-    attachments: &[TurnPromptAttachment],
-) -> Result<String, AgentBackendError> {
-    if attachments.is_empty() {
-        return Ok(prompt.to_string());
-    }
-
-    let mut rendered_prompt = String::new();
-
-    for content_part in split_turn_prompt_content(prompt, attachments) {
-        match content_part {
-            TurnPromptContentPart::Text(text) => rendered_prompt.push_str(text),
-            TurnPromptContentPart::Attachment(attachment) => {
-                let attachment_path = attachment_path_for_prompt(attachment)?;
-                rendered_prompt.push_str(&attachment_path);
-            }
-            TurnPromptContentPart::OrphanAttachment(attachment) => {
-                if !rendered_prompt.is_empty()
-                    && rendered_prompt
-                        .chars()
-                        .last()
-                        .is_some_and(|character| !character.is_whitespace())
-                {
-                    rendered_prompt.push('\n');
-                }
-
-                rendered_prompt.push_str(&attachment_path_for_prompt(attachment)?);
-                rendered_prompt.push('\n');
-            }
-        }
-    }
-
-    Ok(rendered_prompt)
-}
-
-/// Returns one prompt attachment path as strict UTF-8 for Claude stdin
-/// rendering.
-///
-/// Claude receives attachment paths through the UTF-8 prompt body, so invalid
-/// UTF-8 paths must fail fast instead of being silently rewritten with lossy
-/// replacement characters.
-fn attachment_path_for_prompt(
-    attachment: &TurnPromptAttachment,
-) -> Result<String, AgentBackendError> {
-    attachment
-        .local_image_path
-        .to_str()
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| {
-            AgentBackendError::CommandBuild(
-                "Claude prompt image path is not valid UTF-8".to_string(),
-            )
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use std::ffi::OsStr;
@@ -195,6 +81,8 @@ mod tests {
 
     use super::*;
     use crate::domain::agent::ReasoningLevel;
+    use crate::domain::turn_prompt::TurnPromptAttachment;
+    use crate::infra::agent::prompt::{self as shared_prompt, ProtocolSchemaInstructionMode};
     use crate::infra::channel::AgentRequestKind;
 
     fn session_start_request_kind() -> AgentRequestKind {
@@ -376,7 +264,7 @@ mod tests {
 
         // Act
         let prompt = String::from_utf8(
-            build_prompt_stdin_payload(
+            shared_prompt::build_prompt_stdin_payload(
                 BuildCommandRequest {
                     attachments: &[],
                     folder: temp_directory.path(),
@@ -386,6 +274,7 @@ mod tests {
                     reasoning_level: ReasoningLevel::default(),
                 },
                 ProtocolSchemaInstructionMode::TransportSchema,
+                "Claude",
             )
             .expect("prompt payload should build"),
         )
@@ -420,7 +309,7 @@ mod tests {
         .expect("command should build");
         let debug_command = format!("{command:?}");
         let prompt = String::from_utf8(
-            build_prompt_stdin_payload(
+            shared_prompt::build_prompt_stdin_payload(
                 BuildCommandRequest {
                     attachments: &[],
                     folder: temp_directory.path(),
@@ -430,6 +319,7 @@ mod tests {
                     reasoning_level: ReasoningLevel::default(),
                 },
                 ProtocolSchemaInstructionMode::TransportSchema,
+                "Claude",
             )
             .expect("prompt payload should build"),
         )
@@ -468,7 +358,7 @@ mod tests {
         .expect("command should build");
         let debug_command = format!("{command:?}");
         let prompt = String::from_utf8(
-            build_prompt_stdin_payload(
+            shared_prompt::build_prompt_stdin_payload(
                 BuildCommandRequest {
                     attachments: &[],
                     folder: temp_directory.path(),
@@ -478,6 +368,7 @@ mod tests {
                     reasoning_level: ReasoningLevel::default(),
                 },
                 ProtocolSchemaInstructionMode::TransportSchema,
+                "Claude",
             )
             .expect("prompt payload should build"),
         )
@@ -489,81 +380,5 @@ mod tests {
         assert!(prompt.contains("Structured response protocol:"));
         assert!(prompt.contains("summary"));
         assert!(!prompt.contains("Authoritative JSON Schema:"));
-    }
-
-    #[test]
-    /// Verifies Claude prompt rendering replaces image placeholders with local
-    /// file paths in placeholder order.
-    fn test_render_prompt_with_local_images_replaces_placeholders_in_order() {
-        // Arrange
-        let attachments = vec![
-            TurnPromptAttachment {
-                placeholder: "[Image #1]".to_string(),
-                local_image_path: PathBuf::from("/tmp/first-image.png"),
-            },
-            TurnPromptAttachment {
-                placeholder: "[Image #2]".to_string(),
-                local_image_path: PathBuf::from("/tmp/second-image.png"),
-            },
-        ];
-
-        // Act
-        let rendered_prompt =
-            render_prompt_with_local_images("Compare [Image #2] with [Image #1]", &attachments)
-                .expect("prompt rendering should succeed");
-
-        // Assert
-        assert_eq!(
-            rendered_prompt,
-            "Compare /tmp/second-image.png with /tmp/first-image.png"
-        );
-    }
-
-    #[test]
-    /// Verifies Claude prompt rendering appends local image paths when
-    /// attachment metadata survives without a placeholder match.
-    fn test_render_prompt_with_local_images_appends_missing_paths() {
-        // Arrange
-        let attachments = vec![TurnPromptAttachment {
-            placeholder: "[Image #1]".to_string(),
-            local_image_path: PathBuf::from("/tmp/first-image.png"),
-        }];
-
-        // Act
-        let rendered_prompt = render_prompt_with_local_images("Review this change", &attachments)
-            .expect("prompt rendering should succeed");
-
-        // Assert
-        assert_eq!(
-            rendered_prompt,
-            "Review this change\n/tmp/first-image.png\n"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    /// Verifies Claude prompt rendering fails fast when an attachment path is
-    /// not valid UTF-8.
-    fn test_render_prompt_with_local_images_rejects_non_utf8_paths() {
-        use std::ffi::OsString;
-        use std::os::unix::ffi::OsStringExt;
-
-        // Arrange
-        let attachments = vec![TurnPromptAttachment {
-            placeholder: "[Image #1]".to_string(),
-            local_image_path: PathBuf::from(OsString::from_vec(vec![0x66, 0x80, 0x6f])),
-        }];
-
-        // Act
-        let error = render_prompt_with_local_images("Review [Image #1]", &attachments)
-            .expect_err("prompt rendering should fail");
-
-        // Assert
-        assert_eq!(
-            error,
-            AgentBackendError::CommandBuild(
-                "Claude prompt image path is not valid UTF-8".to_string()
-            )
-        );
     }
 }

@@ -1,15 +1,12 @@
 //! Codex app-server transport boundary.
 
-use std::future::Future;
-use std::pin::Pin;
-
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, BufReader, Lines};
 
-use crate::infra::app_server_transport::{self, AppServerTransportError, write_json_line};
+use super::super::stdio_transport::{AppServerTransportFuture, SharedAppServerStdioTransport};
+use crate::infra::app_server_transport::AppServerTransportError;
 
 /// Boxed async result used by [`CodexRuntimeTransport`] methods.
-pub(super) type CodexTransportFuture<'scope, T> = Pin<Box<dyn Future<Output = T> + Send + 'scope>>;
+pub(super) type CodexTransportFuture<'scope, T> = AppServerTransportFuture<'scope, T>;
 
 /// Async stdio transport boundary for one running Codex app-server runtime.
 ///
@@ -38,8 +35,7 @@ pub(crate) trait CodexRuntimeTransport: Send {
 
 /// Production transport backed by Codex child-process stdio.
 pub(super) struct CodexStdioTransport {
-    stdin: Option<tokio::process::ChildStdin>,
-    stdout_lines: Lines<BufReader<tokio::process::ChildStdout>>,
+    inner: SharedAppServerStdioTransport,
 }
 
 impl CodexStdioTransport {
@@ -49,14 +45,18 @@ impl CodexStdioTransport {
         stdout: tokio::process::ChildStdout,
     ) -> Self {
         Self {
-            stdin: Some(stdin),
-            stdout_lines: BufReader::new(stdout).lines(),
+            inner: SharedAppServerStdioTransport::new(
+                stdin,
+                stdout,
+                "Codex app-server stdin is unavailable",
+                "Failed reading Codex app-server stdout",
+            ),
         }
     }
 
     /// Closes the runtime stdin handle so shutdown can signal EOF.
     pub(super) fn close_stdin(&mut self) {
-        drop(self.stdin.take());
+        self.inner.close_stdin();
     }
 }
 
@@ -65,39 +65,19 @@ impl CodexRuntimeTransport for CodexStdioTransport {
         &mut self,
         payload: Value,
     ) -> CodexTransportFuture<'_, Result<(), AppServerTransportError>> {
-        Box::pin(async move {
-            let stdin = self
-                .stdin
-                .as_mut()
-                .ok_or_else(|| AppServerTransportError::Io {
-                    context: "Codex app-server stdin is unavailable".to_string(),
-                    source: std::io::Error::new(std::io::ErrorKind::NotConnected, "stdin closed"),
-                })?;
-
-            write_json_line(stdin, &payload).await
-        })
+        self.inner.write_json_line(payload)
     }
 
     fn wait_for_response_line(
         &mut self,
         response_id: String,
     ) -> CodexTransportFuture<'_, Result<String, AppServerTransportError>> {
-        Box::pin(async move {
-            app_server_transport::wait_for_response_line(&mut self.stdout_lines, &response_id).await
-        })
+        self.inner.wait_for_response_line(response_id)
     }
 
     fn next_stdout(
         &mut self,
     ) -> CodexTransportFuture<'_, Result<Option<String>, AppServerTransportError>> {
-        Box::pin(async move {
-            self.stdout_lines
-                .next_line()
-                .await
-                .map_err(|source| AppServerTransportError::Io {
-                    context: "Failed reading Codex app-server stdout".to_string(),
-                    source,
-                })
-        })
+        self.inner.next_stdout()
     }
 }

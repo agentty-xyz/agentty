@@ -43,9 +43,11 @@ module docstrings directly.
 - `infra/`: External integrations behind traits — SQLite persistence (`infra/db/`
   repositories), git (`GitClient`), filesystem (`FsClient`), tmux, clipboard images,
   version checks, project discovery, file indexing, and the agent stack: provider
-  registry, per-provider backends (`infra/agent/`), the transport channels
-  (`infra/channel/`), app-server clients (`infra/agent/app_server/`), and the structured
-  response protocol (`infra/agent/protocol/`).
+  registry, per-provider backends (`infra/agent/`), shared prompt preparation and
+  access-root selection (`infra/agent/prompt.rs`), transport channels
+  (`infra/channel/`), app-server clients plus shared command and stdio transport helpers
+  (`infra/agent/app_server/`), and the structured response protocol
+  (`infra/agent/protocol/`).
 - `runtime/`: Terminal lifecycle and the event loop — terminal setup, the event-reader
   thread, key dispatch, and one handler per `AppMode` under `runtime/mode/`.
 - `ui/`: Rendering — frame composition, mode-to-page routing, pages under `ui/page/`,

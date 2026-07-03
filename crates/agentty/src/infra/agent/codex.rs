@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::process::Command;
 
+use super::app_server::build_codex_app_server_command;
 use super::backend::{AgentBackend, AgentBackendError, BuildCommandRequest};
 
 /// Keeps Codex setup wired through [`AgentBackend`] while always routing turns
@@ -23,33 +24,11 @@ impl AgentBackend for CodexBackend {
         &'request self,
         request: BuildCommandRequest<'request>,
     ) -> Result<Command, AgentBackendError> {
-        Ok(build_app_server_command(request))
+        Ok(build_codex_app_server_command(
+            request.folder,
+            request.model,
+        ))
     }
-}
-
-/// Builds the persistent `codex app-server` runtime command for one session.
-///
-/// The prompt payload is sent later over JSON-RPC, so prompt text, request
-/// kind, attachments, and reasoning level do not change the spawned process.
-fn build_app_server_command(request: BuildCommandRequest<'_>) -> Command {
-    let BuildCommandRequest {
-        attachments: _attachments,
-        folder,
-        prompt: _prompt,
-        request_kind: _request_kind,
-        model,
-        reasoning_level: _reasoning_level,
-    } = request;
-    let mut command = Command::new("codex");
-    command
-        .arg("--model")
-        .arg(model)
-        .arg("app-server")
-        .arg("--listen")
-        .arg("stdio://")
-        .current_dir(folder);
-
-    command
 }
 
 #[cfg(test)]

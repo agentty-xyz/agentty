@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::process::Command;
 
+use super::app_server::build_gemini_acp_command;
 use super::backend::{AgentBackend, AgentBackendError, BuildCommandRequest};
 
 /// Backend implementation for the Gemini ACP runtime.
@@ -15,31 +16,8 @@ impl AgentBackend for GeminiBackend {
         &'request self,
         request: BuildCommandRequest<'request>,
     ) -> Result<Command, AgentBackendError> {
-        Ok(build_app_server_command(request))
+        Ok(build_gemini_acp_command(request.folder, request.model))
     }
-}
-
-/// Builds the persistent Gemini ACP runtime command for one session.
-///
-/// Prompt submission and resume behavior happen over ACP after the process is
-/// running, so startup only depends on the working directory and model.
-fn build_app_server_command(request: BuildCommandRequest<'_>) -> Command {
-    let BuildCommandRequest {
-        attachments: _attachments,
-        folder,
-        prompt: _prompt,
-        request_kind: _request_kind,
-        model,
-        reasoning_level: _reasoning_level,
-    } = request;
-    let mut command = Command::new("gemini");
-    command
-        .arg("--acp")
-        .arg("--model")
-        .arg(model)
-        .current_dir(folder);
-
-    command
 }
 
 #[cfg(test)]

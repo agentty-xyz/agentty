@@ -7,7 +7,7 @@ use super::backend::{
     AgentBackend, AgentBackendError, AgentPromptTransport, AgentTransport, AppServerThoughtPolicy,
     BuildCommandRequest,
 };
-use super::prompt::ProtocolSchemaInstructionMode;
+use super::prompt::{self, ProtocolSchemaInstructionMode};
 use super::protocol;
 use super::response_parser::ParsedResponse;
 use crate::domain::agent::{AgentKind, AgentModel};
@@ -139,15 +139,18 @@ pub(crate) fn build_command_stdin_payload(
     match prompt_transport(kind) {
         AgentPromptTransport::Argv => Ok(None),
         AgentPromptTransport::Stdin => match kind {
-            AgentKind::Antigravity => super::antigravity::build_prompt_stdin_payload(
+            AgentKind::Antigravity => prompt::build_prompt_stdin_payload(
                 request,
                 protocol_schema_instruction_mode,
+                "Antigravity",
             )
             .map(Some),
-            AgentKind::Claude => {
-                super::claude::build_prompt_stdin_payload(request, protocol_schema_instruction_mode)
-                    .map(Some)
-            }
+            AgentKind::Claude => prompt::build_prompt_stdin_payload(
+                request,
+                protocol_schema_instruction_mode,
+                "Claude",
+            )
+            .map(Some),
             AgentKind::Codex | AgentKind::Gemini => Ok(None),
         },
     }

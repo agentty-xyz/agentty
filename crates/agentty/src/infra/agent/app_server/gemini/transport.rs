@@ -1,15 +1,12 @@
 //! Gemini ACP transport boundary.
 
-use std::future::Future;
-use std::pin::Pin;
-
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, BufReader, Lines};
 
-use crate::infra::app_server_transport::{self, AppServerTransportError, write_json_line};
+use super::super::stdio_transport::{AppServerTransportFuture, SharedAppServerStdioTransport};
+use crate::infra::app_server_transport::AppServerTransportError;
 
 /// Boxed async result used by [`GeminiRuntimeTransport`] methods.
-pub(super) type GeminiTransportFuture<'scope, T> = Pin<Box<dyn Future<Output = T> + Send + 'scope>>;
+pub(super) type GeminiTransportFuture<'scope, T> = AppServerTransportFuture<'scope, T>;
 
 /// Async ACP transport boundary for one running Gemini runtime.
 ///
@@ -38,8 +35,7 @@ pub(crate) trait GeminiRuntimeTransport: Send {
 
 /// Production ACP transport backed by Gemini child process stdio streams.
 pub(super) struct GeminiStdioTransport {
-    stdin: Option<tokio::process::ChildStdin>,
-    stdout_lines: Lines<BufReader<tokio::process::ChildStdout>>,
+    inner: SharedAppServerStdioTransport,
 }
 
 impl GeminiStdioTransport {
@@ -49,14 +45,18 @@ impl GeminiStdioTransport {
         stdout: tokio::process::ChildStdout,
     ) -> Self {
         Self {
-            stdin: Some(stdin),
-            stdout_lines: BufReader::new(stdout).lines(),
+            inner: SharedAppServerStdioTransport::new(
+                stdin,
+                stdout,
+                "Gemini ACP stdin is unavailable",
+                "Failed reading Gemini ACP stdout",
+            ),
         }
     }
 
     /// Closes the runtime stdin handle so shutdown can signal EOF.
     pub(super) fn close_stdin(&mut self) {
-        drop(self.stdin.take());
+        self.inner.close_stdin();
     }
 }
 
@@ -65,39 +65,19 @@ impl GeminiRuntimeTransport for GeminiStdioTransport {
         &mut self,
         payload: Value,
     ) -> GeminiTransportFuture<'_, Result<(), AppServerTransportError>> {
-        Box::pin(async move {
-            let stdin = self
-                .stdin
-                .as_mut()
-                .ok_or_else(|| AppServerTransportError::Io {
-                    context: "Gemini ACP stdin is unavailable".to_string(),
-                    source: std::io::Error::new(std::io::ErrorKind::NotConnected, "stdin closed"),
-                })?;
-
-            write_json_line(stdin, &payload).await
-        })
+        self.inner.write_json_line(payload)
     }
 
     fn wait_for_response_line(
         &mut self,
         response_id: String,
     ) -> GeminiTransportFuture<'_, Result<String, AppServerTransportError>> {
-        Box::pin(async move {
-            app_server_transport::wait_for_response_line(&mut self.stdout_lines, &response_id).await
-        })
+        self.inner.wait_for_response_line(response_id)
     }
 
     fn next_stdout(
         &mut self,
     ) -> GeminiTransportFuture<'_, Result<Option<String>, AppServerTransportError>> {
-        Box::pin(async move {
-            self.stdout_lines
-                .next_line()
-                .await
-                .map_err(|source| AppServerTransportError::Io {
-                    context: "Failed reading Gemini ACP stdout".to_string(),
-                    source,
-                })
-        })
+        self.inner.next_stdout()
     }
 }
