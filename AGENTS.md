@@ -149,6 +149,14 @@ repository's current session.
   app client bundles in shared test support when duplication would make model or state
   changes mechanical. The other exception is `#[cfg_attr(test, mockall::automock)]` on
   traits used for mocking.
+- **Reusable Test Surfaces:** When multiple tests need the same setup, row conversion,
+  command expectation, or fixture data, extract a named helper or builder in the nearest
+  test module or established test-support crate instead of duplicating setup. If the
+  helper also removes production duplication, such as shared row metadata mapping or a
+  bound status-transition context, make it production code with doc comments and test it
+  directly. Keep assertion-only adapters and fixtures inside `#[cfg(test)] mod tests`;
+  do not expose `pub(crate)` test-only APIs from production modules solely to share
+  fixtures between tests.
 - **Struct Fields:** Order fields in structs as follows:
   - Public fields first.
   - Private fields second.
