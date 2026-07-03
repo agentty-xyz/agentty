@@ -11,122 +11,50 @@ trait boundaries so orchestration logic can be tested deterministically.
 
 ## Testability and Boundaries
 
-<a id="architecture-testability-boundaries"></a> The traits below are mocked with
-`mockall`. Most use `#[cfg_attr(test, mockall::automock)]`; shared workspace crates such
-as `ag-forge` also expose test mocks through crate features for downstream tests.
+<a id="architecture-testability-boundaries"></a> External-boundary traits are mocked
+with `mockall`, usually via `#[cfg_attr(test, mockall::automock)]`; shared workspace
+crates such as `ag-forge` expose test mocks through crate features. The major
+boundaries:
 
-| Trait | Module | Boundary | |-------|--------|----------| | `SyncMainRunner` |
-`app/sync.rs` | App-level async sync orchestration trigger used by list-mode sync flows.
-Production sends requests into `SyncOrchestrator`; tests can still mock the trigger
-without running git commands. | | `ReviewRequestClient` |
-`crates/ag-forge/src/client.rs` | GitHub/GitLab review-request detection plus
-`gh`/`glab` orchestration boundary, including title and description sync for linked
-PRs/MRs after completed turns. | | `ForgeCommandRunner` |
-`crates/ag-forge/src/command.rs` | Provider CLI command execution boundary used to
-unit-test forge adapters without live `gh` or `glab` binaries. | | `GitClient` |
-`infra/git/client.rs` | Git/process operations (worktree, merge, rebase, diff, push,
-pull, upstream-ref resolution, porcelain status snapshots for isolation checks, and
-ahead/behind comparisons for both upstream-tracking and session-vs-base-branch status).
-Stacked-session restacking also uses this boundary to resolve commit hashes, start
-deterministic `git rebase --onto` flows, and abort stale in-progress rebases during
-restart recovery. | | `FsClient` | `infra/fs.rs` | Async filesystem operations and path
-probes used by app or runtime orchestration, including non-blocking file reads,
-existence checks, canonicalization, session worktree cleanup, and prompt-image temp file
-or directory removal. | | `ClipboardImageClient` | `infra/clipboard_image.rs` | Host
-clipboard image capture, PNG encoding, injected-clock file naming, filesystem
-persistence, and paste-error normalization for prompt attachments. | | `TmuxClient` |
-`infra/tmux.rs` | Tmux subprocess operations for opening session worktrees and
-dispatching open commands. | | `TmuxCommandRunner` | `infra/tmux.rs` | Internal tmux
-command boundary that keeps multi-command `send-keys` flows deterministic in unit tests.
-| | `AgentChannel` | `infra/channel.rs` | Provider-agnostic turn execution (session
-init, run turn, shutdown). | | `AgentBackend` | `infra/agent/backend.rs` | Per-provider
-setup and transport command construction. | | `AgentAvailabilityProbe` |
-`infra/agent/availability.rs` | Machine-scoped backend discovery and startup CLI
-update/version refresh used to filter settings defaults and `/model` without shelling
-out directly from app or runtime orchestration. | | `AppServerClient` |
-`infra/app_server/contract.rs` | Provider-specific app-server RPC execution and session
-runtime lifecycle. | | `EventSource` | `runtime/event.rs` | Terminal event polling for
-deterministic event-loop tests. | | `Clock` | `infra/clock.rs` | Shared wall-clock and
-monotonic time boundary used by session orchestration, runtime render-throttle
-accounting, and helpers such as pasted-image file naming. The `RealClock` production
-adapter lives alongside the trait in `infra/`. | | `Backend` (generic) |
-`runtime/core.rs` | Runtime accepts `Terminal<B: Backend>` via `run_with_backend`,
-enabling in-process TUI tests with `TestBackend` without a real terminal. | |
-`TerminalOperation` | `runtime/terminal.rs` | Terminal raw-mode and alternate-screen
-transitions for deterministic setup and restore failure-path tests. | | `Sleeper` |
-`lib.rs` | Wall-clock sleep boundary used by retry/polling flows such as git rebase
-assistance. | | `UpdateRunner` | `infra/version.rs` | npm install command execution for
-background auto-updates. | | `VersionCommandRunner` | `infra/version.rs` | npm/curl
-command execution for update checks. | | `ProjectDiscoveryClient` |
-`infra/project_discovery.rs` | Home-directory repository discovery used by startup
-catalog refresh without walking the real filesystem from `app/`. | | `GitCommandRunner`
-| `infra/git/rebase.rs` | Rebase command invocation boundary for conflict/retry tests. |
-| `SyncAssistClient` | `app/session/workflow/merge.rs` | Sync-rebase assistance
-execution boundary. | | `ExistingSessionRebaseAssistClient` |
-`app/session/workflow/merge.rs` | Session rebase conflict assistance routed through the
-active session channel. | | `SessionRepository` | `infra/db/session.rs` | Session row
-persistence, turn metadata storage, and session list queries without binding app
-workflows to the full `Database` surface. | | `ProjectRepository` |
-`infra/db/project.rs` | Project persistence and project-list aggregation behind a narrow
-mockable boundary. | | `ReviewRepository` | `infra/db/review.rs` | Session
-review-request linkage persistence used by branch publish, refresh flows, and post-turn
-metadata sync. | | `UsageRepository` | `infra/db/usage.rs` | Per-session model usage
-aggregation used by turn persistence and usage views. | | `ActivityRepository` |
-`infra/db/activity.rs` | Session-activity history queries and backfill helpers used by
-startup and session list refresh. | | `OperationRepository` | `infra/db/operation.rs` |
-Persisted session-operation lifecycle tracking used by worker restart recovery and
-cancellation. | | `SettingRepository` | `infra/db/setting.rs` | Global and
-project-scoped setting persistence used by startup and settings orchestration. | |
-`AppServerClient` retry helpers | `infra/app_server/retry.rs` | Shared
-restart-and-replay orchestration for provider runtimes without duplicating lifecycle
-policy in each provider. | | `CodexRuntimeTransport` |
-`infra/agent/app_server/codex/transport.rs` | Codex stdio transport boundary for
-lifecycle, account usage, compaction, and turn-stream tests without scripted shell
-runtimes. | | `GeminiRuntimeTransport` | `infra/agent/app_server/gemini/transport.rs` |
-Gemini ACP stdio transport boundary for lifecycle, permission, prompt-content, and
-turn-stream tests without scripted shell runtimes. |
+| Trait | Module | Boundary | |-------|--------|----------| | `GitClient` |
+`infra/git/client.rs` | Git and worktree operations (merge, rebase, diff, push, status,
+ahead/behind). | | `FsClient` | `infra/fs.rs` | Async filesystem operations and path
+probes. | | `AgentChannel` | `infra/channel.rs` | Provider-agnostic turn execution. | |
+`AgentBackend` | `infra/agent/backend.rs` | Per-provider setup and transport command
+construction. | | `AppServerClient` | `infra/app_server/contract.rs` | Provider
+app-server RPC execution and session runtime lifecycle. | | `ReviewRequestClient` |
+`crates/ag-forge/src/client.rs` | GitHub/GitLab review-request orchestration through
+`gh`/`glab`. | | `EventSource` | `runtime/event.rs` | Terminal event polling for
+deterministic event-loop tests. | | `Clock` | `infra/clock.rs` | Wall-clock and
+monotonic time for session orchestration and render throttling. | | `TmuxClient` |
+`infra/tmux.rs` | Tmux subprocess operations for opening worktrees. | |
+`ClipboardImageClient` | `infra/clipboard_image.rs` | Clipboard image capture and
+temp-file persistence. | | Repository traits | `infra/db/*.rs` | Narrow persistence
+boundaries (`SessionRepository`, `ProjectRepository`, `ReviewRepository`,
+`UsageRepository`, `ActivityRepository`, `OperationRepository`, `SettingRepository`). |
 
-### Typed Error Enums at Infra Boundaries
+Beyond these, narrower internal command-runner boundaries (for example
+`ForgeCommandRunner`, `GitCommandRunner`, `TmuxCommandRunner`, `UpdateRunner`, and the
+provider transport traits) keep subprocess sequencing and retry behavior deterministic
+in unit tests. The runtime also accepts `Terminal<B: Backend>` via `run_with_backend`,
+enabling in-process TUI tests with `TestBackend`.
+
+## Typed Errors Across Layers
 
 <a id="architecture-typed-error-enums"></a> Each infra boundary exposes a typed error
-enum instead of opaque `String` errors, so the app layer can discriminate failure causes
-without parsing formatted messages.
-
-| Error Type | Module | Variants | Wraps | |------------|--------|----------|-------| |
-`DbError` | `infra/db/error.rs` | `Migration`, `Query`, `Io` | `sqlx::Error` | |
-`GitError` | `infra/git/error.rs` | `WorktreeCreate`, `WorktreeRemove`, `BranchDelete`,
-`Command`, etc. | `std::io::Error`, process exit details | | `AppServerTransportError` |
-`infra/app_server_transport.rs` | `Io`, `ProcessTerminated`, `Timeout` |
-`std::io::Error` | | `AppServerError` | `infra/app_server/error.rs` | `Transport`,
-`Provider`, `SessionNotFound`, `Shutdown` | `AppServerTransportError` via `#[from]` | |
-`AgentError` | `infra/channel/contract.rs` | `AppServer`, `Backend`, `Io` |
-`AppServerError` via `#[from]` | | `ClipboardError` | `infra/clipboard_image.rs` |
-`Unavailable`, `NoImage`, `Persist`, `PathResolve`, `SystemClock`, etc. | `arboard`,
-`image`, filesystem, clock, and task-join failures |
-
-The conversion chain `AppServerTransportError` → `AppServerError::Transport` →
-`AgentError::AppServer` allows `?`-propagation through the transport, provider, and
-channel layers without collapsing causal context into formatted strings.
-
-### Typed Error Propagation at the App Layer
+enum (`DbError`, `GitError`, `AppServerError`, `AgentError`, `ClipboardError`, and so
+on) instead of opaque `String` errors. The conversion chain `AppServerTransportError` →
+`AppServerError::Transport` → `AgentError::AppServer` allows `?`-propagation through the
+transport, provider, and channel layers without collapsing causal context into formatted
+strings.
 
 <a id="architecture-app-layer-typed-errors"></a> The app layer propagates infra errors
-through two orchestration-level enums instead of flattening them to `String`:
+through `SessionError` (`app/session/error.rs`) and `AppError` (`app/error.rs`), both of
+which wrap the infra enums via `#[from]` plus a `Workflow(String)` variant for
+contextual app-level failures. At event and display boundaries, errors are converted to
+`String` via `Display` because those types require `Clone` and `Eq`.
 
-| Error Type | Module | Wraps via `#[from]` |
-|------------|--------|---------------------| | `SessionError` | `app/session/error.rs`
-| `DbError`, `GitError`, `AppServerError`, plus `Workflow(String)` for contextual
-app-level failures | | `AppError` | `app/error.rs` | `SessionError`, `DbError`,
-`GitError`, plus `Workflow(String)` for contextual app-level failures |
-
-App-layer functions that cross infra boundaries return `AppError` or `SessionError` so
-callers can discriminate failure causes by variant. `SessionError::with_context` adds an
-operation-specific prefix to `Workflow` messages (for example *"Commit assistance
-failed: …"*) while passing typed infrastructure variants through unchanged. At event and
-display boundaries (for example `AppEvent` variants and `ReviewCacheEntry`), errors are
-converted to `String` via `Display` because those types require `Clone` and `Eq`, which
-the infra error types cannot satisfy due to non-cloneable inner types such as
-`std::io::Error`.
+## Testing Guidance
 
 <a id="architecture-boundary-testing-guidance"></a> When adding higher-level flows
 involving multiple external commands, prefer injectable trait boundaries and
@@ -137,21 +65,8 @@ coverage of subprocess sequencing or retry behavior.
 Apply the same rule to filesystem discovery and path probes in `app/` and `runtime/`:
 route directory walking, `exists` checks, `canonicalize`, and file copy or persistence
 helpers through an infra boundary instead of calling `std::fs` or `Path` helpers
-directly from orchestration code.
-
-Use the same pattern for time access in `app/` and `runtime/`: if orchestration logic
-needs `Instant::now()` or `SystemTime::now()`, route that call through the shared
-`Clock` boundary instead of calling the clock API directly in production logic.
-
-Session review-request publication and refresh follow this rule directly:
-`SessionManager` combines `GitClient` with `ReviewRequestClient` so tests can cover
-branch publish, duplicate detection, stored-link reuse, and archived session refresh
-without live forge auth or network state.
-
-Project sync follows the same pattern: `SyncOrchestrator` combines `GitClient`,
-`ReviewRequestClient`, `ReviewCommentCache`, and the mockable `SyncMainRunner` trigger
-so periodic status refreshes and manual `s` sync commands can be unit-tested without
-live git locks or forge CLI state.
+directly from orchestration code. Likewise, route `Instant::now()` and
+`SystemTime::now()` through the shared `Clock` boundary.
 
 ## TUI E2E Testing Framework (`testty`)
 
@@ -160,24 +75,15 @@ dual-oracle model for TUI end-to-end testing. The PTY path (`portable-pty` + `vt
 the semantic oracle for text, style, and location assertions; the VHS path is the visual
 oracle and review artifact generator.
 
-| Module | Purpose | |--------|---------| | `session` | PTY executor: spawns binaries in
-a pseudo-terminal, writes input, captures ANSI output. | | `frame` | Terminal frame
-parser: converts ANSI bytes into a cell grid with text, color, and style access. | |
-`region` | Rectangular region definitions with named anchors (top row, footer,
-quadrants, percentages). | | `locator` | Text locators with style/color filtering for
-identifying TUI controls. | | `assertion` | Structured matcher APIs:
-`assert_text_in_region`, `assert_span_is_highlighted`, `assert_match_count`. | |
-`recipe` | Agent-friendly helpers: `expect_selected_tab`, `expect_keybinding_hint`,
-`expect_dialog_title`. | | `scenario` / `step` | Scenario DSL: compose user journeys
-from steps, compile to PTY or VHS. | | `vhs` | VHS tape compiler: generates `.tape`
-files from scenarios for visual screenshot capture. | | `snapshot` | Paired baseline
-workflow: visual PNG + semantic frame sidecar with environment-driven update mode. | |
-`proof` | Proof pipeline: report collection plus pluggable backends (`frame_text`,
-feature-gated `gif`, `html`, `strip`). | | `journey` | Composable journey building
-blocks for declarative test authoring. | | `feature` | `FeatureDemo` builder for
-scenario execution with hash-cached VHS GIF generation. |
+| Module | Purpose | |--------|---------| | `session` | PTY executor: spawns binaries,
+writes input, captures ANSI output. | | `frame` | Terminal frame parser: ANSI bytes to a
+cell grid. | | `region` / `locator` | Rectangular regions and style-aware text locators.
+| | `assertion` / `recipe` | Structured matchers and agent-friendly expectation helpers.
+| | `scenario` / `step` / `journey` | Scenario DSL compiled to PTY or VHS. | | `vhs` /
+`snapshot` / `proof` | VHS tape compilation, paired baselines, proof backends. | |
+`feature` | `FeatureDemo` builder with hash-cached VHS GIF generation. |
 
 testty has no crate-root re-export module: every public item is addressable only through
-its owning module path (for example, `use testty::scenario::Scenario;` and
-`use testty::session::PtySessionBuilder;`). The `tests/public_api.rs` tripwire pins
-those per-module items as the documented stable surface.
+its owning module path (for example, `use testty::scenario::Scenario;`). The
+`tests/public_api.rs` tripwire pins those per-module items as the documented stable
+surface.

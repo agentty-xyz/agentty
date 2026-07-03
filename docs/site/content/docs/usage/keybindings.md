@@ -14,9 +14,13 @@ For session states and transition behavior, see [Workflow](@/docs/usage/workflow
 ## Session List
 
 | Key | Action | |-----|--------| | `q` | Quit | | `a` | Open session creation selector
-| | `s` | Sync active project branch | | `c` | Cancel the selected running session,
-review session, or unstarted draft session (confirmation popup) | | `Enter` | Open
-session | | `j` / `k` | Navigate sessions | | `Tab` | Switch tab | | `?` | Help |
+(`Regular`, `Draft`, `Stacked`) | | `s` | Sync active project branch | | `c` | Cancel
+the selected session (confirmation popup) | | `Enter` | Open session | | `j` / `k` |
+Navigate sessions | | `Tab` | Switch tab | | `?` | Help |
+
+In the `a` selector, `Stacked` is enabled only when the selected session is a root
+session with an active branch. `c` appears only for cancelable rows: running sessions,
+review-ready sessions, and unstarted draft sessions.
 
 ## Project List
 
@@ -24,17 +28,7 @@ session | | `j` / `k` | Navigate sessions | | `Tab` | Switch tab | | `?` | Help 
 `j` / `k` | Navigate projects | | `Tab` | Switch tab | | `?` | Help |
 
 <a id="usage-project-list-active-highlight"></a> The currently active project is
-highlighted in the table with a `* ` prefix and accented row text, even while cursor
-selection moves to other rows.
-
-On the **Sessions** list, `a` opens a popup with `Regular`, `Draft`, and `Stacked`.
-`Stacked` is enabled only when the selected session is a root session with an active
-branch. `Enter` chooses the highlighted option, `j` / `k` or `Up` / `Down` move between
-enabled options, and `Esc` / `q` closes the popup.
-
-On the **Sessions** list, `c` appears only when the selected row is cancelable: running
-sessions, review-ready sessions, and draft sessions that are still in `Draft` before
-their first staged bundle starts.
+highlighted in the table with a `* ` prefix and accented row text.
 
 ## Settings
 
@@ -44,23 +38,10 @@ or `Shift+Enter` | Add newline while editing `Open Commands` | | `Up` / `Down` /
 / `Right` | Move cursor while editing `Open Commands` | | `Tab` | Switch tab | | `?` |
 Help |
 
-<a id="usage-settings-options"></a> The Settings tab includes:
-
-The page is split into `Global settings` for the app-wide `Theme` row and
-`'<project>' settings` for rows stored against the active project.
-
-- `Theme` to switch the whole terminal UI between `Agentty Default`, the green
-  terminal-inspired `Agentty Green` palette, and the warm navy `Dark Horizon` palette
-  inspired by the Horizon editor theme. Agentty uses `Agentty Default` by default.
-- `Default Reasoning Level` (`low`, `medium`, `high`, `xhigh`) for Codex and Claude
-  turns in the active project.
-- `Default Smart Model`, `Default Fast Model`, and `Default Review Model` for the active
-  project. Explicit model values display and persist as `agent/model`, and
-  `Default Smart Model` can also cycle to `Last used model as default`.
-- `Coauthored by Agentty` to enable or disable the `Co-Authored-By` trailer on generated
-  session commit messages for the active project. New projects start with this disabled.
-- `Open Commands` for launching session worktrees in the active project (one command per
-  line).
+<a id="usage-settings-options"></a> The page is split into `Global settings` for the
+app-wide `Theme` row (`Agentty Default`, `Agentty Green`, or `Dark Horizon`) and
+`'<project>' settings` for the reasoning level, model defaults, commit coauthor toggle,
+and `Open Commands` rows described in [Workflow](@/docs/usage/workflow.md).
 
 ## Logs
 
@@ -68,23 +49,13 @@ The page is split into `Global settings` for the app-wide `Theme` row and
 Jump to oldest retained log entries | | `G` | Jump to newest log entries | | `Tab` |
 Switch tab | | `?` | Help |
 
-The **Logs** tab is process-local and read-only. It keeps the newest `1000` system log
-entries in memory only, so entries disappear when Agentty exits and the oldest retained
-entries are purged as new ones arrive.
-
 ## Review
 
 | Key | Action | |-----|--------| | `q` | Quit | | `j` / `k` | Navigate reviews | |
-`Enter` | Open review details | | `s` | Refresh PRs/MRs requesting your review for the
-active project | | `Tab` | Switch tab | | `?` | Help |
+`Enter` | Open review details | | `s` | Refresh PRs/MRs requesting your review | | `Tab`
+| Switch tab | | `?` | Help |
 
-The **Review** tab is read-only: it lists matching GitHub pull requests and GitLab merge
-requests, including drafts marked with `Draft`. GitHub rows are separated into direct
-review requests and team-sourced review requests. Use `j` / `k` to select a review, then
-press `Enter` to open a read-only detail page with the review title, author, rendered
-description, review-request-wide comments, and inline comment threads. The detail page
-opens immediately and shows a comment loading message until the background forge request
-finishes. On the detail page, use `j` / `k` or `Up` / `Down` to scroll, `Ctrl+d` /
+On the read-only detail page, use `j` / `k` or `Up` / `Down` to scroll, `Ctrl+d` /
 `Ctrl+u` to move by half pages, `g` / `G` to jump to the top or bottom, and `q` / `Esc`
 to return to the review list.
 
@@ -94,85 +65,40 @@ to return to the review list.
 The full set in **Review** state:
 
 | Key | Action | |-----|--------| | `q` | Back to list | | `Enter` | Compose the first
-prompt or reply; in draft sessions it adds a draft; while the session is **InProgress**
-it opens the composer to queue the next chat message inline with a `queued ›` prefix | |
-`/` | Open the composer with `/` prefilled for slash commands | | `s` | Start a staged
-draft session | | `o` | Open worktree in tmux when the session worktree exists | | `p` |
-Publish session branch and create or refresh forge review request | | `d` | Show diff |
-| `f` | Append focused review output (regenerate if already present) | | `m` | Add to
-merge queue (confirmation popup) | | `r` | Sync session branch | | `j` / `k` | Scroll
-output | | `g` | Scroll to top | | `G` | Scroll to bottom | | `Ctrl+d` | Half page down
-| | `Ctrl+u` | Half page up | | `Ctrl+c` | During **InProgress**: while the queue has
-staged chat messages, each press retracts the most recently queued message (LIFO) and
-leaves the running turn alone; once the queue is empty, the next press stops the current
-turn and returns the session to **Review** | | `?` | Help |
+prompt, a reply, or a queued message during a running turn | | `/` | Open the composer
+with `/` prefilled for slash commands | | `s` | Start a staged draft session | | `o` |
+Open worktree in tmux when the session worktree exists | | `p` | Publish session branch
+and create or refresh forge review request | | `d` | Show diff | | `f` | Append focused
+review output (regenerate if already present) | | `m` | Add to merge queue (confirmation
+popup) | | `r` | Sync session branch | | `j` / `k` | Scroll output | | `g` / `G` |
+Scroll to top / bottom | | `Ctrl+d` / `Ctrl+u` | Half page down / up | | `Ctrl+c` |
+Retract the newest queued message, or stop the running turn when the queue is empty | |
+`?` | Help |
 
-During **AgentReview**, Agentty keeps the same review-oriented shortcuts but hides `r`
-until the background focused-review generation finishes and the session returns to
-**Review**.
+State-specific differences:
 
-For stacked parents with a materialized child, `Enter` and `r` remain available when no
-stack member is actively running, queued, syncing, merging, or waiting on a question.
-Slash-command and merge shortcuts such as `/` and `m` stay hidden until the child is
-terminal or no longer linked. Pressing `r` on the parent syncs the parent first, then
-rebases review-ready materialized children onto the refreshed parent branch. When a
-parent reply completes in **Review**, Agentty performs the same child rebase fan-out
-automatically.
+- **AgentReview** keeps the review shortcuts but hides `r` until the focused review
+  finishes.
+- **Draft** sessions hide `o` until the worktree exists; stacked drafts hide `m` and `r`
+  and show `s` only when the parent is review-ready and the stack is idle.
+- Stacked parents with a materialized child keep `Enter` and `r` while the stack is
+  idle, but hide `/` and `m` until the child is terminal or no longer linked.
+- **Done** sessions offer `c` to start a continuation draft (confirmation popup).
+- **Canceled**, **Queued**, **Rebasing**, and **Merging** sessions are read-only (`q`,
+  scroll, help).
 
-<a id="usage-additional-keys"></a> Additional notes:
-
-- **Open command behavior**: `o` opens the session worktree in tmux when a local
-  worktree is available and the session is not actively running, rebasing, queued, or
-  merging. If one `Open Commands` entry is configured for the active project, it runs
-  immediately. If multiple entries are configured (one command per line), Agentty opens
-  a selector popup. Run Agentty in `tmux` when you rely on `Open Commands`, because
-  those commands are dispatched into tmux windows.
-- **Draft sessions**: sessions created through the `a` selector do not create a worktree
-  until you press `s` to start the staged bundle, so `o` stays hidden before the first
-  live turn. Stacked drafts can stage messages immediately, but `s` appears only when
-  the parent is review-ready and no stack member is already running, queued, syncing,
-  merging, or waiting on a question. Their action list hides `m` and `r` until the
-  stacked draft launches.
-- **Forge review-request publish**: `p` is available in **Review** and **AgentReview**
-  and opens a publish popup. Press `Enter` with an empty field to keep the default
-  session branch target, or type a custom remote branch name first. Agentty pushes the
-  branch, then creates or refreshes the linked forge review request after the push
-  succeeds. Stacked child review requests target the parent review branch while the
-  parent link remains active. When no request is linked yet, only an open same-branch
-  request is reused. GitHub projects publish pull requests, while GitLab projects
-  publish merge requests.
-- **Focused review persistence**: when a focused review has already been generated, it
-  stays visible after opening `d` diff mode, returning to the session view, or entering
-  **Question** mode for clarifications.
-- **Branch publish lock**: once a session branch already tracks a remote branch, Agentty
-  locks the popup field and re-publishes to that same remote branch only.
-- **Branch publish auth**: `p` always runs `git push` first. HTTPS remotes therefore
-  need Git credentials even when the forge CLI is already logged in. Review-request
-  publishing also needs authenticated `gh` access for GitHub repositories and
-  authenticated `glab` access for GitLab repositories. See
-  [Forge Authentication](@/docs/usage/forge-authentication.md) for the GitHub and GitLab
-  CLI setup steps.
-- **Question**: opening the session enters Question Input mode until all prompts are
-  answered and submitted, the clarification turn is ended with `Ctrl+C`, or the user
-  exits to the sessions list with `q`.
-- **Done**: `c` opens a yes/no confirmation, then creates a new draft composer with the
-  continuation text already staged as the first draft message. When Agentty has the
-  merged hash, including the session branch `HEAD` hash captured when a synced GitHub PR
-  or GitLab MR is already merged, that staged message is
-  `Summarize changes from <full-hash> to use it as an initial context for this session`;
-  otherwise it falls back to the saved summary/transcript.
-- **Canceled**: continuation is unavailable; use `q`, scroll, or help from the read-only
-  session view.
-- **Review**: Runs in read-only review mode. It can use internet lookup and non-editing
-  verification commands, but it should not edit files or mutate git/workspace state.
+`o` runs the configured `Open Commands` entry, or opens a selector popup when several
+are configured. Run Agentty inside `tmux` when you rely on `Open Commands`, because
+those commands are dispatched into tmux windows. Publish (`p`), sync (`r`), and stacked
+behavior are described in [Workflow](@/docs/usage/workflow.md).
 
 ## Publish Popup
 
 | Key | Action | |-----|--------| | `Enter` | Publish using the typed branch name, or
-the default session branch target when left blank | | `Esc` / `q` | Cancel and return to
-session view | | `Left` / `Right` / `Home` / `End` | Move cursor | | `Up` / `Down` |
-Move cursor across wrapped lines | | `Backspace` / `Delete` | Delete character | | text
-keys | Edit remote branch name |
+the default target when blank | | `Esc` / `q` | Cancel and return to session view | |
+`Left` / `Right` / `Home` / `End` | Move cursor | | `Up` / `Down` | Move cursor across
+wrapped lines | | `Backspace` / `Delete` | Delete character | | text keys | Edit remote
+branch name |
 
 ## Open Command Selector
 
@@ -182,56 +108,32 @@ worktree and run selected command | | `Esc` / `q` | Cancel and return to session
 ## Diff Mode
 
 Pressing `d` from session view opens diff mode with the right panel showing the git
-diff. Pressing `c` from session view opens the same diff mode but with the right panel
-switched to review-request comments. Within diff mode, press `c` to toggle the right
-panel between the git diff and the cached review-request comments without leaving the
-page.
+diff. Within diff mode, press `c` to toggle the right panel between the annotated git
+diff and the cached review-request comments.
 
 | Key | Action | |-----|--------| | `q` / `Esc` | Back to session | | `j` / `k` | Select
 file | | `Up` / `Down` | Scroll selected panel | | `c` | Toggle right panel between diff
 and comments | | `?` | Help |
 
-<a id="usage-diff-totals"></a> When the right panel shows the git diff, its title
-includes aggregate line totals as `+added` and `-removed` counts for the current session
-diff, and cached pull-request or merge-request line comments are rendered inline below
-matching diff lines. When the right panel shows review-request comments, it lists the
-same cached inline threads as an overview plus pull-request-level or merge-request-level
-"General discussion" comments. Resolved inline threads are hidden from both views. The
-comments panel is read-only; replies must happen on the forge web UI. Comment threads
-are fetched by the background review-request sync task and are pre-sorted by file path,
-line, and diff side.
+<a id="usage-diff-totals"></a> The diff panel title includes aggregate `+added` and
+`-removed` line totals, and cached review-request line comments render inline below
+matching diff lines. See [Workflow](@/docs/usage/workflow.md) for the comments panel
+behavior.
 
 ## Prompt Input
 
-| Key | Action | |-----|--------| | `Enter` | Submit the first prompt in a regular
-session that is still `Draft`, stage one prompt in a draft session that is still
-`Draft`, or submit reply/question text elsewhere | | `Alt+Enter` or `Shift+Enter` |
-Insert newline | | `Ctrl+V`, `Ctrl+Shift+V`, or `Alt+V` | Paste one clipboard image as
-an inline `[Image #n]` placeholder | | `Cmd+Left` | Move to start of current line | |
-`Cmd+Right` | Move to end of current line | | `Option+Left` | Move to previous word | |
-`Option+Right` | Move to next word | | `Option+Backspace` | Delete previous word | |
-`Cmd+Backspace` | Delete current line | | `Esc` | Cancel | | `@` | Open file picker | |
-`/` | Open slash commands |
-
-Prompt input keeps regular text paste on terminal `Event::Paste`. The dedicated image
-paste shortcuts insert highlighted `[Image #n]` tokens directly in the composer and send
-the referenced local image for Codex, Antigravity, and Claude session models. On Linux,
-clipboard image capture supports both X11 and Wayland data-control clipboard backends,
-including Wayland compositors such as Hyprland. Codex preserves the multimodal ordering
-at transport level, while Antigravity and Claude rewrite the placeholders to local image
-paths before streaming the prompt.
+| Key | Action | |-----|--------| | `Enter` | Submit the prompt, or stage it as a draft
+in draft sessions | | `Alt+Enter` or `Shift+Enter` | Insert newline | | `Ctrl+J` /
+`Ctrl+M` | Insert newline (terminal compat fallback) | | `Ctrl+V`, `Ctrl+Shift+V`, or
+`Alt+V` | Paste one clipboard image as `[Image #n]` | | `Cmd+Left` / `Cmd+Right` | Move
+to start / end of current line | | `Option+Left` / `Option+Right` | Move to previous /
+next word | | `Option+Backspace` | Delete previous word | | `Cmd+Backspace` | Delete
+current line | | `Esc` | Cancel | | `@` | Open file picker | | `/` | Open slash commands
+|
 
 Agentty requests enhanced keyboard reporting from supporting terminals and `tmux` panes
-so remote sessions can distinguish `Shift+Enter` from plain `Enter`. `Ctrl+J` and
-`Ctrl+M` remain fallback newline shortcuts when a terminal or multiplexer does not
-forward modified `Enter`.
-
-When the current session was created as `Draft`, pressing `Enter` stages the current
-composer contents into the draft bundle and returns to session view. Use `s` from
-session view to launch the staged bundle as the first live turn. For a `Stacked` draft,
-that start action creates the child worktree from the parent session branch after the
-parent is review-ready and the stack has no other active branch work. Sessions created
-as `Regular` start immediately on the first `Enter`.
+so remote sessions can distinguish `Shift+Enter` from plain `Enter`. Image paste and `@`
+lookup behavior are described in [Workflow](@/docs/usage/workflow.md).
 
 ## Question Input — Option Selection
 
@@ -247,37 +149,32 @@ review without answering |
 After moving above or below the predefined option list, or when no predefined options
 exist:
 
-| Key | Action | |-----|--------| | `Enter` | Submit typed response | | `Alt+Enter` or
-`Shift+Enter` | Insert newline | | `Ctrl+J` / `Ctrl+M` | Insert newline (macOS terminal
-compat) | | `Ctrl+C` | End turn — return to review without answering | | `Left` /
-`Right` | Move cursor | | `Up` / `Down` | Move cursor across wrapped lines | |
-`Backspace` / `Delete` | Delete character | | `Home` / `End` | Move cursor to start/end
-| | `Cmd+Left` | Move to start of current line | | `Cmd+Right` | Move to end of current
-line | | `Option+Left` / `Option+Right` | Move to previous / next word | |
-`Option+Backspace` | Delete previous word | | `Cmd+Backspace` | Delete current line | |
-`Ctrl+K` | Kill to end of current line | | `Ctrl+W` | Delete previous word | | `Ctrl+D`
-| Delete character forward | | `Tab` | Switch focus to chat output for scrolling |
+| Key | Action | |-----|--------| | `Enter` | Submit typed response (blank stores
+`no answer`) | | `Alt+Enter` or `Shift+Enter` | Insert newline | | `Ctrl+J` / `Ctrl+M` |
+Insert newline (terminal compat fallback) | | `Ctrl+C` | End turn — return to review
+without answering | | `Esc` | End turn when the answer text is empty | | `Left` /
+`Right` / `Up` / `Down` | Move cursor | | `Backspace` / `Delete` | Delete character | |
+`Home` / `End` | Move cursor to start / end | | `Cmd+Left` / `Cmd+Right` | Move to start
+/ end of current line | | `Option+Left` / `Option+Right` | Move to previous / next word
+| | `Option+Backspace` / `Ctrl+W` | Delete previous word | | `Cmd+Backspace` | Delete
+current line | | `Ctrl+K` | Kill to end of current line | | `Ctrl+D` | Delete character
+forward | | `Tab` | Switch focus to chat output for scrolling |
 
 In free-text mode every other printable character — including `q` — is inserted into the
-answer so responses can contain it. To exit the question without answering, press `Tab`
-to focus the chat output (or navigate back into the option list when the question has
-predefined options) and then press `q`, or press `Ctrl+C` from any focus to cancel the
-turn.
+answer. To leave without answering, press `Tab` to focus the chat output and then `q`,
+or press `Ctrl+C` from any focus to end the turn.
 
 ## Question Input — Chat Scroll
 
 When chat output is focused (press `Tab` to switch):
 
 | Key | Action | |-----|--------| | `j` / `k` / `Up` / `Down` | Scroll chat output | |
-`g` | Scroll to top | | `G` | Scroll to bottom | | `Ctrl+d` | Half page down | |
-`Ctrl+u` | Half page up | | `d` | Open diff preview for the current session | | `Enter`
-/ `Esc` | Return focus to answer input | | `Tab` | Switch focus back to answer input | |
-`q` | Return to the sessions list | | `Ctrl+C` | End turn — return to review without
-answering |
+`g` / `G` | Scroll to top / bottom | | `Ctrl+d` / `Ctrl+u` | Half page down / up | | `d`
+| Open diff preview for the current session | | `Enter` / `Esc` / `Tab` | Return focus
+to answer input | | `q` | Return to the sessions list | | `Ctrl+C` | End turn — return
+to review without answering |
 
 <a id="usage-question-input-submit-flow"></a> After the last question is answered,
-Agentty sends one follow-up message to the session with each question and its response,
-then returns to session view. Pressing `Ctrl+C` at any point ends the turn immediately
-without sending a reply and returns the session to review. Pressing `q` (outside
-free-text input) returns to the sessions list while leaving the session in **Question**
-state so the clarification can be resumed by reopening it.
+Agentty sends one follow-up message with each question and its response, then returns to
+session view. Pressing `q` (outside free-text input) returns to the sessions list while
+leaving the session in **Question** state so the clarification can be resumed later.

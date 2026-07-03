@@ -88,8 +88,6 @@ through the correct modules without crossing layer boundaries.
 1. Treat render-time helpers as hot paths: avoid per-frame cloning of large render
    inputs, and make line-count/layout helpers reuse the same cached derived data as the
    final paint path.
-1. When adding/removing files in `runtime/mode/`, update the runtime-mode file list in
-   `docs/site/content/docs/architecture/module-map.md`.
 1. When changing `TurnRequest`/`TurnEvent`/`TurnResult` shapes in
    `crates/agentty/src/infra/channel/contract.rs` (re-exported by
    `crates/agentty/src/infra/channel.rs`), update the key-types table in

@@ -5,9 +5,10 @@ weight = 2
 +++
 
 <a id="architecture-runtime-flow-introduction"></a> This guide documents Agentty's
-runtime data flows end to end: the foreground event loop, reducer/event buses,
-session-worker turn execution, merge/rebase/sync orchestration, and every background
-task with trigger points and side effects.
+runtime data flows at a high level: the foreground event loop, reducer/event buses,
+session-worker turn execution, merge/rebase/sync orchestration, and background tasks.
+Implementation details live in the module docstrings; this page explains how the pieces
+fit together.
 
 <!-- more -->
 
@@ -26,12 +27,10 @@ these constraints:
 ## Workspace Map
 
 | Path | Responsibility | |------|----------------| | `crates/ag-forge/` | Shared forge
-review-request library crate for normalized review-request types, GitHub/GitLab remote
-detection, and `gh`/`glab` adapter orchestration. | | `crates/agentty/` | Main TUI
-application crate (`agentty`) with runtime, app orchestration, domain, infrastructure,
-and UI modules. | | `crates/ag-xtask/` | Workspace maintenance commands (migration
-checks, workspace-map generation, automation helpers). | | `docs/site/content/docs/` |
-End-user and contributor documentation published at `/docs/`. |
+review-request library (`gh`/`glab` adapters). | | `crates/agentty/` | Main TUI
+application crate. | | `crates/testty/` | TUI end-to-end testing framework. | |
+`crates/ag-xtask/` | Workspace maintenance and automation commands. | |
+`docs/site/content/docs/` | End-user and contributor documentation. |
 
 ## Main Runtime Flow
 
@@ -78,442 +77,89 @@ flowchart TD
 
 - `run_main_loop()` drains one bounded batch of queued app events before draw so touched
   sessions sync from their live handles without a full list-wide sweep every frame.
-- `process_events()` waits on terminal events, app events, or tick with Tokio's default
-  fair `select!` polling order.
-- After one event, it drains a bounded batch of queued terminal events immediately to
-  avoid one-key-per-frame lag while still yielding to redraw/tick cycles under input
-  floods.
-- Tick interval is `50ms`; metadata-based session reload fallback is `5s`
-  (`SESSION_REFRESH_INTERVAL`).
+- `process_events()` waits on terminal events, app events, or tick, then drains a
+  bounded batch of queued terminal events to avoid one-key-per-frame lag.
+- Tick interval is `50ms`; metadata-based session reload fallback is `5s`.
 
 ## Data Channels
 
 <a id="architecture-runtime-flow-channels"></a> Agentty uses four primary runtime data
 channels:
 
-### Terminal `Event` channel (`runtime/event.rs`)
+- **Terminal `Event` channel** (`runtime/event.rs`): the event-reader thread forwards
+  `crossterm` events into `runtime::process_events()`.
+- **App event bus** (`AppEvent`): background tasks and workers send typed events into
+  the `App::apply_app_events()` reducer for safe cross-task state mutation.
+- **Turn event stream** (`TurnEvent`): `AgentChannel` implementations stream transient
+  loader-thought and PID updates to the session turn consumer while the final transcript
+  waits for the completed turn result.
+- **Session handles** (`SessionHandles`): shared `Arc<Mutex<...>>` output, status, PID,
+  and queued-message state. Handles are the single source of truth for live session
+  data; the reducer re-projects them into render snapshots on `SessionUpdated` without a
+  full DB reload.
 
-- Producer(s): Event-reader thread
-- Consumer(s): `runtime::process_events()`
-- Payload: `crossterm::Event`
-- Purpose: User input and terminal events.
-
-### App event bus (`AppEvent`)
-
-- Producer(s): App background tasks, workers, and task helpers
-- Consumer(s): `App::apply_app_events()` reducer
-- Payload: `AppEvent` variants
-- Purpose: Safe cross-task app-state mutation, including process-local system log
-  recording.
-
-### Turn event stream (`TurnEvent`)
-
-- Producer(s): `AgentChannel` implementations
-- Consumer(s): Session turn execution `consume_turn_events()`
-- Payload: Loader-thought and pid updates
-- Purpose: Transient loader updates and PID updates while final transcript output waits
-  for the completed turn result.
-
-### Session handles (`SessionHandles`)
-
-- Producer(s): Workers and session task helpers
-- Consumer(s): `App::apply_app_events()` via `SessionUpdated`-driven
-  `sync_session_from_handle()` calls
-- Payload: Shared `Arc<Mutex<...>>` output, status, pid handles, and the in-memory
-  `queued_messages` deque
-- Purpose: Fast targeted snapshot sync without a full DB reload. Handles are the single
-  source of truth for `output`, `status`, and the chat queue;
-  `sync_session_with_handles()` re-projects all three into the snapshot, so queue
-  mutations (lifecycle enqueue, worker drain between turns, runtime LIFO pop) only need
-  to touch the handle and emit `SessionUpdated`.
-
-## App Event Reducer Flow
+## App Event Reducer
 
 <a id="architecture-runtime-flow-app-events"></a> `App::apply_app_events()` is the
-single reducer path for async app events.
+single reducer path for async app events. Each cycle drains queued events up to a
+bounded budget, coalesces them into one `AppEventBatch` (refresh, git status, model, and
+loader updates), and applies side effects in stable order. Key behaviors:
 
-Flow:
+- Refresh events set reload flags instead of reloading inline; the expensive
+  home-directory project discovery runs only during `App::new()`.
+- Git-status and review-request events carry a sync-context generation so stale
+  completions are discarded after the active project or session changes.
+- Externally merged review requests transition sessions to `Done`; closed requests
+  transition them to `Canceled`.
+- Terminal statuses (`Done`, `Canceled`) drop per-session worker senders so workers can
+  shut down their runtimes.
 
-1. Drain queued events up to the per-cycle budget (`first_event` + bounded `try_recv`
-   loop).
-1. Reduce into `AppEventBatch` (coalesces refresh, git status, model, and
-   loader-thinking updates).
-1. Apply side effects in stable order.
-
-Reducer behaviors that matter for data flow:
-
-- `RefreshSessions` sets `should_reload_sessions`, which triggers
-  `refresh_sessions_now()` without reloading project rows.
-- `RefreshProjects` sets `should_reload_projects`, which triggers `reload_projects()`
-  for project-table metadata and aggregate session counts.
-- `reload_projects()` now reloads only persisted project rows; the expensive
-  home-directory repository discovery pass runs only during `App::new()`.
-- `BranchPublishActionCompleted` swaps the session-view popup from loading to success or
-  blocked/failure copy after the session-view `p` review-request publish flow finishes.
-- `ReviewRequestStatusUpdated` persists refreshed forge summaries for review-ready
-  sessions and silently transitions externally merged sessions to `Done` or externally
-  closed sessions to `Canceled`. Git-status and review-request status events carry a
-  sync-context generation, and the reducer discards stale completions after the active
-  project or session target snapshot changes.
-- `SessionUpdated` marks touched sessions so reducer can call
-  `sync_session_from_handle()` selectively.
-- `SessionProgressUpdated` refreshes transient loader text used by the session view.
-- `AgentResponseReceived` routes question-mode transitions for active view sessions and
-  applies the worker's reducer-ready turn projection (summary, questions, token deltas)
-  to the currently loaded session.
-- `PublishedBranchSyncUpdated` tracks detached post-turn auto-push state for
-  already-published session branches so stale background completions do not overwrite
-  newer sync attempts in the active session view.
-- `SystemLog` appends structured source/severity/message entries to the process-local
-  bounded log buffer that backs the top-level **Logs** tab.
-- After touched-session sync, terminal statuses (`Done`, `Canceled`) drop per-session
-  worker senders so workers can shut down runtimes.
-
-## Session Chat Rendering Flow
+## Session Chat Rendering
 
 <a id="architecture-runtime-flow-session-chat"></a> The session chat panel is rendered
 by `crates/agentty/src/ui/page/session_chat.rs` and
-`crates/agentty/src/ui/component/session_output.rs`. The page chooses which session is
-visible and which auxiliary view state applies; the component turns that state into the
-exact lines printed inside the bordered output panel.
+`crates/agentty/src/ui/component/session_output.rs`. The durable transcript is the
+ordered `session_message` rows (typed `UserPrompt`, `AssistantAnswer`, `WorkflowNotice`,
+and `LegacyTranscript` rows); the component layers synthetic content on top at render
+time: the `session.summary` block, focused review text, the published-branch sync row,
+and the animated loader row. Structured clarification questions render in the bottom
+question panel (`AppMode::Question`), not inside the output component.
 
-### Data Origins
-
-The printed session-chat data comes from these sources:
-
-- Durable transcript text is loaded from ordered `session_message` rows in
-  `crates/agentty/src/app/session/workflow/load.rs`, converted through
-  `SessionTranscript::to_legacy_output()`, then kept hot in the render snapshot
-  `Session.output` field and per-session handle via
-  `crates/agentty/src/app/session_state.rs`. Runtime workers append user and assistant
-  content through `SessionTaskService::append_session_output_message()` and append
-  workflow notices through `SessionTaskService::append_session_output()` in
-  `crates/agentty/src/app/session/workflow/task.rs`; both paths insert typed
-  `session_message` rows, refresh `session.updated_at`, and update only the in-memory
-  handle buffer. The legacy `session.output` database column is retained as a migration
-  backup and is not a runtime read/write source.
-- `active_prompt_output` Cached by `SessionManager::set_active_prompt_output()` in
-  `crates/agentty/src/app/session/core.rs` when a start or reply prompt is submitted.
-  This stores the exact prompt-shaped render block for the typed `UserPrompt` row that
-  was just inserted, so `SessionOutput` can split completed-turn content from the
-  currently active turn without reparsing generic prompt-looking lines from assistant
-  output.
-- `session.summary` Persisted by post-turn application in
-  `crates/agentty/src/app/session/workflow/post_turn.rs` as the raw protocol `summary`
-  payload. `App::apply_agent_response_received()` in `crates/agentty/src/app/core.rs`
-  now applies that same raw payload to the in-memory session snapshot immediately, and
-  `crates/agentty/src/ui/component/session_output.rs` renders the synthetic summary
-  block from `session.summary` instead of storing a second markdown copy inside the
-  durable transcript. For merged/done flows, merge helpers can rewrite the stored value
-  into a display-oriented markdown form before the next reload.
-- `session.questions` Persisted by the worker alongside the latest turn metadata and
-  applied immediately by the reducer, but these items do not render inside
-  `SessionOutput`. Instead they drive `AppMode::Question`, where the bottom question
-  panel renders the current question and its options/input while the transcript panel
-  remains visible above it.
-- `review_status_message` and `review_text` Stored on `AppMode::View` and its
-  restore-view variants, with successful focused review text also persisted on the
-  `session` row as the last focused-review cache entry. Review mode is opened from
-  `crates/agentty/src/runtime/mode/session_view.rs`, which either reuses a cached
-  review, shows a loading message, or starts a review-assist task. That task emits
-  `ReviewPrepared` / `ReviewPreparationFailed`, and `App::apply_review_update()` in
-  `crates/agentty/src/app/core/events.rs` writes the resulting text or error/status
-  message back into the active view mode while the reducer persists successful text for
-  restart hydration.
-- `active_progress` Sourced from `App::session_progress_message()` in
-  `crates/agentty/src/app/core.rs`. Session task helpers emit
-  `AppEvent::SessionProgressUpdated` from
-  `crates/agentty/src/app/session/workflow/task.rs`, the reducer batches those updates,
-  and session view mode reads the latest message before rendering.
-
-### Output Assembly Diagram
-
-`SessionOutput` renders from the formatted `Session.output` render snapshot assembled
-from `session_message` rows. The component assembles the panel from that snapshot plus
-synthetic metadata and transient view state:
-
-```mermaid
-flowchart TD
-  render["SessionChatPage render_session()"]
-  lines["SessionOutput output_lines()"]
-  render --> lines
-
-  base["Choose base body text"]
-  lines --> base
-  base --> draft["Draft preview<br/>(draft-status session)"]
-  base --> transcript["Session.output render snapshot<br/>(all other statuses)"]
-
-  split["Split transcript with active_prompt_output"]
-  completed["Completed-turn text"]
-  active["Active-turn text"]
-  lines --> split
-  split --> completed
-  split --> active
-
-  completed --> spacing["Normalize prompt spacing"]
-  spacing --> footer_split["Peel trailing workflow notice block"]
-  footer_split --> footer_kind["Commit, assist, or error notice"]
-  footer_split --> completed_md["Render completed-turn markdown"]
-
-  completed_md --> summary["Append synthetic session.summary block"]
-  summary --> footer["Append trailing workflow notices"]
-  footer --> active_prompt["Append active-turn prompt block"]
-  active_prompt --> review["Append focused review markdown<br/>(review_text)"]
-  review --> branch_sync["Append published-branch sync row<br/>(auto-push started, completed, or failed)"]
-  branch_sync --> final_row["Append final status row<br/>or done continuation hint"]
-```
-
-This means `session_message` is the durable transcript. `UserPrompt` and
-`AssistantAnswer` rows store normalized raw content, `WorkflowNotice` rows store exact
-formatted notice text, and `LegacyTranscript` rows preserve pre-migration transcript
-strings losslessly. When a legacy row appears after earlier canonical rows, it acts as a
-checkpoint for that prior history so render assembly does not duplicate the old
-transcript before later rows. Summary and focused review are still layered on during
-render instead of being appended back into that transcript string.
-
-`App` owns one UI `RenderCacheStore` instead of individual concrete render caches and
-threads that store's shared markdown, diff, and session-output caches through
-`RenderContext`, the router, overlay restore state, and `SessionChatPage`. The markdown
-cache deduplicates rendered markdown blocks, while the layout cache deduplicates the
-fully assembled `Line` list and line count for matching session id/update version,
-width, active prompt, review text/status, progress text, and markdown style version.
-Changes in this area should keep caches bounded and avoid introducing separate
-layout-only render passes that bypass the shared cache.
-
-### Render Path
-
-The exact session-chat render path is:
-
-1. `crates/agentty/src/runtime/mode/session_view.rs` calculates the visible output
-   height by calling `SessionChatPage::rendered_output_line_count(...)` with the
-   selected `Session`, `review_status_message`, `review_text`, and the latest
-   `active_progress`.
-1. `crates/agentty/src/ui/page/session_chat.rs` builds `SessionOutput` inside
-   `render_session()`, forwarding the same render inputs plus scroll offset.
-1. `SessionChatPage::render_session_header()` prints the single-line session header
-   above the bordered output region.
-1. `SessionOutput::output_text()` in `crates/agentty/src/ui/component/session_output.rs`
-   selects the base text: staged draft preview for draft-status sessions, otherwise the
-   `Session.output` render snapshot assembled from `session_message`.
-1. `SessionOutput::output_lines()` converts that source text into final panel lines: it
-   optionally splits the transcript using `active_prompt_output`, normalizes prompt
-   spacing, splits any trailing workflow notices, renders the completed-turn markdown,
-   appends the synthetic summary block from `session.summary` when the current status
-   and prompt state allow it, reattaches the trailing workflow notices, appends the
-   active prompt block, appends focused review markdown from `review_text`, appends the
-   published-branch sync row when a detached auto-push starts, completes, or fails, and
-   finally adds the loader row or done continuation hint when the current status
-   requires it.
-1. `SessionOutput::render()` writes the final `Line` list into a `ratatui` `Paragraph`,
-   then applies a Tachyonfx pulse over the active loader glyph cells when the status row
-   is visible in the session chat output area.
-
-### Print Timing
-
-The session output panel shows different data at different lifecycle points:
-
-```mermaid
-flowchart TD
-  submit["Start or reply submitted"]
-  submit --> append_prompt["Insert UserPrompt row"]
-  submit --> cache_prompt["Cache same block as active_prompt_output"]
-  submit --> progress["Render loader row from active_progress"]
-
-  turn_done["Turn completes"]
-  append_prompt --> turn_done
-  cache_prompt --> turn_done
-  progress --> turn_done
-
-  turn_done --> answer["Insert AssistantAnswer row"]
-  answer --> answer_kind["Protocol answer<br/>or joined clarification-question text"]
-  turn_done --> metadata["Persist and apply latest-turn metadata"]
-  metadata --> summary_meta["session.summary"]
-  metadata --> question_meta["session.questions"]
-  turn_done --> clear_active["Drop active_prompt_output"]
-  turn_done --> next_status["Move session to Review or Question"]
-
-  next_status --> review_run["Focused review runs"]
-  review_run --> review_loader["Render AgentReview loader row<br/>from review_status_message"]
-  review_run --> review_text["Append review_text<br/>after transcript content"]
-
-  question_meta --> clarifications["Clarification answers submitted"]
-  clarifications --> clarification_prompt["Runtime builds one normal reply prompt<br/>starting with Clarifications:"]
-  question_meta --> end_turn["Esc ends clarification turn<br/>and restores Review without a reply"]
-```
-
-### What Prints, When It Prints, and When It Stops Showing
-
-Use the artifact-by-artifact reference below instead of a wide comparison table. Each
-item keeps the same four questions grouped vertically so the page stays readable on
-narrow screens.
-
-#### User prompt blocks
-
-- Comes from: `UserPrompt` rows serialized into the `Session.output` render snapshot and
-  `active_prompt_output`
-- Prints: immediately after start or reply submission. The same block stays in the
-  transcript after the turn finishes.
-- Hidden or removed: the transcript entry is durable. Only the transient
-  `active_prompt_output` cache is removed after turn metadata is applied or when the
-  session is no longer active.
-
-#### Assistant answer
-
-- Comes from: `AssistantAnswer` rows serialized into the `Session.output` render
-  snapshot
-- Prints: after a successful turn when protocol `answer` is non-empty.
-- Hidden or removed: durable transcript entry; not removed by `SessionOutput`.
-
-#### Clarification question text from the assistant
-
-- Comes from: `AssistantAnswer` rows containing joined clarification text when no
-  protocol `answer` exists
-- Prints: after a successful turn with questions but without top-level `answer` text.
-- Hidden or removed: durable transcript entry once appended. Pending structured
-  `session.questions` continue separately in question mode until answered.
-
-#### Structured clarification questions
-
-- Comes from: `session.questions`
-- Prints: in `AppMode::Question`, inside the bottom question panel, not inside
-  `SessionOutput`.
-- Hidden or removed: cleared when the resumed turn starts. The output panel never
-  renders these as synthetic transcript rows.
-
-#### Clarification answers
-
-- Comes from: a new reply prompt built by runtime and persisted as a `UserPrompt` row.
-- Prints: when the user finishes all questions and submits the generated
-  `Clarifications:` reply turn.
-- Hidden or removed: durable transcript entry. `SessionOutput` only adjusts spacing
-  between numbered question groups for readability. If the user ends question mode with
-  `Esc`, no clarification reply is built and the session returns to `Review`.
-
-#### Summary block
-
-- Comes from: `session.summary`
-- Prints: appended after the completed agent-turn transcript and before later trailing
-  workflow notices for most statuses.
-- Hidden or removed: hidden for `Canceled` sessions and while a newer prompt is active,
-  so stale change metadata disappears as soon as the user posts the next prompt.
-
-#### Trailing workflow notices
-
-- Comes from: `WorkflowNotice` rows and any pre-migration `LegacyTranscript` paragraphs
-  that begin with known workflow labels such as `[Commit]`, `[Commit Error]`,
-  `[Commit Assist]`, `[Sync Assist]`, `[Sync Error]`, or other bracketed workflow
-  errors. Producers and the renderer share these labels through `TranscriptNotice` in
-  `crates/agentty/src/domain/transcript_notice.rs`.
-- Prints: reattached after the synthetic summary so the summary stays at the completed
-  agent-turn boundary and later workflow notices remain below it in transcript order.
-- Hidden or removed: durable transcript content; only moved later in render order.
-
-#### Focused review loader
-
-- Comes from: `review_status_message` with `Status::AgentReview`
-- Prints: while review assist is running or when the latest review attempt failed.
-- Hidden or removed: removed when a review result arrives, when session view leaves
-  review state, or when a new reply clears the review cache.
-
-#### Focused review text
-
-- Comes from: `review_text` from review cache or view state; successful focused reviews
-  are also saved as the session's persisted focused-review cache entry and hydrated into
-  `App.review_cache` on startup.
-- Prints: appended after transcript content once review assist succeeds.
-- Hidden or removed: cleared from memory and persistence when a new reply starts, when
-  the session returns to `InProgress`, when a replacement review starts, or when a later
-  review result fails and replaces it with an error status message.
-
-#### In-progress loader
-
-- Comes from: `active_progress`
-- Prints: while a turn is running in `InProgress`; the loader glyph is painted as stable
-  text and animated by a Tachyonfx buffer effect after paragraph rendering.
-- Related loaders: shared spinner call sites render the same `▌▌▌` glyph and apply the
-  reusable Tachyon loader effect where their glyph area is known.
-- Hidden or removed: removed when the turn finishes or the session leaves an active
-  status.
-
-### Mode Rules
-
-- `Status::Done` Keeps transcript output as the primary body, appends the synthetic
-  summary section, and ends with the continuation hint.
-- `Status::Question` Keeps the transcript panel visible above, while the
-  question/options/input UI is rendered in the bottom panel rather than inside
-  `SessionOutput`.
-- `Status::Canceled` Uses raw transcript only. Synthetic summary rendering is
-  intentionally suppressed so interrupted sessions do not show finalized metadata they
-  never completed.
+`App` owns one shared `RenderCacheStore` for markdown, diff, and session-output layout
+caches. Changes in this area should keep caches bounded and route layout/count helpers
+and the final paint path through the same cached derived data instead of recomputing the
+render twice per frame.
 
 ## Session Turn Data Flow
 
-Default session agent/model resolution happens before the first prompt turn starts.
-`SessionManager` loads the active project's `DefaultSmartAgent` and `DefaultSmartModel`
-settings as a pair, falling back through legacy model-only settings by using the
-available provider order. When `LastUsedModelAsDefault` is enabled, session model
-switches persist both keys so shared Gemini model ids keep their selected provider.
-
 <a id="architecture-runtime-flow-turn"></a> From prompt submit to persisted result:
 
-1. Prompt mode converts a submit key into an app-layer prompt intent.
-1. `App::handle_prompt_submit_intent()` drains normal prompt submissions or dispatches
-   slash-command selections through app-owned intent handlers such as `/apply`,
-   `/qe:check`, and `/stats`.
-1. `start_session()` for first prompt (`AgentRequestKind::SessionStart`) or `reply()`
-   for follow-up (`AgentRequestKind::SessionResume`).
-1. Shared prompt-composer helpers in `crates/agentty/src/domain/composer.rs` derive
-   slash-menu options and attachment-aware deletion ranges. App-layer prompt intent
-   handlers drain the final prompt submission payload. The transcript keeps raw `@path`
-   lookups, while the later agent-facing prompt text quotes the repository-relative path
-   without adding transport sentinels.
-1. Session command is persisted in `session_operation` before enqueue.
-1. `SessionWorkerService` lazily creates or reuses a per-session worker queue.
-1. Worker marks operation `running`, checks cancel flags, then delegates to
-   `workflow/turn.rs` for channel execution.
-1. `workflow/turn.rs` creates `TurnRequest` (reasoning level, model, prompt,
-   `request_kind`, replay output, provider conversation id).
-1. `workflow/turn.rs` spawns `consume_turn_events()`.
-1. `AgentChannel::run_turn()` streams `TurnEvent` values and returns `TurnResult`.
-1. `workflow/post_turn.rs` applies final result:
-1. Append final assistant transcript output when no assistant chunks were already
-   streamed (`answer` text, fallback `question` text).
-1. `TurnPersistence::apply(...)` transactionally stores the canonical summary payload,
-   question payload, token-usage deltas, and provider conversation markers, then returns
-   `TurnAppliedState`.
-1. Emit `AppEvent::AgentResponseReceived` with that reducer projection so the active
-   session updates without a forced reload.
-1. If canonical metadata persistence fails, append a recovery error to the transcript,
-   trigger `RefreshSessions`, and skip reducer projection emission so the UI falls back
-   to durable state on reload.
-1. Run auto-commit assistance path, which preserves a single evolving commit on the
-   session branch: the first successful file-changing turn creates the commit, later
-   turns regenerate the message from the cumulative diff with the active project's
-   `Default Fast Model`, an empty-amend result drops the reverted session commit and
-   reports a no-change notice, auto-commit recovery prompts use that same fast-model
-   selection, and the session `title` is synced from the rewritten commit after success
-   while the structured response `summary` payload remains unchanged.
-1. When the auto-commit produces a new commit, the session already tracks a published
-   upstream branch, and no inline chat messages are queued behind the completed turn,
-   start the detached auto-push task. Queued follow-up turns suppress this launch until
-   the queue drains and the latest queued turn completes. After that push succeeds,
-   linked open review requests load the current remote title/body metadata through
-   `ReviewRequestClient`, update the PR/MR only if the latest commit message differs,
-   and persist the refreshed review-request summary. If the push fails, the linked
-   review request is left unchanged so its stored summary still matches the remote
-   branch state.
-1. When the completed turn returns to `Review`, emit
-   `AppEvent::StackedParentTurnCompleted`; after the reducer syncs touched session
-   handles, it asks `SessionMergeService` to enqueue `SessionCommand::Rebase` for each
-   review-ready materialized child so child branches replay onto the latest parent
-   branch.
-1. When a parent session merges, emit `AppEvent::StackedParentMergeCompleted` with the
-   review-ready materialized children that were retargeted to the parent's base branch.
-   The reducer enqueues the same `SessionCommand::Rebase` worker flow for those
-   children, but the rebase plan uses the recorded parent commit as the old base so the
-   child drops the parent's pre-squash commits deterministically.
-1. Refresh persisted session size.
-1. Update final status (`Review` or `Question`; on failure -> `Review`).
+1. Prompt mode converts a submit key into an app-layer prompt intent;
+   `App::handle_prompt_submit_intent()` drains normal submissions or dispatches
+   slash-command selections.
+1. `start_session()` (first prompt) or `reply()` (follow-up) persists the command in
+   `session_operation` and enqueues it on the per-session worker.
+1. The worker marks the operation `running`, checks cancel flags, verifies worktree
+   isolation, and delegates to `workflow/turn.rs`.
+1. `workflow/turn.rs` builds a `TurnRequest` and calls `AgentChannel::run_turn()`, which
+   streams `TurnEvent` values (loader updates) and returns a `TurnResult`.
+1. `workflow/post_turn.rs` appends the final assistant transcript output, then
+   `TurnPersistence::apply(...)` transactionally stores the summary payload, question
+   payload, token-usage deltas, and provider conversation markers.
+1. `AppEvent::AgentResponseReceived` carries the reducer projection so the active
+   session updates without a forced reload. If persistence fails, the worker appends a
+   recovery error and falls back to a durable-state reload.
+1. Auto-commit keeps one evolving commit on the session branch: the first file-changing
+   turn creates it, later turns regenerate the message from the cumulative diff with the
+   project's `Default Fast Model` and amend `HEAD`; an empty amend drops the reverted
+   commit. The session title is synced from the commit text.
+1. If the session already tracks a published upstream branch and no chat messages are
+   queued, a detached auto-push updates the remote branch and refreshes linked
+   review-request metadata when the commit message changed.
+1. Completed stacked-parent turns fan out `SessionCommand::Rebase` to review-ready
+   materialized children so child branches replay onto the latest parent branch.
+1. The session size is refreshed and the final status becomes `Review` or `Question`
+   (failures return to `Review`).
 
 ### Operation Lifecycle and Recovery
 
@@ -524,11 +170,9 @@ restart-safe:
 - Worker transitions: `queued -> running -> done/failed/canceled`.
 - Cancel requests are persisted and checked before command execution.
 - On startup, unfinished operations are failed with reason `Interrupted by app restart`,
-  interrupted rebase operations abort any stale in-progress git rebase metadata in the
-  session worktree, and impacted sessions are reset to `Review`.
-- Startup also loads parentless review-ready stacked children that still have a recorded
-  stack base commit and requeues their post-merge sync, so a restart during stack
-  restacking converges through the normal worker flow.
+  interrupted rebase operations abort stale in-progress git rebase metadata, and
+  impacted sessions are reset to `Review`. Pending post-merge stacked-child syncs are
+  requeued.
 
 ### Status Transition Rules
 
@@ -545,21 +189,12 @@ restart-safe:
 - `InProgress -> Canceled` (list-mode cancel stops the running turn)
 - `InProgress/Rebasing -> Review/Question` (post-turn or post-sync)
 
-Stacked-session branch gates are enforced before those transitions start branch work.
-`start_staged_session()` only materializes a stacked draft when its parent is
-review-ready and no sibling or parent stack member is running, queued, syncing, merging,
-or waiting on a question. Merge queue entry and slash-command branch work use the
-stricter branch-work stack check, with parent branch workflow actions blocked while a
-materialized child remains linked. Session sync uses the sync-specific stack check, so a
-parent can refresh itself when materialized children are idle and then fan out child
-rebases. `reply()` uses the reply-specific stack check, so a parent can accept another
-prompt once a materialized child is idle in review. The checks are computed from one
-stack snapshot so parent, child, and sibling branch-work decisions share the same busy
-state. When that parent prompt finishes in `Review`, the reducer starts automatic child
-sync rebases through the same per-session worker command used by manual session sync.
-Session-list grouping only nests a stacked child below its loaded parent while both rows
-belong to the same display group, so a directly canceled child under an active parent
-moves to the archive group immediately.
+Stacked-session gates are enforced before branch work starts: a stacked draft
+materializes only when its parent is review-ready and no stack member is busy; parent
+merge-queue and slash-command branch work are blocked while a materialized child remains
+linked; parent sync and replies are allowed when materialized children are idle. All
+checks are computed from one stack snapshot so parent, child, and sibling decisions
+share the same busy state.
 
 ## Agent Channel Architecture
 
@@ -597,364 +232,132 @@ flowchart TD
 <a id="architecture-key-types"></a> Key types (`infra/channel/contract.rs`, re-exported
 by `infra/channel.rs`, with prompt payloads owned by `domain/turn_prompt.rs`):
 
-| Type | Purpose | |------|---------| | `TurnRequest` | Input payload:
-`reasoning_level`, folder, `live_session_output`, model, `request_kind`, prompt, and
-`provider_conversation_id`. | | `TurnEvent` | Incremental stream events: `ThoughtDelta`,
-`Completed`, `Failed`, `PidUpdate`. | | `TurnResult` | Normalized output:
-`assistant_message`, token counts, `provider_conversation_id`. | | `AgentRequestKind` |
-`SessionStart`, `SessionResume` (with optional session output replay), or
-`UtilityPrompt`. |
+| Type | Purpose | |------|---------| | `TurnRequest` | Input payload: reasoning level,
+folder, model, prompt, request kind, and provider conversation id. | | `TurnEvent` |
+Incremental stream events: `ThoughtDelta`, `Completed`, `Failed`, `PidUpdate`. | |
+`TurnResult` | Normalized output: `assistant_message`, token counts,
+`provider_conversation_id`. | | `AgentRequestKind` | `SessionStart`, `SessionResume`
+(with optional output replay), or `UtilityPrompt`. |
 
-<a id="architecture-provider-conversation-id-flow"></a> Provider conversation id flow:
-
-- App-server providers return `provider_conversation_id` in `TurnResult`.
-- Post-turn application persists it to DB (`update_session_provider_conversation_id`).
-- Post-turn application also persists the matching instruction-bootstrap marker so
-  app-server follow-up turns know whether the active provider context already received
-  Agentty's full prompt contract.
-- Future `TurnRequest` loads and forwards both values so runtime restarts can resume
-  native provider context and decide between a full bootstrap and a compact reminder.
+<a id="architecture-provider-conversation-id-flow"></a> App-server providers return a
+`provider_conversation_id` in `TurnResult`. Post-turn application persists it, along
+with an instruction-bootstrap marker, so later turns and runtime restarts can resume the
+native provider context and choose between resending the full prompt contract and a
+compact reminder.
 
 <a id="architecture-session-isolation-guards"></a> Session isolation guards:
 
-- Before every worker-dispatched turn, `workflow/turn.rs` calls `workflow/isolation.rs`
-  to verify the session folder exists, is checked out on the expected
-  `wt/<session-id-prefix>` branch, and resolves to a linked worktree with a distinct
-  main checkout.
-- The worker captures `git status --porcelain=v1 --untracked-files=no` for that main
-  checkout before provider execution and compares it again after a successful turn. A
-  changed tracked-file snapshot appends a `[Main Checkout Warning]` transcript notice
-  while allowing the session turn to persist normally.
-- Merge and `sync main` workflows perform clean-check preflights on the target checkout
-  before changing base-branch state, so dirty main-checkout state blocks only the
-  workflows that actually depend on it.
-- Codex app-server permissions are scoped in `app_server/codex/policy.rs`: turns use the
-  non-interactive `never` approval policy plus a workspace-write sandbox. If Codex still
-  emits pre-action requests, command approvals are accepted under that sandbox and
-  file-change approvals are accepted only for paths inside the session folder.
-- Gemini ACP permission responses are scoped in `app_server/gemini/policy.rs`: Agentty
-  selects one-shot allow options when Gemini offers them and cancels permission requests
-  when no allow option is available.
-- Antigravity and Claude subprocess turns run from the session worktree process
-  directory and rely on the main-checkout tracked-file guard for isolation.
-- Antigravity command construction passes the session worktree as the first
-  `agy --add-dir` root, because Antigravity print mode uses ordered explicit workspace
-  roots for file tools instead of treating the process directory as an editable
-  workspace. If the real worktree path contains a hidden component such as `.agentty`,
-  Agentty first creates a non-hidden temp symlink alias and passes that alias as both
-  the process directory and the first `agy --add-dir` root, because Antigravity refuses
-  hidden workspace folders. Session teardown paths remove that alias before deleting the
-  real worktree directory, including deletion, cancellation, merge cleanup, and setup
-  rollback.
-- Antigravity setup and command construction add `.antigravitycli/` and
-  `cache/projects.json` to the repository-local git exclude file before `agy` starts,
-  keeping Antigravity's project configuration state out of session diffs without
-  changing tracked ignore files.
+- Before every worker-dispatched turn, `workflow/isolation.rs` verifies the session
+  folder exists, is checked out on the expected `wt/<hash>` branch, and resolves to a
+  linked worktree with a distinct main checkout.
+- The worker snapshots the main checkout's tracked-file git status before and after each
+  turn and appends a `[Main Checkout Warning]` transcript notice when it changed.
+- Merge and `sync main` workflows require a clean target checkout before changing
+  base-branch state.
+- Provider permission policies are scoped per transport: Codex turns run with a
+  non-interactive approval policy and workspace-write sandbox, Gemini ACP requests
+  prefer one-shot allow options, and CLI-backed providers run from the session worktree
+  process directory.
 
 ## Agent Interaction Protocol Flow
 
 <a id="architecture-agent-interaction-protocol"></a> Provider output is normalized to
-one structured response protocol:
+one structured response protocol (`answer`, `questions`, optional `summary`):
 
-1. Prompt builders choose among `BootstrapFull`, `DeltaOnly`, and `BootstrapWithReplay`.
-   CLI turns still use the full shared protocol preamble each turn, while persistent
-   app-server turns reuse a compact reminder when the active provider context already
-   matches the stored instruction bootstrap marker.
-   `crates/agentty/src/infra/agent/template/protocol_instruction_prompt.md` owns the
-   normal request wrapper,
-   `crates/agentty/src/infra/agent/template/protocol_refresh_prompt.md` owns the compact
-   reminder wrapper, the sibling profile-specific markdown templates supply the
-   request-family instruction text, `crates/agentty/src/infra/agent/prompt.rs` owns
-   shared prompt preparation, and `crates/agentty/src/infra/agent/protocol.rs` routes to
-   the authoritative protocol model/schema/parse submodules.
-1. `BootstrapFull` and `BootstrapWithReplay` still prepend the same self-descriptive
-   `schemars` document, so every provider sees the same
-   `answer`/`questions`/optional-`summary` schema and transport-enforced `outputSchema`
-   paths can normalize that same contract separately.
-1. The caller selects one canonical `AgentRequestKind` before transport handoff, and the
-   transport derives the matching `ProtocolRequestProfile` from it. Session turns use
-   `SessionStart` or `SessionResume`, while isolated utility prompts use
-   `UtilityPrompt`.
-1. Session discussion turns typically populate `summary.turn` and `summary.session`,
-   while one-shot prompts may leave `summary` unused.
-1. Channels emit transient loader updates as `TurnEvent::ThoughtDelta` values when
-   providers surface thought or tool-status text during the turn.
-1. Final output is parsed to protocol `answer`, `questions`, and the optional structured
-   summary. The final assistant payload itself must match the shared protocol JSON
-   object, while direct deserialization into the shared wire type still accepts
-   summary-only or otherwise defaulted top-level fields. If a provider prepends prose
-   before one final schema object, parsing now recovers that trailing payload as long as
-   nothing except whitespace follows it. Rejected payloads now surface parse diagnostics
-   including response sizing, JSON parser location/category, and discovered top-level
-   keys.
-1. Worker persists final display text, then `TurnPersistence::apply(...)` commits the
-   canonical turn metadata and emits `AgentResponseReceived` with the matching reducer
-   projection. If that transaction fails, the worker requests `RefreshSessions` and does
-   not emit the projection.
-
-<a id="architecture-agent-interaction-streaming"></a> Streaming behavior differs by
-transport/provider:
-
-- CLI channel (`CliAgentChannel`): parses stdout lines into loader-only `ThoughtDelta`
-  updates for non-response progress/thought text and keeps raw output for final parse.
-  Claude uses its documented `stream-json` output path here so compaction/tool-use
-  progress can surface without waiting for a single final JSON payload. Antigravity uses
-  `agy --print` and waits for the complete stdout payload because it does not currently
-  expose a documented streaming output format.
-- CLI prompt submission can stream the fully rendered prompt through stdin for providers
-  that would otherwise exceed argv limits on large diffs or one-shot utility prompts.
-- Shared CLI subprocess helpers under `crates/agentty/src/infra/agent/cli/` now own
-  stdin piping and provider-aware exit guidance so session turns and one-shot prompts
-  use the same subprocess behavior.
-- App-server channel (`AppServerAgentChannel`): routes provider thought phases and
-  progress updates to transient loader text, while withholding assistant transcript
-  chunks until the completed turn result is parsed.
-- One-shot prompt submission asks the concrete backend for its transport path, so Codex
-  resolves its own app-server runtime client while Antigravity and Claude stay on direct
-  CLI subprocess execution.
-- Provider capabilities in `crates/agentty/src/infra/agent/provider.rs` centralize
-  strict final protocol validation, CLI stream classification, app-server thought-phase
-  handling, and provider app-server client construction.
-- Worker persistence behavior: `ThoughtDelta` updates refresh the loader only, while
-  assistant transcript output is appended once from the final parsed turn result.
-
-<a id="architecture-agent-interaction-validation"></a> Final-output validation:
-
-- Claude and Codex use strict protocol parsing and return an error immediately when
-  invalid. Antigravity uses strict parsing plus one repair retry first, then falls back
-  to a plain `answer` for non-empty `agy --print` prose so malformed Antigravity JSON
-  does not turn a completed session response into an internal schema error.
-- One-shot agent submissions still surface schema errors directly to the caller whenever
-  the shared parser rejects the final output, including plain text, blank utility
-  responses, non-utility prompts that miss the schema, or any output that leaves
-  trailing non-whitespace text after the recovered protocol payload. Those surfaced
-  errors now also include the shared protocol parser's debug report.
-- App-server restart retries preserve the original protocol profile and now compare the
-  persisted instruction state against the runtime's actual `provider_conversation_id`
-  before choosing the prompt-delivery mode.
+1. Prompt builders in `crates/agentty/src/infra/agent/` prepend a shared protocol
+   preamble with a self-descriptive JSON schema. CLI turns resend it every turn;
+   persistent app-server turns reuse a compact reminder when the provider context
+   already received the full bootstrap, and replay the transcript when provider context
+   was lost.
+1. Channels emit transient loader updates as `TurnEvent::ThoughtDelta` values while the
+   turn runs; assistant transcript output is appended once from the final parsed result.
+1. Final output must parse as the shared protocol JSON object. Claude, Gemini, and Codex
+   session turns fail closed on invalid output; Antigravity tries one protocol-repair
+   retry and then preserves non-empty plain text as `answer`. Rejected payloads surface
+   parse diagnostics (response sizing, parser location, visible top-level keys).
+1. Provider-specific transport, stdin-vs-argv prompt delivery, strict parsing policy,
+   and thought-phase handling are centralized in the provider registry
+   (`crates/agentty/src/infra/agent/provider.rs`).
 
 ## Clarification Question Loop
 
 <a id="architecture-agent-question-loop"></a> Question-mode loop:
 
-1. Worker receives final parsed response containing clarification questions in
-   `questions`.
-1. Worker persists question list and sets session status `Question`.
-1. Reducer switches active view to `AppMode::Question` when that session is focused.
-1. User answers each question. Submitting a blank free-text answer stores `no answer`.
-1. Runtime builds one follow-up prompt:
+1. The worker receives a final parsed response containing clarification `questions`,
+   persists them, and sets session status `Question`.
+1. The reducer switches the active view to `AppMode::Question` when that session is
+   focused.
+1. The user answers each question (a blank free-text answer stores `no answer`).
+1. Runtime builds one `Clarifications:` follow-up prompt listing each question and
+   answer, and submits it as a normal reply turn.
 
-```text
-Clarifications:
-1. Q: <question 1>
-   A: <response 1>
-2. Q: <question 2>
-   A: <response 2>
-```
-
-6. Runtime submits this as a normal reply turn; flow returns to standard worker path.
-
-Pressing `Esc` instead ends question mode immediately, restores the session to `Review`,
-and does not send the generated clarification reply.
+Pressing `Ctrl+C` instead ends question mode immediately, restores the session to
+`Review`, and does not send the generated clarification reply.
 
 ## Background Task Catalog
 
-<a id="architecture-runtime-flow-background-tasks"></a> Detached/background execution
-paths and their trigger conditions:
+<a id="architecture-runtime-flow-background-tasks"></a> Background execution paths and
+their triggers:
 
-### Terminal event reader thread
-
-- Trigger: Runtime startup
-- Spawn site: `runtime/event::spawn_event_reader`
-- Emits or writes: Terminal `Event` channel
-- What it does: Polls crossterm and forwards terminal events into the runtime loop.
-
-### Project sync orchestrator
-
-- Trigger: App startup, project switch, session refreshes that change active session
-  branches, periodic ticks, and list-mode sync action `s`
-- Spawn site: `SyncHandle::spawn`
-- Emits or writes: `AppEvent::GitStatusUpdated`, `AppEvent::ReviewRequestStatusUpdated`,
-  `AppEvent::ReviewCommentsUpdated`, `AppEvent::SyncMainCompleted`, and
-  `AppEvent::SystemLog`
-- What it does: Owns one command queue plus a watched `SyncContext` for the active
-  project. Periodic passes serialize a read-only `git fetch`, branch ahead/behind
-  snapshot, and every-other-tick review-request refresh. Manual sync commands enter the
-  same queue, so pull/rebase/push does not race the background fetch or forge-refresh
-  passes. Emitted status events carry the context generation so stale completions are
-  ignored after targets change.
-
-### Version check one-shot
-
-- Trigger: App startup
-- Spawn site: `TaskService::spawn_version_check_task`
-- Emits or writes: `AppEvent::VersionAvailabilityUpdated`
-- What it does: Checks the latest npm version tag and reports update availability.
-
-### Per-session worker loop
-
-- Trigger: First command enqueue for a session
-- Spawn site: `SessionWorkerService::spawn_session_worker`
-- Emits or writes: DB `session_operation` updates plus app or session updates
-- What it does: Serializes all turn commands per session and manages channel lifecycle.
-
-### Per-turn turn-event consumer
-
-- Trigger: Every queued turn execution
-- Spawn site: `run_channel_turn`
-- Emits or writes: Loader updates and pid slot updates
-- What it does: Consumes the `TurnEvent` stream, coalesces ready loader-thought bursts
-  before app-event enqueue, and applies immediate side effects.
-
-### CLI stdout and stderr readers
-
-- Trigger: Every CLI-backed turn
-- Spawn site: `CliAgentChannel::run_turn`
-- Emits or writes: `TurnEvent` stream plus raw output buffers
-- What it does: Reads subprocess streams and emits transient loader updates while
-  buffering final output.
-
-### App-server stream bridge
-
-- Trigger: Every app-server-backed turn
-- Spawn site: `AppServerAgentChannel::run_turn`
-- Emits or writes: `TurnEvent` stream
-- What it does: Bridges `AppServerStreamEvent` values into the unified turn event
-  stream.
-
-### Clipboard image persistence
-
-- Trigger: Prompt input `Ctrl+V`, `Ctrl+Shift+V`, or `Alt+V`
-- Spawn site: `runtime/mode/prompt::handle_prompt_image_paste`
-- Emits or writes: Temporary PNG files under `AGENTTY_ROOT/tmp/<session-id>/images/`
-  plus prompt attachment state
-- What it does: Reads a copied PNG file, clipboard image, or PNG path via
-  `spawn_blocking` from X11 or Wayland data-control clipboard backends, persists it, and
-  inserts an inline `[Image #n]` placeholder.
-
-### Session title generation
-
-- Trigger: First `Start` turn, before main turn execution
-- Spawn site: `spawn_start_turn_title_generation`
-- Emits or writes: Database title update plus `AppEvent::RefreshSessions`
-- What it does: Runs a one-shot title prompt in the background and persists the
-  generated title when it is a concise title rather than overlong prose, first-person
-  narration, or provider progress/status text.
-
-### At-mention file indexing
-
-- Trigger: Prompt input or question free-text input activates `@` mention mode
-- Spawn site: `runtime/mode/prompt::activate_at_mention` and
-  `runtime/mode/question::activate_question_at_mention`
-- Emits or writes: `AppEvent::AtMentionEntriesLoaded`
-- What it does: Lists session files via `spawn_blocking`, falling back to the active
-  project working directory when an unstarted draft session has not yet materialized its
-  worktree, and updates mention picker entries for the active composer.
-
-### Background session-size refresh
-
-- Trigger: `Enter` on a session in list mode
-- Spawn site: `App::refresh_session_size_in_background`
-- Emits or writes: Database size update plus `AppEvent::RefreshSessions`
-- What it does: Computes the diff-size bucket without blocking the key-handling path.
-
-### Session-view branch-publish action
-
-- Trigger: Session view `p` in `Review`, then publish popup `Enter`
-- Spawn site: `App::start_publish_branch_action`
-- Emits or writes: `AppEvent::BranchPublishActionCompleted`
-- What it does: Collects an optional remote branch name before first publish, locks to
-  the existing upstream after publish, then runs `git push --force-with-lease` for the
-  session branch in the background and updates the session-view popup with success or
-  recovery guidance.
-
-### Deferred session cleanup
-
-- Trigger: Delete with the deferred cleanup path
-- Spawn site: `delete_selected_session_deferred_cleanup`
-- Emits or writes: Filesystem and git side effects
-- What it does: Removes the worktree folder and branch asynchronously after database
-  deletion.
-
-### Focused review assist
-
-- Trigger: View mode focused-review open when the diff is reviewable
-- Spawn site: `TaskService::spawn_review_assist_task`
-- Emits or writes: `ReviewPrepared` or `ReviewPreparationFailed`
-- What it does: Runs the model review prompt and stores the final review text or error.
-
-### Sync-main workflow task
-
-- Trigger: List-mode sync action `s`
-- Spawn site: `OrchestratorSyncMainRunner::start_sync_main`
-- Emits or writes: `AppEvent::SyncMainCompleted` and `AppEvent::SystemLog`
-- What it does: Enqueues the selected project branch pull/rebase/push through the sync
-  orchestrator so it serializes with background git and forge status refreshes. The
-  assisted conflict flow still runs when needed.
-
-### Session merge task
-
-- Trigger: Merge confirmation accepted
-- Spawn site: `SessionMergeService::merge_session`
-- Emits or writes: Output append, status updates, and session metadata updates
-- What it does: Runs rebase, reuses the single evolving session-branch `HEAD` commit
-  message for squash merge, then cleans up the worktree in the background.
-
-### Session sync task
-
-- Trigger: Session sync action in view mode, a completed stacked-parent sync that
-  returned to `Review`, a completed stacked-parent turn that returned to `Review`, or a
-  completed parent merge that restacked review-ready materialized children onto the
-  parent base branch
-- Spawn site: `SessionMergeService::rebase_session` and stacked-parent auto-sync both
-  enqueue `SessionCommand::Rebase`
-- Emits or writes: Output append and status updates
-- What it does: Runs the assisted rebase flow on the session worker and returns the
-  session to `Review`. Published sessions fetch first and rebase onto the remote base
-  ref from the published upstream's remote; unpublished sessions use the local base
-  branch. Post-merge stacked-child syncs use `git rebase --onto` with the recorded
-  parent commit as the old base so the child keeps its own commits while dropping the
-  parent's pre-squash commits. Rebase-conflict prompts run through the existing session
-  channel so the provider keeps conversation context while Agentty owns staging and
-  `git rebase --continue`. When a stacked parent sync completes successfully, the
-  reducer reuses the child auto-sync fan-out so review-ready materialized children are
-  replayed onto the refreshed parent branch.
+- **Terminal event reader thread** (runtime startup): polls crossterm and forwards
+  terminal events into the runtime loop.
+- **Project sync orchestrator** (startup, project switch, ticks, list-mode `s`): owns
+  one command queue per active project that serializes read-only `git fetch`,
+  ahead/behind snapshots, review-request refreshes, and manual pull/rebase/push
+  commands.
+- **Version check** (startup): reports npm update availability.
+- **Per-session worker loop** (first command enqueue): serializes all turn commands per
+  session and manages channel lifecycle.
+- **Per-turn event consumer** (every turn): consumes the `TurnEvent` stream and
+  coalesces loader updates.
+- **CLI stdout/stderr readers** (every CLI-backed turn): stream subprocess output into
+  loader updates and final buffers.
+- **App-server stream bridge** (every app-server turn): bridges provider stream events
+  into the unified turn event stream.
+- **Clipboard image persistence** (prompt image paste): captures the clipboard image via
+  `spawn_blocking` and stores it under `AGENTTY_ROOT/tmp/<session-id>/images/`.
+- **Session title generation** (first start turn): runs a one-shot title prompt and
+  persists a concise generated title.
+- **At-mention file indexing** (`@` in prompt or question input): lists session files
+  for the mention picker, falling back to the project root for unstarted drafts.
+- **Session-size refresh** (`Enter` on a session in list mode): recomputes the diff-size
+  bucket off the key-handling path.
+- **Branch-publish action** (session view `p`): pushes with `--force-with-lease` and
+  creates or refreshes the forge review request.
+- **Deferred session cleanup** (session delete): removes the worktree folder and branch
+  after database deletion.
+- **Focused review assist** (entering review): runs the review prompt and stores the
+  result or error.
+- **Sync-main workflow** (list-mode `s`): pull/rebase/push of the project branch through
+  the sync orchestrator, with assisted conflict resolution.
+- **Session merge task** (merge confirmation): rebase, squash merge with the session
+  commit message, worktree cleanup.
+- **Session sync task** (view-mode `r`, stacked-parent fan-out): assisted rebase of the
+  session branch; post-merge stacked-child syncs use `git rebase --onto` with the
+  recorded parent commit as the old base.
 
 ## Sync, Merge, and Rebase Flows
 
 <a id="architecture-runtime-flow-git-workflows"></a> Project and session git workflows
-use shared boundaries (`GitClient`, `FsClient`, assist helpers) but have distinct
+use shared boundaries (`GitClient`, `FsClient`, assist helpers) with distinct
 orchestration paths:
 
-- `sync main`: selected project branch pull/rebase/push, optional assisted conflict
-  resolution, popup result summary, and post-success status refresh through the shared
-  sync orchestrator.
-- session merge: queue-aware workflow, assisted rebase first, reuse the single evolving
-  session-branch `HEAD` commit message for the squash commit into the base branch, then
-  clean up the worktree and set status `Done`.
-- session sync: assisted rebase of session branch onto the local base branch for
-  unpublished sessions or onto the published upstream's remote base ref for published
-  sessions, resolves conflicts through the existing session channel, and returns to
-  `Review` after completion/failure reporting.
-- session review-request publish: review-ready sessions push the session branch through
-  `GitClient` with `--force-with-lease`, then create or refresh the forge review request
-  through `ReviewRequestClient`. Unlinked sessions only reuse an open same-branch review
-  request; terminal same-branch requests are ignored so branch names can be reused after
-  merge or close.
-- requested-review detail loading: the top-level Review tab loads only PR/MR metadata;
-  pressing `Enter` opens the detail page immediately, renders a comment loading message,
-  and starts a detached `ReviewRequestClient` comment snapshot fetch that reports back
-  through `AppEvent`. The reducer applies the result only to the matching active project
-  and review detail, clears the generation-scoped in-flight fetch marker on completion,
-  and caches successful snapshots on the list row for later opens. Reopening the same
-  detail page while a fetch is still running reuses that in-flight request instead of
-  spawning a duplicate forge API call. Refreshing the top-level Review tab invalidates
-  older in-flight comment loads so stale completions cannot repopulate the refreshed
-  list.
-- background review-request sync: review-ready sessions with a published branch or
-  linked review request are polled through `ReviewRequestClient` inside the shared sync
-  orchestrator; merged requests move the session to `Done`, and closed requests move it
-  to `Canceled`.
+- `sync main`: selected project branch pull/rebase/push with optional assisted conflict
+  resolution, serialized through the shared sync orchestrator.
+- Session merge: queue-aware workflow — assisted rebase first, squash commit into the
+  base branch reusing the session-branch `HEAD` commit message, then worktree cleanup
+  and status `Done`.
+- Session sync: assisted rebase onto the local base branch (unpublished) or the
+  published upstream's remote base ref (published). Rebase-conflict prompts run through
+  the existing session channel so the provider keeps conversation context while Agentty
+  owns staging and `git rebase --continue`.
+- Review-request publish: push with `--force-with-lease`, then create or refresh the
+  forge review request through `ReviewRequestClient`; only open same-branch requests are
+  reused.
+- Background review-request sync: review-ready sessions with a published branch or
+  linked request are polled; merged requests move the session to `Done`, closed requests
+  to `Canceled`. The Review tab loads comment snapshots on demand with generation-scoped
+  deduplication.
 
 ## Persistence and Recovery Boundaries
 
@@ -965,12 +368,10 @@ runtime flow:
   startup.
 - Session snapshots in memory are authoritative for rendering; DB is authoritative for
   restart recovery.
-- System logs are process-local only: `App` owns a bounded in-memory buffer, reducer
-  events append to it, and no log entry is written to SQLite or disk.
-- Shared session handles (`output`, `status`, `child_pid`) provide low-latency updates
-  between DB reloads.
-- Event-driven refresh is primary (`RefreshSessions` for session rows and
-  `RefreshProjects` for project rows); metadata polling is fallback safety only.
+- System logs are process-local only: a bounded in-memory buffer, never written to
+  SQLite or disk.
+- Shared session handles provide low-latency updates between DB reloads.
+- Event-driven refresh is primary; metadata polling is fallback safety only.
 - External integrations (`GitClient`, `ReviewRequestClient`, `AppServerClient`,
   `AgentChannel`, `EventSource`, `FsClient`, `TmuxClient`) isolate side effects and
   enable deterministic tests.

@@ -25,15 +25,13 @@ operational heavy lifting for workflow safety:
 ## Typical Flow
 
 1. Open a repository and start `agentty`.
-1. Press `a` and choose `Regular`, `Draft`, or `Stacked` when an eligible parent session
-   is selected.
-1. For regular sessions, type the first prompt and press `Enter` to start immediately.
-1. For draft sessions, stage one or more draft messages, then press `s` to start the
-   bundle.
-1. For stacked drafts, stage messages while the parent is still active, then press `s`
-   after the parent is review-ready and the stack has no other active branch work.
+1. Press `a` and choose `Regular`.
+1. Type the first prompt and press `Enter` to start the agent immediately.
 1. Let the agent modify files in its worktree.
-1. Review the diff (`d`) and decide to apply or discard.
+1. Review the diff (`d`) and decide to merge or discard.
+
+Sessions can also be staged as drafts or stacked on top of another session. See
+[Workflow](@/docs/usage/workflow.md) for draft and stacked session details.
 
 ## Worktree Isolation
 
@@ -45,18 +43,11 @@ live session starts:
   ID.
 - The branch starts from whichever local branch was active when you launched `agentty`.
   If local `main` is behind `origin/main`, the session still starts from local `main`.
-- Regular sessions create the worktree as soon as you start the first prompt. Draft
-  sessions delay worktree creation until you press `s` to start the staged bundle.
-  Stacked drafts are based on the parent session branch, start only after the parent is
-  review-ready and the stack has no other active branch work, and are canceled when the
-  parent is canceled.
 - All agent edits happen inside the worktree, keeping your base branch untouched until
   you explicitly merge.
 - Before each turn, Agentty verifies that the session folder still exists, is on its
   expected `wt/<hash>` branch, and resolves to a linked worktree rather than the main
-  checkout. It also compares the main checkout's tracked-file git status before and
-  after the turn and adds a transcript warning if that checkout changed. Merge and sync
-  actions still require a clean main checkout before they start.
+  checkout.
 - If worktree creation fails (e.g., git is not installed or permissions are
   insufficient), session creation fails atomically and displays an error.
 
@@ -67,24 +58,22 @@ delete a session.
 ## Auto-Update
 
 <a id="overview-auto-update"></a> Agentty checks npmjs for newer versions at startup and
-automatically installs updates in the background. Progress is shown in the status bar.
-The new version takes effect on next launch. Use `--no-update` to disable automatic
-updates.
-
-Agent backend CLIs are also refreshed on startup: available `agy`, `claude`, and `codex`
-executables run their `update` command in the background, and the Projects tab updates
-their displayed versions when each refresh finishes.
+automatically installs updates in the background. Agent backend CLIs (`agy`, `claude`,
+`codex`, and `gemini`) are also refreshed on startup when installed. See
+[Workflow](@/docs/usage/workflow.md) for status-bar details and how to disable automatic
+updates with `--no-update`.
 
 ## Key Concepts
 
-| Concept | Description | |---------|-------------| | **Agent** | An external AI CLI
-backend (Antigravity, Claude, or Codex) that performs coding work. See
-[Agents & Models](@/docs/agents/backends.md). | | **Session** | An isolated unit of
-work: one prompt, one worktree branch, one reviewable diff. See
-[Workflow](@/docs/usage/workflow.md) and [Keybindings](@/docs/usage/keybindings.md). | |
-**Project** | A git repository registered in Agentty. Select between projects with the
-Projects tab. | | **Diff view** | Press `d` in a review-state session to see exactly
-what the agent changed. |
+- **Agent**: An external AI CLI backend (Antigravity, Claude, Codex, or Gemini) that
+  performs coding work. See [Agents & Models](@/docs/agents/backends.md).
+- **Session**: An isolated unit of work: one prompt, one worktree branch, one reviewable
+  diff. See [Workflow](@/docs/usage/workflow.md) and
+  [Keybindings](@/docs/usage/keybindings.md).
+- **Project**: A git repository registered in Agentty. Select between projects with the
+  Projects tab.
+- **Diff view**: Press `d` in a review-state session to see exactly what the agent
+  changed.
 
 ## Next Steps
 
