@@ -824,7 +824,7 @@ mod tests {
     use tokio::sync::Barrier;
 
     use super::*;
-    use crate::app::{App, AppEvent, SyncSessionStartError, Tab};
+    use crate::app::{App, AppEvent, ReviewCacheEntry, SyncSessionStartError, Tab};
     use crate::domain::agent::{
         AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ReasoningLevel,
     };
@@ -5227,6 +5227,137 @@ mod tests {
         // Assert
         assert!(result.is_ok(), "rebase should succeed: {:?}", result.err());
         wait_for_output_contains(&mut app, &session_id, "[Sync] Successfully synced", 200).await;
+    }
+
+    #[tokio::test]
+    async fn test_rebase_session_cancels_pending_focused_review() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        let db = app.services.db().clone();
+        db.sessions()
+            .update_session_focused_review(
+                &session_id,
+                Some("111".to_string()),
+                Some("old persisted focused review".to_string()),
+            )
+            .await
+            .expect("failed to seed persisted focused review");
+        crate::test_support::set_session_status_for_test(
+            &mut app,
+            &session_id,
+            Status::AgentReview,
+        );
+        app.mode = AppMode::View {
+            review_status_message: Some(crate::app::review_loading_message(AgentModel::Gpt55)),
+            review_text: None,
+            session_id: session_id.clone().into(),
+            scroll_offset: None,
+        };
+        app.review_cache.insert(
+            session_id.clone().into(),
+            ReviewCacheEntry::Loading { diff_hash: 777 },
+        );
+
+        // Act
+        let result = app.rebase_session(&session_id).await;
+
+        // Assert
+        assert!(result.is_ok(), "rebase should succeed: {:?}", result.err());
+        assert!(!app.review_cache.contains_key(session_id.as_str()));
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                review_status_message: None,
+                review_text: None,
+                ..
+            }
+        ));
+
+        // Act
+        app.apply_app_events(AppEvent::ReviewPrepared {
+            diff_hash: 777,
+            review_text: "stale focused review".to_string(),
+            session_id: session_id.clone().into(),
+        })
+        .await;
+
+        // Assert
+        assert!(!app.review_cache.contains_key(session_id.as_str()));
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                review_status_message: None,
+                review_text: None,
+                ..
+            }
+        ));
+        let restarted_app = new_test_app_with_git_and_db(dir.path(), db).await;
+        assert!(!restarted_app.review_cache.contains_key(session_id.as_str()));
+    }
+
+    /// Verifies focused-review cleanup failure rejects sync before rebase
+    /// starts.
+    #[tokio::test]
+    async fn test_rebase_session_cleanup_failure_does_not_start_sync() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let (db, pool) = AppRepositories::in_memory_with_pool().await;
+        let mut app = new_test_app_with_git_and_db(dir.path(), db.clone()).await;
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        db.sessions()
+            .update_session_focused_review(
+                &session_id,
+                Some("111".to_string()),
+                Some("old persisted focused review".to_string()),
+            )
+            .await
+            .expect("failed to seed persisted focused review");
+        crate::test_support::set_session_status_for_test(
+            &mut app,
+            &session_id,
+            Status::AgentReview,
+        );
+        app.mode = AppMode::View {
+            review_status_message: Some(crate::app::review_loading_message(AgentModel::Gpt55)),
+            review_text: None,
+            session_id: session_id.clone().into(),
+            scroll_offset: None,
+        };
+        app.review_cache.insert(
+            session_id.clone().into(),
+            ReviewCacheEntry::Loading { diff_hash: 777 },
+        );
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client.expect_rebase_start().times(0);
+        install_mock_git_client(&mut app, mock_git_client);
+        pool.close().await;
+
+        // Act
+        let result = app.rebase_session(&session_id).await;
+
+        // Assert
+        assert!(result.is_err(), "cleanup failure should reject sync");
+        assert!(app.review_cache.contains_key(session_id.as_str()));
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                review_status_message: Some(_),
+                review_text: None,
+                ..
+            }
+        ));
+        assert_eq!(
+            session_status_or_done(&app, &session_id),
+            Status::AgentReview
+        );
     }
 
     #[tokio::test]

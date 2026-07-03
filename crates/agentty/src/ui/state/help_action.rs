@@ -76,8 +76,7 @@ pub enum ViewSessionState {
     /// review, and diff shortcuts are available.
     Review,
     /// Session is generating focused review output; reply, worktree-open,
-    /// merge, review, and diff stay available while sync remains hidden
-    /// until the status returns to `Review`.
+    /// merge, sync, review, and diff stay available.
     AgentReview,
     /// Session allows reply/merge/sync actions but is not in review mode, so
     /// diff remains hidden.
@@ -404,9 +403,8 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
 
 /// Returns compact session-view footer actions for the page-level hint line.
 ///
-/// Interactive and review-oriented sessions keep merge controls discoverable
-/// in the footer, while `AgentReview` hides the sync shortcut until focused
-/// review generation finishes.
+/// Interactive and review-oriented sessions keep merge and sync controls
+/// discoverable in the footer.
 pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
     let action_set = ViewActionSet::from_state(state);
     let mut actions = vec![HelpAction::new("back", "q", "Back to list")];
@@ -498,9 +496,7 @@ fn can_open_view_command(
 /// sync constraints.
 ///
 /// Regular drafts, interactive sessions, and review-ready sessions expose
-/// sync when the stack is idle. Stacked drafts hide sync until they launch,
-/// and focused review generation hides sync until the session returns to
-/// `Review`.
+/// sync when the stack is idle. Stacked drafts hide sync until they launch.
 fn can_rebase_view_session(
     session_state: ViewSessionState,
     can_rebase_session_branch: ViewActionAvailability,
@@ -508,7 +504,10 @@ fn can_rebase_view_session(
     can_rebase_session_branch.is_enabled()
         && matches!(
             session_state,
-            ViewSessionState::NewSession | ViewSessionState::Interactive | ViewSessionState::Review
+            ViewSessionState::NewSession
+                | ViewSessionState::Interactive
+                | ViewSessionState::Review
+                | ViewSessionState::AgentReview
         )
 }
 
@@ -519,8 +518,6 @@ fn can_rebase_view_session(
 /// merge, and sync controls so future edits do not accidentally apply a
 /// different guard to one of those related actions. Stacked drafts keep only
 /// draft-editing and start actions until their first turn launches.
-/// `AgentReview` keeps the prompt and merge actions visible while suppressing
-/// `r` until background review generation finishes.
 fn append_view_footer_edit_actions(
     actions: &mut Vec<HelpAction>,
     session_state: ViewSessionState,
@@ -920,7 +917,7 @@ mod tests {
     }
 
     #[test]
-    fn test_view_actions_agent_review_hides_sync() {
+    fn test_view_actions_agent_review_shows_sync() {
         // Arrange
         let state = ViewHelpState {
             can_mutate_session_branch: ViewActionAvailability::Enabled,
@@ -940,7 +937,7 @@ mod tests {
         assert!(actions.iter().any(|action| action.key == "f"));
         assert!(actions.iter().any(|action| action.key == "m"));
         assert!(actions.iter().any(|action| action.key == "p"));
-        assert!(!actions.iter().any(|action| action.key == "r"));
+        assert!(actions.iter().any(|action| action.key == "r"));
     }
 
     #[test]
@@ -1129,7 +1126,7 @@ mod tests {
     }
 
     #[test]
-    fn test_view_footer_actions_agent_review_hides_sync() {
+    fn test_view_footer_actions_agent_review_shows_sync() {
         // Arrange
         let state = ViewHelpState {
             can_mutate_session_branch: ViewActionAvailability::Enabled,
@@ -1152,7 +1149,7 @@ mod tests {
         assert!(actions.iter().any(|action| action.key == "p"));
         assert!(actions.iter().any(|action| action.key == "p"));
         assert!(actions.iter().any(|action| action.key == "m"));
-        assert!(!actions.iter().any(|action| action.key == "r"));
+        assert!(actions.iter().any(|action| action.key == "r"));
     }
 
     #[test]

@@ -150,7 +150,8 @@ pub enum Status {
     InProgress,
     Review,
     /// Session is generating focused-review output while keeping the
-    /// review-oriented shortcuts available and temporarily hiding rebase.
+    /// review-oriented shortcuts available. Starting sync from this state
+    /// cancels the pending focused review before rebasing.
     AgentReview,
     /// Session is waiting for model clarification responses.
     Question,

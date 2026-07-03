@@ -59,15 +59,20 @@ New session worktrees start from the local active base branch. If local `main` i
 | Status | Meaning | |--------|---------| | **Draft** | Created but not started; draft
 sessions can stage prompts first. | | **InProgress** | Agent is actively working. | |
 **Review** | Agent finished; changes are ready for review. | | **AgentReview** | Focused
-review output is generating in the background. | | **Question** | Agent requested
-clarification before continuing. | | **Queued** | Waiting in the merge queue. | |
-**Rebasing** | Session branch is rebasing onto its base branch. | | **Merging** |
-Changes are being merged into the base branch. | | **Done** | Completed and merged; the
-worktree was removed. | | **Canceled** | Canceled by the user; the worktree was removed.
-|
+review output is generating in the background; `r` sync cancels the pending focused
+review before rebasing. | | **Question** | Agent requested clarification before
+continuing. | | **Queued** | Waiting in the merge queue. | | **Rebasing** | Session
+branch is rebasing onto its base branch. | | **Merging** | Changes are being merged into
+the base branch. | | **Done** | Completed and merged; the worktree was removed. | |
+**Canceled** | Canceled by the user; the worktree was removed. |
 
 The shortcuts available in each state are listed in
 [Keybindings](@/docs/usage/keybindings.md).
+
+When a session enters **Review**, Agentty starts focused review in the background. While
+it is running, **AgentReview** keeps the review-oriented shortcuts available; pressing
+`r` starts session sync immediately and cancels pending focused-review output so stale
+review text cannot reappear after the rebase begins.
 
 ### Typical Transitions
 
@@ -121,6 +126,7 @@ flowchart TB
   review -->|generate focused review| agent_review
   review -->|create stacked draft| stacked_draft
   agent_review -->|review ready| review
+  agent_review -->|sync cancels review| rebasing
   review -->|sync| rebasing
   rebasing -->|sync complete| review
   review -->|queue merge| queued

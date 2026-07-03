@@ -426,7 +426,10 @@ async fn handle_workflow_view_key(
             open_merge_confirmation(app, view_context);
         }
         KeyCode::Char('r') if view_session_snapshot.can_rebase_session() => {
-            rebase_view_session(app, &view_context.session_id).await;
+            if rebase_view_session(app, &view_context.session_id).await {
+                pending_update.review_status_message = None;
+                pending_update.review_text = None;
+            }
         }
         KeyCode::Char('c')
             if key.modifiers.contains(event::KeyModifiers::CONTROL)
@@ -664,8 +667,11 @@ fn is_view_review_allowed(status: Status) -> bool {
 }
 
 /// Returns whether the `r` shortcut can start session sync from view mode.
+///
+/// `AgentReview` is included so users can interrupt pending focused-review
+/// generation with an explicit sync request.
 fn is_view_rebase_allowed(status: Status) -> bool {
-    is_view_action_allowed(status) && status != Status::AgentReview
+    is_view_action_allowed(status)
 }
 
 /// Handles `Ctrl+C` while a session is `InProgress` with a per-press policy.
@@ -1204,11 +1210,16 @@ async fn load_view_session_diff(app: &App, view_context: &ViewContext) -> String
     }
 }
 
-async fn rebase_view_session(app: &mut App, session_id: &str) {
+/// Starts session sync and reports whether the rebase command was accepted.
+async fn rebase_view_session(app: &mut App, session_id: &str) -> bool {
     if let Err(error) = app.rebase_session(session_id).await {
         app.append_output_for_session(session_id, &TranscriptNotice::RebaseError.format(error))
             .await;
+
+        return false;
     }
+
+    true
 }
 
 #[cfg(test)]
@@ -1367,7 +1378,7 @@ mod tests {
     }
 
     #[test]
-    fn test_is_view_rebase_allowed_blocks_agent_review() {
+    fn test_is_view_rebase_allowed_includes_agent_review() {
         // Arrange
         let review_status = Status::Review;
         let agent_review_status = Status::AgentReview;
@@ -1378,7 +1389,7 @@ mod tests {
 
         // Assert
         assert!(review_allowed);
-        assert!(!agent_review_allowed);
+        assert!(agent_review_allowed);
     }
 
     #[tokio::test]

@@ -168,6 +168,29 @@ pub(crate) fn review_cache_from_rows(
         .collect()
 }
 
+/// Cancels an in-flight focused review for a session and clears active render
+/// state so a later stale review-assist result is ignored.
+///
+/// Returns `true` when a loading review was removed, letting callers clear any
+/// matching persisted review state from durable storage.
+pub(crate) fn cancel_pending_review(
+    review_cache: &mut HashMap<SessionId, ReviewCacheEntry>,
+    mode: &mut AppMode,
+    session_id: &str,
+) -> bool {
+    let Some(ReviewCacheEntry::Loading { .. }) = review_cache.get(session_id) else {
+        return false;
+    };
+
+    review_cache.remove(session_id);
+    if let Some(mode_target) = review_mode_target(mode, session_id) {
+        *mode_target.review_status_message = None;
+        *mode_target.review_text = None;
+    }
+
+    true
+}
+
 /// Spawns one focused review-assist task for the provided session diff.
 pub(crate) fn start_review_assist(
     app_event_tx: mpsc::UnboundedSender<AppEvent>,

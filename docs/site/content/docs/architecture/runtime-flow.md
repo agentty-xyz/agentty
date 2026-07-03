@@ -183,7 +183,8 @@ restart-safe:
 - Draft session in `Draft` status -> `Canceled` (list-mode cancel before first turn)
 - `Review/Question -> InProgress` (reply)
 - `Review -> Queued -> Merging -> Done` (merge queue path)
-- `Review -> Rebasing -> Review/Question` (session sync path)
+- `Review/AgentReview -> Rebasing -> Review/Question` (session sync path; starting from
+  `AgentReview` cancels pending focused-review output)
 - `Review/Question -> Canceled`
 - `InProgress -> Review` (user stops the current turn)
 - `InProgress -> Canceled` (list-mode cancel stops the running turn)

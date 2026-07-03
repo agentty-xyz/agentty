@@ -10,6 +10,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 
+use agentty::db::{DB_DIR, DB_FILE, Database};
 use agentty::domain::agent::ReasoningLevel;
 use agentty::domain::session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
@@ -95,6 +96,54 @@ fn seed_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
     })?;
 
     std::fs::create_dir_all(env.agentty_root.join("wt").join("review-s"))?;
+
+    Ok(())
+}
+
+/// Seeds one session that is already generating focused review output so
+/// shortcut rendering can cover the transient `AgentReview` state.
+fn seed_agent_review_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    let canonical_workdir = env.workdir.canonicalize()?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(async {
+        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
+        let database = Database::open(&db_path).await?;
+        let project_id = database
+            .projects()
+            .upsert_project(
+                &canonical_workdir.to_string_lossy(),
+                Some("main".to_string()),
+            )
+            .await?;
+
+        database
+            .projects()
+            .touch_project_last_opened(project_id)
+            .await?;
+        database
+            .sessions()
+            .insert_session(
+                "agent-review-sync-0001",
+                "gpt-5.5",
+                "main",
+                "AgentReview",
+                project_id,
+            )
+            .await?;
+        database
+            .sessions()
+            .update_session_title("agent-review-sync-0001", "Agent review sync shortcut")
+            .await?;
+        database
+            .sessions()
+            .update_session_diff_stats(8, 2, "agent-review-sync-0001", "S")
+            .await
+    })?;
+
+    std::fs::create_dir_all(env.agentty_root.join("wt").join("agent-re"))?;
 
     Ok(())
 }
@@ -1535,6 +1584,37 @@ fn persisted_focused_review_survives_reload() -> E2eResult {
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Persisted focused review finding.", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify the `AgentReview` session footer keeps the sync shortcut visible so
+/// users can start a rebase without waiting for focused review generation.
+#[test]
+fn agent_review_session_shows_sync_shortcut() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("agent_review_sync_shortcut")
+        .with_git()
+        .setup(seed_agent_review_session)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "agent_review_sync_shortcut",
+                        "AgentReview session view with sync shortcut",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Agent review sync shortcut", &full);
+                assertion::assert_text_in_region(frame, "r: sync", &full);
             },
         )?;
 

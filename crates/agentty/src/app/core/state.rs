@@ -19,7 +19,7 @@ use app::branch_publish::{BranchPublishTaskSession, run_branch_publish_action};
 use app::merge_queue::{MergeQueue, MergeQueueProgress};
 use app::project::ProjectManager;
 use app::review::{
-    ReviewCacheEntry, mark_session_agent_review, review_view_state,
+    ReviewCacheEntry, cancel_pending_review, mark_session_agent_review, review_view_state,
     start_review_assist as spawn_review_assist,
 };
 use app::service::AppServices;
@@ -1338,13 +1338,33 @@ impl App {
 
     /// Rebases a reviewed session branch onto its base branch.
     ///
+    /// If the session is currently generating focused review output, starting
+    /// sync cancels the pending review cache and persisted review entries so
+    /// late review-assist completions cannot overwrite the rebased view state
+    /// and startup cannot hydrate stale review text.
+    ///
     /// # Errors
-    /// Returns an error if session cannot start rebasing.
+    /// Returns an error if focused-review persistence cannot be cleared before
+    /// sync starts, or if session sync cannot start.
     pub async fn rebase_session(&mut self, session_id: &str) -> Result<(), AppError> {
-        Ok(self
-            .sessions
+        let should_clear_pending_review = matches!(
+            self.review_cache.get(session_id),
+            Some(ReviewCacheEntry::Loading { .. })
+        );
+        if should_clear_pending_review {
+            self.services
+                .db()
+                .sessions()
+                .update_session_focused_review(session_id, None, None)
+                .await?;
+            cancel_pending_review(&mut self.review_cache, &mut self.mode, session_id);
+        }
+
+        self.sessions
             .rebase_session(&self.services, session_id)
-            .await?)
+            .await?;
+
+        Ok(())
     }
 
     /// Starts selected-project branch sync in the background and immediately
