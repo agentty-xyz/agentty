@@ -19,28 +19,39 @@ use crate::ui::state::app_mode::{
 };
 use crate::ui::{Component, Page, RenderContext, component, markdown, overlay, page};
 
-/// Shared borrowed data required to render list-page backgrounds.
-pub(crate) struct ListBackgroundRenderContext<'a> {
-    /// Identifier for the currently active project in the project list tab.
-    pub(crate) active_project_id: i64,
-    /// Locally available agent CLI executables and detected versions.
-    pub(crate) available_agent_clis: &'a [AgentCliInfo],
-    pub(crate) current_tab: Tab,
-    pub(crate) project_table_state: &'a mut TableState,
-    pub(crate) projects: &'a [ProjectListItem],
-    pub(crate) requested_review_selected_index: Option<usize>,
-    pub(crate) requested_review_table_state: &'a mut TableState,
-    pub(crate) requested_reviews: &'a RequestedReviewState,
-    pub(crate) sessions: &'a [Session],
-    pub(crate) settings: &'a mut SettingsManager,
-    pub(crate) stats_activity: &'a [DailyActivity],
-    pub(crate) system_log_tail_offset: u16,
-    pub(crate) system_logs: &'a SystemLogBuffer,
-    pub(crate) table_state: &'a mut TableState,
+/// Borrowed list-background view into shared route state.
+pub(crate) struct ListBackgroundRenderContext<'a, 'state> {
+    /// Shared route data borrowed while a list-backed page or overlay renders.
+    shared: &'a mut RouteSharedContext<'state>,
+}
+
+impl ListBackgroundRenderContext<'_, '_> {
+    /// Returns whether the session-creation overlay can offer a stacked
+    /// session option for the currently selected session row.
+    pub(crate) fn can_create_stacked_session(&self) -> bool {
+        self.shared.current_tab == Tab::Sessions
+            && self
+                .shared
+                .table_state
+                .selected()
+                .and_then(|selected_index| self.shared.sessions.get(selected_index))
+                .is_some_and(Session::allows_stacked_child_creation)
+    }
+
+    /// Returns the active project-scoped reasoning level for list-restored
+    /// session backgrounds.
+    pub(crate) fn default_reasoning_level(&self) -> ReasoningLevel {
+        self.shared.settings.reasoning_level
+    }
+
+    /// Returns the shared session rows available to list-backed overlays.
+    pub(crate) fn sessions(&self) -> &[Session] {
+        self.shared.sessions
+    }
 }
 
 /// Shared mutable routing data reused across app modes in `route_frame`.
-struct RouteSharedContext<'a> {
+pub(crate) struct RouteSharedContext<'a> {
     /// Identifier for the active project shared across list-mode renders.
     active_project_id: i64,
     /// Locally available agent CLI executables and detected versions.
@@ -59,26 +70,11 @@ struct RouteSharedContext<'a> {
     table_state: &'a mut TableState,
 }
 
-impl RouteSharedContext<'_> {
+impl<'state> RouteSharedContext<'state> {
     /// Creates a list-background context for overlays/pages that render on top
-    /// of the tabbed list content.
-    fn list_background(&mut self) -> ListBackgroundRenderContext<'_> {
-        ListBackgroundRenderContext {
-            active_project_id: self.active_project_id,
-            available_agent_clis: self.available_agent_clis,
-            current_tab: self.current_tab,
-            project_table_state: self.project_table_state,
-            projects: self.projects,
-            requested_review_selected_index: self.requested_review_selected_index,
-            requested_review_table_state: self.requested_review_table_state,
-            requested_reviews: self.requested_reviews,
-            sessions: self.sessions,
-            settings: self.settings,
-            stats_activity: self.stats_activity,
-            system_log_tail_offset: self.system_log_tail_offset,
-            system_logs: self.system_logs,
-            table_state: self.table_state,
-        }
+    /// of the tabbed list content without repacking shared route fields.
+    fn list_background(&mut self) -> ListBackgroundRenderContext<'_, 'state> {
+        ListBackgroundRenderContext { shared: self }
     }
 }
 
@@ -130,6 +126,86 @@ struct RouteAuxContext<'a> {
     session_update_versions: &'a HashMap<SessionId, u64>,
     session_worktree_availability: &'a HashMap<SessionId, bool>,
     wall_clock_unix_seconds: i64,
+}
+
+impl<'a> RouteAuxContext<'a> {
+    /// Creates a session chat render context from shared route inputs and the
+    /// mode-specific session selection.
+    fn session_chat<'b>(
+        self,
+        sessions: &'b [Session],
+        mode: &'b AppMode,
+        session_id: &'b str,
+        scroll_offset: Option<u16>,
+    ) -> SessionChatRenderContext<'b>
+    where
+        'a: 'b,
+    {
+        SessionChatRenderContext {
+            active_prompt_outputs: self.active_prompt_outputs,
+            default_reasoning_level: self.default_reasoning_level,
+            markdown_render_cache: self.markdown_render_cache,
+            mode,
+            output_layout_cache: self.output_layout_cache,
+            session_id,
+            session_progress_messages: self.session_progress_messages,
+            session_update_versions: self.session_update_versions,
+            session_worktree_availability: self.session_worktree_availability,
+            sessions,
+            scroll_offset,
+            wall_clock_unix_seconds: self.wall_clock_unix_seconds,
+        }
+    }
+
+    /// Creates a session-overlay render context from shared route inputs and
+    /// the view restored behind the overlay.
+    fn session_overlay<'b>(
+        self,
+        sessions: &'b [Session],
+        restore_view: &'b ConfirmationViewMode,
+    ) -> SessionOverlayRenderContext<'b>
+    where
+        'a: 'b,
+    {
+        SessionOverlayRenderContext {
+            active_prompt_outputs: self.active_prompt_outputs,
+            default_reasoning_level: self.default_reasoning_level,
+            markdown_render_cache: self.markdown_render_cache,
+            output_layout_cache: self.output_layout_cache,
+            restore_view,
+            session_progress_messages: self.session_progress_messages,
+            session_update_versions: self.session_update_versions,
+            session_worktree_availability: self.session_worktree_availability,
+            sessions,
+            wall_clock_unix_seconds: self.wall_clock_unix_seconds,
+        }
+    }
+
+    /// Creates the publish-branch overlay context by combining shared route
+    /// inputs with publish-mode values.
+    fn publish_branch_overlay<'b>(
+        self,
+        sessions: &'b [Session],
+        mode_context: PublishBranchModeContext<'b>,
+    ) -> PublishBranchOverlayContext<'b>
+    where
+        'a: 'b,
+    {
+        PublishBranchOverlayContext {
+            default_branch_name: mode_context.default_branch_name,
+            active_prompt_outputs: self.active_prompt_outputs,
+            default_reasoning_level: self.default_reasoning_level,
+            markdown_render_cache: self.markdown_render_cache,
+            output_layout_cache: self.output_layout_cache,
+            input: mode_context.input,
+            locked_upstream_ref: mode_context.locked_upstream_ref,
+            restore_view: mode_context.restore_view,
+            session_progress_messages: self.session_progress_messages,
+            session_update_versions: self.session_update_versions,
+            session_worktree_availability: self.session_worktree_availability,
+            sessions,
+        }
+    }
 }
 
 /// Routes the content-area render path by active `AppMode`.
@@ -324,18 +400,7 @@ fn render_confirmation_mode(
         render_session_confirmation_overlay(
             f,
             area,
-            SessionOverlayRenderContext {
-                active_prompt_outputs: aux.active_prompt_outputs,
-                default_reasoning_level: aux.default_reasoning_level,
-                markdown_render_cache: aux.markdown_render_cache,
-                output_layout_cache: aux.output_layout_cache,
-                restore_view: view_mode,
-                session_progress_messages: aux.session_progress_messages,
-                session_update_versions: aux.session_update_versions,
-                session_worktree_availability: aux.session_worktree_availability,
-                sessions: shared.sessions,
-                wall_clock_unix_seconds: aux.wall_clock_unix_seconds,
-            },
+            aux.session_overlay(shared.sessions, view_mode),
             &SessionConfirmationContext {
                 confirmation_message,
                 confirmation_title,
@@ -436,6 +501,49 @@ struct SessionOverlayRenderContext<'a> {
     wall_clock_unix_seconds: i64,
 }
 
+impl SessionOverlayRenderContext<'_> {
+    /// Creates the session-chat context used to render the restored background
+    /// page behind a session-scoped overlay.
+    fn session_chat<'a>(&'a self, background_mode: &'a AppMode) -> SessionChatRenderContext<'a> {
+        SessionChatRenderContext {
+            active_prompt_outputs: self.active_prompt_outputs,
+            default_reasoning_level: self.default_reasoning_level,
+            markdown_render_cache: self.markdown_render_cache,
+            mode: background_mode,
+            output_layout_cache: self.output_layout_cache,
+            session_id: &self.restore_view.session_id,
+            session_progress_messages: self.session_progress_messages,
+            session_update_versions: self.session_update_versions,
+            session_worktree_availability: self.session_worktree_availability,
+            sessions: self.sessions,
+            scroll_offset: self.restore_view.scroll_offset,
+            wall_clock_unix_seconds: self.wall_clock_unix_seconds,
+        }
+    }
+}
+
+impl<'context> PublishBranchOverlayContext<'context> {
+    /// Creates the session-overlay context that restores the chat page behind
+    /// the publish-branch prompt.
+    fn session_overlay(
+        self,
+        wall_clock_unix_seconds: i64,
+    ) -> SessionOverlayRenderContext<'context> {
+        SessionOverlayRenderContext {
+            active_prompt_outputs: self.active_prompt_outputs,
+            default_reasoning_level: self.default_reasoning_level,
+            markdown_render_cache: self.markdown_render_cache,
+            output_layout_cache: self.output_layout_cache,
+            restore_view: self.restore_view,
+            session_progress_messages: self.session_progress_messages,
+            session_update_versions: self.session_update_versions,
+            session_worktree_availability: self.session_worktree_availability,
+            sessions: self.sessions,
+            wall_clock_unix_seconds,
+        }
+    }
+}
+
 /// Renders the shared session-chat background for session-scoped overlays and
 /// dims it with the generic overlay backdrop.
 fn render_session_overlay_background(
@@ -445,24 +553,7 @@ fn render_session_overlay_background(
 ) {
     let background_mode = context.restore_view.clone().into_view_mode();
 
-    render_session_chat(
-        f,
-        area,
-        SessionChatRenderContext {
-            active_prompt_outputs: context.active_prompt_outputs,
-            default_reasoning_level: context.default_reasoning_level,
-            markdown_render_cache: context.markdown_render_cache,
-            mode: &background_mode,
-            output_layout_cache: context.output_layout_cache,
-            session_id: &context.restore_view.session_id,
-            session_progress_messages: context.session_progress_messages,
-            session_update_versions: context.session_update_versions,
-            session_worktree_availability: context.session_worktree_availability,
-            sessions: context.sessions,
-            scroll_offset: context.restore_view.scroll_offset,
-            wall_clock_unix_seconds: context.wall_clock_unix_seconds,
-        },
-    );
+    render_session_chat(f, area, context.session_chat(&background_mode));
 }
 
 /// Renders a session-scoped confirmation above the originating session chat
@@ -509,20 +600,7 @@ fn render_session_or_diff_mode(
         } => render_session_chat(
             f,
             area,
-            SessionChatRenderContext {
-                active_prompt_outputs: aux.active_prompt_outputs,
-                default_reasoning_level: aux.default_reasoning_level,
-                markdown_render_cache: aux.markdown_render_cache,
-                mode,
-                output_layout_cache: aux.output_layout_cache,
-                session_id,
-                session_progress_messages: aux.session_progress_messages,
-                session_update_versions: aux.session_update_versions,
-                session_worktree_availability: aux.session_worktree_availability,
-                sessions,
-                scroll_offset: *scroll_offset,
-                wall_clock_unix_seconds: aux.wall_clock_unix_seconds,
-            },
+            aux.session_chat(sessions, mode, session_id, *scroll_offset),
         ),
         AppMode::OpenCommandSelector {
             commands,
@@ -531,18 +609,7 @@ fn render_session_or_diff_mode(
         } => render_open_command_selector_overlay(
             f,
             area,
-            SessionOverlayRenderContext {
-                active_prompt_outputs: aux.active_prompt_outputs,
-                default_reasoning_level: aux.default_reasoning_level,
-                markdown_render_cache: aux.markdown_render_cache,
-                output_layout_cache: aux.output_layout_cache,
-                restore_view,
-                session_progress_messages: aux.session_progress_messages,
-                session_update_versions: aux.session_update_versions,
-                session_worktree_availability: aux.session_worktree_availability,
-                sessions,
-                wall_clock_unix_seconds: aux.wall_clock_unix_seconds,
-            },
+            aux.session_overlay(sessions, restore_view),
             commands,
             *selected_command_index,
         ),
@@ -601,20 +668,7 @@ fn render_publish_branch_input_mode(
     render_publish_branch_overlay(
         f,
         area,
-        &PublishBranchOverlayContext {
-            default_branch_name: mode_context.default_branch_name,
-            active_prompt_outputs: aux.active_prompt_outputs,
-            default_reasoning_level: aux.default_reasoning_level,
-            markdown_render_cache: aux.markdown_render_cache,
-            output_layout_cache: aux.output_layout_cache,
-            input: mode_context.input,
-            locked_upstream_ref: mode_context.locked_upstream_ref,
-            restore_view: mode_context.restore_view,
-            session_progress_messages: aux.session_progress_messages,
-            session_update_versions: aux.session_update_versions,
-            session_worktree_availability: aux.session_worktree_availability,
-            sessions,
-        },
+        aux.publish_branch_overlay(sessions, mode_context),
         aux.wall_clock_unix_seconds,
     );
 }
@@ -652,44 +706,15 @@ fn render_open_command_selector_overlay(
 fn render_publish_branch_overlay(
     f: &mut Frame,
     area: Rect,
-    context: &PublishBranchOverlayContext<'_>,
+    context: PublishBranchOverlayContext<'_>,
     wall_clock_unix_seconds: i64,
 ) {
-    let PublishBranchOverlayContext {
-        default_branch_name,
-        active_prompt_outputs,
-        default_reasoning_level,
-        markdown_render_cache,
-        output_layout_cache,
-        input,
-        locked_upstream_ref,
-        restore_view,
-        session_progress_messages,
-        session_update_versions,
-        session_worktree_availability,
-        sessions,
-    } = *context;
-    render_session_overlay_background(
-        f,
-        area,
-        SessionOverlayRenderContext {
-            active_prompt_outputs,
-            default_reasoning_level,
-            markdown_render_cache,
-            output_layout_cache,
-            restore_view,
-            session_progress_messages,
-            session_update_versions,
-            session_worktree_availability,
-            sessions,
-            wall_clock_unix_seconds,
-        },
-    );
+    render_session_overlay_background(f, area, context.session_overlay(wall_clock_unix_seconds));
 
     component::publish_branch_overlay::PublishBranchOverlay::new(
-        input,
-        default_branch_name,
-        locked_upstream_ref,
+        context.input,
+        context.default_branch_name,
+        context.locked_upstream_ref,
     )
     .render(f, area);
 }
@@ -782,66 +807,58 @@ fn render_diff_mode(
 pub(crate) fn render_list_background(
     f: &mut Frame,
     content_area: Rect,
-    context: ListBackgroundRenderContext<'_>,
+    context: ListBackgroundRenderContext<'_, '_>,
     wall_clock_unix_seconds: i64,
 ) {
-    let ListBackgroundRenderContext {
-        active_project_id,
-        available_agent_clis,
-        current_tab,
-        project_table_state,
-        projects,
-        requested_review_selected_index,
-        requested_review_table_state,
-        requested_reviews,
-        sessions,
-        settings,
-        stats_activity,
-        system_log_tail_offset,
-        system_logs,
-        table_state,
-    } = context;
+    let shared = context.shared;
 
     let chunks = Layout::default()
         .constraints([Constraint::Length(3), Constraint::Min(0)])
         .split(content_area);
 
-    component::tab::Tabs::new(current_tab, active_project_id, projects).render(f, chunks[0]);
+    component::tab::Tabs::new(
+        shared.current_tab,
+        shared.active_project_id,
+        shared.projects,
+    )
+    .render(f, chunks[0]);
 
-    match current_tab {
+    match shared.current_tab {
         Tab::Projects => {
             page::project_list::ProjectListPage::new(
-                projects,
-                available_agent_clis,
-                stats_activity,
-                project_table_state,
-                active_project_id,
+                shared.projects,
+                shared.available_agent_clis,
+                shared.stats_activity,
+                &mut *shared.project_table_state,
+                shared.active_project_id,
             )
             .render(f, chunks[1]);
         }
         Tab::Sessions => {
             page::session_list::SessionListPage::new(
-                sessions,
-                table_state,
-                settings.reasoning_level,
+                shared.sessions,
+                &mut *shared.table_state,
+                shared.settings.reasoning_level,
                 wall_clock_unix_seconds,
             )
             .render(f, chunks[1]);
         }
         Tab::Review => {
             page::review_list::ReviewListPage::new(
-                requested_reviews,
-                requested_review_selected_index,
-                requested_review_table_state,
+                shared.requested_reviews,
+                shared.requested_review_selected_index,
+                &mut *shared.requested_review_table_state,
             )
             .render(f, chunks[1]);
         }
         Tab::Settings => {
-            let active_project_name = active_project_name(active_project_id, projects);
-            page::setting::SettingsPage::new(settings, active_project_name).render(f, chunks[1]);
+            let active_project_name =
+                active_project_name(shared.active_project_id, shared.projects);
+            page::setting::SettingsPage::new(&mut *shared.settings, active_project_name)
+                .render(f, chunks[1]);
         }
         Tab::Logs => {
-            page::system_log::SystemLogPage::new(system_logs, system_log_tail_offset)
+            page::system_log::SystemLogPage::new(shared.system_logs, shared.system_log_tail_offset)
                 .render(f, chunks[1]);
         }
     }

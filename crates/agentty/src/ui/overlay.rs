@@ -6,7 +6,6 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding};
 
-use crate::app::Tab;
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::session::{Session, SessionId};
 use crate::infra::review_comment_cache::ReviewCommentCache;
@@ -65,11 +64,11 @@ pub(crate) struct ViewInfoPopupRenderContext<'a> {
 }
 
 /// Borrowed parameters for rendering the help overlay and its background page.
-pub(crate) struct HelpOverlayRenderContext<'a> {
+pub(crate) struct HelpOverlayRenderContext<'a, 'state> {
     /// Help overlay content and the background page to restore behind it.
     pub(crate) help_context: &'a HelpContext,
     /// Shared tab-list state rendered behind list-backed help overlays.
-    pub(crate) list_background: ListBackgroundRenderContext<'a>,
+    pub(crate) list_background: ListBackgroundRenderContext<'a, 'state>,
     /// Shared diff-layout cache reused by restored diff backgrounds.
     pub(crate) diff_layout_cache: &'a page::diff::DiffLayoutCache,
     /// Shared markdown cache reused by restored background pages.
@@ -90,11 +89,11 @@ pub(crate) struct HelpOverlayRenderContext<'a> {
 }
 
 /// Borrowed parameters for rendering the background behind the help overlay.
-struct HelpBackgroundRenderContext<'a> {
+struct HelpBackgroundRenderContext<'a, 'state> {
     /// Help overlay content and the background page to restore behind it.
     help_context: &'a HelpContext,
     /// Shared tab-list state rendered behind list-backed help overlays.
-    list_background: ListBackgroundRenderContext<'a>,
+    list_background: ListBackgroundRenderContext<'a, 'state>,
     /// Shared diff-layout cache reused by restored diff backgrounds.
     diff_layout_cache: &'a page::diff::DiffLayoutCache,
     /// Shared markdown cache reused by restored background pages.
@@ -117,7 +116,7 @@ pub(crate) fn render_confirmation_overlay(
     f: &mut Frame,
     area: Rect,
     mode: &AppMode,
-    list_background: ListBackgroundRenderContext<'_>,
+    list_background: ListBackgroundRenderContext<'_, '_>,
     wall_clock_unix_seconds: i64,
 ) {
     render_list_background(f, area, list_background, wall_clock_unix_seconds);
@@ -144,16 +143,11 @@ pub(crate) fn render_confirmation_overlay(
 pub(crate) fn render_session_creation_overlay(
     f: &mut Frame,
     area: Rect,
-    list_background: ListBackgroundRenderContext<'_>,
+    list_background: ListBackgroundRenderContext<'_, '_>,
     selected_option_index: usize,
     wall_clock_unix_seconds: i64,
 ) {
-    let can_create_stacked_session = list_background.current_tab == Tab::Sessions
-        && list_background
-            .table_state
-            .selected()
-            .and_then(|selected_index| list_background.sessions.get(selected_index))
-            .is_some_and(Session::allows_stacked_child_creation);
+    let can_create_stacked_session = list_background.can_create_stacked_session();
 
     render_list_background(f, area, list_background, wall_clock_unix_seconds);
 
@@ -168,7 +162,7 @@ pub(crate) fn render_session_creation_overlay(
 pub(crate) fn render_sync_blocked_popup(
     f: &mut Frame,
     area: Rect,
-    list_background: ListBackgroundRenderContext<'_>,
+    list_background: ListBackgroundRenderContext<'_, '_>,
     wall_clock_unix_seconds: i64,
     context: SyncBlockedPopupRenderContext<'_>,
 ) {
@@ -266,7 +260,7 @@ pub(crate) fn sync_popup_message(
 }
 
 /// Renders help overlay above the context-specific background page.
-pub(crate) fn render_help(f: &mut Frame, area: Rect, context: HelpOverlayRenderContext<'_>) {
+pub(crate) fn render_help(f: &mut Frame, area: Rect, context: HelpOverlayRenderContext<'_, '_>) {
     let HelpOverlayRenderContext {
         diff_layout_cache,
         help_context,
@@ -442,7 +436,7 @@ fn resolve_help_background<'a>(
 }
 
 /// Renders background content behind help based on the source `HelpContext`.
-fn render_help_background(f: &mut Frame, area: Rect, context: HelpBackgroundRenderContext<'_>) {
+fn render_help_background(f: &mut Frame, area: Rect, context: HelpBackgroundRenderContext<'_, '_>) {
     let HelpBackgroundRenderContext {
         diff_layout_cache,
         help_context,
@@ -454,7 +448,7 @@ fn render_help_background(f: &mut Frame, area: Rect, context: HelpBackgroundRend
         session_update_versions,
         wall_clock_unix_seconds,
     } = context;
-    let sessions = list_background.sessions;
+    let sessions = list_background.sessions();
 
     match resolve_help_background(help_context, sessions, review_comment_cache) {
         Some(ResolvedHelpBackground::List) => {
@@ -483,7 +477,7 @@ fn render_help_background(f: &mut Frame, area: Rect, context: HelpBackgroundRend
             page::session_chat::SessionChatPage::new(page::session_chat::SessionChatPageInput {
                 active_prompt_output: None,
                 active_progress,
-                default_reasoning_level: list_background.settings.reasoning_level,
+                default_reasoning_level: list_background.default_reasoning_level(),
                 markdown_render_cache,
                 mode: &bg_mode,
                 output_layout_cache,
