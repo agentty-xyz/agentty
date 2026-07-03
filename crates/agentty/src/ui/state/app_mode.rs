@@ -20,6 +20,8 @@ pub enum ConfirmationIntent {
     CancelSession,
     /// Confirms creating a continuation draft from one terminal session.
     ContinueSession,
+    /// Confirms forking a root review-ready session into a new session.
+    ForkSession,
     /// Confirms queueing merge for the active view session.
     MergeSession,
     /// Confirms regenerating the focused review for the active view session.
@@ -322,6 +324,7 @@ pub enum HelpContext {
     /// Generic list-mode help context with precomputed keybindings.
     List { keybindings: Vec<HelpAction> },
     View {
+        can_fork_session: bool,
         can_mutate_session_branch: bool,
         can_open_worktree: bool,
         can_rebase_session_branch: bool,
@@ -353,6 +356,7 @@ impl HelpContext {
     pub fn keybindings(&self) -> Vec<HelpAction> {
         match self {
             HelpContext::View {
+                can_fork_session,
                 can_mutate_session_branch,
                 can_open_worktree,
                 can_rebase_session_branch,
@@ -362,6 +366,7 @@ impl HelpContext {
                 session_state,
                 ..
             } => help_action::view_actions(ViewHelpState {
+                can_fork_session: ViewActionAvailability::from_bool(*can_fork_session),
                 can_mutate_session_branch: ViewActionAvailability::from_bool(
                     *can_mutate_session_branch,
                 ),
@@ -461,6 +466,7 @@ mod tests {
     fn test_help_context_view_keybindings_for_in_progress_hide_edit_actions() {
         // Arrange
         let context = HelpContext::View {
+            can_fork_session: true,
             can_mutate_session_branch: true,
             can_open_worktree: true,
             can_rebase_session_branch: true,
@@ -493,6 +499,7 @@ mod tests {
     fn test_help_context_restore_mode_ignores_help_only_view_fields() {
         // Arrange
         let context = HelpContext::View {
+            can_fork_session: true,
             can_mutate_session_branch: true,
             can_open_worktree: true,
             can_rebase_session_branch: true,
@@ -528,6 +535,7 @@ mod tests {
     fn test_help_context_view_keybindings_include_publish_pull_request_action() {
         // Arrange
         let context = HelpContext::View {
+            can_fork_session: true,
             can_mutate_session_branch: true,
             can_open_worktree: true,
             can_rebase_session_branch: true,

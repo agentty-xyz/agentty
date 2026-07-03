@@ -182,6 +182,8 @@ restart-safe:
 - `Draft -> InProgress` (first prompt)
 - Draft session in `Draft` status -> `Canceled` (list-mode cancel before first turn)
 - `Review/Question -> InProgress` (reply)
+- Root `Review/AgentReview -> Review` (forked session snapshot opens as a new
+  review-ready session)
 - `Review -> Queued -> Merging -> Done` (merge queue path)
 - `Review/AgentReview -> Rebasing -> Review/Question` (session sync path; starting from
   `AgentReview` cancels pending focused-review output)
@@ -327,6 +329,10 @@ their triggers:
   creates or refreshes the forge review request.
 - **Deferred session cleanup** (session delete): removes the worktree folder and branch
   after database deletion.
+- **Session fork** (root session view `F`): creates a new worktree branch from the
+  source session branch, copies `session_message` rows in one transaction, clears
+  provider/review-request/stack linkage, and marks the fork for one-time transcript
+  replay before its first reply. Stacked child sessions do not expose this action.
 - **Focused review assist** (entering review): runs the review prompt and stores the
   result or error.
 - **Sync-main workflow** (list-mode `s`): pull/rebase/push of the project branch through

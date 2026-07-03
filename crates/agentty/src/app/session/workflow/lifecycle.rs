@@ -301,6 +301,121 @@ impl SessionManager {
         Ok(session_id)
     }
 
+    /// Forks a root review-ready session into a new independent review
+    /// session.
+    ///
+    /// The fork creates a new worktree branch from the source session branch,
+    /// snapshots persisted transcript messages, clears provider-native
+    /// conversation and publish/review-request linkage, and marks the new
+    /// session for one-time history replay on its first reply.
+    ///
+    /// # Errors
+    /// Returns an error if the source session is missing, not root
+    /// review-ready, repository metadata cannot be resolved, the worktree
+    /// cannot be created, or the metadata snapshot cannot be persisted.
+    pub async fn fork_session(
+        &mut self,
+        services: &AppServices,
+        source_session_id: &str,
+    ) -> Result<String, SessionError> {
+        let (source_branch, source_agent) = {
+            let source_session = self.session_or_err(source_session_id)?;
+            if !source_session.allows_fork_action() {
+                return Err(SessionError::Workflow(
+                    "Only root review-ready sessions can be forked".to_string(),
+                ));
+            }
+
+            let source_branch = self
+                .session_branch_name(&source_session.id)
+                .map_or_else(|| session_branch(&source_session.id), str::to_string);
+
+            (source_branch, source_session.agent)
+        };
+        services
+            .db()
+            .sessions()
+            .load_session_project_id(source_session_id)
+            .await?
+            .ok_or_else(|| {
+                SessionError::Workflow(
+                    "Source session has no project association for session forking".to_string(),
+                )
+            })?;
+
+        let repo_root = self
+            .load_session_repo_root(services, source_session_id)
+            .await?;
+        let session_id = Uuid::new_v4().to_string();
+        let folder = session_folder(services.base_path(), &session_id);
+        if services.fs_client().exists(folder.clone()) {
+            return Err(SessionError::Workflow(format!(
+                "Session folder {session_id} already exists"
+            )));
+        }
+
+        let worktree_branch = session_branch(&session_id);
+        self.create_session_worktree(
+            services,
+            &session_id,
+            &folder,
+            &repo_root,
+            &worktree_branch,
+            &source_branch,
+        )
+        .await?;
+
+        let fork_status = Status::Review.to_string();
+        let snapshot = db::ForkSessionSnapshot {
+            new_session_id: &session_id,
+            source_session_id,
+            status: &fork_status,
+        };
+        if let Err(error) = services
+            .db()
+            .sessions()
+            .fork_session_snapshot(snapshot)
+            .await
+        {
+            self.rollback_failed_session_creation(
+                services,
+                &folder,
+                &repo_root,
+                &session_id,
+                &worktree_branch,
+                false,
+            )
+            .await;
+
+            return Err(SessionError::Workflow(format!(
+                "Failed to save forked session metadata: {error}"
+            )));
+        }
+
+        Self::record_session_creation_activity(services, &session_id).await;
+
+        if let Err(error) = agent::create_backend(source_agent.kind()).setup(&folder) {
+            self.rollback_failed_session_creation(
+                services,
+                &folder,
+                &repo_root,
+                &session_id,
+                &worktree_branch,
+                true,
+            )
+            .await;
+
+            return Err(SessionError::Workflow(format!(
+                "Failed to setup session backend: {error}"
+            )));
+        }
+
+        self.mark_history_replay_pending(&session_id);
+        services.emit_session_and_project_refresh_events();
+
+        Ok(session_id)
+    }
+
     /// Creates one regular session whose worktree is materialized before the
     /// first prompt is submitted.
     ///
@@ -402,11 +517,12 @@ impl SessionManager {
     }
 
     /// Creates the git worktree and session-local metadata directory for one
-    /// session branch.
+    /// session branch from an explicit start ref.
     ///
-    /// The worktree always starts from the local base branch so new sessions
-    /// reflect the user's current checkout instead of any tracked upstream
-    /// ref.
+    /// Regular sessions pass the local base branch as the start ref, stacked
+    /// drafts pass their parent branch, and forks pass the source session
+    /// branch so the new worktree preserves the source branch state at fork
+    /// time.
     ///
     /// # Errors
     /// Returns an error if git worktree creation fails or the `.agentty`
@@ -418,7 +534,7 @@ impl SessionManager {
         folder: &Path,
         repo_root: &Path,
         worktree_branch: &str,
-        base_branch: &str,
+        start_ref: &str,
     ) -> Result<(), SessionError> {
         services
             .git_client()
@@ -426,7 +542,7 @@ impl SessionManager {
                 repo_root.to_path_buf(),
                 folder.to_path_buf(),
                 worktree_branch.to_string(),
-                base_branch.to_string(),
+                start_ref.to_string(),
             )
             .await
             .map_err(|error| {

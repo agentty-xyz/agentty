@@ -110,6 +110,8 @@ impl ViewActionAvailability {
 /// Action availability snapshot for view-mode help projection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ViewHelpState {
+    /// Whether this session can fork into a new independent session.
+    pub(crate) can_fork_session: ViewActionAvailability,
     /// Whether this session can start branch-mutating work under the current
     /// one-level stack consistency rules.
     pub(crate) can_mutate_session_branch: ViewActionAvailability,
@@ -135,6 +137,7 @@ pub(crate) struct ViewHelpState {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ViewActionSet {
     continue_terminal_session: ViewActionAvailability,
+    fork_session: ViewActionAvailability,
     open_command: ViewActionAvailability,
     open_prompt: ViewActionAvailability,
     open_worktree: ViewActionAvailability,
@@ -171,6 +174,9 @@ impl ViewActionSet {
                 state.session_state,
                 ViewSessionState::Done
             )),
+            fork_session: ViewActionAvailability::from_bool(
+                state.can_fork_session.is_enabled() && can_show_review,
+            ),
             open_command: ViewActionAvailability::from_bool(can_open_command),
             open_prompt: ViewActionAvailability::from_bool(can_open_prompt),
             open_worktree: ViewActionAvailability::from_bool(can_open_worktree),
@@ -372,6 +378,10 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
         actions.push(HelpAction::new("review", "f", "Focused review"));
     }
 
+    if action_set.fork_session.is_enabled() {
+        actions.push(HelpAction::new("fork", "F", "Fork session"));
+    }
+
     if let Some(publish_pull_request_action) = state.publish_pull_request_action {
         actions.push(publish_pull_request_help_action(
             publish_pull_request_action,
@@ -432,6 +442,10 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
 
     if action_set.show_review.is_enabled() {
         actions.push(HelpAction::new("review", "f", "Focused review"));
+    }
+
+    if action_set.fork_session.is_enabled() {
+        actions.push(HelpAction::new("fork", "F", "Fork session"));
     }
 
     if let Some(publish_pull_request_action) = state.publish_pull_request_action {
@@ -764,6 +778,7 @@ mod tests {
     fn test_view_actions_in_progress_shows_stop_and_hides_open_and_edit_actions() {
         // Arrange
         let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -787,6 +802,7 @@ mod tests {
     fn test_view_actions_hide_open_when_worktree_is_unavailable() {
         // Arrange
         let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Disabled,
@@ -807,6 +823,7 @@ mod tests {
     fn test_view_actions_rebasing_hides_open_and_stop() {
         // Arrange
         let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -830,6 +847,7 @@ mod tests {
     fn test_view_actions_merge_queue_hides_worktree_shortcuts_and_stop() {
         // Arrange
         let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -853,6 +871,7 @@ mod tests {
     fn test_view_actions_review_shows_diff() {
         // Arrange
         let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -876,6 +895,7 @@ mod tests {
         assert!(actions.iter().any(|action| action.key == "p"));
         assert!(actions.iter().any(|action| action.key == "o"));
         assert!(actions.iter().any(|action| action.key == "Enter"));
+        assert!(actions.iter().any(|action| action.key == "F"));
         assert!(actions.iter().any(|action| {
             action.key == "/"
                 && action.footer_label == "commands menu"
@@ -890,9 +910,31 @@ mod tests {
     }
 
     #[test]
+    fn test_view_actions_review_hides_fork_when_unavailable() {
+        // Arrange
+        let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Disabled,
+            can_mutate_session_branch: ViewActionAvailability::Enabled,
+            can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_open_worktree: ViewActionAvailability::Enabled,
+            reply_to_session: ViewActionAvailability::Enabled,
+            can_start_staged_session: ViewActionAvailability::Disabled,
+            publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
+            session_state: ViewSessionState::Review,
+        };
+
+        // Act
+        let actions = view_actions(state);
+
+        // Assert
+        assert!(!actions.iter().any(|action| action.key == "F"));
+    }
+
+    #[test]
     fn test_view_actions_review_keeps_reply_and_sync_when_stack_blocks_branch_mutation() {
         // Arrange
         let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Disabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -920,6 +962,7 @@ mod tests {
     fn test_view_actions_agent_review_shows_sync() {
         // Arrange
         let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -944,6 +987,7 @@ mod tests {
     fn test_view_actions_interactive_hides_diff() {
         // Arrange
         let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -967,6 +1011,7 @@ mod tests {
     fn test_view_actions_new_session_shows_add_draft_and_start() {
         // Arrange
         let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -995,6 +1040,7 @@ mod tests {
     fn test_view_actions_stacked_draft_shows_start_and_hides_merge_sync() {
         // Arrange
         let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1023,6 +1069,7 @@ mod tests {
     fn test_view_actions_stacked_draft_hides_start_without_staged_drafts() {
         // Arrange
         let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1050,6 +1097,7 @@ mod tests {
     fn test_view_actions_done_shows_continue_and_hides_edit_actions() {
         // Arrange
         let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1076,6 +1124,7 @@ mod tests {
     fn test_view_footer_actions_review_shows_advanced_actions() {
         // Arrange
         let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1093,6 +1142,7 @@ mod tests {
         assert!(actions.iter().any(|action| action.key == "/"));
         assert!(actions.iter().any(|action| action.key == "o"));
         assert!(actions.iter().any(|action| action.key == "f"));
+        assert!(actions.iter().any(|action| action.key == "F"));
         assert!(actions.iter().any(|action| action.key == "p"));
         assert!(actions.iter().any(|action| action.key == "p"));
         assert!(actions.iter().any(|action| action.key == "m"));
@@ -1100,9 +1150,31 @@ mod tests {
     }
 
     #[test]
+    fn test_view_footer_actions_review_hides_fork_when_unavailable() {
+        // Arrange
+        let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Disabled,
+            can_mutate_session_branch: ViewActionAvailability::Enabled,
+            can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_open_worktree: ViewActionAvailability::Enabled,
+            reply_to_session: ViewActionAvailability::Enabled,
+            can_start_staged_session: ViewActionAvailability::Disabled,
+            publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
+            session_state: ViewSessionState::Review,
+        };
+
+        // Act
+        let actions = view_footer_actions(state);
+
+        // Assert
+        assert!(!actions.iter().any(|action| action.key == "F"));
+    }
+
+    #[test]
     fn test_view_footer_actions_review_keeps_reply_and_sync_when_stack_blocks_branch_mutation() {
         // Arrange
         let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Disabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1129,6 +1201,7 @@ mod tests {
     fn test_view_footer_actions_agent_review_shows_sync() {
         // Arrange
         let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1156,6 +1229,7 @@ mod tests {
     fn test_view_footer_actions_rebasing_hides_open_and_stop() {
         // Arrange
         let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1179,6 +1253,7 @@ mod tests {
     fn test_view_footer_actions_new_session_keeps_edit_actions_grouped() {
         // Arrange
         let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1200,6 +1275,7 @@ mod tests {
     fn test_view_footer_actions_stacked_draft_shows_start_and_hides_merge_sync() {
         // Arrange
         let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1224,6 +1300,7 @@ mod tests {
     fn test_view_footer_actions_merge_queue_hides_worktree_shortcuts_and_stop() {
         // Arrange
         let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1248,6 +1325,7 @@ mod tests {
     fn test_view_actions_canceled_without_branch_publish_action() {
         // Arrange
         let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1272,6 +1350,7 @@ mod tests {
     fn test_view_footer_actions_done_shows_continue_before_scroll() {
         // Arrange
         let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1293,6 +1372,7 @@ mod tests {
     fn test_view_footer_actions_canceled_hides_continue() {
         // Arrange
         let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1353,6 +1433,7 @@ mod tests {
     fn test_view_footer_actions_in_progress_shows_stop_and_hides_open() {
         // Arrange
         let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1376,6 +1457,7 @@ mod tests {
     fn test_view_actions_review_hides_stop() {
         // Arrange
         let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1396,6 +1478,7 @@ mod tests {
     fn test_view_footer_actions_review_hides_stop() {
         // Arrange
         let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,

@@ -42,6 +42,17 @@ pub struct PersistedSessionAgentModel<'a> {
     pub model: &'a str,
 }
 
+/// Borrowed identifiers used to persist one forked session snapshot.
+pub struct ForkSessionSnapshot<'a> {
+    /// Stable id assigned to the newly forked session.
+    pub new_session_id: &'a str,
+    /// Stable id of the source session whose metadata and transcript are
+    /// copied.
+    pub source_session_id: &'a str,
+    /// Initial lifecycle status for the forked session.
+    pub status: &'a str,
+}
+
 /// Row returned when loading a session from the `session` table.
 ///
 /// Includes optional normalized forge review-request linkage metadata loaded
@@ -293,6 +304,11 @@ pub trait SessionRepository: Send + Sync {
         status: &str,
         project_id: i64,
     ) -> Result<(), DbError>;
+
+    /// Inserts a new session by snapshotting source metadata and ordered
+    /// transcript messages while clearing source-specific runtime linkage.
+    async fn fork_session_snapshot(&self, snapshot: ForkSessionSnapshot<'_>)
+    -> Result<(), DbError>;
 
     #[cfg(test)]
     /// Loads all sessions ordered by most recent update.
@@ -735,6 +751,88 @@ impl SessionReviewRequestJoinRow {
     }
 }
 
+/// SQL statement that copies session metadata for one fork while clearing
+/// runtime- and source-specific linkage.
+const FORK_SESSION_ROW_SQL: &str = r"
+INSERT INTO session (
+    id,
+    agent,
+    model,
+    base_branch,
+    status,
+    project_id,
+    prompt,
+    output,
+    summary,
+    title,
+    reasoning_level,
+    added_lines,
+    deleted_lines,
+    size,
+    input_tokens,
+    output_tokens,
+    is_draft,
+    parent_session_id,
+    provider_conversation_id,
+    app_server_instruction_provider_conversation_id,
+    questions,
+    published_upstream_ref,
+    merged_commit_hash,
+    focused_review_text,
+    focused_review_diff_hash,
+    stack_base_commit_hash,
+    in_progress_total_seconds,
+    in_progress_started_at,
+    created_at,
+    updated_at
+)
+SELECT ?,
+       agent,
+       model,
+       base_branch,
+       ?,
+       project_id,
+       prompt,
+       output,
+       summary,
+       title,
+       reasoning_level,
+       added_lines,
+       deleted_lines,
+       size,
+       0,
+       0,
+       0,
+       NULL,
+       NULL,
+       NULL,
+       NULL,
+       NULL,
+       NULL,
+       NULL,
+       NULL,
+       NULL,
+       0,
+       NULL,
+       CAST(strftime('%s', 'now') AS INTEGER),
+       CAST(strftime('%s', 'now') AS INTEGER)
+FROM session
+WHERE id = ?
+";
+
+/// SQL statement that copies durable transcript messages for one fork.
+const FORK_SESSION_MESSAGES_SQL: &str = r"
+INSERT INTO session_message (session_id, position, kind, content, created_at)
+SELECT ?,
+       position,
+       kind,
+       content,
+       created_at
+FROM session_message
+WHERE session_id = ?
+ORDER BY position, id
+";
+
 #[async_trait]
 impl SessionRepository for SqliteSessionRepository {
     async fn append_session_message(
@@ -1078,6 +1176,38 @@ WHERE id = ?
             },
         )
         .await
+    }
+
+    async fn fork_session_snapshot(
+        &self,
+        snapshot: ForkSessionSnapshot<'_>,
+    ) -> Result<(), DbError> {
+        let ForkSessionSnapshot {
+            new_session_id,
+            source_session_id,
+            status,
+        } = snapshot;
+        let mut transaction = self.0.begin().await?;
+
+        let insert_result = sqlx::query(FORK_SESSION_ROW_SQL)
+            .bind(new_session_id)
+            .bind(status)
+            .bind(source_session_id)
+            .execute(&mut *transaction)
+            .await?;
+        if insert_result.rows_affected() != 1 {
+            return Err(sqlx::Error::RowNotFound.into());
+        }
+
+        sqlx::query(FORK_SESSION_MESSAGES_SQL)
+            .bind(new_session_id)
+            .bind(source_session_id)
+            .execute(&mut *transaction)
+            .await?;
+
+        transaction.commit().await?;
+
+        Ok(())
     }
 
     #[cfg(test)]
@@ -2166,6 +2296,27 @@ fn is_missing_follow_up_task_table(error: &sqlx::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::session::{
+        ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
+    };
+    use crate::infra::db::AppRepositories;
+
+    /// Session columns that must be reset when snapshotting a fork.
+    #[derive(sqlx::FromRow)]
+    struct ForkResetRow {
+        app_server_instruction_provider_conversation_id: Option<String>,
+        focused_review_diff_hash: Option<String>,
+        focused_review_text: Option<String>,
+        in_progress_started_at: Option<i64>,
+        in_progress_total_seconds: i64,
+        is_draft: bool,
+        merged_commit_hash: Option<String>,
+        parent_session_id: Option<String>,
+        provider_conversation_id: Option<String>,
+        published_upstream_ref: Option<String>,
+        questions: Option<String>,
+        stack_base_commit_hash: Option<String>,
+    }
 
     impl SessionRowMetadata {
         /// Converts shared metadata fields into a full session row for the
@@ -2320,6 +2471,307 @@ mod tests {
             title: "Add forge review support".to_string(),
             web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
         }
+    }
+
+    /// Builds the review-request domain fixture used by fork snapshot tests.
+    fn review_request_fixture() -> ReviewRequest {
+        ReviewRequest {
+            last_refreshed_at: 456,
+            summary: ReviewRequestSummary {
+                display_id: "#42".to_string(),
+                forge_kind: ForgeKind::GitHub,
+                source_branch: "feature/forge".to_string(),
+                state: ReviewRequestState::Open,
+                status_summary: Some("2 approvals, checks passing".to_string()),
+                target_branch: "main".to_string(),
+                title: "Add forge review support".to_string(),
+                web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
+            },
+        }
+    }
+
+    /// Loads reset-sensitive fork columns that are not exposed by public
+    /// session row projections.
+    async fn load_fork_reset_row(pool: &SqlitePool, session_id: &str) -> ForkResetRow {
+        sqlx::query_as::<_, ForkResetRow>(
+            r"
+SELECT app_server_instruction_provider_conversation_id,
+       focused_review_diff_hash,
+       focused_review_text,
+       in_progress_started_at,
+       in_progress_total_seconds,
+       is_draft,
+       merged_commit_hash,
+       parent_session_id,
+       provider_conversation_id,
+       published_upstream_ref,
+       questions,
+       stack_base_commit_hash
+FROM session
+WHERE id = ?
+",
+        )
+        .bind(session_id)
+        .fetch_one(pool)
+        .await
+        .expect("failed to load fork reset row")
+    }
+
+    /// Seeds a forkable source session with every source-only field that the
+    /// snapshot insert is expected to clear.
+    async fn seed_fork_snapshot_source(
+        database: &AppRepositories,
+        pool: &SqlitePool,
+    ) -> (ForkResetRow, Option<SessionReviewRequestRow>) {
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/project", None)
+            .await
+            .expect("failed to upsert project");
+        database
+            .sessions()
+            .insert_session("parent-session", "gpt-5.5", "main", "Review", project_id)
+            .await
+            .expect("failed to insert parent session");
+        database
+            .sessions()
+            .insert_stacked_draft_session(
+                "source-session",
+                "gpt-5.5",
+                "wt/parent",
+                "Review",
+                "parent-session",
+                project_id,
+            )
+            .await
+            .expect("failed to insert source session");
+
+        seed_fork_snapshot_source_linkage(database).await;
+        seed_fork_snapshot_source_timing(database, pool).await;
+
+        let source_reset_row = load_fork_reset_row(pool, "source-session").await;
+        let source_review_request = database
+            .reviews()
+            .load_session_review_request("source-session")
+            .await
+            .expect("failed to load source review request");
+
+        (source_reset_row, source_review_request)
+    }
+
+    /// Persists source-only linkage and counters on the fork source row.
+    async fn seed_fork_snapshot_source_linkage(database: &AppRepositories) {
+        database
+            .sessions()
+            .update_session_provider_conversation_id(
+                "source-session",
+                Some("provider-thread".to_string()),
+            )
+            .await
+            .expect("failed to update provider conversation id");
+        database
+            .sessions()
+            .update_session_instruction_conversation_id(
+                "source-session",
+                Some("instruction-thread".to_string()),
+            )
+            .await
+            .expect("failed to update instruction conversation id");
+        database
+            .sessions()
+            .update_session_questions("source-session", r#"["Need detail?"]"#)
+            .await
+            .expect("failed to update questions");
+        database
+            .sessions()
+            .update_session_published_upstream_ref(
+                "source-session",
+                Some("origin/wt/source-session".to_string()),
+            )
+            .await
+            .expect("failed to update published upstream ref");
+        database
+            .sessions()
+            .update_session_merged_commit_hash("source-session", Some("merged123".to_string()))
+            .await
+            .expect("failed to update merged commit hash");
+        database
+            .sessions()
+            .update_session_focused_review(
+                "source-session",
+                Some("diff123".to_string()),
+                Some("Focused review text".to_string()),
+            )
+            .await
+            .expect("failed to update focused review");
+        database
+            .sessions()
+            .update_session_stack_base_commit_hash(
+                "source-session",
+                Some("stackbase123".to_string()),
+            )
+            .await
+            .expect("failed to update stack base commit hash");
+        database
+            .sessions()
+            .update_session_stats(
+                "source-session",
+                &SessionStats {
+                    added_lines: 0,
+                    deleted_lines: 0,
+                    input_tokens: 11,
+                    output_tokens: 29,
+                },
+            )
+            .await
+            .expect("failed to update token stats");
+        database
+            .reviews()
+            .update_session_review_request("source-session", Some(review_request_fixture()))
+            .await
+            .expect("failed to update review request");
+    }
+
+    /// Persists active-work timing fields on the fork source row.
+    async fn seed_fork_snapshot_source_timing(database: &AppRepositories, pool: &SqlitePool) {
+        database
+            .sessions()
+            .update_session_status_with_timing_at("source-session", "InProgress", 100)
+            .await
+            .expect("failed to open timing interval");
+        sqlx::query(
+            r"
+UPDATE session
+SET in_progress_total_seconds = ?
+WHERE id = ?
+",
+        )
+        .bind(75_i64)
+        .bind("source-session")
+        .execute(pool)
+        .await
+        .expect("failed to seed elapsed timing");
+    }
+
+    /// Asserts the fixture source row actually had source-only state before
+    /// the snapshot was taken.
+    fn assert_source_reset_state(
+        source_reset_row: &ForkResetRow,
+        source_review_request: Option<&SessionReviewRequestRow>,
+    ) {
+        assert!(source_reset_row.is_draft);
+        assert_eq!(
+            source_reset_row.parent_session_id.as_deref(),
+            Some("parent-session")
+        );
+        assert_eq!(
+            source_reset_row.provider_conversation_id.as_deref(),
+            Some("provider-thread")
+        );
+        assert_eq!(
+            source_reset_row
+                .app_server_instruction_provider_conversation_id
+                .as_deref(),
+            Some("instruction-thread")
+        );
+        assert_eq!(
+            source_reset_row.published_upstream_ref.as_deref(),
+            Some("origin/wt/source-session")
+        );
+        assert_eq!(
+            source_reset_row.questions.as_deref(),
+            Some(r#"["Need detail?"]"#)
+        );
+        assert_eq!(
+            source_reset_row.merged_commit_hash.as_deref(),
+            Some("merged123")
+        );
+        assert_eq!(
+            source_reset_row.focused_review_diff_hash.as_deref(),
+            Some("diff123")
+        );
+        assert_eq!(
+            source_reset_row.focused_review_text.as_deref(),
+            Some("Focused review text")
+        );
+        assert_eq!(
+            source_reset_row.stack_base_commit_hash.as_deref(),
+            Some("stackbase123")
+        );
+        assert_eq!(source_reset_row.in_progress_started_at, Some(100));
+        assert_eq!(source_reset_row.in_progress_total_seconds, 75);
+        assert_eq!(
+            source_review_request.map(|review_request| review_request.display_id.as_str()),
+            Some("#42")
+        );
+    }
+
+    /// Asserts the forked row kept durable snapshot state while clearing
+    /// source-only linkage.
+    fn assert_fork_reset_state(
+        fork_row: &SessionRow,
+        fork_reset_row: &ForkResetRow,
+        fork_review_request: Option<&SessionReviewRequestRow>,
+    ) {
+        assert_eq!(fork_row.status, "Review");
+        assert!(!fork_row.is_draft);
+        assert_eq!(fork_row.parent_session_id, None);
+        assert_eq!(fork_row.input_tokens, 0);
+        assert_eq!(fork_row.output_tokens, 0);
+        assert_eq!(fork_row.questions, None);
+        assert_eq!(fork_row.published_upstream_ref, None);
+        assert_eq!(fork_row.review_request, None);
+        assert_eq!(fork_reset_row.provider_conversation_id, None);
+        assert_eq!(
+            fork_reset_row.app_server_instruction_provider_conversation_id,
+            None
+        );
+        assert_eq!(fork_reset_row.merged_commit_hash, None);
+        assert_eq!(fork_reset_row.focused_review_diff_hash, None);
+        assert_eq!(fork_reset_row.focused_review_text, None);
+        assert_eq!(fork_reset_row.questions, None);
+        assert_eq!(fork_reset_row.stack_base_commit_hash, None);
+        assert_eq!(fork_reset_row.in_progress_started_at, None);
+        assert_eq!(fork_reset_row.in_progress_total_seconds, 0);
+        assert_eq!(fork_review_request, None);
+    }
+
+    #[tokio::test]
+    async fn test_fork_session_snapshot_resets_source_specific_state() {
+        // Arrange
+        let (database, pool) = AppRepositories::in_memory_with_pool().await;
+        let (source_reset_row, source_review_request) =
+            seed_fork_snapshot_source(&database, &pool).await;
+
+        // Act
+        database
+            .sessions()
+            .fork_session_snapshot(ForkSessionSnapshot {
+                new_session_id: "fork-session",
+                source_session_id: "source-session",
+                status: "Review",
+            })
+            .await
+            .expect("failed to fork session snapshot");
+
+        // Assert
+        let fork_row = database
+            .sessions()
+            .load_sessions()
+            .await
+            .expect("failed to load sessions")
+            .into_iter()
+            .find(|session_row| session_row.id == "fork-session")
+            .expect("missing forked session row");
+        let fork_reset_row = load_fork_reset_row(&pool, "fork-session").await;
+        let fork_review_request = database
+            .reviews()
+            .load_session_review_request("fork-session")
+            .await
+            .expect("failed to load fork review request");
+
+        assert_source_reset_state(&source_reset_row, source_review_request.as_ref());
+        assert_fork_reset_state(&fork_row, &fork_reset_row, fork_review_request.as_ref());
     }
 
     /// Verifies `SessionJoinRow::into_session_row()` drops partially

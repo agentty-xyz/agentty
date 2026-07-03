@@ -91,6 +91,7 @@ impl ViewActionState {
 /// Snapshot of session-derived state used by view-mode key handling.
 struct ViewSessionSnapshot {
     continue_terminal_session: ViewActionState,
+    fork_session: ViewActionState,
     follow_up_task_action: Option<FollowUpTaskAction>,
     mutate_session_branch: ViewActionState,
     open_worktree: ViewActionState,
@@ -122,6 +123,11 @@ impl ViewSessionSnapshot {
     /// Returns whether a terminal session can launch a continuation draft.
     fn can_continue_terminal_session(&self) -> bool {
         self.continue_terminal_session.is_enabled()
+    }
+
+    /// Returns whether this session can be forked from view mode.
+    fn can_fork_session(&self) -> bool {
+        self.fork_session.is_enabled()
     }
 
     /// Returns whether this session can start branch-mutating stack work.
@@ -415,9 +421,16 @@ async fn handle_workflow_view_key(
 
             return Some(false);
         }
-        KeyCode::Char(character)
-            if character.eq_ignore_ascii_case(&'f')
-                && !key.modifiers.contains(event::KeyModifiers::CONTROL)
+        KeyCode::Char('F')
+            if !key.modifiers.contains(event::KeyModifiers::CONTROL)
+                && view_session_snapshot.can_fork_session() =>
+        {
+            open_fork_confirmation(app, view_context);
+
+            return Some(false);
+        }
+        KeyCode::Char('f')
+            if !key.modifiers.contains(event::KeyModifiers::CONTROL)
                 && is_view_review_allowed(view_session_snapshot.session_status) =>
         {
             open_or_regenerate_review(app, view_context, pending_update).await;
@@ -447,6 +460,23 @@ async fn handle_workflow_view_key(
     }
 
     Some(true)
+}
+
+/// Opens a fork confirmation overlay for the active view session.
+///
+/// The body explains that the new session keeps the current transcript history
+/// while starting on a fresh session branch.
+fn open_fork_confirmation(app: &mut App, view_context: &ViewContext) {
+    app.mode = AppMode::Confirmation {
+        confirmation_intent: ConfirmationIntent::ForkSession,
+        confirmation_message: "Fork this session into a new session with the current transcript \
+                               history?"
+            .to_string(),
+        confirmation_title: "Confirm Fork".to_string(),
+        restore_view: Some(confirmation_view_mode(view_context)),
+        session_id: Some(view_context.session_id.clone()),
+        selected_confirmation_index: DEFAULT_OPTION_INDEX,
+    };
 }
 
 /// Opens a merge confirmation overlay for the active view session.
@@ -572,6 +602,7 @@ fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSe
         continue_terminal_session: ViewActionState::from_bool(
             session.allows_terminal_continuation(),
         ),
+        fork_session: ViewActionState::from_bool(session.allows_fork_action()),
         follow_up_task_action: app.selected_follow_up_task_action(&view_context.session_id),
         mutate_session_branch: ViewActionState::from_bool(
             app.sessions
@@ -884,6 +915,7 @@ fn open_view_help_overlay(
 ) {
     app.mode = AppMode::Help {
         context: HelpContext::View {
+            can_fork_session: view_session_snapshot.can_fork_session(),
             can_mutate_session_branch: view_session_snapshot.can_mutate_session_branch(),
             can_open_worktree: view_session_snapshot.can_open_worktree(),
             can_rebase_session_branch: view_session_snapshot.can_rebase_session_branch(),
@@ -2359,6 +2391,7 @@ mod tests {
         };
         let view_session_snapshot = ViewSessionSnapshot {
             continue_terminal_session: ViewActionState::Disabled,
+            fork_session: ViewActionState::Enabled,
             mutate_session_branch: ViewActionState::Enabled,
             rebase_session_branch: ViewActionState::Enabled,
             open_worktree: ViewActionState::Enabled,
@@ -2378,6 +2411,7 @@ mod tests {
             app.mode,
             AppMode::Help {
                 context: HelpContext::View {
+                    can_fork_session: true,
                     can_mutate_session_branch: true,
                     can_open_worktree: true,
                     can_start_staged_session: false,
@@ -2755,6 +2789,7 @@ mod tests {
         let mut pending_update = ViewPendingUpdate::from_context(&view_context);
         let view_session_snapshot = ViewSessionSnapshot {
             continue_terminal_session: ViewActionState::Disabled,
+            fork_session: ViewActionState::Disabled,
             mutate_session_branch: ViewActionState::Enabled,
             rebase_session_branch: ViewActionState::Enabled,
             open_worktree: ViewActionState::Disabled,
@@ -2794,6 +2829,66 @@ mod tests {
             } if session_id == &view_context.session_id
         ));
         assert_eq!(pending_update.scroll_offset, Some(2));
+    }
+
+    #[tokio::test]
+    async fn test_handle_view_key_uppercase_f_does_not_start_review_when_fork_unavailable() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.sessions.sessions_mut()[0].status = Status::Review;
+        app.mode = AppMode::View {
+            review_status_message: None,
+            review_text: None,
+            session_id: session_id.clone().into(),
+            scroll_offset: Some(2),
+        };
+        let view_context = view_context(&mut app).expect("expected view context");
+        let mut pending_update = ViewPendingUpdate::from_context(&view_context);
+        let view_session_snapshot = ViewSessionSnapshot {
+            continue_terminal_session: ViewActionState::Disabled,
+            fork_session: ViewActionState::Disabled,
+            mutate_session_branch: ViewActionState::Enabled,
+            rebase_session_branch: ViewActionState::Enabled,
+            open_worktree: ViewActionState::Enabled,
+            reply_to_session: ViewActionState::Enabled,
+            start_staged_session: ViewActionState::Disabled,
+            follow_up_task_action: None,
+            publish_pull_request_action: None,
+            session_state: ViewSessionState::Review,
+            session_status: Status::Review,
+        };
+        let view_key_context = ViewKeyContext {
+            context: &view_context,
+            metrics: ViewMetrics {
+                total_lines: 10,
+                view_height: 5,
+            },
+            session_snapshot: &view_session_snapshot,
+        };
+
+        // Act
+        let should_apply = handle_view_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('F'), KeyModifiers::NONE),
+            view_key_context,
+            &mut pending_update,
+        )
+        .await;
+
+        // Assert
+        assert!(should_apply);
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                ref session_id,
+                review_status_message: None,
+                review_text: None,
+                scroll_offset: Some(2),
+            } if session_id == &view_context.session_id
+        ));
+        assert_eq!(pending_update.review_status_message, None);
+        assert_eq!(pending_update.review_text, None);
+        assert!(!app.review_cache.contains_key(session_id.as_str()));
     }
 
     #[tokio::test]
@@ -2952,6 +3047,7 @@ mod tests {
         let mut pending_update = ViewPendingUpdate::from_context(&view_context);
         let view_session_snapshot = ViewSessionSnapshot {
             continue_terminal_session: ViewActionState::Disabled,
+            fork_session: ViewActionState::Enabled,
             mutate_session_branch: ViewActionState::Enabled,
             rebase_session_branch: ViewActionState::Enabled,
             open_worktree: ViewActionState::Enabled,
@@ -3013,6 +3109,7 @@ mod tests {
         let mut pending_update = ViewPendingUpdate::from_context(&view_context);
         let view_session_snapshot = ViewSessionSnapshot {
             continue_terminal_session: ViewActionState::Disabled,
+            fork_session: ViewActionState::Enabled,
             mutate_session_branch: ViewActionState::Enabled,
             rebase_session_branch: ViewActionState::Enabled,
             open_worktree: ViewActionState::Enabled,
@@ -3067,6 +3164,7 @@ mod tests {
         let mut pending_update = ViewPendingUpdate::from_context(&view_context);
         let view_session_snapshot = ViewSessionSnapshot {
             continue_terminal_session: ViewActionState::Disabled,
+            fork_session: ViewActionState::Enabled,
             mutate_session_branch: ViewActionState::Enabled,
             rebase_session_branch: ViewActionState::Enabled,
             open_worktree: ViewActionState::Enabled,
@@ -3139,6 +3237,7 @@ mod tests {
             let mut pending_update = ViewPendingUpdate::from_context(&view_context);
             let view_session_snapshot = ViewSessionSnapshot {
                 continue_terminal_session: ViewActionState::Disabled,
+                fork_session: ViewActionState::Disabled,
                 mutate_session_branch: ViewActionState::Enabled,
                 rebase_session_branch: ViewActionState::Enabled,
                 open_worktree: ViewActionState::Disabled,

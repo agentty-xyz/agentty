@@ -452,6 +452,7 @@ fn confirmation_cancel_mode(mode: &AppMode) -> AppMode {
     if let AppMode::Confirmation {
         confirmation_intent:
             ConfirmationIntent::ContinueSession
+            | ConfirmationIntent::ForkSession
             | ConfirmationIntent::MergeSession
             | ConfirmationIntent::RegenerateReview,
         restore_view: Some(restore_view),
@@ -492,6 +493,9 @@ async fn handle_confirmation_confirm(app: &mut App) -> io::Result<EventResult> {
         }
         ConfirmationIntent::ContinueSession => {
             handle_continue_session_confirmation(app, confirmation_session_id, restore_view).await
+        }
+        ConfirmationIntent::ForkSession => {
+            handle_fork_session_confirmation(app, confirmation_session_id, restore_view).await
         }
         ConfirmationIntent::MergeSession => {
             handle_merge_confirmation(app, confirmation_session_id, restore_view).await
@@ -539,6 +543,28 @@ async fn handle_continue_session_confirmation(
     if let Err(error) = app.continue_terminal_session(&session_id).await {
         app.mode = restore_view.map_or(AppMode::List, ConfirmationViewMode::into_view_mode);
         app.append_output_for_session(&session_id, &TranscriptNotice::ContinueError.format(error))
+            .await;
+    }
+
+    Ok(EventResult::Continue)
+}
+
+/// Creates a fork of the confirmed source session and opens the forked
+/// session view.
+async fn handle_fork_session_confirmation(
+    app: &mut App,
+    confirmation_session_id: Option<SessionId>,
+    restore_view: Option<ConfirmationViewMode>,
+) -> io::Result<EventResult> {
+    let Some(session_id) = confirmation_session_id else {
+        app.mode = restore_view.map_or(AppMode::List, ConfirmationViewMode::into_view_mode);
+
+        return Ok(EventResult::Continue);
+    };
+
+    if let Err(error) = app.fork_session(&session_id).await {
+        app.mode = restore_view.map_or(AppMode::List, ConfirmationViewMode::into_view_mode);
+        app.append_output_for_session(&session_id, &TranscriptNotice::ForkError.format(error))
             .await;
     }
 

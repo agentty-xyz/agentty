@@ -393,6 +393,7 @@ fn render_confirmation_mode(
     if matches!(
         confirmation_intent,
         ConfirmationIntent::ContinueSession
+            | ConfirmationIntent::ForkSession
             | ConfirmationIntent::MergeSession
             | ConfirmationIntent::RegenerateReview
     ) && let Some(view_mode) = restore_view

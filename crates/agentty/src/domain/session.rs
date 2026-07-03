@@ -593,6 +593,22 @@ impl Session {
             && !matches!(self.status, Status::Done | Status::Canceled)
     }
 
+    /// Returns whether this session can be forked into a new independent
+    /// session branch.
+    ///
+    /// Forks start from the current session branch and snapshot durable
+    /// transcript history, so the source must be a root session with a
+    /// materialized branch in a review-ready state. Drafts are excluded
+    /// because their worktree may not exist yet, stacked children are excluded
+    /// because they remain coupled to parent stack workflow, and non-review
+    /// statuses are excluded because active branch work or terminal cleanup
+    /// could race with the snapshot.
+    pub fn allows_fork_action(&self) -> bool {
+        self.parent_session_id.is_none()
+            && !self.is_draft_session()
+            && self.status.allows_review_actions()
+    }
+
     /// Returns whether this session belongs to a one-level stack beneath a
     /// parent session branch.
     pub fn is_stacked_child(&self) -> bool {
@@ -1051,6 +1067,61 @@ pub(crate) mod tests {
         assert!(!allows_nested_child);
         assert!(!allows_done_child);
         assert!(!allows_canceled_child);
+    }
+
+    #[test]
+    fn test_allows_fork_action_accepts_review_ready_materialized_sessions() {
+        // Arrange
+        let review_session = SessionFixtureBuilder::new()
+            .draft(false)
+            .status(Status::Review)
+            .build();
+        let agent_review_session = SessionFixtureBuilder::new()
+            .draft(false)
+            .status(Status::AgentReview)
+            .build();
+
+        // Act
+        let allows_review_fork = review_session.allows_fork_action();
+        let allows_agent_review_fork = agent_review_session.allows_fork_action();
+
+        // Assert
+        assert!(allows_review_fork);
+        assert!(allows_agent_review_fork);
+    }
+
+    #[test]
+    fn test_allows_fork_action_rejects_drafts_children_active_and_terminal_sessions() {
+        // Arrange
+        let draft_review_session = SessionFixtureBuilder::new()
+            .draft(true)
+            .status(Status::Review)
+            .build();
+        let child_review_session = SessionFixtureBuilder::new()
+            .draft(false)
+            .parent_session_id(Some(SessionId::from("parent-session")))
+            .status(Status::Review)
+            .build();
+        let in_progress_session = SessionFixtureBuilder::new()
+            .draft(false)
+            .status(Status::InProgress)
+            .build();
+        let done_session = SessionFixtureBuilder::new()
+            .draft(false)
+            .status(Status::Done)
+            .build();
+
+        // Act
+        let allows_draft_fork = draft_review_session.allows_fork_action();
+        let allows_child_fork = child_review_session.allows_fork_action();
+        let allows_active_fork = in_progress_session.allows_fork_action();
+        let allows_done_fork = done_session.allows_fork_action();
+
+        // Assert
+        assert!(!allows_draft_fork);
+        assert!(!allows_child_fork);
+        assert!(!allows_active_fork);
+        assert!(!allows_done_fork);
     }
 
     #[test]

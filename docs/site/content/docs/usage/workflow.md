@@ -125,6 +125,7 @@ flowchart TB
 
   review -->|generate focused review| agent_review
   review -->|create stacked draft| stacked_draft
+  review -->|fork session| review
   agent_review -->|review ready| review
   agent_review -->|sync cancels review| rebasing
   review -->|sync| rebasing
@@ -160,6 +161,17 @@ into the session output, or to see a loading message while generation is still r
 The appended review stays visible across diff mode and question mode, and is cleared
 when you submit the next prompt. A turn stopped with `Ctrl+c` does not start a focused
 review automatically; press `f` for a manual one.
+
+### Forking a Review Session
+
+Pressing `F` in a root **Review** or **AgentReview** session opens a confirmation, then
+creates a new independent **Review** session from the source session branch. The fork
+receives a fresh worktree branch and a copy of the durable transcript history as it
+existed at fork time. Stacked child sessions hide `F` because their branch remains tied
+to the parent stack workflow. Provider-native conversation IDs, focused-review cache,
+published branch state, linked review-request metadata, stack parent links, active-work
+timing, and token usage are reset on the fork so future replies and publishing are
+tracked separately from the source session.
 
 ### Commit and Merge Behavior
 

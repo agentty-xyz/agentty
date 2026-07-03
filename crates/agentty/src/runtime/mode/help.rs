@@ -67,6 +67,7 @@ mod tests {
         let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.mode = AppMode::Help {
             context: HelpContext::View {
+                can_fork_session: true,
                 can_mutate_session_branch: true,
                 can_open_worktree: true,
                 can_rebase_session_branch: true,

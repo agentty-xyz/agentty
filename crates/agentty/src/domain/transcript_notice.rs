@@ -20,6 +20,8 @@ pub(crate) enum TranscriptNotice {
     ContinueError,
     /// Generic prompt submission failure.
     Error,
+    /// Session fork creation failure.
+    ForkError,
     /// Follow-up task execution failure.
     FollowUpTaskError,
     /// Merge workflow progress.
@@ -56,6 +58,7 @@ impl TranscriptNotice {
             Self::CommitError => "[Commit Error]",
             Self::ContinueError => "[Continue Error]",
             Self::Error => "[Error]",
+            Self::ForkError => "[Fork Error]",
             Self::FollowUpTaskError => "[Follow-Up Task Error]",
             Self::Merge => "[Merge]",
             Self::MergeError => "[Merge Error]",
@@ -92,6 +95,7 @@ pub(crate) const TRAILING_TRANSCRIPT_NOTICE_PREFIXES: &[&str] = &[
     TranscriptNotice::CommitError.prefix(),
     TranscriptNotice::ContinueError.prefix(),
     TranscriptNotice::Error.prefix(),
+    TranscriptNotice::ForkError.prefix(),
     TranscriptNotice::FollowUpTaskError.prefix(),
     TranscriptNotice::Merge.prefix(),
     TranscriptNotice::MergeError.prefix(),
@@ -147,6 +151,7 @@ mod tests {
             TranscriptNotice::CommitError,
             TranscriptNotice::ContinueError,
             TranscriptNotice::Error,
+            TranscriptNotice::ForkError,
             TranscriptNotice::FollowUpTaskError,
             TranscriptNotice::Merge,
             TranscriptNotice::MergeError,

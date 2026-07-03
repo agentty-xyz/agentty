@@ -77,7 +77,8 @@ duration: 283ms
     Ok(())
 }
 
-/// Seeds one review-ready session and propagates setup errors to the caller.
+/// Seeds one review-ready session plus its default source branch and
+/// propagates setup errors to the caller.
 fn seed_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
@@ -95,6 +96,7 @@ fn seed_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
             .await
     })?;
 
+    run_git(&env.workdir, &["branch", "wt/review-s"])?;
     std::fs::create_dir_all(env.agentty_root.join("wt").join("review-s"))?;
 
     Ok(())
@@ -1615,6 +1617,127 @@ fn agent_review_session_shows_sync_shortcut() -> E2eResult {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Agent review sync shortcut", &full);
                 assertion::assert_text_in_region(frame, "r: sync", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that root review-ready sessions can confirm session forking from
+/// session view.
+#[test]
+fn session_fork_confirmation_creates_session_from_review_session() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_fork_confirmation")
+        .with_git()
+        .with_terminal_size(120, 24)
+        .setup(seed_review_ready_session)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .viewing_pause_ms(1000)
+                    .capture_labeled("session_view", "Fork shortcut visible in session view")
+                    .write_text("F")
+                    .wait_for_text("Confirm Fork", 3000)
+                    .viewing_pause_ms(1000)
+                    .capture_labeled("fork_confirmation", "Fork confirmation popup")
+                    .write_text("y")
+                    .wait_for_text("Review-ready session shortcuts", 5000)
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled("forked_session_view", "Forked session opened")
+                    .press_key("q")
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled("session_list_after_fork", "Source and fork listed")
+            },
+            |frame, report| {
+                let session_view_frame = common::frame_from_capture(&report.captures[0]);
+                let view_full = Region::full(session_view_frame.cols(), session_view_frame.rows());
+                assertion::assert_text_in_region(&session_view_frame, "F: fork", &view_full);
+
+                let confirmation_frame = common::frame_from_capture(&report.captures[1]);
+                let confirmation_full =
+                    Region::full(confirmation_frame.cols(), confirmation_frame.rows());
+                assertion::assert_text_in_region(
+                    &confirmation_frame,
+                    "Confirm Fork",
+                    &confirmation_full,
+                );
+                assertion::assert_text_in_region(
+                    &confirmation_frame,
+                    "Fork this session",
+                    &confirmation_full,
+                );
+
+                let forked_view_frame = common::frame_from_capture(&report.captures[2]);
+                let forked_view_full =
+                    Region::full(forked_view_frame.cols(), forked_view_frame.rows());
+                assertion::assert_text_in_region(
+                    &forked_view_frame,
+                    "Review-ready session shortcuts",
+                    &forked_view_full,
+                );
+                assertion::assert_not_visible(&forked_view_frame, "Confirm Fork");
+
+                let full = Region::full(frame.cols(), frame.rows());
+                let session_list_text = frame.text_in_region(&full);
+                let session_title_count = session_list_text
+                    .matches("Review-ready session shortcuts")
+                    .count();
+                assert!(
+                    session_title_count >= 2,
+                    "expected source and fork rows in session list, got \
+                     {session_title_count}:\n{session_list_text}"
+                );
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that review-ready stacked children do not expose session forking.
+#[test]
+fn stacked_child_hides_session_fork_shortcut() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("stacked_child_hides_session_fork_shortcut")
+        .with_git()
+        .with_terminal_size(120, 24)
+        .setup(seed_review_ready_parent_with_review_child)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .wait_for_text("Child stack review", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Child stack review", 5000)
+                    .wait_for_stable_frame(300, 5000)
+                    .viewing_pause_ms(1000)
+                    .capture_labeled("child_view", "Fork shortcut hidden for stacked child")
+                    .write_text("F")
+                    .wait_for_stable_frame(300, 5000)
+                    .viewing_pause_ms(1000)
+                    .capture_labeled("after_f", "No fork confirmation opens for stacked child")
+            },
+            |frame, report| {
+                let child_view_frame = common::frame_from_capture(&report.captures[0]);
+                let view_full = Region::full(child_view_frame.cols(), child_view_frame.rows());
+                assertion::assert_text_in_region(
+                    &child_view_frame,
+                    "Child stack review",
+                    &view_full,
+                );
+                assertion::assert_not_visible(&child_view_frame, "F: fork");
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Child stack review", &full);
+                assertion::assert_not_visible(frame, "F: fork");
+                assertion::assert_not_visible(frame, "Confirm Fork");
+                assertion::assert_not_visible(frame, "Reviewing changes with");
+                assertion::assert_not_visible(frame, "No diff changes found for review.");
             },
         )?;
 

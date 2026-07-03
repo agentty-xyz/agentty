@@ -428,6 +428,7 @@ impl<'a> SessionChatPage<'a> {
         let can_rebase_session_branch =
             can_rebase_session_branch_in_stack(self.sessions, session.id.as_str());
         let view_help_state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::from_bool(session.allows_fork_action()),
             can_mutate_session_branch: ViewActionAvailability::from_bool(can_mutate_session_branch),
             can_open_worktree: ViewActionAvailability::from_bool(self.can_open_worktree),
             can_rebase_session_branch: ViewActionAvailability::from_bool(can_rebase_session_branch),

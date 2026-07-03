@@ -69,17 +69,19 @@ prompt, a reply, or a queued message during a running turn | | `/` | Open the co
 with `/` prefilled for slash commands | | `s` | Start a staged draft session | | `o` |
 Open worktree in tmux when the session worktree exists | | `p` | Publish session branch
 and create or refresh forge review request | | `d` | Show diff | | `f` | Append focused
-review output (regenerate if already present) | | `m` | Add to merge queue (confirmation
-popup) | | `r` | Sync session branch | | `j` / `k` | Scroll output | | `g` / `G` |
-Scroll to top / bottom | | `Ctrl+d` / `Ctrl+u` | Half page down / up | | `Ctrl+c` |
-Retract the newest queued message, or stop the running turn when the queue is empty | |
-`?` | Help |
+review output (regenerate if already present) | | `F` | Fork into a new session with the
+current transcript history | | `m` | Add to merge queue (confirmation popup) | | `r` |
+Sync session branch | | `j` / `k` | Scroll output | | `g` / `G` | Scroll to top / bottom
+| | `Ctrl+d` / `Ctrl+u` | Half page down / up | | `Ctrl+c` | Retract the newest queued
+message, or stop the running turn when the queue is empty | | `?` | Help |
 
 State-specific differences:
 
 - **AgentReview** keeps the review shortcuts, including `r`. Pressing `r` starts session
   sync immediately and cancels the pending focused review so stale review output cannot
   appear after the rebase begins.
+- Root **Review** and **AgentReview** sessions offer `F` to fork the current branch and
+  copied transcript history into a new independent session; stacked children hide `F`.
 - **Draft** sessions hide `o` until the worktree exists; stacked drafts hide `m` and `r`
   and show `s` only when the parent is review-ready and the stack is idle.
 - Stacked parents with a materialized child keep `Enter` and `r` while the stack is
