@@ -8,13 +8,13 @@ use crate::ui::state::app_mode::HelpContext;
 use crate::ui::style::palette;
 use crate::ui::{Component, overlay};
 
-const OVERLAY_WIDTH_PERCENT: u16 = 40;
-
-const OVERLAY_HEIGHT_PERCENT: u16 = 60;
-
 const MIN_OVERLAY_WIDTH: u16 = 30;
 
 const MIN_OVERLAY_HEIGHT: u16 = 10;
+
+/// Popup dimensions for the mode-sensitive keybinding help overlay.
+const OVERLAY_DIMENSIONS: overlay::OverlayDimensions =
+    overlay::OverlayDimensions::new(40, 60, MIN_OVERLAY_WIDTH, MIN_OVERLAY_HEIGHT);
 
 const SCROLL_X_OFFSET: u16 = 0;
 
@@ -44,7 +44,7 @@ impl<'a> HelpOverlay<'a> {
 
 impl Component for HelpOverlay<'_> {
     fn render(&self, f: &mut Frame, area: Rect) {
-        let popup_area = popup_area(area);
+        let popup_area = OVERLAY_DIMENSIONS.centered_popup_area(area);
 
         overlay::clear_popup_area(f, popup_area);
 
@@ -95,17 +95,6 @@ impl Component for HelpOverlay<'_> {
     }
 }
 
-/// Computes a centered rectangle within the given `area`.
-fn popup_area(area: Rect) -> Rect {
-    overlay::centered_popup_area(
-        area,
-        OVERLAY_WIDTH_PERCENT,
-        OVERLAY_HEIGHT_PERCENT,
-        MIN_OVERLAY_WIDTH,
-        MIN_OVERLAY_HEIGHT,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,7 +109,7 @@ mod tests {
 
         // Act
 
-        let popup = popup_area(area);
+        let popup = OVERLAY_DIMENSIONS.centered_popup_area(area);
 
         // Assert
 
@@ -142,7 +131,7 @@ mod tests {
 
         // Act
 
-        let popup = popup_area(area);
+        let popup = OVERLAY_DIMENSIONS.centered_popup_area(area);
 
         // Assert — min sizes clamped to area
 
@@ -160,7 +149,7 @@ mod tests {
 
         // Act
 
-        let popup = popup_area(area);
+        let popup = OVERLAY_DIMENSIONS.centered_popup_area(area);
 
         // Assert — 40% of 40=16 < MIN 30, so width = 30; 60% of 20=12 >= MIN 10
 

@@ -18,10 +18,9 @@ const OPTION_DETAIL_WIDTH: usize = 27;
 const OPTION_LABEL_WIDTH: usize = 7;
 /// Detail text for the experimental stacked session creation path.
 const STACKED_SESSION_PREVIEW_DETAIL: &str = "[Preview] Stack on selected";
-/// Popup height as a percentage of the available render area on tall terminals.
-const OVERLAY_HEIGHT_PERCENT: u16 = 22;
-/// Popup width as a percentage of the available render area on wide terminals.
-const OVERLAY_WIDTH_PERCENT: u16 = 30;
+/// Popup dimensions for the compact session selector.
+const OVERLAY_DIMENSIONS: overlay::OverlayDimensions =
+    overlay::OverlayDimensions::new(30, 22, MIN_OVERLAY_WIDTH, MIN_OVERLAY_HEIGHT);
 
 /// Centered popup used to choose the type of session to create.
 pub struct SessionCreationOverlay {
@@ -38,17 +37,6 @@ impl SessionCreationOverlay {
             can_create_stacked_session,
             selected_option_index,
         }
-    }
-
-    /// Returns the centered popup rectangle for the compact session selector.
-    fn popup_area(area: Rect) -> Rect {
-        overlay::centered_popup_area(
-            area,
-            OVERLAY_WIDTH_PERCENT,
-            OVERLAY_HEIGHT_PERCENT,
-            MIN_OVERLAY_WIDTH,
-            MIN_OVERLAY_HEIGHT,
-        )
     }
 
     /// Returns all render lines for this popup.
@@ -136,7 +124,7 @@ impl SessionCreationOverlay {
 
 impl Component for SessionCreationOverlay {
     fn render(&self, f: &mut Frame, area: Rect) {
-        let popup_area = Self::popup_area(area);
+        let popup_area = OVERLAY_DIMENSIONS.centered_popup_area(area);
         let paragraph = Paragraph::new(self.lines())
             .alignment(Alignment::Left)
             .wrap(Wrap { trim: true })
@@ -170,7 +158,7 @@ mod tests {
         let area = Rect::new(0, 0, 80, 20);
 
         // Act
-        let popup_area = SessionCreationOverlay::popup_area(area);
+        let popup_area = OVERLAY_DIMENSIONS.centered_popup_area(area);
 
         // Assert
         assert_eq!(popup_area.width, 44);
@@ -185,7 +173,7 @@ mod tests {
         let area = Rect::new(0, 0, 240, 60);
 
         // Act
-        let popup_area = SessionCreationOverlay::popup_area(area);
+        let popup_area = OVERLAY_DIMENSIONS.centered_popup_area(area);
 
         // Assert
         assert_eq!(popup_area.width, 72);

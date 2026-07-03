@@ -9,5 +9,6 @@ pub(crate) mod list;
 pub(crate) mod prompt;
 pub(crate) mod question;
 pub(crate) mod review_detail;
+pub(crate) mod session_output_metric;
 pub(crate) mod session_view;
 pub(crate) mod sync_blocked;

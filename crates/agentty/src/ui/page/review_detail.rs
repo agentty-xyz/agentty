@@ -1,7 +1,4 @@
-use ag_forge::{
-    RequestedReview, ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot,
-    ReviewCommentThread,
-};
+use ag_forge::{RequestedReview, ReviewCommentSnapshot};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -9,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::ui::state::help_action;
-use crate::ui::{Page, layout, markdown, style};
+use crate::ui::{Page, layout, markdown, review_comment_format, style};
 
 /// Page renderer for one requested PR or MR review summary, comments, and
 /// comment-load failures.
@@ -195,7 +192,7 @@ fn append_review_comments(
     if !snapshot.pr_level_comments.is_empty() {
         lines.push(Line::from(""));
         lines.push(comment_group_label("General discussion"));
-        append_review_comment_bodies(
+        review_comment_format::append_comment_bodies(
             lines,
             &snapshot.pr_level_comments,
             markdown_render_cache,
@@ -205,8 +202,18 @@ fn append_review_comments(
 
     for thread in &snapshot.threads {
         lines.push(Line::from(""));
-        lines.push(review_thread_header_line(thread));
-        append_review_comment_bodies(lines, &thread.comments, markdown_render_cache, width);
+        lines.push(review_comment_format::thread_header_line(
+            thread,
+            Style::default()
+                .fg(style::palette::text())
+                .add_modifier(Modifier::BOLD),
+        ));
+        review_comment_format::append_comment_bodies(
+            lines,
+            &thread.comments,
+            markdown_render_cache,
+            width,
+        );
     }
 }
 
@@ -231,75 +238,6 @@ fn comment_group_label(label: &'static str) -> Line<'static> {
             .fg(style::palette::text())
             .add_modifier(Modifier::BOLD),
     ))
-}
-
-/// Appends each comment author and markdown body under one comment group.
-fn append_review_comment_bodies(
-    lines: &mut Vec<Line<'static>>,
-    comments: &[ReviewComment],
-    markdown_render_cache: &markdown::MarkdownRenderCache,
-    width: usize,
-) {
-    for (comment_index, comment) in comments.iter().enumerate() {
-        if comment_index > 0 {
-            lines.push(Line::from(""));
-        }
-
-        lines.push(Line::from(Span::styled(
-            comment.author.clone(),
-            Style::default()
-                .fg(style::palette::text())
-                .add_modifier(Modifier::BOLD),
-        )));
-
-        let body_width = width.saturating_sub(2).max(1);
-        let rendered = markdown_render_cache.render(&comment.body, body_width);
-        for rendered_line in rendered.iter() {
-            let mut spans = Vec::with_capacity(rendered_line.spans.len() + 1);
-            spans.push(Span::raw("  "));
-            spans.extend(rendered_line.spans.iter().cloned());
-            lines.push(Line::from(spans));
-        }
-    }
-}
-
-/// Builds the file, line, side, and state header for one inline thread.
-fn review_thread_header_line(thread: &ReviewCommentThread) -> Line<'static> {
-    let anchor = match thread.line {
-        Some(line) => format!("{}:{line}", thread.path),
-        None => thread.path.clone(),
-    };
-    let side_tag = match thread.anchor_side {
-        ReviewCommentAnchorSide::File => "file",
-        ReviewCommentAnchorSide::New => "new",
-        ReviewCommentAnchorSide::Old => "old",
-    };
-    let comment_count = thread.comments.len();
-    let resolution_tag = if thread.is_resolved {
-        "resolved"
-    } else {
-        "unresolved"
-    };
-    let outdated_tag = if thread.is_outdated == Some(true) {
-        "  ·  outdated"
-    } else {
-        ""
-    };
-
-    Line::from(vec![
-        Span::styled(
-            anchor,
-            Style::default()
-                .fg(style::palette::text())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(
-                "  ·  {side_tag}  ·  {comment_count} comments  ·  {resolution_tag}{outdated_tag}"
-            ),
-            Style::default().fg(style::palette::text_muted()),
-        ),
-    ])
 }
 
 /// Builds one muted informational line.
@@ -534,7 +472,10 @@ fn review_detail_block() -> Block<'static> {
 
 #[cfg(test)]
 mod tests {
-    use ag_forge::{ForgeKind, RequestedReviewAudience};
+    use ag_forge::{
+        ForgeKind, RequestedReviewAudience, ReviewComment, ReviewCommentAnchorSide,
+        ReviewCommentThread,
+    };
     use ratatui::backend::TestBackend;
 
     use super::*;

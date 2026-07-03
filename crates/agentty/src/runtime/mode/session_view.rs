@@ -17,8 +17,7 @@ use crate::domain::transcript_notice::TranscriptNotice;
 use crate::runtime::EventResult;
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
 use crate::runtime::mode::input_key::is_insertable_char_key;
-use crate::ui::component::session_output::SessionOutputLineContext;
-use crate::ui::page::session_chat::SessionChatPage;
+use crate::runtime::mode::session_output_metric;
 use crate::ui::state::app_mode::{
     AppMode, ConfirmationIntent, ConfirmationViewMode, DiffRightPanel, HelpContext,
 };
@@ -964,7 +963,7 @@ where
     let terminal_size = terminal.size().map_err(crate::runtime::backend_err)?;
     let view_height = terminal_size.height.saturating_sub(5);
     let output_width = terminal_size.width.saturating_sub(2);
-    let total_lines = view_total_lines(
+    let total_lines = session_output_metric::rendered_output_line_count(
         app,
         &view_context.session_id,
         view_context.session_index,
@@ -978,40 +977,6 @@ where
         view_height,
     })
 }
-
-fn view_total_lines(
-    app: &App,
-    session_id: &str,
-    session_index: usize,
-    review_status_message: Option<&str>,
-    review_text: Option<&str>,
-    output_width: u16,
-) -> u16 {
-    let active_progress = app.session_progress_message(session_id);
-    let active_prompt_output = app
-        .sessions
-        .active_prompt_outputs()
-        .get(session_id)
-        .map(std::string::String::as_str);
-
-    app.sessions.session_at(session_index).map_or(0, |session| {
-        SessionChatPage::rendered_output_line_count(
-            session,
-            output_width,
-            SessionOutputLineContext {
-                active_prompt_output,
-                active_progress,
-                review_model: app.settings.default_review_selection.model(),
-                review_status_message,
-                review_text,
-                session_update_version: app.session_update_version(session_id),
-            },
-            app.render_cache_store().markdown_render_cache(),
-            app.render_cache_store().session_output_layout_cache(),
-        )
-    })
-}
-
 /// Extracts user prompt history entries from persisted session output text.
 ///
 /// The parser accepts both legacy multiline prompts (raw continuation lines)
@@ -1256,6 +1221,8 @@ mod tests {
 
     use super::*;
     use crate::infra::tmux::{MockTmuxClient, TmuxClient};
+    use crate::ui::component::session_output::SessionOutputLineContext;
+    use crate::ui::page::session_chat::SessionChatPage;
 
     /// Builds one git-backed test app with one created session and an
     /// injected tmux boundary.
@@ -1754,7 +1721,8 @@ mod tests {
             u16::try_from(app.sessions.sessions()[0].output.lines().count()).unwrap_or(u16::MAX);
 
         // Act
-        let total_lines = view_total_lines(&app, &session_id, 0, None, None, 20);
+        let total_lines =
+            session_output_metric::rendered_output_line_count(&app, &session_id, 0, None, None, 20);
 
         // Assert
         assert!(total_lines > raw_line_count);
@@ -1814,7 +1782,14 @@ mod tests {
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.sessions.sessions_mut()[0].output = "word ".repeat(60);
         let metrics = ViewMetrics {
-            total_lines: view_total_lines(&app, &session_id, 0, None, None, 20),
+            total_lines: session_output_metric::rendered_output_line_count(
+                &app,
+                &session_id,
+                0,
+                None,
+                None,
+                20,
+            ),
             view_height: 5,
         };
 
@@ -1959,7 +1934,14 @@ mod tests {
         );
 
         // Act
-        let total_lines = view_total_lines(&app, &session_id, 0, None, None, output_width);
+        let total_lines = session_output_metric::rendered_output_line_count(
+            &app,
+            &session_id,
+            0,
+            None,
+            None,
+            output_width,
+        );
 
         // Assert
         assert_eq!(total_lines, expected);

@@ -15,8 +15,9 @@ const REVIEW_REQUEST_TITLE: &str = "Publish Review Request";
 const INPUT_TITLE: &str = "Remote Branch";
 const MIN_OVERLAY_HEIGHT: u16 = 11;
 const MIN_OVERLAY_WIDTH: u16 = 58;
-const OVERLAY_HEIGHT_PERCENT: u16 = 42;
-const OVERLAY_WIDTH_PERCENT: u16 = 62;
+/// Popup dimensions for branch publishing and review-request refresh.
+const OVERLAY_DIMENSIONS: overlay::OverlayDimensions =
+    overlay::OverlayDimensions::new(62, 42, MIN_OVERLAY_WIDTH, MIN_OVERLAY_HEIGHT);
 
 /// Centered popup that collects an optional remote branch name before
 /// publishing or refreshing the linked review request.
@@ -38,17 +39,6 @@ impl<'a> PublishBranchOverlay<'a> {
             input,
             locked_upstream_ref,
         }
-    }
-
-    /// Returns the centered popup rectangle constrained to terminal bounds.
-    fn popup_area(area: Rect) -> Rect {
-        overlay::centered_popup_area(
-            area,
-            OVERLAY_WIDTH_PERCENT,
-            OVERLAY_HEIGHT_PERCENT,
-            MIN_OVERLAY_WIDTH,
-            MIN_OVERLAY_HEIGHT,
-        )
     }
 
     /// Returns the placeholder shown before the first publish.
@@ -113,7 +103,7 @@ impl<'a> PublishBranchOverlay<'a> {
 
 impl Component for PublishBranchOverlay<'_> {
     fn render(&self, f: &mut Frame, area: Rect) {
-        let popup_area = Self::popup_area(area);
+        let popup_area = OVERLAY_DIMENSIONS.centered_popup_area(area);
         let block = overlay::overlay_block(REVIEW_REQUEST_TITLE, palette::accent());
         let inner_area = block.inner(popup_area);
         let sections = Layout::vertical([
@@ -169,7 +159,7 @@ mod tests {
         let area = Rect::new(0, 0, 120, 40);
 
         // Act
-        let popup_area = PublishBranchOverlay::popup_area(area);
+        let popup_area = OVERLAY_DIMENSIONS.centered_popup_area(area);
 
         // Assert
         assert_eq!(popup_area.width, 74);

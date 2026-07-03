@@ -759,22 +759,15 @@ fn handle_prompt_char(app: &mut App, character: char) {
 /// indexes the active project working directory until the session folder is
 /// materialized.
 fn activate_at_mention(app: &mut App, prompt_context: &PromptContext) {
-    let lookup_root = app
+    let session_folder = app
         .sessions
         .session_at(prompt_context.session_index)
-        .map_or_else(
-            || app.working_dir().to_path_buf(),
-            |session| {
-                let session_folder = session.folder.clone();
-                let has_session_folder = app.services.fs_client().is_dir(session_folder.clone());
-
-                at_mention::lookup_root(
-                    app.working_dir().to_path_buf(),
-                    Some(session_folder),
-                    has_session_folder,
-                )
-            },
-        );
+        .map(|session| session.folder.clone());
+    let lookup_root = at_mention::lookup_root_for_session(
+        app.working_dir().to_path_buf(),
+        session_folder,
+        |session_folder| app.services.fs_client().is_dir(session_folder),
+    );
     let session_id = prompt_context.session_id.clone();
     let event_tx = app.services.event_sender();
 

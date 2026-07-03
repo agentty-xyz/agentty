@@ -185,6 +185,25 @@ pub(crate) fn lookup_root(
     project_working_dir
 }
 
+/// Returns the lookup root for an optional session folder after checking
+/// materialization through the injected filesystem boundary.
+pub(crate) fn lookup_root_for_session(
+    project_working_dir: PathBuf,
+    session_folder: Option<PathBuf>,
+    is_session_folder: impl FnOnce(PathBuf) -> bool,
+) -> PathBuf {
+    let Some(session_folder) = session_folder else {
+        return project_working_dir;
+    };
+    let has_session_folder = is_session_folder(session_folder.clone());
+
+    lookup_root(
+        project_working_dir,
+        Some(session_folder),
+        has_session_folder,
+    )
+}
+
 /// Clears one visible `@`-mention dropdown state.
 pub(crate) fn dismiss(at_mention_state: &mut Option<PromptAtMentionState>) {
     *at_mention_state = None;
@@ -252,6 +271,7 @@ fn format_mention_text(entry: &FileEntry) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -349,6 +369,38 @@ mod tests {
 
         // Assert
         assert_eq!(lookup_root, project_working_dir);
+    }
+
+    #[test]
+    fn test_lookup_root_for_session_skips_filesystem_check_without_session_folder() {
+        // Arrange
+        let project_working_dir = PathBuf::from("/project");
+        let was_filesystem_checked = Cell::new(false);
+
+        // Act
+        let lookup_root = lookup_root_for_session(project_working_dir.clone(), None, |_| {
+            was_filesystem_checked.set(true);
+
+            true
+        });
+
+        // Assert
+        assert_eq!(lookup_root, project_working_dir);
+        assert!(!was_filesystem_checked.get());
+    }
+
+    #[test]
+    fn test_lookup_root_for_session_uses_materialized_session_folder() {
+        // Arrange
+        let project_working_dir = PathBuf::from("/project");
+        let session_folder = PathBuf::from("/project/.agentty/session");
+
+        // Act
+        let lookup_root =
+            lookup_root_for_session(project_working_dir, Some(session_folder.clone()), |_| true);
+
+        // Assert
+        assert_eq!(lookup_root, session_folder);
     }
 
     #[tokio::test]

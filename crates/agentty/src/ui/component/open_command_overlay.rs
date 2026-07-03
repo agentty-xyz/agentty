@@ -10,8 +10,9 @@ use crate::ui::{Component, overlay};
 
 const MIN_OVERLAY_HEIGHT: u16 = 9;
 const MIN_OVERLAY_WIDTH: u16 = 50;
-const OVERLAY_HEIGHT_PERCENT: u16 = 38;
-const OVERLAY_WIDTH_PERCENT: u16 = 62;
+/// Popup dimensions for configured open-command selection.
+const OVERLAY_DIMENSIONS: overlay::OverlayDimensions =
+    overlay::OverlayDimensions::new(62, 38, MIN_OVERLAY_WIDTH, MIN_OVERLAY_HEIGHT);
 
 /// Centered popup that allows selecting one configured open command.
 pub struct OpenCommandOverlay<'a> {
@@ -88,22 +89,11 @@ impl<'a> OpenCommandOverlay<'a> {
 
         lines
     }
-
-    /// Returns the centered popup rectangle constrained to terminal bounds.
-    fn popup_area(area: Rect) -> Rect {
-        overlay::centered_popup_area(
-            area,
-            OVERLAY_WIDTH_PERCENT,
-            OVERLAY_HEIGHT_PERCENT,
-            MIN_OVERLAY_WIDTH,
-            MIN_OVERLAY_HEIGHT,
-        )
-    }
 }
 
 impl Component for OpenCommandOverlay<'_> {
     fn render(&self, f: &mut Frame, area: Rect) {
-        let popup_area = Self::popup_area(area);
+        let popup_area = OVERLAY_DIMENSIONS.centered_popup_area(area);
         let command_width = overlay::overlay_content_width(popup_area.width)
             .saturating_sub(1)
             .max(1);
@@ -143,7 +133,7 @@ mod tests {
         let area = Rect::new(0, 0, 120, 40);
 
         // Act
-        let popup_area = OpenCommandOverlay::popup_area(area);
+        let popup_area = OVERLAY_DIMENSIONS.centered_popup_area(area);
 
         // Assert
         assert_eq!(popup_area.width, 74);

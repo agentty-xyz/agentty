@@ -11,6 +11,7 @@ pub mod prompt_format;
 pub mod question_format;
 mod render;
 mod render_cache;
+pub mod review_comment_format;
 pub mod router;
 pub mod session_format;
 pub mod state;

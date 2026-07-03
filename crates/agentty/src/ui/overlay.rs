@@ -17,6 +17,43 @@ use crate::ui::{Component, Page, component, markdown, page};
 const OVERLAY_HORIZONTAL_PADDING: u16 = 2;
 const OVERLAY_VERTICAL_PADDING: u16 = 1;
 
+/// Percentage and minimum-size constraints for a centered overlay popup.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OverlayDimensions {
+    height_percent: u16,
+    min_height: u16,
+    min_width: u16,
+    width_percent: u16,
+}
+
+impl OverlayDimensions {
+    /// Creates reusable dimensions for one popup family.
+    pub const fn new(
+        width_percent: u16,
+        height_percent: u16,
+        min_width: u16,
+        min_height: u16,
+    ) -> Self {
+        Self {
+            height_percent,
+            min_height,
+            min_width,
+            width_percent,
+        }
+    }
+
+    /// Computes a centered popup rectangle within `area`.
+    pub fn centered_popup_area(self, area: Rect) -> Rect {
+        centered_popup_area(
+            area,
+            self.width_percent,
+            self.height_percent,
+            self.min_width,
+            self.min_height,
+        )
+    }
+}
+
 /// Borrowed parameters for rendering the sync-blocked popup overlay.
 #[derive(Clone, Copy)]
 pub(crate) struct SyncBlockedPopupRenderContext<'a> {

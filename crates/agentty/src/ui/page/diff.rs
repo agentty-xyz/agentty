@@ -24,7 +24,7 @@ use crate::ui::diff_util::{
 use crate::ui::state::app_mode::DiffRightPanel;
 use crate::ui::state::help_action;
 use crate::ui::text_util::{inline_text, wrap_lines_to_rows};
-use crate::ui::{Component, Page, diff_util, markdown, style};
+use crate::ui::{Component, Page, diff_util, markdown, review_comment_format, style};
 
 const SCROLLBAR_TRACK_SYMBOL: &str = "│";
 const SCROLLBAR_THUMB_SYMBOL: &str = "█";
@@ -1315,13 +1315,12 @@ fn append_pr_level_comments(
             .add_modifier(Modifier::BOLD),
     )));
 
-    for (comment_index, comment) in comments.iter().enumerate() {
-        if comment_index > 0 {
-            lines.push(Line::default());
-        }
-
-        append_comment_body(lines, comment, markdown_render_cache, width);
-    }
+    review_comment_format::append_comment_bodies(
+        lines,
+        comments,
+        markdown_render_cache,
+        usize::from(width),
+    );
 }
 
 /// Appends the header and comment bodies for one inline review thread.
@@ -1331,59 +1330,6 @@ fn append_thread_lines(
     markdown_render_cache: &markdown::MarkdownRenderCache,
     width: u16,
 ) {
-    lines.push(thread_header_line(thread));
-
-    for (comment_index, comment) in thread.comments.iter().enumerate() {
-        if comment_index > 0 {
-            lines.push(Line::default());
-        }
-
-        append_comment_body(lines, comment, markdown_render_cache, width);
-    }
-}
-
-/// Appends one comment's author header followed by the markdown-rendered body.
-fn append_comment_body(
-    lines: &mut Vec<Line<'static>>,
-    comment: &ReviewComment,
-    markdown_render_cache: &markdown::MarkdownRenderCache,
-    width: u16,
-) {
-    lines.push(Line::from(Span::styled(
-        comment.author.clone(),
-        Style::default()
-            .fg(style::palette::text())
-            .add_modifier(Modifier::BOLD),
-    )));
-
-    let body_width = width.saturating_sub(2).max(1) as usize;
-    let rendered = markdown_render_cache.render(&comment.body, body_width);
-    append_indented_markdown(lines, &rendered);
-}
-
-/// Renders the `path:line · side · N comments · resolved/unresolved` header
-/// for one inline thread in the overview comments panel.
-fn thread_header_line(thread: &ReviewCommentThread) -> Line<'static> {
-    let anchor = match thread.line {
-        Some(line) => format!("{}:{}", thread.path, line),
-        None => thread.path.clone(),
-    };
-    let side_tag = match thread.anchor_side {
-        ReviewCommentAnchorSide::File => "file",
-        ReviewCommentAnchorSide::New => "new",
-        ReviewCommentAnchorSide::Old => "old",
-    };
-    let comment_count = thread.comments.len();
-    let resolution_tag = if thread.is_resolved {
-        "resolved"
-    } else {
-        "unresolved"
-    };
-    let outdated_tag = if thread.is_outdated == Some(true) {
-        "  ·  outdated"
-    } else {
-        ""
-    };
     let header_style = if thread.is_resolved {
         Style::default().fg(style::palette::text_muted())
     } else {
@@ -1392,25 +1338,16 @@ fn thread_header_line(thread: &ReviewCommentThread) -> Line<'static> {
             .add_modifier(Modifier::BOLD)
     };
 
-    Line::from(vec![
-        Span::styled(anchor, header_style),
-        Span::styled(
-            format!(
-                "  ·  {side_tag}  ·  {comment_count} comments  ·  {resolution_tag}{outdated_tag}"
-            ),
-            Style::default().fg(style::palette::text_muted()),
-        ),
-    ])
-}
-
-/// Appends rendered markdown lines indented two spaces under a comment header.
-fn append_indented_markdown(lines: &mut Vec<Line<'static>>, rendered: &Arc<[Line<'static>]>) {
-    for source_line in rendered.iter() {
-        let mut spans = Vec::with_capacity(source_line.spans.len() + 1);
-        spans.push(Span::raw("  "));
-        spans.extend(source_line.spans.iter().cloned());
-        lines.push(Line::from(spans));
-    }
+    lines.push(review_comment_format::thread_header_line(
+        thread,
+        header_style,
+    ));
+    review_comment_format::append_comment_bodies(
+        lines,
+        &thread.comments,
+        markdown_render_cache,
+        usize::from(width),
+    );
 }
 
 #[cfg(test)]

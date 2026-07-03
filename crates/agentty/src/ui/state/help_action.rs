@@ -28,6 +28,27 @@ impl HelpAction {
     }
 }
 
+/// Shared list-mode shortcuts available before tab-specific actions.
+const LIST_BASE_ACTIONS: [HelpAction; 2] = [
+    HelpAction::new("quit", "q", "Quit"),
+    HelpAction::new("sync", "s", "Sync"),
+];
+
+/// Full session-view scroll shortcuts shown in the help overlay.
+const VIEW_OUTPUT_SCROLL_ACTIONS: [HelpAction; 5] = [
+    HelpAction::new("scroll", "j/k", "Scroll output"),
+    HelpAction::new("top", "g", "Scroll to top"),
+    HelpAction::new("bottom", "G", "Scroll to bottom"),
+    HelpAction::new("half down", "Ctrl+d", "Half page down"),
+    HelpAction::new("half up", "Ctrl+u", "Half page up"),
+];
+
+/// Compact trailing session-view footer shortcuts.
+const VIEW_FOOTER_TRAILING_ACTIONS: [HelpAction; 2] = [
+    HelpAction::new("scroll", "j/k", "Scroll output"),
+    HelpAction::new("help", "?", "Help"),
+];
+
 /// Encodes which shortcut family is available for the viewed session state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ViewSessionState {
@@ -109,6 +130,59 @@ pub(crate) struct ViewHelpState {
     pub(crate) publish_pull_request_action: Option<PublishBranchAction>,
     /// High-level view-mode state that gates the rest of the shortcut set.
     pub(crate) session_state: ViewSessionState,
+}
+
+/// Derived view-mode action gates shared by full help and compact footer rows.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ViewActionSet {
+    continue_terminal_session: ViewActionAvailability,
+    open_command: ViewActionAvailability,
+    open_prompt: ViewActionAvailability,
+    open_worktree: ViewActionAvailability,
+    rebase_session: ViewActionAvailability,
+    show_diff: ViewActionAvailability,
+    show_review: ViewActionAvailability,
+    stop_session: ViewActionAvailability,
+}
+
+impl ViewActionSet {
+    /// Projects a view help state into concrete shortcut availability.
+    fn from_state(state: ViewHelpState) -> Self {
+        let can_open_worktree = state.can_open_worktree.is_enabled()
+            && matches!(
+                state.session_state,
+                ViewSessionState::Interactive
+                    | ViewSessionState::NewSession
+                    | ViewSessionState::StackedDraft
+                    | ViewSessionState::Review
+                    | ViewSessionState::AgentReview
+            );
+        let can_open_prompt = can_open_view_prompt(state.session_state, state.reply_to_session);
+        let can_open_command =
+            can_open_view_command(state.session_state, state.can_mutate_session_branch);
+        let can_rebase_session =
+            can_rebase_view_session(state.session_state, state.can_rebase_session_branch);
+        let can_show_review = matches!(
+            state.session_state,
+            ViewSessionState::Review | ViewSessionState::AgentReview
+        );
+
+        Self {
+            continue_terminal_session: ViewActionAvailability::from_bool(matches!(
+                state.session_state,
+                ViewSessionState::Done
+            )),
+            open_command: ViewActionAvailability::from_bool(can_open_command),
+            open_prompt: ViewActionAvailability::from_bool(can_open_prompt),
+            open_worktree: ViewActionAvailability::from_bool(can_open_worktree),
+            rebase_session: ViewActionAvailability::from_bool(can_rebase_session),
+            show_diff: ViewActionAvailability::from_bool(can_show_review),
+            show_review: ViewActionAvailability::from_bool(can_show_review),
+            stop_session: ViewActionAvailability::from_bool(
+                state.session_state == ViewSessionState::InProgress,
+            ),
+        }
+    }
 }
 
 /// Maps one session snapshot into the shared view-mode shortcut state used by
@@ -265,40 +339,17 @@ pub(crate) fn review_actions() -> Vec<HelpAction> {
 /// These entries are used by the help overlay and include all available
 /// actions.
 pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
-    let can_open_worktree = state.can_open_worktree.is_enabled()
-        && matches!(
-            state.session_state,
-            ViewSessionState::Interactive
-                | ViewSessionState::NewSession
-                | ViewSessionState::StackedDraft
-                | ViewSessionState::Review
-                | ViewSessionState::AgentReview
-        );
-    let can_open_prompt = can_open_view_prompt(state.session_state, state.reply_to_session);
-    let can_open_command =
-        can_open_view_command(state.session_state, state.can_mutate_session_branch);
-    let can_rebase_session =
-        can_rebase_view_session(state.session_state, state.can_rebase_session_branch);
-    let can_show_diff = matches!(
-        state.session_state,
-        ViewSessionState::Review | ViewSessionState::AgentReview
-    );
-    let can_show_review = matches!(
-        state.session_state,
-        ViewSessionState::Review | ViewSessionState::AgentReview
-    );
-    let can_continue_terminal_session = matches!(state.session_state, ViewSessionState::Done);
-    let can_stop_session = state.session_state == ViewSessionState::InProgress;
+    let action_set = ViewActionSet::from_state(state);
     let mut actions = vec![HelpAction::new("back", "q", "Back to list")];
 
     append_view_prompt_actions(
         &mut actions,
         state.session_state,
-        can_open_prompt,
-        can_open_command,
+        action_set.open_prompt.is_enabled(),
+        action_set.open_command.is_enabled(),
     );
 
-    if can_stop_session {
+    if action_set.stop_session.is_enabled() {
         actions.push(HelpAction::new(
             "stop",
             "Ctrl+c",
@@ -310,15 +361,15 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
         actions.push(HelpAction::new("start", "s", "Start staged session"));
     }
 
-    if can_open_worktree {
+    if action_set.open_worktree.is_enabled() {
         actions.push(HelpAction::new("open", "o", "Open worktree"));
     }
 
-    if can_show_diff {
+    if action_set.show_diff.is_enabled() {
         actions.push(HelpAction::new("diff", "d", "Show diff"));
     }
 
-    if can_show_review {
+    if action_set.show_review.is_enabled() {
         actions.push(HelpAction::new("review", "f", "Focused review"));
     }
 
@@ -328,7 +379,8 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
         ));
     }
 
-    if can_open_command && state.session_state != ViewSessionState::StackedDraft {
+    if action_set.open_command.is_enabled() && state.session_state != ViewSessionState::StackedDraft
+    {
         actions.push(HelpAction::new(
             "add to merge queue",
             "m",
@@ -336,19 +388,15 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
         ));
     }
 
-    if can_rebase_session {
+    if action_set.rebase_session.is_enabled() {
         actions.push(HelpAction::new("sync", "r", "Sync"));
     }
 
-    if can_continue_terminal_session {
+    if action_set.continue_terminal_session.is_enabled() {
         actions.push(HelpAction::new("continue", "c", "Continue in new session"));
     }
 
-    actions.push(HelpAction::new("scroll", "j/k", "Scroll output"));
-    actions.push(HelpAction::new("top", "g", "Scroll to top"));
-    actions.push(HelpAction::new("bottom", "G", "Scroll to bottom"));
-    actions.push(HelpAction::new("half down", "Ctrl+d", "Half page down"));
-    actions.push(HelpAction::new("half up", "Ctrl+u", "Half page up"));
+    actions.extend(VIEW_OUTPUT_SCROLL_ACTIONS);
     actions.push(HelpAction::new("help", "?", "Help"));
 
     actions
@@ -360,39 +408,19 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
 /// in the footer, while `AgentReview` hides the sync shortcut until focused
 /// review generation finishes.
 pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
-    let can_open_worktree = state.can_open_worktree.is_enabled()
-        && matches!(
-            state.session_state,
-            ViewSessionState::Interactive
-                | ViewSessionState::NewSession
-                | ViewSessionState::StackedDraft
-                | ViewSessionState::Review
-                | ViewSessionState::AgentReview
-        );
-    let can_open_prompt = can_open_view_prompt(state.session_state, state.reply_to_session);
-    let can_open_command =
-        can_open_view_command(state.session_state, state.can_mutate_session_branch);
-    let can_rebase_session =
-        can_rebase_view_session(state.session_state, state.can_rebase_session_branch);
-    let can_show_review = matches!(
-        state.session_state,
-        ViewSessionState::Review | ViewSessionState::AgentReview
-    );
-    let can_continue_terminal_session = matches!(state.session_state, ViewSessionState::Done);
-    let can_stop_session = state.session_state == ViewSessionState::InProgress;
-
+    let action_set = ViewActionSet::from_state(state);
     let mut actions = vec![HelpAction::new("back", "q", "Back to list")];
 
     append_view_footer_edit_actions(
         &mut actions,
         state.session_state,
         state.can_start_staged_session,
-        ViewActionAvailability::from_bool(can_open_prompt),
-        ViewActionAvailability::from_bool(can_open_command),
-        ViewActionAvailability::from_bool(can_rebase_session),
+        action_set.open_prompt,
+        action_set.open_command,
+        action_set.rebase_session,
     );
 
-    if can_stop_session {
+    if action_set.stop_session.is_enabled() {
         actions.push(HelpAction::new(
             "stop",
             "Ctrl+c",
@@ -400,11 +428,11 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
         ));
     }
 
-    if can_open_worktree {
+    if action_set.open_worktree.is_enabled() {
         actions.push(HelpAction::new("open", "o", "Open worktree"));
     }
 
-    if can_show_review {
+    if action_set.show_review.is_enabled() {
         actions.push(HelpAction::new("review", "f", "Focused review"));
     }
 
@@ -414,12 +442,11 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
         ));
     }
 
-    if can_continue_terminal_session {
+    if action_set.continue_terminal_session.is_enabled() {
         actions.push(HelpAction::new("continue", "c", "Continue in new session"));
     }
 
-    actions.push(HelpAction::new("scroll", "j/k", "Scroll output"));
-    actions.push(HelpAction::new("help", "?", "Help"));
+    actions.extend(VIEW_FOOTER_TRAILING_ACTIONS);
 
     actions
 }
@@ -649,10 +676,7 @@ pub(crate) fn footer_separator_span() -> Span<'static> {
 
 /// Returns list-mode actions shared by all tabs.
 fn list_base_actions() -> Vec<HelpAction> {
-    vec![
-        HelpAction::new("quit", "q", "Quit"),
-        HelpAction::new("sync", "s", "Sync"),
-    ]
+    Vec::from(LIST_BASE_ACTIONS)
 }
 
 /// Returns the view-mode shortcut entry for the current pull-request publish

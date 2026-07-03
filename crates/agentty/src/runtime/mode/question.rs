@@ -8,9 +8,7 @@ use crate::domain::question::QuestionItem;
 use crate::domain::session::{SessionId, Status};
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::runtime::EventResult;
-use crate::runtime::mode::{at_mention, input_key};
-use crate::ui::component::session_output::SessionOutputLineContext;
-use crate::ui::page::session_chat::SessionChatPage;
+use crate::runtime::mode::{at_mention, input_key, session_output_metric};
 use crate::ui::state::app_mode::{AppMode, DiffRightPanel, QuestionFocus, QuestionModeSnapshot};
 use crate::ui::state::prompt::PromptAtMentionState;
 
@@ -231,31 +229,16 @@ fn question_view_metrics(app: &App, terminal_size: Rect) -> QuestionViewMetrics 
         | AppMode::PublishBranchInput { .. }
         | AppMode::ViewInfoPopup { .. } => (None, None),
     };
-    let total_lines = session_index
-        .and_then(|index| app.sessions.session_at(index))
-        .map_or(0, |session| {
-            let active_progress = app.session_progress_message(session_id);
-            let active_prompt_output = app
-                .sessions
-                .active_prompt_outputs()
-                .get(session_id)
-                .map(std::string::String::as_str);
-
-            SessionChatPage::rendered_output_line_count(
-                session,
-                output_width,
-                SessionOutputLineContext {
-                    active_prompt_output,
-                    active_progress,
-                    review_model: app.settings.default_review_selection.model(),
-                    review_status_message,
-                    review_text,
-                    session_update_version: app.session_update_version(session_id),
-                },
-                app.render_cache_store().markdown_render_cache(),
-                app.render_cache_store().session_output_layout_cache(),
-            )
-        });
+    let total_lines = session_index.map_or(0, |index| {
+        session_output_metric::rendered_output_line_count(
+            app,
+            session_id,
+            index,
+            review_status_message,
+            review_text,
+            output_width,
+        )
+    });
 
     QuestionViewMetrics {
         total_lines,
@@ -723,24 +706,17 @@ fn sync_question_at_mention_state(app: &mut App) {
 /// Starts asynchronous loading of file entries for the question-mode
 /// at-mention dropdown.
 fn activate_question_at_mention(app: &mut App, session_id: &str) {
-    let lookup_root = app
+    let session_folder = app
         .sessions
         .sessions()
         .iter()
         .find(|session| session.id == session_id)
-        .map_or_else(
-            || app.working_dir().to_path_buf(),
-            |session| {
-                let session_folder = session.folder.clone();
-                let has_session_folder = app.services.fs_client().is_dir(session_folder.clone());
-
-                at_mention::lookup_root(
-                    app.working_dir().to_path_buf(),
-                    Some(session_folder),
-                    has_session_folder,
-                )
-            },
-        );
+        .map(|session| session.folder.clone());
+    let lookup_root = at_mention::lookup_root_for_session(
+        app.working_dir().to_path_buf(),
+        session_folder,
+        |session_folder| app.services.fs_client().is_dir(session_folder),
+    );
     let owned_session_id = SessionId::from(session_id);
     let event_tx = app.services.event_sender();
 
@@ -975,6 +951,8 @@ mod tests {
     use super::*;
     use crate::domain::agent::AgentModel;
     use crate::domain::session::Status;
+    use crate::ui::component::session_output::SessionOutputLineContext;
+    use crate::ui::page::session_chat::SessionChatPage;
     use crate::ui::state::app_mode::QuestionFocus;
 
     /// Fake terminal size used by tests that don't exercise scrolling.

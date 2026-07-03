@@ -49,11 +49,12 @@ module docstrings directly.
   (`infra/agent/app_server/`), and the structured response protocol
   (`infra/agent/protocol/`).
 - `runtime/`: Terminal lifecycle and the event loop — terminal setup, the event-reader
-  thread, key dispatch, and one handler per `AppMode` under `runtime/mode/`.
+  thread, key dispatch, one handler per `AppMode` under `runtime/mode/`, and shared mode
+  helpers for session-output metrics.
 - `ui/`: Rendering — frame composition, mode-to-page routing, pages under `ui/page/`,
   reusable widgets under `ui/component/`, UI state under `ui/state/`, plus markdown,
-  diff, layout, and theme helpers. Render caches are owned by the shared
-  `RenderCacheStore`.
+  diff, layout, review-comment formatting, and theme helpers. Render caches are owned by
+  the shared `RenderCacheStore`.
 
 ## Layer Rules
 
