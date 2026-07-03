@@ -14,6 +14,7 @@ pub(crate) use adapter_common::{
 };
 #[cfg(any(test, feature = "test-utils"))]
 pub use client::MockReviewRequestClient;
+pub(crate) use client::ReviewRequestAdapter;
 pub use client::{RealReviewRequestClient, ReviewRequestClient};
 pub(crate) use command::{
     ForgeCommand, ForgeCommandError, ForgeCommandOutput, ForgeCommandRunner,

@@ -6,18 +6,20 @@ use serde::Deserialize;
 use url::{Url, form_urlencoded};
 
 use super::{
-    CreateReviewRequestInput, ForgeCommand, ForgeCommandOutput, ForgeCommandRunner, ForgeKind,
-    ForgeRemote, RequestedReview, RequestedReviewAudience, ReviewComment, ReviewCommentAnchorSide,
-    ReviewCommentSnapshot, ReviewCommentThread, ReviewRequestError, ReviewRequestState,
-    ReviewRequestSummary, UpdateReviewRequestInput, command_output_detail, is_gitlab_host,
-    looks_like_authentication_failure, looks_like_host_resolution_failure, map_spawn_error,
-    normalize_provider_label, parse_remote_url, status_summary_parts, strip_port,
+    CreateReviewRequestInput, ForgeCommand, ForgeCommandOutput, ForgeCommandRunner, ForgeFuture,
+    ForgeKind, ForgeRemote, RequestedReview, RequestedReviewAudience, ReviewComment,
+    ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread, ReviewRequestAdapter,
+    ReviewRequestError, ReviewRequestState, ReviewRequestSummary, UpdateReviewRequestInput,
+    command_output_detail, is_gitlab_host, looks_like_authentication_failure,
+    looks_like_host_resolution_failure, map_spawn_error, normalize_provider_label,
+    parse_remote_url, status_summary_parts, strip_port,
 };
 
 /// Maximum requested-review rows loaded from `glab` for one refresh.
 const REQUESTED_REVIEW_LIMIT: usize = 100;
 
 /// GitLab merge-request adapter that normalizes `glab` command output.
+#[derive(Clone)]
 pub(crate) struct GitLabReviewRequestAdapter {
     command_runner: Arc<dyn ForgeCommandRunner>,
 }
@@ -36,242 +38,6 @@ impl GitLabReviewRequestAdapter {
         }
 
         Some(parsed_remote.into_forge_remote(ForgeKind::GitLab))
-    }
-
-    /// Finds one existing merge request for `source_branch`.
-    pub(crate) async fn find_by_source_branch(
-        &self,
-        remote: ForgeRemote,
-        source_branch: String,
-    ) -> Result<Option<ReviewRequestSummary>, ReviewRequestError> {
-        self.ensure_authenticated(&remote).await?;
-
-        self.find_by_source_branch_after_auth(remote, source_branch)
-            .await
-    }
-
-    /// Creates one new draft merge request from `input`.
-    pub(crate) async fn create_review_request(
-        &self,
-        remote: ForgeRemote,
-        input: CreateReviewRequestInput,
-    ) -> Result<ReviewRequestSummary, ReviewRequestError> {
-        self.ensure_authenticated(&remote).await?;
-
-        self.create_review_request_after_auth(remote, input).await
-    }
-
-    /// Refreshes one existing merge request by display id.
-    pub(crate) async fn refresh_review_request(
-        &self,
-        remote: ForgeRemote,
-        display_id: String,
-    ) -> Result<ReviewRequestSummary, ReviewRequestError> {
-        self.ensure_authenticated(&remote).await?;
-
-        self.refresh_review_request_after_auth(remote, display_id)
-            .await
-    }
-
-    /// Checks the current merge-request title/description and updates them
-    /// when they differ from `input`.
-    pub(crate) async fn sync_review_request_metadata(
-        &self,
-        remote: ForgeRemote,
-        display_id: String,
-        input: UpdateReviewRequestInput,
-    ) -> Result<ReviewRequestSummary, ReviewRequestError> {
-        self.ensure_authenticated(&remote).await?;
-
-        self.sync_review_request_metadata_after_auth(remote, display_id, input)
-            .await
-    }
-
-    /// Fetches merge-request discussions through GitLab's REST API and
-    /// normalizes diff notes plus review-request-wide notes for the comments
-    /// preview.
-    pub(crate) async fn fetch_review_comment_snapshot(
-        &self,
-        remote: ForgeRemote,
-        display_id: String,
-    ) -> Result<ReviewCommentSnapshot, ReviewRequestError> {
-        self.ensure_authenticated(&remote).await?;
-
-        let merge_request_iid = parse_display_id(&display_id)?;
-        let output = self
-            .run_review_command(
-                &remote,
-                discussions_command(&remote, &merge_request_iid),
-                "fetch merge-request discussions",
-            )
-            .await?;
-
-        parse_review_comment_snapshot_response(&output.stdout).map_err(|message| {
-            ReviewRequestError::OperationFailed {
-                forge_kind: ForgeKind::GitLab,
-                message,
-            }
-        })
-    }
-
-    /// Lists open merge requests in `remote` that request review from the
-    /// current authenticated GitLab user.
-    pub(crate) async fn list_requested_reviews(
-        &self,
-        remote: ForgeRemote,
-    ) -> Result<Vec<RequestedReview>, ReviewRequestError> {
-        self.ensure_authenticated(&remote).await?;
-
-        let output = self
-            .run_review_command(
-                &remote,
-                requested_reviews_command(&remote),
-                "list requested merge-request reviews",
-            )
-            .await?;
-
-        parse_requested_reviews_response(&output.stdout, &remote).map_err(|message| {
-            ReviewRequestError::OperationFailed {
-                forge_kind: ForgeKind::GitLab,
-                message,
-            }
-        })
-    }
-
-    /// Finds one existing merge request after authentication has been
-    /// verified.
-    async fn find_by_source_branch_after_auth(
-        &self,
-        remote: ForgeRemote,
-        source_branch: String,
-    ) -> Result<Option<ReviewRequestSummary>, ReviewRequestError> {
-        let output = self
-            .run_review_command(
-                &remote,
-                lookup_command(&remote, &source_branch),
-                "find merge request",
-            )
-            .await?;
-        let display_id = parse_lookup_display_id(&output.stdout).map_err(|message| {
-            ReviewRequestError::OperationFailed {
-                forge_kind: ForgeKind::GitLab,
-                message,
-            }
-        })?;
-
-        let Some(display_id) = display_id else {
-            return Ok(None);
-        };
-
-        self.refresh_review_request_after_auth(remote, display_id)
-            .await
-            .map(Some)
-    }
-
-    /// Creates one new draft merge request after authentication has been
-    /// verified.
-    async fn create_review_request_after_auth(
-        &self,
-        remote: ForgeRemote,
-        input: CreateReviewRequestInput,
-    ) -> Result<ReviewRequestSummary, ReviewRequestError> {
-        let output = self
-            .run_review_command(
-                &remote,
-                create_command(&remote, &input),
-                "create merge request",
-            )
-            .await?;
-        let display_id = parse_create_display_id(&output.stdout).map_err(|message| {
-            ReviewRequestError::OperationFailed {
-                forge_kind: ForgeKind::GitLab,
-                message,
-            }
-        })?;
-
-        self.refresh_review_request_after_auth(remote, display_id)
-            .await
-    }
-
-    /// Refreshes one merge request after authentication has been verified.
-    async fn refresh_review_request_after_auth(
-        &self,
-        remote: ForgeRemote,
-        display_id: String,
-    ) -> Result<ReviewRequestSummary, ReviewRequestError> {
-        let merge_request_iid = parse_display_id(&display_id)?;
-        let output = self
-            .run_review_command(
-                &remote,
-                view_command(&remote, &merge_request_iid),
-                "refresh merge request",
-            )
-            .await?;
-
-        parse_view_response(&output.stdout).map_err(|message| ReviewRequestError::OperationFailed {
-            forge_kind: ForgeKind::GitLab,
-            message,
-        })
-    }
-
-    /// Syncs merge-request metadata after authentication has been verified.
-    async fn sync_review_request_metadata_after_auth(
-        &self,
-        remote: ForgeRemote,
-        display_id: String,
-        input: UpdateReviewRequestInput,
-    ) -> Result<ReviewRequestSummary, ReviewRequestError> {
-        let merge_request_iid = parse_display_id(&display_id)?;
-        let output = self
-            .run_review_command(
-                &remote,
-                view_command(&remote, &merge_request_iid),
-                "view merge-request metadata",
-            )
-            .await?;
-        let metadata = parse_metadata_response(&output.stdout).map_err(|message| {
-            ReviewRequestError::OperationFailed {
-                forge_kind: ForgeKind::GitLab,
-                message,
-            }
-        })?;
-
-        if metadata.requires_update(&input) {
-            self.run_review_command(
-                &remote,
-                update_metadata_command(&remote, &merge_request_iid, &input),
-                "update merge-request metadata",
-            )
-            .await?;
-        }
-
-        self.refresh_review_request_after_auth(remote, display_id)
-            .await
-    }
-
-    /// Verifies that `glab` is installed and authenticated for `remote.host`.
-    async fn ensure_authenticated(&self, remote: &ForgeRemote) -> Result<(), ReviewRequestError> {
-        let output = self
-            .command_runner
-            .run(auth_status_command(remote))
-            .await
-            .map_err(|error| map_spawn_error(remote, error))?;
-        if output.success() {
-            return Ok(());
-        }
-
-        if looks_like_host_resolution_failure(&command_output_detail(&output)) {
-            return Err(ReviewRequestError::HostResolutionFailed {
-                forge_kind: ForgeKind::GitLab,
-                host: remote.host.clone(),
-            });
-        }
-
-        Err(ReviewRequestError::AuthenticationRequired {
-            detail: Some(command_output_detail(&output)),
-            forge_kind: ForgeKind::GitLab,
-            host: remote.host.clone(),
-        })
     }
 
     /// Runs one authenticated `glab` command and normalizes common failures.
@@ -309,6 +75,222 @@ impl GitLabReviewRequestAdapter {
         Err(ReviewRequestError::OperationFailed {
             forge_kind: ForgeKind::GitLab,
             message: format!("{operation}: {detail}"),
+        })
+    }
+}
+
+impl ReviewRequestAdapter for GitLabReviewRequestAdapter {
+    fn ensure_authenticated(
+        &self,
+        remote: &ForgeRemote,
+    ) -> ForgeFuture<Result<(), ReviewRequestError>> {
+        let command_runner = Arc::clone(&self.command_runner);
+        let remote = remote.clone();
+
+        Box::pin(async move {
+            let output = command_runner
+                .run(auth_status_command(&remote))
+                .await
+                .map_err(|error| map_spawn_error(&remote, error))?;
+            if output.success() {
+                return Ok(());
+            }
+
+            if looks_like_host_resolution_failure(&command_output_detail(&output)) {
+                return Err(ReviewRequestError::HostResolutionFailed {
+                    forge_kind: ForgeKind::GitLab,
+                    host: remote.host.clone(),
+                });
+            }
+
+            Err(ReviewRequestError::AuthenticationRequired {
+                detail: Some(command_output_detail(&output)),
+                forge_kind: ForgeKind::GitLab,
+                host: remote.host.clone(),
+            })
+        })
+    }
+
+    /// Finds one existing merge request for `source_branch`.
+    fn find_by_source_branch(
+        &self,
+        remote: ForgeRemote,
+        source_branch: String,
+    ) -> ForgeFuture<Result<Option<ReviewRequestSummary>, ReviewRequestError>> {
+        let adapter = self.clone();
+
+        Box::pin(async move {
+            let output = adapter
+                .run_review_command(
+                    &remote,
+                    lookup_command(&remote, &source_branch),
+                    "find merge request",
+                )
+                .await?;
+            let display_id = parse_lookup_display_id(&output.stdout).map_err(|message| {
+                ReviewRequestError::OperationFailed {
+                    forge_kind: ForgeKind::GitLab,
+                    message,
+                }
+            })?;
+
+            let Some(display_id) = display_id else {
+                return Ok(None);
+            };
+
+            adapter
+                .refresh_review_request(remote, display_id)
+                .await
+                .map(Some)
+        })
+    }
+
+    /// Creates one new draft merge request from `input`.
+    fn create_review_request(
+        &self,
+        remote: ForgeRemote,
+        input: CreateReviewRequestInput,
+    ) -> ForgeFuture<Result<ReviewRequestSummary, ReviewRequestError>> {
+        let adapter = self.clone();
+
+        Box::pin(async move {
+            let output = adapter
+                .run_review_command(
+                    &remote,
+                    create_command(&remote, &input),
+                    "create merge request",
+                )
+                .await?;
+            let display_id = parse_create_display_id(&output.stdout).map_err(|message| {
+                ReviewRequestError::OperationFailed {
+                    forge_kind: ForgeKind::GitLab,
+                    message,
+                }
+            })?;
+
+            adapter.refresh_review_request(remote, display_id).await
+        })
+    }
+
+    /// Refreshes one existing merge request by display id.
+    fn refresh_review_request(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+    ) -> ForgeFuture<Result<ReviewRequestSummary, ReviewRequestError>> {
+        let adapter = self.clone();
+
+        Box::pin(async move {
+            let merge_request_iid = parse_display_id(&display_id)?;
+            let output = adapter
+                .run_review_command(
+                    &remote,
+                    view_command(&remote, &merge_request_iid),
+                    "refresh merge request",
+                )
+                .await?;
+
+            parse_view_response(&output.stdout).map_err(|message| {
+                ReviewRequestError::OperationFailed {
+                    forge_kind: ForgeKind::GitLab,
+                    message,
+                }
+            })
+        })
+    }
+
+    /// Checks the current merge-request title/description and updates them
+    /// when they differ from `input`.
+    fn sync_review_request_metadata(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+        input: UpdateReviewRequestInput,
+    ) -> ForgeFuture<Result<ReviewRequestSummary, ReviewRequestError>> {
+        let adapter = self.clone();
+
+        Box::pin(async move {
+            let merge_request_iid = parse_display_id(&display_id)?;
+            let output = adapter
+                .run_review_command(
+                    &remote,
+                    view_command(&remote, &merge_request_iid),
+                    "view merge-request metadata",
+                )
+                .await?;
+            let metadata = parse_metadata_response(&output.stdout).map_err(|message| {
+                ReviewRequestError::OperationFailed {
+                    forge_kind: ForgeKind::GitLab,
+                    message,
+                }
+            })?;
+
+            if metadata.requires_update(&input) {
+                adapter
+                    .run_review_command(
+                        &remote,
+                        update_metadata_command(&remote, &merge_request_iid, &input),
+                        "update merge-request metadata",
+                    )
+                    .await?;
+            }
+
+            adapter.refresh_review_request(remote, display_id).await
+        })
+    }
+
+    /// Fetches merge-request discussions through GitLab's REST API and
+    /// normalizes diff notes plus review-request-wide notes for the comments
+    /// preview.
+    fn fetch_review_comment_snapshot(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+    ) -> ForgeFuture<Result<ReviewCommentSnapshot, ReviewRequestError>> {
+        let adapter = self.clone();
+
+        Box::pin(async move {
+            let merge_request_iid = parse_display_id(&display_id)?;
+            let output = adapter
+                .run_review_command(
+                    &remote,
+                    discussions_command(&remote, &merge_request_iid),
+                    "fetch merge-request discussions",
+                )
+                .await?;
+
+            parse_review_comment_snapshot_response(&output.stdout).map_err(|message| {
+                ReviewRequestError::OperationFailed {
+                    forge_kind: ForgeKind::GitLab,
+                    message,
+                }
+            })
+        })
+    }
+
+    /// Lists open merge requests in `remote` that request review from the
+    /// current authenticated GitLab user.
+    fn list_requested_reviews(
+        &self,
+        remote: ForgeRemote,
+    ) -> ForgeFuture<Result<Vec<RequestedReview>, ReviewRequestError>> {
+        let adapter = self.clone();
+
+        Box::pin(async move {
+            let output = adapter
+                .run_review_command(
+                    &remote,
+                    requested_reviews_command(&remote),
+                    "list requested merge-request reviews",
+                )
+                .await?;
+
+            parse_requested_reviews_response(&output.stdout, &remote).map_err(|message| {
+                ReviewRequestError::OperationFailed {
+                    forge_kind: ForgeKind::GitLab,
+                    message,
+                }
+            })
         })
     }
 }
@@ -892,16 +874,6 @@ mod tests {
             .withf({
                 let remote = remote.clone();
 
-                move |command| command == &auth_status_command(&remote)
-            })
-            .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
-        command_runner
-            .expect_run()
-            .once()
-            .in_sequence(&mut sequence)
-            .withf({
-                let remote = remote.clone();
-
                 move |command| command == &lookup_command(&remote, "feature/forge")
             })
             .returning(|_| Box::pin(async { Ok(success_output(r#"[{"iid":42}]"#.to_string())) }));
@@ -952,16 +924,6 @@ mod tests {
             .withf({
                 let remote = remote.clone();
 
-                move |command| command == &auth_status_command(&remote)
-            })
-            .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
-        command_runner
-            .expect_run()
-            .once()
-            .in_sequence(&mut sequence)
-            .withf({
-                let remote = remote.clone();
-
                 move |command| command == &lookup_command(&remote, "feature/forge")
             })
             .returning(|_| Box::pin(async { Ok(success_output("[]".to_string())) }));
@@ -1004,16 +966,6 @@ mod tests {
         };
         let mut sequence = Sequence::new();
         let mut command_runner = MockForgeCommandRunner::new();
-        command_runner
-            .expect_run()
-            .once()
-            .in_sequence(&mut sequence)
-            .withf({
-                let remote = remote.clone();
-
-                move |command| command == &auth_status_command(&remote)
-            })
-            .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
         command_runner
             .expect_run()
             .once()
@@ -1075,16 +1027,6 @@ mod tests {
             .withf({
                 let remote = remote.clone();
 
-                move |command| command == &auth_status_command(&remote)
-            })
-            .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
-        command_runner
-            .expect_run()
-            .once()
-            .in_sequence(&mut sequence)
-            .withf({
-                let remote = remote.clone();
-
                 move |command| command == &view_command(&remote, "42")
             })
             .returning(|_| Box::pin(async { Ok(success_output(gitlab_view_json())) }));
@@ -1138,16 +1080,6 @@ mod tests {
             .withf({
                 let remote = remote.clone();
 
-                move |command| command == &auth_status_command(&remote)
-            })
-            .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
-        command_runner
-            .expect_run()
-            .once()
-            .in_sequence(&mut sequence)
-            .withf({
-                let remote = remote.clone();
-
                 move |command| command == &view_command(&remote, "42")
             })
             .returning(|_| Box::pin(async { Ok(success_output(gitlab_view_json())) }));
@@ -1179,16 +1111,6 @@ mod tests {
         let remote = gitlab_remote();
         let mut sequence = Sequence::new();
         let mut command_runner = MockForgeCommandRunner::new();
-        command_runner
-            .expect_run()
-            .once()
-            .in_sequence(&mut sequence)
-            .withf({
-                let remote = remote.clone();
-
-                move |command| command == &auth_status_command(&remote)
-            })
-            .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
         command_runner
             .expect_run()
             .once()
@@ -1232,16 +1154,6 @@ mod tests {
         let remote = gitlab_remote();
         let mut sequence = Sequence::new();
         let mut command_runner = MockForgeCommandRunner::new();
-        command_runner
-            .expect_run()
-            .once()
-            .in_sequence(&mut sequence)
-            .withf({
-                let remote = remote.clone();
-
-                move |command| command == &auth_status_command(&remote)
-            })
-            .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
         command_runner
             .expect_run()
             .once()
