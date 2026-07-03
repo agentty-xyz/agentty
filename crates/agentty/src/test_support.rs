@@ -12,6 +12,8 @@ use std::sync::Arc;
 #[cfg(test)]
 use std::time::{Instant, SystemTime};
 
+#[cfg(test)]
+use ag_git as git;
 use ratatui::buffer::{Buffer, Cell};
 #[cfg(test)]
 use ratatui::widgets::TableState;
@@ -29,7 +31,7 @@ use crate::domain::session::{
     SessionStats, Status,
 };
 #[cfg(test)]
-use crate::infra::{agent, app_server, git};
+use crate::infra::{agent, app_server};
 #[cfg(test)]
 use crate::ui::state::app_mode::AppMode;
 

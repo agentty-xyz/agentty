@@ -10,6 +10,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use ag_forge::{ForgeRemote, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewRequestClient};
+use ag_git::GitClient;
 use askama::Template;
 use tokio::sync::mpsc;
 
@@ -19,7 +20,6 @@ use crate::domain::agent::{AgentCliInfo, AgentKind, AgentModel, ReasoningLevel};
 use crate::domain::session::SessionId;
 use crate::domain::system_log::{SystemLogCategory, SystemLogEvent, SystemLogLevel};
 use crate::infra::agent;
-use crate::infra::git::GitClient;
 use crate::version;
 
 /// Stateless helpers for app-scoped one-shot background tasks and app-server
@@ -518,10 +518,10 @@ mod tests {
         ForgeKind, MockReviewRequestClient, RequestedReview, RequestedReviewAudience,
         ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread,
     };
+    use ag_git::MockGitClient;
 
     use super::*;
     use crate::infra::agent::protocol::AgentResponse;
-    use crate::infra::git::MockGitClient;
 
     struct PanickingAgentAvailabilityProbe;
 

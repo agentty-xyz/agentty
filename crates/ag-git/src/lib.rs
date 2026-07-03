@@ -1,7 +1,4 @@
-//! Git infrastructure module router.
-//!
-//! This parent module intentionally exposes child modules and re-exports the
-//! public git API surface.
+//! Reusable git, worktree, sync, rebase, and squash-merge orchestration.
 
 /// Client boundary and production adapter implementations.
 mod client;
@@ -13,13 +10,15 @@ mod merge;
 mod rebase;
 /// Repository-level helpers and metadata operations.
 mod repo;
+/// Sleep boundary for retry behavior.
+mod sleeper;
 /// Commit, diff, and remote synchronization workflows.
 mod sync;
 /// Worktree and branch-detection workflows.
 mod worktree;
 
-#[cfg(test)]
-pub(crate) use client::MockGitClient;
+#[cfg(any(test, feature = "test-utils"))]
+pub use client::MockGitClient;
 pub use client::{GitClient, GitFuture, RealGitClient};
 /// Re-exported typed error for git infrastructure operations.
 pub use error::GitError;
@@ -33,6 +32,9 @@ pub use rebase::{
 };
 /// Re-exported repository metadata APIs.
 pub use repo::{main_repo_root, repo_url};
+#[cfg(test)]
+pub(crate) use sleeper::MockSleeper;
+pub(crate) use sleeper::{Sleeper, ThreadSleeper};
 /// Re-exported commit/sync/diff APIs.
 pub use sync::{
     BranchTrackingMap, PullRebaseResult, SingleCommitMessageStrategy, branch_tracking_statuses,

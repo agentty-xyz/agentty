@@ -275,6 +275,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use ag_git as git;
     use ratatui::widgets::TableState;
     use tempfile::TempDir;
 
@@ -284,7 +285,6 @@ mod tests {
     use crate::domain::agent::AgentModel;
     use crate::domain::session::{Session, SessionHandles, SessionSize, SessionStats, Status};
     use crate::infra::clock::RealClock;
-    use crate::infra::git;
 
     #[test]
     fn test_sync_action_requests_activation_for_new_query() {

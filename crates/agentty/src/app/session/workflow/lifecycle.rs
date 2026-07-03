@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use ag_forge as forge;
+use ag_git as git;
 use askama::Template;
 use tokio::sync::mpsc;
 use tracing::warn;
@@ -34,7 +35,7 @@ use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
 use crate::infra::channel::AgentRequestKind;
 use crate::infra::fs::{FsClient, FsError};
-use crate::infra::{agent, db, git};
+use crate::infra::{agent, db};
 
 /// Maximum accepted length for generated session titles.
 ///

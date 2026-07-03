@@ -13,11 +13,12 @@ const ARCHITECTURE_DOCS: [&str; 4] = [
     "docs/site/content/docs/architecture/change-recipes.md",
     "docs/site/content/docs/architecture/testability-boundaries.md",
 ];
-const AGENT_GUIDES: [&str; 13] = [
+const AGENT_GUIDES: [&str; 14] = [
     "AGENTS.md",
     "skills/AGENTS.md",
     "crates/AGENTS.md",
     "crates/ag-forge/AGENTS.md",
+    "crates/ag-git/AGENTS.md",
     "crates/ag-xtask/AGENTS.md",
     "crates/testty/AGENTS.md",
     "crates/agentty/AGENTS.md",
@@ -380,6 +381,9 @@ mod tests {
         )
         .expect("Failed to write module map");
         fs::write(dir.path().join("AGENTS.md"), "").expect("Failed to write root AGENTS");
+        fs::create_dir_all(dir.path().join("crates/ag-git")).expect("Failed to create ag-git");
+        fs::write(dir.path().join("crates/ag-git/AGENTS.md"), "")
+            .expect("Failed to write ag-git AGENTS");
 
         let metadata = json!({
             "workspace_members": ["example 0.1.0 (path+file:///tmp/example)"],
@@ -414,5 +418,9 @@ mod tests {
             "{rendered_map}"
         );
         assert!(rendered_map.contains("\"agent_guides\""), "{rendered_map}");
+        assert!(
+            rendered_map.contains("\"crates/ag-git/AGENTS.md\""),
+            "{rendered_map}"
+        );
     }
 }

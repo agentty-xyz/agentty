@@ -16,8 +16,7 @@ through the correct modules without crossing layer boundaries.
 1. Keep persistence in `crates/agentty/src/infra/db/` domain modules and keep
    `crates/agentty/src/infra/db.rs` router-only. Use `repository.rs` for repository
    bundle composition and `connection.rs` for pool wiring.
-1. Keep git operations behind `GitClient` in `crates/agentty/src/infra/git/client.rs`
-   (re-exported from `crates/agentty/src/infra/git.rs`).
+1. Keep git operations behind `GitClient` in `crates/ag-git/src/client.rs`.
 1. Preserve the session-branch invariant: one evolving commit per session branch, with
    the first file-changing turn creating it and later file-changing turns updating it by
    amending `HEAD`.

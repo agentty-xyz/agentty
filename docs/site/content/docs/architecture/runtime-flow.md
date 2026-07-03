@@ -26,11 +26,14 @@ these constraints:
 
 ## Workspace Map
 
-| Path | Responsibility | |------|----------------| | `crates/ag-forge/` | Shared forge
-review-request library (`gh`/`glab` adapters). | | `crates/agentty/` | Main TUI
-application crate. | | `crates/testty/` | TUI end-to-end testing framework. | |
-`crates/ag-xtask/` | Workspace maintenance and automation commands. | |
-`docs/site/content/docs/` | End-user and contributor documentation. |
+| Path                      | Responsibility                                              |
+| ------------------------- | ----------------------------------------------------------- |
+| `crates/ag-forge/`        | Shared forge review-request library (`gh`/`glab` adapters). |
+| `crates/ag-git/`          | Shared git, worktree, sync, rebase, and merge library.      |
+| `crates/agentty/`         | Main TUI application crate.                                 |
+| `crates/testty/`          | TUI end-to-end testing framework.                           |
+| `crates/ag-xtask/`        | Workspace maintenance and automation commands.              |
+| `docs/site/content/docs/` | End-user and contributor documentation.                     |
 
 ## Main Runtime Flow
 
@@ -233,12 +236,12 @@ flowchart TD
 <a id="architecture-key-types"></a> Key types (`infra/channel/contract.rs`, re-exported
 by `infra/channel.rs`, with prompt payloads owned by `domain/turn_prompt.rs`):
 
-| Type | Purpose | |------|---------| | `TurnRequest` | Input payload: reasoning level,
-folder, model, prompt, request kind, and provider conversation id. | | `TurnEvent` |
-Incremental stream events: `ThoughtDelta`, `Completed`, `Failed`, `PidUpdate`. | |
-`TurnResult` | Normalized output: `assistant_message`, token counts,
-`provider_conversation_id`. | | `AgentRequestKind` | `SessionStart`, `SessionResume`
-(with optional output replay), or `UtilityPrompt`. |
+| Type               | Purpose                                                                                            |
+| ------------------ | -------------------------------------------------------------------------------------------------- |
+| `TurnRequest`      | Input payload: reasoning level, folder, model, prompt, request kind, and provider conversation id. |
+| `TurnEvent`        | Incremental stream events: `ThoughtDelta`, `Completed`, `Failed`, `PidUpdate`.                     |
+| `TurnResult`       | Normalized output: `assistant_message`, token counts, `provider_conversation_id`.                  |
+| `AgentRequestKind` | `SessionStart`, `SessionResume` (with optional output replay), or `UtilityPrompt`.                 |
 
 <a id="architecture-provider-conversation-id-flow"></a> App-server providers return a
 `provider_conversation_id` in `TurnResult`. Post-turn application persists it, along

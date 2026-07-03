@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ag_forge::ReviewRequestClient;
+use ag_git::GitClient;
 use tokio::sync::{mpsc, watch};
 use tokio::time::MissedTickBehavior;
 
@@ -27,7 +28,6 @@ use crate::app::{AppEvent, session};
 use crate::domain::agent::AgentModel;
 use crate::domain::session::{ReviewRequestState, SessionId};
 use crate::domain::system_log::{SystemLogCategory, SystemLogEvent, SystemLogLevel};
-use crate::infra::git::GitClient;
 use crate::infra::review_comment_cache::ReviewCommentCache;
 
 /// Seconds between background read-only sync passes.
@@ -1157,9 +1157,9 @@ fn sync_task_result_from_summary(
 #[cfg(test)]
 mod tests {
     use ag_forge::{ForgeKind, MockReviewRequestClient, ReviewRequestSummary};
+    use ag_git::{GitError, MockGitClient};
 
     use super::*;
-    use crate::infra::git::{GitError, MockGitClient};
 
     /// Builds one test review request summary for sync tests.
     fn test_review_request_summary(

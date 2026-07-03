@@ -1,4 +1,5 @@
-//! Infrastructure adapters for database, git, and agent backends.
+//! Infrastructure adapters for database, filesystem, system, and agent
+//! backends.
 
 pub mod agent;
 /// Shared app-server types and runtime trait boundaries.
@@ -18,7 +19,6 @@ pub mod db;
 pub mod file_index;
 /// Filesystem trait boundary used by app orchestration.
 pub mod fs;
-pub mod git;
 /// Process-management utilities for agent subprocess lifecycle.
 pub(crate) mod process;
 /// Startup project-discovery boundary for home-directory repository scans.

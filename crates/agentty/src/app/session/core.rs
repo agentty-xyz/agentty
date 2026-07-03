@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use ag_git as git;
 use ratatui::widgets::TableState;
 use tokio::task::{JoinHandle, JoinSet};
 
@@ -24,7 +25,6 @@ use crate::domain::session::{
     DailyActivity, FollowUpTaskAction, PublishedBranchSyncStatus, ReviewRequest, Session,
     SessionFollowUpTask, SessionId, SessionStats,
 };
-use crate::infra::git;
 
 /// Low-frequency fallback interval for metadata-based session refresh.
 pub(crate) const SESSION_REFRESH_INTERVAL: Duration = Duration::from_secs(5);

@@ -22,6 +22,7 @@ repos:
         additional_dependencies:
           - mdformat==0.7.22
           - mdformat-front-matters==2.0.0
+          - mdformat-gfm==1.0.0
         args: ['--wrap', '88']
         files: \.(md|markdown)$
         exclude: ^skills/[^/]+/SKILL\.md$
@@ -83,6 +84,14 @@ repos:
         name: cargo nextest ag-forge src
         description: Source tests for `crates/ag-forge/src`.
         entry: cargo nextest run --locked --profile ci -p ag-forge --lib
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [manual]
+      - id: test-ag-git-src
+        name: cargo nextest ag-git src
+        description: Source tests for `crates/ag-git/src`.
+        entry: cargo nextest run --locked --profile ci -p ag-git --lib
         language: system
         always_run: true
         pass_filenames: false

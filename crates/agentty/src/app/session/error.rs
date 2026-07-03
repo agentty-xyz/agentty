@@ -16,7 +16,7 @@ pub enum SessionError {
 
     /// A git infrastructure operation failed.
     #[error("{0}")]
-    Git(#[from] crate::infra::git::GitError),
+    Git(#[from] ag_git::GitError),
 
     /// A database operation failed.
     #[error("{0}")]
@@ -103,7 +103,7 @@ mod tests {
     #[test]
     fn git_error_converts_via_from() {
         // Arrange
-        let git_error = crate::infra::git::GitError::OutputParse("bad output".to_string());
+        let git_error = ag_git::GitError::OutputParse("bad output".to_string());
 
         // Act
         let error = SessionError::from(git_error);
@@ -170,7 +170,7 @@ mod tests {
     /// unchanged because their type already identifies the failure origin.
     fn with_context_preserves_typed_infrastructure_variants() {
         // Arrange
-        let error = SessionError::Git(crate::infra::git::GitError::OutputParse("bad".to_string()));
+        let error = SessionError::Git(ag_git::GitError::OutputParse("bad".to_string()));
 
         // Act
         let contextual = error.with_context("Rebase assistance failed");

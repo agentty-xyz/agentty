@@ -3,6 +3,8 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use ag_git::GitClient;
+
 use super::{draft, session_folder};
 use crate::app::SessionManager;
 use crate::domain::agent::{AgentSelection, ReasoningLevel, parse_persisted_session_agent_model};
@@ -16,7 +18,6 @@ use crate::infra::db::{
     AppRepositories, DbError, SessionDetailRow, SessionListRow, SessionMessageRow,
 };
 use crate::infra::fs::FsClient;
-use crate::infra::git::GitClient;
 
 /// Mutable context threaded through the per-row session-load helper.
 ///

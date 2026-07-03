@@ -26,6 +26,8 @@ jobs:
         include:
           - member: ag-forge
             hook: test-ag-forge-src
+          - member: ag-git
+            hook: test-ag-git-src
           - member: agentty
             hook: test-agentty-src
           - member: ag-xtask

@@ -5,6 +5,7 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use ag_forge as forge;
+use ag_git::GitClient;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -18,7 +19,6 @@ use crate::domain::session::{
 };
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::db::AppRepositories;
-use crate::infra::git::GitClient;
 
 /// Owned inputs required to start one detached published-branch auto-push.
 pub(super) struct PublishedBranchAutoPushStartInput {

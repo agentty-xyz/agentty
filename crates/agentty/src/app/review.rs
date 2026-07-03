@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
+use ag_git::GitClient;
 use tokio::sync::mpsc;
 
 use super::core::AppEvent;
@@ -12,7 +13,6 @@ use crate::app::session_state::SessionState;
 use crate::domain::agent::AgentModel;
 use crate::domain::session::{SessionId, Status};
 use crate::infra::db::SessionFocusedReviewRow;
-use crate::infra::git::GitClient;
 use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
 
 /// Cached focused review state for a session.

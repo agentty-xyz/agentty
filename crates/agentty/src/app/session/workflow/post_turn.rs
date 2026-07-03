@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ag_forge as forge;
+use ag_git::GitClient;
 use serde_json;
 use tokio::sync::mpsc;
 
@@ -21,7 +22,6 @@ use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::channel::{AgentError, TurnResult};
 use crate::infra::db::{AppRepositories, SessionTurnMetadata};
 use crate::infra::fs::FsClient;
-use crate::infra::git::GitClient;
 use crate::infra::{agent, channel};
 
 /// Narrow dependency set used to apply a completed provider turn.

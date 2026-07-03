@@ -2,9 +2,9 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use ag_git::{GitClient, RealGitClient};
 use agentty::app::{AGENTTY_WT_DIR, App, AppError, agentty_home};
 use agentty::infra::db::{DB_DIR, DB_FILE, Database};
-use agentty::infra::git::{GitClient, RealGitClient};
 
 /// Runs the `agentty` application runtime using the configured workspace and
 /// database.

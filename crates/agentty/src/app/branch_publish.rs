@@ -4,13 +4,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use ag_forge as forge;
+use ag_git::GitClient;
 
 use super::session::{self, unix_timestamp_from_system_time};
 use crate::app::review_request;
 use crate::domain::session::{PublishBranchAction, ReviewRequest, Session, SessionId, Status};
 use crate::infra::clock::Clock;
 use crate::infra::db;
-use crate::infra::git::GitClient;
 use crate::ui::state::app_mode::ConfirmationViewMode;
 
 /// Session snapshot cloned into a branch-publish background task.
@@ -853,9 +853,10 @@ fn strip_port(host: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+    use ag_git as git;
+
     use super::*;
     use crate::infra::db::AppRepositories;
-    use crate::infra::git;
 
     #[tokio::test]
     async fn review_request_remote_attaches_session_worktree_to_detected_remote() {

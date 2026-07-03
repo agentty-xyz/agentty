@@ -306,7 +306,7 @@ async fn test_switch_project_updates_active_git_upstream_reference() {
     .await
     .expect("failed to build app");
 
-    let mut mock_git_client = crate::infra::git::MockGitClient::new();
+    let mut mock_git_client = ag_git::MockGitClient::new();
     mock_git_client
         .expect_detect_git_info()
         .once()
@@ -348,7 +348,7 @@ async fn open_selected_requested_review_surfaces_comment_load_error() {
     .await;
     app.replace_requested_reviews(app.projects.active_project_id(), vec![requested_review()]);
 
-    let mut mock_git_client = crate::infra::git::MockGitClient::new();
+    let mut mock_git_client = ag_git::MockGitClient::new();
     mock_git_client.expect_repo_url().once().returning(|_| {
         Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
     });
@@ -424,7 +424,7 @@ async fn open_selected_requested_review_applies_background_comment_snapshot() {
     .await;
     app.replace_requested_reviews(app.projects.active_project_id(), vec![requested_review()]);
 
-    let mut mock_git_client = crate::infra::git::MockGitClient::new();
+    let mut mock_git_client = ag_git::MockGitClient::new();
     mock_git_client.expect_repo_url().once().returning(|_| {
         Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
     });
@@ -500,7 +500,7 @@ async fn open_selected_requested_review_reuses_in_flight_comment_fetch() {
     .await;
     app.replace_requested_reviews(app.projects.active_project_id(), vec![requested_review()]);
 
-    let mut mock_git_client = crate::infra::git::MockGitClient::new();
+    let mut mock_git_client = ag_git::MockGitClient::new();
     mock_git_client.expect_repo_url().once().returning(|_| {
         Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
     });
@@ -587,7 +587,7 @@ async fn refresh_requested_reviews_ignores_stale_comment_snapshot_completion() {
             })
     );
 
-    let mut mock_git_client = crate::infra::git::MockGitClient::new();
+    let mut mock_git_client = ag_git::MockGitClient::new();
     mock_git_client.expect_repo_url().once().returning(|_| {
         Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
     });
@@ -1021,7 +1021,7 @@ async fn push_session_branch_auth_failure_shows_git_guidance() {
     let branch_session = BranchPublishTaskSession::from_session(
         &crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/review-session")),
     );
-    let mut mock_git_client = crate::infra::git::MockGitClient::new();
+    let mut mock_git_client = ag_git::MockGitClient::new();
     mock_git_client
         .expect_push_current_branch_to_remote_branch()
         .once()
@@ -1031,14 +1031,14 @@ async fn push_session_branch_auth_failure_shows_git_guidance() {
         )
         .returning(|_, _| {
             Box::pin(async {
-                Err(crate::infra::git::GitError::OutputParse(
+                Err(ag_git::GitError::OutputParse(
                     "Git push failed: fatal: could not read Username for 'https://github.com': \
                      terminal prompts disabled"
                         .to_string(),
                 ))
             })
         });
-    let git_client: Arc<dyn crate::infra::git::GitClient> = Arc::new(mock_git_client);
+    let git_client: Arc<dyn ag_git::GitClient> = Arc::new(mock_git_client);
     let database = crate::infra::db::AppRepositories::in_memory().await;
 
     // Act
@@ -1070,12 +1070,12 @@ async fn push_session_branch_preserves_blocked_when_remote_branch_exists() {
     let branch_session = BranchPublishTaskSession::from_session(
         &crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/review-session")),
     );
-    let mut mock_git_client = crate::infra::git::MockGitClient::new();
+    let mut mock_git_client = ag_git::MockGitClient::new();
     mock_git_client
         .expect_remote_branch_exists()
         .once()
         .returning(|_, _| Box::pin(async { Ok(true) }));
-    let git_client: Arc<dyn crate::infra::git::GitClient> = Arc::new(mock_git_client);
+    let git_client: Arc<dyn ag_git::GitClient> = Arc::new(mock_git_client);
     let database = crate::infra::db::AppRepositories::in_memory().await;
 
     // Act
@@ -1100,13 +1100,13 @@ async fn push_session_branch_shows_auth_guidance_when_ls_remote_fails_with_auth_
     let branch_session = BranchPublishTaskSession::from_session(
         &crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/review-session")),
     );
-    let mut mock_git_client = crate::infra::git::MockGitClient::new();
+    let mut mock_git_client = ag_git::MockGitClient::new();
     mock_git_client
         .expect_remote_branch_exists()
         .once()
         .returning(|_, _| {
             Box::pin(async {
-                Err(crate::infra::git::GitError::CommandFailed {
+                Err(ag_git::GitError::CommandFailed {
                     command: "git ls-remote".to_string(),
                     stderr: "fatal: could not read Username for 'https://github.com/org/repo': \
                              terminal prompts disabled"
@@ -1114,7 +1114,7 @@ async fn push_session_branch_shows_auth_guidance_when_ls_remote_fails_with_auth_
                 })
             })
         });
-    let git_client: Arc<dyn crate::infra::git::GitClient> = Arc::new(mock_git_client);
+    let git_client: Arc<dyn ag_git::GitClient> = Arc::new(mock_git_client);
     let database = crate::infra::db::AppRepositories::in_memory().await;
 
     // Act
@@ -1257,7 +1257,7 @@ async fn push_session_branch_uses_custom_remote_branch_name_when_provided() {
     let branch_session = BranchPublishTaskSession::from_session(
         &crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/review-session")),
     );
-    let mut mock_git_client = crate::infra::git::MockGitClient::new();
+    let mut mock_git_client = ag_git::MockGitClient::new();
     mock_git_client
         .expect_remote_branch_exists()
         .once()
@@ -1277,7 +1277,7 @@ async fn push_session_branch_uses_custom_remote_branch_name_when_provided() {
         .returning(|_| {
             Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
         });
-    let git_client: Arc<dyn crate::infra::git::GitClient> = Arc::new(mock_git_client);
+    let git_client: Arc<dyn ag_git::GitClient> = Arc::new(mock_git_client);
     let database = crate::infra::db::AppRepositories::in_memory().await;
 
     // Act
@@ -1313,7 +1313,7 @@ async fn push_session_branch_succeeds_without_review_request_link_for_unsupporte
     let branch_session = BranchPublishTaskSession::from_session(
         &crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/review-session")),
     );
-    let mut mock_git_client = crate::infra::git::MockGitClient::new();
+    let mut mock_git_client = ag_git::MockGitClient::new();
     mock_git_client
         .expect_push_current_branch_to_remote_branch()
         .with(
@@ -1327,7 +1327,7 @@ async fn push_session_branch_succeeds_without_review_request_link_for_unsupporte
         .with(mockall::predicate::eq(PathBuf::from("/tmp/review-session")))
         .once()
         .returning(|_| Box::pin(async { Ok("https://example.com/team/project.git".to_string()) }));
-    let git_client: Arc<dyn crate::infra::git::GitClient> = Arc::new(mock_git_client);
+    let git_client: Arc<dyn ag_git::GitClient> = Arc::new(mock_git_client);
     let database = crate::infra::db::AppRepositories::in_memory().await;
 
     // Act
@@ -2700,7 +2700,7 @@ async fn apply_app_events_refresh_git_status_requests_orchestrator_refresh() {
     )
     .await
     .expect("failed to build test app");
-    let mut mock_git_client = crate::infra::git::MockGitClient::new();
+    let mut mock_git_client = ag_git::MockGitClient::new();
     mock_git_client
         .expect_find_git_repo_root()
         .times(1)
@@ -3080,7 +3080,7 @@ async fn apply_app_events_agent_response_starts_auto_review_from_synced_handle_s
         .lock()
         .expect("expected handle status lock") = Status::Review;
 
-    let mut mock_git_client = crate::infra::git::MockGitClient::new();
+    let mut mock_git_client = ag_git::MockGitClient::new();
     mock_git_client
         .expect_diff()
         .returning(move |_, _| Box::pin(async move { Ok(diff_text.to_string()) }));
@@ -3150,7 +3150,7 @@ async fn apply_app_events_agent_response_starts_auto_review_when_snapshot_alread
         scroll_offset: None,
     };
 
-    let mut mock_git_client = crate::infra::git::MockGitClient::new();
+    let mut mock_git_client = ag_git::MockGitClient::new();
     mock_git_client
         .expect_diff()
         .returning(move |_, _| Box::pin(async move { Ok(diff_text.to_string()) }));
@@ -3855,8 +3855,8 @@ async fn wait_for_app_condition(app: &mut App, condition: impl Fn(&App) -> bool)
 }
 
 /// Replaces the app-level git dependencies with one caller-provided mock.
-fn install_mock_git_client(app: &mut App, mock_git_client: crate::infra::git::MockGitClient) {
-    let mock_git_client: Arc<dyn crate::infra::git::GitClient> = Arc::new(mock_git_client);
+fn install_mock_git_client(app: &mut App, mock_git_client: ag_git::MockGitClient) {
+    let mock_git_client: Arc<dyn ag_git::GitClient> = Arc::new(mock_git_client);
     let base_path = app.services.base_path().to_path_buf();
     let db = app.services.db().clone();
     let event_sender = app.services.event_sender();
@@ -4007,7 +4007,7 @@ async fn test_continue_terminal_session_opens_draft_prompt_for_done_session_with
     source_session.base_branch = "release".to_string();
     app.sessions.push_session(source_session);
 
-    let mut mock_git_client = crate::infra::git::MockGitClient::new();
+    let mut mock_git_client = ag_git::MockGitClient::new();
     mock_git_client
         .expect_find_git_repo_root()
         .times(1..)
@@ -4094,7 +4094,7 @@ async fn test_continue_terminal_session_falls_back_to_persisted_context_without_
         .title(Some("Done source".to_string()))
         .build();
     app.sessions.push_session(source_session);
-    let mut mock_git_client = crate::infra::git::MockGitClient::new();
+    let mut mock_git_client = ag_git::MockGitClient::new();
     mock_git_client
         .expect_find_git_repo_root()
         .times(1..)
@@ -4428,7 +4428,7 @@ async fn auto_start_reviews_skips_when_diff_hash_unchanged() {
     );
     let session_ids = HashSet::from([session_id.into()]);
 
-    let mut mock_git_client = crate::infra::git::MockGitClient::new();
+    let mut mock_git_client = ag_git::MockGitClient::new();
     mock_git_client
         .expect_diff()
         .returning(move |_, _| Box::pin(async move { Ok(diff_text.to_string()) }));
@@ -4468,7 +4468,7 @@ async fn auto_start_reviews_skips_when_already_loading_with_same_hash() {
     );
     let session_ids = HashSet::from([session_id.into()]);
 
-    let mut mock_git_client = crate::infra::git::MockGitClient::new();
+    let mut mock_git_client = ag_git::MockGitClient::new();
     mock_git_client
         .expect_diff()
         .returning(move |_, _| Box::pin(async move { Ok(diff_text.to_string()) }));
@@ -4508,7 +4508,7 @@ async fn auto_start_reviews_skips_when_auto_review_is_suppressed() {
     );
     let session_ids = HashSet::from([session_id.into()]);
 
-    let mut mock_git_client = crate::infra::git::MockGitClient::new();
+    let mut mock_git_client = ag_git::MockGitClient::new();
     mock_git_client
         .expect_diff()
         .returning(move |_, _| Box::pin(async move { Ok(diff_text.to_string()) }));
@@ -4543,7 +4543,7 @@ async fn auto_start_reviews_starts_loading_for_review_session() {
     let expected_hash = diff_content_hash(diff_text);
     let session_ids = HashSet::from([session_id.into()]);
 
-    let mut mock_git_client = crate::infra::git::MockGitClient::new();
+    let mut mock_git_client = ag_git::MockGitClient::new();
     mock_git_client
         .expect_diff()
         .returning(move |_, _| Box::pin(async move { Ok(diff_text.to_string()) }));

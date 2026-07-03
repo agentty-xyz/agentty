@@ -4,6 +4,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use ag_git::{self as git, GitClient};
 use askama::Template;
 use tokio::sync::mpsc;
 use tracing::warn;
@@ -27,7 +28,6 @@ use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::agent;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs::FsClient;
-use crate::infra::git::{self as git, GitClient};
 
 const AUTO_COMMIT_ASSIST_POLICY: AssistPolicy = AssistPolicy {
     max_attempts: 10,
@@ -1331,6 +1331,8 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant, SystemTime};
 
+    use ag_git::{GitError, MockGitClient};
+
     use super::*;
     use crate::app::service::AppServiceDeps;
     use crate::db::AppRepositories;
@@ -1338,7 +1340,6 @@ mod tests {
     use crate::infra::agent::tests::MockAgentBackend;
     use crate::infra::channel::AgentRequestKind;
     use crate::infra::fs;
-    use crate::infra::git::{GitError, MockGitClient};
 
     /// Mutable test clock used to drive deterministic status-transition timing
     /// assertions.

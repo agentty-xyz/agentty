@@ -6,6 +6,7 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
+use ag_git as git;
 use tempfile::tempdir;
 use tokio::sync::Barrier;
 
@@ -20,6 +21,7 @@ use crate::domain::session::{
 use crate::domain::setting::SettingName;
 use crate::infra::agent::AgentResponse;
 use crate::infra::agent::tests::MockAgentBackend;
+use crate::infra::app_server;
 use crate::infra::app_server::{AppServerTurnResponse, MockAppServerClient};
 use crate::infra::channel::{
     AgentRequestKind, MockAgentChannel, TurnPrompt, TurnPromptAttachment, TurnPromptTextSource,
@@ -28,7 +30,6 @@ use crate::infra::channel::{
 use crate::infra::clock::RealClock;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs::{self as fs, FsClient};
-use crate::infra::{app_server, git};
 use crate::ui::activity_heatmap;
 use crate::ui::state::app_mode::AppMode;
 

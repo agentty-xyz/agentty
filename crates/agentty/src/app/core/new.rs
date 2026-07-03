@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use ag_git::GitClient;
 use tokio::sync::mpsc;
 
 use super::events::AppEvent;
@@ -20,7 +21,6 @@ use crate::infra::clock::{Clock, RealClock};
 use crate::infra::db;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs::FsClient;
-use crate::infra::git::GitClient;
 #[cfg(test)]
 use crate::infra::project_discovery::ProjectDiscoveryClient;
 

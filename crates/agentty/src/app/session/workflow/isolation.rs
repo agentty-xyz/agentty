@@ -2,10 +2,11 @@
 
 use std::path::{Path, PathBuf};
 
+use ag_git::{GitClient, GitError};
+
 use super::session_branch;
 use crate::app::session::SessionError;
 use crate::infra::fs::FsClient;
-use crate::infra::git::{GitClient, GitError};
 
 /// Validated git metadata for one session worktree.
 #[derive(Debug)]
@@ -119,8 +120,10 @@ fn isolation_error(message: &str) -> SessionError {
 mod tests {
     use std::path::PathBuf;
 
+    use ag_git as git;
+
     use super::*;
-    use crate::infra::{fs, git};
+    use crate::infra::fs;
 
     /// Builds an `FsClient` mock that treats `session_folder` and `repo_root`
     /// as existing canonical paths.
