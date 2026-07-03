@@ -2865,13 +2865,12 @@ mod tests {
     use crate::app::{AppEvent, AppServices, SessionState};
     use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
     use crate::domain::session::{
-        ForgeKind, ReviewRequestState, ReviewRequestSummary, SessionHandles, SessionSize,
-        SessionStats,
+        ForgeKind, ReviewRequestState, ReviewRequestSummary, SessionHandles,
     };
     use crate::domain::turn_prompt::{TurnPromptAttachment, TurnPromptTextSource};
     use crate::infra::clock::RealClock;
     use crate::infra::db::{self, AppRepositories};
-    use crate::infra::{app_server, fs};
+    use crate::infra::fs;
 
     /// Builds a session manager with one session for reply-context tests.
     fn session_manager_with_one_session(session: Session) -> SessionManager {
@@ -2902,44 +2901,17 @@ mod tests {
 
     /// Builds a minimal in-memory session snapshot for lifecycle unit tests.
     fn test_session(prompt: &str, status: Status, title: Option<&str>, output: &str) -> Session {
-        Session {
-            base_branch: "main".to_string(),
-            created_at: 0,
-            draft_attachments: Vec::new(),
-            folder: PathBuf::from("/tmp/session"),
-            follow_up_tasks: Vec::new(),
-            id: "session-id".into(),
-            in_progress_started_at: None,
-            in_progress_total_seconds: 0,
-            is_draft: false,
-            agent: crate::domain::agent::AgentSelection::new(
+        crate::test_support::SessionFixtureBuilder::new()
+            .agent(crate::domain::agent::AgentSelection::new(
                 crate::domain::agent::AgentKind::Claude,
                 AgentModel::ClaudeSonnet5,
-            ),
-            output: output.to_string(),
-            parent_session_id: None,
-            project_name: "project".to_string(),
-            prompt: prompt.to_string(),
-            queued_messages: Vec::new(),
-            reasoning_level_override: None,
-            published_upstream_ref: None,
-            published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
-            questions: Vec::new(),
-            review_request: None,
-            size: SessionSize::Xs,
-            stats: SessionStats::default(),
-            status,
-            summary: None,
-            title: title.map(ToString::to_string),
-            updated_at: 0,
-            workflow_notice: None,
-        }
-    }
-
-    /// Builds one mock app-server client wrapped in `Arc` for service
-    /// fixtures.
-    fn mock_app_server() -> Arc<dyn app_server::AppServerClient> {
-        Arc::new(app_server::MockAppServerClient::new())
+            ))
+            .folder(PathBuf::from("/tmp/session"))
+            .output(output)
+            .prompt(prompt)
+            .status(status)
+            .title(title.map(ToString::to_string))
+            .build()
     }
 
     /// Builds a filesystem mock that delegates simple checks to local disk.
@@ -3059,7 +3031,7 @@ mod tests {
             Arc::new(crate::infra::clock::RealClock),
             event_tx,
             crate::app::service::AppServiceDeps {
-                app_server_client_override: Some(mock_app_server()),
+                app_server_client_override: Some(crate::test_support::mock_app_server()),
                 available_agent_kinds: AgentKind::ALL.to_vec(),
                 clipboard_image_client_override: None,
                 fs_client,
@@ -3098,7 +3070,7 @@ mod tests {
             Arc::new(crate::infra::clock::RealClock),
             event_tx,
             crate::app::service::AppServiceDeps {
-                app_server_client_override: Some(mock_app_server()),
+                app_server_client_override: Some(crate::test_support::mock_app_server()),
                 available_agent_kinds: AgentKind::ALL.to_vec(),
                 clipboard_image_client_override: None,
                 fs_client: Arc::new(create_passthrough_mock_fs_client()),

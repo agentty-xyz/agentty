@@ -68,13 +68,10 @@ fn review_detail_half_page_step(content_area: Rect) -> u16 {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use ag_forge::{ForgeKind, RequestedReview, RequestedReviewAudience};
     use crossterm::event::KeyModifiers;
 
     use super::*;
-    use crate::db::Database;
 
     #[tokio::test]
     async fn test_handle_q_returns_to_list_mode() {
@@ -168,37 +165,10 @@ mod tests {
 
     /// Builds a minimal app in review-detail mode for key handling tests.
     async fn new_test_app() -> App {
-        let base_dir = tempfile::tempdir().expect("failed to create temp dir");
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
-        let mut app = App::new_with_clients(
-            base_dir.path().to_path_buf(),
-            base_dir.path().to_path_buf(),
-            None,
-            database,
-            test_app_clients(),
-        )
-        .await
-        .expect("failed to build app");
-        app.mode = AppMode::ReviewDetail {
-            comment_error: None,
-            is_loading_comments: false,
-            review: requested_review("Detail body"),
-            scroll_offset: 0,
-        };
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        crate::test_support::set_review_detail_mode(&mut app, requested_review("Detail body"));
 
         app
-    }
-
-    /// Builds one client bundle with deterministic agent availability for
-    /// test app startup.
-    fn test_app_clients() -> crate::app::AppClients {
-        crate::app::AppClients::new().with_agent_availability_probe(Arc::new(
-            crate::infra::agent::StaticAgentAvailabilityProbe {
-                available_agent_kinds: crate::domain::agent::AgentKind::ALL.to_vec(),
-            },
-        ))
     }
 
     /// Builds one requested review snapshot for detail-mode tests.

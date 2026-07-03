@@ -340,7 +340,7 @@ mod tests {
     use crate::ui::style;
 
     fn session_fixture() -> Session {
-        crate::domain::session::tests::SessionFixtureBuilder::new()
+        crate::test_support::SessionFixtureBuilder::new()
             .status(Status::Draft)
             .build()
     }

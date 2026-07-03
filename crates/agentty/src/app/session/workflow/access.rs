@@ -43,98 +43,18 @@ impl SessionManager {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::path::PathBuf;
-    use std::sync::Arc;
-    use std::time::{Instant, SystemTime};
 
-    use ratatui::widgets::TableState;
-
-    use crate::app::session::{Clock, SessionDefaults, SessionError};
-    use crate::app::{SessionManager, SessionState};
-    use crate::domain::agent::AgentKind;
-    use crate::domain::session::{
-        Session, SessionHandles, SessionId, SessionSize, SessionStats, Status,
-    };
-    use crate::infra::git;
-
-    /// Deterministic clock for test construction.
-    struct FixedClock;
-
-    impl Clock for FixedClock {
-        fn now_instant(&self) -> Instant {
-            Instant::now()
-        }
-
-        fn now_system_time(&self) -> SystemTime {
-            SystemTime::UNIX_EPOCH
-        }
-    }
-
-    /// Builds a minimal test session with the given identifier and status.
-    fn test_session(session_id: &str, status: Status) -> Session {
-        Session {
-            base_branch: "main".to_string(),
-            created_at: 0,
-            draft_attachments: Vec::new(),
-            folder: PathBuf::from("/tmp/test"),
-            follow_up_tasks: Vec::new(),
-            id: session_id.into(),
-            in_progress_started_at: None,
-            in_progress_total_seconds: 0,
-            is_draft: false,
-            agent: crate::domain::agent::AgentSelection::new(
-                crate::domain::agent::AgentKind::Antigravity,
-                crate::domain::agent::AgentModel::Gemini3FlashPreview,
-            ),
-            output: String::new(),
-            parent_session_id: None,
-            project_name: "project".to_string(),
-            prompt: String::new(),
-            queued_messages: Vec::new(),
-            reasoning_level_override: None,
-            published_upstream_ref: None,
-            published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
-            questions: Vec::new(),
-            review_request: None,
-            size: SessionSize::Xs,
-            stats: SessionStats::default(),
-            status,
-            summary: None,
-            title: None,
-            updated_at: 0,
-            workflow_notice: None,
-        }
-    }
-
-    /// Builds a session manager with given sessions and optional handles.
-    fn session_manager_with(
-        sessions: Vec<Session>,
-        handles: HashMap<SessionId, SessionHandles>,
-    ) -> SessionManager {
-        SessionManager::new(
-            SessionDefaults {
-                model: AgentKind::Antigravity.default_model(),
-            },
-            Arc::new(git::MockGitClient::new()),
-            SessionState::new(
-                handles,
-                sessions,
-                TableState::default(),
-                Arc::new(FixedClock),
-                0,
-                0,
-            ),
-            Vec::new(),
-        )
-    }
+    use crate::app::session::SessionError;
+    use crate::domain::session::{SessionHandles, Status};
+    use crate::test_support;
 
     // --- session_index_or_err ---
 
     #[test]
     fn test_session_index_or_err_returns_index_for_existing_session() {
         // Arrange
-        let session = test_session("sess-1", Status::Review);
-        let manager = session_manager_with(vec![session], HashMap::new());
+        let session = test_support::session_fixture("sess-1", Status::Review);
+        let manager = test_support::session_manager_with_handles(vec![session], HashMap::new());
 
         // Act
         let index = manager
@@ -148,9 +68,10 @@ mod tests {
     #[test]
     fn test_session_index_or_err_returns_correct_index_for_second_session() {
         // Arrange
-        let session_a = test_session("sess-a", Status::Review);
-        let session_b = test_session("sess-b", Status::Draft);
-        let manager = session_manager_with(vec![session_a, session_b], HashMap::new());
+        let session_a = test_support::session_fixture("sess-a", Status::Review);
+        let session_b = test_support::session_fixture("sess-b", Status::Draft);
+        let manager =
+            test_support::session_manager_with_handles(vec![session_a, session_b], HashMap::new());
 
         // Act
         let index = manager
@@ -164,7 +85,7 @@ mod tests {
     #[test]
     fn test_session_index_or_err_returns_not_found_for_missing_session() {
         // Arrange
-        let manager = session_manager_with(Vec::new(), HashMap::new());
+        let manager = test_support::session_manager_with_handles(Vec::new(), HashMap::new());
 
         // Act
         let result = manager.session_index_or_err("nonexistent");
@@ -178,8 +99,8 @@ mod tests {
     #[test]
     fn test_session_or_err_returns_session_reference() {
         // Arrange
-        let session = test_session("sess-1", Status::InProgress);
-        let manager = session_manager_with(vec![session], HashMap::new());
+        let session = test_support::session_fixture("sess-1", Status::InProgress);
+        let manager = test_support::session_manager_with_handles(vec![session], HashMap::new());
 
         // Act
         let found = manager
@@ -194,7 +115,7 @@ mod tests {
     #[test]
     fn test_session_or_err_returns_not_found_for_missing_session() {
         // Arrange
-        let manager = session_manager_with(Vec::new(), HashMap::new());
+        let manager = test_support::session_manager_with_handles(Vec::new(), HashMap::new());
 
         // Act
         let result = manager.session_or_err("missing");
@@ -213,7 +134,7 @@ mod tests {
             "sess-1".into(),
             SessionHandles::new(String::new(), Status::Review),
         );
-        let manager = session_manager_with(Vec::new(), handles);
+        let manager = test_support::session_manager_with_handles(Vec::new(), handles);
 
         // Act
         let result = manager.session_handles_or_err("sess-1");
@@ -225,7 +146,7 @@ mod tests {
     #[test]
     fn test_session_handles_or_err_returns_handles_not_found() {
         // Arrange
-        let manager = session_manager_with(Vec::new(), HashMap::new());
+        let manager = test_support::session_manager_with_handles(Vec::new(), HashMap::new());
 
         // Act
         let result = manager.session_handles_or_err("missing");
@@ -239,13 +160,13 @@ mod tests {
     #[test]
     fn test_session_and_handles_returns_both() {
         // Arrange
-        let session = test_session("sess-1", Status::Review);
+        let session = test_support::session_fixture("sess-1", Status::Review);
         let mut handles = HashMap::new();
         handles.insert(
             "sess-1".into(),
             SessionHandles::new("output".to_string(), Status::Review),
         );
-        let manager = session_manager_with(vec![session], handles);
+        let manager = test_support::session_manager_with_handles(vec![session], handles);
 
         // Act
         let result = manager.session_and_handles_or_err("sess-1");
@@ -271,7 +192,7 @@ mod tests {
             "sess-1".into(),
             SessionHandles::new(String::new(), Status::Review),
         );
-        let manager = session_manager_with(Vec::new(), handles);
+        let manager = test_support::session_manager_with_handles(Vec::new(), handles);
 
         // Act
         let result = manager.session_and_handles_or_err("sess-1");
@@ -283,8 +204,8 @@ mod tests {
     #[test]
     fn test_session_and_handles_fails_when_handles_missing() {
         // Arrange
-        let session = test_session("sess-1", Status::Review);
-        let manager = session_manager_with(vec![session], HashMap::new());
+        let session = test_support::session_fixture("sess-1", Status::Review);
+        let manager = test_support::session_manager_with_handles(vec![session], HashMap::new());
 
         // Act
         let result = manager.session_and_handles_or_err("sess-1");

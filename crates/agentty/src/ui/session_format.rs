@@ -485,10 +485,10 @@ fn session_output_published_branch_sync_color(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::session::tests::SessionFixtureBuilder;
     use crate::domain::session::{
         ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
     };
+    use crate::test_support::SessionFixtureBuilder;
 
     fn session_with_review_request(url: &str) -> Session {
         let mut session = SessionFixtureBuilder::new().build();

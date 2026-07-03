@@ -215,13 +215,11 @@ mod tests {
     use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
     use ratatui::buffer::Cell;
     use ratatui::layout::{Position, Size};
-    use tempfile::tempdir;
 
     use super::*;
     use crate::app::AppEvent;
-    use crate::db::Database;
-    use crate::domain::session::tests::SessionFixtureBuilder;
     use crate::domain::session::{SessionHandles, Status};
+    use crate::test_support::SessionFixtureBuilder;
     use crate::ui::state::app_mode::AppMode;
 
     /// Test-only loop state that records call counts and scripted outcomes.
@@ -239,16 +237,6 @@ mod tests {
                 .pop_front()
                 .expect("test should provide one result per cycle")
         }
-    }
-
-    /// Builds one client bundle with deterministic agent availability for
-    /// test app startup.
-    fn test_app_clients() -> crate::app::AppClients {
-        crate::app::AppClients::new().with_agent_availability_probe(std::sync::Arc::new(
-            crate::infra::agent::StaticAgentAvailabilityProbe {
-                available_agent_kinds: crate::domain::agent::AgentKind::ALL.to_vec(),
-            },
-        ))
     }
 
     #[tokio::test]
@@ -292,30 +280,6 @@ mod tests {
         let error = loop_result.expect_err("loop should return the cycle error");
         assert_eq!(error.to_string(), "cycle failed");
         assert_eq!(state.cycle_count, 1);
-    }
-
-    /// Builds a test app rooted at a temporary directory.
-    ///
-    /// Returns both the `App` and the `TempDir` guard so the caller keeps the
-    /// temporary directory alive for the full test lifetime.
-    async fn new_test_app() -> (App, tempfile::TempDir) {
-        let base_dir = tempdir().expect("failed to create temp dir");
-        let base_path = base_dir.path().to_path_buf();
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
-
-        let app = App::new_with_clients(
-            base_path.clone(),
-            base_path,
-            None,
-            database,
-            test_app_clients(),
-        )
-        .await
-        .expect("failed to build test app");
-
-        (app, base_dir)
     }
 
     /// Flattens a test terminal buffer into one searchable string.
@@ -408,7 +372,7 @@ mod tests {
     #[tokio::test]
     async fn run_with_backend_exits_on_quit_key() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).expect("failed to create test terminal");
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
@@ -440,7 +404,7 @@ mod tests {
     #[tokio::test]
     async fn run_with_backend_waits_for_cleanup_tasks_after_quit() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).expect("failed to create test terminal");
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
@@ -492,7 +456,7 @@ mod tests {
     /// spinner or timer is active.
     async fn run_with_backend_skips_idle_redraws_without_tick_driven_ui() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         let (backend, draw_count) = CountingBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).expect("failed to create test terminal");
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
@@ -537,7 +501,7 @@ mod tests {
     /// before the next render without scanning all session handles.
     async fn run_cycle_renders_pending_session_update_before_waiting_for_events() {
         // Arrange
-        let (mut app, base_dir) = new_test_app().await;
+        let (mut app, base_dir) = crate::test_support::new_test_app().await;
         let session_id = "session-1".to_string();
         let mut event_rx = mpsc::unbounded_channel().1;
         let backend = TestBackend::new(80, 24);

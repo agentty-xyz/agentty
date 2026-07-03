@@ -652,146 +652,15 @@ async fn handle_regenerate_review_confirmation(
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-    use std::process::Command;
     use std::sync::Arc;
 
     use crossterm::event::KeyModifiers;
     use mockall::predicate::eq;
-    use tempfile::tempdir;
 
     use super::*;
-    use crate::app::AppClients;
-    use crate::db::Database;
     use crate::domain::agent::AgentModel;
-    use crate::infra::app_server;
-    use crate::infra::tmux::{MockTmuxClient, TmuxClient};
+    use crate::infra::tmux::MockTmuxClient;
     use crate::ui::state::app_mode::ConfirmationViewMode;
-
-    fn setup_test_git_repo(path: &Path) {
-        Command::new("git")
-            .args(["init"])
-            .current_dir(path)
-            .output()
-            .expect("git init failed");
-        Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(path)
-            .output()
-            .expect("git config failed");
-        Command::new("git")
-            .args(["config", "user.email", "test@test.com"])
-            .current_dir(path)
-            .output()
-            .expect("git config failed");
-        std::fs::write(path.join("README.md"), "test").expect("write failed");
-        Command::new("git")
-            .args(["add", "."])
-            .current_dir(path)
-            .output()
-            .expect("git add failed");
-        Command::new("git")
-            .args(["commit", "-m", "Initial commit"])
-            .current_dir(path)
-            .output()
-            .expect("git commit failed");
-        Command::new("git")
-            .args(["branch", "-M", "main"])
-            .current_dir(path)
-            .output()
-            .expect("git branch failed");
-    }
-
-    /// Returns a mock app-server client wrapped in `Arc` for test injection.
-    fn mock_app_server() -> std::sync::Arc<dyn app_server::AppServerClient> {
-        std::sync::Arc::new(app_server::MockAppServerClient::new())
-    }
-
-    /// Builds one client bundle with deterministic agent availability for
-    /// test app startup.
-    fn test_app_clients() -> AppClients {
-        AppClients::new().with_agent_availability_probe(std::sync::Arc::new(
-            crate::infra::agent::StaticAgentAvailabilityProbe {
-                available_agent_kinds: crate::domain::agent::AgentKind::ALL.to_vec(),
-            },
-        ))
-    }
-
-    /// Builds one test app with an injected tmux boundary.
-    async fn new_test_app_with_tmux_client(
-        tmux_client: Arc<dyn TmuxClient>,
-    ) -> (App, tempfile::TempDir) {
-        let base_dir = tempdir().expect("failed to create temp dir");
-        let base_path = base_dir.path().to_path_buf();
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
-        let clients = test_app_clients()
-            .with_app_server_client_override(mock_app_server())
-            .with_tmux_client(tmux_client);
-        let app = App::new_with_clients(base_path.clone(), base_path, None, database, clients)
-            .await
-            .expect("failed to build app");
-
-        (app, base_dir)
-    }
-
-    /// Builds one test app with a strict mocked tmux boundary.
-    async fn new_test_app() -> (App, tempfile::TempDir) {
-        new_test_app_with_tmux_client(Arc::new(MockTmuxClient::new())).await
-    }
-
-    /// Builds one git-backed test app with an injected tmux boundary.
-    async fn new_test_app_with_git_and_tmux_client(
-        tmux_client: Arc<dyn TmuxClient>,
-    ) -> (App, tempfile::TempDir) {
-        let base_dir = tempdir().expect("failed to create temp dir");
-        let base_path = base_dir.path().to_path_buf();
-        setup_test_git_repo(base_dir.path());
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
-        let clients = test_app_clients()
-            .with_app_server_client_override(mock_app_server())
-            .with_tmux_client(tmux_client);
-        let app = App::new_with_clients(
-            base_path.clone(),
-            base_path,
-            Some("main".to_string()),
-            database,
-            clients,
-        )
-        .await
-        .expect("failed to build app");
-
-        (app, base_dir)
-    }
-
-    /// Builds one git-backed test app with a strict mocked tmux boundary.
-    async fn new_test_app_with_git() -> (App, tempfile::TempDir) {
-        new_test_app_with_git_and_tmux_client(Arc::new(MockTmuxClient::new())).await
-    }
-
-    fn set_session_status_for_test(
-        app: &mut App,
-        session_id: &str,
-        status: crate::domain::session::Status,
-    ) {
-        if let Some(session) = app
-            .sessions
-            .sessions_mut()
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        {
-            session.status = status;
-        }
-
-        if let Some(handles) = app.sessions.session_handles().get(session_id)
-            && let Ok(mut current_status) = handles.status.lock()
-        {
-            *current_status = status;
-        }
-    }
 
     #[test]
     fn test_content_area_for_terminal_excludes_global_bars() {
@@ -808,7 +677,8 @@ mod tests {
     #[tokio::test]
     async fn test_handle_session_creation_key_creates_regular_session() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) =
+            crate::test_support::new_git_test_app_with_mock_tmux_client().await;
         app.mode = AppMode::SessionCreation {
             selected_option_index: 0,
         };
@@ -837,7 +707,8 @@ mod tests {
     #[tokio::test]
     async fn test_handle_session_creation_key_creates_draft_session() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) =
+            crate::test_support::new_git_test_app_with_mock_tmux_client().await;
         app.mode = AppMode::SessionCreation {
             selected_option_index: 0,
         };
@@ -869,7 +740,8 @@ mod tests {
     #[tokio::test]
     async fn test_handle_session_creation_key_escape_returns_to_list() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) =
+            crate::test_support::new_git_test_app_with_mock_tmux_client().await;
         app.mode = AppMode::SessionCreation {
             selected_option_index: 0,
         };
@@ -888,7 +760,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_view_info_popup_key_restores_view_mode() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
         app.mode = AppMode::ViewInfoPopup {
             is_loading: false,
             loading_label: "Refreshing review request...".to_string(),
@@ -921,7 +793,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_confirmation_decision_confirm_quits_when_no_session_context() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
         app.mode = AppMode::Confirmation {
             confirmation_intent: ConfirmationIntent::Quit,
             confirmation_message: "Quit agentty?".to_string(),
@@ -943,7 +815,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_confirmation_decision_cancel_returns_to_list() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
         app.mode = AppMode::Confirmation {
             confirmation_intent: ConfirmationIntent::Quit,
             confirmation_message: "Quit agentty?".to_string(),
@@ -965,12 +837,13 @@ mod tests {
     #[tokio::test]
     async fn test_handle_confirmation_decision_confirm_cancels_session_when_context_exists() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) =
+            crate::test_support::new_git_test_app_with_mock_tmux_client().await;
         let session_id = app
             .create_session()
             .await
             .expect("failed to create session");
-        set_session_status_for_test(
+        crate::test_support::set_session_status_for_test(
             &mut app,
             &session_id,
             crate::domain::session::Status::Review,
@@ -1002,7 +875,8 @@ mod tests {
     #[tokio::test]
     async fn test_handle_key_event_routes_done_session_continue_shortcut() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) =
+            crate::test_support::new_git_test_app_with_mock_tmux_client().await;
         let source_session_id = app
             .create_session()
             .await
@@ -1057,7 +931,8 @@ mod tests {
     #[tokio::test]
     async fn test_handle_confirmation_decision_cancel_restores_view_for_merge_confirmation() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) =
+            crate::test_support::new_git_test_app_with_mock_tmux_client().await;
         let session_id = app
             .create_session()
             .await
@@ -1098,7 +973,8 @@ mod tests {
     #[tokio::test]
     async fn test_handle_confirmation_decision_cancel_restores_view_for_continue_confirmation() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) =
+            crate::test_support::new_git_test_app_with_mock_tmux_client().await;
         let session_id = app
             .create_session()
             .await
@@ -1138,7 +1014,8 @@ mod tests {
     #[tokio::test]
     async fn test_handle_confirmation_decision_confirm_opens_continuation_draft_prompt() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) =
+            crate::test_support::new_git_test_app_with_mock_tmux_client().await;
         let merged_commit_hash = "704de31d0f4b5a1234567890abcdef1234567890";
         let source_session_id = app
             .create_session()
@@ -1153,7 +1030,7 @@ mod tests {
             )
             .await
             .expect("failed to persist merged commit hash");
-        set_session_status_for_test(
+        crate::test_support::set_session_status_for_test(
             &mut app,
             &source_session_id,
             crate::domain::session::Status::Done,
@@ -1211,7 +1088,8 @@ mod tests {
     #[tokio::test]
     async fn test_handle_confirmation_decision_confirm_queues_merge_with_view_restore() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) =
+            crate::test_support::new_git_test_app_with_mock_tmux_client().await;
         let session_id = app
             .create_session()
             .await
@@ -1253,7 +1131,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_publish_branch_input_key_escape_restores_view_mode() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
         app.mode = AppMode::PublishBranchInput {
             default_branch_name: "wt/session".to_string(),
             input: crate::domain::input::InputState::with_text("review/custom".to_string()),
@@ -1291,12 +1169,13 @@ mod tests {
     #[tokio::test]
     async fn test_handle_publish_branch_input_key_enter_starts_pull_request_publish() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) =
+            crate::test_support::new_git_test_app_with_mock_tmux_client().await;
         let session_id = app
             .create_session()
             .await
             .expect("failed to create session");
-        set_session_status_for_test(
+        crate::test_support::set_session_status_for_test(
             &mut app,
             &session_id,
             crate::domain::session::Status::Review,
@@ -1337,7 +1216,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_publish_branch_input_key_char_updates_input_state() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
         app.mode = AppMode::PublishBranchInput {
             default_branch_name: "wt/session".to_string(),
             input: crate::domain::input::InputState::default(),
@@ -1378,7 +1257,8 @@ mod tests {
         let typed_shortcut_characters = ['q', 'p', 'd', 'f', 'm', 'r', 'j', 'k', 'g', 'G', '?'];
 
         for character in typed_shortcut_characters {
-            let (mut app, _base_dir) = new_test_app().await;
+            let (mut app, _base_dir) =
+                crate::test_support::new_test_app_with_mock_tmux_client().await;
             app.mode = AppMode::PublishBranchInput {
                 default_branch_name: "wt/session".to_string(),
                 input: crate::domain::input::InputState::default(),
@@ -1418,7 +1298,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_publish_branch_input_key_left_moves_cursor() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
         app.mode = AppMode::PublishBranchInput {
             default_branch_name: "wt/session".to_string(),
             input: crate::domain::input::InputState::with_text("review/custom".to_string()),
@@ -1450,7 +1330,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_publish_branch_input_key_char_keeps_locked_branch_name() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
         app.mode = AppMode::PublishBranchInput {
             default_branch_name: "wt/session".to_string(),
             input: crate::domain::input::InputState::with_text("review/custom".to_string()),
@@ -1511,7 +1391,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_open_command_selector_key_escape_restores_view_mode() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
         app.mode = AppMode::OpenCommandSelector {
             commands: vec!["cargo test".to_string(), "npm run dev".to_string()],
             restore_view: ConfirmationViewMode {
@@ -1548,7 +1428,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_open_command_selector_key_j_updates_selected_index() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
         app.mode = AppMode::OpenCommandSelector {
             commands: vec!["cargo test".to_string(), "npm run dev".to_string()],
             restore_view: ConfirmationViewMode {
@@ -1581,7 +1461,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_open_command_selector_key_with_empty_commands_keeps_index_zero() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
         app.mode = AppMode::OpenCommandSelector {
             commands: Vec::new(),
             restore_view: ConfirmationViewMode {
@@ -1614,7 +1494,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_open_command_selector_key_enter_restores_view_without_session() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
         app.mode = AppMode::OpenCommandSelector {
             commands: vec!["cargo test".to_string()],
             restore_view: ConfirmationViewMode {
@@ -1660,7 +1540,8 @@ mod tests {
             .times(1)
             .returning(|_, _| Box::pin(async {}));
         let (mut app, _base_dir) =
-            new_test_app_with_git_and_tmux_client(Arc::new(mock_tmux_client)).await;
+            crate::test_support::new_git_test_app_with_tmux_client(Arc::new(mock_tmux_client))
+                .await;
         let expected_session_id = app
             .create_session()
             .await
@@ -1699,7 +1580,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_open_command_selector_key_unknown_key_preserves_state() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
         app.mode = AppMode::OpenCommandSelector {
             commands: vec!["cargo test".to_string(), "npm run dev".to_string()],
             restore_view: ConfirmationViewMode {
@@ -1742,7 +1623,8 @@ mod tests {
     #[tokio::test]
     async fn test_handle_confirmation_decision_cancel_restores_view_for_regenerate_confirmation() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) =
+            crate::test_support::new_git_test_app_with_mock_tmux_client().await;
         let session_id = app
             .create_session()
             .await
@@ -1780,7 +1662,8 @@ mod tests {
     #[tokio::test]
     async fn test_handle_confirmation_decision_confirm_regenerates_review() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) =
+            crate::test_support::new_git_test_app_with_mock_tmux_client().await;
         let session_id = app
             .create_session()
             .await

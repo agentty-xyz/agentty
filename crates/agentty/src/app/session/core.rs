@@ -844,11 +844,6 @@ mod tests {
     use crate::ui::activity_heatmap;
     use crate::ui::state::app_mode::AppMode;
 
-    /// Returns a mock app-server client wrapped in `Arc` for test injection.
-    fn mock_app_server() -> Arc<dyn app_server::AppServerClient> {
-        Arc::new(MockAppServerClient::new())
-    }
-
     /// Builds a filesystem mock that delegates operations to local disk.
     fn create_passthrough_mock_fs_client() -> fs::MockFsClient {
         let mut mock_fs_client = fs::MockFsClient::new();
@@ -1351,16 +1346,6 @@ mod tests {
         app.sessions.git_client = mock_git_client;
     }
 
-    /// Builds one client bundle with deterministic agent availability for
-    /// test app startup.
-    fn test_app_clients() -> crate::app::AppClients {
-        crate::app::AppClients::new().with_agent_availability_probe(Arc::new(
-            crate::infra::agent::StaticAgentAvailabilityProbe {
-                available_agent_kinds: AgentKind::ALL.to_vec(),
-            },
-        ))
-    }
-
     /// Builds a test app with a caller-provided database, git context, and
     /// app-server boundary.
     async fn new_test_app_with_db_and_app_server(
@@ -1370,7 +1355,8 @@ mod tests {
         db: AppRepositories,
         app_server_client: Arc<dyn app_server::AppServerClient>,
     ) -> App {
-        let clients = test_app_clients().with_app_server_client_override(app_server_client);
+        let clients = crate::test_support::test_app_clients()
+            .with_app_server_client_override(app_server_client);
         let mut app = App::new_with_clients(path, working_dir.clone(), git_branch, db, clients)
             .await
             .expect("failed to build app");
@@ -1387,8 +1373,14 @@ mod tests {
         git_branch: Option<String>,
         db: AppRepositories,
     ) -> App {
-        new_test_app_with_db_and_app_server(path, working_dir, git_branch, db, mock_app_server())
-            .await
+        new_test_app_with_db_and_app_server(
+            path,
+            working_dir,
+            git_branch,
+            db,
+            crate::test_support::mock_app_server(),
+        )
+        .await
     }
 
     /// Builds a test app rooted at `path` with no branch-specific git context.
@@ -1804,24 +1796,6 @@ mod tests {
             "session output while waiting for status: {}",
             session.output
         );
-    }
-
-    /// Forces one session status in both render snapshot and runtime handle.
-    fn set_session_status_for_test(app: &mut App, session_id: &str, status: Status) {
-        if let Some(session) = app
-            .sessions
-            .sessions_mut()
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        {
-            session.status = status;
-        }
-
-        if let Some(handles) = app.sessions.session_handles().get(session_id)
-            && let Ok(mut current_status) = handles.status.lock()
-        {
-            *current_status = status;
-        }
     }
 
     /// Waits until background cleanup removes `path`.
@@ -2881,7 +2855,11 @@ mod tests {
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
         let parent_session_id = app.create_session().await.expect("failed to create parent");
-        set_session_status_for_test(&mut app, &parent_session_id, Status::Review);
+        crate::test_support::set_session_status_for_test(
+            &mut app,
+            &parent_session_id,
+            Status::Review,
+        );
         let child_session_id = app
             .create_stacked_draft_session(&parent_session_id)
             .await
@@ -3153,7 +3131,11 @@ mod tests {
             .create_dir_all(child_folder)
             .await
             .expect("failed to materialize child worktree folder");
-        set_session_status_for_test(&mut app, &child_session_id, Status::Review);
+        crate::test_support::set_session_status_for_test(
+            &mut app,
+            &child_session_id,
+            Status::Review,
+        );
         app.services
             .db()
             .sessions()
@@ -3196,7 +3178,7 @@ mod tests {
         create_and_start_session(&mut app, "Initial").await;
         let session_id = app.sessions.sessions()[0].id.clone();
         wait_for_status(&mut app, &session_id, Status::Review).await;
-        set_session_status_for_test(&mut app, &session_id, Status::InProgress);
+        crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::InProgress);
 
         // Act
         app.enqueue_message(&session_id, "queued reply")
@@ -3235,7 +3217,7 @@ mod tests {
         create_and_start_session(&mut app, "Initial").await;
         let session_id = app.sessions.sessions()[0].id.clone();
         wait_for_status(&mut app, &session_id, Status::Review).await;
-        set_session_status_for_test(&mut app, &session_id, Status::InProgress);
+        crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::InProgress);
         app.enqueue_message(&session_id, "queued reply")
             .expect("enqueue_message should succeed for InProgress session");
 
@@ -3268,7 +3250,7 @@ mod tests {
         create_and_start_session(&mut app, "Initial").await;
         let session_id = app.sessions.sessions()[0].id.clone();
         wait_for_status(&mut app, &session_id, Status::Review).await;
-        set_session_status_for_test(&mut app, &session_id, Status::InProgress);
+        crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::InProgress);
 
         // Act
         let outcome = app.enqueue_message(&session_id, "");
@@ -4936,7 +4918,7 @@ mod tests {
             .create_session()
             .await
             .expect("failed to create merge session");
-        set_session_status_for_test(&mut app, &session_id, Status::Review);
+        crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Review);
         let session_folder = app
             .sessions
             .sessions()
@@ -4983,7 +4965,11 @@ mod tests {
         app.stage_draft_message(&child_session_id, "Ready after parent merge")
             .await
             .expect("failed to stage child draft message");
-        set_session_status_for_test(&mut app, &parent_session_id, Status::Review);
+        crate::test_support::set_session_status_for_test(
+            &mut app,
+            &parent_session_id,
+            Status::Review,
+        );
         let mock_git =
             create_mock_git_client_for_successful_noop_merges(1, dir.path().to_path_buf());
         app.sessions.git_client = Arc::new(mock_git);
@@ -5018,7 +5004,7 @@ mod tests {
             .create_session()
             .await
             .expect("failed to create merge session");
-        set_session_status_for_test(&mut app, &session_id, Status::Review);
+        crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Review);
         let mock_git =
             create_mock_git_client_for_successful_noop_merges(1, dir.path().to_path_buf());
         app.sessions.git_client = Arc::new(mock_git);
@@ -5053,8 +5039,16 @@ mod tests {
             .create_session()
             .await
             .expect("failed to create second queue session");
-        set_session_status_for_test(&mut app, &first_session_id, Status::Review);
-        set_session_status_for_test(&mut app, &second_session_id, Status::Review);
+        crate::test_support::set_session_status_for_test(
+            &mut app,
+            &first_session_id,
+            Status::Review,
+        );
+        crate::test_support::set_session_status_for_test(
+            &mut app,
+            &second_session_id,
+            Status::Review,
+        );
         let mock_git =
             create_mock_git_client_for_successful_noop_merges(2, dir.path().to_path_buf());
         app.sessions.git_client = Arc::new(mock_git);
@@ -5520,7 +5514,7 @@ mod tests {
             .expect("missing session")
             .folder
             .clone();
-        set_session_status_for_test(&mut app, &session_id, Status::Review);
+        crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Review);
 
         // Act
         app.sessions
@@ -5613,7 +5607,11 @@ mod tests {
             .create_stacked_draft_session(&parent_session_id)
             .await
             .expect("failed to create stacked draft session");
-        set_session_status_for_test(&mut app, &parent_session_id, Status::Review);
+        crate::test_support::set_session_status_for_test(
+            &mut app,
+            &parent_session_id,
+            Status::Review,
+        );
 
         // Act
         app.sessions
@@ -5669,7 +5667,7 @@ mod tests {
             .create_session()
             .await
             .expect("failed to create session");
-        set_session_status_for_test(&mut app, &session_id, Status::InProgress);
+        crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::InProgress);
         app.services
             .db()
             .operations()

@@ -297,7 +297,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::*;
-    use crate::domain::session::tests::SessionFixtureBuilder;
+    use crate::test_support::SessionFixtureBuilder;
 
     /// Builds one deterministic session fixture for footer render tests.
     fn session_fixture(session_id: &str, folder: &str) -> Session {

@@ -275,45 +275,13 @@ mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
     use mockall::Sequence;
     use mockall::predicate::eq;
-    use tempfile::tempdir;
 
     use super::*;
-    use crate::db::Database;
-    use crate::domain::agent::AgentKind;
     use crate::domain::input::InputState;
     use crate::domain::question::QuestionItem;
     use crate::domain::session::{Session, SessionSize, SessionStats, Status};
     use crate::ui::state::app_mode::{AppMode, QuestionFocus};
     use crate::ui::state::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
-
-    /// Builds one client bundle with deterministic agent availability for
-    /// test app startup.
-    fn test_app_clients() -> crate::app::AppClients {
-        crate::app::AppClients::new().with_agent_availability_probe(std::sync::Arc::new(
-            crate::infra::agent::StaticAgentAvailabilityProbe {
-                available_agent_kinds: AgentKind::ALL.to_vec(),
-            },
-        ))
-    }
-
-    /// Builds one test app rooted at a temporary directory.
-    async fn new_test_app() -> App {
-        let base_dir = tempdir().expect("failed to create temp dir");
-        let base_path = base_dir.path().to_path_buf();
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
-
-        App::new_with_clients(
-            base_path.clone(),
-            base_path,
-            None,
-            database,
-            test_app_clients(),
-        )
-        .await
-        .expect("failed to build app")
-    }
 
     /// Verifies the event reader forwards one queued event before stopping on
     /// a poll error.
@@ -450,7 +418,7 @@ mod tests {
     #[tokio::test]
     async fn test_process_event_with_key_handler_pastes_into_prompt_mode() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         let session_id = "session-1".to_string();
         app.sessions.push_session(Session {
             base_branch: "main".to_string(),
@@ -518,7 +486,7 @@ mod tests {
     async fn test_process_event_with_key_handler_pastes_into_question_free_text_mode() {
         // Arrange — paste only works in free-text mode (`selected_option_index`
         // is `None`).
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::Question {
             at_mention_state: None,
             current_index: 0,
@@ -562,7 +530,7 @@ mod tests {
     #[tokio::test]
     async fn test_process_event_with_key_handler_ignores_resize_events() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         let original_mode = AppMode::List;
         app.mode = original_mode;
         let mut terminal = ();
@@ -586,7 +554,7 @@ mod tests {
     #[tokio::test]
     async fn test_process_event_with_key_handler_ignores_key_release_events() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         let mut terminal = ();
 
         // Act
@@ -610,7 +578,7 @@ mod tests {
     #[tokio::test]
     async fn test_process_events_with_handler_returns_handler_error() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         let mut terminal = ();
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         event_tx
@@ -644,7 +612,7 @@ mod tests {
     #[tokio::test]
     async fn test_process_events_with_handler_keeps_events_over_budget_queued() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         let mut terminal = ();
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         for _ in 0..(TERMINAL_EVENT_DRAIN_BUDGET + 2) {

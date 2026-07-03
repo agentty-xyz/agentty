@@ -38,87 +38,9 @@ impl SessionManager {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use std::path::PathBuf;
-    use std::sync::Arc;
-    use std::time::{Instant, SystemTime};
-
-    use ratatui::widgets::TableState;
-
     use super::*;
-    use crate::app::SessionState;
-    use crate::app::session::{Clock, SessionDefaults};
-    use crate::domain::agent::AgentKind;
-    use crate::domain::session::{SessionSize, SessionStats, Status};
-    use crate::infra::git;
-
-    /// Deterministic clock for test construction.
-    struct FixedClock;
-
-    impl Clock for FixedClock {
-        fn now_instant(&self) -> Instant {
-            Instant::now()
-        }
-
-        fn now_system_time(&self) -> SystemTime {
-            SystemTime::UNIX_EPOCH
-        }
-    }
-
-    /// Builds a minimal test session with the given identifier and status.
-    fn test_session(session_id: &str, status: Status) -> Session {
-        Session {
-            base_branch: "main".to_string(),
-            created_at: 0,
-            draft_attachments: Vec::new(),
-            folder: PathBuf::from("/tmp/test"),
-            follow_up_tasks: Vec::new(),
-            id: session_id.into(),
-            in_progress_started_at: None,
-            in_progress_total_seconds: 0,
-            is_draft: false,
-            agent: crate::domain::agent::AgentSelection::new(
-                crate::domain::agent::AgentKind::Antigravity,
-                crate::domain::agent::AgentModel::Gemini3FlashPreview,
-            ),
-            output: String::new(),
-            parent_session_id: None,
-            project_name: "project".to_string(),
-            prompt: String::new(),
-            queued_messages: Vec::new(),
-            reasoning_level_override: None,
-            published_upstream_ref: None,
-            published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
-            questions: Vec::new(),
-            review_request: None,
-            size: SessionSize::Xs,
-            stats: SessionStats::default(),
-            status,
-            summary: None,
-            title: None,
-            updated_at: 0,
-            workflow_notice: None,
-        }
-    }
-
-    /// Builds a session manager with given sessions (no handles).
-    fn session_manager_with(sessions: Vec<Session>) -> SessionManager {
-        SessionManager::new(
-            SessionDefaults {
-                model: AgentKind::Antigravity.default_model(),
-            },
-            Arc::new(git::MockGitClient::new()),
-            SessionState::new(
-                HashMap::new(),
-                sessions,
-                TableState::default(),
-                Arc::new(FixedClock),
-                0,
-                0,
-            ),
-            Vec::new(),
-        )
-    }
+    use crate::domain::session::Status;
+    use crate::test_support;
 
     // --- startup_history_replay_set ---
 
@@ -126,9 +48,9 @@ mod tests {
     fn test_startup_replay_set_collects_review_sessions() {
         // Arrange
         let sessions = vec![
-            test_session("review-1", Status::Review),
-            test_session("in-progress", Status::InProgress),
-            test_session("review-2", Status::Review),
+            test_support::session_fixture("review-1", Status::Review),
+            test_support::session_fixture("in-progress", Status::InProgress),
+            test_support::session_fixture("review-2", Status::Review),
         ];
 
         // Act
@@ -143,7 +65,10 @@ mod tests {
     #[test]
     fn test_startup_replay_set_collects_agent_review_sessions() {
         // Arrange
-        let sessions = vec![test_session("review-1", Status::AgentReview)];
+        let sessions = vec![test_support::session_fixture(
+            "review-1",
+            Status::AgentReview,
+        )];
 
         // Act
         let replay_set = SessionManager::startup_history_replay_set(&sessions);
@@ -157,8 +82,8 @@ mod tests {
     fn test_startup_replay_set_returns_empty_when_no_review_sessions() {
         // Arrange
         let sessions = vec![
-            test_session("new-1", Status::Draft),
-            test_session("done-1", Status::Done),
+            test_support::session_fixture("new-1", Status::Draft),
+            test_support::session_fixture("done-1", Status::Done),
         ];
 
         // Act
@@ -182,7 +107,7 @@ mod tests {
     #[test]
     fn test_mark_and_check_replay_pending() {
         // Arrange
-        let mut manager = session_manager_with(Vec::new());
+        let mut manager = test_support::session_manager_with_sessions(Vec::new());
 
         // Act
         manager.mark_history_replay_pending("sess-1");
@@ -194,7 +119,7 @@ mod tests {
     #[test]
     fn test_should_replay_returns_false_when_not_marked() {
         // Arrange
-        let manager = session_manager_with(Vec::new());
+        let manager = test_support::session_manager_with_sessions(Vec::new());
 
         // Act / Assert
         assert!(!manager.should_replay_history("unknown"));
@@ -205,7 +130,7 @@ mod tests {
     #[test]
     fn test_clear_removes_pending_replay() {
         // Arrange
-        let mut manager = session_manager_with(Vec::new());
+        let mut manager = test_support::session_manager_with_sessions(Vec::new());
         manager.mark_history_replay_pending("sess-1");
 
         // Act
@@ -218,7 +143,7 @@ mod tests {
     #[test]
     fn test_clear_is_idempotent_for_unmarked_session() {
         // Arrange
-        let mut manager = session_manager_with(Vec::new());
+        let mut manager = test_support::session_manager_with_sessions(Vec::new());
 
         // Act / Assert — does not panic
         manager.clear_history_replay_pending("nonexistent");
@@ -230,12 +155,12 @@ mod tests {
     fn test_constructor_marks_review_sessions_for_replay() {
         // Arrange
         let sessions = vec![
-            test_session("review-sess", Status::Review),
-            test_session("new-sess", Status::Draft),
+            test_support::session_fixture("review-sess", Status::Review),
+            test_support::session_fixture("new-sess", Status::Draft),
         ];
 
         // Act
-        let manager = session_manager_with(sessions);
+        let manager = test_support::session_manager_with_sessions(sessions);
 
         // Assert
         assert!(manager.should_replay_history("review-sess"));

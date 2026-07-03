@@ -143,9 +143,12 @@ repository's current session.
     explicit UFCS trait calls, or rustdoc links.
   - In test modules, prefer `use super::*;` where practical.
 - **Test-only code placement:** Never introduce `#[cfg(test)]` in production code
-  outside `#[cfg(test)] mod tests`. Keep test-only helpers, imports, and support code
-  inside test modules instead (duplicate code there if needed). The only exception is
-  `#[cfg_attr(test, mockall::automock)]` on traits used for mocking.
+  outside `#[cfg(test)] mod tests` unless the code belongs to an established shared
+  test-support surface for broadly reused fixtures. Prefer local helpers for one-off
+  setup, but keep canonical fixtures such as session builders, deterministic clocks, and
+  app client bundles in shared test support when duplication would make model or state
+  changes mechanical. The other exception is `#[cfg_attr(test, mockall::automock)]` on
+  traits used for mocking.
 - **Struct Fields:** Order fields in structs as follows:
   - Public fields first.
   - Private fields second.

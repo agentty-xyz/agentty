@@ -323,106 +323,17 @@ pub(crate) fn open_session_prompt(app: &mut App, session_id: String) {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-    use std::process::Command;
-    use std::sync::Arc;
-
     use ag_forge::{ForgeKind, RequestedReview, RequestedReviewAudience};
     use crossterm::event::KeyModifiers;
-    use tempfile::tempdir;
 
     use super::*;
     use crate::app::{AppEvent, MockSyncMainRunner, SyncMainOutcome, SyncSessionStartError};
-    use crate::db::Database;
     use crate::domain::question::QuestionItem;
-
-    /// Builds one client bundle with deterministic agent availability for
-    /// test app startup.
-    fn test_app_clients() -> crate::app::AppClients {
-        crate::app::AppClients::new().with_agent_availability_probe(Arc::new(
-            crate::infra::agent::StaticAgentAvailabilityProbe {
-                available_agent_kinds: crate::domain::agent::AgentKind::ALL.to_vec(),
-            },
-        ))
-    }
-
-    async fn new_test_app() -> (App, tempfile::TempDir) {
-        let base_dir = tempdir().expect("failed to create temp dir");
-        let base_path = base_dir.path().to_path_buf();
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
-        let app = App::new_with_clients(
-            base_path.clone(),
-            base_path,
-            None,
-            database,
-            test_app_clients(),
-        )
-        .await
-        .expect("failed to build app");
-
-        (app, base_dir)
-    }
-
-    fn setup_test_git_repo(path: &Path) {
-        Command::new("git")
-            .args(["init"])
-            .current_dir(path)
-            .output()
-            .expect("git init failed");
-        Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(path)
-            .output()
-            .expect("git config failed");
-        Command::new("git")
-            .args(["config", "user.email", "test@test.com"])
-            .current_dir(path)
-            .output()
-            .expect("git config failed");
-        std::fs::write(path.join("README.md"), "test").expect("write failed");
-        Command::new("git")
-            .args(["add", "."])
-            .current_dir(path)
-            .output()
-            .expect("git add failed");
-        Command::new("git")
-            .args(["commit", "-m", "Initial commit"])
-            .current_dir(path)
-            .output()
-            .expect("git commit failed");
-        Command::new("git")
-            .args(["branch", "-M", "main"])
-            .current_dir(path)
-            .output()
-            .expect("git branch failed");
-    }
-
-    async fn new_test_app_with_git() -> (App, tempfile::TempDir) {
-        let base_dir = tempdir().expect("failed to create temp dir");
-        let base_path = base_dir.path().to_path_buf();
-        setup_test_git_repo(base_dir.path());
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
-        let app = App::new_with_clients(
-            base_path.clone(),
-            base_path,
-            Some("main".to_string()),
-            database,
-            test_app_clients(),
-        )
-        .await
-        .expect("failed to build app");
-
-        (app, base_dir)
-    }
 
     /// Builds a settings-focused test app with the `Open Commands` row
     /// selected.
     async fn new_test_app_for_settings() -> (App, tempfile::TempDir) {
-        let (mut app, base_dir) = new_test_app_with_git().await;
+        let (mut app, base_dir) = crate::test_support::new_git_test_app().await;
         app.create_session()
             .await
             .expect("failed to create session for settings tests");
@@ -460,7 +371,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_quit_key_shows_confirm_quit_overlay() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
 
         // Act
         let event_result = handle(
@@ -488,7 +399,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_backtab_key_cycles_tabs_backward() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.tabs.set(Tab::Projects);
 
         // Act
@@ -509,7 +420,7 @@ mod tests {
     #[tokio::test]
     async fn test_logs_tab_scroll_keys_update_tail_offset() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.tabs.set(Tab::Logs);
         app.scroll_system_logs_up();
 
@@ -554,7 +465,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_add_key_opens_session_creation_overlay() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
         app.tabs.set(Tab::Sessions);
 
         // Act
@@ -579,7 +490,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_add_key_ignored_on_projects_tab() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
         app.tabs.set(Tab::Projects);
 
         // Act
@@ -599,7 +510,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_add_key_ignored_on_settings_tab() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
         app.tabs.set(Tab::Settings);
 
         // Act
@@ -619,7 +530,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_enter_key_opens_selected_session_in_view_mode() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
         let expected_session_id = app
             .create_session()
             .await
@@ -648,7 +559,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_enter_key_restores_cached_review_output() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
         let expected_session_id = app
             .create_session()
             .await
@@ -686,7 +597,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_enter_key_opens_selected_question_session_in_question_mode() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
         let expected_session_id = app
             .create_session()
             .await
@@ -746,7 +657,7 @@ mod tests {
     #[tokio::test]
     async fn test_review_tab_navigation_selects_loaded_reviews() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
         app.tabs.set(Tab::Review);
         app.replace_requested_reviews(
             app.projects.active_project_id(),
@@ -772,7 +683,7 @@ mod tests {
     #[tokio::test]
     async fn test_review_tab_enter_opens_selected_review_detail() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
         app.tabs.set(Tab::Review);
         app.replace_requested_reviews(
             app.projects.active_project_id(),
@@ -804,7 +715,7 @@ mod tests {
     #[tokio::test]
     async fn test_review_tab_enter_uses_grouped_selection_order_after_mixed_provider_order() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
         app.tabs.set(Tab::Review);
         app.replace_requested_reviews(
             app.projects.active_project_id(),
@@ -836,7 +747,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_enter_key_keeps_persisted_size_until_turn_completion() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
         let expected_session_id = app
             .create_session()
             .await
@@ -891,7 +802,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_enter_key_opens_done_session() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
         let expected_session_id = app
             .create_session()
             .await
@@ -924,7 +835,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_enter_key_opens_canceled_session() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
         let expected_session_id = app
             .create_session()
             .await
@@ -957,7 +868,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_enter_key_switches_to_sessions_tab_from_projects_tab() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
         app.tabs.set(Tab::Projects);
         app.mode = AppMode::List;
 
@@ -1228,7 +1139,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_enter_key_without_session_selection_keeps_list_mode() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
         app.tabs.set(Tab::Sessions);
         app.mode = AppMode::List;
 
@@ -1246,7 +1157,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_cancel_key_opens_cancel_confirmation_for_review_session() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
         let expected_session_id = app
             .create_session()
             .await
@@ -1284,7 +1195,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_cancel_key_opens_cancel_confirmation_for_draft_session() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
         let expected_session_id = app
             .create_draft_session()
             .await
@@ -1321,7 +1232,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_cancel_key_opens_cancel_confirmation_for_running_session() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
         let expected_session_id = app
             .create_session()
             .await
@@ -1359,7 +1270,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_cancel_key_ignores_non_review_session() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
         let _session_id = app
             .create_session()
             .await
@@ -1383,7 +1294,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_question_mark_opens_help_overlay() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
 
         // Act
         let event_result = handle(
@@ -1408,7 +1319,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_sync_key_shows_failure_when_upstream_is_missing() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
         mock_sync_main_completion(
             &mut app,
             Err(SyncSessionStartError::Other("missing upstream".to_string())),
@@ -1450,7 +1361,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_sync_key_is_case_insensitive() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
         mock_sync_main_completion(
             &mut app,
             Err(SyncSessionStartError::Other("missing upstream".to_string())),
@@ -1492,7 +1403,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_sync_key_uses_project_name_and_branch_in_popup_message() {
         // Arrange
-        let (mut app, base_dir) = new_test_app_with_git().await;
+        let (mut app, base_dir) = crate::test_support::new_git_test_app().await;
         mock_sync_main_completion(
             &mut app,
             Err(SyncSessionStartError::MainHasUncommittedChanges {
@@ -1554,7 +1465,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_sync_key_opens_popup_when_main_has_uncommitted_changes() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
         mock_sync_main_completion(
             &mut app,
             Err(SyncSessionStartError::MainHasUncommittedChanges {

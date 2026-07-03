@@ -244,54 +244,15 @@ fn session_group(session: &Session) -> SessionGroup {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use super::*;
-    use crate::domain::session::{PublishedBranchSyncStatus, SessionSize, SessionStats};
-
-    /// Returns one session snapshot with a custom id and status.
-    fn test_session(id: &str, status: Status) -> Session {
-        Session {
-            base_branch: "main".to_string(),
-            created_at: 0,
-            draft_attachments: Vec::new(),
-            folder: PathBuf::new(),
-            follow_up_tasks: Vec::new(),
-            id: id.into(),
-            in_progress_started_at: None,
-            in_progress_total_seconds: 0,
-            is_draft: false,
-            agent: crate::domain::agent::AgentSelection::new(
-                crate::domain::agent::AgentKind::Antigravity,
-                crate::domain::agent::AgentModel::Gemini3FlashPreview,
-            ),
-            output: String::new(),
-            parent_session_id: None,
-            project_name: "project".to_string(),
-            prompt: String::new(),
-            queued_messages: Vec::new(),
-            reasoning_level_override: None,
-            published_upstream_ref: None,
-            published_branch_sync_status: PublishedBranchSyncStatus::Idle,
-            questions: Vec::new(),
-            review_request: None,
-            size: SessionSize::Xs,
-            stats: SessionStats::default(),
-            status,
-            summary: None,
-            title: Some(id.to_string()),
-            updated_at: 0,
-            workflow_notice: None,
-        }
-    }
 
     #[test]
     fn test_preferred_initial_session_index_prefers_active_group_when_available() {
         // Arrange
         let sessions = vec![
-            test_session("archive-1", Status::Done),
-            test_session("active-1", Status::Review),
-            test_session("merge-1", Status::Queued),
+            crate::test_support::titled_session_fixture("archive-1", Status::Done),
+            crate::test_support::titled_session_fixture("active-1", Status::Review),
+            crate::test_support::titled_session_fixture("merge-1", Status::Queued),
         ];
 
         // Act
@@ -305,8 +266,8 @@ mod tests {
     fn test_preferred_initial_session_index_falls_back_to_first_grouped_session() {
         // Arrange
         let sessions = vec![
-            test_session("archive-1", Status::Done),
-            test_session("merge-1", Status::Queued),
+            crate::test_support::titled_session_fixture("archive-1", Status::Done),
+            crate::test_support::titled_session_fixture("merge-1", Status::Queued),
         ];
 
         // Act
@@ -320,9 +281,9 @@ mod tests {
     fn test_next_selectable_session_index_advances_in_grouped_order() {
         // Arrange
         let sessions = vec![
-            test_session("active-1", Status::Review),
-            test_session("queued-1", Status::Queued),
-            test_session("archive-1", Status::Done),
+            crate::test_support::titled_session_fixture("active-1", Status::Review),
+            crate::test_support::titled_session_fixture("queued-1", Status::Queued),
+            crate::test_support::titled_session_fixture("archive-1", Status::Done),
         ];
 
         // Act
@@ -336,8 +297,8 @@ mod tests {
     fn test_next_selectable_session_index_wraps_after_last_grouped_row() {
         // Arrange
         let sessions = vec![
-            test_session("active-1", Status::Review),
-            test_session("archive-1", Status::Done),
+            crate::test_support::titled_session_fixture("active-1", Status::Review),
+            crate::test_support::titled_session_fixture("archive-1", Status::Done),
         ];
 
         // Act
@@ -351,9 +312,9 @@ mod tests {
     fn test_previous_selectable_session_index_moves_back_in_grouped_order() {
         // Arrange
         let sessions = vec![
-            test_session("active-1", Status::Review),
-            test_session("queued-1", Status::Queued),
-            test_session("archive-1", Status::Done),
+            crate::test_support::titled_session_fixture("active-1", Status::Review),
+            crate::test_support::titled_session_fixture("queued-1", Status::Queued),
+            crate::test_support::titled_session_fixture("archive-1", Status::Done),
         ];
 
         // Act
@@ -367,8 +328,8 @@ mod tests {
     fn test_previous_selectable_session_index_wraps_before_first_grouped_row() {
         // Arrange
         let sessions = vec![
-            test_session("active-1", Status::Review),
-            test_session("archive-1", Status::Done),
+            crate::test_support::titled_session_fixture("active-1", Status::Review),
+            crate::test_support::titled_session_fixture("archive-1", Status::Done),
         ];
 
         // Act
@@ -382,12 +343,12 @@ mod tests {
     fn test_selectable_session_indexes_orders_sessions_without_headers() {
         // Arrange
         let sessions = vec![
-            test_session("active-1", Status::Review),
-            test_session("queued-1", Status::Queued),
-            test_session("merge-1", Status::Merging),
-            test_session("done-1", Status::Done),
-            test_session("canceled-1", Status::Canceled),
-            test_session("active-2", Status::Draft),
+            crate::test_support::titled_session_fixture("active-1", Status::Review),
+            crate::test_support::titled_session_fixture("queued-1", Status::Queued),
+            crate::test_support::titled_session_fixture("merge-1", Status::Merging),
+            crate::test_support::titled_session_fixture("done-1", Status::Done),
+            crate::test_support::titled_session_fixture("canceled-1", Status::Canceled),
+            crate::test_support::titled_session_fixture("active-2", Status::Draft),
         ];
 
         // Act
@@ -414,12 +375,13 @@ mod tests {
     #[test]
     fn test_selectable_session_indexes_places_stacked_child_after_parent() {
         // Arrange
-        let mut child_session = test_session("child-1", Status::Draft);
+        let mut child_session =
+            crate::test_support::titled_session_fixture("child-1", Status::Draft);
         child_session.parent_session_id = Some("parent-1".into());
         let sessions = vec![
             child_session,
-            test_session("parent-1", Status::Review),
-            test_session("sibling-1", Status::Review),
+            crate::test_support::titled_session_fixture("parent-1", Status::Review),
+            crate::test_support::titled_session_fixture("sibling-1", Status::Review),
         ];
 
         // Act
@@ -444,12 +406,12 @@ mod tests {
     fn test_grouped_session_rows_orders_merge_queue_before_active_and_archive_sessions() {
         // Arrange
         let sessions = vec![
-            test_session("active-1", Status::Review),
-            test_session("queued-1", Status::Queued),
-            test_session("merge-1", Status::Merging),
-            test_session("done-1", Status::Done),
-            test_session("canceled-1", Status::Canceled),
-            test_session("active-2", Status::Draft),
+            crate::test_support::titled_session_fixture("active-1", Status::Review),
+            crate::test_support::titled_session_fixture("queued-1", Status::Queued),
+            crate::test_support::titled_session_fixture("merge-1", Status::Merging),
+            crate::test_support::titled_session_fixture("done-1", Status::Done),
+            crate::test_support::titled_session_fixture("canceled-1", Status::Canceled),
+            crate::test_support::titled_session_fixture("active-2", Status::Draft),
         ];
 
         // Act
@@ -483,8 +445,8 @@ mod tests {
     fn test_grouped_session_rows_includes_placeholder_for_groups_without_sessions() {
         // Arrange
         let sessions = vec![
-            test_session("active-1", Status::Review),
-            test_session("active-2", Status::InProgress),
+            crate::test_support::titled_session_fixture("active-1", Status::Review),
+            crate::test_support::titled_session_fixture("active-2", Status::InProgress),
         ];
 
         // Act
@@ -515,13 +477,15 @@ mod tests {
     #[test]
     fn test_grouped_session_rows_marks_stacked_child_with_tree_position() {
         // Arrange
-        let mut first_child_session = test_session("child-1", Status::Draft);
+        let mut first_child_session =
+            crate::test_support::titled_session_fixture("child-1", Status::Draft);
         first_child_session.parent_session_id = Some("parent-1".into());
-        let mut second_child_session = test_session("child-2", Status::Draft);
+        let mut second_child_session =
+            crate::test_support::titled_session_fixture("child-2", Status::Draft);
         second_child_session.parent_session_id = Some("parent-1".into());
         let sessions = vec![
             first_child_session,
-            test_session("parent-1", Status::Review),
+            crate::test_support::titled_session_fixture("parent-1", Status::Review),
             second_child_session,
         ];
 
@@ -558,9 +522,13 @@ mod tests {
     #[test]
     fn test_grouped_session_rows_archives_canceled_child_below_active_parent() {
         // Arrange
-        let mut child_session = test_session("child-1", Status::Canceled);
+        let mut child_session =
+            crate::test_support::titled_session_fixture("child-1", Status::Canceled);
         child_session.parent_session_id = Some("parent-1".into());
-        let sessions = vec![child_session, test_session("parent-1", Status::Review)];
+        let sessions = vec![
+            child_session,
+            crate::test_support::titled_session_fixture("parent-1", Status::Review),
+        ];
 
         // Act
         let rows = grouped_session_rows(&sessions);
@@ -594,9 +562,13 @@ mod tests {
     #[test]
     fn test_grouped_session_rows_keeps_canceled_child_below_canceled_parent() {
         // Arrange
-        let mut child_session = test_session("child-1", Status::Canceled);
+        let mut child_session =
+            crate::test_support::titled_session_fixture("child-1", Status::Canceled);
         child_session.parent_session_id = Some("parent-1".into());
-        let sessions = vec![child_session, test_session("parent-1", Status::Canceled)];
+        let sessions = vec![
+            child_session,
+            crate::test_support::titled_session_fixture("parent-1", Status::Canceled),
+        ];
 
         // Act
         let rows = grouped_session_rows(&sessions);

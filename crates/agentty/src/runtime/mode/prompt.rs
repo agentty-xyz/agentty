@@ -867,16 +867,6 @@ mod tests {
         PromptSlashState,
     };
 
-    /// Builds one client bundle with deterministic agent availability for
-    /// test app startup.
-    fn test_app_clients() -> crate::app::AppClients {
-        crate::app::AppClients::new().with_agent_availability_probe(std::sync::Arc::new(
-            crate::infra::agent::StaticAgentAvailabilityProbe {
-                available_agent_kinds: crate::domain::agent::AgentKind::ALL.to_vec(),
-            },
-        ))
-    }
-
     /// Replaces the app-level git client with a caller-provided mock by
     /// rebuilding `AppServices` through its public constructor, preserving
     /// the remaining shared dependencies.
@@ -1007,7 +997,7 @@ mod tests {
             base_path,
             Some("main".to_string()),
             database,
-            test_app_clients(),
+            crate::test_support::test_app_clients(),
         )
         .await
         .expect("failed to build app");

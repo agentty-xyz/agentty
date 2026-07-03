@@ -317,16 +317,10 @@ mod tests {
     use crate::domain::agent::AgentKind;
     use crate::domain::session::{
         ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, Session,
-        SessionHandles, SessionSize, SessionStats, Status,
+        SessionHandles, Status,
     };
     use crate::infra::db::AppRepositories;
-    use crate::infra::{app_server, fs, git};
-
-    /// Builds one mock app-server client wrapped in `Arc` for service
-    /// fixtures.
-    fn mock_app_server() -> Arc<dyn app_server::AppServerClient> {
-        Arc::new(app_server::MockAppServerClient::new())
-    }
+    use crate::infra::{fs, git};
 
     /// Builds a filesystem mock that delegates directory checks to local disk.
     fn create_passthrough_mock_fs_client() -> fs::MockFsClient {
@@ -400,7 +394,7 @@ mod tests {
             Arc::new(crate::infra::clock::RealClock),
             event_tx,
             crate::app::service::AppServiceDeps {
-                app_server_client_override: Some(mock_app_server()),
+                app_server_client_override: Some(crate::test_support::mock_app_server()),
                 available_agent_kinds: crate::domain::agent::AgentKind::ALL.to_vec(),
                 clipboard_image_client_override: None,
                 fs_client: Arc::new(create_passthrough_mock_fs_client()),
@@ -436,38 +430,13 @@ mod tests {
         review_request: Option<ReviewRequest>,
         status: Status,
     ) -> Session {
-        Session {
-            base_branch: "main".to_string(),
-            created_at: 0,
-            draft_attachments: Vec::new(),
-            folder,
-            follow_up_tasks: Vec::new(),
-            id: "session-id".into(),
-            in_progress_started_at: None,
-            in_progress_total_seconds: 0,
-            is_draft: false,
-            agent: crate::domain::agent::AgentSelection::new(
-                crate::domain::agent::AgentKind::Antigravity,
-                crate::domain::agent::AgentModel::Gemini3FlashPreview,
-            ),
-            output: String::new(),
-            parent_session_id: None,
-            project_name: "project".to_string(),
-            prompt: "Implement forge review support".to_string(),
-            queued_messages: Vec::new(),
-            reasoning_level_override: None,
-            published_upstream_ref: None,
-            published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
-            questions: Vec::new(),
-            review_request,
-            size: SessionSize::Xs,
-            stats: SessionStats::default(),
-            status,
-            summary: None,
-            title: Some("Add forge review support".to_string()),
-            updated_at: 0,
-            workflow_notice: None,
-        }
+        crate::test_support::SessionFixtureBuilder::new()
+            .folder(folder)
+            .prompt("Implement forge review support")
+            .review_request(review_request)
+            .status(status)
+            .title(Some("Add forge review support".to_string()))
+            .build()
     }
 
     /// Builds one normalized GitHub review-request summary.

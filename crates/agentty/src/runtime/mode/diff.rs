@@ -272,42 +272,11 @@ mod tests {
     };
     use crossterm::event::KeyModifiers;
     use ratatui::layout::Rect;
-    use tempfile::tempdir;
 
     use super::*;
-    use crate::db::Database;
     use crate::ui::markdown;
 
     const TEST_TERMINAL_SIZE: Rect = Rect::new(0, 0, 80, 12);
-
-    /// Builds one client bundle with deterministic agent availability for
-    /// test app startup.
-    fn test_app_clients() -> crate::app::AppClients {
-        crate::app::AppClients::new().with_agent_availability_probe(std::sync::Arc::new(
-            crate::infra::agent::StaticAgentAvailabilityProbe {
-                available_agent_kinds: crate::domain::agent::AgentKind::ALL.to_vec(),
-            },
-        ))
-    }
-
-    async fn new_test_app() -> (App, tempfile::TempDir) {
-        let base_dir = tempdir().expect("failed to create temp dir");
-        let base_path = base_dir.path().to_path_buf();
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
-        let app = App::new_with_clients(
-            base_path.clone(),
-            base_path,
-            None,
-            database,
-            test_app_clients(),
-        )
-        .await
-        .expect("failed to build app");
-
-        (app, base_dir)
-    }
 
     /// Returns a diff long enough to keep the diff pane scrollable in tests.
     fn scrollable_diff_fixture() -> String {
@@ -354,7 +323,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_quit_key_returns_to_view_mode() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.mode = AppMode::Diff {
             session_id: "session-id".into(),
             diff: "diff output".to_string(),
@@ -387,7 +356,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_quit_key_restores_cached_review_output() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.review_cache.insert(
             "session-id".into(),
             crate::app::ReviewCacheEntry::Ready {
@@ -429,7 +398,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_down_key_increments_scroll_offset() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.mode = AppMode::Diff {
             session_id: "session-id".into(),
             diff: scrollable_diff_fixture(),
@@ -461,7 +430,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_shift_j_increments_scroll_offset() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.mode = AppMode::Diff {
             session_id: "session-id".into(),
             diff: scrollable_diff_fixture(),
@@ -494,7 +463,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_up_key_saturates_scroll_offset_at_zero() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.mode = AppMode::Diff {
             session_id: "session-id".into(),
             diff: "diff output".to_string(),
@@ -526,7 +495,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_shift_k_saturates_scroll_offset_at_zero() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.mode = AppMode::Diff {
             session_id: "session-id".into(),
             diff: "diff output".to_string(),
@@ -559,7 +528,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_non_diff_mode_leaves_mode_unchanged() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.mode = AppMode::List;
 
         // Act
@@ -577,7 +546,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_j_resets_scroll_offset() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.mode = AppMode::Diff {
             session_id: "session-id".into(),
             diff: "diff --git a/src/main.rs b/src/main.rs\n+added".to_string(),
@@ -609,7 +578,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_j_wraps_file_selection_from_last_to_first() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.mode = AppMode::Diff {
             session_id: "session-id".into(),
             diff: "diff --git a/src/main.rs b/src/main.rs\n+added".to_string(),
@@ -641,7 +610,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_k_resets_scroll_offset() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.mode = AppMode::Diff {
             session_id: "session-id".into(),
             diff: "diff --git a/src/main.rs b/src/main.rs\n+added".to_string(),
@@ -673,7 +642,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_k_wraps_file_selection_from_first_to_last() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.mode = AppMode::Diff {
             session_id: "session-id".into(),
             diff: "diff --git a/src/main.rs b/src/main.rs\n+added".to_string(),
@@ -705,7 +674,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_question_mark_opens_help_overlay() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.mode = AppMode::Diff {
             session_id: "session-id".into(),
             diff: "diff output".to_string(),
@@ -743,7 +712,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_down_key_clamps_scroll_offset_at_bottom() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         let diff = scrollable_diff_fixture();
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
         let diff_layout_cache = page::diff::DiffLayoutCache::default();
@@ -787,7 +756,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_up_key_recovers_immediately_from_overscrolled_state() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         let diff = scrollable_diff_fixture();
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
         let diff_layout_cache = page::diff::DiffLayoutCache::default();
@@ -872,7 +841,7 @@ mod tests {
         use crate::domain::question::QuestionItem;
         use crate::ui::state::app_mode::QuestionModeSnapshot;
 
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.mode = AppMode::Diff {
             session_id: "session-q".into(),
             diff: "diff output".to_string(),
@@ -923,7 +892,7 @@ mod tests {
         use crate::domain::question::QuestionItem;
         use crate::ui::state::app_mode::QuestionModeSnapshot;
 
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         let snapshot = QuestionModeSnapshot {
             at_mention_state: None,
             current_index: 1,
@@ -1014,7 +983,7 @@ mod tests {
         use crate::ui::state::app_mode::DiffRightPanel;
 
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.mode = AppMode::Diff {
             session_id: "session-id".into(),
             diff: "diff output".to_string(),

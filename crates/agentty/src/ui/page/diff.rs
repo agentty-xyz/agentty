@@ -1416,9 +1416,9 @@ fn append_indented_markdown(lines: &mut Vec<Line<'static>>, rendered: &Arc<[Line
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::session::tests::SessionFixtureBuilder;
     use crate::domain::session::{ForgeKind, ReviewRequestSummary};
     use crate::domain::theme::ColorTheme;
+    use crate::test_support::SessionFixtureBuilder;
     use crate::ui::diff_util::{parse_diff_lines, selected_diff_lines};
 
     const SAMPLE_DIFF: &str = concat!(

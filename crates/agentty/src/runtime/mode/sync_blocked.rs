@@ -70,44 +70,13 @@ fn should_close_sync_blocked_popup(key: KeyEvent) -> bool {
 #[cfg(test)]
 mod tests {
     use crossterm::event::KeyModifiers;
-    use tempfile::tempdir;
 
     use super::*;
-    use crate::db::Database;
-
-    /// Builds one client bundle with deterministic agent availability for
-    /// test app startup.
-    fn test_app_clients() -> crate::app::AppClients {
-        crate::app::AppClients::new().with_agent_availability_probe(std::sync::Arc::new(
-            crate::infra::agent::StaticAgentAvailabilityProbe {
-                available_agent_kinds: crate::domain::agent::AgentKind::ALL.to_vec(),
-            },
-        ))
-    }
-
-    async fn new_test_app() -> (App, tempfile::TempDir) {
-        let base_dir = tempdir().expect("failed to create temp dir");
-        let base_path = base_dir.path().to_path_buf();
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
-        let app = App::new_with_clients(
-            base_path.clone(),
-            base_path,
-            None,
-            database,
-            test_app_clients(),
-        )
-        .await
-        .expect("failed to build app");
-
-        (app, base_dir)
-    }
 
     #[tokio::test]
     async fn test_handle_esc_closes_sync_blocked_popup() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.mode = AppMode::SyncBlockedPopup {
             default_branch: None,
             is_loading: false,
@@ -127,7 +96,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_enter_closes_sync_blocked_popup() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.mode = AppMode::SyncBlockedPopup {
             default_branch: None,
             is_loading: false,
@@ -147,7 +116,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_other_key_keeps_sync_blocked_popup_open() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.mode = AppMode::SyncBlockedPopup {
             default_branch: None,
             is_loading: false,
@@ -170,7 +139,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_enter_does_not_close_loading_sync_popup() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.mode = AppMode::SyncBlockedPopup {
             default_branch: None,
             is_loading: true,
@@ -196,7 +165,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_r_keeps_sync_blocked_popup_open() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.mode = AppMode::SyncBlockedPopup {
             default_branch: None,
             is_loading: false,

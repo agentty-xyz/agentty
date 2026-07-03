@@ -614,7 +614,7 @@ mod tests {
     use crate::ui::state::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
 
     fn session_fixture() -> Session {
-        crate::domain::session::tests::SessionFixtureBuilder::new()
+        crate::test_support::SessionFixtureBuilder::new()
             .folder(std::env::temp_dir())
             .status(Status::Draft)
             .build()

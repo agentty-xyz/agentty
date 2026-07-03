@@ -1248,8 +1248,6 @@ async fn rebase_view_session(app: &mut App, session_id: &str) {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-    use std::process::Command;
     use std::sync::Arc;
 
     use crossterm::event::KeyModifiers;
@@ -1257,116 +1255,15 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::app::AppClients;
-    use crate::db::Database;
-    use crate::infra::app_server;
     use crate::infra::tmux::{MockTmuxClient, TmuxClient};
-
-    /// Returns a mock app-server client wrapped in `Arc` for test injection.
-    fn mock_app_server() -> std::sync::Arc<dyn app_server::AppServerClient> {
-        std::sync::Arc::new(app_server::MockAppServerClient::new())
-    }
-
-    /// Builds one client bundle with deterministic agent availability for
-    /// test app startup.
-    fn test_app_clients() -> AppClients {
-        AppClients::new().with_agent_availability_probe(Arc::new(
-            crate::infra::agent::StaticAgentAvailabilityProbe {
-                available_agent_kinds: crate::domain::agent::AgentKind::ALL.to_vec(),
-            },
-        ))
-    }
-
-    /// Builds one test app with an injected tmux boundary.
-    async fn new_test_app_with_tmux_client(
-        tmux_client: Arc<dyn TmuxClient>,
-    ) -> (App, tempfile::TempDir) {
-        let base_dir = tempdir().expect("failed to create temp dir");
-        let base_path = base_dir.path().to_path_buf();
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
-        let clients = test_app_clients()
-            .with_app_server_client_override(mock_app_server())
-            .with_tmux_client(tmux_client);
-        let app = App::new_with_clients(base_path.clone(), base_path, None, database, clients)
-            .await
-            .expect("failed to build app");
-
-        (app, base_dir)
-    }
-
-    /// Builds one test app with a strict mocked tmux boundary.
-    async fn new_test_app() -> (App, tempfile::TempDir) {
-        new_test_app_with_tmux_client(Arc::new(MockTmuxClient::new())).await
-    }
-
-    fn setup_test_git_repo(path: &Path) {
-        Command::new("git")
-            .args(["init"])
-            .current_dir(path)
-            .output()
-            .expect("git init failed");
-        Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(path)
-            .output()
-            .expect("git config failed");
-        Command::new("git")
-            .args(["config", "user.email", "test@test.com"])
-            .current_dir(path)
-            .output()
-            .expect("git config failed");
-        std::fs::write(path.join("README.md"), "test").expect("write failed");
-        Command::new("git")
-            .args(["add", "."])
-            .current_dir(path)
-            .output()
-            .expect("git add failed");
-        Command::new("git")
-            .args(["commit", "-m", "Initial commit"])
-            .current_dir(path)
-            .output()
-            .expect("git commit failed");
-        Command::new("git")
-            .args(["branch", "-M", "main"])
-            .current_dir(path)
-            .output()
-            .expect("git branch failed");
-    }
-
-    /// Builds one git-backed test app with an injected tmux boundary.
-    async fn new_test_app_with_git_and_tmux_client(
-        tmux_client: Arc<dyn TmuxClient>,
-    ) -> (App, tempfile::TempDir) {
-        let base_dir = tempdir().expect("failed to create temp dir");
-        let base_path = base_dir.path().to_path_buf();
-        setup_test_git_repo(base_dir.path());
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
-        let clients = test_app_clients()
-            .with_app_server_client_override(mock_app_server())
-            .with_tmux_client(tmux_client);
-        let app = App::new_with_clients(
-            base_path.clone(),
-            base_path,
-            Some("main".to_string()),
-            database,
-            clients,
-        )
-        .await
-        .expect("failed to build app");
-
-        (app, base_dir)
-    }
 
     /// Builds one git-backed test app with one created session and an
     /// injected tmux boundary.
     async fn new_test_app_with_session_and_tmux_client(
         tmux_client: Arc<dyn TmuxClient>,
     ) -> (App, tempfile::TempDir, String) {
-        let (mut app, base_dir) = new_test_app_with_git_and_tmux_client(tmux_client).await;
+        let (mut app, base_dir) =
+            crate::test_support::new_git_test_app_with_tmux_client(tmux_client).await;
         let session_id = app
             .create_session()
             .await
@@ -1383,7 +1280,7 @@ mod tests {
 
     /// Builds one minimal session snapshot for pure view-state tests.
     fn session_fixture(status: Status, is_draft: bool) -> crate::domain::session::Session {
-        crate::domain::session::tests::SessionFixtureBuilder::new()
+        crate::test_support::SessionFixtureBuilder::new()
             .status(status)
             .draft(is_draft)
             .folder(std::env::temp_dir())
@@ -1520,7 +1417,7 @@ mod tests {
     #[tokio::test]
     async fn test_view_context_returns_none_for_non_view_mode() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
         app.mode = AppMode::List;
 
         // Act
@@ -1534,7 +1431,7 @@ mod tests {
     #[tokio::test]
     async fn test_view_context_falls_back_to_list_when_session_is_missing() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
         app.mode = AppMode::View {
             review_status_message: None,
             review_text: None,
@@ -1622,7 +1519,8 @@ mod tests {
     async fn test_view_session_snapshot_hides_worktree_open_for_unstarted_draft_session() {
         // Arrange
         let (mut app, _base_dir) =
-            new_test_app_with_git_and_tmux_client(Arc::new(MockTmuxClient::new())).await;
+            crate::test_support::new_git_test_app_with_tmux_client(Arc::new(MockTmuxClient::new()))
+                .await;
         let session_id = app
             .create_draft_session()
             .await
@@ -2664,7 +2562,7 @@ mod tests {
     #[test]
     fn test_view_session_state_maps_stacked_draft_status() {
         // Arrange
-        let session = crate::domain::session::tests::SessionFixtureBuilder::new()
+        let session = crate::test_support::SessionFixtureBuilder::new()
             .status(Status::Draft)
             .draft(true)
             .parent_session_id(Some("parent-session".into()))

@@ -431,49 +431,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use ratatui::widgets::TableState;
 
     use super::*;
     use crate::agent::{AgentModel, ReasoningLevel};
-    use crate::domain::session::SessionStats;
     use crate::domain::theme::ColorTheme;
-
-    fn test_session(id: &str, status: Status) -> Session {
-        Session {
-            base_branch: "main".to_string(),
-            created_at: 0,
-            draft_attachments: Vec::new(),
-            folder: PathBuf::new(),
-            follow_up_tasks: Vec::new(),
-            id: id.into(),
-            in_progress_started_at: None,
-            in_progress_total_seconds: 0,
-            is_draft: false,
-            agent: crate::domain::agent::AgentSelection::new(
-                crate::domain::agent::AgentKind::Antigravity,
-                crate::domain::agent::AgentModel::Gemini3FlashPreview,
-            ),
-            output: String::new(),
-            parent_session_id: None,
-            project_name: "project".to_string(),
-            prompt: String::new(),
-            queued_messages: Vec::new(),
-            reasoning_level_override: None,
-            published_upstream_ref: None,
-            published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
-            questions: Vec::new(),
-            review_request: None,
-            size: SessionSize::Xs,
-            stats: SessionStats::default(),
-            status,
-            summary: None,
-            title: Some(id.to_string()),
-            updated_at: 0,
-            workflow_notice: None,
-        }
-    }
 
     /// Flattens a rendered test buffer into a plain string for assertions.
     fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
@@ -612,7 +574,10 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let mut table_state = TableState::default();
         table_state.select(Some(0));
-        let sessions = vec![test_session("new-1", Status::Draft)];
+        let sessions = vec![crate::test_support::titled_session_fixture(
+            "new-1",
+            Status::Draft,
+        )];
 
         // Act
         terminal
@@ -631,10 +596,10 @@ mod tests {
     fn test_selected_render_row_maps_original_selection_to_grouped_index() {
         // Arrange
         let sessions = vec![
-            test_session("active-1", Status::Review),
-            test_session("queued-1", Status::Queued),
-            test_session("merge-1", Status::Merging),
-            test_session("active-2", Status::Draft),
+            crate::test_support::titled_session_fixture("active-1", Status::Review),
+            crate::test_support::titled_session_fixture("queued-1", Status::Queued),
+            crate::test_support::titled_session_fixture("merge-1", Status::Merging),
+            crate::test_support::titled_session_fixture("active-2", Status::Draft),
         ];
         let rows = session_order::grouped_session_rows(&sessions);
         let selected_session_id = selected_session_id(&sessions, Some(3));
@@ -680,12 +645,14 @@ mod tests {
         // Arrange
         let expected_width =
             u16::try_from("claude-sonnet-5 [low]".chars().count()).unwrap_or(u16::MAX);
-        let mut default_session = test_session("active-1", Status::Review);
+        let mut default_session =
+            crate::test_support::titled_session_fixture("active-1", Status::Review);
         default_session.agent = crate::domain::agent::AgentSelection::new(
             crate::domain::agent::AgentKind::Claude,
             AgentModel::ClaudeSonnet5,
         );
-        let mut medium_session = test_session("active-2", Status::Review);
+        let mut medium_session =
+            crate::test_support::titled_session_fixture("active-2", Status::Review);
         medium_session.agent = crate::domain::agent::AgentSelection::new(
             crate::domain::agent::AgentKind::Codex,
             AgentModel::Gpt55,
@@ -724,7 +691,7 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let mut table_state = TableState::default();
         table_state.select(Some(0));
-        let mut session = test_session("session-1", Status::Review);
+        let mut session = crate::test_support::titled_session_fixture("session-1", Status::Review);
         session.agent = crate::domain::agent::AgentSelection::new(
             crate::domain::agent::AgentKind::Codex,
             AgentModel::Gpt55,
@@ -758,7 +725,7 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let mut table_state = TableState::default();
         table_state.select(Some(0));
-        let mut session = test_session("session-1", Status::Review);
+        let mut session = crate::test_support::titled_session_fixture("session-1", Status::Review);
         session.agent = crate::domain::agent::AgentSelection::new(
             crate::domain::agent::AgentKind::Codex,
             AgentModel::Gpt55,
@@ -786,9 +753,11 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let mut table_state = TableState::default();
         table_state.select(Some(1));
-        let mut parent_session = test_session("parent-1", Status::Review);
+        let mut parent_session =
+            crate::test_support::titled_session_fixture("parent-1", Status::Review);
         parent_session.title = Some("Parent session".to_string());
-        let mut child_session = test_session("child-1", Status::Draft);
+        let mut child_session =
+            crate::test_support::titled_session_fixture("child-1", Status::Draft);
         child_session.parent_session_id = Some("parent-1".into());
         child_session.title = Some("Child session".to_string());
         let sessions = vec![parent_session, child_session];
@@ -820,7 +789,7 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let mut table_state = TableState::default();
         table_state.select(Some(0));
-        let mut session = test_session("session-1", Status::Review);
+        let mut session = crate::test_support::titled_session_fixture("session-1", Status::Review);
         session.agent = crate::domain::agent::AgentSelection::new(
             crate::domain::agent::AgentKind::Codex,
             AgentModel::Gpt55,
@@ -859,7 +828,7 @@ mod tests {
         use crate::domain::session::{
             ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
         };
-        let mut session = test_session("session-1", Status::Review);
+        let mut session = crate::test_support::titled_session_fixture("session-1", Status::Review);
         session.review_request = Some(ReviewRequest {
             last_refreshed_at: 0,
             summary: ReviewRequestSummary {
@@ -887,10 +856,12 @@ mod tests {
     #[test]
     fn test_timer_column_width_uses_longest_rendered_timer_label() {
         // Arrange
-        let mut active_session = test_session("active-1", Status::InProgress);
+        let mut active_session =
+            crate::test_support::titled_session_fixture("active-1", Status::InProgress);
         active_session.in_progress_started_at = Some(100);
         active_session.in_progress_total_seconds = 60;
-        let mut archived_session = test_session("done-1", Status::Done);
+        let mut archived_session =
+            crate::test_support::titled_session_fixture("done-1", Status::Done);
         archived_session.in_progress_total_seconds = 3_661;
         let sessions = vec![active_session, archived_session];
         let expected_width = u16::try_from("1h1m1s".chars().count()).unwrap_or(u16::MAX);
@@ -927,7 +898,7 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let mut table_state = TableState::default();
         table_state.select(Some(0));
-        let mut session = test_session("new-1", Status::Draft);
+        let mut session = crate::test_support::titled_session_fixture("new-1", Status::Draft);
         session.size = SessionSize::Xxl;
         session.title = Some("Update dependency graph".to_string());
         let sessions = vec![session];
@@ -953,7 +924,7 @@ mod tests {
     #[test]
     fn test_session_list_help_line_includes_sync_for_non_empty_sessions() {
         // Arrange
-        let session = test_session("session-1", Status::Review);
+        let session = crate::test_support::titled_session_fixture("session-1", Status::Review);
 
         // Act
         let help_text = session_list_help_line(Some(&session)).to_string();
@@ -965,7 +936,7 @@ mod tests {
     #[test]
     fn test_session_list_help_line_hides_cancel_for_regular_new_session() {
         // Arrange
-        let session = test_session("session-1", Status::Draft);
+        let session = crate::test_support::titled_session_fixture("session-1", Status::Draft);
 
         // Act
         let help_text = session_list_help_line(Some(&session)).to_string();
@@ -977,7 +948,7 @@ mod tests {
     #[test]
     fn test_session_list_help_line_includes_cancel_for_draft_session() {
         // Arrange
-        let mut session = test_session("session-1", Status::Draft);
+        let mut session = crate::test_support::titled_session_fixture("session-1", Status::Draft);
         session.is_draft = true;
 
         // Act
@@ -990,7 +961,7 @@ mod tests {
     #[test]
     fn test_session_list_help_line_includes_open_for_canceled_session() {
         // Arrange
-        let session = test_session("session-1", Status::Canceled);
+        let session = crate::test_support::titled_session_fixture("session-1", Status::Canceled);
 
         // Act
         let help_text = session_list_help_line(Some(&session)).to_string();
@@ -1006,7 +977,8 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let mut table_state = TableState::default();
         table_state.select(Some(0));
-        let mut session = test_session("active-1", Status::InProgress);
+        let mut session =
+            crate::test_support::titled_session_fixture("active-1", Status::InProgress);
         session.in_progress_started_at = Some(100);
         session.in_progress_total_seconds = 60;
         let sessions = vec![session];
@@ -1031,7 +1003,7 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let mut table_state = TableState::default();
         table_state.select(Some(0));
-        let mut session = test_session("done-1", Status::Done);
+        let mut session = crate::test_support::titled_session_fixture("done-1", Status::Done);
         session.in_progress_total_seconds = 125;
         let sessions = vec![session];
 
@@ -1060,7 +1032,10 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let mut table_state = TableState::default();
         table_state.select(Some(0));
-        let sessions = vec![test_session("review-1", Status::AgentReview)];
+        let sessions = vec![crate::test_support::titled_session_fixture(
+            "review-1",
+            Status::AgentReview,
+        )];
 
         // Act
         terminal
@@ -1082,7 +1057,7 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let mut table_state = TableState::default();
         table_state.select(Some(0));
-        let mut session = test_session("draft-1", Status::Draft);
+        let mut session = crate::test_support::titled_session_fixture("draft-1", Status::Draft);
         session.title = Some("First draft\n\nSecond draft".to_string());
         let sessions = vec![session];
 
@@ -1107,7 +1082,10 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let mut table_state = TableState::default();
         table_state.select(Some(0));
-        let sessions = vec![test_session("new-1", Status::Draft)];
+        let sessions = vec![crate::test_support::titled_session_fixture(
+            "new-1",
+            Status::Draft,
+        )];
 
         // Act
         terminal

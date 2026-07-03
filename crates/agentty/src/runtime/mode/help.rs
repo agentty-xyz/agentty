@@ -34,46 +34,15 @@ pub(crate) fn handle(app: &mut App, key: KeyEvent) -> EventResult {
 #[cfg(test)]
 mod tests {
     use crossterm::event::KeyModifiers;
-    use tempfile::tempdir;
 
     use super::*;
-    use crate::infra::db::Database;
     use crate::ui::state::app_mode::{DiffRightPanel, HelpContext};
     use crate::ui::state::help_action::{HelpAction, ViewSessionState};
-
-    /// Builds one client bundle with deterministic agent availability for
-    /// test app startup.
-    fn test_app_clients() -> crate::app::AppClients {
-        crate::app::AppClients::new().with_agent_availability_probe(std::sync::Arc::new(
-            crate::infra::agent::StaticAgentAvailabilityProbe {
-                available_agent_kinds: crate::domain::agent::AgentKind::ALL.to_vec(),
-            },
-        ))
-    }
-
-    async fn new_test_app() -> (App, tempfile::TempDir) {
-        let base_dir = tempdir().expect("failed to create temp dir");
-        let base_path = base_dir.path().to_path_buf();
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
-        let app = App::new_with_clients(
-            base_path.clone(),
-            base_path,
-            None,
-            database,
-            test_app_clients(),
-        )
-        .await
-        .expect("failed to build app");
-
-        (app, base_dir)
-    }
 
     #[tokio::test]
     async fn test_handle_question_mark_restores_list_mode() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.mode = AppMode::Help {
             context: HelpContext::List {
                 keybindings: vec![HelpAction::new("quit", "q", "Quit")],
@@ -95,7 +64,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_quit_key_restores_view_mode() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.mode = AppMode::Help {
             context: HelpContext::View {
                 can_mutate_session_branch: true,
@@ -134,7 +103,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_down_key_increments_scroll_offset() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.mode = AppMode::Help {
             context: HelpContext::List {
                 keybindings: vec![HelpAction::new("quit", "q", "Quit")],
@@ -158,7 +127,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_up_key_saturates_at_zero() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.mode = AppMode::Help {
             context: HelpContext::List {
                 keybindings: vec![HelpAction::new("quit", "q", "Quit")],
@@ -182,7 +151,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_non_help_mode_leaves_mode_unchanged() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.mode = AppMode::List;
 
         // Act
@@ -199,7 +168,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_restores_diff_mode_with_content() {
         // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.mode = AppMode::Help {
             context: HelpContext::Diff {
                 session_id: "s1".into(),

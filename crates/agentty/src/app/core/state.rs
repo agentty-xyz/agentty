@@ -1903,8 +1903,8 @@ mod tests {
     use crate::domain::question::QuestionItem;
     use crate::domain::session::{
         ForgeKind, PublishedBranchSyncStatus, ReviewRequest, ReviewRequestState,
-        ReviewRequestSummary, SESSION_DATA_DIR, Session, SessionFollowUpTask, SessionHandles,
-        SessionSize, SessionStats, Status,
+        ReviewRequestSummary, SESSION_DATA_DIR, SessionFollowUpTask, SessionHandles, SessionSize,
+        SessionStats, Status,
     };
     use crate::domain::setting::SettingName;
     use crate::infra::agent::protocol::AgentResponseSummary;
@@ -1914,65 +1914,6 @@ mod tests {
     };
     use crate::infra::tmux::{MockTmuxClient, TmuxClient};
     use crate::ui::state::app_mode::ConfirmationViewMode;
-
-    /// Builds one mock app-server client wrapped in `Arc`.
-    fn mock_app_server() -> Arc<dyn app_server::AppServerClient> {
-        Arc::new(app_server::MockAppServerClient::new())
-    }
-
-    /// Builds one client bundle with one injected availability snapshot for
-    /// test app startup.
-    fn test_app_clients_with_available_agent_kinds(
-        available_agent_kinds: Vec<AgentKind>,
-    ) -> AppClients {
-        AppClients::new().with_agent_availability_probe(Arc::new(
-            agent::StaticAgentAvailabilityProbe {
-                available_agent_kinds,
-            },
-        ))
-    }
-
-    /// Builds one client bundle with deterministic agent availability for
-    /// test app startup.
-    fn test_app_clients() -> AppClients {
-        test_app_clients_with_available_agent_kinds(AgentKind::ALL.to_vec())
-    }
-
-    /// Builds one deterministic session snapshot rooted at `session_folder`.
-    fn test_session(session_folder: PathBuf) -> Session {
-        Session {
-            base_branch: "main".to_string(),
-            created_at: 0,
-            draft_attachments: Vec::new(),
-            folder: session_folder,
-            follow_up_tasks: Vec::new(),
-            id: "session-1".into(),
-            in_progress_started_at: None,
-            in_progress_total_seconds: 0,
-            is_draft: false,
-            agent: crate::domain::agent::AgentSelection::new(
-                crate::domain::agent::AgentKind::Antigravity,
-                crate::domain::agent::AgentModel::Gemini3FlashPreview,
-            ),
-            output: String::new(),
-            parent_session_id: None,
-            project_name: "test-project".to_string(),
-            prompt: "test prompt".to_string(),
-            queued_messages: Vec::new(),
-            reasoning_level_override: None,
-            published_upstream_ref: None,
-            published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
-            questions: Vec::new(),
-            review_request: None,
-            size: SessionSize::Xs,
-            stats: SessionStats::default(),
-            status: Status::Review,
-            summary: None,
-            title: None,
-            updated_at: 0,
-            workflow_notice: None,
-        }
-    }
 
     /// Builds one reducer-ready turn projection for tests.
     fn test_turn_applied_state(
@@ -2018,32 +1959,14 @@ mod tests {
         }
     }
 
-    /// Builds a test app rooted at one temporary workspace with an injected
-    /// tmux boundary.
-    async fn new_test_app_with_tmux_client(tmux_client: Arc<dyn TmuxClient>) -> App {
-        let base_dir = tempdir().expect("failed to create temp dir");
-        let base_path = base_dir.path().to_path_buf();
-        let database = AppRepositories::in_memory().await;
-        let clients = test_app_clients()
-            .with_app_server_client_override(mock_app_server())
-            .with_tmux_client(tmux_client);
-
-        App::new_with_clients(base_path.clone(), base_path, None, database, clients)
-            .await
-            .expect("failed to build test app")
-    }
-
-    /// Builds a test app rooted at one temporary workspace with a mocked tmux
-    /// boundary.
-    async fn new_test_app() -> App {
-        new_test_app_with_tmux_client(Arc::new(MockTmuxClient::new())).await
-    }
-
     /// Verifies app startup seeds the first process-local system log entry.
     #[tokio::test]
     async fn new_with_clients_records_startup_system_log() {
         // Arrange, Act
-        let app = new_test_app().await;
+        let app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
 
         // Assert
         assert!(
@@ -2060,8 +1983,8 @@ mod tests {
         let base_dir = tempdir().expect("failed to create temp dir");
         let base_path = base_dir.path().to_path_buf();
         let database = AppRepositories::in_memory().await;
-        let clients = test_app_clients_with_available_agent_kinds(Vec::new())
-            .with_app_server_client_override(mock_app_server())
+        let clients = crate::test_support::test_app_clients_with_available_agent_kinds(Vec::new())
+            .with_app_server_client_override(crate::test_support::mock_app_server())
             .with_tmux_client(Arc::new(MockTmuxClient::new()));
 
         // Act
@@ -2080,9 +2003,14 @@ mod tests {
     #[tokio::test]
     async fn session_git_status_targets_include_active_unpublished_sessions() {
         // Arrange
-        let mut app = new_test_app().await;
-        let review_session = test_session(PathBuf::from("/tmp/session-review"));
-        let mut done_session = test_session(PathBuf::from("/tmp/session-done"));
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
+        let review_session =
+            crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/session-review"));
+        let mut done_session =
+            crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/session-done"));
         done_session.id = "session-2".into();
         done_session.status = Status::Done;
         app.sessions.push_session(review_session);
@@ -2105,8 +2033,12 @@ mod tests {
     #[tokio::test]
     async fn session_git_status_targets_use_detected_session_branch_name_when_available() {
         // Arrange
-        let mut app = new_test_app().await;
-        let review_session = test_session(PathBuf::from("/tmp/session-review"));
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
+        let review_session =
+            crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/session-review"));
         app.sessions.push_session(review_session);
         app.sessions.replace_session_branch_names(HashMap::from([(
             SessionId::from("session-1"),
@@ -2130,8 +2062,12 @@ mod tests {
     #[tokio::test]
     async fn session_git_status_targets_skip_unmaterialized_drafts() {
         // Arrange
-        let mut app = new_test_app().await;
-        let mut draft_session = test_session(PathBuf::from("/tmp/session-draft"));
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
+        let mut draft_session =
+            crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/session-draft"));
         draft_session.id = "draft-1".into();
         draft_session.is_draft = true;
         draft_session.status = Status::Draft;
@@ -2209,7 +2145,7 @@ mod tests {
             base_path,
             None,
             database,
-            test_app_clients(),
+            crate::test_support::test_app_clients(),
         )
         .await
         .expect("failed to build app");
@@ -2255,7 +2191,7 @@ mod tests {
             base_path,
             None,
             database,
-            test_app_clients(),
+            crate::test_support::test_app_clients(),
         )
         .await
         .expect("failed to build app");
@@ -2296,7 +2232,10 @@ mod tests {
     #[tokio::test]
     async fn open_selected_requested_review_surfaces_comment_load_error() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         app.replace_requested_reviews(app.projects.active_project_id(), vec![requested_review()]);
 
         let mut mock_git_client = crate::infra::git::MockGitClient::new();
@@ -2369,7 +2308,10 @@ mod tests {
     #[tokio::test]
     async fn open_selected_requested_review_applies_background_comment_snapshot() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         app.replace_requested_reviews(app.projects.active_project_id(), vec![requested_review()]);
 
         let mut mock_git_client = crate::infra::git::MockGitClient::new();
@@ -2442,7 +2384,10 @@ mod tests {
     #[tokio::test]
     async fn open_selected_requested_review_reuses_in_flight_comment_fetch() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         app.replace_requested_reviews(app.projects.active_project_id(), vec![requested_review()]);
 
         let mut mock_git_client = crate::infra::git::MockGitClient::new();
@@ -2511,7 +2456,10 @@ mod tests {
     #[tokio::test]
     async fn refresh_requested_reviews_ignores_stale_comment_snapshot_completion() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         app.tabs.set(Tab::Review);
         let project_id = app.projects.active_project_id();
         let review = requested_review();
@@ -2647,7 +2595,7 @@ mod tests {
             base_path,
             None,
             database,
-            test_app_clients(),
+            crate::test_support::test_app_clients(),
         )
         .await
         .expect("failed to build app");
@@ -2676,7 +2624,7 @@ mod tests {
             base_path,
             None,
             database,
-            test_app_clients(),
+            crate::test_support::test_app_clients(),
         )
         .await
         .err()
@@ -2707,7 +2655,7 @@ mod tests {
             base_path,
             None,
             database,
-            test_app_clients(),
+            crate::test_support::test_app_clients(),
         )
         .await
         .err()
@@ -2790,7 +2738,7 @@ mod tests {
             current_project_path.clone(),
             Some("main".to_string()),
             database,
-            test_app_clients(),
+            crate::test_support::test_app_clients(),
         )
         .await
         .expect("failed to build app");
@@ -2826,14 +2774,20 @@ mod tests {
         tmux_client: Arc<dyn TmuxClient>,
     ) -> App {
         // Arrange
-        let mut app = new_test_app_with_tmux_client(tmux_client).await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            tmux_client,
+        )
+        .await;
         if !session_folder.as_os_str().is_empty() {
             std::fs::create_dir_all(&session_folder).expect("failed to create session folder");
         }
 
         // Act
         app.settings.open_command = open_command.to_string();
-        app.sessions.push_session(test_session(session_folder));
+        app.sessions
+            .push_session(crate::test_support::session_fixture_with_folder(
+                session_folder,
+            ));
         app.sessions.select_session_index(Some(0));
 
         // Assert
@@ -2959,9 +2913,9 @@ mod tests {
     #[tokio::test]
     async fn push_session_branch_auth_failure_shows_git_guidance() {
         // Arrange
-        let branch_session = BranchPublishTaskSession::from_session(&test_session(PathBuf::from(
-            "/tmp/review-session",
-        )));
+        let branch_session = BranchPublishTaskSession::from_session(
+            &crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/review-session")),
+        );
         let mut mock_git_client = crate::infra::git::MockGitClient::new();
         mock_git_client
             .expect_push_current_branch_to_remote_branch()
@@ -3008,9 +2962,9 @@ mod tests {
     #[tokio::test]
     async fn push_session_branch_preserves_blocked_when_remote_branch_exists() {
         // Arrange
-        let branch_session = BranchPublishTaskSession::from_session(&test_session(PathBuf::from(
-            "/tmp/review-session",
-        )));
+        let branch_session = BranchPublishTaskSession::from_session(
+            &crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/review-session")),
+        );
         let mut mock_git_client = crate::infra::git::MockGitClient::new();
         mock_git_client
             .expect_remote_branch_exists()
@@ -3038,9 +2992,9 @@ mod tests {
     #[tokio::test]
     async fn push_session_branch_shows_auth_guidance_when_ls_remote_fails_with_auth_error() {
         // Arrange
-        let branch_session = BranchPublishTaskSession::from_session(&test_session(PathBuf::from(
-            "/tmp/review-session",
-        )));
+        let branch_session = BranchPublishTaskSession::from_session(
+            &crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/review-session")),
+        );
         let mut mock_git_client = crate::infra::git::MockGitClient::new();
         mock_git_client
             .expect_remote_branch_exists()
@@ -3078,8 +3032,12 @@ mod tests {
     #[tokio::test]
     async fn branch_publish_task_helpers_reject_unsupported_session_states() {
         // Arrange
-        let app = new_test_app().await;
-        let mut review_session = test_session(PathBuf::from("/tmp/review-session"));
+        let app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
+        let mut review_session =
+            crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/review-session"));
         review_session.status = Status::Done;
         let done_snapshot = BranchPublishTaskSession::from_session(&review_session);
 
@@ -3123,8 +3081,12 @@ mod tests {
     #[tokio::test]
     async fn branch_publish_task_session_targets_stacked_parent_review_source_branch() {
         // Arrange
-        let mut app = new_test_app().await;
-        let mut parent_session = test_session(PathBuf::from("/tmp/parent-session"));
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
+        let mut parent_session =
+            crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/parent-session"));
         parent_session.id = "parent-session".into();
         parent_session.review_request = Some(ReviewRequest {
             last_refreshed_at: 0,
@@ -3139,7 +3101,8 @@ mod tests {
                 web_url: "https://github.com/org/repo/pull/12".to_string(),
             },
         });
-        let mut child_session = test_session(PathBuf::from("/tmp/child-session"));
+        let mut child_session =
+            crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/child-session"));
         child_session.id = "child-session".into();
         child_session.base_branch = session::session_branch("parent-session");
         child_session.parent_session_id = Some("parent-session".into());
@@ -3158,11 +3121,16 @@ mod tests {
     #[tokio::test]
     async fn branch_publish_task_session_targets_stacked_parent_upstream_branch() {
         // Arrange
-        let mut app = new_test_app().await;
-        let mut parent_session = test_session(PathBuf::from("/tmp/parent-session"));
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
+        let mut parent_session =
+            crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/parent-session"));
         parent_session.id = "parent-session".into();
         parent_session.published_upstream_ref = Some("origin/review/parent-custom".to_string());
-        let mut child_session = test_session(PathBuf::from("/tmp/child-session"));
+        let mut child_session =
+            crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/child-session"));
         child_session.id = "child-session".into();
         child_session.base_branch = session::session_branch("parent-session");
         child_session.parent_session_id = Some("parent-session".into());
@@ -3181,9 +3149,9 @@ mod tests {
     #[tokio::test]
     async fn push_session_branch_uses_custom_remote_branch_name_when_provided() {
         // Arrange
-        let branch_session = BranchPublishTaskSession::from_session(&test_session(PathBuf::from(
-            "/tmp/review-session",
-        )));
+        let branch_session = BranchPublishTaskSession::from_session(
+            &crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/review-session")),
+        );
         let mut mock_git_client = crate::infra::git::MockGitClient::new();
         mock_git_client
             .expect_remote_branch_exists()
@@ -3237,9 +3205,9 @@ mod tests {
     #[tokio::test]
     async fn push_session_branch_succeeds_without_review_request_link_for_unsupported_remote() {
         // Arrange
-        let branch_session = BranchPublishTaskSession::from_session(&test_session(PathBuf::from(
-            "/tmp/review-session",
-        )));
+        let branch_session = BranchPublishTaskSession::from_session(
+            &crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/review-session")),
+        );
         let mut mock_git_client = crate::infra::git::MockGitClient::new();
         mock_git_client
             .expect_push_current_branch_to_remote_branch()
@@ -3459,7 +3427,10 @@ mod tests {
     #[tokio::test]
     async fn stats_for_session_returns_duration_and_usage_rows() {
         // Arrange
-        let app = new_test_app().await;
+        let app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         let session_id = "session-stats";
         let project_id = app
             .services
@@ -3511,7 +3482,10 @@ mod tests {
     #[tokio::test]
     async fn stats_for_session_returns_none_duration_for_unknown_session() {
         // Arrange
-        let app = new_test_app().await;
+        let app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
 
         // Act
         let stats = app.stats_for_session("missing-session").await;
@@ -3524,7 +3498,10 @@ mod tests {
     #[tokio::test]
     async fn configured_open_commands_returns_trimmed_non_empty_entries() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         app.settings.open_command = "  cargo test \n npm run dev \n".to_string();
 
         // Act
@@ -3599,10 +3576,15 @@ mod tests {
         let mut mock_tmux_client = MockTmuxClient::new();
         mock_tmux_client.expect_open_window_for_folder().times(0);
         mock_tmux_client.expect_run_command_in_window().times(0);
-        let mut app = new_test_app_with_tmux_client(Arc::new(mock_tmux_client)).await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(mock_tmux_client),
+        )
+        .await;
         app.settings.open_command = "npm run dev".to_string();
         app.sessions
-            .push_session(test_session(missing_session_folder));
+            .push_session(crate::test_support::session_fixture_with_folder(
+                missing_session_folder,
+            ));
         app.sessions.select_session_index(Some(0));
 
         // Act
@@ -4177,7 +4159,10 @@ mod tests {
     /// `App.update_status`.
     async fn apply_app_events_update_status_changed_updates_app_state() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         assert!(app.update_status().is_none());
         app.clear_redraw();
 
@@ -4204,7 +4189,10 @@ mod tests {
     /// rows and request a redraw.
     async fn apply_app_events_agent_cli_versions_updates_app_services() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         app.services
             .replace_available_agent_clis(vec![AgentCliInfo::loading(AgentKind::Claude)]);
         app.clear_redraw();
@@ -4233,7 +4221,10 @@ mod tests {
     #[tokio::test]
     async fn apply_app_events_records_system_log_events() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         let initial_log_count = app.system_logs.len();
         app.clear_redraw();
 
@@ -4267,8 +4258,12 @@ mod tests {
     /// changing persisted transcript output.
     async fn apply_app_events_session_workflow_notice_updates_session_state() {
         // Arrange
-        let mut app = new_test_app().await;
-        let mut session = test_session(PathBuf::from("/tmp/session-review"));
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
+        let mut session =
+            crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/session-review"));
         session.id = "session-1".into();
         session.output = "assistant output".to_string();
         app.sessions.push_session(session);
@@ -4311,7 +4306,10 @@ mod tests {
     /// reducer has already applied that handle snapshot.
     async fn apply_app_events_session_updated_same_version_keeps_redraw_clean() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
 
         // Act
         app.apply_app_events(AppEvent::SessionUpdated {
@@ -4335,9 +4333,14 @@ mod tests {
     /// session snapshot cache.
     async fn apply_app_events_git_status_updated_updates_project_and_session_state() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         app.sessions
-            .push_session(test_session(PathBuf::from("/tmp/session-git-status")));
+            .push_session(crate::test_support::session_fixture_with_folder(
+                PathBuf::from("/tmp/session-git-status"),
+            ));
 
         // Act
         app.apply_app_events(AppEvent::GitStatusUpdated {
@@ -4372,7 +4375,10 @@ mod tests {
     /// generation.
     async fn apply_app_events_git_status_updated_ignores_stale_generation() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         app.publish_sync_context_for_refresh();
         let stale_generation = app.sync_handle.current_generation().saturating_sub(1);
 
@@ -4394,9 +4400,14 @@ mod tests {
     /// session after the sync context moved to a newer generation.
     async fn apply_app_events_review_request_status_updated_ignores_stale_generation() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         app.sessions
-            .push_session(test_session(PathBuf::from("/tmp/session-review-stale")));
+            .push_session(crate::test_support::session_fixture_with_folder(
+                PathBuf::from("/tmp/session-review-stale"),
+            ));
         app.publish_sync_context_for_refresh();
         let stale_generation = app.sync_handle.current_generation().saturating_sub(1);
 
@@ -4428,7 +4439,10 @@ mod tests {
     #[tokio::test]
     async fn apply_app_events_review_request_status_transition_records_system_log() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         let project_id = app.active_project_id();
         let session_id = "session-log-transition";
         app.services
@@ -4499,7 +4513,10 @@ mod tests {
     /// post-sync refresh bumps the status generation.
     async fn apply_app_events_review_request_status_survives_same_batch_sync_refresh() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         let project_id = app.active_project_id();
         let session_id = "session-sync-batch";
         app.services
@@ -4568,8 +4585,8 @@ mod tests {
         let base_dir = tempdir().expect("failed to create temp dir");
         let base_path = base_dir.path().to_path_buf();
         let database = AppRepositories::in_memory().await;
-        let clients = test_app_clients()
-            .with_app_server_client_override(mock_app_server())
+        let clients = crate::test_support::test_app_clients()
+            .with_app_server_client_override(crate::test_support::mock_app_server())
             .with_tmux_client(Arc::new(MockTmuxClient::new()));
         let mut app = App::new_with_clients(
             base_path.clone(),
@@ -4635,9 +4652,14 @@ mod tests {
     #[tokio::test]
     async fn apply_app_events_agent_response_switches_view_mode_to_question_mode() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         app.sessions
-            .push_session(test_session(PathBuf::from("/tmp/session-question-view")));
+            .push_session(crate::test_support::session_fixture_with_folder(
+                PathBuf::from("/tmp/session-question-view"),
+            ));
         app.mode = AppMode::View {
             review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
             review_text: Some("Focused review".to_string()),
@@ -4702,7 +4724,10 @@ mod tests {
     #[tokio::test]
     async fn apply_app_events_agent_response_keeps_list_mode_when_not_viewing_session() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         app.mode = AppMode::List;
 
         // Act
@@ -4726,9 +4751,14 @@ mod tests {
     /// summary immediately.
     async fn apply_app_events_agent_response_updates_session_summary() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         app.sessions
-            .push_session(test_session(PathBuf::from("/tmp/session-summary-view")));
+            .push_session(crate::test_support::session_fixture_with_folder(
+                PathBuf::from("/tmp/session-summary-view"),
+            ));
         let expected_summary = serde_json::to_string(&AgentResponseSummary {
             turn: "- Added structured protocol summary fields.".to_string(),
             session: "- Session output now renders persisted summary separately.".to_string(),
@@ -4763,9 +4793,14 @@ mod tests {
     /// the active session.
     async fn apply_app_events_agent_response_updates_session_follow_up_tasks() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         app.sessions
-            .push_session(test_session(PathBuf::from("/tmp/session-follow-up-view")));
+            .push_session(crate::test_support::session_fixture_with_folder(
+                PathBuf::from("/tmp/session-follow-up-view"),
+            ));
 
         // Act
         app.apply_app_events(AppEvent::AgentResponseReceived {
@@ -4800,9 +4835,14 @@ mod tests {
     /// latest in-progress auto-push state.
     async fn apply_app_events_ignores_stale_published_branch_sync_updates() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         app.sessions
-            .push_session(test_session(PathBuf::from("/tmp/session-branch-sync-view")));
+            .push_session(crate::test_support::session_fixture_with_folder(
+                PathBuf::from("/tmp/session-branch-sync-view"),
+            ));
 
         // Act
         app.apply_app_events(AppEvent::PublishedBranchSyncUpdated {
@@ -4836,11 +4876,15 @@ mod tests {
     /// when start and success updates are drained together.
     async fn apply_app_events_preserves_completed_published_branch_sync_updates() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         let event_sender = app.services.event_sender();
-        app.sessions.push_session(test_session(PathBuf::from(
-            "/tmp/session-branch-sync-success",
-        )));
+        app.sessions
+            .push_session(crate::test_support::session_fixture_with_folder(
+                PathBuf::from("/tmp/session-branch-sync-success"),
+            ));
 
         event_sender
             .send(AppEvent::PublishedBranchSyncUpdated {
@@ -4870,8 +4914,13 @@ mod tests {
     /// token deltas to cached session stats.
     async fn apply_app_events_agent_response_updates_questions_and_token_usage() {
         // Arrange
-        let mut app = new_test_app().await;
-        let mut session = test_session(PathBuf::from("/tmp/session-stats-view"));
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
+        let mut session = crate::test_support::session_fixture_with_folder(PathBuf::from(
+            "/tmp/session-stats-view",
+        ));
         session.questions = vec![QuestionItem::new("Old question?")];
         session.stats.input_tokens = 5;
         session.stats.output_tokens = 8;
@@ -4906,13 +4955,18 @@ mod tests {
     /// `SessionUpdated` event has not been reduced yet.
     async fn apply_app_events_agent_response_starts_auto_review_from_synced_handle_status() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         let session_id = "session-1";
         let diff_text = "diff --git a/file.rs b/file.rs\n+new line";
         let expected_hash = diff_content_hash(diff_text);
 
         app.sessions
-            .push_session(test_session(PathBuf::from("/tmp/session-auto-review-sync")));
+            .push_session(crate::test_support::session_fixture_with_folder(
+                PathBuf::from("/tmp/session-auto-review-sync"),
+            ));
         app.sessions.sessions_mut()[0].status = Status::InProgress;
         app.sessions.session_handles_mut().insert(
             session_id.to_string().into(),
@@ -4970,13 +5024,18 @@ mod tests {
     /// auto-review triggering.
     async fn apply_app_events_agent_response_starts_auto_review_when_snapshot_already_review() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         let session_id = "session-1";
         let diff_text = "diff --git a/file.rs b/file.rs\n+new line";
         let expected_hash = diff_content_hash(diff_text);
 
         app.sessions
-            .push_session(test_session(PathBuf::from("/tmp/session-already-review")));
+            .push_session(crate::test_support::session_fixture_with_folder(
+                PathBuf::from("/tmp/session-already-review"),
+            ));
         // Simulate sync_from_handles() having already updated the snapshot
         // to `Review` in a prior render tick.
         app.sessions.sessions_mut()[0].status = Status::Review;
@@ -5034,10 +5093,15 @@ mod tests {
     /// accumulating token usage from multiple queued completions.
     async fn apply_app_events_agent_response_batches_same_session_turns() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         let event_sender = app.services.event_sender();
         app.sessions
-            .push_session(test_session(PathBuf::from("/tmp/session-batched-turns")));
+            .push_session(crate::test_support::session_fixture_with_folder(
+                PathBuf::from("/tmp/session-batched-turns"),
+            ));
 
         let first_turn = test_turn_applied_state(
             vec![QuestionItem::new("First question?")],
@@ -5098,15 +5162,20 @@ mod tests {
     /// session instead of creating another session.
     async fn launch_or_open_selected_follow_up_task_opens_existing_sibling_session() {
         // Arrange
-        let mut app = new_test_app().await;
-        let mut source_session = test_session(PathBuf::from("/tmp/source-session"));
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
+        let mut source_session =
+            crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/source-session"));
         source_session.follow_up_tasks = vec![SessionFollowUpTask {
             id: 1,
             launched_session_id: Some("session-2".into()),
             position: 0,
             text: "Open the sibling session.".to_string(),
         }];
-        let mut sibling_session = test_session(PathBuf::from("/tmp/sibling-session"));
+        let mut sibling_session =
+            crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/sibling-session"));
         sibling_session.id = "session-2".into();
         sibling_session.title = Some("Sibling session".to_string());
         app.sessions.push_session(source_session);
@@ -5134,8 +5203,12 @@ mod tests {
     /// same orphaned sibling id.
     async fn launch_or_open_selected_follow_up_task_clears_stale_sibling_link_before_launch() {
         // Arrange
-        let mut app = new_test_app().await;
-        let mut source_session = test_session(PathBuf::from("/tmp/source-session"));
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
+        let mut source_session =
+            crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/source-session"));
         source_session.follow_up_tasks = vec![SessionFollowUpTask {
             id: 1,
             launched_session_id: Some("missing-session".into()),
@@ -5167,9 +5240,14 @@ mod tests {
     /// transition reaches `Done`.
     async fn apply_app_events_session_updated_keeps_done_view_review_state() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         app.sessions
-            .push_session(test_session(PathBuf::from("/tmp/session-done-view")));
+            .push_session(crate::test_support::session_fixture_with_folder(
+                PathBuf::from("/tmp/session-done-view"),
+            ));
         app.sessions.session_handles_mut().insert(
             "session-1".into(),
             SessionHandles::new("Merge finished".to_string(), Status::Done),
@@ -5228,12 +5306,12 @@ mod tests {
             base_path.clone(),
             None,
             database,
-            test_app_clients(),
+            crate::test_support::test_app_clients(),
         )
         .await
         .expect("failed to build app");
         let session_folder = base_path.join("session-1");
-        let mut viewed_session = test_session(session_folder);
+        let mut viewed_session = crate::test_support::session_fixture_with_folder(session_folder);
         viewed_session.status = Status::Merging;
         app.sessions.push_session(viewed_session);
         app.sessions.session_handles_mut().insert(
@@ -5533,7 +5611,7 @@ mod tests {
             base_path,
             None,
             database,
-            test_app_clients(),
+            crate::test_support::test_app_clients(),
         )
         .await
         .expect("failed to build app");
@@ -5792,8 +5870,8 @@ mod tests {
         let base_dir = tempdir().expect("failed to create temp dir");
         let base_path = base_dir.path().to_path_buf();
         let database = AppRepositories::in_memory().await;
-        let clients = test_app_clients()
-            .with_app_server_client_override(mock_app_server())
+        let clients = crate::test_support::test_app_clients()
+            .with_app_server_client_override(crate::test_support::mock_app_server())
             .with_tmux_client(Arc::new(MockTmuxClient::new()));
         let mut app = App::new_with_clients(
             base_path.clone(),
@@ -5824,7 +5902,7 @@ mod tests {
             .update_session_merged_commit_hash("done-source", Some(merged_commit_hash.to_string()))
             .await
             .expect("failed to persist merged commit hash");
-        let mut source_session = crate::domain::session::tests::SessionFixtureBuilder::new()
+        let mut source_session = crate::test_support::SessionFixtureBuilder::new()
             .id("done-source")
             .status(Status::Done)
             .project_name("project-alpha")
@@ -5897,8 +5975,8 @@ mod tests {
         let base_dir = tempdir().expect("failed to create temp dir");
         let base_path = base_dir.path().to_path_buf();
         let database = AppRepositories::in_memory().await;
-        let clients = test_app_clients()
-            .with_app_server_client_override(mock_app_server())
+        let clients = crate::test_support::test_app_clients()
+            .with_app_server_client_override(crate::test_support::mock_app_server())
             .with_tmux_client(Arc::new(MockTmuxClient::new()));
         let mut app = App::new_with_clients(
             base_path.clone(),
@@ -5916,7 +5994,7 @@ mod tests {
             .insert_session("done-source", "gpt-5.5", "main", "Done", project_id)
             .await
             .expect("failed to insert source session row");
-        let source_session = crate::domain::session::tests::SessionFixtureBuilder::new()
+        let source_session = crate::test_support::SessionFixtureBuilder::new()
             .id("done-source")
             .status(Status::Done)
             .summary(Some("# Summary\n\nUse the saved context.".to_string()))
@@ -5974,8 +6052,11 @@ mod tests {
     #[tokio::test]
     async fn test_continue_terminal_session_rejects_non_terminal_source_session() {
         // Arrange
-        let mut app = new_test_app().await;
-        let source_session = crate::domain::session::tests::SessionFixtureBuilder::new()
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
+        let source_session = crate::test_support::SessionFixtureBuilder::new()
             .id("review-source")
             .status(Status::Review)
             .summary(Some("summary".to_string()))
@@ -5996,8 +6077,11 @@ mod tests {
     #[tokio::test]
     async fn test_continue_terminal_session_rejects_canceled_source_session() {
         // Arrange
-        let mut app = new_test_app().await;
-        let source_session = crate::domain::session::tests::SessionFixtureBuilder::new()
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
+        let source_session = crate::test_support::SessionFixtureBuilder::new()
             .id("canceled-source")
             .status(Status::Canceled)
             .summary(Some("summary".to_string()))
@@ -6018,8 +6102,11 @@ mod tests {
     #[tokio::test]
     async fn test_continue_terminal_session_reports_legacy_session_without_project() {
         // Arrange
-        let mut app = new_test_app().await;
-        let source_session = crate::domain::session::tests::SessionFixtureBuilder::new()
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
+        let source_session = crate::test_support::SessionFixtureBuilder::new()
             .id("legacy-source")
             .status(Status::Done)
             .summary(Some("summary".to_string()))
@@ -6041,10 +6128,15 @@ mod tests {
     #[tokio::test]
     async fn apply_review_update_stores_success_in_cache() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         let session_id = "session-review-cache";
         let review_text = "## Review\nLooks good.";
-        let mut session = test_session(PathBuf::from("/tmp/session-review-cache"));
+        let mut session = crate::test_support::session_fixture_with_folder(PathBuf::from(
+            "/tmp/session-review-cache",
+        ));
         session.id = session_id.to_string().into();
         session.status = Status::AgentReview;
         app.sessions.push_session(session);
@@ -6087,7 +6179,10 @@ mod tests {
     #[tokio::test]
     async fn apply_review_update_stores_failure_in_cache() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         let session_id = "session-review-fail";
         let error_message = "Review assist failed with exit code 1";
         app.review_cache.insert(
@@ -6114,7 +6209,10 @@ mod tests {
     #[tokio::test]
     async fn apply_review_update_ignores_stale_diff_hash() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         let session_id = "session-review-stale";
         app.review_cache.insert(
             session_id.to_string().into(),
@@ -6140,9 +6238,14 @@ mod tests {
     #[tokio::test]
     async fn apply_review_update_keeps_non_agent_review_status_unchanged() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         let session_id = "session-review-progress";
-        let mut session = test_session(PathBuf::from("/tmp/session-review-progress"));
+        let mut session = crate::test_support::session_fixture_with_folder(PathBuf::from(
+            "/tmp/session-review-progress",
+        ));
         session.id = session_id.to_string().into();
         session.status = Status::InProgress;
         app.sessions.push_session(session);
@@ -6181,10 +6284,15 @@ mod tests {
     #[tokio::test]
     async fn auto_start_reviews_clears_cache_on_in_progress_transition() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         let session_id = "session-1";
         app.sessions
-            .push_session(test_session(PathBuf::from("/tmp/session-cache-clear")));
+            .push_session(crate::test_support::session_fixture_with_folder(
+                PathBuf::from("/tmp/session-cache-clear"),
+            ));
         app.sessions.sessions_mut()[0].status = Status::InProgress;
         app.review_cache.insert(
             session_id.to_string().into(),
@@ -6205,10 +6313,15 @@ mod tests {
     #[tokio::test]
     async fn auto_start_reviews_skips_when_diff_hash_unchanged() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         let session_id = "session-1";
         app.sessions
-            .push_session(test_session(PathBuf::from("/tmp/session-hash-skip")));
+            .push_session(crate::test_support::session_fixture_with_folder(
+                PathBuf::from("/tmp/session-hash-skip"),
+            ));
         app.sessions.sessions_mut()[0].status = Status::Review;
 
         let diff_text = "diff --git a/file.rs b/file.rs\n+new line";
@@ -6243,10 +6356,15 @@ mod tests {
     /// hash is not re-triggered by a subsequent reducer tick.
     async fn auto_start_reviews_skips_when_already_loading_with_same_hash() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         let session_id = "session-1";
         app.sessions
-            .push_session(test_session(PathBuf::from("/tmp/session-loading-skip")));
+            .push_session(crate::test_support::session_fixture_with_folder(
+                PathBuf::from("/tmp/session-loading-skip"),
+            ));
         app.sessions.sessions_mut()[0].status = Status::Review;
 
         let diff_text = "diff --git a/file.rs b/file.rs\n+new line";
@@ -6278,10 +6396,15 @@ mod tests {
     #[tokio::test]
     async fn auto_start_reviews_skips_when_auto_review_is_suppressed() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         let session_id = "session-1";
         app.sessions
-            .push_session(test_session(PathBuf::from("/tmp/session-suppressed-skip")));
+            .push_session(crate::test_support::session_fixture_with_folder(
+                PathBuf::from("/tmp/session-suppressed-skip"),
+            ));
         app.sessions.sessions_mut()[0].status = Status::Review;
 
         let diff_text = "diff --git a/file.rs b/file.rs\n+stopped turn";
@@ -6312,10 +6435,15 @@ mod tests {
     #[tokio::test]
     async fn auto_start_reviews_starts_loading_for_review_session() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         let session_id = "session-1";
         app.sessions
-            .push_session(test_session(PathBuf::from("/tmp/session-hash-start")));
+            .push_session(crate::test_support::session_fixture_with_folder(
+                PathBuf::from("/tmp/session-hash-start"),
+            ));
         app.sessions.sessions_mut()[0].status = Status::Review;
 
         let diff_text = "diff --git a/file.rs b/file.rs\n+new line";
@@ -6342,9 +6470,14 @@ mod tests {
     #[tokio::test]
     async fn delete_selected_session_clears_review_cache() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         app.sessions
-            .push_session(test_session(PathBuf::from("/tmp/session-delete-cache")));
+            .push_session(crate::test_support::session_fixture_with_folder(
+                PathBuf::from("/tmp/session-delete-cache"),
+            ));
         app.sessions.select_session_index(Some(0));
         let session_id = app.sessions.sessions()[0].id.clone();
         app.review_cache.insert(
@@ -6382,7 +6515,10 @@ mod tests {
     #[tokio::test]
     async fn test_apply_review_request_status_update_ignores_background_errors() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         app.mode = AppMode::List;
 
         let update = ReviewRequestStatusUpdate {
@@ -6401,7 +6537,10 @@ mod tests {
     #[tokio::test]
     async fn test_apply_review_request_status_update_persists_summary() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         let project_id = app.active_project_id();
         let session_id = "session-1";
         app.services
@@ -6456,7 +6595,10 @@ mod tests {
     #[tokio::test]
     async fn test_apply_review_request_status_update_closed_cancels_session() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         let project_id = app.active_project_id();
         let session_id = "session-closed";
         app.services
@@ -6511,7 +6653,10 @@ mod tests {
     #[tokio::test]
     async fn test_apply_review_request_status_update_closed_cancels_stacked_child() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         let project_id = app.active_project_id();
         let session_id = "session-closed";
         let child_session_id = "session-child";
@@ -6585,7 +6730,10 @@ mod tests {
     #[tokio::test]
     async fn test_apply_review_request_status_update_merged_marks_session_done() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         let project_id = app.active_project_id();
         let session_id = "session-merged";
         app.services
@@ -6650,7 +6798,10 @@ mod tests {
     #[tokio::test]
     async fn test_apply_review_request_status_update_merged_restacks_stacked_child() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         let project_id = app.active_project_id();
         let session_id = "session-merged";
         let child_session_id = "session-child";

@@ -975,52 +975,22 @@ mod tests {
     use super::*;
     use crate::domain::agent::AgentModel;
     use crate::domain::session::Status;
-    use crate::infra::db::Database;
     use crate::ui::state::app_mode::QuestionFocus;
 
     /// Fake terminal size used by tests that don't exercise scrolling.
     const TEST_TERMINAL_SIZE: Rect = Rect::new(0, 0, 80, 24);
 
-    /// Builds one client bundle with deterministic agent availability for
-    /// test app startup.
-    fn test_app_clients() -> crate::app::AppClients {
-        crate::app::AppClients::new().with_agent_availability_probe(std::sync::Arc::new(
-            crate::infra::agent::StaticAgentAvailabilityProbe {
-                available_agent_kinds: crate::domain::agent::AgentKind::ALL.to_vec(),
-            },
-        ))
-    }
-
-    /// Creates one test app with in-memory persistence.
-    async fn new_test_app() -> App {
-        let base_dir = tempdir().expect("failed to create temp dir");
-        let base_path = base_dir.path().to_path_buf();
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
-
-        App::new_with_clients(
-            base_path.clone(),
-            base_path,
-            None,
-            database,
-            test_app_clients(),
-        )
-        .await
-        .expect("failed to build app")
-    }
-
     #[tokio::test]
     async fn test_question_view_metrics_uses_default_review_model_for_loading_fallback() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         let session_id = "session-review-model";
         app.settings.default_review_selection = crate::domain::agent::AgentSelection::new(
             crate::domain::agent::AgentKind::Claude,
             AgentModel::ClaudeHaiku4520251001,
         );
         app.sessions.push_session(
-            crate::domain::session::tests::SessionFixtureBuilder::new()
+            crate::test_support::SessionFixtureBuilder::new()
                 .id(session_id)
                 .model(AgentModel::Gpt55)
                 .status(Status::AgentReview)
@@ -1068,7 +1038,7 @@ mod tests {
     async fn test_handle_enter_on_type_custom_answer_with_blank_input_records_no_answer() {
         // Arrange — user navigated to "Type custom answer" and entered
         // free-text mode, then pressed Enter with empty input.
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::Question {
             at_mention_state: None,
             review_status_message: None,
@@ -1116,7 +1086,7 @@ mod tests {
     async fn test_handle_ctrl_c_ends_turn_and_transitions_to_view() {
         // Arrange — two unanswered questions. Ctrl+C should cancel the
         // question turn and transition to View without sending a reply.
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.review_cache.insert(
             "session-ctrl-c".into(),
             crate::app::ReviewCacheEntry::Ready {
@@ -1171,7 +1141,7 @@ mod tests {
     async fn test_handle_escape_ends_turn_and_transitions_to_view() {
         // Arrange — answer focus with no at-mention overlay. Esc must mirror
         // Ctrl+C and cancel the question turn without sending a reply.
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.review_cache.insert(
             "session-esc".into(),
             crate::app::ReviewCacheEntry::Ready {
@@ -1220,7 +1190,7 @@ mod tests {
     async fn test_handle_q_returns_to_sessions_list_in_chat_focus() {
         // Arrange — chat focus is read-only, so plain `q` should jump to the
         // sessions list (matching session-view navigation).
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::Question {
             at_mention_state: None,
             review_status_message: None,
@@ -1254,7 +1224,7 @@ mod tests {
     async fn test_handle_q_returns_to_sessions_list_when_navigating_options() {
         // Arrange — option-navigation mode treats letters as navigation
         // keys, so `q` should exit to the sessions list.
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::Question {
             at_mention_state: None,
             review_status_message: None,
@@ -1288,7 +1258,7 @@ mod tests {
     async fn test_handle_q_inserts_character_in_free_text_answer() {
         // Arrange — free-text mode (no option navigation) must accept `q` as
         // a regular character so users can type answers containing it.
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::Question {
             at_mention_state: None,
             review_status_message: None,
@@ -1329,7 +1299,7 @@ mod tests {
 
         use crate::domain::session::{Session, SessionSize, SessionStats};
 
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         let session_id = "session-review-check";
         app.sessions.push_session(Session {
             base_branch: "main".to_string(),
@@ -1407,7 +1377,7 @@ mod tests {
 
         use crate::domain::session::{Session, SessionHandles, SessionSize, SessionStats};
 
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         let session_id = "session-handle-review";
         app.sessions.push_session(Session {
             base_branch: "main".to_string(),
@@ -1484,7 +1454,7 @@ mod tests {
     async fn test_handle_ctrl_c_closes_open_in_progress_timer_before_review() {
         // Arrange — persisted state still has an open active-work interval
         // when question mode exits.
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         let session_id = "session-timer-close";
         let project_id = app
             .services
@@ -1556,7 +1526,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_enter_on_last_question_transitions_to_view_mode() {
         // Arrange — free-text mode on last question.
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::Question {
             at_mention_state: None,
             review_status_message: None,
@@ -1595,7 +1565,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_paste_normalizes_line_endings_in_free_text_mode() {
         // Arrange — free-text mode (user selected "Type custom answer").
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::Question {
             at_mention_state: None,
             review_status_message: None,
@@ -1626,7 +1596,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_paste_ignored_while_navigating_options() {
         // Arrange — navigating options mode.
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = question_mode_with_options();
 
         // Act
@@ -1673,7 +1643,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_down_from_first_selects_second_option() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = question_mode_with_options();
 
         // Act
@@ -1698,7 +1668,7 @@ mod tests {
     async fn test_handle_up_from_first_enters_free_text_mode() {
         // Arrange — 3 real options, navigating up from first wraps to
         // free-text input.
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = question_mode_with_options();
 
         // Act
@@ -1723,7 +1693,7 @@ mod tests {
     async fn test_handle_down_from_last_real_enters_free_text_mode() {
         // Arrange — 3 real options, navigating down from last enters
         // free-text input.
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = question_mode_with_options();
         if let AppMode::Question {
             selected_option_index,
@@ -1754,7 +1724,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_up_from_free_text_returns_to_last_real_option() {
         // Arrange — free-text mode with 3 real options available.
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = question_mode_with_options();
         if let AppMode::Question {
             selected_option_index,
@@ -1785,7 +1755,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_down_from_free_text_wraps_to_first_option() {
         // Arrange — free-text mode with 3 real options available.
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = question_mode_with_options();
         if let AppMode::Question {
             selected_option_index,
@@ -1816,7 +1786,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_enter_with_selected_option_submits_option_text() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::Question {
             at_mention_state: None,
             review_status_message: None,
@@ -1863,7 +1833,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_char_ignored_while_navigating_options() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = question_mode_with_options();
         if let AppMode::Question {
             selected_option_index,
@@ -1896,7 +1866,7 @@ mod tests {
     async fn test_handle_up_from_free_text_stays_in_free_text_when_no_options() {
         // Arrange — question has no predefined options, so Up stays in
         // free-text mode (no options to navigate to).
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = free_text_question_mode("some text", 4);
 
         // Act
@@ -1921,7 +1891,7 @@ mod tests {
     async fn test_handle_up_from_free_text_stays_when_cursor_not_on_first_line() {
         // Arrange — multiline input with cursor on second line. Up should
         // move the cursor within the text, not exit to option navigation.
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = question_mode_with_options();
         if let AppMode::Question {
             selected_option_index,
@@ -1956,7 +1926,7 @@ mod tests {
     async fn test_handle_down_from_free_text_stays_when_cursor_not_on_last_line() {
         // Arrange — multiline input with cursor on first line. Down should
         // move the cursor within the text, not exit to option navigation.
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = question_mode_with_options();
         if let AppMode::Question {
             selected_option_index,
@@ -1990,7 +1960,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_char_inserts_in_free_text_mode() {
         // Arrange — free-text mode after selecting "Type custom answer".
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = question_mode_with_options();
         if let AppMode::Question {
             selected_option_index,
@@ -2022,7 +1992,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_j_selects_next_option() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = question_mode_with_options();
 
         // Act
@@ -2046,7 +2016,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_k_selects_previous_option() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = question_mode_with_options();
         if let AppMode::Question {
             selected_option_index,
@@ -2077,7 +2047,7 @@ mod tests {
     #[tokio::test]
     async fn test_store_question_response_defaults_to_first_option_on_next_question() {
         // Arrange — free-text mode on first question, next has options.
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::Question {
             at_mention_state: None,
             review_status_message: None,
@@ -2157,7 +2127,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_tab_toggles_focus_from_answer_to_chat() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = question_mode_with_options();
 
         // Act
@@ -2181,7 +2151,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_tab_toggles_focus_from_chat_to_answer() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = question_mode_with_options();
         if let AppMode::Question { focus, .. } = &mut app.mode {
             *focus = QuestionFocus::Chat;
@@ -2208,7 +2178,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_scroll_down_in_chat_focus_updates_scroll_offset() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = question_mode_with_options();
         if let AppMode::Question {
             focus,
@@ -2242,7 +2212,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_scroll_keys_ignored_in_answer_focus() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = question_mode_with_options();
 
         // Act — 'j' in answer focus navigates options, not scroll.
@@ -2268,7 +2238,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_jump_to_top_in_chat_focus_sets_offset_zero() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = question_mode_with_options();
         if let AppMode::Question {
             focus,
@@ -2302,7 +2272,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_jump_to_bottom_in_chat_focus_sets_offset_none() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = question_mode_with_options();
         if let AppMode::Question {
             focus,
@@ -2337,7 +2307,7 @@ mod tests {
     async fn test_handle_enter_in_chat_focus_switches_to_answer_without_submitting() {
         // Arrange — chat focused, pressing Enter should return focus to Answer
         // without submitting the question response.
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = question_mode_with_options();
         if let AppMode::Question { focus, .. } = &mut app.mode {
             *focus = QuestionFocus::Chat;
@@ -2415,7 +2385,7 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_free_text_super_left_moves_to_line_start() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = free_text_question_mode("first\nsecond\nthird", "first\nseco".chars().count());
 
         // Act
@@ -2435,7 +2405,7 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_free_text_super_right_moves_to_line_end() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = free_text_question_mode("first\nsecond\nthird", "first\nse".chars().count());
 
         // Act
@@ -2455,7 +2425,7 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_free_text_ctrl_a_moves_to_line_start() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = free_text_question_mode("first\nsecond\nthird", "first\nseco".chars().count());
 
         // Act
@@ -2475,7 +2445,7 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_free_text_ctrl_e_moves_to_line_end() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = free_text_question_mode("first\nsecond\nthird", "first\nse".chars().count());
 
         // Act
@@ -2495,7 +2465,7 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_free_text_alt_b_moves_to_previous_word() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode =
             free_text_question_mode("hello brave world", "hello brave world".chars().count());
 
@@ -2516,7 +2486,7 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_free_text_alt_f_moves_to_next_word() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = free_text_question_mode("hello brave world", 0);
 
         // Act
@@ -2536,7 +2506,7 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_free_text_alt_left_moves_to_previous_word() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode =
             free_text_question_mode("hello brave world", "hello brave world".chars().count());
 
@@ -2557,7 +2527,7 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_free_text_alt_right_moves_to_next_word() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = free_text_question_mode("hello brave world", 0);
 
         // Act
@@ -2577,7 +2547,7 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_free_text_alt_enter_inserts_newline() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = free_text_question_mode("hello", "hello".chars().count());
 
         // Act
@@ -2597,7 +2567,7 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_free_text_shift_enter_inserts_newline() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = free_text_question_mode("hello", "hello".chars().count());
 
         // Act
@@ -2617,7 +2587,7 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_free_text_ctrl_j_inserts_newline() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = free_text_question_mode("hello", "hello".chars().count());
 
         // Act
@@ -2637,7 +2607,7 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_free_text_ctrl_m_inserts_newline() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = free_text_question_mode("hello", "hello".chars().count());
 
         // Act
@@ -2657,7 +2627,7 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_free_text_ctrl_f_moves_right() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = free_text_question_mode("hello", 2);
 
         // Act
@@ -2677,7 +2647,7 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_free_text_ctrl_b_moves_left() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = free_text_question_mode("hello", 3);
 
         // Act
@@ -2697,7 +2667,7 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_free_text_ctrl_p_moves_up() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = free_text_question_mode("first\nsecond", "first\nseco".chars().count());
 
         // Act
@@ -2717,7 +2687,7 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_free_text_ctrl_n_moves_down() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = free_text_question_mode("first\nsecond", 2);
 
         // Act
@@ -2737,7 +2707,7 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_free_text_ctrl_d_deletes_forward() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = free_text_question_mode("hello", 2);
 
         // Act
@@ -2758,7 +2728,7 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_free_text_ctrl_k_kills_to_line_end() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = free_text_question_mode("first\nsecond\nthird", "first\nse".chars().count());
 
         // Act
@@ -2778,7 +2748,7 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_free_text_ctrl_w_deletes_previous_word() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode =
             free_text_question_mode("hello brave world", "hello brave world".chars().count());
 
@@ -2799,7 +2769,7 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_free_text_alt_backspace_deletes_previous_word() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode =
             free_text_question_mode("hello brave world", "hello brave world".chars().count());
 
@@ -2820,7 +2790,7 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_free_text_super_backspace_deletes_current_line() {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = free_text_question_mode("first\nsecond\nthird", "first\nseco".chars().count());
 
         // Act
@@ -2841,7 +2811,7 @@ mod tests {
     async fn test_alt_enter_ignored_while_navigating_options() {
         // Arrange — navigating options, Alt+Enter should submit (not insert
         // newline), because newline insertion only applies in free-text mode.
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::Question {
             at_mention_state: None,
             review_status_message: None,
@@ -2888,7 +2858,7 @@ mod tests {
     async fn test_escape_in_chat_focus_returns_to_answer_focus() {
         // Arrange — question mode with chat focused. Esc should switch
         // focus back to Answer, not end the turn.
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::Question {
             at_mention_state: None,
             review_status_message: None,
@@ -2931,7 +2901,7 @@ mod tests {
         // session that has a non-empty diff.
         use crate::domain::session::{Session, SessionSize, SessionStats};
 
-        let mut app = new_test_app().await;
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         let session_id = "session-diff-question";
 
         // Set up a session with a real temp dir (no git repo, so diff will

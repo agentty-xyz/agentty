@@ -864,7 +864,7 @@ mod tests {
     use super::*;
     use crate::domain::agent::ReasoningLevel;
     use crate::domain::session::Status;
-    use crate::domain::session::tests::SessionFixtureBuilder;
+    use crate::test_support::SessionFixtureBuilder;
 
     /// Builds one deterministic session fixture for router render tests.
     fn session_fixture(session_id: &str) -> Session {
