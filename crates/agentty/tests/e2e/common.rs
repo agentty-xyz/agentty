@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
+use agentty::db::{DB_DIR, DB_FILE, Database, DbError};
 use assert_cmd::cargo::cargo_bin;
 use testty::assertion;
 use testty::feature::{FeatureDemo, GifMode, GifStatus};
@@ -165,6 +166,242 @@ impl BuilderEnv {
     fn stub_only_path(&self) -> String {
         self.stub_bin.to_string_lossy().into_owned()
     }
+}
+
+/// Session row shape inserted by [`seed_session`].
+#[derive(Clone, Copy)]
+enum SessionSeedKind<'a> {
+    /// Insert a normal persisted session row.
+    Regular,
+    /// Insert a draft session row that has not started running.
+    Draft,
+    /// Insert a stacked draft session linked to an existing parent.
+    StackedDraft {
+        /// Parent session id used by the stack relationship.
+        parent_session_id: &'a str,
+        /// Worktree path stored on the stacked draft session.
+        worktree_path: &'a str,
+    },
+}
+
+/// Declarative seed data for inserting one E2E session row.
+#[derive(Clone, Copy)]
+pub(crate) struct SessionSeed<'a> {
+    base_branch: &'a str,
+    kind: SessionSeedKind<'a>,
+    model: &'a str,
+    project_git_branch: Option<&'a str>,
+    session_id: &'a str,
+    status: &'a str,
+    title: Option<&'a str>,
+}
+
+impl<'a> SessionSeed<'a> {
+    /// Build seed data for a regular persisted session.
+    pub(crate) fn regular(
+        session_id: &'a str,
+        model: &'a str,
+        base_branch: &'a str,
+        status: &'a str,
+    ) -> Self {
+        Self {
+            base_branch,
+            kind: SessionSeedKind::Regular,
+            model,
+            project_git_branch: Some(base_branch),
+            session_id,
+            status,
+            title: None,
+        }
+    }
+
+    /// Build seed data for an unstarted draft session.
+    pub(crate) fn draft(
+        session_id: &'a str,
+        model: &'a str,
+        base_branch: &'a str,
+        status: &'a str,
+    ) -> Self {
+        Self {
+            base_branch,
+            kind: SessionSeedKind::Draft,
+            model,
+            project_git_branch: Some(base_branch),
+            session_id,
+            status,
+            title: None,
+        }
+    }
+
+    /// Build seed data for a stacked draft session.
+    pub(crate) fn stacked_draft(
+        session_id: &'a str,
+        model: &'a str,
+        worktree_path: &'a str,
+        status: &'a str,
+        parent_session_id: &'a str,
+    ) -> Self {
+        Self {
+            base_branch: worktree_path,
+            kind: SessionSeedKind::StackedDraft {
+                parent_session_id,
+                worktree_path,
+            },
+            model,
+            project_git_branch: Some("main"),
+            session_id,
+            status,
+            title: None,
+        }
+    }
+
+    /// Return seed data that updates the inserted row title.
+    pub(crate) fn with_title(mut self, title: &'a str) -> Self {
+        self.title = Some(title);
+
+        self
+    }
+}
+
+/// Seed one session into the isolated E2E database.
+///
+/// Opens the database under [`BuilderEnv::agentty_root`], upserts and touches
+/// the canonical test project, inserts the requested session row, and applies
+/// an optional title update.
+///
+/// # Errors
+///
+/// Returns an error if runtime creation, project canonicalization, database
+/// opening, project upsert/touch, or session insertion fails.
+pub(crate) fn seed_session(
+    env: &BuilderEnv,
+    seed: SessionSeed<'_>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let runtime = seed_runtime()?;
+
+    runtime.block_on(async {
+        let (database, project_id) =
+            open_database_with_seeded_project(env, seed.project_git_branch).await?;
+        insert_session_seed(&database, project_id, &seed).await
+    })?;
+
+    Ok(())
+}
+
+/// Create the current-thread Tokio runtime used by synchronous E2E seeders.
+///
+/// The E2E tests are synchronous `#[test]` functions, so database setup uses a
+/// short-lived runtime that does not leak across PTY scenario execution.
+///
+/// # Errors
+///
+/// Returns an error if the Tokio runtime cannot be built.
+pub(crate) fn seed_runtime() -> std::io::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+}
+
+/// Open the isolated E2E database and register the current test project.
+///
+/// The project path is canonicalized from [`BuilderEnv::workdir`], upserted
+/// with `project_git_branch`, and marked as last opened so startup sees the
+/// same active project as the seed data.
+///
+/// # Errors
+///
+/// Returns an error if path canonicalization, database opening, project upsert,
+/// or last-opened persistence fails.
+async fn open_database_with_seeded_project(
+    env: &BuilderEnv,
+    project_git_branch: Option<&str>,
+) -> Result<(Database, i64), DbError> {
+    let canonical_workdir = env.workdir.canonicalize()?;
+    let database = open_database(env).await?;
+    let project_id = database
+        .projects()
+        .upsert_project(
+            &canonical_workdir.to_string_lossy(),
+            project_git_branch.map(str::to_string),
+        )
+        .await?;
+
+    database
+        .projects()
+        .touch_project_last_opened(project_id)
+        .await?;
+
+    Ok((database, project_id))
+}
+
+/// Open the isolated E2E database for direct test data setup.
+///
+/// # Errors
+///
+/// Returns an error if the database cannot be opened or migrated.
+pub(crate) async fn open_database(env: &BuilderEnv) -> Result<Database, DbError> {
+    let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
+
+    Database::open(&db_path).await
+}
+
+/// Insert one seeded session row and apply any row-level seed updates.
+async fn insert_session_seed(
+    database: &Database,
+    project_id: i64,
+    seed: &SessionSeed<'_>,
+) -> Result<(), DbError> {
+    match seed.kind {
+        SessionSeedKind::Regular => {
+            database
+                .sessions()
+                .insert_session(
+                    seed.session_id,
+                    seed.model,
+                    seed.base_branch,
+                    seed.status,
+                    project_id,
+                )
+                .await?;
+        }
+        SessionSeedKind::Draft => {
+            database
+                .sessions()
+                .insert_draft_session(
+                    seed.session_id,
+                    seed.model,
+                    seed.base_branch,
+                    seed.status,
+                    project_id,
+                )
+                .await?;
+        }
+        SessionSeedKind::StackedDraft {
+            parent_session_id,
+            worktree_path,
+        } => {
+            database
+                .sessions()
+                .insert_stacked_draft_session(
+                    seed.session_id,
+                    seed.model,
+                    worktree_path,
+                    seed.status,
+                    parent_session_id,
+                    project_id,
+                )
+                .await?;
+        }
+    }
+
+    if let Some(title) = seed.title {
+        database
+            .sessions()
+            .update_session_title(seed.session_id, title)
+            .await?;
+    }
+
+    Ok(())
 }
 
 /// Acquire the global E2E test lock so PTY-driven tests do not overlap.

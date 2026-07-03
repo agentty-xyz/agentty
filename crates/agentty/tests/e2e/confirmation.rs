@@ -3,83 +3,33 @@
 
 use std::time::Duration;
 
-use agentty::db::{DB_DIR, DB_FILE, Database};
 use testty::assertion;
 use testty::region::Region;
 use testty::scenario::Scenario;
 
 use crate::common;
-use crate::common::{BuilderEnv, FeatureTest};
+use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
 
 type E2eResult = Result<(), Box<dyn std::error::Error>>;
 
 /// Seeds one unstarted draft session for list-mode cancel confirmation.
 fn seed_cancelable_draft_session(env: &BuilderEnv) -> E2eResult {
-    let canonical_workdir = env.workdir.canonicalize()?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-
-    runtime.block_on(async {
-        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
-        let database = Database::open(&db_path).await?;
-        let project_id = database
-            .projects()
-            .upsert_project(
-                &canonical_workdir.to_string_lossy(),
-                Some("main".to_string()),
-            )
-            .await?;
-
-        database
-            .projects()
-            .touch_project_last_opened(project_id)
-            .await?;
-        database
-            .sessions()
-            .insert_draft_session("draft-cancel-0001", "gpt-5.5", "main", "Draft", project_id)
-            .await?;
-        database
-            .sessions()
-            .update_session_title("draft-cancel-0001", "Cancel staged draft from list")
-            .await
-    })?;
-
-    Ok(())
+    common::seed_session(
+        env,
+        SessionSeed::draft("draft-cancel-0001", "gpt-5.5", "main", "Draft")
+            .with_title("Cancel staged draft from list"),
+    )
 }
 
 /// Seeds one running session for list-mode cancel confirmation.
 fn seed_cancelable_running_session(env: &BuilderEnv) -> E2eResult {
     let session_id = "running-cancel-0001";
-    let canonical_workdir = env.workdir.canonicalize()?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
 
-    runtime.block_on(async {
-        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
-        let database = Database::open(&db_path).await?;
-        let project_id = database
-            .projects()
-            .upsert_project(
-                &canonical_workdir.to_string_lossy(),
-                Some("main".to_string()),
-            )
-            .await?;
-
-        database
-            .projects()
-            .touch_project_last_opened(project_id)
-            .await?;
-        database
-            .sessions()
-            .insert_session(session_id, "gpt-5.5", "main", "InProgress", project_id)
-            .await?;
-        database
-            .sessions()
-            .update_session_title(session_id, "Cancel running session from list")
-            .await
-    })?;
+    common::seed_session(
+        env,
+        SessionSeed::regular(session_id, "gpt-5.5", "main", "InProgress")
+            .with_title("Cancel running session from list"),
+    )?;
 
     let worktree_name = &session_id[..8];
     // Match `session_folder()` so the seeded in-progress row remains visible
@@ -93,50 +43,23 @@ fn seed_cancelable_running_session(env: &BuilderEnv) -> E2eResult {
 fn seed_cancelable_stacked_child_session(env: &BuilderEnv) -> E2eResult {
     let parent_session_id = "parentca-0001";
     let child_session_id = "childcan-0001";
-    let canonical_workdir = env.workdir.canonicalize()?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
 
-    runtime.block_on(async {
-        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
-        let database = Database::open(&db_path).await?;
-        let project_id = database
-            .projects()
-            .upsert_project(
-                &canonical_workdir.to_string_lossy(),
-                Some("main".to_string()),
-            )
-            .await?;
-
-        database
-            .projects()
-            .touch_project_last_opened(project_id)
-            .await?;
-        database
-            .sessions()
-            .insert_session(parent_session_id, "gpt-5.5", "main", "Review", project_id)
-            .await?;
-        database
-            .sessions()
-            .update_session_title(parent_session_id, "Parent for child cancel")
-            .await?;
-        database
-            .sessions()
-            .insert_stacked_draft_session(
-                child_session_id,
-                "gpt-5.5",
-                "wt/parentca",
-                "Draft",
-                parent_session_id,
-                project_id,
-            )
-            .await?;
-        database
-            .sessions()
-            .update_session_title(child_session_id, "Stacked child cancel archive")
-            .await
-    })?;
+    common::seed_session(
+        env,
+        SessionSeed::regular(parent_session_id, "gpt-5.5", "main", "Review")
+            .with_title("Parent for child cancel"),
+    )?;
+    common::seed_session(
+        env,
+        SessionSeed::stacked_draft(
+            child_session_id,
+            "gpt-5.5",
+            "wt/parentca",
+            "Draft",
+            parent_session_id,
+        )
+        .with_title("Stacked child cancel archive"),
+    )?;
 
     std::fs::create_dir_all(env.agentty_root.join("wt").join("parentca"))?;
 

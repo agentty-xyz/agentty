@@ -10,7 +10,6 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 
-use agentty::db::{DB_DIR, DB_FILE, Database};
 use agentty::domain::agent::ReasoningLevel;
 use agentty::domain::session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
@@ -22,7 +21,7 @@ use testty::region::Region;
 use testty::scenario::Scenario;
 
 use crate::common;
-use crate::common::{BuilderEnv, FeatureTest};
+use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
 
 type E2eResult = Result<(), Box<dyn std::error::Error>>;
 const LOADER_SESSION_ID: &str = "loader-session-0001";
@@ -35,40 +34,16 @@ const RUNNING_STOP_SESSION_ID: &str = "running-stop-0001";
 fn seed_session_with_beautified_agent_error(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let canonical_workdir = env.workdir.canonicalize()?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
+    common::seed_session(
+        env,
+        SessionSeed::regular("agent-error-0001", "claude-opus-4-8", "main", "Review")
+            .with_title("Readable agent error"),
+    )?;
+
+    let runtime = common::seed_runtime()?;
 
     runtime.block_on(async {
-        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
-        let database = Database::open(&db_path).await?;
-        let project_id = database
-            .projects()
-            .upsert_project(
-                &canonical_workdir.to_string_lossy(),
-                Some("main".to_string()),
-            )
-            .await?;
-
-        database
-            .projects()
-            .touch_project_last_opened(project_id)
-            .await?;
-        database
-            .sessions()
-            .insert_session(
-                "agent-error-0001",
-                "claude-opus-4-8",
-                "main",
-                "Review",
-                project_id,
-            )
-            .await?;
-        database
-            .sessions()
-            .update_session_title("agent-error-0001", "Readable agent error")
-            .await?;
+        let database = common::open_database(env).await?;
         database
             .sessions()
             .append_session_message(
@@ -103,40 +78,16 @@ duration: 283ms
 
 /// Seeds one review-ready session and propagates setup errors to the caller.
 fn seed_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
-    let canonical_workdir = env.workdir.canonicalize()?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
+    common::seed_session(
+        env,
+        SessionSeed::regular("review-shortcut-0001", "gpt-5.5", "main", "Review")
+            .with_title("Review-ready session shortcuts"),
+    )?;
+
+    let runtime = common::seed_runtime()?;
 
     runtime.block_on(async {
-        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
-        let database = Database::open(&db_path).await?;
-        let project_id = database
-            .projects()
-            .upsert_project(
-                &canonical_workdir.to_string_lossy(),
-                Some("main".to_string()),
-            )
-            .await?;
-
-        database
-            .projects()
-            .touch_project_last_opened(project_id)
-            .await?;
-        database
-            .sessions()
-            .insert_session(
-                "review-shortcut-0001",
-                "gpt-5.5",
-                "main",
-                "Review",
-                project_id,
-            )
-            .await?;
-        database
-            .sessions()
-            .update_session_title("review-shortcut-0001", "Review-ready session shortcuts")
-            .await?;
+        let database = common::open_database(env).await?;
         database
             .sessions()
             .update_session_diff_stats(12, 3, "review-shortcut-0001", "M")
@@ -152,50 +103,22 @@ fn seed_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
 fn seed_review_ready_parent_with_review_child(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let canonical_workdir = env.workdir.canonicalize()?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-
-    runtime.block_on(async {
-        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
-        let database = Database::open(&db_path).await?;
-        let project_id = database
-            .projects()
-            .upsert_project(
-                &canonical_workdir.to_string_lossy(),
-                Some("main".to_string()),
-            )
-            .await?;
-
-        database
-            .projects()
-            .touch_project_last_opened(project_id)
-            .await?;
-        database
-            .sessions()
-            .insert_session("stack-parent-0001", "gpt-5.5", "main", "Review", project_id)
-            .await?;
-        database
-            .sessions()
-            .update_session_title("stack-parent-0001", "Parent stack review")
-            .await?;
-        database
-            .sessions()
-            .insert_stacked_draft_session(
-                "stack-child-0001",
-                "gpt-5.5",
-                "wt/stack-pa",
-                "Review",
-                "stack-parent-0001",
-                project_id,
-            )
-            .await?;
-        database
-            .sessions()
-            .update_session_title("stack-child-0001", "Child stack review")
-            .await
-    })?;
+    common::seed_session(
+        env,
+        SessionSeed::regular("stack-parent-0001", "gpt-5.5", "main", "Review")
+            .with_title("Parent stack review"),
+    )?;
+    common::seed_session(
+        env,
+        SessionSeed::stacked_draft(
+            "stack-child-0001",
+            "gpt-5.5",
+            "wt/stack-pa",
+            "Review",
+            "stack-parent-0001",
+        )
+        .with_title("Child stack review"),
+    )?;
 
     std::fs::create_dir_all(env.agentty_root.join("wt").join("stack-pa"))?;
     std::fs::create_dir_all(env.agentty_root.join("wt").join("stack-ch"))?;
@@ -208,42 +131,18 @@ fn seed_review_ready_parent_with_review_child(
 fn seed_pending_post_merge_restack_child(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let canonical_workdir = env.workdir.canonicalize()?;
     let child_worktree = env.agentty_root.join("wt").join("stack-re");
     let parent_tip = seed_child_worktree_for_onto_rebase(&child_worktree)?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
+    common::seed_session(
+        env,
+        SessionSeed::regular("stack-restack-child-0001", "gpt-5.5", "main", "Review")
+            .with_title("Pending post-merge child sync"),
+    )?;
+
+    let runtime = common::seed_runtime()?;
 
     runtime.block_on(async {
-        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
-        let database = Database::open(&db_path).await?;
-        let project_id = database
-            .projects()
-            .upsert_project(
-                &canonical_workdir.to_string_lossy(),
-                Some("main".to_string()),
-            )
-            .await?;
-
-        database
-            .projects()
-            .touch_project_last_opened(project_id)
-            .await?;
-        database
-            .sessions()
-            .insert_session(
-                "stack-restack-child-0001",
-                "gpt-5.5",
-                "main",
-                "Review",
-                project_id,
-            )
-            .await?;
-        database
-            .sessions()
-            .update_session_title("stack-restack-child-0001", "Pending post-merge child sync")
-            .await?;
+        let database = common::open_database(env).await?;
         database
             .sessions()
             .update_session_stack_base_commit_hash("stack-restack-child-0001", Some(parent_tip))
@@ -287,13 +186,10 @@ fn seed_child_worktree_for_onto_rebase(
 fn seed_session_with_reasoning_level(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     seed_review_ready_session(env)?;
 
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
+    let runtime = common::seed_runtime()?;
 
     runtime.block_on(async {
-        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
-        let database = Database::open(&db_path).await?;
+        let database = common::open_database(env).await?;
         database
             .sessions()
             .update_session_reasoning_level(
@@ -372,13 +268,10 @@ fn seed_review_ready_session_with_persisted_focused_review(
 ) -> Result<(), Box<dyn std::error::Error>> {
     seed_review_ready_session(env)?;
 
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
+    let runtime = common::seed_runtime()?;
 
     runtime.block_on(async {
-        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
-        let database = Database::open(&db_path).await?;
+        let database = common::open_database(env).await?;
         database
             .sessions()
             .update_session_focused_review(
@@ -395,41 +288,11 @@ fn seed_review_ready_session_with_persisted_focused_review(
 /// Seeds one running session so `Ctrl+c` can exercise the turn-stop path
 /// without needing a live agent backend.
 fn seed_running_stop_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
-    let canonical_workdir = env.workdir.canonicalize()?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-
-    runtime.block_on(async {
-        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
-        let database = Database::open(&db_path).await?;
-        let project_id = database
-            .projects()
-            .upsert_project(
-                &canonical_workdir.to_string_lossy(),
-                Some("main".to_string()),
-            )
-            .await?;
-
-        database
-            .projects()
-            .touch_project_last_opened(project_id)
-            .await?;
-        database
-            .sessions()
-            .insert_session(
-                RUNNING_STOP_SESSION_ID,
-                "gpt-5.5",
-                "main",
-                "InProgress",
-                project_id,
-            )
-            .await?;
-        database
-            .sessions()
-            .update_session_title(RUNNING_STOP_SESSION_ID, "Running session stop")
-            .await
-    })?;
+    common::seed_session(
+        env,
+        SessionSeed::regular(RUNNING_STOP_SESSION_ID, "gpt-5.5", "main", "InProgress")
+            .with_title("Running session stop"),
+    )?;
 
     // Match `session_folder()` so the seeded row has the worktree path the
     // runtime expects for this session id.
@@ -447,13 +310,10 @@ fn seed_review_ready_session_with_review_request(
     seed_review_worktree_with_diff(env)?;
     seed_github_review_comments_stub(env)?;
 
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
+    let runtime = common::seed_runtime()?;
 
     runtime.block_on(async {
-        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
-        let database = Database::open(&db_path).await?;
+        let database = common::open_database(env).await?;
         let review_request = ReviewRequest {
             last_refreshed_at: 55,
             summary: ReviewRequestSummary {
@@ -592,34 +452,16 @@ fn seed_draft_at_lookup_project(env: &BuilderEnv) -> Result<(), Box<dyn std::err
 /// draft flow.
 fn seed_done_session_for_continuation(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     let merged_commit_hash = "704de31d0f4b5a1234567890abcdef1234567890";
-    let canonical_workdir = env.workdir.canonicalize()?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
+    common::seed_session(
+        env,
+        SessionSeed::regular("done-continue-0001", "gpt-5.5", "main", "Done")
+            .with_title("Continue terminal session"),
+    )?;
+
+    let runtime = common::seed_runtime()?;
 
     runtime.block_on(async {
-        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
-        let database = Database::open(&db_path).await?;
-        let project_id = database
-            .projects()
-            .upsert_project(
-                &canonical_workdir.to_string_lossy(),
-                Some("main".to_string()),
-            )
-            .await?;
-
-        database
-            .projects()
-            .touch_project_last_opened(project_id)
-            .await?;
-        database
-            .sessions()
-            .insert_session("done-continue-0001", "gpt-5.5", "main", "Done", project_id)
-            .await?;
-        database
-            .sessions()
-            .update_session_title("done-continue-0001", "Continue terminal session")
-            .await?;
+        let database = common::open_database(env).await?;
         database
             .sessions()
             .update_session_merged_commit_hash(
@@ -637,43 +479,11 @@ fn seed_done_session_for_continuation(env: &BuilderEnv) -> Result<(), Box<dyn st
 /// Seeds one in-progress session so the session view can show the active
 /// Tachyonfx loader without launching a live agent backend.
 fn seed_active_loader_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
-    let canonical_workdir = env.workdir.canonicalize()?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-
-    runtime.block_on(async {
-        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
-        let database = Database::open(&db_path).await?;
-        let project_id = database
-            .projects()
-            .upsert_project(
-                &canonical_workdir.to_string_lossy(),
-                Some("main".to_string()),
-            )
-            .await?;
-
-        database
-            .projects()
-            .touch_project_last_opened(project_id)
-            .await?;
-        database
-            .sessions()
-            .insert_session(
-                LOADER_SESSION_ID,
-                "gpt-5.5",
-                "main",
-                "InProgress",
-                project_id,
-            )
-            .await?;
-        database
-            .sessions()
-            .update_session_title(LOADER_SESSION_ID, "Loader session")
-            .await?;
-
-        Ok::<(), Box<dyn std::error::Error>>(())
-    })?;
+    common::seed_session(
+        env,
+        SessionSeed::regular(LOADER_SESSION_ID, "gpt-5.5", "main", "InProgress")
+            .with_title("Loader session"),
+    )?;
 
     std::fs::create_dir_all(test_support::session_folder(
         &env.agentty_root.join("wt"),
