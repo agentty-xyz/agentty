@@ -17,7 +17,6 @@ When working within `crates/agentty/src/ui/`:
 - **Palette Usage**: Use semantic color tokens from `style.rs` (`palette::*`) for UI
   colors. Avoid direct `Color::*` usage in UI components/pages, except approved
   data-visualization scales (for example heatmap intensity colors).
-- **Symlinks**: Ensure `CLAUDE.md` and `GEMINI.md` are symlinked to this file.
 
 ## Procedures
 

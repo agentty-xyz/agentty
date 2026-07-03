@@ -2,81 +2,79 @@
 
 TUI tool to manage agents.
 
-# MANDATORY
-
-> **STOP! Read this section before proceeding.** These rules are absolute and take
-> precedence over all others.
-
-- **Document Code:** Document all added or updated code using docstrings. When touching
-  existing code, add or refresh docstrings so the changed behavior is clearly described.
-- **Update AGENTS.md:** Update the relevant `AGENTS.md` file only when a user
-  instruction establishes a critical, persistent preference, convention, or workflow
-  rule. Do not update it for one-off tasks.
-- **Semantic Guidance Only:** Keep `AGENTS.md` files focused on purpose, entry points,
-  invariants, change routing, and docs-sync notes. Do not maintain exhaustive
-  per-directory file inventories.
-- **Local Paths Only:** In `AGENTS.md`, do not use parent-directory relative paths. Each
-  file should describe only its own directory or module boundary.
-- **Context First:** Before broad exploration, read the nearest available `AGENTS.md`.
-  Root invariants always apply; nearer guides add or specialize local behavior. If the
-  current directory does not have one, fall back to the closest ancestor guide and the
-  architecture docs in `docs/site/content/docs/architecture/`.
-- **Context7 First:** When a task asks about external library, framework, SDK, API, CLI,
-  or cloud-service usage, and Context7 is connected as an MCP server, try Context7
-  before relying on memory. If Context7 is unavailable, use official docs as the
-  fallback and note the fallback in your response.
-- **Test Isolation for External Commands:** Keep isolated single-command tests real when
-  they validate one external command call, but for higher-level flows that involve
-  multiple external command calls, always extract trait boundaries and mock them with
-  `mockall` (`#[cfg_attr(test, mockall::automock)]`) to reduce runtime and flakiness.
-- **Diff-First Verification:** In every non-`main` branch, when a user asks for
-  something that is not currently present on `main`, inspect the full worktree diff
-  against the branch base/fork point before concluding what changed or remains. Include
-  committed changes, uncommitted changes, and untracked files; avoid counting commits
-  already applied to the base branch.
-- **Test Coverage:** Cover all touched behavior with automated tests when practical.
-  Critical logic always needs regression coverage; boilerplate or untestable I/O can use
-  a pragmatic exception.
-- **Feature Test Gate:** Every user-visible feature must ship with a corresponding E2E
-  feature test in `crates/agentty/tests/e2e/` using the `FeatureTest` builder from
-  `common.rs`. If infrastructure blocks the feature test, report the blocker and the
-  missing coverage in the handoff.
-- **Legacy Retention Approval:** Prefer removing legacy code or behavior during
-  development. If retaining legacy code or behavior for any reason, obtain explicit user
-  approval first.
-- **Per-Turn Validation:** Before finalizing every turn in this repository, run
-  `uv tool run prek run --all-files` and
-  `cargo build --locked --all-targets --all-features`; fix any failures.
-
 ## Project Facts
 
-- Project is a Rust workspace.
-- The `crates/` directory contains all workspace members.
+- Project is a Rust workspace; the `crates/` directory contains all workspace members.
 - Workspace crate package names are `agentty`, `testty`, and any shared support crates
   that use the `ag-` prefix (for example, `ag-xtask`).
 - `agentty`: A binary crate providing the CLI interface using Ratatui.
 - `testty`: A library crate providing the Rust-native TUI end-to-end testing framework.
-- **Workflow**: Agents are run in isolated git worktrees.
+- **Workflow**: Agents are run in isolated git worktrees. Agentty creates these
+  worktrees automatically for sessions launched from a git repository; treat that as
+  product behavior, not as an instruction to mutate the local development checkout. Keep
+  worktree lifecycle details aligned with
+  `docs/site/content/docs/getting-started/overview.md` and
+  `docs/site/content/docs/usage/workflow.md`.
 - **Review**: Users review changes using the Diff view (`d` key in chat) which shows the
   output of `git diff` in the session's worktree.
 - **Output**: Agent `stdout` and `stderr` are captured in parallel using `tokio` tasks
   to ensure prompts and errors are visible.
 
+## Command Quick Reference
+
+Hook IDs come from `.pre-commit-config.yaml`, the executable source of truth for
+validation commands. See Quality Gates for when to run what.
+
+- Format Rust sources: `prek run rustfmt-fix --files <paths> --hook-stage manual`
+- Compile check: `prek run cargo-check --files <paths>`
+- Lint: `prek run clippy --files <paths>`
+- Test one crate: `prek run test-agentty-src` (also `test-testty-src`,
+  `test-ag-forge-src`, `test-ag-xtask-src`)
+- Focused E2E test:
+  `cargo nextest run --locked --profile ci -p agentty --test e2e <test-filter>`
+- Format markdown: `prek run mdformat --files <paths>`
+- Full validation: `prek run --all-files`, then
+  `prek run test-workspace --all-files --hook-stage manual`
+
+# MANDATORY
+
+> These rules are absolute and take precedence over all others.
+
+- **Product-vs-Repository Scope:** Workflow prompts describe Agentty product behavior by
+  default, not mutations of this checkout. Apply the rules in "Product-vs-Repository
+  Prompt Scope" before acting on any workflow prompt.
+- **Feature Test Gate:** Every user-visible feature must ship with a corresponding E2E
+  feature test in `crates/agentty/tests/e2e/` using the `FeatureTest` builder from
+  `common.rs`. If infrastructure blocks the feature test, report the blocker and the
+  missing coverage in the handoff.
+- **Never Bypass Hooks:** Do not use `--no-verify`, `--no-gpg-sign`, or any other flag
+  that skips or disables git hooks managed by `prek`. If a hook fails, investigate and
+  fix the underlying issue instead of bypassing it.
+- **Legacy Retention Approval:** Prefer removing legacy code or behavior during
+  development. If retaining legacy code or behavior for any reason, obtain explicit user
+  approval first.
+- **Preserve User Changes:** Never revert unrelated work unless explicitly asked.
+
 ## Task Start Checklist
 
-1. Resolve whether the request targets Agentty product behavior or this local
-   repository.
+1. Resolve whether the request targets Agentty product behavior or this local repository
+   (see MANDATORY and "Product-vs-Repository Prompt Scope").
 1. Read the nearest applicable `AGENTS.md`; apply this root guide as the baseline and
-   the nearest guide as the local specialization.
+   the nearest guide as the local specialization. If the current directory does not have
+   one, fall back to the closest ancestor guide and the architecture docs in
+   `docs/site/content/docs/architecture/`.
 1. Read `skills/AGENTS.md` and activate the smallest matching skill set when the task
    names a skill or matches a skill description.
 1. If the request involves external library, framework, SDK, API, CLI, or cloud-service
-   details, query Context7 before answering or coding.
-1. On a non-`main` branch, inspect the full diff against the fork point before deciding
-   what is already implemented or still missing.
+   details, and Context7 is connected as an MCP server, query Context7 before answering
+   or coding. If Context7 is unavailable, use official docs as the fallback and note the
+   fallback in your response.
+1. On a non-`main` branch, when a user asks for something that is not currently present
+   on `main`, inspect the full worktree diff against the branch base/fork point before
+   concluding what changed or remains. Include committed changes, uncommitted changes,
+   and untracked files; avoid counting commits already applied to the base branch.
 1. Before editing, identify any docs-sync targets, feature-test requirements, dependency
    impact, and validation hooks for the files likely to change.
-1. Preserve user changes. Never revert unrelated work unless explicitly asked.
 
 ## Product-vs-Repository Prompt Scope
 
@@ -142,6 +140,13 @@ repository's current session.
   - Use fully-qualified `crate::...` references only when needed for disambiguation,
     explicit UFCS trait calls, or rustdoc links.
   - In test modules, prefer `use super::*;` where practical.
+- **Test Coverage:** Cover all touched behavior with automated tests when practical.
+  Critical logic always needs regression coverage; boilerplate or untestable I/O can use
+  a pragmatic exception.
+- **Test Isolation for External Commands:** Keep isolated single-command tests real when
+  they validate one external command call, but for higher-level flows that involve
+  multiple external command calls, always extract trait boundaries and mock them with
+  `mockall` (`#[cfg_attr(test, mockall::automock)]`) to reduce runtime and flakiness.
 - **Test-only code placement:** Never introduce `#[cfg(test)]` in production code
   outside `#[cfg(test)] mod tests` unless the code belongs to an established shared
   test-support surface for broadly reused fixtures. Prefer local helpers for one-off
@@ -308,37 +313,44 @@ The project uses `tokio` as its async runtime. The binary entry point uses
 
 Use the repository hook catalog in `.pre-commit-config.yaml` as the executable source of
 truth for validation commands. Keep agent workflows and CI invoking hook IDs from that
-file instead of re-encoding cargo or Zola commands elsewhere.
+file instead of re-encoding cargo or Zola commands elsewhere. When hooks are added or
+renamed there, follow the catalog, not this guide.
+
+### Validation Ladder
+
+Run exactly one rung per situation; do not stack a full sweep on top of targeted checks
+that already cover the impact.
+
+1. **While iterating (per edit):** Run the relevant fixer or check on touched files
+   only, such as `rustfmt-fix` for Rust sources or `mdformat` for markdown.
+1. **Before finalizing a turn, handoff, commit, or review:** Run impact-based validation
+   (below) — the narrowest repository-defined checks that cover every touched file,
+   expanded through affected workspace dependencies and dependents. Use the dependency
+   graph from workspace manifests or `cargo metadata` when deciding which crates and
+   tests are affected.
+1. **Cross-cutting changes, unclear dependency impact, release work, or low confidence
+   in targeted checks:** Run the full suite: `prek run --all-files`, then
+   `prek run test-workspace --all-files --hook-stage manual`.
+
+If you cannot confidently prove the targeted checks cover the full impact, escalate to
+the full suite.
 
 ### Impact-Based Validation
 
-Before handoff, commit, or opening a review, run the narrowest repository-defined checks
-that cover every touched file, then expand through affected workspace dependencies and
-dependents. Use the dependency graph from workspace manifests or `cargo metadata` when
-deciding which crates and tests are affected. If you cannot confidently prove the
-targeted checks cover the full impact, run the full repository suite instead.
-
-- **Markdown and docs:** Run `prek run mdformat --files <paths>` and
-  `prek run --files <paths>`.
-- **`docs/site/` content:** Run markdown/docs checks and
-  `prek run zola-check --all-files --hook-stage manual`.
-- **Rust sources:** Run `prek run rustfmt-fix --files <paths> --hook-stage manual` while
-  iterating, then `prek run cargo-check --files <paths>`. Add focused tests for the
-  changed crate and affected dependents.
-- **Workspace crate source tests:** Use the narrowest matching hook when one exists:
-  `test-ag-forge-src`, `test-agentty-src`, `test-ag-xtask-src`, or `test-testty-src`.
-- **Cargo manifests and lockfile:** Run `prek run cargo-check --files <paths>`,
-  `prek run clippy --files <paths>`, and tests for affected workspace crates plus
-  dependents. Use `prek run test-workspace --all-files --hook-stage manual` when
-  dependency impact is broad or uncertain.
-- **SQL migrations:** Run `prek run check-migrations --files <paths>` plus Rust checks
-  and tests for crates that embed or query those migrations.
-- **Hook catalog:** Run `prek run validate-prek-config --files .pre-commit-config.yaml`.
-- **User-visible UI behavior:** Add or update required `FeatureTest` coverage and run
-  focused E2E tests for the changed workflows, such as
-  `cargo nextest run --locked --profile ci -p agentty --test e2e <test-filter>`. Do not
-  run the full E2E feature suite locally; `.github/workflows/postsubmit.yml` runs
-  `test-agentty-e2e` on GitHub after merge to `main`.
+- **Markdown and docs:** Run `mdformat`, then the default hooks for touched paths.
+- **`docs/site/` content:** Add `zola-check`; use `djlint-reformat` for HTML templates.
+- **Rust sources:** Run `rustfmt-fix` while iterating, then `cargo-check`; add focused
+  tests for the changed crate and affected dependents.
+- **Workspace crate source tests:** Use the narrowest matching member source-test hook.
+- **Cargo manifests and lockfile:** Run `cargo-check`, `clippy`, and affected crate
+  tests; use `test-workspace` when dependency impact is broad or uncertain.
+- **SQL migrations:** Run `check-migrations` plus Rust checks and tests for crates that
+  embed or query those migrations.
+- **Hook catalog:** Run `validate-prek-config`.
+- **User-visible UI behavior:** Satisfy the MANDATORY feature-test gate, then run the
+  focused E2E workflow. Do not run the full E2E feature suite locally;
+  `.github/workflows/postsubmit.yml` runs `test-agentty-e2e` on GitHub after merge to
+  `main`.
 
 ### Autofix Discipline
 
@@ -349,33 +361,15 @@ Run mutating fixers one at a time and inspect the resulting diff after each one:
 1. **Clippy Fix:** `prek run clippy-fix --all-files --hook-stage manual`
 1. **Inspect:** Review the diff for behavior changes before continuing.
 
-### Full Validation
-
-Run the full suite when a change is cross-cutting, when dependency impact is unclear,
-before release work, or when targeted validation fails to give high confidence:
-
-1. **Validate:** `prek run --all-files`
-1. **Test:** `prek run test-workspace --all-files --hook-stage manual`
-
 ### Periodic / CI
 
-Use these slower hygiene checks in CI or when making broader changes:
+Use slower hygiene hooks only in CI or when making broader changes. Consult
+`.pre-commit-config.yaml` for current hook IDs and invocations.
 
-1. **Coverage Summary:** `prek run coverage --all-files --hook-stage manual`
-1. **Member source tests:** Run locally when they cover touched Rust code;
-   `.github/workflows/postsubmit.yml` also runs one source-test hook per workspace
-   member (`test-ag-forge-src`, `test-agentty-src`, `test-ag-xtask-src`, and
-   `test-testty-src`) after merge to `main`.
-1. **Coverage Upload (GitHub-only):** Do not run locally;
-   `.github/workflows/postsubmit.yml` runs `coverage-lcov` on GitHub after merge to
-   `main`. Keep `coverage-lcov` excluding `crates/agentty/tests` because
-   `.github/workflows/postsubmit.yml` runs `test-agentty-e2e` separately and those tests
-   do not contribute to coverage.
-1. **End-to-end feature suite (GitHub-only):** Do not run locally;
-   `.github/workflows/postsubmit.yml` runs `test-agentty-e2e` on GitHub after merge to
-   `main`, and that hook owns the `crates/agentty/tests` targets.
-1. **Docs Site:** `prek run zola-check --all-files --hook-stage manual`
-1. **Dependency Hygiene:** `prek run cargo-shear --all-files --hook-stage manual`
+- Run local broad checks when relevant: coverage summary, member source tests,
+  `zola-check`, `cargo-shear`, and `cargo-audit`.
+- Do not run GitHub-only `coverage-lcov` or the full `test-agentty-e2e` suite locally;
+  `.github/workflows/postsubmit.yml` owns those after merge to `main`.
 
 ### Test Failure Protocol
 
@@ -388,8 +382,8 @@ Use these slower hygiene checks in CI or when making broader changes:
 
 ### Manual Verification
 
-- **Test Style:** Verify *every* test function uses explicit `// Arrange`, `// Act`, and
-  `// Assert` comments.
+- **Test Style:** Verify every *touched* test function uses explicit `// Arrange`,
+  `// Act`, and `// Assert` comments.
   - Combining `Arrange`, `Act`, and `Assert` is allowed when it improves clarity (for
     very small tests).
 - **Dependencies:** Verify all dependencies (including dev/build) are defined in the
@@ -406,18 +400,22 @@ Use these slower hygiene checks in CI or when making broader changes:
 Apply the smallest documentation update that matches the change. When multiple triggers
 apply, update all matching docs before handoff.
 
-| Trigger | Required documentation action | | --- | --- | | Added or updated code |
-Document the added or updated behavior using docstrings. In Rust, add or refresh `///`
-doc comments for touched public structs, functions, types, and closely related sibling
-or parent elements when needed for clarity. | | Documentation, commit messages, PR
-descriptions, or bullets reference code elements | Wrap code elements in backticks. | |
-User-facing features, agent backends, models, keybindings, session states, UI pages, or
-visible behavior change | Update the corresponding page under `docs/site/content/docs/`.
-| | Architecture boundaries, runtime flow, trait boundaries, workspace crate ownership,
-modules, or change-path guidance change | Update the matching architecture docs listed
-below. | | End-user prerequisites, usage instructions, features, or crate information
-changes | Update `README.md`. | | Release work changes shipped behavior | Update
-`CHANGELOG.md` using Keep a Changelog format. |
+- **Added or updated code:** Document the added or updated behavior using docstrings. In
+  Rust, add or refresh `///` doc comments for touched public structs, functions, types,
+  and closely related sibling or parent elements when needed for clarity.
+- **Documentation, commit messages, PR descriptions, or bullets reference code
+  elements:** Wrap code elements in backticks.
+- **User-facing features, agent backends, models, keybindings, session states, UI pages,
+  or visible behavior change:** Update the corresponding page under
+  `docs/site/content/docs/`; use the nearest source-side guide for exact routing.
+- **Architecture boundaries, runtime flow, trait boundaries, workspace crate ownership,
+  modules, or change-path guidance change:** Update the matching architecture docs under
+  `docs/site/content/docs/architecture/`; use the nearest source-side guide for exact
+  routing.
+- **End-user prerequisites, usage instructions, features, or crate information
+  changes:** Update `README.md`.
+- **Release work changes shipped behavior:** Update `CHANGELOG.md` using Keep a
+  Changelog format.
 
 Always wrap these code elements in backticks when referenced in prose:
 
@@ -428,43 +426,6 @@ Always wrap these code elements in backticks when referenced in prose:
 - Key bindings: `Tab`, `Enter`, `Esc`
 - File names: `model.rs`, `AGENTS.md`
 - Configuration values: `workspace = true`
-
-When adding, removing, or changing user-facing features (agent backends, models,
-keybindings, session states, UI pages), update the corresponding documentation page in
-`docs/site/content/docs/`. Source-side `AGENTS.md` files indicate which doc pages track
-their area.
-
-- `docs/site/content/docs/agents/backends.md` covers agent backends and models.
-- `docs/site/content/docs/usage/workflow.md` covers session lifecycle, workflow, slash
-  commands, and data location.
-- `docs/site/content/docs/usage/keybindings.md` covers keybindings across lists, session
-  view, diff mode, and prompt input.
-- `docs/site/content/docs/getting-started/overview.md` covers high-level concepts and
-  worktree isolation.
-- `docs/site/content/docs/architecture/runtime-flow.md` covers architecture goals,
-  workspace map, runtime flow, and channel transport model.
-- `docs/site/content/docs/architecture/module-map.md` covers module boundaries and path
-  ownership across layers.
-- `docs/site/content/docs/architecture/change-recipes.md` covers change-path recipes and
-  the architecture-safe contributor checklist.
-- `docs/site/content/docs/architecture/testability-boundaries.md` covers trait
-  boundaries and testability guidance for external integrations.
-- `docs/site/content/docs/contributing/managing-docs-with-zola.md` covers conventions
-  for maintaining docs with Zola.
-
-Update architecture docs whenever you change:
-
-- Module boundaries (`app`, `domain`, `infra`, `runtime`, `ui`) or add/remove/rename
-  modules (`docs/site/content/docs/architecture/module-map.md`).
-- Runtime or control flow between layers (event loop, mode dispatch, app orchestration)
-  (`docs/site/content/docs/architecture/runtime-flow.md`).
-- Trait-based external boundaries (`GitClient`, `AppServerClient`, `EventSource`)
-  (`docs/site/content/docs/architecture/testability-boundaries.md`).
-- Workspace crate ownership or add/remove workspace members
-  (`docs/site/content/docs/architecture/module-map.md`).
-- Canonical change-path guidance
-  (`docs/site/content/docs/architecture/change-recipes.md`) when contribution workflows
-  change.
 
 ### Docs Site Integrity
 
@@ -481,9 +442,7 @@ Update architecture docs whenever you change:
 ## Git Conventions
 
 - For all commit preparation and commit message work, use `skills/git-commit/SKILL.md`.
-- **Never bypass `prek`-managed hooks:** Do not use `--no-verify`, `--no-gpg-sign`, or
-  any other flag that skips or disables git hooks managed by `prek`. If a hook fails,
-  investigate and fix the underlying issue instead of bypassing it.
+- Never bypass `prek`-managed hooks (see MANDATORY).
 
 ## Release Automation
 
@@ -503,14 +462,6 @@ Update architecture docs whenever you change:
 - When updating `cargo-dist`, review and commit the generated changes in
   `dist-workspace.toml` and `.github/workflows/release.yml` together.
 
-## Git Worktree Integration
-
-Agentty automatically creates isolated git worktrees for sessions launched from a git
-repository. Treat this as product behavior, not as an instruction to mutate the local
-development checkout. Keep worktree lifecycle details aligned with
-`docs/site/content/docs/getting-started/overview.md` and
-`docs/site/content/docs/usage/workflow.md`.
-
 ## Agent Instructions
 
 - **Pragmatic Abstractions:** Introduce new abstractions only when they provide clear
@@ -526,6 +477,16 @@ development checkout. Keep worktree lifecycle details aligned with
   behavior.
 - Structure tests using "Arrange, Act, Assert" comments to clearly separate setup,
   execution, and verification phases.
+
+### AGENTS.md Maintenance
+
+- Update the relevant `AGENTS.md` file only when a user instruction establishes a
+  critical, persistent preference, convention, or workflow rule. Do not update it for
+  one-off tasks.
+- Keep `AGENTS.md` files focused on purpose, entry points, invariants, change routing,
+  and docs-sync notes. Do not maintain exhaustive per-directory file inventories.
+- In `AGENTS.md`, do not use parent-directory relative paths. Each file should describe
+  only its own directory or module boundary.
 - When creating a new `AGENTS.md` file in any directory, always create corresponding
   symlinks: `ln -s AGENTS.md CLAUDE.md && ln -s AGENTS.md GEMINI.md` in the same
   directory.
