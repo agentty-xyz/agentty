@@ -156,8 +156,7 @@ mod tests {
     use crate::domain::session_message::SessionMessageKind;
     use crate::domain::setting::SettingName;
     use crate::infra::db::{
-        SessionFocusedReviewRow, SessionJoinRow, SessionOperationRow, SessionRow,
-        SessionTurnMetadata,
+        SessionFocusedReviewRow, SessionOperationRow, SessionRow, SessionTurnMetadata,
     };
     /// Environment flag used to run the DST regression helper in an isolated
     /// subprocess with a fixed timezone.
@@ -291,12 +290,6 @@ WHERE id = ?
     /// Typed helper row used to verify nullable session references.
     struct SessionUsageSessionIdRow {
         session_id: Option<String>,
-    }
-
-    /// Builds one deterministic joined-session row fixture for conversion
-    /// tests.
-    fn session_join_row_fixture() -> SessionJoinRow {
-        SessionJoinRow::fixture_for_test()
     }
 
     /// Verifies `open()` creates missing parent directories before opening the
@@ -1547,60 +1540,6 @@ WHERE model = ?
         assert!(done_row.finished_at.is_some());
         assert!(done_row.heartbeat_at.is_some());
         assert_eq!(done_row.last_error, None);
-    }
-
-    /// Verifies `SessionJoinRow::into_session_row()` drops partially
-    /// populated review-request columns instead of surfacing an invalid row
-    /// model.
-    #[test]
-    fn test_session_join_row_ignores_partial_review_request_columns() {
-        // Arrange
-        let mut session_join_row = session_join_row_fixture();
-        session_join_row.review_request_last_refreshed_at = None;
-
-        // Act
-        let session_row = session_join_row.into_session_row();
-
-        // Assert
-        assert_eq!(session_row.id, "session-a");
-        assert_eq!(session_row.project_id, Some(7));
-        assert_eq!(
-            session_row.parent_session_id.as_deref(),
-            Some("parent-session")
-        );
-        assert_eq!(session_row.status, "Review");
-        assert_eq!(session_row.added_lines, 14);
-        assert_eq!(session_row.deleted_lines, 6);
-        assert_eq!(session_row.review_request, None);
-    }
-
-    /// Verifies `SessionJoinRow::into_session_row()` maps a fully populated
-    /// review-request into the public session row model.
-    #[test]
-    fn test_session_join_row_maps_review_request_columns() {
-        // Arrange
-        let session_join_row = session_join_row_fixture();
-
-        // Act
-        let session_row = session_join_row.into_session_row();
-
-        // Assert
-        assert_eq!(session_row.id, "session-a");
-        assert_eq!(session_row.added_lines, 14);
-        assert_eq!(session_row.deleted_lines, 6);
-        assert_eq!(session_row.project_id, Some(7));
-        assert_eq!(
-            session_row.parent_session_id.as_deref(),
-            Some("parent-session")
-        );
-        assert_eq!(
-            session_row.published_upstream_ref.as_deref(),
-            Some("origin/session-a")
-        );
-        assert_eq!(session_row.questions.as_deref(), Some("Question text"));
-        assert_eq!(session_row.summary.as_deref(), Some("Summary text"));
-        assert_eq!(session_row.title.as_deref(), Some("Review session"));
-        assert_review_request_row(&session_row);
     }
 
     /// Verifies `upsert_session_usage()` accumulates per-model token totals and
