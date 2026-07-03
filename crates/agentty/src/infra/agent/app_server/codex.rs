@@ -7,9 +7,9 @@ mod client;
 mod lifecycle;
 mod policy;
 mod stream_parser;
-mod transport;
 mod usage;
 
 pub(crate) use client::RealCodexAppServerClient;
+
 #[cfg(test)]
-pub(crate) use transport::MockCodexRuntimeTransport;
+pub(crate) use super::stdio_transport::MockAppServerRuntimeTransport as MockCodexRuntimeTransport;

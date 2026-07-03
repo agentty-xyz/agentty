@@ -13,7 +13,7 @@ use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
-use super::transport::{GeminiRuntimeTransport, GeminiStdioTransport};
+use super::super::stdio_transport::{AppServerRuntimeTransport, AppServerStdioTransport};
 use super::{policy, stream_parser, usage};
 use crate::domain::agent::AgentKind;
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment, TurnPromptContentPart};
@@ -51,7 +51,7 @@ pub(super) async fn start_runtime(
 ) -> Result<
     (
         tokio::process::Child,
-        GeminiStdioTransport,
+        AppServerStdioTransport,
         GeminiRuntimeState,
     ),
     AppServerError,
@@ -71,7 +71,12 @@ pub(super) async fn start_runtime(
         })?;
     let (mut child, stdin, stdout) =
         app_server_transport::spawn_runtime_command(command, "gemini --acp")?;
-    let mut transport = GeminiStdioTransport::new(stdin, stdout);
+    let mut transport = AppServerStdioTransport::new(
+        stdin,
+        stdout,
+        "Gemini ACP stdin is unavailable",
+        "Failed reading Gemini ACP stdout",
+    );
     let mut state = GeminiRuntimeState::new(request.folder.clone(), request.model.clone());
 
     match bootstrap_runtime_session(&mut transport, state.folder.as_path()).await {
@@ -91,7 +96,7 @@ pub(super) async fn start_runtime(
 
 /// Completes ACP bootstrap by sending `initialize` and creating
 /// `session/new`.
-pub(super) async fn bootstrap_runtime_session<Transport: GeminiRuntimeTransport>(
+pub(super) async fn bootstrap_runtime_session<Transport: AppServerRuntimeTransport>(
     transport: &mut Transport,
     folder: &Path,
 ) -> Result<String, AppServerError> {
@@ -101,7 +106,7 @@ pub(super) async fn bootstrap_runtime_session<Transport: GeminiRuntimeTransport>
 }
 
 /// Sends the ACP initialize handshake.
-pub(super) async fn initialize_runtime<Transport: GeminiRuntimeTransport>(
+pub(super) async fn initialize_runtime<Transport: AppServerRuntimeTransport>(
     transport: &mut Transport,
 ) -> Result<(), AppServerError> {
     let initialization_request_id = format!("init-{}", uuid::Uuid::new_v4());
@@ -197,7 +202,7 @@ pub(super) fn parse_json_rpc_result<T: serde::de::DeserializeOwned>(
 }
 
 /// Creates one ACP session and returns the assigned `sessionId`.
-pub(super) async fn start_session<Transport: GeminiRuntimeTransport>(
+pub(super) async fn start_session<Transport: AppServerRuntimeTransport>(
     transport: &mut Transport,
     folder: &Path,
 ) -> Result<String, AppServerError> {
@@ -245,7 +250,7 @@ pub(super) fn parse_session_new_response(response_value: &Value) -> Result<Strin
 }
 
 /// Sends one prompt turn and waits for the matching prompt response id.
-pub(super) async fn run_turn_with_runtime<Transport: GeminiRuntimeTransport>(
+pub(super) async fn run_turn_with_runtime<Transport: AppServerRuntimeTransport>(
     transport: &mut Transport,
     session_id: &str,
     prompt: impl Into<TurnPrompt>,

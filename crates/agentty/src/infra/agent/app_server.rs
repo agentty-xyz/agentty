@@ -4,6 +4,7 @@
 //! their matching backend implementations instead of exposing them as
 //! top-level `infra/` modules.
 
+mod client;
 mod codex;
 mod command;
 mod gemini;

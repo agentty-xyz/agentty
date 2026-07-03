@@ -2,8 +2,7 @@
 //!
 //! Both Codex (`codex app-server`) and Gemini (`gemini --acp`) use the same
 //! wire protocol framing and stdio loop logic. This module centralizes the
-//! transport lifetime helpers while keeping provider-specific wrappers in the
-//! child modules.
+//! transport lifetime helpers behind one mockable boundary.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -17,15 +16,40 @@ use crate::infra::app_server_transport::{self, AppServerTransportError, write_js
 pub(super) type AppServerTransportFuture<'scope, T> =
     Pin<Box<dyn Future<Output = T> + Send + 'scope>>;
 
-/// Shared stdio transport used by app-server runtime wrappers.
-pub(super) struct SharedAppServerStdioTransport {
+/// Async stdio transport boundary for one running app-server runtime.
+///
+/// Production uses [`AppServerStdioTransport`] backed by child process stdio,
+/// while tests can inject `MockAppServerRuntimeTransport` to validate
+/// higher-level lifecycle and turn flows without scripted shell processes.
+#[cfg_attr(test, mockall::automock)]
+pub(crate) trait AppServerRuntimeTransport: Send {
+    /// Writes one JSON-RPC payload to runtime stdin.
+    fn write_json_line(
+        &mut self,
+        payload: Value,
+    ) -> AppServerTransportFuture<'_, Result<(), AppServerTransportError>>;
+
+    /// Waits for one JSON-RPC response line matching `response_id`.
+    fn wait_for_response_line(
+        &mut self,
+        response_id: String,
+    ) -> AppServerTransportFuture<'_, Result<String, AppServerTransportError>>;
+
+    /// Reads the next raw stdout line from the runtime.
+    fn next_stdout(
+        &mut self,
+    ) -> AppServerTransportFuture<'_, Result<Option<String>, AppServerTransportError>>;
+}
+
+/// Shared stdio transport used by app-server runtimes.
+pub(super) struct AppServerStdioTransport {
     read_stdout_context: &'static str,
     stdin: Option<tokio::process::ChildStdin>,
     stdin_unavailable_context: &'static str,
     stdout_lines: Lines<BufReader<tokio::process::ChildStdout>>,
 }
 
-impl SharedAppServerStdioTransport {
+impl AppServerStdioTransport {
     /// Creates a shared transport over the child process stdin/stdout streams.
     pub(super) fn new(
         stdin: tokio::process::ChildStdin,
@@ -45,9 +69,11 @@ impl SharedAppServerStdioTransport {
     pub(super) fn close_stdin(&mut self) {
         drop(self.stdin.take());
     }
+}
 
+impl AppServerRuntimeTransport for AppServerStdioTransport {
     /// Writes one JSON-RPC payload to runtime stdin.
-    pub(super) fn write_json_line(
+    fn write_json_line(
         &mut self,
         payload: Value,
     ) -> AppServerTransportFuture<'_, Result<(), AppServerTransportError>> {
@@ -67,7 +93,7 @@ impl SharedAppServerStdioTransport {
     }
 
     /// Waits for one matching response line for a request id.
-    pub(super) fn wait_for_response_line(
+    fn wait_for_response_line(
         &mut self,
         response_id: String,
     ) -> AppServerTransportFuture<'_, Result<String, AppServerTransportError>> {
@@ -77,7 +103,7 @@ impl SharedAppServerStdioTransport {
     }
 
     /// Reads one raw JSON line from runtime stdout.
-    pub(super) fn next_stdout(
+    fn next_stdout(
         &mut self,
     ) -> AppServerTransportFuture<'_, Result<Option<String>, AppServerTransportError>> {
         let read_stdout_context = self.read_stdout_context;

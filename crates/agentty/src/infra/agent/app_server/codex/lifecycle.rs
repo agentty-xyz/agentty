@@ -6,7 +6,7 @@ use std::time::Duration;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
-use super::transport::{CodexRuntimeTransport, CodexStdioTransport};
+use super::super::stdio_transport::{AppServerRuntimeTransport, AppServerStdioTransport};
 use super::{policy, stream_parser, usage};
 use crate::domain::agent::{AgentKind, ReasoningLevel};
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptContentPart};
@@ -49,7 +49,7 @@ pub(super) async fn start_runtime(
 ) -> Result<
     (
         tokio::process::Child,
-        CodexStdioTransport,
+        AppServerStdioTransport,
         CodexRuntimeState,
     ),
     AppServerError,
@@ -81,14 +81,19 @@ pub(super) async fn start_runtime_with_built_command(
 ) -> Result<
     (
         tokio::process::Child,
-        CodexStdioTransport,
+        AppServerStdioTransport,
         CodexRuntimeState,
     ),
     AppServerError,
 > {
     let (mut child, stdin, stdout) =
         app_server_transport::spawn_runtime_command(command, "codex app-server")?;
-    let mut transport = CodexStdioTransport::new(stdin, stdout);
+    let mut transport = AppServerStdioTransport::new(
+        stdin,
+        stdout,
+        "Codex app-server stdin is unavailable",
+        "Failed reading Codex app-server stdout",
+    );
     let mut state = CodexRuntimeState::new(request.folder.clone(), request.model.clone());
 
     let bootstrap_result = async {
@@ -121,7 +126,7 @@ pub(super) async fn start_runtime_with_built_command(
 }
 
 /// Sends the initialize handshake for one app-server process.
-pub(super) async fn initialize_runtime<Transport: CodexRuntimeTransport>(
+pub(super) async fn initialize_runtime<Transport: AppServerRuntimeTransport>(
     transport: &mut Transport,
 ) -> Result<(), AppServerError> {
     let initialize_id = format!("init-{}", uuid::Uuid::new_v4());
@@ -158,7 +163,7 @@ pub(super) async fn initialize_runtime<Transport: CodexRuntimeTransport>(
 ///
 /// Returns the active thread id plus a flag indicating whether provider
 /// context was restored.
-pub(super) async fn start_or_resume_thread<Transport: CodexRuntimeTransport>(
+pub(super) async fn start_or_resume_thread<Transport: AppServerRuntimeTransport>(
     transport: &mut Transport,
     folder: &Path,
     model: &str,
@@ -178,7 +183,7 @@ pub(super) async fn start_or_resume_thread<Transport: CodexRuntimeTransport>(
 }
 
 /// Starts one Codex thread and returns its identifier.
-pub(super) async fn start_thread<Transport: CodexRuntimeTransport>(
+pub(super) async fn start_thread<Transport: AppServerRuntimeTransport>(
     transport: &mut Transport,
     folder: &Path,
     model: &str,
@@ -210,7 +215,7 @@ pub(super) async fn start_thread<Transport: CodexRuntimeTransport>(
 }
 
 /// Resumes one existing Codex thread and returns the active identifier.
-pub(super) async fn resume_thread<Transport: CodexRuntimeTransport>(
+pub(super) async fn resume_thread<Transport: AppServerRuntimeTransport>(
     transport: &mut Transport,
     thread_id: &str,
     model: &str,
@@ -289,7 +294,7 @@ pub(super) fn build_thread_resume_payload(
 }
 
 /// Sends one turn prompt and waits for terminal completion notification.
-pub(super) async fn run_turn_with_runtime<Transport: CodexRuntimeTransport>(
+pub(super) async fn run_turn_with_runtime<Transport: AppServerRuntimeTransport>(
     transport: &mut Transport,
     state: &mut CodexRuntimeState,
     prompt: impl Into<TurnPrompt>,
@@ -349,7 +354,7 @@ pub(super) async fn run_turn_with_runtime<Transport: CodexRuntimeTransport>(
 }
 
 /// Sends `thread/compact/start` and waits for compaction to complete.
-pub(super) async fn send_compact_request<Transport: CodexRuntimeTransport>(
+pub(super) async fn send_compact_request<Transport: AppServerRuntimeTransport>(
     transport: &mut Transport,
     thread_id: &str,
     latest_input_tokens: &mut u64,
@@ -365,7 +370,7 @@ pub(super) async fn send_compact_request<Transport: CodexRuntimeTransport>(
 
 /// Sends `thread/compact/start` and waits for compaction to complete within
 /// one caller-provided timeout window.
-pub(super) async fn send_compact_request_with_timeout<Transport: CodexRuntimeTransport>(
+pub(super) async fn send_compact_request_with_timeout<Transport: AppServerRuntimeTransport>(
     transport: &mut Transport,
     thread_id: &str,
     latest_input_tokens: &mut u64,
@@ -424,7 +429,7 @@ pub(super) async fn send_compact_request_with_timeout<Transport: CodexRuntimeTra
 
 /// Sends one `turn/start` request and processes the event stream until
 /// `turn/completed` is received.
-pub(super) async fn execute_turn_event_loop<Transport: CodexRuntimeTransport>(
+pub(super) async fn execute_turn_event_loop<Transport: AppServerRuntimeTransport>(
     transport: &mut Transport,
     folder: &Path,
     model: &str,
@@ -467,7 +472,7 @@ pub(super) struct CodexTurnEventLoopInput<'a> {
 
 /// Sends one `turn/start` request and processes the event stream using a
 /// caller-provided timeout window.
-pub(super) async fn execute_turn_event_loop_with_timeout<Transport: CodexRuntimeTransport>(
+pub(super) async fn execute_turn_event_loop_with_timeout<Transport: AppServerRuntimeTransport>(
     transport: &mut Transport,
     input: CodexTurnEventLoopInput<'_>,
 ) -> Result<(String, u64, u64), AppServerError> {
@@ -521,7 +526,7 @@ impl CodexTurnEventLoopState {
 
     /// Processes one app-server response and returns a completed turn when
     /// ready.
-    async fn process_response<Transport: CodexRuntimeTransport>(
+    async fn process_response<Transport: AppServerRuntimeTransport>(
         &mut self,
         transport: &mut Transport,
         folder: &Path,
@@ -641,7 +646,7 @@ impl CodexTurnEventLoopState {
 }
 
 /// Reads the next non-empty JSON response from Codex app-server stdout.
-async fn read_turn_response_value<Transport: CodexRuntimeTransport>(
+async fn read_turn_response_value<Transport: AppServerRuntimeTransport>(
     transport: &mut Transport,
 ) -> Result<Option<Value>, AppServerError> {
     let stdout_line =
@@ -655,7 +660,7 @@ async fn read_turn_response_value<Transport: CodexRuntimeTransport>(
 }
 
 /// Writes the initial `turn/start` request and returns its request id.
-async fn write_turn_start_request<Transport: CodexRuntimeTransport>(
+async fn write_turn_start_request<Transport: AppServerRuntimeTransport>(
     transport: &mut Transport,
     input: &CodexTurnEventLoopInput<'_>,
 ) -> Result<String, AppServerError> {
@@ -872,7 +877,7 @@ fn finalize_turn_completion(
 }
 
 /// Reads the next stdout line from the app-server runtime.
-async fn read_required_stdout_line<'scope, Transport: CodexRuntimeTransport>(
+async fn read_required_stdout_line<'scope, Transport: AppServerRuntimeTransport>(
     transport: &'scope mut Transport,
     context: &'scope str,
 ) -> Result<String, AppServerError> {

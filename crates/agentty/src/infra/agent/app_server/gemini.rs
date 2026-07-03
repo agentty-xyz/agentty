@@ -8,7 +8,6 @@ mod client;
 mod lifecycle;
 mod policy;
 mod stream_parser;
-mod transport;
 mod usage;
 
 pub(crate) use client::RealGeminiAcpClient;
