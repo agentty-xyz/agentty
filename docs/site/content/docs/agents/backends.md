@@ -98,9 +98,9 @@ Both providers share the same Gemini model ids:
 
 ### Claude Models
 
-- `claude-opus-4-8` (default): Latest Claude Opus model for complex tasks.
+- `claude-fable-5` (default): Claude Fable model for creative, narrative-heavy tasks.
+- `claude-opus-4-8`: Latest Claude Opus model for complex tasks.
 - `claude-sonnet-5`: Balanced Claude model for quality and latency.
-- `claude-fable-5`: Claude Fable model for creative, narrative-heavy tasks.
 - `claude-haiku-4-5-20251001`: Fast Claude model for lighter tasks.
 
 ### Codex Models

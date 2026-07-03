@@ -518,7 +518,7 @@ impl AgentKind {
     pub fn default_model(self) -> AgentModel {
         match self {
             Self::Antigravity | Self::Gemini => AgentModel::Gemini31ProPreview,
-            Self::Claude => AgentModel::ClaudeOpus48,
+            Self::Claude => AgentModel::ClaudeFable5,
             Self::Codex => AgentModel::Gpt55,
         }
     }
@@ -547,9 +547,9 @@ impl AgentKind {
             AgentModel::Gemini3FlashPreview,
         ];
         const CLAUDE_MODELS: &[AgentModel] = &[
+            AgentModel::ClaudeFable5,
             AgentModel::ClaudeOpus48,
             AgentModel::ClaudeSonnet5,
-            AgentModel::ClaudeFable5,
             AgentModel::ClaudeHaiku4520251001,
         ];
         const CODEX_MODELS: &[AgentModel] = &[

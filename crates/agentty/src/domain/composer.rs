@@ -1067,7 +1067,7 @@ mod tests {
             selection,
             Some(PromptSuggestionSelection::Model(AgentSelection::new(
                 AgentKind::Claude,
-                AgentModel::ClaudeOpus48,
+                AgentModel::ClaudeFable5,
             )))
         );
     }

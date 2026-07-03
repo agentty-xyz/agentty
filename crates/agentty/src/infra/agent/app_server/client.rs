@@ -278,7 +278,7 @@ mod tests {
 
         // Assert
         assert_eq!(response.assistant_message, "assistant");
-        assert_eq!(response.context_reset, false);
+        assert!(!response.context_reset);
         assert_eq!(response.input_tokens, 11);
         assert_eq!(response.output_tokens, 12);
         assert_eq!(response.pid, Some(42));
