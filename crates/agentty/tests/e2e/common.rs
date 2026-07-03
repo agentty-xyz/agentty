@@ -574,6 +574,8 @@ impl ZolaFeaturePage {
 /// }
 /// ```
 pub(crate) struct FeatureTest {
+    /// Extra child-process environment variables applied to PTY and VHS runs.
+    child_env: Vec<(String, String)>,
     /// Whether PTY and VHS runs inherit the ambient system `PATH`.
     inherit_system_path: bool,
     /// Feature name used for GIF filename and Zola page filename.
@@ -600,6 +602,7 @@ impl FeatureTest {
     /// The name is used as the GIF filename stem and Zola page filename.
     pub(crate) fn new(name: impl Into<String>) -> Self {
         Self {
+            child_env: Vec::new(),
             inherit_system_path: true,
             name: name.into(),
             setup: None,
@@ -617,6 +620,13 @@ impl FeatureTest {
         setup: impl Fn(&BuilderEnv) -> Result<(), Box<dyn std::error::Error>> + 'static,
     ) -> Self {
         self.setup = Some(Box::new(setup));
+
+        self
+    }
+
+    /// Add an environment variable for the PTY session and VHS recording.
+    pub(crate) fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.child_env.push((key.into(), value.into()));
 
         self
     }
@@ -691,25 +701,30 @@ impl FeatureTest {
         let terminal_rows = self.terminal_rows;
         let uses_default_terminal_size =
             terminal_cols == DEFAULT_TERMINAL_COLS && terminal_rows == DEFAULT_TERMINAL_ROWS;
-        let (builder, owned_pairs) = if self.inherit_system_path && uses_default_terminal_size {
-            (env.builder(), env.as_vhs_env_pairs())
-        } else if self.inherit_system_path {
-            (
-                env.builder_with_path_and_size(
-                    env.path_with_stub_bin(),
-                    terminal_cols,
-                    terminal_rows,
-                ),
-                env.as_vhs_env_pairs(),
-            )
-        } else {
-            let path_env = env.stub_only_path();
+        let (mut builder, mut owned_pairs) =
+            if self.inherit_system_path && uses_default_terminal_size {
+                (env.builder(), env.as_vhs_env_pairs())
+            } else if self.inherit_system_path {
+                (
+                    env.builder_with_path_and_size(
+                        env.path_with_stub_bin(),
+                        terminal_cols,
+                        terminal_rows,
+                    ),
+                    env.as_vhs_env_pairs(),
+                )
+            } else {
+                let path_env = env.stub_only_path();
 
-            (
-                env.builder_with_path_and_size(path_env.clone(), terminal_cols, terminal_rows),
-                env.as_vhs_env_pairs_with_path(path_env),
-            )
-        };
+                (
+                    env.builder_with_path_and_size(path_env.clone(), terminal_cols, terminal_rows),
+                    env.as_vhs_env_pairs_with_path(path_env),
+                )
+            };
+        for (key, value) in &self.child_env {
+            builder = builder.env(key.clone(), value.clone());
+            owned_pairs.push((key.clone(), value.clone()));
+        }
         let env_pairs: Vec<(&str, &str)> = owned_pairs
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str()))

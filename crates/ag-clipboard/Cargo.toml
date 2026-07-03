@@ -1,0 +1,30 @@
+[package]
+name = "ag-clipboard"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+image.workspace = true
+percent-encoding.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+mockall.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix.workspace = true
+x11rb.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+image = { workspace = true, features = ["tiff"] }
+objc2.workspace = true
+objc2-app-kit = { workspace = true, features = ["std", "NSPasteboard", "NSPasteboardItem"] }
+objc2-foundation = { workspace = true, features = ["std", "NSEnumerator", "NSString"] }

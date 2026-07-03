@@ -1279,6 +1279,47 @@ mod tests {
         }
     }
 
+    /// Verifies unavailable clipboard backends surface as inline paste errors
+    /// without mutating prompt attachments.
+    #[tokio::test]
+    async fn test_handle_prompt_image_paste_reports_unavailable_clipboard_backend() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+        let mut clipboard_image_client =
+            crate::infra::clipboard_image::MockClipboardImageClient::new();
+        clipboard_image_client
+            .expect_persist_clipboard_image()
+            .once()
+            .returning(|_, _| {
+                Box::pin(async {
+                    Err(crate::infra::clipboard_image::ClipboardError::Unavailable {
+                        reason: "unsupported clipboard backend".to_string(),
+                    })
+                })
+            });
+        install_mock_clipboard_image_client(&mut app, clipboard_image_client);
+
+        // Act
+        handle_prompt_image_paste(&mut app, &prompt_context).await;
+
+        // Assert
+        app.sessions.sync_from_handles();
+        assert!(app.sessions.sessions()[0].output.contains(
+            "[Paste Image Error] Clipboard is unavailable. Try again after granting clipboard \
+             access."
+        ));
+        if let AppMode::Prompt {
+            attachment_state,
+            input,
+            ..
+        } = &app.mode
+        {
+            assert_eq!(input.text(), "Review ");
+            assert!(attachment_state.attachments.is_empty());
+        }
+    }
+
     #[tokio::test]
     async fn test_take_submitted_turn_prompt_drains_text_and_attachment_state() {
         // Arrange

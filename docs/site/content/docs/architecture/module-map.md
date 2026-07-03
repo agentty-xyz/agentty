@@ -16,6 +16,10 @@ module docstrings directly.
 
 ## Workspace Crates
 
+- `crates/ag-clipboard/`: Read-only clipboard support crate with the narrow text,
+  file-list, and RGBA image read surface used by prompt image capture. Platform backends
+  own macOS pasteboard access, X11 selection reads, Wayland `wl-paste` reads, and
+  unsupported-backend reporting.
 - `crates/ag-forge/`: Shared forge review-request library crate with normalized
   review-request types, GitHub/GitLab remote detection, and the `gh`/`glab` adapters
   behind the `ReviewRequestClient` and `ForgeCommandRunner` boundaries.
@@ -50,8 +54,10 @@ module docstrings directly.
 - `infra/`: External integrations behind traits — SQLite persistence (`infra/db/`
   repositories), git (`GitClient`, backed by `ag-git`), filesystem (`FsClient`), tmux,
   clipboard images, version checks, project discovery, file indexing, and the agent
-  stack: provider registry, per-provider backends (`infra/agent/`), shared prompt
-  preparation and access-root selection (`infra/agent/prompt.rs`), transport channels
+  stack. Clipboard image capture delegates host clipboard reads to `ag-clipboard`, then
+  owns temp-file persistence and attachment metadata. The agent stack includes provider
+  registry, per-provider backends (`infra/agent/`), shared prompt preparation and
+  access-root selection (`infra/agent/prompt.rs`), transport channels
   (`infra/channel/`), app-server clients plus shared command and stdio transport helpers
   (`infra/agent/app_server/`), and the structured response protocol compatibility layer
   backed by `ag-protocol` prompt-envelope, schema, and parser APIs.

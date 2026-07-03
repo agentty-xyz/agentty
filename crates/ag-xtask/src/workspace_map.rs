@@ -13,10 +13,11 @@ const ARCHITECTURE_DOCS: [&str; 4] = [
     "docs/site/content/docs/architecture/change-recipes.md",
     "docs/site/content/docs/architecture/testability-boundaries.md",
 ];
-const AGENT_GUIDES: [&str; 15] = [
+const AGENT_GUIDES: [&str; 16] = [
     "AGENTS.md",
     "skills/AGENTS.md",
     "crates/AGENTS.md",
+    "crates/ag-clipboard/AGENTS.md",
     "crates/ag-forge/AGENTS.md",
     "crates/ag-git/AGENTS.md",
     "crates/ag-protocol/AGENTS.md",
