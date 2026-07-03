@@ -11,7 +11,9 @@ use tokio::task::{JoinHandle, JoinSet};
 
 use super::workflow::merge::SessionMergeService;
 pub(crate) use super::workflow::merge::{SyncMainOutcome, SyncSessionStartError};
-pub(crate) use super::workflow::task::{RunAgentAssistTaskInput, SessionTaskService};
+pub(crate) use super::workflow::task::{
+    RunAgentAssistTaskInput, SessionTaskService, StatusTransition,
+};
 use super::workflow::worker::SessionWorkerService;
 use crate::app::session_state::SessionGitStatus;
 use crate::app::{AppServices, SessionState, setting};

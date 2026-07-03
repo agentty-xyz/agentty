@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use super::worker::{SessionWorkerContext, TurnMetadata};
-use super::{SessionTaskService, isolation, post_turn};
+use super::{SessionTaskService, StatusTransition, isolation, post_turn};
 use crate::app::session::SessionError;
 use crate::app::{AppEvent, SessionManager, setting};
 use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel};
@@ -131,16 +131,15 @@ pub(super) async fn run_channel_turn(
             .await;
 
         // Best-effort: status transition failure is non-critical.
-        let _ = SessionTaskService::update_status(
-            &context.status,
-            context.clock.as_ref(),
-            &context.db,
-            &context.app_event_tx,
-            &context.session_update_versions,
-            &context.session_id,
-            Status::InProgress,
-        )
-        .await;
+        let status_transition = StatusTransition::from_parts(
+            context.app_event_tx.clone(),
+            Arc::clone(&context.clock),
+            context.db.clone(),
+            context.session_id.clone(),
+            Arc::clone(&context.session_update_versions),
+            Arc::clone(&context.status),
+        );
+        let _ = status_transition.apply(Status::InProgress).await;
     }
 
     let main_checkout_snapshot = match MainCheckoutSnapshot::capture(context).await {

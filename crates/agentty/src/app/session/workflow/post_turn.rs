@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 
 use super::task::SessionOutputMessageAppend;
 use super::worker::{SessionWorkerContext, TurnMetadata};
-use super::{SessionTaskService, published_branch};
+use super::{SessionTaskService, StatusTransition, published_branch};
 use crate::app::AppEvent;
 use crate::app::assist::AssistContext;
 use crate::app::service::SessionUpdateVersionMap;
@@ -260,16 +260,15 @@ pub(super) async fn finalize_channel_turn(
 
     if let Some(target_status) = status_update_after_turn_result(result) {
         // Best-effort: status transition failure is non-critical.
-        let _ = SessionTaskService::update_status(
-            &context.status,
-            context.clock.as_ref(),
-            &context.db,
-            &context.app_event_tx,
-            &context.session_update_versions,
-            &context.session_id,
-            target_status,
-        )
-        .await;
+        let status_transition = StatusTransition::from_parts(
+            context.app_event_tx.clone(),
+            Arc::clone(&context.clock),
+            context.db.clone(),
+            context.session_id.clone(),
+            Arc::clone(&context.session_update_versions),
+            Arc::clone(&context.status),
+        );
+        let _ = status_transition.apply(target_status).await;
     }
 }
 

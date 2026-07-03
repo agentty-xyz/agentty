@@ -12,7 +12,7 @@ use uuid::Uuid;
 use super::task::SessionOutputMessageAppend;
 use super::worker::{SessionCommand, TurnMetadata};
 use super::{
-    SessionTaskService, draft, isolation, session_branch, session_folder,
+    SessionTaskService, StatusTransition, draft, isolation, session_branch, session_folder,
     unix_timestamp_from_system_time,
 };
 use crate::app::session::SessionError;
@@ -949,7 +949,8 @@ impl SessionManager {
 
         let handles = self.session_handles_or_err(&persisted_session_id)?;
         let output = Arc::clone(&handles.output);
-        let status = Arc::clone(&handles.status);
+        let status_transition =
+            StatusTransition::from_services(services, handles, persisted_session_id.clone());
         let app_event_tx = services.event_sender();
 
         self.persist_first_message_metadata(services, &persisted_session_id, &prompt.text, &title)
@@ -972,17 +973,7 @@ impl SessionManager {
         .await;
         self.set_active_prompt_output(&persisted_session_id, initial_output);
 
-        if !SessionTaskService::update_status(
-            &status,
-            services.clock().as_ref(),
-            services.db(),
-            &app_event_tx,
-            &services.session_update_versions(),
-            &persisted_session_id,
-            Status::InProgress,
-        )
-        .await
-        {
+        if !status_transition.apply(Status::InProgress).await {
             warn!(
                 session_id = %persisted_session_id,
                 "skipped session start status update because the in-memory status did not transition to in-progress"
@@ -1658,7 +1649,8 @@ impl SessionManager {
         };
 
         let output = Arc::clone(&handles.output);
-        let status = Arc::clone(&handles.status);
+        let status_transition =
+            StatusTransition::from_services(services, handles, persisted_session_id.clone());
 
         let effective_prompt = prompt;
 
@@ -1671,17 +1663,7 @@ impl SessionManager {
             )
             .await;
 
-            if !SessionTaskService::update_status(
-                &status,
-                services.clock().as_ref(),
-                services.db(),
-                &app_event_tx,
-                &services.session_update_versions(),
-                &persisted_session_id,
-                Status::InProgress,
-            )
-            .await
-            {
+            if !status_transition.apply(Status::InProgress).await {
                 warn!(
                     session_id = %persisted_session_id,
                     "skipped reply status update because the in-memory status did not transition to in-progress"
@@ -2471,23 +2453,13 @@ impl SessionManager {
         let is_running = session.status == Status::InProgress;
         let has_worktree = services.fs_client().is_dir(folder.clone());
         let handles = self.session_handles_or_err(session_id)?;
-        let status = Arc::clone(&handles.status);
-        let app_event_tx = services.event_sender();
+        let status_transition = StatusTransition::from_services(services, handles, session_id);
 
         if is_running {
             Self::signal_running_session_cancellation(services, handles, session_id).await;
         }
 
-        let status_updated = SessionTaskService::update_status(
-            &status,
-            services.clock().as_ref(),
-            services.db(),
-            &app_event_tx,
-            &services.session_update_versions(),
-            session_id,
-            Status::Canceled,
-        )
-        .await;
+        let status_updated = status_transition.apply(Status::Canceled).await;
 
         if status_updated {
             Self::spawn_canceled_session_cleanup(

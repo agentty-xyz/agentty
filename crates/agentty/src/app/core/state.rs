@@ -29,7 +29,7 @@ use app::sync::SyncMainRunner;
 use app::tab::{Tab, TabManager};
 use app::{sync, task};
 use ratatui::widgets::TableState;
-use session::SessionTaskService;
+use session::StatusTransition;
 #[cfg(test)]
 use session::{SyncMainOutcome, SyncSessionStartError, TurnAppliedState};
 use tokio::sync::mpsc;
@@ -1686,17 +1686,9 @@ impl App {
     /// Returns an error when status transition to `Queued` is invalid.
     async fn mark_session_as_queued_for_merge(&self, session_id: &str) -> Result<(), AppError> {
         let handles = self.sessions.session_handles_or_err(session_id)?;
-        let app_event_tx = self.services.event_sender();
-        let status_updated = SessionTaskService::update_status(
-            handles.status.as_ref(),
-            self.services.clock().as_ref(),
-            self.services.db(),
-            &app_event_tx,
-            &self.services.session_update_versions(),
-            session_id,
-            Status::Queued,
-        )
-        .await;
+        let status_transition =
+            StatusTransition::from_services(&self.services, handles, session_id);
+        let status_updated = status_transition.apply(Status::Queued).await;
 
         if !status_updated {
             return Err(AppError::Workflow(
@@ -1720,18 +1712,10 @@ impl App {
         let Ok(handles) = self.sessions.session_handles_or_err(session_id) else {
             return;
         };
-        let app_event_tx = self.services.event_sender();
         // Best-effort: status transition failure is non-critical.
-        let _ = SessionTaskService::update_status(
-            handles.status.as_ref(),
-            self.services.clock().as_ref(),
-            self.services.db(),
-            &app_event_tx,
-            &self.services.session_update_versions(),
-            session_id,
-            Status::Review,
-        )
-        .await;
+        let status_transition =
+            StatusTransition::from_services(&self.services, handles, session_id);
+        let _ = status_transition.apply(Status::Review).await;
     }
 
     /// Starts the next pending merge request when no merge is currently active.

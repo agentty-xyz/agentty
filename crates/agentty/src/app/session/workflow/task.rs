@@ -12,13 +12,15 @@ use crate::app::assist::{
     AssistContext, AssistPolicy, FailureTracker, append_assist_header, format_detail_lines,
     run_agent_assist,
 };
-use crate::app::service::SessionUpdateVersionMap;
+use crate::app::service::{AppServices, SessionUpdateVersionMap};
 use crate::app::session::{Clock, SessionError, unix_timestamp_from_system_time};
 use crate::app::{AppEvent, SessionManager, setting};
 use crate::domain::agent::{AgentKind, AgentSelection};
 #[cfg(test)]
 use crate::domain::agent::{AgentModel, AgentSelectionMetadata};
-use crate::domain::session::{COMMITTING_PROGRESS_LABEL, SessionId, SessionSize, Status};
+use crate::domain::session::{
+    COMMITTING_PROGRESS_LABEL, SessionHandles, SessionId, SessionSize, Status,
+};
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::setting::SettingName;
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -59,6 +61,88 @@ struct SessionCommitMessagePromptTemplate<'a> {
 
 /// Stateless helpers for session process execution and output handling.
 pub(crate) struct SessionTaskService;
+
+/// Bound context for applying status transitions to one live session.
+pub(crate) struct StatusTransition {
+    /// App event sender used for session-update notifications.
+    app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    /// Clock used for persisted status timing.
+    clock: Arc<dyn Clock>,
+    /// Repository bundle used for status persistence.
+    db: AppRepositories,
+    /// Stable session identifier receiving the transition.
+    session_id: SessionId,
+    /// Per-app session update versions shared with the main runtime.
+    session_update_versions: SessionUpdateVersionMap,
+    /// Shared in-memory status handle synchronized with persistence.
+    status: Arc<Mutex<Status>>,
+}
+
+impl StatusTransition {
+    /// Creates a transition context from shared services and runtime handles.
+    pub(crate) fn from_services(
+        services: &AppServices,
+        handles: &SessionHandles,
+        session_id: impl Into<SessionId>,
+    ) -> Self {
+        Self {
+            app_event_tx: services.event_sender(),
+            clock: services.clock(),
+            db: services.db().clone(),
+            session_id: session_id.into(),
+            session_update_versions: services.session_update_versions(),
+            status: Arc::clone(&handles.status),
+        }
+    }
+
+    /// Creates a transition context from already-decomposed workflow inputs.
+    pub(crate) fn from_parts(
+        app_event_tx: mpsc::UnboundedSender<AppEvent>,
+        clock: Arc<dyn Clock>,
+        db: AppRepositories,
+        session_id: impl Into<SessionId>,
+        session_update_versions: SessionUpdateVersionMap,
+        status: Arc<Mutex<Status>>,
+    ) -> Self {
+        Self {
+            app_event_tx,
+            clock,
+            db,
+            session_id: session_id.into(),
+            session_update_versions,
+            status,
+        }
+    }
+
+    /// Applies a status transition using the bound session dependencies.
+    pub(crate) async fn apply(&self, status: Status) -> bool {
+        SessionTaskService::update_status(
+            self.status.as_ref(),
+            self.clock.as_ref(),
+            &self.db,
+            &self.app_event_tx,
+            &self.session_update_versions,
+            self.session_id.as_str(),
+            status,
+        )
+        .await
+    }
+
+    /// Applies a status transition or returns a workflow error for invalid
+    /// state-machine edges.
+    pub(crate) async fn apply_or_invalid_transition(
+        &self,
+        status: Status,
+    ) -> Result<(), SessionError> {
+        if self.apply(status).await {
+            return Ok(());
+        }
+
+        Err(SessionError::Workflow(format!(
+            "Invalid status transition to {status}"
+        )))
+    }
+}
 
 /// Generated session commit details for one successful auto-commit run.
 pub(crate) struct SessionCommitOutcome {
@@ -1248,9 +1332,12 @@ mod tests {
     use std::time::{Duration, Instant, SystemTime};
 
     use super::*;
+    use crate::app::service::AppServiceDeps;
     use crate::db::AppRepositories;
+    use crate::domain::agent::AgentCliInfo;
     use crate::infra::agent::tests::MockAgentBackend;
     use crate::infra::channel::AgentRequestKind;
+    use crate::infra::fs;
     use crate::infra::git::{GitError, MockGitClient};
 
     /// Mutable test clock used to drive deterministic status-transition timing
@@ -1427,6 +1514,56 @@ mod tests {
         assert_eq!(session_row.status, "Question");
         assert_eq!(session_row.in_progress_started_at, None);
         assert_eq!(session_row.in_progress_total_seconds, 150);
+    }
+
+    /// Verifies the status-transition context updates both live handles and
+    /// persisted rows when built from shared services.
+    #[tokio::test]
+    async fn test_status_transition_from_services_updates_handle_and_persistence() {
+        // Arrange
+        let database = AppRepositories::in_memory().await;
+        insert_review_session(&database, "gpt-5.5").await;
+        let handles = SessionHandles::new(String::new(), Status::Review);
+        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+        let services = AppServices::new_with_agent_clis(
+            PathBuf::from("/tmp/agentty-tests"),
+            Arc::new(StaticClock::new(
+                SystemTime::UNIX_EPOCH + Duration::from_secs(42),
+            )),
+            app_event_tx,
+            AppServiceDeps {
+                app_server_client_override: Some(crate::test_support::mock_app_server()),
+                available_agent_kinds: AgentKind::ALL.to_vec(),
+                clipboard_image_client_override: None,
+                fs_client: Arc::new(fs::MockFsClient::new()),
+                git_client: Arc::new(MockGitClient::new()),
+                repositories: database.clone(),
+                review_request_client: Arc::new(ag_forge::MockReviewRequestClient::new()),
+            },
+            AgentCliInfo::from_kinds(AgentKind::ALL),
+        );
+        let status_transition = StatusTransition::from_services(&services, &handles, "session-id");
+
+        // Act
+        let status_updated = status_transition.apply(Status::InProgress).await;
+        let live_status = handles
+            .status
+            .lock()
+            .expect("status lock should not be poisoned")
+            .to_string();
+        let session_row = database
+            .sessions()
+            .load_sessions()
+            .await
+            .expect("failed to load sessions")
+            .into_iter()
+            .find(|row| row.id == "session-id")
+            .expect("missing session row");
+
+        // Assert
+        assert!(status_updated);
+        assert_eq!(live_status, Status::InProgress.to_string());
+        assert_eq!(session_row.status, Status::InProgress.to_string());
     }
 
     #[test]

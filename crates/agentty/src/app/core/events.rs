@@ -24,7 +24,7 @@ use super::state::{
     UpdateStatus,
 };
 use crate::app::session::{
-    SessionTaskService, SyncMainOutcome, SyncSessionStartError, TurnAppliedState,
+    StatusTransition, SyncMainOutcome, SyncSessionStartError, TurnAppliedState,
 };
 use crate::app::session_state::SessionGitStatus;
 use crate::app::{self, session};
@@ -1870,16 +1870,9 @@ impl App {
             }
         }
 
-        SessionTaskService::update_status(
-            handles.status.as_ref(),
-            self.services.clock().as_ref(),
-            self.services.db(),
-            &app_event_tx,
-            &self.services.session_update_versions(),
-            session_id,
-            Status::Done,
-        )
-        .await;
+        let status_transition =
+            StatusTransition::from_services(&self.services, handles, session_id);
+        let _ = status_transition.apply(Status::Done).await;
 
         (!warnings.is_empty()).then(|| warnings.join("\n"))
     }
@@ -1889,18 +1882,10 @@ impl App {
         let Ok(handles) = self.sessions.session_handles_or_err(session_id) else {
             return;
         };
-        let app_event_tx = self.services.event_sender();
 
-        let _ = SessionTaskService::update_status(
-            handles.status.as_ref(),
-            self.services.clock().as_ref(),
-            self.services.db(),
-            &app_event_tx,
-            &self.services.session_update_versions(),
-            session_id,
-            Status::Canceled,
-        )
-        .await;
+        let status_transition =
+            StatusTransition::from_services(&self.services, handles, session_id);
+        let _ = status_transition.apply(Status::Canceled).await;
         self.sessions
             .cancel_stacked_child_sessions(&self.services, session_id)
             .await;

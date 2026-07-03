@@ -13,7 +13,7 @@ use tracing::warn;
 
 use super::published_branch::{self, PublishedBranchAutoPushInput};
 use super::worker::SessionCommand;
-use super::{SessionTaskService, session_branch};
+use super::{SessionTaskService, StatusTransition, session_branch};
 use crate::app::assist::{
     AssistContext, AssistPolicy, FailureTracker, append_assist_header, format_detail_lines,
     run_agent_assist,
@@ -120,12 +120,12 @@ impl RebasePlan {
 /// Shared context needed to restore a failed merge-start attempt back to
 /// `Review`.
 struct MergeStartRestoreContext<'a> {
-    app_event_tx: &'a mpsc::UnboundedSender<AppEvent>,
-    clock: &'a dyn Clock,
+    /// Repository boundary used to load merge-start metadata.
     db: &'a AppRepositories,
+    /// Session whose merge-start attempt is being restored.
     session_id: &'a str,
-    session_update_versions: &'a SessionUpdateVersionMap,
-    status: &'a Arc<Mutex<Status>>,
+    /// Bound transition context used for best-effort rollback.
+    status_transition: &'a StatusTransition,
 }
 
 struct MergeTaskInput {
@@ -150,24 +150,20 @@ struct MergeTaskInput {
 struct SuccessfulMergeCompletion<'a> {
     /// Event channel used for status and stacked-child rebase notifications.
     app_event_tx: &'a mpsc::UnboundedSender<AppEvent>,
+    /// Canonical session commit message used for title and summary sync.
+    authoritative_commit_message: Option<&'a str>,
     /// Branch that received the squash merge.
     base_branch: &'a str,
-    /// Clock boundary used when updating session status timing.
-    clock: &'a dyn Clock,
     /// Repository boundary for session metadata updates.
     db: &'a AppRepositories,
     /// Session that finished merging.
     id: &'a SessionId,
-    /// Canonical session commit message used for title and summary sync.
-    authoritative_commit_message: Option<&'a str>,
     /// Commit hash created on the target branch, when the merge produced one.
     merged_commit_hash: Option<&'a str>,
     /// Pre-merge parent tip used as the old base for child restacks.
     parent_commit_hash: String,
-    /// Per-session update versions used to reject stale status writes.
-    session_update_versions: &'a SessionUpdateVersionMap,
-    /// Live status handle for the merging session.
-    status: &'a Arc<Mutex<Status>>,
+    /// Bound transition context for moving the merged session to `Done`.
+    status_transition: &'a StatusTransition,
 }
 
 #[derive(Clone)]
@@ -221,7 +217,6 @@ pub(super) struct RebaseCommandInput {
 /// Bundled context for finalizing one rebase task.
 struct FinalizeRebaseInput<'a> {
     app_event_tx: &'a mpsc::UnboundedSender<AppEvent>,
-    clock: &'a dyn Clock,
     db: &'a AppRepositories,
     folder: &'a Path,
     git_client: &'a Arc<dyn GitClient>,
@@ -229,19 +224,20 @@ struct FinalizeRebaseInput<'a> {
     output: &'a Arc<Mutex<String>>,
     rebase_result: Result<String, SessionError>,
     session_update_versions: &'a SessionUpdateVersionMap,
-    status: &'a Arc<Mutex<Status>>,
+    /// Bound transition context for restoring `Review` after rebase cleanup.
+    status_transition: &'a StatusTransition,
 }
 
 /// Bundled context for finalizing one merge task.
 struct FinalizeMergeInput<'a> {
-    clock: &'a dyn Clock,
-    db: &'a AppRepositories,
     app_event_tx: &'a mpsc::UnboundedSender<AppEvent>,
+    db: &'a AppRepositories,
     id: &'a str,
     output: &'a Arc<Mutex<String>>,
     result: Result<String, SessionError>,
     session_update_versions: &'a SessionUpdateVersionMap,
-    status: &'a Arc<Mutex<Status>>,
+    /// Bound transition context for restoring failed merges to `Review`.
+    status_transition: &'a StatusTransition,
 }
 
 /// Input context for assisted conflict resolution during `sync main`.
@@ -588,29 +584,22 @@ impl SessionMergeService {
             Arc::clone(&handles.output),
             Arc::clone(&handles.status),
         );
+        let status_transition = StatusTransition::from_parts(
+            app_event_tx.clone(),
+            Arc::clone(&clock),
+            db.clone(),
+            id.clone(),
+            Arc::clone(&session_update_versions),
+            Arc::clone(&status),
+        );
         let restore_context = MergeStartRestoreContext {
-            app_event_tx: &app_event_tx,
-            clock: clock.as_ref(),
             db: &db,
             session_id: &id,
-            session_update_versions: &session_update_versions,
-            status: &status,
+            status_transition: &status_transition,
         };
-        if !SessionTaskService::update_status(
-            &status,
-            clock.as_ref(),
-            &db,
-            &app_event_tx,
-            &session_update_versions,
-            &id,
-            Status::Merging,
-        )
-        .await
-        {
-            return Err(SessionError::Workflow(
-                "Invalid status transition to Merging".to_string(),
-            ));
-        }
+        status_transition
+            .apply_or_invalid_transition(Status::Merging)
+            .await?;
 
         let base_branch = Self::load_merge_base_branch(&restore_context).await?;
         let repo_root = Self::find_merge_repo_root(
@@ -654,17 +643,7 @@ impl SessionMergeService {
     /// Restores a failed merge-start attempt to `Review` status without
     /// masking the original error.
     async fn restore_review_status(context: &MergeStartRestoreContext<'_>) {
-        if !SessionTaskService::update_status(
-            context.status,
-            context.clock,
-            context.db,
-            context.app_event_tx,
-            context.session_update_versions,
-            context.session_id,
-            Status::Review,
-        )
-        .await
-        {
+        if !context.status_transition.apply(Status::Review).await {
             warn!(
                 session_id = context.session_id,
                 "skipped restoring review status because the in-memory status was already current"
@@ -775,49 +754,25 @@ impl SessionMergeService {
         let handles = manager
             .session_handles_or_err(session_id)
             .map_err(|_| SessionError::HandlesNotFound)?;
-        let status = Arc::clone(&handles.status);
-        let db = services.db().clone();
-        let app_event_tx = services.event_sender();
-        let clock = services.clock();
-        let session_update_versions = services.session_update_versions();
-
-        if !SessionTaskService::update_status(
-            &status,
-            clock.as_ref(),
-            &db,
-            &app_event_tx,
-            &session_update_versions,
-            &persisted_session_id,
-            Status::Rebasing,
-        )
-        .await
-        {
-            return Err(SessionError::Workflow(
-                "Invalid status transition to Rebasing".to_string(),
-            ));
-        }
+        let status_transition =
+            StatusTransition::from_services(services, handles, persisted_session_id.clone());
+        status_transition
+            .apply_or_invalid_transition(Status::Rebasing)
+            .await?;
 
         let command = SessionCommand::Rebase {
             base_branch,
             operation_id: uuid::Uuid::new_v4().to_string(),
         };
-        if let Err(error) = manager
-            .enqueue_session_command(services, &persisted_session_id, command)
-            .await
-        {
-            let _ = SessionTaskService::update_status(
-                &status,
-                clock.as_ref(),
-                &db,
-                &app_event_tx,
-                &session_update_versions,
-                &persisted_session_id,
-                Status::Review,
-            )
-            .await;
-
-            return Err(error);
-        }
+        Self::enqueue_with_status_rollback(
+            manager,
+            services,
+            &status_transition,
+            &persisted_session_id,
+            command,
+            Status::Review,
+        )
+        .await?;
 
         Ok(())
     }
@@ -945,46 +900,47 @@ impl SessionMergeService {
         let handles = manager
             .session_handles_or_err(child_session_id)
             .map_err(|_| SessionError::HandlesNotFound)?;
-        let status = Arc::clone(&handles.status);
-        let db = services.db().clone();
-        let app_event_tx = services.event_sender();
-        let clock = services.clock();
-        let session_update_versions = services.session_update_versions();
-
-        if !SessionTaskService::update_status(
-            &status,
-            clock.as_ref(),
-            &db,
-            &app_event_tx,
-            &session_update_versions,
-            &persisted_session_id,
-            Status::Rebasing,
-        )
-        .await
-        {
-            return Err(SessionError::Workflow(
-                "Invalid status transition to Rebasing".to_string(),
-            ));
-        }
+        let status_transition =
+            StatusTransition::from_services(services, handles, persisted_session_id.clone());
+        status_transition
+            .apply_or_invalid_transition(Status::Rebasing)
+            .await?;
 
         let command = SessionCommand::Rebase {
             base_branch,
             operation_id: uuid::Uuid::new_v4().to_string(),
         };
+        Self::enqueue_with_status_rollback(
+            manager,
+            services,
+            &status_transition,
+            &persisted_session_id,
+            command,
+            previous_status,
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    /// Enqueues a worker command and restores the previous status if the
+    /// queue handoff cannot be recorded or delivered.
+    ///
+    /// # Errors
+    /// Returns the enqueue failure after the best-effort rollback attempt.
+    async fn enqueue_with_status_rollback(
+        manager: &mut SessionManager,
+        services: &AppServices,
+        status_transition: &StatusTransition,
+        session_id: &SessionId,
+        command: SessionCommand,
+        fallback_status: Status,
+    ) -> Result<(), SessionError> {
         if let Err(error) = manager
-            .enqueue_session_command(services, &persisted_session_id, command)
+            .enqueue_session_command(services, session_id, command)
             .await
         {
-            let _ = SessionTaskService::update_status(
-                &status,
-                clock.as_ref(),
-                &db,
-                &app_event_tx,
-                &session_update_versions,
-                &persisted_session_id,
-                previous_status,
-            )
-            .await;
+            let _ = status_transition.apply(fallback_status).await;
 
             return Err(error);
         }
@@ -1058,15 +1014,22 @@ impl SessionManager {
         let session_update_versions = input.session_update_versions.clone();
 
         let merge_result = Self::execute_merge_workflow(input).await;
+        let status_transition = StatusTransition::from_parts(
+            app_event_tx.clone(),
+            Arc::clone(&clock),
+            db.clone(),
+            id.clone(),
+            Arc::clone(&session_update_versions),
+            Arc::clone(&status),
+        );
         Self::finalize_merge_task(FinalizeMergeInput {
-            clock: clock.as_ref(),
-            db: &db,
             app_event_tx: &app_event_tx,
+            db: &db,
             id: &id,
             output: &output,
             result: merge_result,
             session_update_versions: &session_update_versions,
-            status: &status,
+            status_transition: &status_transition,
         })
         .await;
     }
@@ -1154,17 +1117,24 @@ impl SessionManager {
             ))
         })?;
 
+        let status_transition = StatusTransition::from_parts(
+            app_event_tx.clone(),
+            Arc::clone(&clock),
+            db.clone(),
+            id.clone(),
+            Arc::clone(&session_update_versions),
+            Arc::clone(&status),
+        );
+
         Self::complete_successful_merge(SuccessfulMergeCompletion {
             app_event_tx: &app_event_tx,
             authoritative_commit_message: authoritative_commit_message.as_deref(),
             base_branch: &base_branch,
-            clock: clock.as_ref(),
             db: &db,
             id: &id,
             merged_commit_hash: merged_commit_hash.as_deref(),
             parent_commit_hash,
-            session_update_versions: &session_update_versions,
-            status: &status,
+            status_transition: &status_transition,
         })
         .await?;
 
@@ -1201,23 +1171,10 @@ impl SessionManager {
         .await?;
         Self::emit_stacked_parent_merge_completed(input.app_event_tx, restacked_child_session_ids);
 
-        if SessionTaskService::update_status(
-            input.status,
-            input.clock,
-            input.db,
-            input.app_event_tx,
-            input.session_update_versions,
-            input.id,
-            Status::Done,
-        )
-        .await
-        {
-            return Ok(());
-        }
-
-        Err(SessionError::Workflow(
-            "Invalid status transition to Done".to_string(),
-        ))
+        input
+            .status_transition
+            .apply_or_invalid_transition(Status::Done)
+            .await
     }
 
     /// Clears stacked-child parent links after a parent branch merges.
@@ -1393,14 +1350,13 @@ impl SessionManager {
     /// active-project roadmap task data.
     async fn finalize_merge_task(input: FinalizeMergeInput<'_>) {
         let FinalizeMergeInput {
-            clock,
-            db,
             app_event_tx,
+            db,
             id,
             output,
             result,
             session_update_versions,
-            status,
+            status_transition,
         } = input;
 
         match result {
@@ -1420,17 +1376,7 @@ impl SessionManager {
                     &merge_error,
                 )
                 .await;
-                if !SessionTaskService::update_status(
-                    status,
-                    clock,
-                    db,
-                    app_event_tx,
-                    session_update_versions,
-                    id,
-                    Status::Review,
-                )
-                .await
-                {
+                if !status_transition.apply(Status::Review).await {
                     warn!(
                         session_id = id,
                         "skipped restoring review status after merge error because the in-memory \
@@ -1820,9 +1766,16 @@ impl SessionManager {
         .await;
         let command_error = rebase_result.as_ref().err().map(ToString::to_string);
 
+        let status_transition = StatusTransition::from_parts(
+            app_event_tx.clone(),
+            Arc::clone(&clock),
+            db.clone(),
+            id.clone(),
+            Arc::clone(&session_update_versions),
+            Arc::clone(&status),
+        );
         Self::finalize_rebase_task(FinalizeRebaseInput {
             app_event_tx: &app_event_tx,
-            clock: clock.as_ref(),
             db: &db,
             folder: &folder,
             git_client: &git_client,
@@ -1830,7 +1783,7 @@ impl SessionManager {
             output: &output,
             rebase_result,
             session_update_versions: &session_update_versions,
-            status: &status,
+            status_transition: &status_transition,
         })
         .await;
 
@@ -2057,7 +2010,6 @@ impl SessionManager {
     async fn finalize_rebase_task(input: FinalizeRebaseInput<'_>) {
         let FinalizeRebaseInput {
             app_event_tx,
-            clock,
             db,
             folder,
             git_client,
@@ -2065,7 +2017,7 @@ impl SessionManager {
             output,
             rebase_result,
             session_update_versions,
-            status,
+            status_transition,
         } = input;
 
         let rebase_succeeded = rebase_result.is_ok();
@@ -2108,16 +2060,7 @@ impl SessionManager {
             }
         }
 
-        let restored_review_status = SessionTaskService::update_status(
-            status,
-            clock,
-            db,
-            app_event_tx,
-            session_update_versions,
-            id,
-            Status::Review,
-        )
-        .await;
+        let restored_review_status = status_transition.apply(Status::Review).await;
         if !restored_review_status {
             warn!(
                 session_id = id,
@@ -4228,13 +4171,18 @@ mod tests {
             .expect_is_worktree_clean()
             .times(1)
             .returning(|_| Box::pin(async { Ok(false) }));
+        let status_transition = StatusTransition::from_parts(
+            app_event_tx,
+            Arc::new(crate::infra::clock::RealClock),
+            db.clone(),
+            "session-123",
+            Arc::clone(&session_update_versions),
+            Arc::clone(&status),
+        );
         let restore_context = MergeStartRestoreContext {
-            app_event_tx: &app_event_tx,
-            clock: &crate::infra::clock::RealClock,
             db: &db,
             session_id: "session-123",
-            session_update_versions: &session_update_versions,
-            status: &status,
+            status_transition: &status_transition,
         };
 
         // Act
@@ -4767,7 +4715,16 @@ mod tests {
         let temp_dir = tempdir().expect("failed to create temp dir");
         let folder = temp_dir.path().join("sess-rebase");
         let output = Arc::new(Mutex::new(String::new()));
+        let session_update_versions = Arc::default();
         let status = Arc::new(Mutex::new(Status::Rebasing));
+        let status_transition = StatusTransition::from_parts(
+            app_event_tx.clone(),
+            Arc::new(crate::infra::clock::RealClock),
+            db.clone(),
+            "sess-rebase",
+            Arc::clone(&session_update_versions),
+            Arc::clone(&status),
+        );
 
         let mut mock_git_client = git::MockGitClient::new();
         mock_git_client
@@ -4782,15 +4739,14 @@ mod tests {
         // Act
         SessionManager::finalize_rebase_task(FinalizeRebaseInput {
             app_event_tx: &app_event_tx,
-            clock: &crate::infra::clock::RealClock,
             db: &db,
             folder: &folder,
             git_client: &git_client,
             id: "sess-rebase",
             output: &output,
             rebase_result: Ok("Successfully synced wt/sess-rebase onto main".to_string()),
-            session_update_versions: &Arc::default(),
-            status: &status,
+            session_update_versions: &session_update_versions,
+            status_transition: &status_transition,
         })
         .await;
 
@@ -4850,21 +4806,29 @@ mod tests {
         let temp_dir = tempdir().expect("failed to create temp dir");
         let folder = temp_dir.path().join("sess-no-push");
         let output = Arc::new(Mutex::new(String::new()));
+        let session_update_versions = Arc::default();
         let status = Arc::new(Mutex::new(Status::Rebasing));
+        let status_transition = StatusTransition::from_parts(
+            app_event_tx.clone(),
+            Arc::new(crate::infra::clock::RealClock),
+            db.clone(),
+            "sess-no-push",
+            Arc::clone(&session_update_versions),
+            Arc::clone(&status),
+        );
         let git_client: Arc<dyn GitClient> = Arc::new(git::MockGitClient::new());
 
         // Act
         SessionManager::finalize_rebase_task(FinalizeRebaseInput {
             app_event_tx: &app_event_tx,
-            clock: &crate::infra::clock::RealClock,
             db: &db,
             folder: &folder,
             git_client: &git_client,
             id: "sess-no-push",
             output: &output,
             rebase_result: Ok("Successfully synced wt/sess-no-push onto main".to_string()),
-            session_update_versions: &Arc::default(),
-            status: &status,
+            session_update_versions: &session_update_versions,
+            status_transition: &status_transition,
         })
         .await;
 
