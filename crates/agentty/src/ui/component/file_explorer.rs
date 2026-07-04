@@ -403,7 +403,7 @@ impl Component for FileExplorer {
                     ))
                     .border_style(style::border_style()),
             )
-            .highlight_style(Style::default().bg(style::palette::surface()));
+            .highlight_style(Style::default().bg(style::palette::surface_selection()));
 
         let mut state = ListState::default();
         state.select(Some(self.selected_index));

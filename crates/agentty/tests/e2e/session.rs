@@ -18,6 +18,7 @@ use agentty::domain::session::{
 use agentty::domain::session_message::SessionMessageKind;
 use agentty::test_support;
 use testty::assertion;
+use testty::frame::CellColor;
 use testty::region::Region;
 use testty::scenario::Scenario;
 
@@ -599,6 +600,71 @@ fn session_list_model_reasoning_level() -> E2eResult {
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "gpt-5.5 [medium]", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that the selected session row renders on the dedicated selection
+/// surface, distinct from the base surface used by the table header.
+///
+/// Cycles the theme to Dark Horizon, where `surface_selection` and `surface`
+/// have different RGB values, then opens the Sessions tab and asserts the
+/// selected row background matches the selection surface while the header
+/// keeps the base surface background. The scenario finishes by wrapping the
+/// theme back to `Agentty Default` so the persisted theme is identical before
+/// the PTY proof run and the VHS replay.
+#[test]
+fn session_list_selected_row_uses_selection_surface() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_selection_highlight")
+        .with_git()
+        .setup(seed_review_ready_session)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::switch_to_tab("Review"))
+                    .compose(&common::switch_to_tab("Settings"))
+                    .press_key("Enter")
+                    .wait_for_text("Agentty Green", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Dark Horizon", 5000)
+                    .compose(&common::switch_to_tab("Logs"))
+                    .compose(&common::switch_to_tab("Projects"))
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .wait_for_text("Review-ready session shortcuts", 5000)
+                    .capture_labeled(
+                        "selected_row_highlight",
+                        "Selected session row on the dedicated selection surface",
+                    )
+                    .compose(&common::switch_to_tab("Review"))
+                    .compose(&common::switch_to_tab("Settings"))
+                    .press_key("Enter")
+                    .wait_for_text("Agentty Default", 5000)
+            },
+            |_frame, report| {
+                assert_eq!(
+                    report.captures.len(),
+                    1,
+                    "Expected 1 capture (selected session row under Dark Horizon)"
+                );
+
+                // Dark Horizon `surface_selection` and `surface` RGB values
+                // from the `ThemePalette` definitions in `ui/style.rs`.
+                let sessions_frame = common::frame_from_capture(&report.captures[0]);
+                assertion::assert_text_has_bg_color(
+                    &sessions_frame,
+                    "Review-ready session shortcuts",
+                    &CellColor::new(45, 50, 68),
+                );
+                assertion::assert_text_has_bg_color(
+                    &sessions_frame,
+                    "Model",
+                    &CellColor::new(22, 24, 31),
+                );
             },
         )?;
 

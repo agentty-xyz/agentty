@@ -40,7 +40,7 @@ impl Page for SettingsPage<'_> {
     fn render(&mut self, f: &mut Frame, area: Rect) {
         let areas = layout::tab_page_areas(area);
 
-        let selected_style = Style::default().bg(style::palette::surface());
+        let selected_style = Style::default().bg(style::palette::surface_selection());
         let global_rows = settings_table_rows(self.manager.global_settings_rows());
         let project_rows = settings_table_rows(self.manager.project_settings_rows());
 

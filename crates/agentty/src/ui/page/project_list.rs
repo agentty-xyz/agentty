@@ -108,7 +108,7 @@ impl Page for ProjectListPage<'_> {
             .block(agent_cli_block)
             .wrap(Wrap { trim: true });
 
-        let selected_style = Style::default().bg(style::palette::surface());
+        let selected_style = Style::default().bg(style::palette::surface_selection());
         let header_cells = ["Project", "Branch", "Sessions", "Path"]
             .iter()
             .map(|header| left_aligned_cell(*header));

@@ -58,7 +58,7 @@ impl Page for SessionListPage<'_> {
     fn render(&mut self, f: &mut Frame, area: Rect) {
         let areas = layout::tab_page_areas(area);
 
-        let selected_style = Style::default().bg(style::palette::surface());
+        let selected_style = Style::default().bg(style::palette::surface_selection());
         let header_style = Style::default()
             .bg(style::palette::surface())
             .fg(style::palette::text_muted())
@@ -778,7 +778,7 @@ mod tests {
         let fallback_cell = &buffer.content()[0];
         let tree_cell = find_text_start_cell(buffer, "└").unwrap_or(fallback_cell);
         assert_eq!(tree_cell.fg, style::palette::text_muted());
-        assert_eq!(tree_cell.bg, style::palette::surface());
+        assert_eq!(tree_cell.bg, style::palette::surface_selection());
         assert_ne!(tree_cell.fg, tree_cell.bg);
     }
 
@@ -1102,7 +1102,7 @@ mod tests {
         let new_cell = find_text_start_cell(buffer, "Draft").unwrap_or(fallback_cell);
         assert_ne!(title_cell.fg, title_cell.bg);
         assert_eq!(new_cell.fg, style::palette::text_muted());
-        assert_eq!(new_cell.bg, style::palette::surface());
+        assert_eq!(new_cell.bg, style::palette::surface_selection());
         assert_ne!(new_cell.fg, new_cell.bg);
     }
 }
