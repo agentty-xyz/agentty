@@ -282,7 +282,8 @@ the highlighted choice. Moving past the list edges switches to the free-text inp
 Submitting a blank free-text answer stores `no answer`. `Ctrl+C` ends the clarification
 turn and returns the session to **Review** without sending a reply, while `q` (outside
 free-text input) returns to the sessions list with the **Question** state kept for
-later.
+later; answers already submitted are saved, and reopening the session resumes at the
+next unanswered question.
 
 ## Prompt Input Extras
 

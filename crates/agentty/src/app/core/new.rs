@@ -173,6 +173,7 @@ impl App {
             projects,
             services,
             sessions,
+            question_progress: std::collections::HashMap::new(),
             requested_review_generation: 0,
             requested_review_comment_fetches: std::collections::HashSet::new(),
             requested_review_selected_index: None,

@@ -2824,6 +2824,123 @@ async fn apply_app_events_agent_response_switches_view_mode_to_question_mode() {
 }
 
 #[tokio::test]
+async fn apply_app_events_agent_response_clears_saved_question_progress() {
+    // Arrange — stale partial answers saved from the previous question set
+    // must not survive a new turn result for the session.
+    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+        Arc::new(MockTmuxClient::new()),
+    )
+    .await;
+    app.sessions
+        .push_session(crate::test_support::session_fixture_with_folder(
+            PathBuf::from("/tmp/session-progress-clear"),
+        ));
+    app.question_progress.insert(
+        "session-1".into(),
+        QuestionProgress {
+            current_index: 1,
+            input: InputState::default(),
+            responses: vec!["Old answer".to_string()],
+            selected_option_index: None,
+        },
+    );
+
+    // Act
+    app.apply_app_events(AppEvent::AgentResponseReceived {
+        session_id: "session-1".into(),
+        turn_applied_state: test_turn_applied_state(
+            vec![QuestionItem::new("New question?")],
+            Vec::new(),
+            None,
+            SessionStats::default(),
+        ),
+    })
+    .await;
+
+    // Assert
+    assert!(app.question_progress.is_empty());
+}
+
+#[tokio::test]
+async fn enter_question_mode_restores_saved_progress() {
+    // Arrange — progress saved by a previous `q` exit from question mode.
+    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+        Arc::new(MockTmuxClient::new()),
+    )
+    .await;
+    let questions = vec![
+        QuestionItem::with_options("First?", vec!["Yes".to_string(), "No".to_string()]),
+        QuestionItem::new("Second?"),
+    ];
+    app.question_progress.insert(
+        "session-restore".into(),
+        QuestionProgress {
+            current_index: 1,
+            input: InputState::with_text("draft answer".to_string()),
+            responses: vec!["Yes".to_string()],
+            selected_option_index: None,
+        },
+    );
+
+    // Act
+    app.enter_question_mode("session-restore", questions);
+
+    // Assert — resumes at the second question with the saved answer, and
+    // the stored entry is consumed.
+    assert!(matches!(
+        &app.mode,
+        AppMode::Question {
+            current_index: 1,
+            responses,
+            input,
+            selected_option_index: None,
+            session_id,
+            ..
+        } if responses == &vec!["Yes".to_string()]
+            && input.text() == "draft answer"
+            && session_id == "session-restore"
+    ));
+    assert!(app.question_progress.is_empty());
+}
+
+#[tokio::test]
+async fn enter_question_mode_discards_progress_for_changed_question_list() {
+    // Arrange — saved progress no longer matches the question list.
+    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+        Arc::new(MockTmuxClient::new()),
+    )
+    .await;
+    let questions = vec![QuestionItem::with_options(
+        "Only question?",
+        vec!["Yes".to_string()],
+    )];
+    app.question_progress.insert(
+        "session-stale".into(),
+        QuestionProgress {
+            current_index: 2,
+            input: InputState::default(),
+            responses: vec!["One".to_string(), "Two".to_string()],
+            selected_option_index: None,
+        },
+    );
+
+    // Act
+    app.enter_question_mode("session-stale", questions);
+
+    // Assert — starts fresh at the first question with its first option
+    // highlighted.
+    assert!(matches!(
+        &app.mode,
+        AppMode::Question {
+            current_index: 0,
+            responses,
+            selected_option_index: Some(0),
+            ..
+        } if responses.is_empty()
+    ));
+}
+
+#[tokio::test]
 async fn apply_app_events_agent_response_keeps_list_mode_when_not_viewing_session() {
     // Arrange
     let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(

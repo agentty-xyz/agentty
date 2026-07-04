@@ -192,4 +192,6 @@ to review without answering |
 <a id="usage-question-input-submit-flow"></a> After the last question is answered,
 Agentty sends one follow-up message with each question and its response, then returns to
 session view. Pressing `q` (outside free-text input) returns to the sessions list while
-leaving the session in **Question** state so the clarification can be resumed later.
+leaving the session in **Question** state; answers already submitted and the current
+free-text draft are kept, so reopening the session resumes at the next unanswered
+question.

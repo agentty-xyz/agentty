@@ -4,7 +4,7 @@ use ratatui::layout::Rect;
 use crate::app::session::SessionTaskService;
 use crate::app::{self, App, AppEvent};
 use crate::domain::input::InputState;
-use crate::domain::question::QuestionItem;
+use crate::domain::question::{QuestionItem, QuestionProgress};
 use crate::domain::session::{SessionId, Status};
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::runtime::EventResult;
@@ -23,9 +23,10 @@ const NO_ANSWER: &str = "no answer";
 /// typed answer (or `no answer` when blank), `Ctrl+C` and `Esc` end the entire
 /// turn without sending a reply (with `Esc` only doing so when the answer
 /// input is focused and no at-mention dropdown is open, so it stays available
-/// to dismiss those overlays), and `q` returns to the sessions list (skipped
-/// while the user is actively typing a free-text answer so the character can
-/// still be inserted into the response).
+/// to dismiss those overlays), and `q` returns to the sessions list while
+/// saving already-submitted answers for the next visit (skipped while the
+/// user is actively typing a free-text answer so the character can still be
+/// inserted into the response).
 pub(crate) async fn handle(app: &mut App, terminal_size: Rect, key: KeyEvent) -> EventResult {
     if handle_focus_toggle(app, key) {
         return EventResult::Continue;
@@ -38,7 +39,7 @@ pub(crate) async fn handle(app: &mut App, terminal_size: Rect, key: KeyEvent) ->
     }
 
     if is_plain_q(key) && should_exit_to_list_on_q(app) {
-        app.mode = AppMode::List;
+        exit_to_list_saving_progress(app);
 
         return EventResult::Continue;
     }
@@ -102,6 +103,35 @@ fn should_exit_to_list_on_q(app: &App) -> bool {
     };
 
     *focus == QuestionFocus::Chat || selected_option_index.is_some()
+}
+
+/// Saves in-progress clarification answers and returns to the sessions list.
+///
+/// The saved progress is restored by `App::enter_question_mode` the next
+/// time the session's question mode opens, so answers already submitted for
+/// earlier questions survive leaving the view with `q`.
+fn exit_to_list_saving_progress(app: &mut App) {
+    let mode = std::mem::replace(&mut app.mode, AppMode::List);
+
+    if let AppMode::Question {
+        current_index,
+        input,
+        responses,
+        selected_option_index,
+        session_id,
+        ..
+    } = mode
+    {
+        app.question_progress.insert(
+            session_id,
+            QuestionProgress {
+                current_index,
+                input,
+                responses,
+                selected_option_index,
+            },
+        );
+    }
 }
 
 /// Toggles focus between the question panel and chat output on `Tab`.
@@ -1230,6 +1260,47 @@ mod tests {
 
         // Assert — switched to the sessions list.
         assert!(matches!(app.mode, AppMode::List));
+    }
+
+    #[tokio::test]
+    async fn test_handle_q_saves_partial_answers_for_reopen() {
+        // Arrange — first question already answered, second in option
+        // navigation. `q` must keep the submitted answer for the next visit.
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        app.mode = AppMode::Question {
+            at_mention_state: None,
+            review_status_message: None,
+            review_text: None,
+            session_id: "session-q-save".into(),
+            questions: vec![
+                QuestionItem::with_options("First?", vec!["Yes".to_string(), "No".to_string()]),
+                QuestionItem::with_options("Second?", vec!["A".to_string(), "B".to_string()]),
+            ],
+            responses: vec!["Yes".to_string()],
+            current_index: 1,
+            focus: QuestionFocus::Answer,
+            input: InputState::default(),
+            scroll_offset: None,
+            selected_option_index: Some(1),
+        };
+
+        // Act
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert — list mode plus saved progress for the session.
+        assert!(matches!(app.mode, AppMode::List));
+        let progress = app
+            .question_progress
+            .get("session-q-save")
+            .expect("progress should be saved");
+        assert_eq!(progress.responses, vec!["Yes".to_string()]);
+        assert_eq!(progress.current_index, 1);
+        assert_eq!(progress.selected_option_index, Some(1));
     }
 
     #[tokio::test]

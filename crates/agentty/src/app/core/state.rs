@@ -45,6 +45,7 @@ use crate::domain::agent::AgentCliInfo;
 use crate::domain::agent::AgentSelection;
 use crate::domain::agent::{AgentKind, ReasoningLevel};
 use crate::domain::input::InputState;
+use crate::domain::question::{QuestionItem, QuestionProgress};
 use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, Session, SessionId, Status};
 use crate::domain::system_log::{
     SystemLogBuffer, SystemLogCategory, SystemLogEvent, SystemLogLevel,
@@ -235,6 +236,11 @@ pub struct App {
     pub settings: SettingsManager,
     /// Manages the selected top-level list tab.
     pub tabs: TabManager,
+    /// Saves partially answered clarification progress per session so
+    /// already-submitted answers survive leaving question mode with `q` and
+    /// reopening the session. Entries are consumed on restore and cleared
+    /// when a new turn result replaces the session's question list.
+    pub(crate) question_progress: HashMap<SessionId, QuestionProgress>,
     /// Caches generated focused review text per session so it survives mode
     /// switches, is hydrated after restart, and is ready when the user presses
     /// `f`.
@@ -1665,21 +1671,7 @@ impl App {
         };
         if session.status == Status::Question {
             let questions = session.questions.clone();
-            let selected_option_index = question::default_option_index(&questions, 0);
-            let (review_status_message, review_text) = self.review_view_state(target_session_id);
-            self.mode = AppMode::Question {
-                at_mention_state: None,
-                session_id: SessionId::from(target_session_id),
-                questions,
-                review_status_message,
-                review_text,
-                responses: Vec::new(),
-                current_index: 0,
-                focus: QuestionFocus::Answer,
-                input: InputState::default(),
-                scroll_offset: None,
-                selected_option_index,
-            };
+            self.enter_question_mode(target_session_id, questions);
 
             return;
         }
@@ -1691,6 +1683,48 @@ impl App {
             review_text,
             session_id: SessionId::from(target_session_id),
             scroll_offset: None,
+        };
+    }
+
+    /// Enters question mode for a clarification session.
+    ///
+    /// Consumes saved partial answers from a previous visit when they still
+    /// match the session's question list, so leaving question mode with `q`
+    /// does not lose already-submitted answers.
+    pub(crate) fn enter_question_mode(&mut self, session_id: &str, questions: Vec<QuestionItem>) {
+        let progress = self
+            .question_progress
+            .remove(session_id)
+            .filter(|progress| progress.applies_to(&questions));
+        let (current_index, input, responses, selected_option_index) = match progress {
+            Some(progress) => (
+                progress.current_index,
+                progress.input,
+                progress.responses,
+                progress.selected_option_index,
+            ),
+            None => (
+                0,
+                InputState::default(),
+                Vec::new(),
+                question::default_option_index(&questions, 0),
+            ),
+        };
+
+        let (review_status_message, review_text) = self.review_view_state(session_id);
+
+        self.mode = AppMode::Question {
+            at_mention_state: None,
+            current_index,
+            focus: QuestionFocus::Answer,
+            input,
+            questions,
+            responses,
+            review_status_message,
+            review_text,
+            scroll_offset: None,
+            selected_option_index,
+            session_id: SessionId::from(session_id),
         };
     }
 

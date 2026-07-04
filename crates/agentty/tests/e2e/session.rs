@@ -31,6 +31,16 @@ const LOADER_SESSION_ID: &str = "loader-session-0001";
 /// Stable id for the seeded running session used by stop-turn tests.
 const RUNNING_STOP_SESSION_ID: &str = "running-stop-0001";
 
+/// Stable id for the seeded clarification-question session used by the
+/// question-resume test.
+const QUESTION_RESUME_SESSION_ID: &str = "question-resume-0001";
+
+/// First clarification question shown when the seeded question session opens.
+const FIRST_QUESTION_TEXT: &str = "Use the default target branch?";
+
+/// Second clarification question that must be shown after resuming.
+const SECOND_QUESTION_TEXT: &str = "Which tests should be added?";
+
 /// Seeds one review-ready session whose transcript contains a beautified
 /// provider command failure.
 fn seed_session_with_beautified_agent_error(
@@ -423,6 +433,37 @@ fn seed_running_stop_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
     // runtime expects for this session id.
     let worktree_name = &RUNNING_STOP_SESSION_ID[..8];
     std::fs::create_dir_all(env.agentty_root.join("wt").join(worktree_name))?;
+
+    Ok(())
+}
+
+/// Seeds one `Question`-status session with two option questions so the
+/// question-resume flow can run without a live agent backend.
+fn seed_question_resume_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    common::seed_session(
+        env,
+        SessionSeed::regular(QUESTION_RESUME_SESSION_ID, "gpt-5.5", "main", "Question")
+            .with_title("Question resume session"),
+    )?;
+
+    std::fs::create_dir_all(test_support::session_folder(
+        &env.agentty_root.join("wt"),
+        QUESTION_RESUME_SESSION_ID,
+    ))?;
+
+    let questions_json = format!(
+        r#"[{{"options":["Yes","No"],"text":"{FIRST_QUESTION_TEXT}"}},{{"options":["Unit","Integration"],"text":"{SECOND_QUESTION_TEXT}"}}]"#
+    );
+    let runtime = common::seed_runtime()?;
+
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+
+        database
+            .sessions()
+            .update_session_questions(QUESTION_RESUME_SESSION_ID, &questions_json)
+            .await
+    })?;
 
     Ok(())
 }
@@ -954,6 +995,54 @@ fn session_stop_turn_returns_to_review() -> E2eResult {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Enter: reply", &full);
                 assertion::assert_not_visible(frame, "Ctrl+c: stop");
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that answering one clarification question, leaving question mode
+/// with `q`, and reopening the session resumes at the next unanswered
+/// question instead of restarting from the first.
+#[test]
+fn session_question_resume_after_leaving_to_list() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_question_resume")
+        .with_git()
+        .setup(seed_question_resume_session)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .wait_for_text("Question resume session", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Question 1/2", 5000)
+                    .capture_labeled(
+                        "first_question",
+                        "Question mode opens on the first question",
+                    )
+                    .press_key("Enter")
+                    .wait_for_text("Question 2/2", 5000)
+                    .press_key("q")
+                    .wait_for_text("new session", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Question 2/2", 5000)
+                    .capture_labeled(
+                        "resumed_second_question",
+                        "Reopening the session resumes at the second question",
+                    )
+            },
+            |frame, report| {
+                let first_frame = common::frame_from_capture(&report.captures[0]);
+                let first_full = Region::full(first_frame.cols(), first_frame.rows());
+                assertion::assert_text_in_region(&first_frame, "Question 1/2", &first_full);
+                assertion::assert_text_in_region(&first_frame, FIRST_QUESTION_TEXT, &first_full);
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Question 2/2", &full);
+                assertion::assert_text_in_region(frame, SECOND_QUESTION_TEXT, &full);
+                assertion::assert_not_visible(frame, FIRST_QUESTION_TEXT);
             },
         )?;
 

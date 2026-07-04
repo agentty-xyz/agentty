@@ -1437,6 +1437,7 @@ impl App {
 
         self.sessions
             .apply_turn_applied_state(session_id, turn_applied_state);
+        self.question_progress.remove(session_id);
         let questions = turn_applied_state.questions.clone();
         if questions.is_empty() {
             return;
