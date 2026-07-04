@@ -126,7 +126,7 @@ fn render_review_table(
         .column_spacing(TABLE_COLUMN_SPACING)
         .header(header)
         .block(block)
-        .row_highlight_style(Style::default().bg(style::palette::surface()))
+        .row_highlight_style(Style::default().bg(style::palette::surface_selection()))
         .highlight_symbol(ROW_HIGHLIGHT_SYMBOL);
 
     f.render_stateful_widget(table, area, table_state);
@@ -549,8 +549,8 @@ mod tests {
             .expect("selected review row should render");
         let unselected_cell = find_text_start_cell(buffer, "PR #42 Add review tab")
             .expect("unselected review row should render");
-        assert_eq!(selected_cell.bg, style::palette::surface());
-        assert_ne!(unselected_cell.bg, style::palette::surface());
+        assert_eq!(selected_cell.bg, style::palette::surface_selection());
+        assert_ne!(unselected_cell.bg, style::palette::surface_selection());
     }
 
     #[test]

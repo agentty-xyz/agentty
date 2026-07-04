@@ -12,7 +12,7 @@ use crate::domain::agent::{AgentCliInfo, AgentKind};
 /// Maximum time spent waiting for one provider CLI `--version` command.
 const AGENT_CLI_VERSION_TIMEOUT: Duration = Duration::from_secs(2);
 /// Maximum time spent waiting for one provider CLI `update` command.
-const AGENT_CLI_UPDATE_TIMEOUT: Duration = Duration::from_secs(300);
+const AGENT_CLI_UPDATE_TIMEOUT: Duration = Duration::from_mins(5);
 /// Poll interval used while waiting for one bounded provider CLI subprocess.
 const AGENT_CLI_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(25);
 

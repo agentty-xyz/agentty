@@ -73,7 +73,7 @@ pub mod palette {
         token_color(|palette| palette.question)
     }
 
-    /// Base surface color for bars and selected rows.
+    /// Base surface color for bars and table headers.
     #[must_use]
     pub fn surface() -> Color {
         token_color(|palette| palette.surface)
@@ -96,6 +96,12 @@ pub mod palette {
     #[must_use]
     pub fn surface_elevated() -> Color {
         token_color(|palette| palette.surface_elevated)
+    }
+
+    /// Highlight surface color for selected rows and list entries.
+    #[must_use]
+    pub fn surface_selection() -> Color {
+        token_color(|palette| palette.surface_selection)
     }
 
     /// Subtle success-tinted surface used behind added diff lines.
@@ -176,7 +182,7 @@ pub struct ThemePalette {
     pub info: Color,
     /// Color used for question-status emphasis.
     pub question: Color,
-    /// Base surface color for bars and selected rows.
+    /// Base surface color for bars and table headers.
     pub surface: Color,
     /// Subtle blue-gray surface used behind clarification prompt blocks.
     pub surface_clarification: Color,
@@ -184,6 +190,8 @@ pub struct ThemePalette {
     pub surface_danger: Color,
     /// Elevated surface color for table headers.
     pub surface_elevated: Color,
+    /// Highlight surface color for selected rows and list entries.
+    pub surface_selection: Color,
     /// Subtle success-tinted surface used behind added diff lines.
     pub surface_success: Color,
     /// Dark surface used to dim background content behind modal overlays.
@@ -216,6 +224,7 @@ const CURRENT_PALETTE: ThemePalette = ThemePalette {
     surface_clarification: Color::Rgb(28, 38, 48),
     surface_danger: Color::Rgb(48, 24, 24),
     surface_elevated: Color::Gray,
+    surface_selection: Color::DarkGray,
     surface_success: Color::Rgb(18, 44, 26),
     surface_overlay: Color::Black,
     text: Color::White,
@@ -241,6 +250,7 @@ const HACKER_PALETTE: ThemePalette = ThemePalette {
     surface_clarification: Color::Rgb(12, 28, 14),
     surface_danger: Color::Rgb(44, 18, 18),
     surface_elevated: Color::Rgb(10, 32, 12),
+    surface_selection: Color::Rgb(6, 18, 8),
     surface_success: Color::Rgb(12, 38, 17),
     surface_overlay: Color::Black,
     text: Color::Rgb(205, 245, 211),
@@ -274,6 +284,7 @@ const DARK_HORIZON_PALETTE: ThemePalette = ThemePalette {
     surface_clarification: Color::Rgb(28, 32, 44),
     surface_danger: Color::Rgb(63, 32, 42),
     surface_elevated: Color::Rgb(33, 36, 48),
+    surface_selection: Color::Rgb(45, 50, 68),
     surface_success: Color::Rgb(28, 64, 54),
     surface_overlay: Color::Rgb(14, 16, 22),
     text: Color::Rgb(214, 217, 232),
@@ -549,6 +560,7 @@ mod tests {
         // Assert
         assert_eq!(palette.surface, Color::Rgb(22, 24, 31));
         assert_eq!(palette.surface_elevated, Color::Rgb(33, 36, 48));
+        assert_eq!(palette.surface_selection, Color::Rgb(45, 50, 68));
         assert_eq!(palette.border, Color::Rgb(52, 60, 82));
         assert_eq!(palette.text, Color::Rgb(214, 217, 232));
         assert_eq!(palette.text_muted, Color::Rgb(132, 136, 168));
@@ -568,6 +580,37 @@ mod tests {
         assert_eq!(palette.warning, Color::Rgb(250, 194, 154));
         assert_eq!(palette.danger, Color::Rgb(209, 67, 76));
         assert_eq!(palette.question, Color::Rgb(184, 119, 219));
+    }
+
+    #[test]
+    fn dark_horizon_selection_surface_is_lighter_than_base_surface() {
+        // Arrange
+        let _theme_scope = scoped_active_theme(ColorTheme::DarkHorizon);
+
+        // Act
+        let selection = palette::surface_selection();
+        let surface = palette::surface();
+
+        // Assert
+        let (selection_red, selection_green, selection_blue) =
+            rgb_components(selection).expect("dark horizon selection surface must be RGB");
+        let (surface_red, surface_green, surface_blue) =
+            rgb_components(surface).expect("dark horizon base surface must be RGB");
+        assert!(
+            selection_red > surface_red
+                && selection_green > surface_green
+                && selection_blue > surface_blue,
+            "selected rows must stay visually distinct from the base surface",
+        );
+    }
+
+    /// Returns the RGB components of a palette color, or `None` for
+    /// non-RGB terminal colors.
+    fn rgb_components(color: Color) -> Option<(u8, u8, u8)> {
+        match color {
+            Color::Rgb(red, green, blue) => Some((red, green, blue)),
+            _ => None,
+        }
     }
 
     #[test]
