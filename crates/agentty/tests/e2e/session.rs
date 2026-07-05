@@ -17,6 +17,8 @@ use agentty::domain::session::{
 };
 use agentty::domain::session_message::SessionMessageKind;
 use agentty::test_support;
+use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::{ConnectOptions, Connection, Executor};
 use testty::assertion;
 use testty::frame::CellColor;
 use testty::region::Region;
@@ -40,6 +42,9 @@ const FIRST_QUESTION_TEXT: &str = "Use the default target branch?";
 
 /// Second clarification question that must be shown after resuming.
 const SECOND_QUESTION_TEXT: &str = "Which tests should be added?";
+
+/// Clarification question emitted by the delayed stub while help is open.
+const RECONCILE_QUESTION_TEXT: &str = "Should I add a regression test?";
 
 /// Seeds one review-ready session whose transcript contains a beautified
 /// provider command failure.
@@ -463,6 +468,71 @@ fn seed_question_resume_session(env: &BuilderEnv) -> Result<(), Box<dyn std::err
             .sessions()
             .update_session_questions(QUESTION_RESUME_SESSION_ID, &questions_json)
             .await
+    })?;
+
+    Ok(())
+}
+
+/// Installs a Claude stub that emits one structured clarification question
+/// after a delay, giving the scenario time to cover the active view with help.
+fn install_delayed_question_claude_stub(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let claude_path = env.stub_bin.join("claude");
+    let script = format!(
+        r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+cat > /dev/null 2>&1
+sleep 1
+printf '%s\n' '{{"type":"system","subtype":"init"}}'
+sleep 2
+printf '%s\n' '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"Need one clarification."}}]}}}}'
+sleep 1
+printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"Need one clarification.\",\"questions\":[{{\"text\":\"{RECONCILE_QUESTION_TEXT}\",\"options\":[\"Yes\",\"No\"]}}],\"summary\":null}}","usage":{{"input_tokens":5,"output_tokens":9}}}}'
+"#
+    );
+
+    std::fs::write(&claude_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+
+    let runtime = common::seed_runtime()?;
+    runtime.block_on(async {
+        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
+        let database = Database::open(&db_path).await?;
+        let canonical_workdir = env.workdir.canonicalize()?;
+        let project_id = database
+            .projects()
+            .upsert_project(
+                &canonical_workdir.to_string_lossy(),
+                Some("main".to_string()),
+            )
+            .await?;
+        database
+            .projects()
+            .touch_project_last_opened(project_id)
+            .await?;
+        drop(database);
+
+        let mut connection = SqliteConnectOptions::new()
+            .filename(&db_path)
+            .connect()
+            .await?;
+        let query = sqlx::query(
+            r"
+INSERT INTO project_setting (project_id, name, value)
+VALUES (?, ?, ?)
+ON CONFLICT(project_id, name) DO UPDATE SET value = excluded.value
+",
+        )
+        .bind(project_id)
+        .bind("DefaultSmartModel")
+        .bind("claude-haiku-4-5-20251001");
+        connection.execute(query).await?;
+        connection.close().await?;
+
+        Result::<(), Box<dyn std::error::Error>>::Ok(())
     })?;
 
     Ok(())
@@ -1101,6 +1171,58 @@ fn session_question_resume_after_leaving_to_list() -> E2eResult {
                 assertion::assert_text_in_region(frame, "Question 2/2", &full);
                 assertion::assert_text_in_region(frame, SECOND_QUESTION_TEXT, &full);
                 assertion::assert_not_visible(frame, FIRST_QUESTION_TEXT);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that an already-open session view enters question mode after a
+/// structured question arrives while the help overlay hides the live
+/// transition.
+#[test]
+fn session_question_reconcile_after_help_overlay() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_question_reconcile")
+        .with_git()
+        .setup(install_delayed_question_claude_stub)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .write_text("Need clarification")
+                    .wait_for_text("Need clarification", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("q: back", 5000)
+                    .press_key("?")
+                    .wait_for_text("Keybindings", 5000)
+                    .viewing_pause_ms(4500)
+                    .capture_labeled(
+                        "help_during_completion",
+                        "Help overlay remains open while the turn completes",
+                    )
+                    .press_key("Escape")
+                    .wait_for_text("Question 1/1", 30000)
+                    .capture_labeled(
+                        "reconciled_question",
+                        "Question panel appears without reopening the session",
+                    )
+            },
+            |frame, report| {
+                let help_frame = common::frame_from_capture(&report.captures[0]);
+                let help_full = Region::full(help_frame.cols(), help_frame.rows());
+                assertion::assert_text_in_region(&help_frame, "Keybindings", &help_full);
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Question 1/1", &full);
+                assertion::assert_text_in_region(frame, RECONCILE_QUESTION_TEXT, &full);
+                assertion::assert_text_in_region(frame, "Yes", &full);
+                assertion::assert_text_in_region(frame, "No", &full);
+                assertion::assert_not_visible(frame, "Keybindings");
             },
         )?;
 

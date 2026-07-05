@@ -61,6 +61,37 @@ fn test_confirmation_view_mode(session_id: &str) -> ConfirmationViewMode {
     }
 }
 
+fn test_view_app_mode(session_id: &str) -> AppMode {
+    AppMode::View {
+        review_status_message: None,
+        review_text: None,
+        session_id: session_id.into(),
+        scroll_offset: None,
+    }
+}
+
+async fn test_app_viewing_reconcile_session(
+    status: Status,
+    questions: Vec<QuestionItem>,
+    folder_name: &str,
+) -> App {
+    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+        Arc::new(MockTmuxClient::new()),
+    )
+    .await;
+    app.sessions.push_session(
+        crate::test_support::SessionFixtureBuilder::new()
+            .id("session-1")
+            .folder(PathBuf::from(format!("/tmp/{folder_name}")))
+            .status(status)
+            .questions(questions)
+            .build(),
+    );
+    app.mode = test_view_app_mode("session-1");
+
+    app
+}
+
 /// Builds a successful branch-publish batch payload for one session.
 fn test_pushed_branch_result(branch_name: &str) -> BranchPublishTaskSuccess {
     BranchPublishTaskSuccess::Pushed {
@@ -2835,6 +2866,126 @@ async fn apply_app_events_agent_response_switches_view_mode_to_question_mode() {
             && responses.is_empty()
             && input.text().is_empty()
     ));
+}
+
+#[tokio::test]
+async fn reconcile_open_session_question_mode_enters_question_mode_from_view() {
+    // Arrange — a viewed session reached `Question` status with pending
+    // questions, but the view was never flipped into the clarification panel
+    // (for example the live projection was missed while an overlay was open).
+    let pending_questions = vec![
+        QuestionItem::with_options("Need a target branch?", vec!["main".to_string()]),
+        QuestionItem::new("Need integration tests?"),
+    ];
+    let mut app = test_app_viewing_reconcile_session(
+        Status::Question,
+        pending_questions.clone(),
+        "session-question-reconcile",
+    )
+    .await;
+
+    // Act
+    app.reconcile_open_session_question_mode().await;
+
+    // Assert
+    assert!(matches!(
+        app.mode,
+        AppMode::Question {
+            ref session_id,
+            questions: ref mode_questions,
+            current_index: 0,
+            ..
+        } if session_id == "session-1" && mode_questions == &pending_questions
+    ));
+}
+
+#[tokio::test]
+async fn reconcile_open_session_question_mode_ignores_non_question_status() {
+    // Arrange — the viewed session is in `Review`, not awaiting a question.
+    let mut app =
+        test_app_viewing_reconcile_session(Status::Review, Vec::new(), "session-review-reconcile")
+            .await;
+
+    // Act
+    app.reconcile_open_session_question_mode().await;
+
+    // Assert — the view is preserved.
+    assert!(matches!(
+        app.mode,
+        AppMode::View { ref session_id, .. } if session_id == "session-1"
+    ));
+}
+
+#[tokio::test]
+async fn reconcile_open_session_question_mode_ignores_non_view_modes() {
+    // Arrange — a `Question` session exists, but the user is on the list, not
+    // viewing that session, so the panel must not steal focus.
+    let mut app = test_app_viewing_reconcile_session(
+        Status::Question,
+        vec![QuestionItem::new("Need integration tests?")],
+        "session-list-reconcile",
+    )
+    .await;
+    app.mode = AppMode::List;
+
+    // Act
+    app.reconcile_open_session_question_mode().await;
+
+    // Assert — the list stays active.
+    assert!(matches!(app.mode, AppMode::List));
+}
+
+#[tokio::test]
+async fn reconcile_open_session_question_mode_reloads_detail_at_most_once_when_still_empty() {
+    // Arrange — a viewed session reports `Question` status but carries no
+    // questions in the snapshot, and no persisted detail exists to reload, so
+    // the reconciliation cannot open the panel.
+    let mut app =
+        test_app_viewing_reconcile_session(Status::Question, Vec::new(), "session-question-empty")
+            .await;
+
+    // Act — run two reconciliations to emulate two consecutive render cycles
+    // while the session stays stuck without questions.
+    app.reconcile_open_session_question_mode().await;
+    let attempted_after_first = app.question_reconcile_reload_attempted.clone();
+    app.reconcile_open_session_question_mode().await;
+
+    // Assert — the first pass records the stuck session so the second cycle
+    // short-circuits before reloading detail again, and the view is preserved
+    // because no questions became available.
+    assert_eq!(attempted_after_first.as_deref(), Some("session-1"));
+    assert_eq!(
+        app.question_reconcile_reload_attempted.as_deref(),
+        Some("session-1")
+    );
+    assert!(matches!(
+        app.mode,
+        AppMode::View { ref session_id, .. } if session_id == "session-1"
+    ));
+}
+
+#[tokio::test]
+async fn reconcile_open_session_question_mode_clears_reload_guard_when_leaving_view() {
+    // Arrange — a stuck `Question` view records the reload guard, then the user
+    // navigates back to the list.
+    let mut app = test_app_viewing_reconcile_session(
+        Status::Question,
+        Vec::new(),
+        "session-question-guard-reset",
+    )
+    .await;
+    app.reconcile_open_session_question_mode().await;
+    assert_eq!(
+        app.question_reconcile_reload_attempted.as_deref(),
+        Some("session-1")
+    );
+
+    // Act — leave the session view and reconcile again.
+    app.mode = AppMode::List;
+    app.reconcile_open_session_question_mode().await;
+
+    // Assert — the guard is cleared so a later legitimate transition reloads.
+    assert!(app.question_reconcile_reload_attempted.is_none());
 }
 
 #[tokio::test]

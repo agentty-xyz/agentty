@@ -227,6 +227,13 @@ pub struct App {
     /// reopening the session. Entries are consumed on restore and cleared
     /// when a new turn result replaces the session's question list.
     pub(crate) question_progress: HashMap<SessionId, QuestionProgress>,
+    /// Records the session for which `reconcile_open_session_question_mode`
+    /// already reloaded detail and still found no persisted questions, so the
+    /// per-frame reconciliation does not reissue that database load every
+    /// render cycle. Cleared once the open view leaves `Status::Question` or
+    /// `AppMode::View`, or once the panel opens, so a later legitimate
+    /// transition reloads again.
+    pub(crate) question_reconcile_reload_attempted: Option<SessionId>,
     /// Caches generated focused review text per session so it survives mode
     /// switches, is hydrated after restart, and is ready when the user presses
     /// `f`.
@@ -947,8 +954,9 @@ impl App {
     ///
     /// Starting a new turn clears cached and persisted focused-review output
     /// for that session so review text does not persist past prompt
-    /// submission.
-    pub async fn reply(&mut self, session_id: &str, prompt: impl Into<TurnPrompt>) {
+    /// submission. Returns `true` when the reply command was enqueued on the
+    /// session worker.
+    pub async fn reply(&mut self, session_id: &str, prompt: impl Into<TurnPrompt>) -> bool {
         self.review_cache.remove(session_id);
         let _ = self
             .services
@@ -956,9 +964,10 @@ impl App {
             .sessions()
             .update_session_focused_review(session_id, None, None)
             .await;
+
         self.sessions
             .reply(&self.services, session_id, prompt)
-            .await;
+            .await
     }
 
     /// Queues one chat prompt for an existing `InProgress` session so the
@@ -1644,6 +1653,75 @@ impl App {
             session_id: SessionId::from(target_session_id),
             scroll_offset: None,
         };
+    }
+
+    /// Enters the interactive clarification panel when the actively viewed
+    /// session has reached [`Status::Question`] but the UI is still on the
+    /// plain session view.
+    ///
+    /// The live transition into `AppMode::Question` is a one-shot side effect
+    /// of the `AgentResponseReceived` projection, gated on the session being
+    /// viewed at the instant the turn completes. When that projection is
+    /// missed — an overlay was open, the projection coalesced to empty, or the
+    /// worker fell back to a reload-only recovery — the durable `Question`
+    /// status still reaches the snapshot, stranding the question behind the
+    /// session view until a manual reopen. This reconciliation mirrors the
+    /// reopen path so the panel appears without one.
+    ///
+    /// A session view showing `Status::Question` is always an anomaly: every
+    /// path that leaves the panel (answering, `Ctrl+C`/`Esc`, or `q`) moves the
+    /// session off `Question` or out of `AppMode::View`, so entering the panel
+    /// here cannot fight a legitimate view state.
+    pub(crate) async fn reconcile_open_session_question_mode(&mut self) {
+        let AppMode::View { session_id, .. } = &self.mode else {
+            self.question_reconcile_reload_attempted = None;
+
+            return;
+        };
+
+        let session_id = session_id.clone();
+        let is_pending_question = self
+            .sessions
+            .session_for_id(&session_id)
+            .is_some_and(|session| session.status == Status::Question);
+        if !is_pending_question {
+            self.question_reconcile_reload_attempted = None;
+
+            return;
+        }
+
+        let mut questions = self
+            .sessions
+            .session_for_id(&session_id)
+            .map(|session| session.questions.clone())
+            .unwrap_or_default();
+        if questions.is_empty() {
+            // The list snapshot only carries persisted questions for the
+            // active session, so reload detail before giving up, mirroring the
+            // reopen path in `open_session_by_index`. A `Question` status with
+            // no persisted questions is malformed, so reload at most once per
+            // stuck session: without this guard `run_cycle` would reissue the
+            // async load on every render frame while the view stays stuck.
+            if self.question_reconcile_reload_attempted.as_deref() == Some(session_id.as_str()) {
+                return;
+            }
+
+            self.question_reconcile_reload_attempted = Some(session_id.clone());
+            self.sessions
+                .load_session_detail_into_state(self.services.db(), &session_id)
+                .await;
+            questions = self
+                .sessions
+                .session_for_id(&session_id)
+                .map(|session| session.questions.clone())
+                .unwrap_or_default();
+        }
+        if questions.is_empty() {
+            return;
+        }
+
+        self.question_reconcile_reload_attempted = None;
+        self.enter_question_mode(&session_id, questions);
     }
 
     /// Enters question mode for a clarification session.

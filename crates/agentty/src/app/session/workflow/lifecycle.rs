@@ -1121,19 +1121,24 @@ impl SessionManager {
     }
 
     /// Submits a follow-up prompt to an existing session.
+    ///
+    /// Returns `true` when the reply command was enqueued on the session
+    /// worker, letting callers gate optimistic status advances on a real
+    /// enqueue.
     pub async fn reply(
         &mut self,
         services: &AppServices,
         session_id: &str,
         prompt: impl Into<TurnPrompt>,
-    ) {
+    ) -> bool {
         let prompt = prompt.into();
         let Ok(session) = self.session_or_err(session_id) else {
-            return;
+            return false;
         };
         let session_agent = session.agent;
+
         self.reply_impl(services, session_id, prompt, session_agent)
-            .await;
+            .await
     }
 
     /// Stages one chat prompt into the in-memory queue for the running turn.
@@ -1731,27 +1736,29 @@ impl SessionManager {
     ///
     /// Gathers reply context, appends the prompt line to session output, builds
     /// a [`SessionCommand::Run`] with the appropriate [`AgentRequestKind`],
-    /// and enqueues it on the session worker.
+    /// and enqueues it on the session worker. Returns `true` only when the
+    /// command reached the worker queue, so callers can defer optimistic status
+    /// advances until the reply is genuinely in flight.
     async fn reply_impl(
         &mut self,
         services: &AppServices,
         session_id: &str,
         prompt: TurnPrompt,
         session_agent: AgentSelection,
-    ) {
+    ) -> bool {
         let Ok(session_index) = self.session_index_or_err(session_id) else {
-            return;
+            return false;
         };
         let should_replay_history = self.should_replay_history(session_id);
         let (session_output, is_first_message, persisted_session_id, title_to_save) =
             match self.prepare_reply_context(session_index, &prompt, should_replay_history) {
                 Ok(Some(reply_context)) => reply_context,
-                Ok(None) => return,
+                Ok(None) => return false,
                 Err(error) => {
                     self.append_reply_status_error(services, session_id, &error)
                         .await;
 
-                    return;
+                    return false;
                 }
             };
 
@@ -1762,7 +1769,7 @@ impl SessionManager {
         let app_event_tx = services.event_sender();
 
         let Ok(handles) = self.session_handles_or_err(&persisted_session_id) else {
-            return;
+            return false;
         };
 
         let output = Arc::clone(&handles.output);
@@ -1816,7 +1823,7 @@ impl SessionManager {
             &effective_prompt,
             command,
         )
-        .await;
+        .await
     }
 
     /// Validates reply eligibility and gathers per-session values needed for
@@ -2085,6 +2092,8 @@ impl SessionManager {
         .await;
     }
 
+    /// Returns `true` when the command reached the session worker queue and
+    /// `false` when enqueueing failed and a reply-error notice was appended.
     async fn enqueue_reply_command(
         &mut self,
         services: &AppServices,
@@ -2093,7 +2102,7 @@ impl SessionManager {
         persisted_session_id: &str,
         prompt: &TurnPrompt,
         command: SessionCommand,
-    ) {
+    ) -> bool {
         if let Err(error) = self
             .enqueue_session_command(services, persisted_session_id, command)
             .await
@@ -2110,7 +2119,11 @@ impl SessionManager {
                 &error_line,
             )
             .await;
+
+            return false;
         }
+
+        true
     }
 
     /// Spawns one detached model command that generates a session title for
