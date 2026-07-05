@@ -22,3 +22,10 @@ Contains the workspace member crates.
   `runtime`, and `ui` layers.
 - `crates/testty/` provides the Rust-native TUI end-to-end testing framework and ships
   the language-agnostic `testty` command-line binary (`src/main.rs`).
+
+## Release Workflow Sync
+
+When adding or removing a workspace crate that is a dependency of any crate already
+published to crates.io, update `.github/workflows/publish-crates-io.yml` in the same
+change so the publish plan includes newly required crates before their dependents or
+removes obsolete crate publish steps.
