@@ -832,8 +832,6 @@ async fn submit_response(app: &mut App, response: String) {
 struct CompletedQuestionResponse {
     questions: Vec<QuestionItem>,
     responses: Vec<String>,
-    review_status_message: Option<String>,
-    review_text: Option<String>,
     scroll_offset: Option<u16>,
     session_id: SessionId,
 }
@@ -882,8 +880,6 @@ fn restore_completed_question_response(
         input,
         questions: completed_response.questions,
         responses: completed_response.responses,
-        review_status_message: completed_response.review_status_message,
-        review_text: completed_response.review_text,
         scroll_offset: completed_response.scroll_offset,
         selected_option_index,
         session_id: completed_response.session_id,
@@ -991,8 +987,6 @@ fn store_question_response(app: &mut App, response: String) -> Option<CompletedQ
         current_index,
         input,
         questions,
-        review_status_message,
-        review_text,
         responses,
         scroll_offset,
         selected_option_index,
@@ -1016,8 +1010,6 @@ fn store_question_response(app: &mut App, response: String) -> Option<CompletedQ
     Some(CompletedQuestionResponse {
         questions: std::mem::take(questions),
         responses: std::mem::take(responses),
-        review_status_message: review_status_message.clone(),
-        review_text: review_text.clone(),
         scroll_offset: *scroll_offset,
         session_id: session_id.clone(),
     })
@@ -1329,8 +1321,6 @@ mod tests {
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::Question {
             at_mention_state: None,
-            review_status_message: None,
-            review_text: None,
             session_id: "session-q-save".into(),
             questions: vec![
                 QuestionItem::with_options("First?", vec!["Yes".to_string(), "No".to_string()]),
@@ -1738,8 +1728,6 @@ mod tests {
         );
         app.mode = AppMode::Question {
             at_mention_state: None,
-            review_status_message: None,
-            review_text: None,
             session_id: session_id.into(),
             questions,
             responses: vec!["Yes".to_string()],

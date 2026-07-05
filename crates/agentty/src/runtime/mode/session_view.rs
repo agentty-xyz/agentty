@@ -1106,10 +1106,10 @@ fn half_page_scroll_step(metrics: ViewMetrics) -> u16 {
 /// output panel instead of replacing it, and successful review text is
 /// persisted for restart hydration.
 async fn open_review_output_mode(app: &mut App, view_context: &ViewContext) {
-    if let Some(cached) = app.review_cache.get(view_context.session_id.as_str()) {
-        if !matches!(cached, ReviewCacheEntry::Suppressed { .. }) {
-            return;
-        }
+    if let Some(cached) = app.review_cache.get(view_context.session_id.as_str())
+        && !matches!(cached, ReviewCacheEntry::Suppressed { .. })
+    {
+        return;
     }
 
     let Some(session) = app.sessions.session_at(view_context.session_index) else {

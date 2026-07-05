@@ -61,8 +61,6 @@ fn test_confirmation_view_mode(session_id: &str) -> ConfirmationViewMode {
 
 fn test_view_app_mode(session_id: &str) -> AppMode {
     AppMode::View {
-        review_status_message: None,
-        review_text: None,
         session_id: session_id.into(),
         scroll_offset: None,
     }

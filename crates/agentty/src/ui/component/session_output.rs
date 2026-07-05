@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
@@ -1412,6 +1411,8 @@ impl Component for SessionOutput<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+
     use ratatui::layout::Alignment;
     use ratatui::style::Style;
     use ratatui::text::Span;
@@ -2929,13 +2930,15 @@ mod tests {
     fn test_output_lines_render_mermaid_diagrams() {
         // Arrange
         let mut session = session_fixture();
-        session.output = concat!(
-            "```mermaid\n",
-            "graph TD\n",
-            "    A[Start] --> B[Finish]\n",
-            "```",
-        )
-        .to_string();
+        set_legacy_transcript(
+            &mut session,
+            concat!(
+                "```mermaid\n",
+                "graph TD\n",
+                "    A[Start] --> B[Finish]\n",
+                "```",
+            ),
+        );
         session.status = Status::Review;
 
         // Act

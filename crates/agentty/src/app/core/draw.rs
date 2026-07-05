@@ -220,7 +220,11 @@ fn visible_session_review_snapshot<'a>(
         AppMode::View { session_id, .. }
         | AppMode::Prompt { session_id, .. }
         | AppMode::Question { session_id, .. }
-        | AppMode::Diff { session_id, .. } => session_id,
+        | AppMode::Diff { session_id, .. }
+        | AppMode::Help {
+            context: HelpContext::View { session_id, .. } | HelpContext::Diff { session_id, .. },
+            ..
+        } => session_id,
         AppMode::Confirmation {
             restore_view: Some(restore_view),
             ..
@@ -228,14 +232,6 @@ fn visible_session_review_snapshot<'a>(
         | AppMode::OpenCommandSelector { restore_view, .. }
         | AppMode::PublishBranchInput { restore_view, .. }
         | AppMode::ViewInfoPopup { restore_view, .. } => &restore_view.session_id,
-        AppMode::Help {
-            context: HelpContext::View { session_id, .. },
-            ..
-        }
-        | AppMode::Help {
-            context: HelpContext::Diff { session_id, .. },
-            ..
-        } => session_id,
         AppMode::List
         | AppMode::ReviewDetail { .. }
         | AppMode::SessionCreation { .. }
