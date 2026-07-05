@@ -7,6 +7,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.12.0] - 2026-07-05
+
 ### Added
 
 - agentty: render complete ```` ```mermaid ```` fenced blocks in session chat markdown
@@ -20,6 +22,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - agentty: replace `arboard` clipboard image capture with the internal `ag-clipboard`
   backend for macOS, X11, and Wayland through `wl-paste`.
 - agentty: require the `wl-clipboard` package for Wayland clipboard image paste.
+- Bump workspace crate metadata and lockfile package versions to `0.12.0`.
+
+### Contributors
+
+- @andagaev
+- @dependabot
+- @minev-dev
 
 ## [v0.11.1] - 2026-07-01
 
