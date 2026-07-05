@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fmt::Write as _;
 
 use ratatui::style::Style;
@@ -221,6 +222,30 @@ pub fn wrapped_line_count(lines: &[Line<'static>], width: u16) -> u16 {
         .fold(0u16, |accumulator, row_count| {
             accumulator.saturating_add(row_count)
         })
+}
+
+/// Builds short-lived paint lines that borrow span text from cached owned
+/// `Line<'static>` entries.
+pub(crate) fn borrowed_paint_lines<'line>(lines: &'line [Line<'static>]) -> Vec<Line<'line>> {
+    lines.iter().map(borrowed_paint_line).collect()
+}
+
+/// Builds one short-lived paint line that borrows span text from a cached
+/// owned line.
+pub(crate) fn borrowed_paint_line<'line>(line: &'line Line<'static>) -> Line<'line> {
+    Line {
+        alignment: line.alignment,
+        spans: line.spans.iter().map(borrowed_paint_span).collect(),
+        style: line.style,
+    }
+}
+
+/// Builds one borrowed paint span from a cached static span.
+fn borrowed_paint_span<'span>(span: &'span Span<'static>) -> Span<'span> {
+    Span {
+        content: Cow::Borrowed(span.content.as_ref()),
+        style: span.style,
+    }
 }
 
 /// Word-wraps each line to `width` columns and flattens the result so the

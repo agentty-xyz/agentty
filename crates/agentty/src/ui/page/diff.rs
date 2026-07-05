@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::hash::Hasher;
@@ -23,7 +22,7 @@ use crate::ui::diff_util::{
 };
 use crate::ui::state::app_mode::DiffRightPanel;
 use crate::ui::state::help_action;
-use crate::ui::text_util::{inline_text, wrap_lines_to_rows};
+use crate::ui::text_util::{self, inline_text, wrap_lines_to_rows};
 use crate::ui::{Component, Page, diff_util, markdown, review_comment_format, style};
 
 const SCROLLBAR_TRACK_SYMBOL: &str = "│";
@@ -531,20 +530,8 @@ impl<'a> DiffPage<'a> {
 
         lines[start_index..end_index]
             .iter()
-            .map(|line| Line {
-                alignment: line.alignment,
-                spans: line.spans.iter().map(Self::borrowed_paint_span).collect(),
-                style: line.style,
-            })
+            .map(text_util::borrowed_paint_line)
             .collect()
-    }
-
-    /// Builds one borrowed paint span from a cached diff span.
-    fn borrowed_paint_span<'span>(span: &'span Span<'static>) -> Span<'span> {
-        Span {
-            content: Cow::Borrowed(span.content.as_ref()),
-            style: span.style,
-        }
     }
 
     /// Returns the style used for added diff lines.

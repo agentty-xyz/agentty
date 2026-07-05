@@ -132,7 +132,7 @@ impl ReviewRequestClient for RealReviewRequestClient {
         source_branch: String,
     ) -> ForgeFuture<Result<Option<ReviewRequestSummary>, ReviewRequestError>> {
         self.call_with_authenticated_adapter(remote, move |adapter, remote| {
-            adapter.find_by_source_branch(remote, source_branch)
+            adapter.find_authenticated_by_source_branch(remote, source_branch)
         })
     }
 
@@ -142,7 +142,7 @@ impl ReviewRequestClient for RealReviewRequestClient {
         input: CreateReviewRequestInput,
     ) -> ForgeFuture<Result<ReviewRequestSummary, ReviewRequestError>> {
         self.call_with_authenticated_adapter(remote, move |adapter, remote| {
-            adapter.create_review_request(remote, input)
+            adapter.create_authenticated_review_request(remote, input)
         })
     }
 
@@ -152,7 +152,7 @@ impl ReviewRequestClient for RealReviewRequestClient {
         display_id: String,
     ) -> ForgeFuture<Result<ReviewRequestSummary, ReviewRequestError>> {
         self.call_with_authenticated_adapter(remote, move |adapter, remote| {
-            adapter.refresh_review_request(remote, display_id)
+            adapter.refresh_authenticated_review_request(remote, display_id)
         })
     }
 
@@ -163,7 +163,7 @@ impl ReviewRequestClient for RealReviewRequestClient {
         input: UpdateReviewRequestInput,
     ) -> ForgeFuture<Result<ReviewRequestSummary, ReviewRequestError>> {
         self.call_with_authenticated_adapter(remote, move |adapter, remote| {
-            adapter.sync_review_request_metadata(remote, display_id, input)
+            adapter.sync_authenticated_review_request_metadata(remote, display_id, input)
         })
     }
 
@@ -187,7 +187,7 @@ impl ReviewRequestClient for RealReviewRequestClient {
         display_id: String,
     ) -> ForgeFuture<Result<ReviewCommentSnapshot, ReviewRequestError>> {
         self.call_with_authenticated_adapter(remote, move |adapter, remote| {
-            adapter.fetch_review_comment_snapshot(remote, display_id)
+            adapter.fetch_authenticated_review_comment_snapshot(remote, display_id)
         })
     }
 
@@ -196,7 +196,7 @@ impl ReviewRequestClient for RealReviewRequestClient {
         remote: ForgeRemote,
     ) -> ForgeFuture<Result<Vec<RequestedReview>, ReviewRequestError>> {
         self.call_with_authenticated_adapter(remote, move |adapter, remote| {
-            adapter.list_requested_reviews(remote)
+            adapter.list_authenticated_requested_reviews(remote)
         })
     }
 }
@@ -255,45 +255,30 @@ pub(crate) trait ReviewRequestAdapter: Send + Sync {
         remote: &ForgeRemote,
     ) -> ForgeFuture<Result<(), ReviewRequestError>>;
 
-    /// Finds one review request for `source_branch` after authentication.
-    ///
-    /// # Errors
-    /// Returns a provider-specific review-request error when lookup or refresh
-    /// fails.
-    fn find_by_source_branch(
+    /// Finds one review request after the production client has authenticated.
+    fn find_authenticated_by_source_branch(
         &self,
         remote: ForgeRemote,
         source_branch: String,
     ) -> ForgeFuture<Result<Option<ReviewRequestSummary>, ReviewRequestError>>;
 
-    /// Creates one review request from `input` after authentication.
-    ///
-    /// # Errors
-    /// Returns a provider-specific review-request error when creation or reload
-    /// fails.
-    fn create_review_request(
+    /// Creates one review request after the production client has
+    /// authenticated.
+    fn create_authenticated_review_request(
         &self,
         remote: ForgeRemote,
         input: CreateReviewRequestInput,
     ) -> ForgeFuture<Result<ReviewRequestSummary, ReviewRequestError>>;
 
-    /// Refreshes one existing review request by provider display id after
-    /// authentication.
-    ///
-    /// # Errors
-    /// Returns a provider-specific review-request error when refresh fails.
-    fn refresh_review_request(
+    /// Refreshes one existing review request after authentication.
+    fn refresh_authenticated_review_request(
         &self,
         remote: ForgeRemote,
         display_id: String,
     ) -> ForgeFuture<Result<ReviewRequestSummary, ReviewRequestError>>;
 
     /// Synchronizes review-request metadata after authentication.
-    ///
-    /// # Errors
-    /// Returns a provider-specific review-request error when metadata lookup,
-    /// update, or refresh fails.
-    fn sync_review_request_metadata(
+    fn sync_authenticated_review_request_metadata(
         &self,
         remote: ForgeRemote,
         display_id: String,
@@ -301,22 +286,14 @@ pub(crate) trait ReviewRequestAdapter: Send + Sync {
     ) -> ForgeFuture<Result<ReviewRequestSummary, ReviewRequestError>>;
 
     /// Fetches a review-comment snapshot after authentication.
-    ///
-    /// # Errors
-    /// Returns a provider-specific review-request error when comment retrieval
-    /// fails.
-    fn fetch_review_comment_snapshot(
+    fn fetch_authenticated_review_comment_snapshot(
         &self,
         remote: ForgeRemote,
         display_id: String,
     ) -> ForgeFuture<Result<ReviewCommentSnapshot, ReviewRequestError>>;
 
     /// Lists requested reviews after authentication.
-    ///
-    /// # Errors
-    /// Returns a provider-specific review-request error when the list request
-    /// fails.
-    fn list_requested_reviews(
+    fn list_authenticated_requested_reviews(
         &self,
         remote: ForgeRemote,
     ) -> ForgeFuture<Result<Vec<RequestedReview>, ReviewRequestError>>;

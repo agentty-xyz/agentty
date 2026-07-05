@@ -217,17 +217,11 @@ pub(crate) fn session_list_actions(
     can_open_selected_session: bool,
 ) -> Vec<HelpAction> {
     let mut actions = list_base_actions();
-    actions.push(HelpAction::new("new session", "a", "Choose session type"));
-
-    if can_cancel_selected_session {
-        actions.push(HelpAction::new("cancel", "c", "Cancel session"));
-    }
-
-    if can_open_selected_session {
-        actions.push(HelpAction::new("open session", "Enter", "Open session"));
-    }
-
-    actions.push(HelpAction::new("nav", "j/k", "Navigate sessions"));
+    append_session_list_selection_actions(
+        &mut actions,
+        can_cancel_selected_session,
+        can_open_selected_session,
+    );
     actions.push(HelpAction::new("next tab", "Tab", "Switch tab"));
     actions.push(HelpAction::new("help", "?", "Help"));
 
@@ -264,6 +258,22 @@ pub(crate) fn session_list_footer_actions(
     can_open_selected_session: bool,
 ) -> Vec<HelpAction> {
     let mut actions = list_base_actions();
+    append_session_list_selection_actions(
+        &mut actions,
+        can_cancel_selected_session,
+        can_open_selected_session,
+    );
+    actions.push(HelpAction::new("help", "?", "Help"));
+
+    actions
+}
+
+/// Appends actions that operate on the currently selected session row.
+fn append_session_list_selection_actions(
+    actions: &mut Vec<HelpAction>,
+    can_cancel_selected_session: bool,
+    can_open_selected_session: bool,
+) {
     actions.push(HelpAction::new("new session", "a", "Choose session type"));
 
     if can_cancel_selected_session {
@@ -275,9 +285,6 @@ pub(crate) fn session_list_footer_actions(
     }
 
     actions.push(HelpAction::new("nav", "j/k", "Navigate sessions"));
-    actions.push(HelpAction::new("help", "?", "Help"));
-
-    actions
 }
 
 /// Returns help actions for the settings page.
@@ -358,39 +365,19 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
         action_set.open_command.is_enabled(),
     );
 
-    if action_set.stop_session.is_enabled() {
-        actions.push(HelpAction::new(
-            "stop",
-            "Ctrl+c",
-            "Stop current turn (pops one queued chat message at a time first)",
-        ));
-    }
+    append_view_stop_action(&mut actions, action_set);
 
     if state.can_start_staged_session.is_enabled() {
         actions.push(HelpAction::new("start", "s", "Start staged session"));
     }
 
-    if action_set.open_worktree.is_enabled() {
-        actions.push(HelpAction::new("open", "o", "Open worktree"));
-    }
+    append_view_open_action(&mut actions, action_set);
 
     if action_set.show_diff.is_enabled() {
         actions.push(HelpAction::new("diff", "d", "Show diff"));
     }
 
-    if action_set.show_review.is_enabled() {
-        actions.push(HelpAction::new("review", "f", "Focused review"));
-    }
-
-    if action_set.fork_session.is_enabled() {
-        actions.push(HelpAction::new("fork", "F", "Fork session"));
-    }
-
-    if let Some(publish_pull_request_action) = state.publish_pull_request_action {
-        actions.push(publish_pull_request_help_action(
-            publish_pull_request_action,
-        ));
-    }
+    append_view_review_actions(&mut actions, state, action_set);
 
     if action_set.open_command.is_enabled() && state.session_state != ViewSessionState::StackedDraft
     {
@@ -405,10 +392,7 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
         actions.push(HelpAction::new("sync", "r", "Sync"));
     }
 
-    if action_set.continue_terminal_session.is_enabled() {
-        actions.push(HelpAction::new("continue", "c", "Continue in new session"));
-    }
-
+    append_view_continue_action(&mut actions, action_set);
     actions.extend(VIEW_OUTPUT_SCROLL_ACTIONS);
     actions.push(HelpAction::new("help", "?", "Help"));
 
@@ -431,7 +415,17 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
         action_set.open_command,
         action_set.rebase_session,
     );
+    append_view_stop_action(&mut actions, action_set);
+    append_view_open_action(&mut actions, action_set);
+    append_view_review_actions(&mut actions, state, action_set);
+    append_view_continue_action(&mut actions, action_set);
+    actions.extend(VIEW_FOOTER_TRAILING_ACTIONS);
 
+    actions
+}
+
+/// Appends the stop action shared by full help and compact footer rows.
+fn append_view_stop_action(actions: &mut Vec<HelpAction>, action_set: ViewActionSet) {
     if action_set.stop_session.is_enabled() {
         actions.push(HelpAction::new(
             "stop",
@@ -439,11 +433,23 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
             "Stop current turn (pops one queued chat message at a time first)",
         ));
     }
+}
 
+/// Appends the worktree-open action shared by full help and compact footer
+/// rows.
+fn append_view_open_action(actions: &mut Vec<HelpAction>, action_set: ViewActionSet) {
     if action_set.open_worktree.is_enabled() {
         actions.push(HelpAction::new("open", "o", "Open worktree"));
     }
+}
 
+/// Appends review and publish actions shared by full help and compact footer
+/// rows.
+fn append_view_review_actions(
+    actions: &mut Vec<HelpAction>,
+    state: ViewHelpState,
+    action_set: ViewActionSet,
+) {
     if action_set.show_review.is_enabled() {
         actions.push(HelpAction::new("review", "f", "Focused review"));
     }
@@ -457,14 +463,14 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
             publish_pull_request_action,
         ));
     }
+}
 
+/// Appends the terminal continuation action shared by full help and compact
+/// footer rows.
+fn append_view_continue_action(actions: &mut Vec<HelpAction>, action_set: ViewActionSet) {
     if action_set.continue_terminal_session.is_enabled() {
         actions.push(HelpAction::new("continue", "c", "Continue in new session"));
     }
-
-    actions.extend(VIEW_FOOTER_TRAILING_ACTIONS);
-
-    actions
 }
 
 /// Returns whether a session state can open the reply composer in view mode.

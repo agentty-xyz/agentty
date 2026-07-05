@@ -108,20 +108,8 @@ pub async fn rebase_start(
 ) -> Result<RebaseStepResult, GitError> {
     spawn_blocking(move || {
         let rebase_args = ["rebase", target_branch.as_str()];
-        let output = run_git_command_with_index_lock_retry(&repo_path, &rebase_args, &[])?;
-
-        if output.status.success() {
-            return Ok(RebaseStepResult::Completed);
-        }
-
-        let detail = command_output_detail(&output.stdout, &output.stderr);
-        if is_rebase_conflict(&detail) {
-            return Ok(RebaseStepResult::Conflict { detail });
-        }
-
-        Err(GitError::CommandFailed {
-            command: "git rebase".to_string(),
-            stderr: format!("Failed to rebase onto {target_branch}: {detail}."),
+        run_rebase_step(&repo_path, &rebase_args, "git rebase", |detail| {
+            format!("Failed to rebase onto {target_branch}: {detail}.")
         })
     })
     .await?
@@ -150,20 +138,8 @@ pub async fn rebase_onto_start(
 ) -> Result<RebaseStepResult, GitError> {
     spawn_blocking(move || {
         let rebase_args = ["rebase", "--onto", new_base.as_str(), old_base.as_str()];
-        let output = run_git_command_with_index_lock_retry(&repo_path, &rebase_args, &[])?;
-
-        if output.status.success() {
-            return Ok(RebaseStepResult::Completed);
-        }
-
-        let detail = command_output_detail(&output.stdout, &output.stderr);
-        if is_rebase_conflict(&detail) {
-            return Ok(RebaseStepResult::Conflict { detail });
-        }
-
-        Err(GitError::CommandFailed {
-            command: "git rebase --onto".to_string(),
-            stderr: format!("Failed to rebase onto {new_base} after {old_base}: {detail}."),
+        run_rebase_step(&repo_path, &rebase_args, "git rebase --onto", |detail| {
+            format!("Failed to rebase onto {new_base} after {old_base}: {detail}.")
         })
     })
     .await?
@@ -377,6 +353,30 @@ pub async fn list_conflicted_files(repo_path: PathBuf) -> Result<Vec<String>, Gi
         Ok(files)
     })
     .await?
+}
+
+/// Runs one rebase command and maps git output to a step result.
+fn run_rebase_step(
+    repo_path: &Path,
+    args: &[&str],
+    command: &str,
+    failure_message: impl FnOnce(&str) -> String,
+) -> Result<RebaseStepResult, GitError> {
+    let output = run_git_command_with_index_lock_retry(repo_path, args, &[])?;
+
+    if output.status.success() {
+        return Ok(RebaseStepResult::Completed);
+    }
+
+    let detail = command_output_detail(&output.stdout, &output.stderr);
+    if is_rebase_conflict(&detail) {
+        return Ok(RebaseStepResult::Conflict { detail });
+    }
+
+    Err(GitError::CommandFailed {
+        command: command.to_string(),
+        stderr: failure_message(&detail),
+    })
 }
 
 /// Runs a git command and retries when `index.lock` contention occurs.

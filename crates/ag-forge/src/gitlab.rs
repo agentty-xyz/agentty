@@ -47,42 +47,32 @@ impl ReviewRequestAdapter for GitLabReviewRequestAdapter {
         &self,
         remote: &ForgeRemote,
     ) -> ForgeFuture<Result<(), ReviewRequestError>> {
-        let operations = self.operations.clone();
-        let remote = remote.clone();
-
-        Box::pin(async move {
-            operations
-                .ensure_authenticated(&remote, auth_status_command(&remote))
-                .await
-        })
+        self.operations
+            .ensure_authenticated_future(remote.clone(), auth_status_command)
     }
 
     /// Finds one existing merge request for `source_branch`.
-    fn find_by_source_branch(
+    fn find_authenticated_by_source_branch(
         &self,
         remote: ForgeRemote,
         source_branch: String,
     ) -> ForgeFuture<Result<Option<ReviewRequestSummary>, ReviewRequestError>> {
         let adapter = self.clone();
-        let operations = self.operations.clone();
 
-        Box::pin(async move {
-            let lookup_command = lookup_command(&remote, &source_branch);
-
-            operations
-                .find_by_source_branch(
-                    remote,
-                    lookup_command,
-                    "find merge request",
-                    parse_lookup_display_id,
-                    move |remote, display_id| adapter.refresh_review_request(remote, display_id),
-                )
-                .await
-        })
+        self.operations.find_by_source_branch_future(
+            remote,
+            source_branch,
+            lookup_command,
+            "find merge request",
+            parse_lookup_display_id,
+            move |remote, display_id| {
+                adapter.refresh_authenticated_review_request(remote, display_id)
+            },
+        )
     }
 
     /// Creates one new draft merge request from `input`.
-    fn create_review_request(
+    fn create_authenticated_review_request(
         &self,
         remote: ForgeRemote,
         input: CreateReviewRequestInput,
@@ -98,110 +88,88 @@ impl ReviewRequestAdapter for GitLabReviewRequestAdapter {
             let display_id =
                 map_parse_error(remote.forge_kind, parse_create_display_id(&output.stdout))?;
 
-            adapter.refresh_review_request(remote, display_id).await
-        })
-    }
-
-    /// Refreshes one existing merge request by display id.
-    fn refresh_review_request(
-        &self,
-        remote: ForgeRemote,
-        display_id: String,
-    ) -> ForgeFuture<Result<ReviewRequestSummary, ReviewRequestError>> {
-        let operations = self.operations.clone();
-
-        Box::pin(async move {
-            operations
-                .refresh_review_request(
-                    remote,
-                    display_id,
-                    parse_display_id,
-                    view_command,
-                    "refresh merge request",
-                    parse_view_response,
-                )
+            adapter
+                .refresh_authenticated_review_request(remote, display_id)
                 .await
         })
     }
 
+    /// Refreshes one existing merge request by display id.
+    fn refresh_authenticated_review_request(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+    ) -> ForgeFuture<Result<ReviewRequestSummary, ReviewRequestError>> {
+        self.operations.refresh_review_request_future(
+            remote,
+            display_id,
+            parse_display_id,
+            view_command,
+            "refresh merge request",
+            parse_view_response,
+        )
+    }
+
     /// Checks the current merge-request title/description and updates them
     /// when they differ from `input`.
-    fn sync_review_request_metadata(
+    fn sync_authenticated_review_request_metadata(
         &self,
         remote: ForgeRemote,
         display_id: String,
         input: UpdateReviewRequestInput,
     ) -> ForgeFuture<Result<ReviewRequestSummary, ReviewRequestError>> {
         let adapter = self.clone();
-        let operations = self.operations.clone();
+        let config = SyncReviewRequestMetadataConfig {
+            edit_metadata_command: update_metadata_command,
+            edit_operation: "update merge-request metadata",
+            parse_display_id,
+            parse_metadata_response,
+            requires_update: GitLabMetadataResponse::requires_update,
+            view_metadata_command: view_command,
+            view_operation: "view merge-request metadata",
+        };
 
-        Box::pin(async move {
-            let config = SyncReviewRequestMetadataConfig {
-                edit_metadata_command: update_metadata_command,
-                edit_operation: "update merge-request metadata",
-                parse_display_id,
-                parse_metadata_response,
-                requires_update: GitLabMetadataResponse::requires_update,
-                view_metadata_command: view_command,
-                view_operation: "view merge-request metadata",
-            };
-
-            operations
-                .sync_review_request_metadata(
-                    remote,
-                    display_id,
-                    input,
-                    config,
-                    move |remote, display_id| adapter.refresh_review_request(remote, display_id),
-                )
-                .await
-        })
+        self.operations.sync_review_request_metadata_future(
+            remote,
+            display_id,
+            input,
+            config,
+            move |remote, display_id| {
+                adapter.refresh_authenticated_review_request(remote, display_id)
+            },
+        )
     }
 
     /// Fetches merge-request discussions through GitLab's REST API and
     /// normalizes diff notes plus review-request-wide notes for the comments
     /// preview.
-    fn fetch_review_comment_snapshot(
+    fn fetch_authenticated_review_comment_snapshot(
         &self,
         remote: ForgeRemote,
         display_id: String,
     ) -> ForgeFuture<Result<ReviewCommentSnapshot, ReviewRequestError>> {
-        let operations = self.operations.clone();
-
-        Box::pin(async move {
-            operations
-                .fetch_review_comment_snapshot(
-                    remote,
-                    display_id,
-                    parse_display_id,
-                    discussions_command,
-                    "fetch merge-request discussions",
-                    parse_review_comment_snapshot_response,
-                )
-                .await
-        })
+        self.operations.fetch_review_comment_snapshot_future(
+            remote,
+            display_id,
+            parse_display_id,
+            discussions_command,
+            "fetch merge-request discussions",
+            parse_review_comment_snapshot_response,
+        )
     }
 
     /// Lists open merge requests in `remote` that request review from the
     /// current authenticated GitLab user.
-    fn list_requested_reviews(
+    fn list_authenticated_requested_reviews(
         &self,
         remote: ForgeRemote,
     ) -> ForgeFuture<Result<Vec<RequestedReview>, ReviewRequestError>> {
-        let operations = self.operations.clone();
-
-        Box::pin(async move {
-            let command = requested_reviews_command(&remote);
-
-            operations
-                .list_requested_reviews(
-                    remote,
-                    command,
-                    "list requested merge-request reviews",
-                    parse_requested_reviews_response,
-                )
-                .await
-        })
+        self.operations.list_requested_reviews_future(
+            remote,
+            requested_reviews_command,
+            "list requested merge-request reviews",
+            parse_requested_reviews_response,
+        )
     }
 }
 
@@ -772,7 +740,7 @@ mod tests {
     use crate::command::{ForgeCommandOutput, MockForgeCommandRunner};
 
     #[tokio::test]
-    async fn find_by_source_branch_builds_lookup_and_refresh_commands() {
+    async fn find_authenticated_by_source_branch_builds_lookup_and_refresh_commands() {
         // Arrange
         let remote = gitlab_remote();
         let mut sequence = Sequence::new();
@@ -801,7 +769,7 @@ mod tests {
 
         // Act
         let review_request = adapter
-            .find_by_source_branch(remote, "feature/forge".to_string())
+            .find_authenticated_by_source_branch(remote, "feature/forge".to_string())
             .await
             .expect("GitLab lookup should succeed");
 
@@ -822,7 +790,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn find_by_source_branch_returns_none_for_empty_lookup_response() {
+    async fn find_authenticated_by_source_branch_returns_none_for_empty_lookup_response() {
         // Arrange
         let remote = gitlab_remote();
         let mut sequence = Sequence::new();
@@ -841,7 +809,7 @@ mod tests {
 
         // Act
         let review_request = adapter
-            .find_by_source_branch(remote, "feature/forge".to_string())
+            .find_authenticated_by_source_branch(remote, "feature/forge".to_string())
             .await
             .expect("GitLab lookup should succeed");
 
@@ -865,7 +833,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_review_request_builds_create_command_and_returns_summary() {
+    async fn create_authenticated_review_request_builds_create_command_and_returns_summary() {
         // Arrange
         let remote = gitlab_remote();
         let input = CreateReviewRequestInput {
@@ -907,7 +875,7 @@ mod tests {
 
         // Act
         let review_request = adapter
-            .create_review_request(remote, input)
+            .create_authenticated_review_request(remote, input)
             .await
             .expect("GitLab create should succeed");
 
@@ -921,7 +889,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_review_request_metadata_updates_changed_merge_request() {
+    async fn sync_authenticated_review_request_metadata_updates_changed_merge_request() {
         // Arrange
         let remote = gitlab_remote();
         let input = UpdateReviewRequestInput {
@@ -965,7 +933,7 @@ mod tests {
 
         // Act
         let review_request = adapter
-            .sync_review_request_metadata(remote, "!42".to_string(), input)
+            .sync_authenticated_review_request_metadata(remote, "!42".to_string(), input)
             .await
             .expect("GitLab metadata sync should succeed");
 
@@ -974,7 +942,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_review_request_metadata_skips_update_when_unchanged() {
+    async fn sync_authenticated_review_request_metadata_skips_update_when_unchanged() {
         // Arrange
         let remote = gitlab_remote();
         let input = UpdateReviewRequestInput {
@@ -1007,7 +975,7 @@ mod tests {
 
         // Act
         let review_request = adapter
-            .sync_review_request_metadata(remote, "!42".to_string(), input)
+            .sync_authenticated_review_request_metadata(remote, "!42".to_string(), input)
             .await
             .expect("GitLab metadata sync should succeed");
 
@@ -1016,7 +984,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_requested_reviews_builds_list_command_and_returns_rows() {
+    async fn list_authenticated_requested_reviews_builds_list_command_and_returns_rows() {
         // Arrange
         let remote = gitlab_remote();
         let mut sequence = Sequence::new();
@@ -1035,7 +1003,7 @@ mod tests {
 
         // Act
         let requested_reviews = adapter
-            .list_requested_reviews(remote)
+            .list_authenticated_requested_reviews(remote)
             .await
             .expect("GitLab requested reviews should load");
 
@@ -1059,7 +1027,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetch_review_comment_snapshot_parses_discussions_response() {
+    async fn fetch_authenticated_review_comment_snapshot_parses_discussions_response() {
         // Arrange
         let remote = gitlab_remote();
         let mut sequence = Sequence::new();
@@ -1078,7 +1046,7 @@ mod tests {
 
         // Act
         let snapshot = adapter
-            .fetch_review_comment_snapshot(remote, "!42".to_string())
+            .fetch_authenticated_review_comment_snapshot(remote, "!42".to_string())
             .await
             .expect("GitLab discussion snapshot should parse");
 

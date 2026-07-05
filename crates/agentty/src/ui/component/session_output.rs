@@ -8,7 +8,7 @@ use std::sync::Arc;
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::text::{Line, Span};
+use ratatui::text::Line;
 use ratatui::widgets::{Block, Paragraph};
 use rustc_hash::FxHasher;
 
@@ -1216,32 +1216,6 @@ impl<'a> SessionOutput<'a> {
         }
     }
 
-    /// Builds short-lived paint lines that borrow span text from cached
-    /// `Line<'static>` entries instead of cloning owned strings.
-    ///
-    /// `Paragraph` takes ownership of a `Vec<Line<'a>>`, so this still creates
-    /// lightweight line/span containers for the current paint pass, but each
-    /// span content becomes `Cow::Borrowed` and avoids allocating transcript
-    /// strings on every frame.
-    fn borrowed_paint_lines<'line>(lines: &'line [Line<'static>]) -> Vec<Line<'line>> {
-        lines
-            .iter()
-            .map(|line| Line {
-                alignment: line.alignment,
-                spans: line.spans.iter().map(Self::borrowed_paint_span).collect(),
-                style: line.style,
-            })
-            .collect()
-    }
-
-    /// Builds one borrowed paint span from a cached static span.
-    fn borrowed_paint_span<'span>(span: &'span Span<'static>) -> Span<'span> {
-        Span {
-            content: Cow::Borrowed(span.content.as_ref()),
-            style: span.style,
-        }
-    }
-
     /// Returns the screen area occupied by a loader glyph when its row is
     /// currently visible inside the scrolled output panel.
     fn loader_area(
@@ -1354,7 +1328,7 @@ impl Component for SessionOutput<'_> {
             final_scroll,
         );
 
-        let paint_lines = SessionOutput::borrowed_paint_lines(&layout.lines);
+        let paint_lines = text_util::borrowed_paint_lines(&layout.lines);
         let paragraph = Paragraph::new(paint_lines)
             .block(
                 Block::default()
@@ -1378,6 +1352,7 @@ impl Component for SessionOutput<'_> {
 mod tests {
     use ratatui::layout::Alignment;
     use ratatui::style::Style;
+    use ratatui::text::Span;
     use serde_json;
 
     use super::*;
@@ -1903,7 +1878,7 @@ mod tests {
         }];
 
         // Act
-        let paint_lines = SessionOutput::borrowed_paint_lines(&cached_lines);
+        let paint_lines = text_util::borrowed_paint_lines(&cached_lines);
 
         // Assert
         assert_eq!(paint_lines[0].alignment, Some(Alignment::Center));

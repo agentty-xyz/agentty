@@ -55,6 +55,21 @@ impl ReviewRequestOperations {
         })
     }
 
+    /// Builds an authentication future for adapter trait implementations.
+    pub(crate) fn ensure_authenticated_future(
+        &self,
+        remote: ForgeRemote,
+        auth_status_command: fn(&ForgeRemote) -> ForgeCommand,
+    ) -> ForgeFuture<Result<(), ReviewRequestError>> {
+        let operations = self.clone();
+
+        Box::pin(async move {
+            operations
+                .ensure_authenticated(&remote, auth_status_command(&remote))
+                .await
+        })
+    }
+
     /// Runs one authenticated forge CLI command and normalizes common
     /// failures.
     pub(crate) async fn run_review_command(
@@ -122,6 +137,39 @@ impl ReviewRequestOperations {
         refresh_review_request(remote, display_id).await.map(Some)
     }
 
+    /// Builds a source-branch lookup future for adapter trait implementations.
+    pub(crate) fn find_by_source_branch_future(
+        &self,
+        remote: ForgeRemote,
+        source_branch: String,
+        lookup_command: fn(&ForgeRemote, &str) -> ForgeCommand,
+        operation: &'static str,
+        parse_lookup_display_id: fn(&str) -> Result<Option<String>, String>,
+        refresh_review_request: impl FnOnce(
+            ForgeRemote,
+            String,
+        ) -> ForgeFuture<
+            Result<ReviewRequestSummary, ReviewRequestError>,
+        > + Send
+        + 'static,
+    ) -> ForgeFuture<Result<Option<ReviewRequestSummary>, ReviewRequestError>> {
+        let operations = self.clone();
+
+        Box::pin(async move {
+            let lookup_command = lookup_command(&remote, &source_branch);
+
+            operations
+                .find_by_source_branch(
+                    remote,
+                    lookup_command,
+                    operation,
+                    parse_lookup_display_id,
+                    refresh_review_request,
+                )
+                .await
+        })
+    }
+
     /// Refreshes one review request by provider display id.
     pub(crate) async fn refresh_review_request(
         &self,
@@ -142,6 +190,33 @@ impl ReviewRequestOperations {
             .await?;
 
         map_parse_error(remote.forge_kind, parse_view_response(&output.stdout))
+    }
+
+    /// Builds a review-request refresh future for adapter trait
+    /// implementations.
+    pub(crate) fn refresh_review_request_future(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+        parse_display_id: fn(&str) -> Result<String, ReviewRequestError>,
+        view_command: fn(&ForgeRemote, &str) -> ForgeCommand,
+        operation: &'static str,
+        parse_view_response: fn(&str) -> Result<ReviewRequestSummary, String>,
+    ) -> ForgeFuture<Result<ReviewRequestSummary, ReviewRequestError>> {
+        let operations = self.clone();
+
+        Box::pin(async move {
+            operations
+                .refresh_review_request(
+                    remote,
+                    display_id,
+                    parse_display_id,
+                    view_command,
+                    operation,
+                    parse_view_response,
+                )
+                .await
+        })
     }
 
     /// Synchronizes review-request metadata when the remote values differ
@@ -184,6 +259,36 @@ impl ReviewRequestOperations {
         refresh_review_request(remote, display_id).await
     }
 
+    /// Builds a metadata sync future for adapter trait implementations.
+    pub(crate) fn sync_review_request_metadata_future<Metadata: Send + 'static>(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+        input: UpdateReviewRequestInput,
+        config: SyncReviewRequestMetadataConfig<Metadata>,
+        refresh_review_request: impl FnOnce(
+            ForgeRemote,
+            String,
+        ) -> ForgeFuture<
+            Result<ReviewRequestSummary, ReviewRequestError>,
+        > + Send
+        + 'static,
+    ) -> ForgeFuture<Result<ReviewRequestSummary, ReviewRequestError>> {
+        let operations = self.clone();
+
+        Box::pin(async move {
+            operations
+                .sync_review_request_metadata(
+                    remote,
+                    display_id,
+                    input,
+                    config,
+                    refresh_review_request,
+                )
+                .await
+        })
+    }
+
     /// Fetches and parses one review-comment snapshot.
     pub(crate) async fn fetch_review_comment_snapshot(
         &self,
@@ -206,6 +311,33 @@ impl ReviewRequestOperations {
         map_parse_error(remote.forge_kind, parse_snapshot_response(&output.stdout))
     }
 
+    /// Builds a review-comment snapshot future for adapter trait
+    /// implementations.
+    pub(crate) fn fetch_review_comment_snapshot_future(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+        parse_display_id: fn(&str) -> Result<String, ReviewRequestError>,
+        snapshot_command: fn(&ForgeRemote, &str) -> ForgeCommand,
+        operation: &'static str,
+        parse_snapshot_response: fn(&str) -> Result<ReviewCommentSnapshot, String>,
+    ) -> ForgeFuture<Result<ReviewCommentSnapshot, ReviewRequestError>> {
+        let operations = self.clone();
+
+        Box::pin(async move {
+            operations
+                .fetch_review_comment_snapshot(
+                    remote,
+                    display_id,
+                    parse_display_id,
+                    snapshot_command,
+                    operation,
+                    parse_snapshot_response,
+                )
+                .await
+        })
+    }
+
     /// Runs one requested-review list command and parses normalized rows.
     pub(crate) async fn list_requested_reviews(
         &self,
@@ -220,6 +352,26 @@ impl ReviewRequestOperations {
             remote.forge_kind,
             parse_requested_reviews(&output.stdout, &remote),
         )
+    }
+
+    /// Builds a requested-review list future for adapter trait
+    /// implementations.
+    pub(crate) fn list_requested_reviews_future(
+        &self,
+        remote: ForgeRemote,
+        command: fn(&ForgeRemote) -> ForgeCommand,
+        operation: &'static str,
+        parse_requested_reviews: fn(&str, &ForgeRemote) -> Result<Vec<RequestedReview>, String>,
+    ) -> ForgeFuture<Result<Vec<RequestedReview>, ReviewRequestError>> {
+        let operations = self.clone();
+
+        Box::pin(async move {
+            let command = command(&remote);
+
+            operations
+                .list_requested_reviews(remote, command, operation, parse_requested_reviews)
+                .await
+        })
     }
 }
 
