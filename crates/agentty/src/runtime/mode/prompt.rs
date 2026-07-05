@@ -1422,7 +1422,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(commands, vec!["/stats"]);
+        assert_eq!(commands, vec!["/stats", "/reasoning"]);
     }
 
     #[test]

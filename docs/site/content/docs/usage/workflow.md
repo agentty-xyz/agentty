@@ -310,6 +310,9 @@ record, and rendered as a title prefix in the **Sessions** list.
 actions. From an editable session view, press `/` to open the composer with the leading
 slash already inserted:
 
+The command picker filters as you type and accepts contains or fuzzy abbreviations such
+as `/o` for `/model` and `/qc` for `/qe:check`.
+
 | Command | Description | |---------|-------------| | `/apply` | Verify focused-review
 suggestions, then apply the still-valid ones. | | `/model` | Switch the model for the
 current session. | | `/qe:check` | Run a read-only quality-enforcement audit prompt. | |

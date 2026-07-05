@@ -851,16 +851,64 @@ fn command_description(command: &str) -> &'static str {
     }
 }
 
-/// Returns all slash commands whose prefixes match the current input.
+/// Returns all slash commands whose fuzzy characters match the current input.
 fn prompt_slash_commands(input: &str, allow_apply_command: bool) -> Vec<&'static str> {
     let lowered = input.to_lowercase();
     let mut commands = vec!["/apply", "/model", "/qe:check", "/reasoning", "/stats"];
     if !allow_apply_command {
         commands.retain(|command| *command != "/apply");
     }
-    commands.retain(|command| command.starts_with(&lowered));
+    commands.retain(|command| slash_command_fuzzy_score(command, &lowered).is_some());
+    commands.sort_by_key(|command| slash_command_fuzzy_score(command, &lowered).unwrap_or(0));
 
     commands
+}
+
+/// Scores how well one slash command matches a lowercase fuzzy query.
+fn slash_command_fuzzy_score(command: &str, lowered_query: &str) -> Option<usize> {
+    let command_name = command.trim_start_matches('/');
+    let query = lowered_query.trim_start_matches('/');
+    if query.is_empty() {
+        return Some(0);
+    }
+
+    if command_name.starts_with(query) {
+        return Some(0);
+    }
+
+    if let Some(match_start) = command_name.find(query) {
+        return Some(100 + match_start);
+    }
+
+    let mut query_chars = query.chars().peekable();
+    let mut gap_count = 0;
+    let mut first_match_index = None;
+    let mut last_match_index = None;
+
+    for (command_index, command_char) in command_name.chars().enumerate() {
+        let Some(query_char) = query_chars.peek() else {
+            break;
+        };
+
+        if command_char != *query_char {
+            continue;
+        }
+
+        if let Some(previous_match_index) = last_match_index {
+            gap_count += command_index.saturating_sub(previous_match_index + 1);
+        }
+        if first_match_index.is_none() {
+            first_match_index = Some(command_index);
+        }
+        last_match_index = Some(command_index);
+        query_chars.next();
+    }
+
+    if query_chars.peek().is_some() {
+        return None;
+    }
+
+    Some(200 + first_match_index.unwrap_or(0) + gap_count)
 }
 
 /// Returns the stable `/reasoning` selection options.
@@ -1029,6 +1077,71 @@ mod tests {
     }
 
     #[test]
+    fn test_slash_suggestion_list_for_command_stage_fuzzy_matches_non_prefix_input() {
+        // Arrange
+        let composer = PromptComposerState::with_input_and_history(
+            InputState::with_text("/qc".to_string()),
+            AgentKind::ALL.to_vec(),
+            Vec::new(),
+        );
+
+        // Act
+        let suggestion_list = composer
+            .slash_suggestion_list(AgentKind::Codex)
+            .expect("expected suggestion list");
+
+        // Assert
+        let labels = suggestion_list
+            .items
+            .into_iter()
+            .map(|item| item.label)
+            .collect::<Vec<_>>();
+        assert_eq!(labels, vec!["/qe:check"]);
+    }
+
+    #[test]
+    fn test_slash_suggestion_list_for_command_stage_contains_matches_non_prefix_input() {
+        // Arrange
+        let composer = PromptComposerState::with_input_and_history(
+            InputState::with_text("/o".to_string()),
+            AgentKind::ALL.to_vec(),
+            Vec::new(),
+        );
+
+        // Act
+        let suggestion_list = composer
+            .slash_suggestion_list(AgentKind::Codex)
+            .expect("expected suggestion list");
+
+        // Assert
+        let labels = suggestion_list
+            .items
+            .into_iter()
+            .map(|item| item.label)
+            .collect::<Vec<_>>();
+        assert_eq!(labels, vec!["/model", "/reasoning"]);
+    }
+
+    #[test]
+    fn test_selected_slash_action_uses_fuzzy_matched_command() {
+        // Arrange
+        let composer = PromptComposerState::with_input_and_history(
+            InputState::with_text("/rsn".to_string()),
+            AgentKind::ALL.to_vec(),
+            Vec::new(),
+        );
+
+        // Act
+        let selection = composer.selected_slash_action(AgentKind::Codex);
+
+        // Assert
+        assert_eq!(
+            selection,
+            Some(PromptSuggestionSelection::Command("/reasoning"))
+        );
+    }
+
+    #[test]
     fn test_slash_suggestion_list_for_agent_stage_uses_available_agent_kinds() {
         // Arrange
         let mut composer = PromptComposerState::with_input_and_history(
@@ -1109,7 +1222,7 @@ mod tests {
         // Assert
         assert_eq!(
             selection,
-            Some(PromptSuggestionSelection::Command("/stats"))
+            Some(PromptSuggestionSelection::Command("/reasoning"))
         );
     }
 
@@ -1312,7 +1425,6 @@ mod tests {
             .expect("expected suggestion list");
 
         // Assert
-        assert_eq!(suggestion_list.items.len(), 1);
         assert_eq!(suggestion_list.items[0].label, "/apply");
         assert_eq!(
             suggestion_list.items[0].detail.as_deref(),

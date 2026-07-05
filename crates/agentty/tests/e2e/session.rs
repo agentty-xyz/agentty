@@ -1867,8 +1867,8 @@ fn apply_slash_command_unavailable_without_review_cache() -> E2eResult {
     Ok(())
 }
 
-/// Verify that `/qe:check` is exposed in the prompt slash-command menu as a
-/// first-class selectable command.
+/// Verify that `/qe:check` is exposed in the prompt slash-command menu when
+/// typed as a fuzzy command abbreviation.
 #[test]
 fn qe_check_slash_command_is_visible() -> E2eResult {
     // Arrange, Act, Assert
@@ -1884,12 +1884,12 @@ fn qe_check_slash_command_is_visible() -> E2eResult {
                     .press_key("Enter")
                     .wait_for_stable_frame(300, 5000)
                     .press_key("/")
-                    .write_text("q")
+                    .write_text("qc")
                     .wait_for_text("/qe:check", 3000)
                     .viewing_pause_ms(1500)
                     .capture_labeled(
                         "qe_check_slash_command_visible",
-                        "`/qe:check` appears in the slash-command picker",
+                        "`/qe:check` appears for fuzzy slash-command input",
                     )
             },
             |frame, _report| {
@@ -1898,6 +1898,45 @@ fn qe_check_slash_command_is_visible() -> E2eResult {
                 assertion::assert_text_in_region(
                     frame,
                     "Send the quality-enforcement check prompt.",
+                    &full,
+                );
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that slash-command filtering can match text contained inside a
+/// command name, not only command prefixes.
+#[test]
+fn model_slash_command_contains_match_is_visible() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("model_slash_command_contains_match")
+        .with_git()
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Regular", 5000)
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .press_key("/")
+                    .write_text("o")
+                    .wait_for_text("/model", 3000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "model_slash_command_contains_match",
+                        "`/model` appears for contained slash-command input",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "/model", &full);
+                assertion::assert_text_in_region(
+                    frame,
+                    "Choose an agent and model for this session.",
                     &full,
                 );
             },
