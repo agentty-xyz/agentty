@@ -8,6 +8,8 @@ use std::fmt;
 /// aligned with summary render ordering.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TranscriptNotice {
+    /// Automatic published-branch push result.
+    BranchPush,
     /// Automatic published-branch push failure.
     BranchPushError,
     /// Session auto-commit result.
@@ -52,6 +54,7 @@ impl TranscriptNotice {
     /// Returns the bracketed transcript prefix for this notice kind.
     pub(crate) const fn prefix(self) -> &'static str {
         match self {
+            Self::BranchPush => "[Branch Push]",
             Self::BranchPushError => "[Branch Push Error]",
             Self::Commit => "[Commit]",
             Self::CommitAssist => "[Commit Assist]",
@@ -89,6 +92,7 @@ impl TranscriptNotice {
 /// Prefixes that identify trailing transcript notices during session output
 /// rendering.
 pub(crate) const TRAILING_TRANSCRIPT_NOTICE_PREFIXES: &[&str] = &[
+    TranscriptNotice::BranchPush.prefix(),
     TranscriptNotice::BranchPushError.prefix(),
     TranscriptNotice::Commit.prefix(),
     TranscriptNotice::CommitAssist.prefix(),
@@ -145,6 +149,7 @@ mod tests {
     fn test_trailing_transcript_notice_prefixes_include_generated_labels() {
         // Arrange
         let generated_labels = [
+            TranscriptNotice::BranchPush,
             TranscriptNotice::BranchPushError,
             TranscriptNotice::Commit,
             TranscriptNotice::CommitAssist,

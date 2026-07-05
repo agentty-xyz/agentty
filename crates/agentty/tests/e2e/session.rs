@@ -135,6 +135,47 @@ fn seed_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+/// Seeds one published review-ready session whose latest auto-push completion
+/// is persisted as transcript output.
+fn seed_session_with_published_branch_push_notice(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let session_id = "published-push-0001";
+
+    common::seed_session(
+        env,
+        SessionSeed::regular(session_id, "gpt-5.5", "main", "Review")
+            .with_title("Published push notice"),
+    )?;
+
+    let runtime = common::seed_runtime()?;
+
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .update_session_published_upstream_ref(
+                session_id,
+                Some("origin/wt/published-push".to_string()),
+            )
+            .await?;
+        database
+            .sessions()
+            .append_session_message(
+                session_id,
+                SessionMessageKind::WorkflowNotice,
+                "\n[Branch Push] Auto-pushed published branch after completed turn.\n",
+            )
+            .await
+    })?;
+
+    // Match `session_folder()` so startup loads the seeded review session.
+    let worktree_name = &session_id[..8];
+    std::fs::create_dir_all(env.agentty_root.join("wt").join(worktree_name))?;
+
+    Ok(())
+}
+
 /// Seeds one session that is already generating focused review output so
 /// shortcut rendering can cover the transient `AgentReview` state.
 fn seed_agent_review_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
@@ -1517,6 +1558,44 @@ fn terminal_session_continue_opens_seeded_prompt() -> E2eResult {
                 assertion::assert_text_in_region(frame, "704de31d0f4b5a12", &full);
                 assertion::assert_text_in_region(frame, "commit as an initial context", &full);
                 assertion::assert_text_in_region(frame, "Type your message", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that completed published-branch auto-push feedback is rendered as
+/// transcript output rather than as a transient status line.
+#[test]
+fn published_branch_push_notice_renders_as_transcript_output() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("published_branch_push_notice")
+        .with_git()
+        .setup(seed_session_with_published_branch_push_notice)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_text("[Branch Push]", 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "published_branch_push_notice",
+                        "Published branch auto-push completion rendered in transcript output",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                let view_text = frame.text_in_region(&full);
+
+                assertion::assert_text_in_region(frame, "[Branch Push]", &full);
+                assert_eq!(
+                    view_text
+                        .matches("Auto-pushed published branch after completed turn.")
+                        .count(),
+                    1
+                );
             },
         )?;
 

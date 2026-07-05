@@ -726,20 +726,18 @@ impl Session {
         has_forge_context && matches!(self.status, Status::Review | Status::AgentReview)
     }
 
-    /// Returns one UI message describing the current published-branch sync
-    /// state when the session tracks an upstream branch.
+    /// Returns one transient UI message describing an active
+    /// published-branch sync when the session tracks an upstream branch.
     pub fn published_branch_sync_message(&self) -> Option<&'static str> {
         self.published_upstream_ref.as_ref()?;
 
         match self.published_branch_sync_status {
-            PublishedBranchSyncStatus::Idle => None,
+            PublishedBranchSyncStatus::Idle
+            | PublishedBranchSyncStatus::Succeeded
+            | PublishedBranchSyncStatus::Failed => None,
             PublishedBranchSyncStatus::InProgress => {
                 Some("Auto-pushing published branch after completed turn...")
             }
-            PublishedBranchSyncStatus::Succeeded => {
-                Some("Auto-pushed published branch after completed turn.")
-            }
-            PublishedBranchSyncStatus::Failed => Some("Published branch sync failed."),
         }
     }
 
@@ -2244,7 +2242,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
     }
 
     #[test]
-    fn test_published_branch_sync_message_returns_succeeded_copy() {
+    fn test_published_branch_sync_message_omits_succeeded_copy() {
         // Arrange
         let mut session = test_session(None);
         session.published_upstream_ref = Some("origin/wt/session-id".to_string());
@@ -2254,14 +2252,11 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
         let sync_message = session.published_branch_sync_message();
 
         // Assert
-        assert_eq!(
-            sync_message,
-            Some("Auto-pushed published branch after completed turn.")
-        );
+        assert_eq!(sync_message, None);
     }
 
     #[test]
-    fn test_published_branch_sync_message_returns_failed_copy() {
+    fn test_published_branch_sync_message_omits_failed_copy() {
         // Arrange
         let mut session = test_session(None);
         session.published_upstream_ref = Some("origin/wt/session-id".to_string());
@@ -2271,7 +2266,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
         let sync_message = session.published_branch_sync_message();
 
         // Assert
-        assert_eq!(sync_message, Some("Published branch sync failed."));
+        assert_eq!(sync_message, None);
     }
 
     #[test]

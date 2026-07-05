@@ -308,7 +308,7 @@ pub fn session_output_status_line(
 }
 
 /// Builds the published-branch sync status line appended after transcript
-/// content when auto-push state is available.
+/// content while an auto-push is in progress.
 pub fn session_output_published_branch_sync_line(session: &Session) -> Option<Line<'static>> {
     let sync_message = session.published_branch_sync_message()?;
 

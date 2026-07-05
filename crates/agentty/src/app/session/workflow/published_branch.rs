@@ -145,6 +145,18 @@ async fn run_published_branch_auto_push_task(input: PublishedBranchAutoPushInput
                 sync_linked_review_request_metadata_after_push(&input, metadata_sync_input).await;
             }
 
+            let message = TranscriptNotice::BranchPush
+                .format("Auto-pushed published branch after completed turn.");
+            SessionTaskService::append_session_output(
+                &input.output,
+                &input.db,
+                &input.app_event_tx,
+                &input.session_update_versions,
+                &input.session_id,
+                &message,
+            )
+            .await;
+
             let _ = input
                 .app_event_tx
                 .send(AppEvent::PublishedBranchSyncUpdated {

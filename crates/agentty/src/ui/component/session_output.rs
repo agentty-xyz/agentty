@@ -664,8 +664,8 @@ impl<'a> SessionOutput<'a> {
         None
     }
 
-    /// Appends one automatic published-branch sync status row when the latest
-    /// completed turn started, finished, or failed an auto-push.
+    /// Appends one automatic published-branch sync status row while the latest
+    /// completed turn is auto-pushing to a published branch.
     fn append_published_branch_sync_lines(
         lines: &mut Vec<Line<'static>>,
         session: &Session,
@@ -1249,6 +1249,7 @@ mod tests {
     use serde_json;
 
     use super::*;
+    use crate::domain::session::PublishedBranchSyncStatus;
     use crate::infra::agent::protocol::AgentResponseSummary;
 
     /// Builds one output-line context with defaults suitable for tests.
@@ -2126,6 +2127,42 @@ mod tests {
 
         // Assert
         assert!(text.contains(review_status_message));
+    }
+
+    /// Verifies completed published-branch pushes render through transcript
+    /// notices instead of appending a sticky synthetic status row.
+    #[test]
+    fn test_output_lines_uses_transcript_for_completed_published_branch_push() {
+        // Arrange
+        let mut session = session_fixture();
+        session.output =
+            "\n[Branch Push] Auto-pushed published branch after completed turn.\n".to_string();
+        session.published_branch_sync_status = PublishedBranchSyncStatus::Succeeded;
+        session.published_upstream_ref = Some("origin/wt/session-id".to_string());
+        session.status = Status::Review;
+
+        // Act
+        let lines = SessionOutput::output_lines_with_metadata(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            line_context(None, None, None),
+            None,
+        );
+        let text = lines
+            .lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert_eq!(lines.published_loader_line_index, None);
+        assert!(text.contains("[Branch Push]"));
+        assert_eq!(
+            text.matches("Auto-pushed published branch after completed turn.")
+                .count(),
+            1
+        );
     }
 
     /// Verifies focused-review fallback text is rendered literally instead of

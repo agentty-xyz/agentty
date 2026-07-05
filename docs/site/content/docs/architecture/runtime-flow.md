@@ -125,9 +125,11 @@ by `crates/agentty/src/ui/page/session_chat.rs` and
 `crates/agentty/src/ui/component/session_output.rs`. The durable transcript is the
 ordered `session_message` rows (typed `UserPrompt`, `AssistantAnswer`, `WorkflowNotice`,
 and `LegacyTranscript` rows); the component layers synthetic content on top at render
-time: the `session.summary` block, focused review text, the published-branch sync row,
-and the animated loader row. Structured clarification questions render in the bottom
-question panel (`AppMode::Question`), not inside the output component.
+time: the `session.summary` block, focused review text, the in-progress published-branch
+sync row, and the animated loader row. Completed published-branch auto-push results are
+persisted as `WorkflowNotice` transcript rows instead of synthetic render rows.
+Structured clarification questions render in the bottom question panel
+(`AppMode::Question`), not inside the output component.
 
 `App` owns one shared `RenderCacheStore` for markdown, diff, and session-output layout
 caches. Changes in this area should keep caches bounded and route layout/count helpers
@@ -159,7 +161,8 @@ render twice per frame.
    commit. The session title is synced from the commit text.
 1. If the session already tracks a published upstream branch and no chat messages are
    queued, a detached auto-push updates the remote branch and refreshes linked
-   review-request metadata when the commit message changed.
+   review-request metadata when the commit message changed, then appends the push result
+   as a durable transcript notice.
 1. Completed stacked-parent turns fan out `SessionCommand::Rebase` to review-ready
    materialized children so child branches replay onto the latest parent branch.
 1. The session size is refreshed and the final status becomes `Review` or `Question`
