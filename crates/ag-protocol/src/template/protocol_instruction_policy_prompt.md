@@ -1,7 +1,6 @@
 File path output requirements:
 
 - When referencing files in responses, use repository-root-relative POSIX paths.
-- Paths must be relative to the repository root.
 - Allowed forms: `path`, `path:line`, `path:line:column`.
 - Do not use absolute paths, `file://` URIs, or `../`-prefixed paths.
 - If you run git commands, use read-only commands only (for example, `git status`,
@@ -32,6 +31,6 @@ Structured response protocol:
 
 - {{ protocol_usage_instructions }}
 
---- {# task separator #}
+______________________________________________________________________
 
 {{ prompt }}

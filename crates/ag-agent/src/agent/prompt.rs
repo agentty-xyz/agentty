@@ -253,12 +253,12 @@ fn attachment_path_for_prompt(
 }
 
 /// Builds a Markdown code-fence delimiter long enough to safely wrap an
-/// arbitrary diff payload.
+/// arbitrary prompt payload.
 ///
 /// Returns a string of backticks whose length exceeds the longest run of
 /// consecutive backticks found anywhere in `content`, with a minimum length
 /// of three. This prevents a triple-backtick fence from being terminated
-/// prematurely when the diff itself contains Markdown fences (for example,
+/// prematurely when the payload itself contains Markdown fences (for example,
 /// when reviewing changes to Markdown or prompt-template files).
 pub fn diff_fence(content: &str) -> String {
     let mut max_run = 0usize;
@@ -412,7 +412,9 @@ mod tests {
         // Assert
         assert!(rendered_prompt.contains("File path output requirements:"));
         assert!(rendered_prompt.contains("repository-root-relative POSIX paths"));
-        assert!(rendered_prompt.contains("Paths must be relative to the repository root."));
+        assert!(
+            rendered_prompt.contains("Allowed forms: `path`, `path:line`, `path:line:column`.")
+        );
         assert!(rendered_prompt.contains("If you run git commands, use read-only commands only"));
         assert!(rendered_prompt.contains("Do not run mutating git commands"));
         assert!(rendered_prompt.contains("Quality check requirements:"));
@@ -428,7 +430,11 @@ mod tests {
         assert!(rendered_prompt.contains("Follow this JSON Schema exactly."));
         assert!(rendered_prompt.contains("Treat the JSON Schema titles and descriptions"));
         assert!(rendered_prompt.contains("Authoritative JSON Schema:"));
-        assert!(rendered_prompt.contains("---"));
+        assert!(
+            rendered_prompt
+                .contains("______________________________________________________________________")
+        );
+        assert!(!rendered_prompt.contains("{# task separator #}"));
         assert!(rendered_prompt.contains("For this session turn"));
         assert!(normalized_rendered_prompt.contains("Do not create commits"));
         assert!(normalized_rendered_prompt.contains("suggest creating commits"));
@@ -503,7 +509,10 @@ mod tests {
 
         // Assert
         assert!(rendered_prompt.contains("Structured response protocol:"));
-        assert!(rendered_prompt.contains("---"));
+        assert!(
+            rendered_prompt
+                .contains("______________________________________________________________________")
+        );
         assert!(rendered_prompt.contains("For this one-shot utility prompt"));
         assert!(rendered_prompt.contains(r#"{"answer":"...","questions":[],"summary":null}"#));
         assert!(rendered_prompt.contains("\"summary\""));
@@ -529,7 +538,8 @@ mod tests {
         // Assert
         assert!(prepared_prompt.contains("Structured response protocol:"));
         assert!(prepared_prompt.contains("previous output"));
-        assert!(prepared_prompt.ends_with("Continue edits"));
+        assert!(prepared_prompt.contains(r"\<user_prompt> Continue edits \</user_prompt>"));
+        assert!(prepared_prompt.ends_with(r"\</user_prompt>"));
     }
 
     #[test]
@@ -546,7 +556,12 @@ mod tests {
         // Assert
         assert!(rendered_prompt.contains("Protocol refresh reminder:"));
         assert!(rendered_prompt.contains("repository-root-relative POSIX paths"));
-        assert!(rendered_prompt.contains("read-only git commands"));
+        assert!(rendered_prompt.contains("If you run git commands, use read-only commands only."));
+        assert!(rendered_prompt.contains("Do not run mutating git commands."));
+        assert!(
+            rendered_prompt
+                .contains("______________________________________________________________________")
+        );
         assert!(!rendered_prompt.contains("Authoritative JSON Schema:"));
         assert!(rendered_prompt.ends_with(prompt));
     }

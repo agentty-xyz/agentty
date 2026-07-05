@@ -1721,7 +1721,9 @@ mod tests {
         // Assert
         assert!(prompt.contains("Failed to commit: merge conflict remains"));
         assert!(prompt.contains("return the required protocol JSON object"));
-        assert!(prompt.contains("`answer` field only"));
+        assert!(prompt.contains("was fixed in `answer`"));
+        assert!(prompt.contains("leave `questions` empty"));
+        assert!(prompt.contains("set `summary` to null"));
     }
 
     #[test]
@@ -1754,6 +1756,7 @@ mod tests {
         assert!(prompt.contains("Keep session commit accurate"));
         assert!(prompt.contains(diff));
         assert!(prompt.contains("required protocol JSON object"));
+        assert!(prompt.contains("Apply this precedence order"));
         assert!(prompt.contains("`.agents/skills/`"));
         assert!(!prompt.contains("`.gemini/skills/`"));
         assert!(!prompt.contains("Return one plain-text commit message"));

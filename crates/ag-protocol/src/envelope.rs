@@ -193,7 +193,9 @@ mod tests {
         // Assert
         assert!(rendered_prompt.contains("File path output requirements:"));
         assert!(rendered_prompt.contains("repository-root-relative POSIX paths"));
-        assert!(rendered_prompt.contains("Paths must be relative to the repository root."));
+        assert!(
+            rendered_prompt.contains("Allowed forms: `path`, `path:line`, `path:line:column`.")
+        );
         assert!(rendered_prompt.contains("If you run git commands, use read-only commands only"));
         assert!(rendered_prompt.contains("Do not run mutating git commands"));
         assert!(rendered_prompt.contains("Quality check requirements:"));
@@ -209,7 +211,11 @@ mod tests {
         assert!(rendered_prompt.contains("Follow this JSON Schema exactly."));
         assert!(rendered_prompt.contains("Treat the JSON Schema titles and descriptions"));
         assert!(rendered_prompt.contains("Authoritative JSON Schema:"));
-        assert!(rendered_prompt.contains("---"));
+        assert!(
+            rendered_prompt
+                .contains("______________________________________________________________________")
+        );
+        assert!(!rendered_prompt.contains("{# task separator #}"));
         assert!(rendered_prompt.contains("For this session turn"));
         assert!(normalized_rendered_prompt.contains("Do not create commits"));
         assert!(normalized_rendered_prompt.contains("suggest creating commits"));
@@ -284,7 +290,10 @@ mod tests {
 
         // Assert
         assert!(rendered_prompt.contains("Structured response protocol:"));
-        assert!(rendered_prompt.contains("---"));
+        assert!(
+            rendered_prompt
+                .contains("______________________________________________________________________")
+        );
         assert!(rendered_prompt.contains("For this one-shot utility prompt"));
         assert!(rendered_prompt.contains(r#"{"answer":"...","questions":[],"summary":null}"#));
         assert!(rendered_prompt.contains("\"summary\""));
@@ -324,7 +333,12 @@ mod tests {
         // Assert
         assert!(rendered_prompt.contains("Protocol refresh reminder:"));
         assert!(rendered_prompt.contains("repository-root-relative POSIX paths"));
-        assert!(rendered_prompt.contains("read-only git commands"));
+        assert!(rendered_prompt.contains("If you run git commands, use read-only commands only."));
+        assert!(rendered_prompt.contains("Do not run mutating git commands."));
+        assert!(
+            rendered_prompt
+                .contains("______________________________________________________________________")
+        );
         assert!(!rendered_prompt.contains("Authoritative JSON Schema:"));
         assert!(rendered_prompt.ends_with(prompt));
     }

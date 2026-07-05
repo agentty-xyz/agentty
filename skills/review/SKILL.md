@@ -5,26 +5,36 @@ description: Guide for reviewing code changes (uncommitted or on a branch), exis
 
 # Code Review Skill
 
-Use this skill when asked to review changes (uncommitted, staged, or committed on a feature branch), existing code files, or the overall project.
+Use this skill when asked to review changes (uncommitted, staged, or committed on a
+feature branch), existing code files, or the overall project.
 
 ## Workflow
 
 1. **Gather Context**
-   - For uncommitted/staged changes: Run `git diff HEAD` or `git diff --staged`.
-   - For a feature branch: Identify the base branch and run `git diff <base_branch>...HEAD`.
-   - For existing code: Use file reading and searching tools to inspect the files and project structure.
-   - Always verify the project's specific conventions and architectural guidelines (e.g., from `AGENTS.md`) to inform your review.
 
-2. **Analyze the Code**
-   - Check for adherence to project style guides (e.g., formatting, naming conventions, docstrings).
+   - For uncommitted/staged changes: Run `git diff HEAD` or `git diff --staged`.
+   - For a feature branch: Identify the base branch and run
+     `git diff <base_branch>...HEAD`.
+   - For existing code: Use file reading and searching tools to inspect the files and
+     project structure.
+   - Always verify the project's specific conventions and architectural guidelines
+     (e.g., from `AGENTS.md`) to inform your review.
+
+1. **Analyze the Code**
+
+   - Check for adherence to project style guides (e.g., formatting, naming conventions,
+     docstrings).
    - Evaluate logic correctness, test coverage, edge cases, and error handling.
-   - Look for security vulnerabilities, performance bottlenecks, and architectural issues.
+   - Look for security vulnerabilities, performance bottlenecks, and architectural
+     issues.
    - Ensure new dependencies or major changes align with project rules.
 
-3. **Generate the Review Report**
+1. **Generate the Review Report**
+
    - Structure your findings into a clear, categorized report.
    - Classify issues by severity: **Critical**, **High**, **Medium**, or **Low**.
-   - For each issue, provide a brief description and an exact, actionable recommendation or fix (including code snippets when applicable).
+   - For each issue, provide a brief description and an exact, actionable recommendation
+     or fix (including code snippets when applicable).
 
 ### Review Report Format
 

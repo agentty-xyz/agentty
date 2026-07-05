@@ -25,7 +25,6 @@ repos:
           - mdformat-gfm==1.0.0
         args: ['--wrap', '88']
         files: \.(md|markdown)$
-        exclude: ^skills/[^/]+/SKILL\.md$
       - id: djlint-reformat
         name: djlint reformat
         description: Format HTML files and embedded CSS blocks.

@@ -1,18 +1,25 @@
 Generate the canonical session commit message using the cumulative session diff below.
-Return the full response as the required protocol JSON object and put the plain-text
-commit message in the `answer` field only. Before writing the message, inspect
-repository commit-message guidance from relevant agent instruction files (`AGENTS.md`,
-`CLAUDE.md`, `GEMINI.md`) and relevant skills under shared or agent-specific skill
-directories (for example `skills/`, `.agents/skills/`, `.claude/skills/`, and
-`.codex/skills/`). Check the skill files that appear relevant to commit-message
-conventions when those paths exist. Use the most specific applicable repository guidance
-you find unless explicit user instructions in the diff request a different format.
+Return the full response as the required protocol JSON object. Put the plain-text commit
+message in `answer`, leave `questions` empty, and set `summary` to null.
+
+Before writing the message, inspect repository commit-message guidance from relevant
+agent instruction files (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`) and relevant skills
+under shared or agent-specific skill directories (for example `skills/`,
+`.agents/skills/`, `.claude/skills/`, and `.codex/skills/`). Check skill files that
+appear relevant to commit-message conventions when those paths exist.
+
+Apply this precedence order:
+
+1. Explicit user instructions in the diff request.
+1. The most specific applicable repository guidance you find.
+1. The default rules below.
 
 Rules:
 
 - The first line is the commit title and must be one line, concise, and in present
   simple tense.
-- Do not use Conventional Commit prefixes like `feat:` or `fix:`.
+- Do not use Conventional Commit prefixes like `feat:` or `fix:` unless higher-priority
+  user instructions or repository guidance require them.
 - If a body is needed, add one empty line after the title and then write the body text.
 - Body text must use present simple tense and use `-` bullets when listing multiple
   points.

@@ -2,9 +2,10 @@ Protocol refresh reminder:
 
 - Continue following the previously bootstrapped Agentty file-path and JSON response
   contract.
-- Keep file references repository-root-relative POSIX paths using only `path`,
-  `path:line`, or `path:line:column`.
-- Use read-only git commands only.
+- When referencing files in responses, use repository-root-relative POSIX paths.
+- Allowed forms: `path`, `path:line`, `path:line:column`.
+- If you run git commands, use read-only commands only.
+- Do not run mutating git commands.
 - {{ protocol_refresh_instructions }}
 
 ______________________________________________________________________

@@ -15,6 +15,8 @@ use crate::QuestionItem;
 /// templates so the prompt-level guidance and the server-side cap stay in
 /// sync automatically.
 pub(crate) const MAX_QUESTIONS: usize = 5;
+const QUESTIONS_FIELD_DESCRIPTION_TEMPLATE: &str =
+    include_str!("template/questions_field_description.md");
 
 /// Returns the canonical JSON Schema description for the `questions` field.
 ///
@@ -25,17 +27,9 @@ pub(crate) const MAX_QUESTIONS: usize = 5;
 /// so all schema-facing call sites must route through this helper to stay in
 /// sync.
 pub(crate) fn questions_field_description() -> String {
-    format!(
-        "Ordered clarification questions emitted for this turn. Emit at most {MAX_QUESTIONS} \
-         items, and use an empty array when no user input is required. Defaults to an empty array \
-         when omitted. Only ask questions that resolve a genuinely ambiguous requirement or an \
-         unresolved design decision that blocks progress. Do NOT ask permission or approval to \
-         perform agreed-upon work (for example, \"Should I commit the changes?\", \"Want me to \
-         push?\", \"Should I proceed?\", \"Ready for me to apply the fix?\"), satisfaction or \
-         sign-off check-ins (for example, \"Are you satisfied with the changes?\", \"Does this \
-         look good?\", \"Anything else you want me to adjust?\"), or rhetorical status \
-         confirmations. Execute the agreed work and report results in `answer` instead."
-    )
+    QUESTIONS_FIELD_DESCRIPTION_TEMPLATE
+        .trim_end()
+        .replace("{{ max_questions }}", &MAX_QUESTIONS.to_string())
 }
 
 /// Protocol-owned request family preserved across prompt submission and repair
@@ -249,5 +243,19 @@ mod tests {
 
         // Assert
         assert_eq!(questions.len(), MAX_QUESTIONS);
+    }
+
+    #[test]
+    /// Ensures the dynamic `questions` field description renders from the
+    /// checked-in prompt-schema template.
+    fn test_questions_field_description_renders_template_limit() {
+        // Arrange, Act
+        let description = questions_field_description();
+        let normalized_description = description.split_whitespace().collect::<Vec<_>>().join(" ");
+
+        // Assert
+        assert!(normalized_description.contains("Emit at most 5 items"));
+        assert!(normalized_description.contains("Execute the agreed work"));
+        assert!(!description.contains("{{ max_questions }}"));
     }
 }

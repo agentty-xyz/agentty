@@ -859,24 +859,25 @@ mod tests {
         // Act
         let prompt = TaskService::review_assist_prompt(review_diff, session_summary)
             .expect("review prompt should render");
+        let normalized_prompt = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
 
         // Assert
-        assert!(prompt.contains("put the Markdown review body in `answer`"));
-        assert!(prompt.contains("leave `questions` empty"));
-        assert!(prompt.contains("set `summary` to null"));
+        assert!(normalized_prompt.contains("Markdown review body in `answer`"));
+        assert!(normalized_prompt.contains("leave `questions` empty"));
+        assert!(normalized_prompt.contains("set `summary` to null"));
         assert!(!prompt.contains("Return Markdown only."));
         assert!(prompt.contains("You are in read-only review mode."));
         assert!(prompt.contains("Do not create, modify, rename, or delete files."));
         assert!(prompt.contains("You may browse the internet when needed."));
         assert!(prompt.contains("You may run non-editing CLI commands"));
-        assert!(prompt.contains("Use the surrounding Agentty protocol for file-reference"));
+        assert!(normalized_prompt.contains("Treat high severity as correctness"));
+        assert!(normalized_prompt.contains("concrete practical impact"));
         let fenced_diff = format!("```diff\n{review_diff}\n```");
         assert!(
             prompt.contains(&fenced_diff),
             "review prompt must wrap the diff in a ```diff``` fence so `@`-prefixed decorator \
              tokens are not misread as file mentions"
         );
-        assert!(prompt.contains("`@`-prefixed tokens inside the diff"));
     }
 
     #[test]

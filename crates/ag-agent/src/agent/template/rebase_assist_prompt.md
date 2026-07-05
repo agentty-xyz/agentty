@@ -1,6 +1,8 @@
 You are helping resolve git rebase conflicts while rebasing onto `{{ base_branch }}`.
 
-Resolve conflicts in only these files: {{ conflicted_files }}
+Resolve conflicts in only these files:
+
+{{ conflicted_files }}
 
 Requirements:
 
@@ -17,4 +19,5 @@ Requirements:
 - After editing, run the repository-defined quality checks needed for the resolved files
   and their affected dependencies or dependents. If targeted coverage is unclear, run
   the full repository test/check suite instead.
-- After editing, provide a short summary of what was resolved.
+- After editing, return the required protocol JSON object, put a short summary of what
+  was resolved in `answer`, leave `questions` empty, and set `summary` to null.

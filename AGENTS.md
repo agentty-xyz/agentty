@@ -504,8 +504,9 @@ Always wrap these code elements in backticks when referenced in prose:
 
 ## Runtime Prompts
 
-- Agent prompt templates live in `crates/ag-agent/src/agent/template/`. Inspect the
-  source templates directly when changing backend prompt behavior.
+- Agent prompt templates live in `crates/ag-agent/src/agent/template/`,
+  `crates/agentty/src/app/template/`, and `crates/ag-protocol/src/template/`. Inspect
+  the source templates directly when changing backend prompt behavior.
 
 ## Workspace Map
 

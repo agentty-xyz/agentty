@@ -282,7 +282,7 @@ mod tests {
 
         // Assert
         assert!(prompt.contains("repository-root-relative POSIX paths"));
-        assert!(prompt.contains("Paths must be relative to the repository root."));
+        assert!(prompt.contains("Allowed forms: `path`, `path:line`, `path:line:column`."));
         assert!(prompt.contains("summary"));
     }
 

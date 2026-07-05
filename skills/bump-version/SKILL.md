@@ -5,11 +5,11 @@ description: Guide for bumping project versions and running base release-prepara
 
 # Bump Version Workflow
 
-Use this skill when preparing a version bump for the project. The repository's
-current release flow is defined in `AGENTS.md`; this skill only covers choosing
-the bump, updating version files, and running the baseline validations that make
-the version-bump change ready for normal review. Do not duplicate commit, tag,
-push, or pull workflow steps here.
+Use this skill when preparing a version bump for the project. The repository's current
+release flow is defined in `AGENTS.md`; this skill only covers choosing the bump,
+updating version files, and running the baseline validations that make the version-bump
+change ready for normal review. Do not duplicate commit, tag, push, or pull workflow
+steps here.
 
 ## Workflow
 

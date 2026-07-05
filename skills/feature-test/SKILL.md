@@ -5,33 +5,39 @@ description: Guide for creating E2E feature tests with VHS GIF generation and Zo
 
 # Feature Test Skill
 
-Use this skill when adding a new visible UI feature that is user-facing and demonstrable in a PTY scenario. The workflow produces three artifacts from one test:
+Use this skill when adding a new visible UI feature that is user-facing and demonstrable
+in a PTY scenario. The workflow produces three artifacts from one test:
 
 1. An E2E test in `crates/agentty/tests/e2e/`.
-2. A feature GIF in `docs/site/static/features/`.
-3. A Zola content page in `docs/site/content/features/`.
+1. A feature GIF in `docs/site/static/features/`.
+1. A Zola content page in `docs/site/content/features/`.
 
 ## When to Use
 
 A feature test is warranted when **all three** criteria are met:
 
-- **Visible UI behavior change** — the feature renders something new or different on screen.
-- **User-facing** — an end user can trigger or observe the behavior through normal interaction.
-- **Demonstrable in a scenario** — the behavior can be captured in a short PTY recording without live agent backends.
+- **Visible UI behavior change** — the feature renders something new or different on
+  screen.
+- **User-facing** — an end user can trigger or observe the behavior through normal
+  interaction.
+- **Demonstrable in a scenario** — the behavior can be captured in a short PTY recording
+  without live agent backends.
 
-Skip this skill for internal refactors, backend-only changes, or features that require a running agent to demonstrate.
+Skip this skill for internal refactors, backend-only changes, or features that require a
+running agent to demonstrate.
 
 ## Naming Convention
 
 A single name flows through the entire pipeline:
 
-| Artifact | Path |
-|----------|------|
+| Artifact      | Path                                                    |
+| ------------- | ------------------------------------------------------- |
 | Test function | `test_{name}` in `crates/agentty/tests/e2e/{module}.rs` |
-| GIF file | `docs/site/static/features/{name}.gif` |
-| Zola page | `docs/site/content/features/{name}.md` |
+| GIF file      | `docs/site/static/features/{name}.gif`                  |
+| Zola page     | `docs/site/content/features/{name}.md`                  |
 
-Choose a short, descriptive `snake_case` name that describes the feature (e.g., `session_creation`, `help_overlay`, `tab_switch`).
+Choose a short, descriptive `snake_case` name that describes the feature (e.g.,
+`session_creation`, `help_overlay`, `tab_switch`).
 
 ## Workflow
 
@@ -44,11 +50,15 @@ Place the test in the E2E module that best matches the feature area:
 - `confirmation.rs` — confirmation dialogs.
 - `project.rs` — project page and project-related flows.
 
-If no existing module fits, create a new one and register it in `crates/agentty/tests/e2e/main.rs`.
+If no existing module fits, create a new one and register it in
+`crates/agentty/tests/e2e/main.rs`.
 
 ### 2. Write the test using `FeatureTest`
 
-Use the `FeatureTest` builder from `crates/agentty/tests/e2e/common.rs`. This is the preferred pattern — it handles `TempDir` and `BuilderEnv` creation, scenario execution, GIF generation with content-hash caching, and optional Zola page creation in a single declarative chain.
+Use the `FeatureTest` builder from `crates/agentty/tests/e2e/common.rs`. This is the
+preferred pattern — it handles `TempDir` and `BuilderEnv` creation, scenario execution,
+GIF generation with content-hash caching, and optional Zola page creation in a single
+declarative chain.
 
 ```rust
 use testty::assertion;
@@ -92,9 +102,12 @@ fn test_{name}() {
 #### `FeatureTest` builder methods
 
 - **`new(name)`** — set the feature name (used for GIF filename and Zola page).
-- **`.with_git()`** — initialize a git repo in the workdir (required for session/worktree features).
-- **`.zola(title, description, weight)`** — enable Zola page auto-generation with the given frontmatter fields. The page is written only if it does not already exist.
-- **`.run(build_scenario, assert)`** — execute the scenario, run assertions, and generate the GIF.
+- **`.with_git()`** — initialize a git repo in the workdir (required for
+  session/worktree features).
+- **`.zola(title, description, weight)`** — enable Zola page auto-generation with the
+  given frontmatter fields. The page is written only if it does not already exist.
+- **`.run(build_scenario, assert)`** — execute the scenario, run assertions, and
+  generate the GIF.
 
 #### Common `Journey` helpers
 
@@ -106,11 +119,14 @@ Reuse the shared journey builders from `common.rs` instead of repeating step seq
 - `open_quit_dialog()` — press `q` and wait.
 - `open_help_overlay()` — press `?` and wait.
 - `create_session_and_return_to_list()` — full session creation flow.
-- `create_session_with_prompt_and_return_to_list(prompt)` — session creation with a custom prompt.
+- `create_session_with_prompt_and_return_to_list(prompt)` — session creation with a
+  custom prompt.
 
 ### 3. Verify the Zola page
 
-If you used `.zola(...)`, `FeatureTest` auto-generates the content page at `docs/site/content/features/{name}.md` on first run. The generated page uses this frontmatter:
+If you used `.zola(...)`, `FeatureTest` auto-generates the content page at
+`docs/site/content/features/{name}.md` on first run. The generated page uses this
+frontmatter:
 
 ```toml
 +++
@@ -123,7 +139,8 @@ gif = "{name}.gif"
 +++
 ```
 
-The `features.html` template auto-discovers all pages in `content/features/` sorted by `weight`. No manual template edits are needed.
+The `features.html` template auto-discovers all pages in `content/features/` sorted by
+`weight`. No manual template edits are needed.
 
 ### 4. Run and verify
 
@@ -135,19 +152,30 @@ prek run test-agentty-e2e --all-files --hook-stage manual
 prek run zola-check --all-files --hook-stage manual
 ```
 
-The GIF is generated only when VHS is installed. On machines without VHS the test still runs and asserts correctly — GIF generation is gracefully skipped.
+The GIF is generated only when VHS is installed. On machines without VHS the test still
+runs and asserts correctly — GIF generation is gracefully skipped.
 
 The `TESTTY_GIF_MODE` env var selects the freshness mode used by `FeatureTest`:
 
-- unset / `generate` / `generate-if-stale` (default) — regenerate when the on-disk hash sidecar is missing or stale, otherwise reuse the committed GIF.
-- `check` / `check-only` — compute the would-be hash and compare it to the on-disk sidecar without invoking VHS or touching the GIF output directory. The harness fails the test on `GifStatus::Stale` and surfaces the current/committed hashes in the error so CI catches drift.
-- `force` / `always` / `always-generate` — bypass the hash cache and re-run VHS unconditionally. VHS must be installed: a missing VHS binary fails the test instead of being silently skipped, because regeneration was explicitly requested.
+- unset / `generate` / `generate-if-stale` (default) — regenerate when the on-disk hash
+  sidecar is missing or stale, otherwise reuse the committed GIF.
+- `check` / `check-only` — compute the would-be hash and compare it to the on-disk
+  sidecar without invoking VHS or touching the GIF output directory. The harness fails
+  the test on `GifStatus::Stale` and surfaces the current/committed hashes in the error
+  so CI catches drift.
+- `force` / `always` / `always-generate` — bypass the hash cache and re-run VHS
+  unconditionally. VHS must be installed: a missing VHS binary fails the test instead of
+  being silently skipped, because regeneration was explicitly requested.
 
-Run `prek run zola-check --all-files --hook-stage manual` after the test to catch broken frontmatter or template integration before the page reaches CI. This requires Zola to be installed locally — if unavailable, CI catches it via the `pages.yml` workflow.
+Run `prek run zola-check --all-files --hook-stage manual` after the test to catch broken
+frontmatter or template integration before the page reaches CI. This requires Zola to be
+installed locally — if unavailable, CI catches it via the `pages.yml` workflow.
 
 ## Legacy Pattern
 
-Older tests manage `TempDir`, `BuilderEnv`, `Scenario`, and `save_feature_gif` manually instead of using `FeatureTest`. This pattern still works but is not recommended for new tests. Prefer `FeatureTest` for all new feature tests.
+Older tests manage `TempDir`, `BuilderEnv`, `Scenario`, and `save_feature_gif` manually
+instead of using `FeatureTest`. This pattern still works but is not recommended for new
+tests. Prefer `FeatureTest` for all new feature tests.
 
 ```rust
 #[test]
@@ -175,15 +203,20 @@ fn legacy_example() {
 }
 ```
 
-When using the legacy pattern, create the Zola page manually at `docs/site/content/features/{name}.md`.
+When using the legacy pattern, create the Zola page manually at
+`docs/site/content/features/{name}.md`.
 
 ## Checklist
 
 - [ ] Feature name follows `snake_case` naming convention.
-- [ ] Test uses `FeatureTest` builder (preferred) or the legacy `Scenario` + `save_feature_gif` pattern.
+- [ ] Test uses `FeatureTest` builder (preferred) or the legacy `Scenario` +
+  `save_feature_gif` pattern.
 - [ ] `.with_git()` is set if the feature requires session creation or worktrees.
 - [ ] `.zola(...)` is set with a clear title, description, and appropriate weight.
-- [ ] Test includes `// Arrange`, `// Act`, and `// Assert` comments (or combined `// Arrange, Act, Assert` for declarative builders).
+- [ ] Test includes `// Arrange`, `// Act`, and `// Assert` comments (or combined
+  `// Arrange, Act, Assert` for declarative builders).
 - [ ] Assertions verify visible UI text or state, not internal implementation details.
-- [ ] E2E feature suite passes with `prek run test-agentty-e2e --all-files --hook-stage manual`.
-- [ ] Zola site validates with `prek run zola-check --all-files --hook-stage manual` (when `.zola(...)` is used).
+- [ ] E2E feature suite passes with
+  `prek run test-agentty-e2e --all-files --hook-stage manual`.
+- [ ] Zola site validates with `prek run zola-check --all-files --hook-stage manual`
+  (when `.zola(...)` is used).
