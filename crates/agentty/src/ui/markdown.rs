@@ -183,56 +183,15 @@ pub fn render_markdown(text: &str, width: usize) -> Vec<Line<'static>> {
     let mut line_index = 0;
 
     while line_index < raw_lines.len() {
-        let raw_line = raw_lines[line_index];
-        if handle_prompt_block_line(
-            raw_line,
+        line_index = render_markdown_input_line(
+            &raw_lines,
+            line_index,
             width,
             &mut block_state,
             &mut is_user_prompt_block,
             &mut active_prompt_block_kind,
             &mut rendered_lines,
-        ) {
-            line_index += 1;
-            continue;
-        }
-
-        if matches!(block_state, BlockState::Paragraph)
-            && is_mermaid_fence(raw_line)
-            && let Some((diagram_lines, next_line_index)) =
-                render_mermaid_block(&raw_lines, line_index, width)
-        {
-            rendered_lines.extend(diagram_lines);
-            line_index = next_line_index;
-
-            continue;
-        }
-
-        if is_fence_delimiter(raw_line) {
-            block_state = match block_state {
-                BlockState::Paragraph => opening_fence_block_state(raw_line),
-                BlockState::FencedCode | BlockState::FencedStats => BlockState::Paragraph,
-            };
-
-            line_index += 1;
-            continue;
-        }
-
-        if matches!(block_state, BlockState::Paragraph)
-            && let Some((table, next_line_index)) = parse_markdown_table(&raw_lines, line_index)
-        {
-            rendered_lines.extend(render_markdown_table(&table, width));
-            line_index = next_line_index;
-
-            continue;
-        }
-
-        match block_state {
-            BlockState::Paragraph => rendered_lines.extend(render_markdown_line(raw_line, width)),
-            BlockState::FencedCode => rendered_lines.extend(render_code_line(raw_line, width)),
-            BlockState::FencedStats => rendered_lines.extend(render_stats_line(raw_line, width)),
-        }
-
-        line_index += 1;
+        );
     }
 
     if is_user_prompt_block {
@@ -244,6 +203,115 @@ pub fn render_markdown(text: &str, width: usize) -> Vec<Line<'static>> {
     }
 
     rendered_lines
+}
+
+/// Renders or consumes one markdown input line and returns the next line index.
+fn render_markdown_input_line(
+    raw_lines: &[&str],
+    line_index: usize,
+    width: usize,
+    block_state: &mut BlockState,
+    is_user_prompt_block: &mut bool,
+    active_prompt_block_kind: &mut PromptBlockKind,
+    rendered_lines: &mut Vec<Line<'static>>,
+) -> usize {
+    let raw_line = raw_lines[line_index];
+
+    if handle_prompt_block_line(
+        raw_line,
+        width,
+        block_state,
+        is_user_prompt_block,
+        active_prompt_block_kind,
+        rendered_lines,
+    ) {
+        return line_index + 1;
+    }
+
+    if let Some(next_line_index) =
+        render_mermaid_block_line(raw_lines, line_index, width, block_state, rendered_lines)
+    {
+        return next_line_index;
+    }
+
+    if update_fence_state(raw_line, block_state) {
+        return line_index + 1;
+    }
+
+    if let Some(next_line_index) =
+        render_markdown_table_line(raw_lines, line_index, width, *block_state, rendered_lines)
+    {
+        return next_line_index;
+    }
+
+    render_markdown_block_line(raw_line, width, *block_state, rendered_lines);
+
+    line_index + 1
+}
+
+/// Renders a mermaid block when the current paragraph line opens one.
+fn render_mermaid_block_line(
+    raw_lines: &[&str],
+    line_index: usize,
+    width: usize,
+    block_state: &BlockState,
+    rendered_lines: &mut Vec<Line<'static>>,
+) -> Option<usize> {
+    let raw_line = raw_lines[line_index];
+    if !matches!(block_state, BlockState::Paragraph) || !is_mermaid_fence(raw_line) {
+        return None;
+    }
+
+    let (diagram_lines, next_line_index) = render_mermaid_block(raw_lines, line_index, width)?;
+    rendered_lines.extend(diagram_lines);
+
+    Some(next_line_index)
+}
+
+/// Toggles fenced block state and returns whether the line was consumed.
+fn update_fence_state(raw_line: &str, block_state: &mut BlockState) -> bool {
+    if !is_fence_delimiter(raw_line) {
+        return false;
+    }
+
+    *block_state = match block_state {
+        BlockState::Paragraph => opening_fence_block_state(raw_line),
+        BlockState::FencedCode | BlockState::FencedStats => BlockState::Paragraph,
+    };
+
+    true
+}
+
+/// Renders a pipe table when the current paragraph line starts one.
+fn render_markdown_table_line(
+    raw_lines: &[&str],
+    line_index: usize,
+    width: usize,
+    block_state: BlockState,
+    rendered_lines: &mut Vec<Line<'static>>,
+) -> Option<usize> {
+    if !matches!(block_state, BlockState::Paragraph) {
+        return None;
+    }
+
+    let (table, next_line_index) = parse_markdown_table(raw_lines, line_index)?;
+    rendered_lines.extend(render_markdown_table(&table, width));
+
+    Some(next_line_index)
+}
+
+/// Renders one non-structural markdown line for the active block state.
+fn render_markdown_block_line(
+    raw_line: &str,
+    width: usize,
+    block_state: BlockState,
+    rendered_lines: &mut Vec<Line<'static>>,
+) {
+    match block_state {
+        BlockState::Paragraph => rendered_lines.extend(render_markdown_line(raw_line, width)),
+        BlockState::FencedCode => rendered_lines.extend(render_code_line(raw_line, width)),
+        BlockState::FencedStats => rendered_lines.extend(render_stats_line(raw_line, width)),
+    }
 }
 
 /// Renders prompt-block lines and returns whether the line was consumed.

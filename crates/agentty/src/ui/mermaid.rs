@@ -955,8 +955,52 @@ struct TopDownEdgePath {
 
 /// Draws a top-down diagram: layers as rows, edges as vertical elbows.
 fn draw_top_down(graph: &MermaidGraph, layout: &GraphLayout) -> MermaidDiagram {
-    let box_widths: Vec<usize> = graph.nodes.iter().map(top_down_node_width).collect();
-    let layer_widths: Vec<usize> = layout
+    let box_widths = top_down_node_widths(graph);
+    let layer_widths = top_down_layer_widths(layout, &box_widths);
+    let canvas_width = layer_widths.iter().copied().max().unwrap_or(1);
+
+    let region_edges = graph_region_edges(graph, layout);
+    let (layer_top_rows, canvas_height) = top_down_layer_top_rows(layout, &region_edges);
+    let mut canvas = Canvas::new(canvas_width, canvas_height);
+    let box_columns = draw_top_down_nodes(
+        &mut canvas,
+        graph,
+        layout,
+        &box_widths,
+        &layer_widths,
+        &layer_top_rows,
+        canvas_width,
+    );
+    let edge_paths = top_down_edge_paths(
+        graph,
+        &region_edges,
+        &layer_top_rows,
+        &box_columns,
+        &box_widths,
+    );
+
+    draw_top_down_edge_paths(&mut canvas, &edge_paths);
+
+    canvas.into_diagram()
+}
+
+/// Returns the rendered width of each top-down graph node.
+fn top_down_node_widths(graph: &MermaidGraph) -> Vec<usize> {
+    graph.nodes.iter().map(top_down_node_width).collect()
+}
+
+/// Returns the width reserved for one top-down graph node.
+fn top_down_node_width(node: &MermaidNode) -> usize {
+    if node.is_hidden {
+        return 1;
+    }
+
+    UnicodeWidthStr::width(node.label.as_str()) + 4
+}
+
+/// Returns the rendered width of each top-down graph layer.
+fn top_down_layer_widths(layout: &GraphLayout, box_widths: &[usize]) -> Vec<usize> {
+    layout
         .layer_members
         .iter()
         .map(|members| {
@@ -966,18 +1010,31 @@ fn draw_top_down(graph: &MermaidGraph, layout: &GraphLayout) -> MermaidDiagram {
                 .sum::<usize>()
                 + LAYER_GAP_COLUMNS * members.len().saturating_sub(1)
         })
-        .collect();
-    let canvas_width = layer_widths.iter().copied().max().unwrap_or(1);
+        .collect()
+}
 
-    let layer_count = layout.layer_members.len();
-    let mut region_edges: Vec<Vec<&MermaidEdge>> = vec![Vec::new(); layer_count.saturating_sub(1)];
+/// Groups graph edges by the routing region after their source layer.
+fn graph_region_edges<'graph>(
+    graph: &'graph MermaidGraph,
+    layout: &GraphLayout,
+) -> Vec<Vec<&'graph MermaidEdge>> {
+    let mut region_edges = vec![Vec::new(); layout.layer_members.len().saturating_sub(1)];
     for edge in &graph.edges {
         region_edges[layout.node_layers[edge.from_index]].push(edge);
     }
 
+    region_edges
+}
+
+/// Returns top row coordinates for top-down layers and the canvas height.
+fn top_down_layer_top_rows(
+    layout: &GraphLayout,
+    region_edges: &[Vec<&MermaidEdge>],
+) -> (Vec<usize>, usize) {
+    let layer_count = layout.layer_members.len();
     let mut layer_top_rows = Vec::with_capacity(layer_count);
     let mut next_row = 0;
-    for (layer_index, _) in layout.layer_members.iter().enumerate() {
+    for layer_index in 0..layer_count {
         layer_top_rows.push(next_row);
         next_row += NODE_BOX_HEIGHT;
         if layer_index + 1 < layer_count {
@@ -985,17 +1042,29 @@ fn draw_top_down(graph: &MermaidGraph, layout: &GraphLayout) -> MermaidDiagram {
         }
     }
 
-    let mut canvas = Canvas::new(canvas_width, next_row);
+    (layer_top_rows, next_row)
+}
+
+/// Draws top-down nodes and returns the left column of each node box.
+fn draw_top_down_nodes(
+    canvas: &mut Canvas,
+    graph: &MermaidGraph,
+    layout: &GraphLayout,
+    box_widths: &[usize],
+    layer_widths: &[usize],
+    layer_top_rows: &[usize],
+    canvas_width: usize,
+) -> Vec<usize> {
     let mut box_columns = vec![0_usize; graph.nodes.len()];
     for (layer_index, members) in layout.layer_members.iter().enumerate() {
         let mut cursor_column = (canvas_width - layer_widths[layer_index]) / 2;
         for node_index in members {
             box_columns[*node_index] = cursor_column;
             if graph.nodes[*node_index].is_hidden {
-                draw_top_down_hidden_node(&mut canvas, cursor_column, layer_top_rows[layer_index]);
+                draw_top_down_hidden_node(canvas, cursor_column, layer_top_rows[layer_index]);
             } else {
                 draw_node_box(
-                    &mut canvas,
+                    canvas,
                     &graph.nodes[*node_index],
                     cursor_column,
                     layer_top_rows[layer_index],
@@ -1006,6 +1075,17 @@ fn draw_top_down(graph: &MermaidGraph, layout: &GraphLayout) -> MermaidDiagram {
         }
     }
 
+    box_columns
+}
+
+/// Builds routed top-down edge geometry for every graph edge.
+fn top_down_edge_paths(
+    graph: &MermaidGraph,
+    region_edges: &[Vec<&MermaidEdge>],
+    layer_top_rows: &[usize],
+    box_columns: &[usize],
+    box_widths: &[usize],
+) -> Vec<TopDownEdgePath> {
     let mut edge_paths = Vec::with_capacity(graph.edges.len());
     for (layer_index, edges) in region_edges.iter().enumerate() {
         let region_top = layer_top_rows[layer_index] + NODE_BOX_HEIGHT;
@@ -1024,13 +1104,18 @@ fn draw_top_down(graph: &MermaidGraph, layout: &GraphLayout) -> MermaidDiagram {
         }
     }
 
-    for edge_path in &edge_paths {
-        draw_top_down_edge_connectors(&mut canvas, edge_path);
+    edge_paths
+}
+
+/// Draws routed top-down edge connectors, labels, and markers.
+fn draw_top_down_edge_paths(canvas: &mut Canvas, edge_paths: &[TopDownEdgePath]) {
+    for edge_path in edge_paths {
+        draw_top_down_edge_connectors(canvas, edge_path);
     }
-    for edge_path in &edge_paths {
-        draw_top_down_edge_label(&mut canvas, edge_path);
+    for edge_path in edge_paths {
+        draw_top_down_edge_label(canvas, edge_path);
     }
-    for edge_path in &edge_paths {
+    for edge_path in edge_paths {
         canvas.try_put_marker(
             edge_path.source_column,
             edge_path.region_top,
@@ -1042,17 +1127,6 @@ fn draw_top_down(graph: &MermaidGraph, layout: &GraphLayout) -> MermaidDiagram {
             edge_path.target_marker,
         );
     }
-
-    canvas.into_diagram()
-}
-
-/// Returns the width reserved for one top-down graph node.
-fn top_down_node_width(node: &MermaidNode) -> usize {
-    if node.is_hidden {
-        return 1;
-    }
-
-    UnicodeWidthStr::width(node.label.as_str()) + 4
 }
 
 /// Draws the through-connector for a hidden top-down routing node.
@@ -1141,8 +1215,54 @@ struct LeftRightEdgePath {
 
 /// Draws a left-right diagram: layers as columns, edges as horizontal elbows.
 fn draw_left_right(graph: &MermaidGraph, layout: &GraphLayout) -> MermaidDiagram {
-    let node_widths: Vec<usize> = graph.nodes.iter().map(left_right_node_width).collect();
-    let layer_widths: Vec<usize> = layout
+    let node_widths = left_right_node_widths(graph);
+    let layer_widths = left_right_layer_widths(layout, &node_widths);
+    let layer_heights = left_right_layer_heights(layout);
+    let canvas_height = layer_heights.iter().copied().max().unwrap_or(1);
+
+    let region_edges = graph_region_edges(graph, layout);
+    let (layer_left_columns, canvas_width) =
+        left_right_layer_left_columns(layout, &region_edges, &layer_widths);
+    let mut canvas = Canvas::new(canvas_width, canvas_height);
+    let box_rows = draw_left_right_nodes(
+        &mut canvas,
+        graph,
+        layout,
+        &layer_widths,
+        &layer_heights,
+        &layer_left_columns,
+        canvas_height,
+    );
+    let edge_paths = left_right_edge_paths(
+        graph,
+        &region_edges,
+        &layer_left_columns,
+        &layer_widths,
+        &box_rows,
+    );
+
+    draw_left_right_edge_paths(&mut canvas, &edge_paths);
+
+    canvas.into_diagram()
+}
+
+/// Returns the rendered width of each left-right graph node.
+fn left_right_node_widths(graph: &MermaidGraph) -> Vec<usize> {
+    graph.nodes.iter().map(left_right_node_width).collect()
+}
+
+/// Returns the width reserved for one left-right graph node.
+fn left_right_node_width(node: &MermaidNode) -> usize {
+    if node.is_hidden {
+        return 1;
+    }
+
+    UnicodeWidthStr::width(node.label.as_str()) + 4
+}
+
+/// Returns the rendered width of each left-right graph layer.
+fn left_right_layer_widths(layout: &GraphLayout, node_widths: &[usize]) -> Vec<usize> {
+    layout
         .layer_members
         .iter()
         .map(|members| {
@@ -1152,25 +1272,30 @@ fn draw_left_right(graph: &MermaidGraph, layout: &GraphLayout) -> MermaidDiagram
                 .max()
                 .unwrap_or(1)
         })
-        .collect();
-    let layer_heights: Vec<usize> = layout
+        .collect()
+}
+
+/// Returns the rendered height of each left-right graph layer.
+fn left_right_layer_heights(layout: &GraphLayout) -> Vec<usize> {
+    layout
         .layer_members
         .iter()
         .map(|members| {
             members.len() * NODE_BOX_HEIGHT + LAYER_GAP_ROWS * members.len().saturating_sub(1)
         })
-        .collect();
-    let canvas_height = layer_heights.iter().copied().max().unwrap_or(1);
+        .collect()
+}
 
+/// Returns left column coordinates for left-right layers and the canvas width.
+fn left_right_layer_left_columns(
+    layout: &GraphLayout,
+    region_edges: &[Vec<&MermaidEdge>],
+    layer_widths: &[usize],
+) -> (Vec<usize>, usize) {
     let layer_count = layout.layer_members.len();
-    let mut region_edges: Vec<Vec<&MermaidEdge>> = vec![Vec::new(); layer_count.saturating_sub(1)];
-    for edge in &graph.edges {
-        region_edges[layout.node_layers[edge.from_index]].push(edge);
-    }
-
     let mut layer_left_columns = Vec::with_capacity(layer_count);
     let mut next_column = 0;
-    for (layer_index, _) in layout.layer_members.iter().enumerate() {
+    for layer_index in 0..layer_count {
         layer_left_columns.push(next_column);
         next_column += layer_widths[layer_index];
         if layer_index + 1 < layer_count {
@@ -1178,7 +1303,19 @@ fn draw_left_right(graph: &MermaidGraph, layout: &GraphLayout) -> MermaidDiagram
         }
     }
 
-    let mut canvas = Canvas::new(next_column, canvas_height);
+    (layer_left_columns, next_column)
+}
+
+/// Draws left-right nodes and returns the top row of each node box.
+fn draw_left_right_nodes(
+    canvas: &mut Canvas,
+    graph: &MermaidGraph,
+    layout: &GraphLayout,
+    layer_widths: &[usize],
+    layer_heights: &[usize],
+    layer_left_columns: &[usize],
+    canvas_height: usize,
+) -> Vec<usize> {
     let mut box_rows = vec![0_usize; graph.nodes.len()];
     for (layer_index, members) in layout.layer_members.iter().enumerate() {
         let mut cursor_row = (canvas_height - layer_heights[layer_index]) / 2;
@@ -1186,14 +1323,14 @@ fn draw_left_right(graph: &MermaidGraph, layout: &GraphLayout) -> MermaidDiagram
             box_rows[*node_index] = cursor_row;
             if graph.nodes[*node_index].is_hidden {
                 draw_left_right_hidden_node(
-                    &mut canvas,
+                    canvas,
                     layer_left_columns[layer_index],
                     cursor_row + 1,
                     layer_widths[layer_index],
                 );
             } else {
                 draw_node_box(
-                    &mut canvas,
+                    canvas,
                     &graph.nodes[*node_index],
                     layer_left_columns[layer_index],
                     cursor_row,
@@ -1204,6 +1341,17 @@ fn draw_left_right(graph: &MermaidGraph, layout: &GraphLayout) -> MermaidDiagram
         }
     }
 
+    box_rows
+}
+
+/// Builds routed left-right edge geometry for every graph edge.
+fn left_right_edge_paths(
+    graph: &MermaidGraph,
+    region_edges: &[Vec<&MermaidEdge>],
+    layer_left_columns: &[usize],
+    layer_widths: &[usize],
+    box_rows: &[usize],
+) -> Vec<LeftRightEdgePath> {
     let mut edge_paths = Vec::with_capacity(graph.edges.len());
     for (layer_index, edges) in region_edges.iter().enumerate() {
         let region_left = layer_left_columns[layer_index] + layer_widths[layer_index];
@@ -1222,13 +1370,18 @@ fn draw_left_right(graph: &MermaidGraph, layout: &GraphLayout) -> MermaidDiagram
         }
     }
 
-    for edge_path in &edge_paths {
-        draw_left_right_edge_connectors(&mut canvas, edge_path);
+    edge_paths
+}
+
+/// Draws routed left-right edge connectors, labels, and markers.
+fn draw_left_right_edge_paths(canvas: &mut Canvas, edge_paths: &[LeftRightEdgePath]) {
+    for edge_path in edge_paths {
+        draw_left_right_edge_connectors(canvas, edge_path);
     }
-    for edge_path in &edge_paths {
-        draw_left_right_edge_label(&mut canvas, edge_path);
+    for edge_path in edge_paths {
+        draw_left_right_edge_label(canvas, edge_path);
     }
-    for edge_path in &edge_paths {
+    for edge_path in edge_paths {
         canvas.try_put_marker(
             edge_path.region_left,
             edge_path.source_row,
@@ -1240,17 +1393,6 @@ fn draw_left_right(graph: &MermaidGraph, layout: &GraphLayout) -> MermaidDiagram
             edge_path.target_marker,
         );
     }
-
-    canvas.into_diagram()
-}
-
-/// Returns the width reserved for one left-right graph node.
-fn left_right_node_width(node: &MermaidNode) -> usize {
-    if node.is_hidden {
-        return 1;
-    }
-
-    UnicodeWidthStr::width(node.label.as_str()) + 4
 }
 
 /// Draws the through-connector for a hidden left-right routing node.
