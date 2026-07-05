@@ -107,40 +107,8 @@ impl App {
             return;
         }
 
-        if context.is_draft_session() {
-            if let Err(error) = self.stage_draft_message(&context.session_id, prompt).await {
-                self.append_output_for_session(
-                    &context.session_id,
-                    &TranscriptNotice::Error.format(error),
-                )
-                .await;
-            }
-        } else if context.is_new_session() {
-            if let Err(error) = self.start_session(&context.session_id, prompt).await {
-                self.append_output_for_session(
-                    &context.session_id,
-                    &TranscriptNotice::Error.format(error),
-                )
-                .await;
-            }
-        } else if self.session_is_in_progress(&context.session_id) {
-            if let Err(error) = self.enqueue_message(&context.session_id, prompt) {
-                self.append_output_for_session(
-                    &context.session_id,
-                    &TranscriptNotice::QueueError.format(error),
-                )
-                .await;
-            }
-        } else {
-            self.reply(&context.session_id, prompt).await;
-        }
-
-        self.mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
-            scroll_offset: None,
-            session_id: context.session_id.clone(),
-        };
+        self.submit_turn_prompt_for_context(context, prompt).await;
+        self.restore_prompt_session_view(context);
     }
 
     /// Executes the active slash-command selection for prompt mode.
@@ -350,6 +318,52 @@ impl App {
             }
             _ => TurnPrompt::from_text(String::new()),
         }
+    }
+
+    /// Routes one prepared turn prompt through the lifecycle path for the
+    /// active prompt context.
+    async fn submit_turn_prompt_for_context(
+        &mut self,
+        context: &PromptIntentContext,
+        prompt: TurnPrompt,
+    ) {
+        if context.is_draft_session() {
+            if let Err(error) = self.stage_draft_message(&context.session_id, prompt).await {
+                self.append_output_for_session(
+                    &context.session_id,
+                    &TranscriptNotice::Error.format(error),
+                )
+                .await;
+            }
+        } else if context.is_new_session() {
+            if let Err(error) = self.start_session(&context.session_id, prompt).await {
+                self.append_output_for_session(
+                    &context.session_id,
+                    &TranscriptNotice::Error.format(error),
+                )
+                .await;
+            }
+        } else if self.session_is_in_progress(&context.session_id) {
+            if let Err(error) = self.enqueue_message(&context.session_id, prompt) {
+                self.append_output_for_session(
+                    &context.session_id,
+                    &TranscriptNotice::QueueError.format(error),
+                )
+                .await;
+            }
+        } else {
+            self.reply(&context.session_id, prompt).await;
+        }
+    }
+
+    /// Restores view mode for the session that owned prompt input.
+    fn restore_prompt_session_view(&mut self, context: &PromptIntentContext) {
+        self.mode = AppMode::View {
+            review_status_message: None,
+            review_text: None,
+            scroll_offset: None,
+            session_id: context.session_id.clone(),
+        };
     }
 
     /// Returns whether the targeted session is currently `InProgress`, used
@@ -644,33 +658,8 @@ impl App {
         let prompt = build_qe_check_prompt();
 
         self.cleanup_prompt_attachment_state().await;
-
-        if context.is_draft_session() {
-            if let Err(error) = self.stage_draft_message(&context.session_id, prompt).await {
-                self.append_output_for_session(
-                    &context.session_id,
-                    &TranscriptNotice::Error.format(error),
-                )
-                .await;
-            }
-        } else if context.is_new_session() {
-            if let Err(error) = self.start_session(&context.session_id, prompt).await {
-                self.append_output_for_session(
-                    &context.session_id,
-                    &TranscriptNotice::Error.format(error),
-                )
-                .await;
-            }
-        } else {
-            self.reply(&context.session_id, prompt).await;
-        }
-
-        self.mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
-            scroll_offset: None,
-            session_id: context.session_id.clone(),
-        };
+        self.submit_turn_prompt_for_context(context, prompt).await;
+        self.restore_prompt_session_view(context);
     }
 }
 

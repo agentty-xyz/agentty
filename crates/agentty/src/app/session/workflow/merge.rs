@@ -273,6 +273,14 @@ impl RebaseAssistLoopInput {
         }
     }
 
+    /// Returns the git boundary used by assist operations.
+    fn git_client(&self) -> &dyn GitClient {
+        match self {
+            Self::Session(input) => input.git_client.as_ref(),
+            Self::Project(input) => input.git_client.as_ref(),
+        }
+    }
+
     /// Builds conflict-state no-progress error text for the active workflow.
     fn repeated_conflict_state_error(&self, detail: &str) -> String {
         match self {
@@ -327,14 +335,12 @@ impl RebaseAssistLoopInput {
         &self,
         previous_conflict_files: &[String],
     ) -> Result<Vec<String>, SessionError> {
-        match self {
-            Self::Session(input) => {
-                SessionManager::load_conflicted_files(input, previous_conflict_files).await
-            }
-            Self::Project(input) => {
-                SessionManager::load_sync_conflicted_files(input, previous_conflict_files).await
-            }
-        }
+        SessionManager::load_rebase_conflicted_files(
+            self.git_client(),
+            self.folder(),
+            previous_conflict_files,
+        )
+        .await
     }
 
     /// Executes one assistance attempt for the active workflow.
@@ -371,14 +377,12 @@ impl RebaseAssistLoopInput {
         &self,
         conflict_files: &[String],
     ) -> Result<bool, SessionError> {
-        match self {
-            Self::Session(input) => {
-                SessionManager::stage_and_check_for_conflicts(input, conflict_files).await
-            }
-            Self::Project(input) => {
-                SessionManager::stage_and_check_for_sync_conflicts(input, conflict_files).await
-            }
-        }
+        SessionManager::stage_and_check_rebase_conflicts(
+            self.git_client(),
+            self.folder(),
+            conflict_files,
+        )
+        .await
     }
 
     /// Continues in-progress rebase for the active workflow.
@@ -1619,34 +1623,6 @@ impl SessionManager {
         (pulled_commits, pushed_commits)
     }
 
-    /// Loads current conflicted files for sync assistance.
-    ///
-    /// # Errors
-    /// Returns an error if conflicted-file inspection fails.
-    async fn load_sync_conflicted_files(
-        input: &SyncRebaseAssistInput,
-        previous_conflict_files: &[String],
-    ) -> Result<Vec<String>, SessionError> {
-        let folder = input.folder.clone();
-        let mut conflicted = input
-            .git_client
-            .list_conflicted_files(folder.clone())
-            .await?;
-
-        let staged_with_markers = input
-            .git_client
-            .list_staged_conflict_marker_files(folder, previous_conflict_files.to_vec())
-            .await?;
-        for file in staged_with_markers {
-            if !conflicted.contains(&file) {
-                conflicted.push(file);
-            }
-        }
-        conflicted.sort_unstable();
-
-        Ok(conflicted)
-    }
-
     /// Executes one agent-assisted sync rebase conflict resolution attempt.
     ///
     /// # Errors
@@ -1661,31 +1637,6 @@ impl SessionManager {
             .resolve_rebase_conflicts(input.folder.clone(), prompt, input.session_agent)
             .await
             .map_err(|error| error.with_context("Sync rebase assistance failed"))
-    }
-
-    /// Stages sync edits and checks whether rebase conflicts remain.
-    ///
-    /// # Errors
-    /// Returns an error when staging or conflict checks fail.
-    async fn stage_and_check_for_sync_conflicts(
-        input: &SyncRebaseAssistInput,
-        conflict_files: &[String],
-    ) -> Result<bool, SessionError> {
-        let folder = input.folder.clone();
-        input.git_client.stage_all(folder).await?;
-
-        let folder = input.folder.clone();
-        if input.git_client.has_unmerged_paths(folder).await? {
-            return Ok(true);
-        }
-
-        let folder = input.folder.clone();
-        let staged_with_markers = input
-            .git_client
-            .list_staged_conflict_marker_files(folder, conflict_files.to_vec())
-            .await?;
-
-        Ok(!staged_with_markers.is_empty())
     }
 
     /// Continues the in-progress sync rebase.
@@ -2636,18 +2587,15 @@ impl SessionManager {
     ///
     /// # Errors
     /// Returns an error if either git query fails.
-    async fn load_conflicted_files(
-        input: &RebaseAssistInput,
+    async fn load_rebase_conflicted_files(
+        git_client: &dyn GitClient,
+        folder: &Path,
         previous_conflict_files: &[String],
     ) -> Result<Vec<String>, SessionError> {
-        let folder = input.folder.clone();
-        let mut conflicted = input
-            .git_client
-            .list_conflicted_files(folder.clone())
-            .await?;
+        let folder = folder.to_path_buf();
+        let mut conflicted = git_client.list_conflicted_files(folder.clone()).await?;
 
-        let staged_with_markers = input
-            .git_client
+        let staged_with_markers = git_client
             .list_staged_conflict_marker_files(folder, previous_conflict_files.to_vec())
             .await?;
         for file in staged_with_markers {
@@ -2716,21 +2664,19 @@ impl SessionManager {
     ///
     /// # Errors
     /// Returns an error when staging or either conflict check fails.
-    async fn stage_and_check_for_conflicts(
-        input: &RebaseAssistInput,
+    async fn stage_and_check_rebase_conflicts(
+        git_client: &dyn GitClient,
+        folder: &Path,
         conflict_files: &[String],
     ) -> Result<bool, SessionError> {
-        let folder = input.folder.clone();
-        input.git_client.stage_all(folder).await?;
+        let folder = folder.to_path_buf();
+        git_client.stage_all(folder.clone()).await?;
 
-        let folder = input.folder.clone();
-        if input.git_client.has_unmerged_paths(folder).await? {
+        if git_client.has_unmerged_paths(folder.clone()).await? {
             return Ok(true);
         }
 
-        let folder = input.folder.clone();
-        let staged_with_markers = input
-            .git_client
+        let staged_with_markers = git_client
             .list_staged_conflict_marker_files(folder, conflict_files.to_vec())
             .await?;
 
@@ -4423,17 +4369,17 @@ mod tests {
             .expect_resolve_rebase_conflicts()
             .times(0);
         let temp_dir = tempdir().expect("failed to create temporary test directory");
-        let input = build_sync_rebase_input_for_test(
+        let assist_input = RebaseAssistLoopInput::Project(build_sync_rebase_input_for_test(
             temp_dir.path().to_path_buf(),
             Arc::new(mock_git_client),
             Arc::new(mock_sync_assist_client),
-        );
+        ));
 
         // Act
-        let conflicted_files = SessionManager::load_sync_conflicted_files(&input, &[]).await;
+        let conflicted_files = assist_input.load_conflicted_files(&[]).await;
 
         // Assert
-        let files = conflicted_files.expect("load_sync_conflicted_files should succeed");
+        let files = conflicted_files.expect("load_conflicted_files should succeed");
         assert_eq!(
             files,
             vec![
@@ -4472,16 +4418,16 @@ mod tests {
             .expect_resolve_rebase_conflicts()
             .times(0);
         let temp_dir = tempdir().expect("failed to create temporary test directory");
-        let input = build_sync_rebase_input_for_test(
+        let assist_input = RebaseAssistLoopInput::Project(build_sync_rebase_input_for_test(
             temp_dir.path().to_path_buf(),
             Arc::new(mock_git_client),
             Arc::new(mock_sync_assist_client),
-        );
+        ));
 
         // Act
-        let still_has_conflicts =
-            SessionManager::stage_and_check_for_sync_conflicts(&input, &["src/lib.rs".to_string()])
-                .await;
+        let still_has_conflicts = assist_input
+            .stage_and_check_for_conflicts(&["src/lib.rs".to_string()])
+            .await;
 
         // Assert
         let has_conflicts = still_has_conflicts.expect("stage_and_check should succeed");
