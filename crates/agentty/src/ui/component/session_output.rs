@@ -2438,6 +2438,40 @@ mod tests {
         assert!(!text.contains("Session Changes"));
     }
 
+    #[test]
+    fn test_output_lines_render_markdown_tables() {
+        // Arrange
+        let mut session = session_fixture();
+        session.output = concat!(
+            "| Message kind | Storage |\n",
+            "| --- | --- |\n",
+            "| User prompt | Session.output |",
+        )
+        .to_string();
+        session.status = Status::Review;
+
+        // Act
+        let lines = output_lines(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            line_context(None, None, None),
+            None,
+        );
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(text.contains("Message kind"));
+        assert!(text.contains("Storage"));
+        assert!(text.contains("User prompt"));
+        assert!(text.contains("Session.output"));
+        assert!(text.contains("┌"));
+        assert!(!text.contains("| --- | --- |"));
+    }
+
     /// Verifies the done-summary transition renders the rewritten summary
     /// payload while preserving the completed transcript.
     #[test]

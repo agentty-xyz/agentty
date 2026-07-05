@@ -162,6 +162,12 @@ The appended review stays visible across diff mode and question mode, and is cle
 when you submit the next prompt. A turn stopped with `Ctrl+c` does not start a focused
 review automatically; press `f` for a manual one.
 
+### Session Output Markdown
+
+Session output renders common Markdown blocks, including headings, lists, block quotes,
+code fences, and pipe tables. Tables are aligned to the output panel width so compact
+comparison data stays readable in the terminal transcript.
+
 ### Forking a Review Session
 
 Pressing `F` in a root **Review** or **AgentReview** session opens a confirmation, then

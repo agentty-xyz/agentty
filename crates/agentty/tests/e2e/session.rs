@@ -78,6 +78,38 @@ duration: 283ms
     Ok(())
 }
 
+/// Seeds one review-ready session whose transcript contains a markdown table.
+fn seed_session_with_markdown_table(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    common::seed_session(
+        env,
+        SessionSeed::regular("markdown-table-0001", "claude-opus-4-8", "main", "Review")
+            .with_title("Markdown table output"),
+    )?;
+
+    let runtime = common::seed_runtime()?;
+
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .append_session_message(
+                "markdown-table-0001",
+                SessionMessageKind::LegacyTranscript,
+                "\
+| Message kind | Storage |
+| --- | --- |
+| User prompt | Session.output |
+| Assistant markdown | Session.output |
+",
+            )
+            .await
+    })?;
+
+    std::fs::create_dir_all(env.agentty_root.join("wt").join("markdown"))?;
+
+    Ok(())
+}
+
 /// Seeds one review-ready session plus its default source branch and
 /// propagates setup errors to the caller.
 fn seed_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
@@ -700,6 +732,37 @@ fn session_view_agent_error_output() -> E2eResult {
                     &full,
                 );
                 assertion::assert_text_in_region(frame, "request id: req_011Cbfc7AF16gbH", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that session output renders markdown pipe tables as aligned terminal
+/// tables instead of showing the raw separator row.
+#[test]
+fn session_view_markdown_table_output() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_markdown_table_output")
+        .setup(seed_session_with_markdown_table)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_text("Session.output", 5000)
+                    .capture_labeled(
+                        "markdown_table",
+                        "Session view with a rendered markdown table",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Message kind", &full);
+                assertion::assert_text_in_region(frame, "Assistant markdown", &full);
+                assertion::assert_text_in_region(frame, "Session.output", &full);
+                assertion::assert_not_visible(frame, "| --- | --- |");
             },
         )?;
 
