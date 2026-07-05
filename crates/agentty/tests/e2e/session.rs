@@ -731,7 +731,15 @@ fn session_list_selected_row_uses_selection_surface() -> E2eResult {
                     .compose(&common::switch_to_tab("Review"))
                     .compose(&common::switch_to_tab("Settings"))
                     .press_key("Enter")
+                    .wait_for_stable_frame(200, 3000)
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
+                    .press_key("Enter")
                     .wait_for_text("Agentty Green", 5000)
+                    .press_key("Enter")
+                    .wait_for_stable_frame(200, 3000)
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
                     .press_key("Enter")
                     .wait_for_text("Dark Horizon", 5000)
                     .compose(&common::switch_to_tab("Logs"))
@@ -745,6 +753,10 @@ fn session_list_selected_row_uses_selection_surface() -> E2eResult {
                     .compose(&common::switch_to_tab("Review"))
                     .compose(&common::switch_to_tab("Settings"))
                     .press_key("Enter")
+                    .wait_for_stable_frame(200, 3000)
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
+                    .press_key("Enter")
                     .wait_for_text("Agentty Default", 5000)
             },
             |_frame, report| {
@@ -757,10 +769,27 @@ fn session_list_selected_row_uses_selection_surface() -> E2eResult {
                 // Dark Horizon `surface_selection` and `surface` RGB values
                 // from the `ThemePalette` definitions in `ui/style.rs`.
                 let sessions_frame = common::frame_from_capture(&report.captures[0]);
-                assertion::assert_text_has_bg_color(
-                    &sessions_frame,
-                    "Review-ready session shortcuts",
-                    &CellColor::new(45, 50, 68),
+                let selected_title = sessions_frame
+                    .find_text("Review-ready session shortcuts")
+                    .into_iter()
+                    .next()
+                    .expect("expected selected session title to be visible");
+                let selected_row_region =
+                    Region::new(0, selected_title.rect.row, sessions_frame.cols(), 1);
+                let selected_model = sessions_frame
+                    .find_text_in_region("gpt-5.5", &selected_row_region)
+                    .into_iter()
+                    .next()
+                    .expect("expected selected session model to be visible");
+                let selection_surface = CellColor::new(45, 50, 68);
+                let selected_model_uses_selection_surface =
+                    (selected_model.rect.col..selected_model.rect.right()).all(|col| {
+                        sessions_frame.bg_color(selected_model.rect.row, col)
+                            == Some(selection_surface)
+                    });
+                assert!(
+                    selected_model_uses_selection_surface,
+                    "Expected selected session model cell to use Dark Horizon selection surface"
                 );
                 assertion::assert_text_has_bg_color(
                     &sessions_frame,
