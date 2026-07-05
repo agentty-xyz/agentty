@@ -54,6 +54,17 @@ const VIEW_FOOTER_TRAILING_ACTIONS: [HelpAction; 2] = [
     HelpAction::new("help", "?", "Help"),
 ];
 
+/// Prompt image paste shortcut shared by full help and compact draft footers.
+const PROMPT_IMAGE_PASTE_ACTION: HelpAction = HelpAction::new(
+    "paste image",
+    PROMPT_IMAGE_PASTE_SHORTCUT_LABEL,
+    "Paste image",
+);
+
+/// Command-menu shortcut shared by full help and compact editable footers.
+const COMMANDS_MENU_ACTION: HelpAction =
+    HelpAction::new("commands menu", "/", "Open commands menu");
+
 /// Encodes which shortcut family is available for the viewed session state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ViewSessionState {
@@ -543,10 +554,10 @@ fn can_rebase_view_session(
 /// Appends footer actions that operate on an editable session in their
 /// canonical order.
 ///
-/// The explicit draft-session start action stays grouped with the prompt,
-/// merge, and sync controls so future edits do not accidentally apply a
-/// different guard to one of those related actions. Stacked drafts keep only
-/// draft-editing and start actions until their first turn launches.
+/// The explicit draft-session start action stays immediately after the draft
+/// edit action so it remains visible in standard-width terminals. Stacked
+/// drafts keep only draft-editing and start actions until their first turn
+/// launches.
 fn append_view_footer_edit_actions(
     actions: &mut Vec<HelpAction>,
     session_state: ViewSessionState,
@@ -558,19 +569,25 @@ fn append_view_footer_edit_actions(
     if !can_open_prompt.is_enabled()
         && !can_open_command.is_enabled()
         && !can_rebase_session.is_enabled()
+        && !can_start_staged_session.is_enabled()
     {
         return;
     }
 
-    append_view_prompt_actions(
-        actions,
-        session_state,
-        can_open_prompt.is_enabled(),
-        can_open_command.is_enabled(),
-    );
+    if can_open_prompt.is_enabled() {
+        actions.push(prompt_action_help_action(session_state));
+    }
 
     if can_start_staged_session.is_enabled() {
         actions.push(HelpAction::new("start", "s", "Start staged session"));
+    }
+
+    if can_open_prompt.is_enabled() {
+        append_prompt_image_paste_action(actions, session_state);
+    }
+
+    if can_open_command.is_enabled() {
+        actions.push(COMMANDS_MENU_ACTION);
     }
 
     if can_open_command.is_enabled() && session_state != ViewSessionState::StackedDraft {
@@ -598,20 +615,30 @@ fn append_view_prompt_actions(
 ) {
     if can_open_prompt {
         actions.push(prompt_action_help_action(session_state));
-        if matches!(
-            session_state,
-            ViewSessionState::NewSession | ViewSessionState::StackedDraft
-        ) {
-            actions.push(HelpAction::new(
-                "paste image",
-                PROMPT_IMAGE_PASTE_SHORTCUT_LABEL,
-                "Paste image",
-            ));
-        }
+        append_prompt_image_paste_action(actions, session_state);
     }
     if can_open_command {
-        actions.push(HelpAction::new("commands menu", "/", "Open commands menu"));
+        actions.push(COMMANDS_MENU_ACTION);
     }
+}
+
+/// Appends image paste help when the current session state supports draft
+/// attachments from view mode.
+fn append_prompt_image_paste_action(
+    actions: &mut Vec<HelpAction>,
+    session_state: ViewSessionState,
+) {
+    if prompt_image_paste_allowed(session_state) {
+        actions.push(PROMPT_IMAGE_PASTE_ACTION);
+    }
+}
+
+/// Returns whether view-mode prompt entry can paste images before launch.
+fn prompt_image_paste_allowed(session_state: ViewSessionState) -> bool {
+    matches!(
+        session_state,
+        ViewSessionState::NewSession | ViewSessionState::StackedDraft
+    )
 }
 
 /// Returns the `Enter` prompt-entry action label appropriate for the current
@@ -1304,9 +1331,9 @@ mod tests {
             [
                 "q",
                 "Enter",
+                "s",
                 PROMPT_IMAGE_PASTE_SHORTCUT_LABEL,
                 "/",
-                "s",
                 "m",
                 "r"
             ]
@@ -1329,8 +1356,13 @@ mod tests {
 
         // Act
         let actions = view_footer_actions(state);
+        let ordered_keys = actions.iter().map(|action| action.key).collect::<Vec<_>>();
 
         // Assert
+        assert_eq!(
+            &ordered_keys[..5],
+            ["q", "Enter", "s", PROMPT_IMAGE_PASTE_SHORTCUT_LABEL, "/"]
+        );
         assert!(actions.iter().any(|action| action.key == "Enter"));
         assert!(actions.iter().any(|action| action.key == "/"));
         assert!(actions.iter().any(|action| action.key == "s"));
