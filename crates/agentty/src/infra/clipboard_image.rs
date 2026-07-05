@@ -6,7 +6,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
-use arboard::Clipboard;
+use ag_clipboard::Clipboard;
 use image::codecs::png::PngEncoder;
 use image::{ExtendedColorType, ImageEncoder};
 
@@ -38,13 +38,6 @@ pub(crate) enum ClipboardError {
     /// A referenced PNG path from clipboard text does not exist on disk.
     #[error("Clipboard PNG path does not exist")]
     PngPathNotFound,
-
-    /// Clipboard image dimensions exceed the `u32` range.
-    #[error("Clipboard image {dimension} is too large")]
-    DimensionOverflow {
-        /// Which dimension overflowed (`"width"` or `"height"`).
-        dimension: &'static str,
-    },
 
     /// A parent directory for the clipboard image is missing from the path.
     #[error("Missing clipboard image directory")]
@@ -107,7 +100,7 @@ pub(crate) trait ClipboardImageClient: Send + Sync {
     ) -> ClipboardImageFuture<Result<PersistedClipboardImage, ClipboardError>>;
 }
 
-/// Production [`ClipboardImageClient`] backed by `arboard`, the injected
+/// Production [`ClipboardImageClient`] backed by `ag-clipboard`, the injected
 /// filesystem boundary, and the injected wall clock.
 pub(crate) struct RealClipboardImageClient {
     clock: Arc<dyn Clock>,
@@ -170,6 +163,10 @@ async fn persist_clipboard_image(
 #[must_use]
 pub(crate) fn normalize_clipboard_image_error(error: &ClipboardError) -> String {
     match error {
+        ClipboardError::Unavailable { reason } if reason.contains("wl-paste") => {
+            "Wayland clipboard image paste requires wl-paste. Install the wl-clipboard package."
+                .to_string()
+        }
         ClipboardError::Unavailable { .. } => {
             "Clipboard is unavailable. Try again after granting clipboard access.".to_string()
         }
@@ -182,9 +179,7 @@ pub(crate) fn normalize_clipboard_image_error(error: &ClipboardError) -> String 
             "Failed to persist pasted image from the clipboard.".to_string()
         }
         ClipboardError::TaskJoin(_) => "Clipboard image capture failed.".to_string(),
-        ClipboardError::DimensionOverflow { .. }
-        | ClipboardError::EmptySessionId
-        | ClipboardError::SystemClock(_) => error.to_string(),
+        ClipboardError::EmptySessionId | ClipboardError::SystemClock(_) => error.to_string(),
     }
 }
 
@@ -240,8 +235,7 @@ fn session_temp_directory_name(session_id: &str) -> Result<&str, ClipboardError>
 /// file is present.
 fn clipboard_png_path_from_file_list(clipboard: &mut Clipboard) -> Result<PathBuf, ClipboardError> {
     clipboard
-        .get()
-        .file_list()
+        .read_file_list()
         .map_err(|_| ClipboardError::NoImage)?
         .into_iter()
         .find(|path| is_png_path(path))
@@ -254,7 +248,7 @@ fn clipboard_png_path_from_file_list(clipboard: &mut Clipboard) -> Result<PathBu
 /// # Errors
 /// Returns an error when clipboard text is unavailable or is not a PNG path.
 fn clipboard_png_path_from_text(clipboard: &mut Clipboard) -> Result<PathBuf, ClipboardError> {
-    let clipboard_text = clipboard.get_text().map_err(|_| ClipboardError::NoImage)?;
+    let clipboard_text = clipboard.read_text().map_err(|_| ClipboardError::NoImage)?;
     let source_image_path = PathBuf::from(clipboard_text.trim());
 
     if !is_png_path(&source_image_path) {
@@ -285,9 +279,9 @@ async fn read_clipboard_payload() -> Result<ClipboardPayload, ClipboardError> {
 
         if let Ok(source_image_path) = clipboard_png_path_from_file_list(&mut clipboard) {
             Ok(ClipboardPayload::ExistingPngPath(source_image_path))
-        } else if let Ok(image_data) = clipboard.get_image() {
+        } else if let Ok(image_data) = clipboard.read_image_rgba() {
             let encoded_png = encode_clipboard_image_to_png(
-                image_data.bytes.as_ref(),
+                &image_data.rgba_bytes,
                 image_data.width,
                 image_data.height,
             )?;
@@ -330,18 +324,12 @@ enum ClipboardPayload {
 /// Encodes one clipboard image buffer into PNG bytes.
 ///
 /// # Errors
-/// Returns an error when either image dimension exceeds the `u32` range or
-/// the PNG encoder fails.
+/// Returns an error when the PNG encoder fails.
 fn encode_clipboard_image_to_png(
     image_bytes: &[u8],
-    width: usize,
-    height: usize,
+    image_width: u32,
+    image_height: u32,
 ) -> Result<Vec<u8>, ClipboardError> {
-    let image_width = u32::try_from(width)
-        .map_err(|_| ClipboardError::DimensionOverflow { dimension: "width" })?;
-    let image_height = u32::try_from(height).map_err(|_| ClipboardError::DimensionOverflow {
-        dimension: "height",
-    })?;
     let mut encoded_png = Vec::new();
 
     PngEncoder::new(&mut encoded_png)
@@ -648,6 +636,25 @@ mod tests {
     }
 
     #[test]
+    fn test_normalize_clipboard_image_error_maps_missing_wl_paste_to_package_status() {
+        // Arrange
+        let error = ClipboardError::Unavailable {
+            reason: "Clipboard backend is unavailable: Wayland clipboard image paste requires \
+                     `wl-paste`; install the `wl-clipboard` package"
+                .to_string(),
+        };
+
+        // Act
+        let normalized_error = normalize_clipboard_image_error(&error);
+
+        // Assert
+        assert_eq!(
+            normalized_error,
+            "Wayland clipboard image paste requires wl-paste. Install the wl-clipboard package."
+        );
+    }
+
+    #[test]
     fn test_normalize_clipboard_image_error_maps_no_image_to_short_status() {
         // Arrange
         let error = ClipboardError::NoImage;
@@ -692,17 +699,5 @@ mod tests {
 
         // Assert
         assert_eq!(normalized_error, "Clipboard image capture failed.");
-    }
-
-    #[test]
-    fn test_normalize_clipboard_image_error_passes_through_dimension_overflow() {
-        // Arrange
-        let error = ClipboardError::DimensionOverflow { dimension: "width" };
-
-        // Act
-        let normalized_error = normalize_clipboard_image_error(&error);
-
-        // Assert
-        assert_eq!(normalized_error, "Clipboard image width is too large");
     }
 }

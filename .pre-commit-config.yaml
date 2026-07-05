@@ -29,7 +29,7 @@ repos:
       - id: djlint-reformat
         name: djlint reformat
         description: Format HTML files and embedded CSS blocks.
-        entry: djlint --reformat --format-css
+        entry: python -X cpu_count=1 -m djlint --reformat --format-css
         language: python
         additional_dependencies: [djlint==1.36.4]
         files: \.html?$
@@ -100,6 +100,14 @@ repos:
         name: cargo nextest ag-protocol src
         description: Source tests for `crates/ag-protocol/src`.
         entry: cargo nextest run --locked --profile ci -p ag-protocol --lib
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [manual]
+      - id: test-ag-clipboard-src
+        name: cargo nextest ag-clipboard src
+        description: Source tests for `crates/ag-clipboard/src`.
+        entry: cargo nextest run --locked --profile ci -p ag-clipboard --lib
         language: system
         always_run: true
         pass_filenames: false

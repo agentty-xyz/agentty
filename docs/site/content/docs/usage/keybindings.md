@@ -146,6 +146,14 @@ next word | | `Option+Backspace` | Delete previous word | | `Cmd+Backspace` | De
 current line | | `Esc` | Cancel | | `@` | Open file picker | | `/` | Open slash commands
 |
 
+Prompt input keeps regular text paste on terminal `Event::Paste`. The dedicated image
+paste shortcuts insert highlighted `[Image #n]` tokens directly in the composer and send
+the referenced local image for Codex, Antigravity, and Claude session models. Clipboard
+image capture uses Agentty's host clipboard backend, with Wayland reads using `wl-paste`
+when it is available. Missing or unsupported clipboard backends report an inline paste
+error. Codex preserves the multimodal ordering at transport level, while Antigravity and
+Claude rewrite the placeholders to local image paths before streaming the prompt.
+
 Agentty requests enhanced keyboard reporting from supporting terminals and `tmux` panes
 so remote sessions can distinguish `Shift+Enter` from plain `Enter`. Image paste and `@`
 lookup behavior are described in [Workflow](@/docs/usage/workflow.md).

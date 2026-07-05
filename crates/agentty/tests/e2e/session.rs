@@ -1010,6 +1010,40 @@ fn session_creation_opens_prompt_mode() -> E2eResult {
     Ok(())
 }
 
+/// Verify that prompt image paste reports unavailable clipboard backends
+/// inline.
+#[test]
+fn prompt_image_paste_unavailable_shows_inline_error() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("prompt_image_paste_unavailable")
+        .with_git()
+        .env("AGENTTY_DISABLE_CLIPBOARD", "1")
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .press_key("ctrl+v")
+                    .wait_for_text("Paste Image Error", 5000)
+                    .capture_labeled(
+                        "paste_error",
+                        "Prompt mode showing unavailable clipboard paste error",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Paste Image Error", &full);
+                assertion::assert_text_in_region(frame, "Clipboard is unavailable", &full);
+                assertion::assert_not_visible(frame, "[Image #1]");
+            },
+        )?;
+
+    Ok(())
+}
+
 /// Verify that choosing Stacked creates a startable draft under the selected
 /// parent and renders the one-level stack with a tree connection in the
 /// session list.

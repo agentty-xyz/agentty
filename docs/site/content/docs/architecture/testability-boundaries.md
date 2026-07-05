@@ -27,7 +27,7 @@ major boundaries:
 | `EventSource`          | `runtime/event.rs`              | Terminal event polling for deterministic event-loop tests.                                                                                                                         |
 | `Clock`                | `infra/clock.rs`                | Wall-clock and monotonic time for session orchestration and render throttling.                                                                                                     |
 | `TmuxClient`           | `infra/tmux.rs`                 | Tmux subprocess operations for opening worktrees.                                                                                                                                  |
-| `ClipboardImageClient` | `infra/clipboard_image.rs`      | Clipboard image capture and temp-file persistence.                                                                                                                                 |
+| `ClipboardImageClient` | `infra/clipboard_image.rs`      | Clipboard image capture and temp-file persistence; host clipboard reads are isolated in `ag-clipboard`.                                                                            |
 | Repository traits      | `infra/db/*.rs`                 | Narrow persistence boundaries (`SessionRepository`, `ProjectRepository`, `ReviewRepository`, `UsageRepository`, `ActivityRepository`, `OperationRepository`, `SettingRepository`). |
 
 Beyond these, narrower internal command-runner boundaries (for example

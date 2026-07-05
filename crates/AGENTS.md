@@ -4,6 +4,8 @@ Contains the workspace member crates.
 
 ## Workspace Crates
 
+- `crates/ag-clipboard/` holds read-only clipboard backends shared by Agentty prompt
+  image capture.
 - `crates/ag-forge/` holds forge review-request types and provider integrations shared
   across the workspace.
 - `crates/ag-git/` holds reusable git, worktree, sync, rebase, and squash-merge

@@ -288,9 +288,12 @@ later.
 
 <a id="usage-prompt-extras"></a> In prompt input, `Ctrl+V`, `Ctrl+Shift+V`, and `Alt+V`
 paste one clipboard image into the current draft or reply as an inline `[Image #n]`
-token; the referenced local images are sent to the agent with the prompt. Draft image
-files are removed when the composer is canceled, after a submitted turn finishes, and
-when a session is deleted or canceled.
+token; the referenced local images are sent to the agent with the prompt. The clipboard
+source can be a copied PNG file, raw image data, or PNG path text from the host
+clipboard backend. Wayland reads use `wl-paste` when it is available; missing or
+unsupported clipboard backends report an inline paste error. Draft image files are
+removed when the composer is canceled, after a submitted turn finishes, and when a
+session is deleted or canceled.
 
 `@` file lookups keep the raw `@path/to/file` text visible in the composer and
 transcript; the agent-facing prompt rewrites them to quoted `path/to/file` tokens.

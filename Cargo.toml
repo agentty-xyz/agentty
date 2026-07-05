@@ -16,6 +16,7 @@ repository = "https://github.com/agentty-xyz/agentty"
 homepage = "https://github.com/agentty-xyz/agentty"
 
 [workspace.dependencies]
+ag-clipboard = { path = "crates/ag-clipboard", version = "0.11.1" }
 ag-forge = { path = "crates/ag-forge", version = "0.11.1" }
 ag-git = { path = "crates/ag-git", version = "0.11.1" }
 ag-protocol = { path = "crates/ag-protocol", version = "0.11.1" }
@@ -23,7 +24,6 @@ testty = { path = "crates/testty", version = "0.11.1" }
 async-trait = "0.1"
 agent-client-protocol = "1.0.0"
 assert_cmd = "2"
-arboard = { version = "3", features = ["image-data", "wayland-data-control"] }
 askama = "0.16.0"
 base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
@@ -32,9 +32,14 @@ dirs = "6.0"
 ignore = "0.4"
 image = { version = "0.25", default-features = false, features = ["png", "gif"] }
 mockall = "0.14"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false }
+objc2-foundation = { version = "0.3", default-features = false }
+percent-encoding = "2"
 portable-pty = "0.9"
 ratatui = "0.30.1"
 rustc-hash = "2"
+rustix = { version = "1.1", features = ["event"] }
 schemars = { version = "1", features = ["derive"] }
 semver = "1"
 serde = { version = "1", features = ["derive"] }
@@ -54,6 +59,7 @@ unicode-width = "0.2"
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 vt100 = "0.16"
+x11rb = "0.13"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

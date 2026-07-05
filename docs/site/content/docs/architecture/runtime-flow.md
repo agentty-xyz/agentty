@@ -327,8 +327,11 @@ their triggers:
   loader updates and final buffers.
 - **App-server stream bridge** (every app-server turn): bridges provider stream events
   into the unified turn event stream.
-- **Clipboard image persistence** (prompt image paste): captures the clipboard image via
-  `spawn_blocking` and stores it under `AGENTTY_ROOT/tmp/<session-id>/images/`.
+- **Clipboard image persistence** (prompt image paste): reads a copied PNG file,
+  clipboard image, or PNG path from `ag-clipboard` via `spawn_blocking`, stores it under
+  `AGENTTY_ROOT/tmp/<session-id>/images/`, and inserts an inline `[Image #n]`
+  placeholder. The backend supports macOS pasteboard, X11 reads, and Wayland reads via
+  `wl-paste`; missing or unsupported backends report an inline paste error.
 - **Session title generation** (first start turn): runs a one-shot title prompt and
   persists a concise generated title.
 - **At-mention file indexing** (`@` in prompt or question input): lists session files
