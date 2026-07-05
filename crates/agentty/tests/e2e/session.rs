@@ -1700,6 +1700,60 @@ fn draft_session_creation_opens_staging_mode() -> E2eResult {
                 assertion::assert_text_in_region(frame, "Draft Session", &full);
                 assertion::assert_text_in_region(frame, "No draft messages staged yet.", &full);
                 assertion::assert_text_in_region(frame, "Enter: stage draft", &full);
+                assertion::assert_text_in_region(frame, "Ctrl+V/Alt+V: paste image", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that pasted-image shortcuts work directly from a draft session view
+/// by opening the draft composer and routing through prompt image paste.
+#[test]
+fn draft_session_view_paste_image_opens_composer() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("draft_session_view_paste_image")
+        .with_git()
+        .env("AGENTTY_DISABLE_CLIPBOARD", "1")
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Regular", 5000)
+                    .press_key("Down")
+                    .press_key("Enter")
+                    .wait_for_text("Enter: stage draft", 5000)
+                    .write_text("Draft with image")
+                    .press_key("Enter")
+                    .wait_for_text("Enter: add draft", 5000)
+                    .capture_labeled(
+                        "draft_view",
+                        "Draft-session view showing direct image paste action",
+                    )
+                    .press_key("ctrl+v")
+                    .wait_for_text("Paste Image Error", 5000)
+                    .capture_labeled(
+                        "draft_paste_error",
+                        "Draft composer opened from view-mode image paste shortcut",
+                    )
+            },
+            |frame, report| {
+                let draft_view_frame = common::frame_from_capture(&report.captures[0]);
+                let draft_view_full =
+                    Region::full(draft_view_frame.cols(), draft_view_frame.rows());
+                assertion::assert_text_in_region(
+                    &draft_view_frame,
+                    "Ctrl+V/Alt+V: paste image",
+                    &draft_view_full,
+                );
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Paste Image Error", &full);
+                assertion::assert_text_in_region(frame, "Clipboard is unavailable", &full);
+                assertion::assert_text_in_region(frame, "Enter: stage draft", &full);
+                assertion::assert_not_visible(frame, "[Image #1]");
             },
         )?;
 

@@ -12,17 +12,12 @@ use crate::ui::state::prompt::{
 };
 
 const AT_MENTION_DEFAULT_MAX_VISIBLE: usize = 10;
-/// Footer shortcut label for prompt image paste.
-///
-/// Keeps the primary prompt image paste shortcut aligned with upstream Codex
-/// CLI while the key handler also accepts shifted terminal paste chords.
-const PROMPT_IMAGE_PASTE_SHORTCUT_LABEL: &str = "Ctrl+V/Alt+V";
 const NEW_SESSION_PROMPT_FOOTER_ACTIONS: [help_action::HelpAction; 4] = [
     help_action::HelpAction::new("stage draft", "Enter", "Stage draft"),
     help_action::HelpAction::new("newline", "Alt+Enter", "Insert newline"),
     help_action::HelpAction::new(
         "paste image",
-        PROMPT_IMAGE_PASTE_SHORTCUT_LABEL,
+        help_action::PROMPT_IMAGE_PASTE_SHORTCUT_LABEL,
         "Paste image",
     ),
     help_action::HelpAction::new("cancel", "Esc", "Cancel prompt"),
@@ -32,7 +27,7 @@ const PROMPT_FOOTER_ACTIONS: [help_action::HelpAction; 4] = [
     help_action::HelpAction::new("newline", "Alt+Enter", "Insert newline"),
     help_action::HelpAction::new(
         "paste image",
-        PROMPT_IMAGE_PASTE_SHORTCUT_LABEL,
+        help_action::PROMPT_IMAGE_PASTE_SHORTCUT_LABEL,
         "Paste image",
     ),
     help_action::HelpAction::new("cancel", "Esc", "Cancel prompt"),

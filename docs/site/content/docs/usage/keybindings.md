@@ -94,8 +94,9 @@ State-specific differences:
   appear after the rebase begins.
 - Root **Review** and **AgentReview** sessions offer `F` to fork the current branch and
   copied transcript history into a new independent session; stacked children hide `F`.
-- **Draft** sessions hide `o` until the worktree exists; stacked drafts hide `m` and `r`
-  and show `s` only when the parent is review-ready and the stack is idle.
+- **Draft** sessions hide `o` until the worktree exists and let `Ctrl+V`,
+  `Ctrl+Shift+V`, or `Alt+V` open the composer with an image paste; stacked drafts hide
+  `m` and `r` and show `s` only when the parent is review-ready and the stack is idle.
 - Stacked parents with a materialized child keep `Enter` and `r` while the stack is
   idle, but hide `/` and `m` until the child is terminal or no longer linked.
 - **Done** sessions offer `c` to start a continuation draft (confirmation popup).

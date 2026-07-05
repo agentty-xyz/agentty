@@ -5,6 +5,9 @@ use ratatui::Terminal;
 use ratatui::backend::Backend;
 use tracing::warn;
 
+use crate::app::prompt_intent::{
+    PromptIntentContext, PromptIntentInputMode, PromptIntentSessionMode,
+};
 use crate::app::session::{SessionTaskService, remote_branch_name_from_upstream_ref};
 use crate::app::{
     self, App, AppEvent, ReviewCacheEntry, diff_content_hash, is_review_loading_status_message,
@@ -17,7 +20,7 @@ use crate::domain::transcript_notice::TranscriptNotice;
 use crate::runtime::EventResult;
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
 use crate::runtime::mode::input_key::is_insertable_char_key;
-use crate::runtime::mode::session_output_metric;
+use crate::runtime::mode::{prompt, session_output_metric};
 use crate::ui::state::app_mode::{
     AppMode, ConfirmationIntent, ConfirmationViewMode, DiffRightPanel, HelpContext,
 };
@@ -173,6 +176,12 @@ impl ViewSessionSnapshot {
         self.can_edit_without_branch_work() || self.can_mutate_session_branch()
     }
 
+    /// Returns whether image paste can open a draft prompt composer directly
+    /// from view mode.
+    fn can_paste_image_into_draft_composer(&self) -> bool {
+        self.can_open_prompt_composer() && self.can_edit_without_branch_work()
+    }
+
     /// Returns whether editing the viewed session only stages local draft
     /// content and therefore does not mutate a session branch.
     fn can_edit_without_branch_work(&self) -> bool {
@@ -308,6 +317,15 @@ async fn handle_primary_view_key(
                 )
                 .await;
             }
+
+            return Some(false);
+        }
+        KeyCode::Char('v' | 'V')
+            if prompt::is_prompt_image_paste_key(key)
+                && view_session_snapshot.can_paste_image_into_draft_composer() =>
+        {
+            open_draft_prompt_with_pasted_image(app, view_context, pending_update.scroll_offset)
+                .await;
 
             return Some(false);
         }
@@ -907,6 +925,36 @@ fn switch_view_to_prompt(
     };
 }
 
+/// Opens a draft composer from view mode and immediately applies the existing
+/// prompt image-paste intent.
+async fn open_draft_prompt_with_pasted_image(
+    app: &mut App,
+    view_context: &ViewContext,
+    scroll_offset: Option<u16>,
+) {
+    let Some(session) = app.sessions.session_at(view_context.session_index) else {
+        return;
+    };
+    let history_state = PromptHistoryState::new(session_prompt_history_entries(session));
+
+    switch_view_to_prompt(
+        app,
+        view_context,
+        history_state,
+        InputState::default(),
+        scroll_offset,
+    );
+
+    app.handle_prompt_image_paste_intent(&PromptIntentContext {
+        input_mode: PromptIntentInputMode::Text,
+        scroll_offset,
+        session_id: view_context.session_id.clone(),
+        session_index: view_context.session_index,
+        session_mode: PromptIntentSessionMode::NewDraft,
+    })
+    .await;
+}
+
 /// Opens the help overlay while preserving the currently viewed session state.
 fn open_view_help_overlay(
     app: &mut App,
@@ -1288,6 +1336,42 @@ mod tests {
         new_test_app_with_session_and_tmux_client(Arc::new(MockTmuxClient::new())).await
     }
 
+    /// Replaces the app-level clipboard-image dependency with one
+    /// caller-provided mock.
+    fn install_mock_clipboard_image_client(
+        app: &mut App,
+        mock_clipboard_image_client: crate::infra::clipboard_image::MockClipboardImageClient,
+    ) {
+        let clipboard_image_client: Arc<dyn crate::infra::clipboard_image::ClipboardImageClient> =
+            Arc::new(mock_clipboard_image_client);
+        let base_path = app.services.base_path().to_path_buf();
+        let db = app.services.db().clone();
+        let event_sender = app.services.event_sender();
+        let available_agent_kinds = app.services.available_agent_kinds();
+        let available_agent_clis =
+            crate::domain::agent::AgentCliInfo::from_kinds(&available_agent_kinds);
+        let app_server_client_override = app.services.app_server_client_override();
+        let fs_client = app.services.fs_client();
+        let git_client = app.services.git_client();
+        let review_request_client = app.services.review_request_client();
+
+        app.services = crate::app::AppServices::new_with_agent_clis(
+            base_path,
+            app.services.clock(),
+            event_sender,
+            crate::app::AppServiceDeps {
+                app_server_client_override,
+                available_agent_kinds,
+                clipboard_image_client_override: Some(clipboard_image_client),
+                fs_client,
+                git_client,
+                repositories: db,
+                review_request_client,
+            },
+            available_agent_clis,
+        );
+    }
+
     /// Builds one minimal session snapshot for pure view-state tests.
     fn session_fixture(status: Status, is_draft: bool) -> crate::domain::session::Session {
         crate::test_support::SessionFixtureBuilder::new()
@@ -1549,6 +1633,7 @@ mod tests {
         // Assert
         assert!(!snapshot.can_open_worktree());
         assert_eq!(snapshot.session_state, ViewSessionState::NewSession);
+        assert!(snapshot.can_paste_image_into_draft_composer());
     }
 
     #[tokio::test]
@@ -1588,8 +1673,61 @@ mod tests {
         // Assert
         assert_eq!(snapshot.session_state, ViewSessionState::StackedDraft);
         assert!(snapshot.can_start_staged_session());
+        assert!(snapshot.can_paste_image_into_draft_composer());
         assert!(!snapshot.can_merge_session());
         assert!(!snapshot.can_rebase_session());
+    }
+
+    #[tokio::test]
+    async fn test_open_draft_prompt_with_pasted_image_inserts_clipboard_image() {
+        // Arrange
+        let (mut app, _base_dir) =
+            crate::test_support::new_git_test_app_with_tmux_client(Arc::new(MockTmuxClient::new()))
+                .await;
+        let session_id = app
+            .create_draft_session()
+            .await
+            .expect("failed to create draft session");
+        app.mode = AppMode::View {
+            review_status_message: None,
+            review_text: None,
+            session_id: session_id.clone().into(),
+            scroll_offset: Some(2),
+        };
+        let view_context = view_context(&mut app).expect("expected view context");
+        let expected_session_id = session_id.clone();
+        let expected_session_id_for_mock = expected_session_id.clone();
+        let mut clipboard_image_client =
+            crate::infra::clipboard_image::MockClipboardImageClient::new();
+        clipboard_image_client
+            .expect_persist_clipboard_image()
+            .once()
+            .withf(move |session_id, attachment_number| {
+                session_id == &expected_session_id_for_mock && *attachment_number == 1
+            })
+            .returning(|_, _| {
+                Box::pin(async {
+                    Ok(crate::infra::clipboard_image::PersistedClipboardImage {
+                        local_image_path: std::path::PathBuf::from("/tmp/draft-image.png"),
+                    })
+                })
+            });
+        install_mock_clipboard_image_client(&mut app, clipboard_image_client);
+
+        // Act
+        open_draft_prompt_with_pasted_image(&mut app, &view_context, Some(2)).await;
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::Prompt {
+                ref input,
+                ref session_id,
+                scroll_offset: Some(2),
+                ..
+            } if input.text() == "[Image #1]"
+                && session_id.as_str() == expected_session_id.as_str()
+        ));
     }
 
     #[tokio::test]

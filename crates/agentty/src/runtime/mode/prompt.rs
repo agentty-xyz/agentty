@@ -384,7 +384,7 @@ fn is_plain_char_key(key: KeyEvent, character: char) -> bool {
 /// Accepts both lowercase and shifted uppercase `V` because Linux terminals
 /// commonly report `Ctrl+Shift+V` as `KeyCode::Char('V')` with `CONTROL` and
 /// `SHIFT` modifiers.
-fn is_prompt_image_paste_key(key: KeyEvent) -> bool {
+pub(crate) fn is_prompt_image_paste_key(key: KeyEvent) -> bool {
     matches!(key.code, KeyCode::Char('v' | 'V'))
         && key
             .modifiers

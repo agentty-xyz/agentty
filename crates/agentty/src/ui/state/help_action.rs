@@ -4,6 +4,11 @@ use ratatui::text::{Line, Span};
 use crate::domain::session::{PublishBranchAction, Session, Status};
 use crate::ui::style;
 
+/// Footer shortcut label for prompt image paste.
+///
+/// Keeps prompt-mode and draft-view image paste shortcut labels aligned.
+pub(crate) const PROMPT_IMAGE_PASTE_SHORTCUT_LABEL: &str = "Ctrl+V/Alt+V";
+
 /// One user-visible shortcut entry that can be rendered in the footer and
 /// in the help popup.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -593,6 +598,16 @@ fn append_view_prompt_actions(
 ) {
     if can_open_prompt {
         actions.push(prompt_action_help_action(session_state));
+        if matches!(
+            session_state,
+            ViewSessionState::NewSession | ViewSessionState::StackedDraft
+        ) {
+            actions.push(HelpAction::new(
+                "paste image",
+                PROMPT_IMAGE_PASTE_SHORTCUT_LABEL,
+                "Paste image",
+            ));
+        }
     }
     if can_open_command {
         actions.push(HelpAction::new("commands menu", "/", "Open commands menu"));
@@ -1040,6 +1055,9 @@ mod tests {
                 .iter()
                 .any(|action| action.key == "Enter" && action.footer_label == "add draft")
         );
+        assert!(actions.iter().any(|action| {
+            action.key == PROMPT_IMAGE_PASTE_SHORTCUT_LABEL && action.footer_label == "paste image"
+        }));
         assert!(actions.iter().any(|action| action.key == "/"));
         assert!(actions.iter().any(|action| action.key == "s"));
         assert!(actions.iter().any(|action| action.key == "m"));
@@ -1069,6 +1087,9 @@ mod tests {
                 .iter()
                 .any(|action| action.key == "Enter" && action.footer_label == "add draft")
         );
+        assert!(actions.iter().any(|action| {
+            action.key == PROMPT_IMAGE_PASTE_SHORTCUT_LABEL && action.footer_label == "paste image"
+        }));
         assert!(actions.iter().any(|action| action.key == "/"));
         assert!(actions.iter().any(|action| action.key == "s"));
         assert!(!actions.iter().any(|action| action.key == "m"));
@@ -1278,7 +1299,18 @@ mod tests {
         let ordered_keys = actions.iter().map(|action| action.key).collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(&ordered_keys[..6], ["q", "Enter", "/", "s", "m", "r"]);
+        assert_eq!(
+            &ordered_keys[..7],
+            [
+                "q",
+                "Enter",
+                PROMPT_IMAGE_PASTE_SHORTCUT_LABEL,
+                "/",
+                "s",
+                "m",
+                "r"
+            ]
+        );
     }
 
     #[test]

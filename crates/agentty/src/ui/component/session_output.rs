@@ -953,6 +953,10 @@ impl<'a> SessionOutput<'a> {
             let _ = write!(output, "\n\n{draft_note}\n");
         }
 
+        if !session.output.trim().is_empty() {
+            let _ = write!(output, "\n\n{}", session.output.trim());
+        }
+
         output
     }
 
@@ -1940,6 +1944,34 @@ mod tests {
         assert!(text.contains("Draft messages stay local until you press s in session view"));
         assert!(text.contains("First draft"));
         assert!(text.contains("Second draft"));
+    }
+
+    #[test]
+    fn test_output_lines_render_draft_preview_with_status_lines() {
+        // Arrange
+        let mut session = session_fixture();
+        session.is_draft = true;
+        session.output = "[Paste Image Error] Clipboard is unavailable.".to_string();
+        session.prompt = "First draft".to_string();
+
+        // Act
+        let lines = output_lines(
+            &session,
+            Rect::new(0, 0, 80, 12),
+            line_context(None, None, None),
+            None,
+        );
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(text.contains("Draft Session"));
+        assert!(text.contains("First draft"));
+        assert!(text.contains("Paste Image Error"));
+        assert!(text.contains("Clipboard is unavailable"));
     }
 
     #[test]
