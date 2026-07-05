@@ -7,8 +7,7 @@ use crate::domain::input::InputState;
 use crate::domain::session::{Session, Status};
 use crate::runtime::EventResult;
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
-use crate::runtime::mode::question;
-use crate::ui::state::app_mode::{AppMode, ConfirmationIntent, HelpContext, QuestionFocus};
+use crate::ui::state::app_mode::{AppMode, ConfirmationIntent, HelpContext};
 use crate::ui::state::help_action::{
     HelpAction, project_list_actions, session_list_actions, settings_actions, system_log_actions,
 };
@@ -137,21 +136,7 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
                     && session.status == Status::Question
                 {
                     let questions = session.questions.clone();
-                    let selected_option_index = question::default_option_index(&questions, 0);
-                    let (review_status_message, review_text) = app.review_view_state(&session_id);
-                    app.mode = AppMode::Question {
-                        at_mention_state: None,
-                        review_status_message,
-                        review_text,
-                        session_id,
-                        questions,
-                        responses: Vec::new(),
-                        current_index: 0,
-                        focus: QuestionFocus::Answer,
-                        input: InputState::default(),
-                        scroll_offset: None,
-                        selected_option_index,
-                    };
+                    app.enter_question_mode(session_id.as_str(), questions);
                 } else {
                     let (review_status_message, review_text) = app.review_view_state(&session_id);
                     app.mode = AppMode::View {
