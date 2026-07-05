@@ -1,0 +1,53 @@
+name: Rust Validation
+
+on:
+  workflow_call:
+    inputs:
+      cargo-audit:
+        description: Run the dependency advisory audit hook.
+        required: false
+        type: boolean
+        default: false
+      llvm-tools-preview:
+        description: Install the Rust `llvm-tools-preview` component.
+        required: false
+        type: boolean
+        default: false
+      workspace-tests:
+        description: Run the full workspace source test suite hook.
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust and `prek`
+        uses: ./.github/actions/setup-rust-prek
+        with:
+          cargo-audit: ${{ inputs['cargo-audit'] && 'true' || 'false' }}
+          llvm-tools-preview: ${{ inputs['llvm-tools-preview'] && 'true' || 'false' }}
+
+      - name: Default validation hooks
+        run: prek run --all-files
+
+      - name: Dependency advisory audit
+        if: ${{ inputs['cargo-audit'] }}
+        run: prek run cargo-audit --all-files --hook-stage manual
+
+      - name: Full test suite
+        if: ${{ inputs['workspace-tests'] }}
+        run: prek run test-workspace --all-files --hook-stage manual

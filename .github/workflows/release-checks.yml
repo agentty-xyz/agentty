@@ -6,26 +6,9 @@ on:
 permissions:
   contents: read
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
   validate:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Setup Rust and `prek`
-        uses: ./.github/actions/setup-rust-prek
-        with:
-          llvm-tools-preview: "true"
-
-      - name: Default validation hooks
-        run: prek run --all-files
-
-      - name: Full test suite
-        run: prek run test-workspace --all-files --hook-stage manual
+    uses: ./.github/workflows/rust-validation.yml
+    with:
+      llvm-tools-preview: true
+      workspace-tests: true
