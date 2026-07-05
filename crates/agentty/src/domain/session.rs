@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
+pub use ag_agent::SessionStats;
 use serde::de::{self, Deserializer};
 use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
@@ -417,38 +418,6 @@ pub enum PublishedBranchSyncStatus {
     Succeeded,
     /// The latest automatic push attempt failed and left the branch stale.
     Failed,
-}
-
-/// Per-session usage and diff statistics.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct SessionStats {
-    /// Added diff lines currently attributed to the session worktree.
-    pub added_lines: u64,
-    /// Deleted diff lines currently attributed to the session worktree.
-    pub deleted_lines: u64,
-    /// Input/prompt tokens consumed by this session.
-    pub input_tokens: u64,
-    /// Output/response tokens produced by this session.
-    pub output_tokens: u64,
-}
-
-impl SessionStats {
-    /// Counts added and deleted lines in one git patch while ignoring file
-    /// header markers such as `+++` and `---`.
-    pub fn line_change_counts(diff: &str) -> (u64, u64) {
-        diff.lines()
-            .fold((0_u64, 0_u64), |(added_lines, deleted_lines), line| {
-                if line.starts_with('+') && !line.starts_with("+++") {
-                    return (added_lines.saturating_add(1), deleted_lines);
-                }
-
-                if line.starts_with('-') && !line.starts_with("---") {
-                    return (added_lines, deleted_lines.saturating_add(1));
-                }
-
-                (added_lines, deleted_lines)
-            })
-    }
 }
 
 /// Aggregated activity count for one day key.

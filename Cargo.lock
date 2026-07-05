@@ -9,6 +9,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "ag-agent"
+version = "0.11.1"
+dependencies = [
+ "ag-protocol",
+ "agent-client-protocol",
+ "askama",
+ "base64",
+ "mockall",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "ag-clipboard"
 version = "0.11.1"
 dependencies = [
@@ -117,6 +136,7 @@ dependencies = [
 name = "agentty"
 version = "0.11.1"
 dependencies = [
+ "ag-agent",
  "ag-clipboard",
  "ag-forge",
  "ag-git",

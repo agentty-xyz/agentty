@@ -1,0 +1,19 @@
+//! Provider-agnostic agent channel module.
+//!
+//! This parent module intentionally acts as a router only:
+//! it exposes child modules and re-exports the public channel API.
+
+pub mod app_server;
+pub mod cli;
+pub mod contract;
+pub mod factory;
+
+#[cfg(any(test, feature = "test-utils"))]
+pub use contract::MockAgentChannel;
+pub use contract::{
+    AgentChannel, AgentError, AgentFuture, AgentRequestKind, SessionRef, StartSessionRequest,
+    TurnEvent, TurnRequest, TurnResult,
+};
+pub use factory::create_agent_channel;
+
+pub use crate::model::turn_prompt::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};

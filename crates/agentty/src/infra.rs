@@ -1,15 +1,15 @@
 //! Infrastructure adapters for database, filesystem, system, and agent
 //! backends.
 
-pub mod agent;
+pub use ag_agent::agent;
 /// Shared app-server types and runtime trait boundaries.
-pub mod app_server;
+pub use ag_agent::app_server;
 /// Provider router for app-server clients.
-pub mod app_server_router;
+pub use ag_agent::app_server_router;
 /// Shared stdio JSON-RPC transport for app-server protocols.
-pub mod app_server_transport;
+pub use ag_agent::app_server_transport;
 /// Provider-agnostic agent channel abstraction for session turn execution.
-pub mod channel;
+pub use ag_agent::channel;
 /// Clipboard image capture and persistence boundary for prompt attachments.
 pub(crate) mod clipboard_image;
 /// Wall-clock boundary used by app, runtime, and session orchestration.

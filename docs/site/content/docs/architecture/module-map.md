@@ -20,6 +20,9 @@ module docstrings directly.
   file-list, and RGBA image read surface used by prompt image capture. Platform backends
   own macOS pasteboard access, X11 selection reads, Wayland `wl-paste` reads, and
   unsupported-backend reporting.
+- `crates/ag-agent/`: Shared agent backend library crate with provider model metadata,
+  prompt templates, CLI and app-server transports, provider-neutral channel contracts,
+  app-server routing, and compatibility re-exports for the moved Agentty agent APIs.
 - `crates/ag-forge/`: Shared forge review-request library crate with normalized
   review-request types, GitHub/GitLab remote detection, and the `gh`/`glab` adapters
   behind the `ReviewRequestClient` and `ForgeCommandRunner` boundaries.
@@ -47,20 +50,18 @@ module docstrings directly.
   workflow steps (`lifecycle`, `turn`, `post_turn`, `merge`, `task`, `worker`). No
   direct process, filesystem, or clock calls — everything external goes through `infra/`
   traits.
-- `domain/`: Pure business entities and logic — agent kinds and models, sessions and
-  statuses, projects, settings keys, themes, structured questions, typed transcript
-  messages, prompt-composer logic, and compatibility re-exports for shared protocol
-  question and turn prompt payloads. No I/O.
+- `domain/`: Pure business entities and logic — sessions and statuses, projects,
+  settings keys, themes, structured questions, typed transcript messages,
+  prompt-composer logic, and compatibility re-exports for `ag-agent` provider models
+  plus shared protocol question and turn prompt payloads. No I/O.
 - `infra/`: External integrations behind traits — SQLite persistence (`infra/db/`
   repositories), git (`GitClient`, backed by `ag-git`), filesystem (`FsClient`), tmux,
   clipboard images, version checks, project discovery, file indexing, and the agent
   stack. Clipboard image capture delegates host clipboard reads to `ag-clipboard`, then
-  owns temp-file persistence and attachment metadata. The agent stack includes provider
-  registry, per-provider backends (`infra/agent/`), shared prompt preparation and
-  access-root selection (`infra/agent/prompt.rs`), transport channels
-  (`infra/channel/`), app-server clients plus shared command and stdio transport helpers
-  (`infra/agent/app_server/`), and the structured response protocol compatibility layer
-  backed by `ag-protocol` prompt-envelope, schema, and parser APIs.
+  owns temp-file persistence and attachment metadata. Agent backend, channel,
+  app-server, and provider registry APIs are owned by `crates/ag-agent/` and re-exported
+  through `infra/agent`, `infra/channel`, `infra/app_server`, `infra/app_server_router`,
+  and `infra/app_server_transport` for Agentty callers.
 - `runtime/`: Terminal lifecycle and the event loop — terminal setup, the event-reader
   thread, key dispatch, one handler per `AppMode` under `runtime/mode/`, and shared mode
   helpers for session-output metrics.

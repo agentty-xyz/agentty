@@ -26,15 +26,16 @@ these constraints:
 
 ## Workspace Map
 
-| Path                      | Responsibility                                                       |
-| ------------------------- | -------------------------------------------------------------------- |
-| `crates/ag-forge/`        | Shared forge review-request library (`gh`/`glab` adapters).          |
-| `crates/ag-git/`          | Shared git, worktree, sync, rebase, and merge library.               |
-| `crates/ag-protocol/`     | Shared structured response protocol and turn prompt payload library. |
-| `crates/agentty/`         | Main TUI application crate.                                          |
-| `crates/testty/`          | TUI end-to-end testing framework.                                    |
-| `crates/ag-xtask/`        | Workspace maintenance and automation commands.                       |
-| `docs/site/content/docs/` | End-user and contributor documentation.                              |
+| Path                      | Responsibility                                                              |
+| ------------------------- | --------------------------------------------------------------------------- |
+| `crates/ag-forge/`        | Shared forge review-request library (`gh`/`glab` adapters).                 |
+| `crates/ag-git/`          | Shared git, worktree, sync, rebase, and merge library.                      |
+| `crates/ag-agent/`        | Shared agent provider models, transports, channels, and app-server routing. |
+| `crates/ag-protocol/`     | Shared structured response protocol and turn prompt payload library.        |
+| `crates/agentty/`         | Main TUI application crate.                                                 |
+| `crates/testty/`          | TUI end-to-end testing framework.                                           |
+| `crates/ag-xtask/`        | Workspace maintenance and automation commands.                              |
+| `docs/site/content/docs/` | End-user and contributor documentation.                                     |
 
 ## Main Runtime Flow
 
@@ -216,7 +217,7 @@ flowchart TD
   worker["app/session/workflow/worker.rs"]
   turn["app/session/workflow/turn.rs"]
   factory["create_agent_channel(kind, override)"]
-  provider["Provider registry<br/>infra/agent/provider.rs"]
+  provider["Provider registry<br/>ag-agent/src/agent/provider.rs"]
   cli_mode["transport_mode() -> Cli"]
   cli_channel["CliAgentChannel<br/>Antigravity/Claude; subprocess per turn"]
   app_server_mode["transport_mode() -> AppServer"]
@@ -239,9 +240,10 @@ flowchart TD
   client_trait --> gemini_client
 ```
 
-<a id="architecture-key-types"></a> Key types (`infra/channel/contract.rs`, re-exported
-by `infra/channel.rs`, with prompt payloads owned by `ag-protocol` and re-exported
-through `domain/turn_prompt.rs`):
+<a id="architecture-key-types"></a> Key types
+(`crates/ag-agent/src/channel/contract.rs`, re-exported by
+`crates/ag-agent/src/channel.rs` and Agentty `infra/channel`, with prompt payloads owned
+by `ag-protocol` and re-exported through `domain/turn_prompt.rs`):
 
 | Type               | Purpose                                                                                                               |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------- |
@@ -275,7 +277,7 @@ compact reminder.
 <a id="architecture-agent-interaction-protocol"></a> Provider output is normalized to
 one structured response protocol (`answer`, `questions`, optional `summary`):
 
-1. Prompt builders in `crates/agentty/src/infra/agent/` ask `crates/ag-protocol/src/` to
+1. Prompt builders in `crates/ag-agent/src/agent/` ask `crates/ag-protocol/src/` to
    prepend the shared protocol preamble with a self-descriptive JSON schema. CLI turns
    resend it every turn; persistent app-server turns reuse a compact reminder when the
    provider context already received the full bootstrap, and replay the transcript when
@@ -292,7 +294,7 @@ one structured response protocol (`answer`, `questions`, optional `summary`):
    parse diagnostics (response sizing, parser location, visible top-level keys).
 1. Provider-specific transport, stdin-vs-argv prompt delivery, strict parsing policy,
    and thought-phase handling are centralized in the provider registry
-   (`crates/agentty/src/infra/agent/provider.rs`).
+   (`crates/ag-agent/src/agent/provider.rs`).
 
 ## Clarification Question Loop
 

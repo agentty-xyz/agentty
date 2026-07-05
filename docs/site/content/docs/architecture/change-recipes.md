@@ -25,15 +25,15 @@ through the correct modules without crossing layer boundaries.
 
 ## Add a New Agent Backend or Model
 
-1. Update domain model declarations in `crates/agentty/src/domain/agent.rs`.
-1. Add backend behavior in `crates/agentty/src/infra/agent/` and register it in
-   `provider.rs`.
+1. Update provider model declarations in `crates/ag-agent/src/model/agent.rs`.
+1. Add backend behavior in `crates/ag-agent/src/agent/` and register it in
+   `crates/ag-agent/src/agent/provider.rs`.
 1. If app-server-based, implement `app_server_client()` in the concrete backend so the
    provider owns its runtime wiring.
 1. Register any shared parsing, prompt-transport, streaming, or thought-policy changes
-   in `crates/agentty/src/infra/agent/provider.rs`.
-1. The channel layer (`infra/channel.rs`) routes automatically based on the
-   backend-owned transport mode - no change needed there unless the runtime contract
+   in `crates/ag-agent/src/agent/provider.rs`.
+1. The channel layer (`crates/ag-agent/src/channel.rs`) routes automatically based on
+   the backend-owned transport mode - no change needed there unless the runtime contract
    itself changes.
 1. Update `docs/site/content/docs/agents/backends.md` with backend/model documentation.
 
@@ -88,8 +88,8 @@ through the correct modules without crossing layer boundaries.
    inputs, and make line-count/layout helpers reuse the same cached derived data as the
    final paint path.
 1. When changing `TurnRequest`/`TurnEvent`/`TurnResult` shapes in
-   `crates/agentty/src/infra/channel/contract.rs` (re-exported by
-   `crates/agentty/src/infra/channel.rs`), update the key-types table in
+   `crates/ag-agent/src/channel/contract.rs` (re-exported by
+   `crates/ag-agent/src/channel.rs`), update the key-types table in
    `docs/site/content/docs/architecture/runtime-flow.md`.
 1. When adding/removing `#[cfg_attr(test, mockall::automock)]` external-boundary traits,
    update `docs/site/content/docs/architecture/testability-boundaries.md`.

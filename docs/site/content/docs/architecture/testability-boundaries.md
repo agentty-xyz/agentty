@@ -13,22 +13,22 @@ trait boundaries so orchestration logic can be tested deterministically.
 
 <a id="architecture-testability-boundaries"></a> External-boundary traits are mocked
 with `mockall`, usually via `#[cfg_attr(test, mockall::automock)]`; shared workspace
-crates such as `ag-forge` and `ag-git` expose test mocks through crate features. The
-major boundaries:
+crates such as `ag-agent`, `ag-forge`, and `ag-git` expose test mocks through crate
+features or test-only exports. The major boundaries:
 
-| Trait                  | Module                          | Boundary                                                                                                                                                                           |
-| ---------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GitClient`            | `crates/ag-git/src/client.rs`   | Git and worktree operations (merge, rebase, diff, push, status, ahead/behind).                                                                                                     |
-| `FsClient`             | `infra/fs.rs`                   | Async filesystem operations and path probes.                                                                                                                                       |
-| `AgentChannel`         | `infra/channel.rs`              | Provider-agnostic turn execution.                                                                                                                                                  |
-| `AgentBackend`         | `infra/agent/backend.rs`        | Per-provider setup and transport command construction.                                                                                                                             |
-| `AppServerClient`      | `infra/app_server/contract.rs`  | Provider app-server RPC execution and session runtime lifecycle.                                                                                                                   |
-| `ReviewRequestClient`  | `crates/ag-forge/src/client.rs` | GitHub/GitLab review-request orchestration through `gh`/`glab`.                                                                                                                    |
-| `EventSource`          | `runtime/event.rs`              | Terminal event polling for deterministic event-loop tests.                                                                                                                         |
-| `Clock`                | `infra/clock.rs`                | Wall-clock and monotonic time for session orchestration and render throttling.                                                                                                     |
-| `TmuxClient`           | `infra/tmux.rs`                 | Tmux subprocess operations for opening worktrees.                                                                                                                                  |
-| `ClipboardImageClient` | `infra/clipboard_image.rs`      | Clipboard image capture and temp-file persistence; host clipboard reads are isolated in `ag-clipboard`.                                                                            |
-| Repository traits      | `infra/db/*.rs`                 | Narrow persistence boundaries (`SessionRepository`, `ProjectRepository`, `ReviewRepository`, `UsageRepository`, `ActivityRepository`, `OperationRepository`, `SettingRepository`). |
+| Trait                  | Module                                       | Boundary                                                                                                                                                                           |
+| ---------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GitClient`            | `crates/ag-git/src/client.rs`                | Git and worktree operations (merge, rebase, diff, push, status, ahead/behind).                                                                                                     |
+| `FsClient`             | `infra/fs.rs`                                | Async filesystem operations and path probes.                                                                                                                                       |
+| `AgentChannel`         | `crates/ag-agent/src/channel.rs`             | Provider-agnostic turn execution.                                                                                                                                                  |
+| `AgentBackend`         | `crates/ag-agent/src/agent/backend.rs`       | Per-provider setup and transport command construction.                                                                                                                             |
+| `AppServerClient`      | `crates/ag-agent/src/app_server/contract.rs` | Provider app-server RPC execution and session runtime lifecycle.                                                                                                                   |
+| `ReviewRequestClient`  | `crates/ag-forge/src/client.rs`              | GitHub/GitLab review-request orchestration through `gh`/`glab`.                                                                                                                    |
+| `EventSource`          | `runtime/event.rs`                           | Terminal event polling for deterministic event-loop tests.                                                                                                                         |
+| `Clock`                | `infra/clock.rs`                             | Wall-clock and monotonic time for session orchestration and render throttling.                                                                                                     |
+| `TmuxClient`           | `infra/tmux.rs`                              | Tmux subprocess operations for opening worktrees.                                                                                                                                  |
+| `ClipboardImageClient` | `infra/clipboard_image.rs`                   | Clipboard image capture and temp-file persistence; host clipboard reads are isolated in `ag-clipboard`.                                                                            |
+| Repository traits      | `infra/db/*.rs`                              | Narrow persistence boundaries (`SessionRepository`, `ProjectRepository`, `ReviewRepository`, `UsageRepository`, `ActivityRepository`, `OperationRepository`, `SettingRepository`). |
 
 Beyond these, narrower internal command-runner boundaries (for example
 `ForgeCommandRunner`, `GitCommandRunner`, `TmuxCommandRunner`, `UpdateRunner`, and the

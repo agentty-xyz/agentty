@@ -28,8 +28,9 @@ validation commands. See Quality Gates for when to run what.
 - Format Rust sources: `prek run rustfmt-fix --files <paths> --hook-stage manual`
 - Compile check: `prek run cargo-check --files <paths>`
 - Lint: `prek run clippy --files <paths>`
-- Test one crate: `prek run test-agentty-src` (also `test-ag-git-src`,
-  `test-testty-src`, `test-ag-forge-src`, `test-ag-xtask-src`)
+- Test one crate: `prek run test-agentty-src` (also `test-ag-agent-src`,
+  `test-ag-git-src`, `test-testty-src`, `test-ag-forge-src`, `test-ag-protocol-src`,
+  `test-ag-clipboard-src`, `test-ag-xtask-src`)
 - Focused E2E test:
   `cargo nextest run --locked --profile ci -p agentty --test e2e <test-filter>`
 - Format markdown: `prek run mdformat --files <paths>`
@@ -503,7 +504,7 @@ Always wrap these code elements in backticks when referenced in prose:
 
 ## Runtime Prompts
 
-- Agent prompt templates live in `crates/agentty/src/infra/agent/template/`. Inspect the
+- Agent prompt templates live in `crates/ag-agent/src/agent/template/`. Inspect the
   source templates directly when changing backend prompt behavior.
 
 ## Workspace Map

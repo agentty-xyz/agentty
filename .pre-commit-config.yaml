@@ -112,6 +112,14 @@ repos:
         always_run: true
         pass_filenames: false
         stages: [manual]
+      - id: test-ag-agent-src
+        name: cargo nextest ag-agent src
+        description: Source tests for `crates/ag-agent/src`.
+        entry: cargo nextest run --locked --profile ci -p ag-agent --lib
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [manual]
       - id: test-agentty-src
         name: cargo nextest agentty src
         description: Source tests for `crates/agentty/src`.

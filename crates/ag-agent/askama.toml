@@ -1,0 +1,3 @@
+[general]
+dirs = ["src/agent/template"]
+whitespace = "preserve"

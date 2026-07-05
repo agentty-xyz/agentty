@@ -16,6 +16,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+ag-agent.workspace = true
 ag-clipboard.workspace = true
 ag-forge.workspace = true
 ag-git.workspace = true
@@ -46,6 +47,7 @@ uuid.workspace = true
 unicode-width.workspace = true
 
 [dev-dependencies]
+ag-agent = { workspace = true, features = ["test-utils"] }
 ag-forge = { workspace = true, features = ["test-utils"] }
 ag-git = { workspace = true, features = ["test-utils"] }
 assert_cmd.workspace = true
