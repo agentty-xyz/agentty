@@ -288,6 +288,8 @@ mod tests {
         );
         assert!(!rendered_prompt.contains("{# task separator #}"));
         assert!(rendered_prompt.contains("For this session turn"));
+        assert!(rendered_prompt.contains("```mermaid"));
+        assert!(rendered_prompt.contains("Supported mermaid syntax"));
         assert!(normalized_rendered_prompt.contains("Do not create commits"));
         assert!(normalized_rendered_prompt.contains("suggest creating commits"));
         assert!(rendered_prompt.contains("summary"));
@@ -374,6 +376,7 @@ mod tests {
                 .contains("______________________________________________________________________")
         );
         assert!(rendered_prompt.contains("For this one-shot utility prompt"));
+        assert!(!rendered_prompt.contains("mermaid"));
         assert!(rendered_prompt.contains(r#"{"answer":"...","questions":[],"summary":null}"#));
         assert!(rendered_prompt.contains("\"summary\""));
         assert!(rendered_prompt.ends_with(prompt));
