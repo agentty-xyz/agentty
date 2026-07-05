@@ -648,6 +648,7 @@ fn add_manual_session_with_status(
         status,
         summary: None,
         title: Some(prompt.to_string()),
+        transcript: None,
         updated_at: 0,
         workflow_notice: None,
     });
@@ -708,6 +709,7 @@ fn test_session_manager_with_clock(
             status: Status::Review,
             summary: None,
             title: Some("Title".to_string()),
+            transcript: None,
             updated_at: 0,
             workflow_notice: None,
         }],

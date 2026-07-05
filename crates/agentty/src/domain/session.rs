@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use super::agent::{AgentSelection, ReasoningLevel};
+use super::session_message::SessionTranscript;
 use crate::domain::question::QuestionItem;
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment};
 
@@ -524,6 +525,8 @@ pub struct Session {
     pub summary: Option<String>,
     /// Optional explicit session title.
     pub title: Option<String>,
+    /// Typed transcript snapshot used by the UI when available.
+    pub transcript: Option<SessionTranscript>,
     /// Last update timestamp (Unix seconds).
     pub updated_at: i64,
     /// Transient workflow notice block shown in the output panel without
@@ -943,6 +946,8 @@ pub struct SessionHandles {
     pub queued_messages: Arc<Mutex<VecDeque<TurnPrompt>>>,
     /// Shared mutable status synchronized with persistence/UI.
     pub status: Arc<Mutex<Status>>,
+    /// Shared typed transcript snapshot mirrored to the render layer.
+    pub transcript: Arc<Mutex<SessionTranscript>>,
 }
 
 impl SessionHandles {
@@ -954,6 +959,23 @@ impl SessionHandles {
             output: Arc::new(Mutex::new(output)),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             status: Arc::new(Mutex::new(status)),
+            transcript: Arc::new(Mutex::new(SessionTranscript::default())),
+        }
+    }
+
+    /// Creates handles initialized with a typed transcript snapshot.
+    pub fn new_with_transcript(
+        output: String,
+        status: Status,
+        transcript: SessionTranscript,
+    ) -> Self {
+        Self {
+            cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+            child_pid: Arc::new(Mutex::new(None)),
+            output: Arc::new(Mutex::new(output)),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            status: Arc::new(Mutex::new(status)),
+            transcript: Arc::new(Mutex::new(transcript)),
         }
     }
 
@@ -1760,6 +1782,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             status: Status::Review,
             summary: None,
             title: None,
+            transcript: None,
             updated_at: 0,
             workflow_notice: None,
         };
@@ -1803,6 +1826,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             status: Status::AgentReview,
             summary: None,
             title: None,
+            transcript: None,
             updated_at: 0,
             workflow_notice: None,
         };
@@ -1846,6 +1870,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             status: Status::InProgress,
             summary: None,
             title: None,
+            transcript: None,
             updated_at: 0,
             workflow_notice: None,
         };
@@ -1889,6 +1914,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             status: Status::Done,
             summary: None,
             title: None,
+            transcript: None,
             updated_at: 0,
             workflow_notice: None,
         };
@@ -1932,6 +1958,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             status: Status::InProgress,
             summary: None,
             title: None,
+            transcript: None,
             updated_at: 0,
             workflow_notice: None,
         };
@@ -1975,6 +2002,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             status: Status::InProgress,
             summary: None,
             title: None,
+            transcript: None,
             updated_at: 0,
             workflow_notice: None,
         };

@@ -1036,65 +1036,6 @@ mod tests {
     }
 
     #[test]
-    fn test_session_output_text_with_spaced_user_input_adds_empty_line_before_and_after() {
-        // Arrange
-        let output = "assistant output\n › user prompt\nagent response";
-
-        // Act
-        let spaced = session_output_text_with_spaced_user_input(output);
-
-        // Assert
-        assert_eq!(
-            spaced,
-            "assistant output\n\n › user prompt\n\nagent response"
-        );
-    }
-
-    #[test]
-    fn test_session_output_text_with_spaced_user_input_keeps_existing_empty_lines() {
-        // Arrange
-        let output = "assistant output\n\n › user prompt\n\nagent response";
-
-        // Act
-        let spaced = session_output_text_with_spaced_user_input(output);
-
-        // Assert
-        assert_eq!(spaced, output);
-    }
-
-    #[test]
-    fn test_session_output_text_with_spaced_user_input_keeps_multiline_user_prompt_together() {
-        // Arrange
-        let output = "assistant output\n › first line\nsecond line\n\nagent response";
-
-        // Act
-        let spaced = session_output_text_with_spaced_user_input(output);
-
-        // Assert
-        assert_eq!(
-            spaced,
-            "assistant output\n\n › first line\nsecond line\n\nagent response"
-        );
-    }
-
-    #[test]
-    fn test_session_output_text_with_spaced_user_input_adds_question_group_spacing() {
-        // Arrange
-        let output = "assistant output\n › Clarifications:\n   1. Q: Need target branch?\n      \
-                      A: main\n   2. Q: Need tests?\n      A: yes\n\nagent response";
-
-        // Act
-        let spaced = session_output_text_with_spaced_user_input(output);
-
-        // Assert
-        assert_eq!(
-            spaced,
-            "assistant output\n\n › Clarifications:\n   \n   1. Q: Need target branch?\n      A: \
-             main\n   \n   2. Q: Need tests?\n      A: yes\n\nagent response"
-        );
-    }
-
-    #[test]
     fn test_annotate_review_suggestions_header_appends_apply_hint_to_exact_header() {
         // Arrange
         let review_markdown = "## Review\n### Project Impact\n- None\n### Suggestions\n- Fix typo.";

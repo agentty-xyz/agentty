@@ -15,7 +15,7 @@ use rustc_hash::FxHasher;
 use crate::app;
 use crate::domain::agent::AgentModel;
 use crate::domain::session::{Session, SessionId, Status};
-use crate::domain::transcript_notice::TRAILING_TRANSCRIPT_NOTICE_PREFIXES;
+use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use crate::icon::{Icon, TACHYON_LOADER_WIDTH};
 use crate::ui::component::tachyon_loader::TachyonLoaderEffect;
 use crate::ui::input_layout::{bottom_pinned_scroll_offset, panel_inner_width};
@@ -35,8 +35,6 @@ const DRAFT_PREVIEW_STACKED_STAGED_NOTE: &str =
     "Draft messages stay local until the parent is review-ready and you press `s` in session view \
      to start the stacked bundle from its parent branch.";
 const USER_PROMPT_PREFIX: &str = " › ";
-/// User prompt prefix when the prompt starts after a transcript newline.
-const USER_PROMPT_LINE_PREFIX: &str = "\n › ";
 const USER_PROMPT_CONTINUATION_PREFIX: &str = "   ";
 const SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT: usize = 16;
 
@@ -67,6 +65,7 @@ struct SessionOutputLayoutCacheKey {
     session_update_version: u64,
     session_updated_at: i64,
     status: Status,
+    transcript: TranscriptFingerprint,
     workflow_notice: TextFingerprint,
 }
 
@@ -118,6 +117,50 @@ impl TextFingerprint {
             content_hash: hasher.finish(),
             content_len,
             is_some: content_count > 0,
+        }
+    }
+}
+
+/// Compact identity for a typed transcript snapshot in the layout cache key.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TranscriptFingerprint {
+    content_len: usize,
+    is_some: bool,
+    last_kind: &'static str,
+    last_position: i64,
+    message_count: usize,
+}
+
+impl TranscriptFingerprint {
+    /// Builds a cheap identity for the optional typed transcript without
+    /// hashing the full transcript on every frame.
+    fn from_session(session: &Session) -> Self {
+        let Some(transcript) = session.transcript.as_ref() else {
+            return Self {
+                content_len: 0,
+                is_some: false,
+                last_kind: "",
+                last_position: 0,
+                message_count: 0,
+            };
+        };
+        let messages = transcript.messages();
+        let Some(last_message) = messages.last() else {
+            return Self {
+                content_len: 0,
+                is_some: false,
+                last_kind: "",
+                last_position: 0,
+                message_count: 0,
+            };
+        };
+
+        Self {
+            content_len: transcript.total_content_len(),
+            is_some: true,
+            last_kind: last_message.kind.as_str(),
+            last_position: last_message.position,
+            message_count: messages.len(),
         }
     }
 }
@@ -194,8 +237,8 @@ struct SessionOutputAssembly<'a> {
     active_progress: Option<&'a str>,
     active_prompt_output: Option<&'a str>,
     active_turn_has_visible_text: bool,
-    active_turn_text: Option<&'a str>,
-    completed_turn_text: &'a str,
+    active_turn_text: Option<String>,
+    completed_turn_text: String,
     inner_width: usize,
     lines: Vec<Line<'static>>,
     markdown_render_cache: Option<&'a markdown::MarkdownRenderCache>,
@@ -205,7 +248,15 @@ struct SessionOutputAssembly<'a> {
     review_text: Option<&'a str>,
     session: &'a Session,
     status: Status,
-    trailing_notice_text: Option<&'a str>,
+    trailing_notice_text: Option<String>,
+}
+
+/// Transcript text split into the visual sections understood by the output
+/// assembly.
+struct SessionOutputTextSections {
+    active_turn: Option<String>,
+    completed_turn: String,
+    trailing_notice: Option<String>,
 }
 
 impl SessionOutputAssembly<'_> {
@@ -242,7 +293,7 @@ impl SessionOutputAssembly<'_> {
     fn append_completed_transcript(&mut self) {
         SessionOutput::append_markdown_lines(
             &mut self.lines,
-            self.completed_turn_text,
+            &self.completed_turn_text,
             self.inner_width,
             self.markdown_render_cache,
         );
@@ -261,7 +312,7 @@ impl SessionOutputAssembly<'_> {
 
         SessionOutput::append_trailing_transcript_notice_lines(
             &mut self.lines,
-            self.trailing_notice_text,
+            self.trailing_notice_text.as_deref(),
             self.inner_width,
             self.markdown_render_cache,
         );
@@ -271,7 +322,7 @@ impl SessionOutputAssembly<'_> {
         if !SessionOutput::shows_summary_block(
             self.status,
             self.active_prompt_output,
-            self.active_turn_text,
+            self.active_turn_text.as_deref(),
         ) {
             return;
         }
@@ -287,7 +338,7 @@ impl SessionOutputAssembly<'_> {
     fn append_active_turn(&mut self) {
         SessionOutput::append_active_turn_lines(
             &mut self.lines,
-            self.active_turn_text,
+            self.active_turn_text.as_deref(),
             self.inner_width,
             self.markdown_render_cache,
         );
@@ -679,6 +730,7 @@ impl<'a> SessionOutput<'a> {
             session_update_version: context.session_update_version,
             session_updated_at: session.updated_at,
             status: session.status,
+            transcript: TranscriptFingerprint::from_session(session),
             workflow_notice: TextFingerprint::from_text(session.workflow_notice.as_deref()),
         }
     }
@@ -728,20 +780,11 @@ impl<'a> SessionOutput<'a> {
             session_update_version: _,
         } = context;
         let status = session.status;
-        let output_text = Self::output_text(session);
-        let (completed_turn_text, active_turn_text) =
-            Self::transcript_sections(status, output_text.as_ref(), active_prompt_output);
-        let completed_turn_text =
-            session_format::session_output_text_with_spaced_user_input(completed_turn_text);
-        let active_turn_text =
-            active_turn_text.map(session_format::session_output_text_with_spaced_user_input);
+        let transcript_sections = Self::output_text_sections(session, status);
         let inner_width =
             panel_inner_width(output_area, session_format::session_output_panel_borders());
-        let (completed_turn_text, trailing_notice_text) = text_util::split_trailing_line_block(
-            &completed_turn_text,
-            TRAILING_TRANSCRIPT_NOTICE_PREFIXES,
-        );
-        let active_turn_has_visible_text = active_turn_text
+        let active_turn_has_visible_text = transcript_sections
+            .active_turn
             .as_deref()
             .is_some_and(|text| !text.trim().is_empty());
         SessionOutputAssembly {
@@ -749,8 +792,8 @@ impl<'a> SessionOutput<'a> {
             active_progress,
             active_prompt_output,
             active_turn_has_visible_text,
-            active_turn_text: active_turn_text.as_deref(),
-            completed_turn_text,
+            active_turn_text: transcript_sections.active_turn,
+            completed_turn_text: transcript_sections.completed_turn,
             inner_width,
             lines: Vec::new(),
             markdown_render_cache,
@@ -760,7 +803,7 @@ impl<'a> SessionOutput<'a> {
             review_text,
             session,
             status,
-            trailing_notice_text,
+            trailing_notice_text: transcript_sections.trailing_notice,
         }
         .into_output_lines()
     }
@@ -852,83 +895,98 @@ impl<'a> SessionOutput<'a> {
         Self::append_markdown_lines(lines, workflow_notice, inner_width, markdown_render_cache);
     }
 
-    /// Splits the transcript before the current active-turn prompt block.
-    ///
-    /// This keeps the current prompt-led block separate when it has already
-    /// been appended to the persisted transcript.
-    fn transcript_sections<'text>(
+    /// Returns transcript sections from draft-preview text or typed message
+    /// rows.
+    fn output_text_sections(session: &Session, status: Status) -> SessionOutputTextSections {
+        let is_draft_preview = session.status == Status::Draft && session.is_draft_session();
+        if is_draft_preview {
+            return SessionOutputTextSections {
+                active_turn: None,
+                completed_turn: Self::render_draft_session_preview(session),
+                trailing_notice: None,
+            };
+        }
+
+        if let Some(transcript) = session
+            .transcript
+            .as_ref()
+            .filter(|transcript| !transcript.is_empty())
+        {
+            return Self::typed_transcript_sections(status, transcript);
+        }
+
+        SessionOutputTextSections {
+            active_turn: None,
+            completed_turn: String::new(),
+            trailing_notice: None,
+        }
+    }
+
+    /// Splits a typed transcript without rediscovering user prompts or
+    /// workflow notices from rendered text prefixes.
+    fn typed_transcript_sections(
         status: Status,
-        output_text: &'text str,
-        active_prompt_output: Option<&str>,
-    ) -> (&'text str, Option<&'text str>) {
+        transcript: &SessionTranscript,
+    ) -> SessionOutputTextSections {
+        let messages = transcript.messages();
+        let active_prompt_index =
+            Self::active_prompt_message_index(status, messages).unwrap_or(messages.len());
+        let (completed_messages, active_messages) = messages.split_at(active_prompt_index);
+        let trailing_notice_start = Self::trailing_workflow_notice_start(completed_messages)
+            .unwrap_or(completed_messages.len());
+        let (completed_messages, trailing_notice_messages) =
+            completed_messages.split_at(trailing_notice_start);
+
+        SessionOutputTextSections {
+            active_turn: (!active_messages.is_empty())
+                .then(|| Self::messages_to_legacy_output(active_messages)),
+            completed_turn: Self::messages_to_legacy_output(completed_messages),
+            trailing_notice: (!trailing_notice_messages.is_empty())
+                .then(|| Self::messages_to_legacy_output(trailing_notice_messages)),
+        }
+    }
+
+    /// Returns the start index for the latest active user prompt message.
+    fn active_prompt_message_index(status: Status, messages: &[SessionMessage]) -> Option<usize> {
         if !matches!(
             status,
             Status::InProgress | Status::Queued | Status::Rebasing | Status::Merging
         ) {
-            return (output_text, None);
+            return None;
         }
-        let Some(active_prompt_start) =
-            Self::active_prompt_start(output_text, active_prompt_output)
+
+        messages
+            .iter()
+            .rposition(|message| message.kind == SessionMessageKind::UserPrompt)
+    }
+
+    /// Returns the first index of the trailing workflow-notice suffix.
+    fn trailing_workflow_notice_start(messages: &[SessionMessage]) -> Option<usize> {
+        if messages.is_empty() {
+            return None;
+        }
+
+        let Some(first_non_notice_from_end) = messages
+            .iter()
+            .rposition(|message| message.kind != SessionMessageKind::WorkflowNotice)
         else {
-            return (output_text, None);
+            return Some(0);
         };
-        (
-            &output_text[..active_prompt_start],
-            Some(&output_text[active_prompt_start..]),
-        )
+        let notice_start = first_non_notice_from_end.saturating_add(1);
+
+        (notice_start < messages.len()).then_some(notice_start)
     }
 
-    /// Returns the byte index where the active prompt block starts.
-    ///
-    /// The exact captured prompt block is preferred because it distinguishes
-    /// user prompts from assistant text that happens to contain prompt-like
-    /// markers. When that in-memory capture is unavailable, the renderer falls
-    /// back to the last persisted user prompt marker so previous-turn summaries
-    /// still render above the latest prompt after reloads or snapshot misses.
-    fn active_prompt_start(output_text: &str, active_prompt_output: Option<&str>) -> Option<usize> {
-        active_prompt_output
-            .filter(|prompt_output| !prompt_output.is_empty())
-            .and_then(|prompt_output| output_text.rfind(prompt_output))
-            .or_else(|| Self::last_user_prompt_start(output_text))
-    }
+    /// Serializes a message slice through the compatibility transcript
+    /// formatter without losing the message boundaries used for splitting.
+    fn messages_to_legacy_output(messages: &[SessionMessage]) -> String {
+        let mut output = String::new();
 
-    /// Returns the byte index of the last line that starts a persisted user
-    /// prompt block.
-    fn last_user_prompt_start(output_text: &str) -> Option<usize> {
-        output_text
-            .rfind(USER_PROMPT_LINE_PREFIX)
-            .map(|index| index + 1)
-            .or_else(|| output_text.starts_with(USER_PROMPT_PREFIX).then_some(0))
-    }
-
-    /// Returns the source text shown in the output panel for the current
-    /// status.
-    ///
-    /// Draft sessions render staged-draft guidance before their first
-    /// live turn starts. Active and canceled sessions otherwise render the
-    /// captured transcript output. Done sessions keep transcript and summary
-    /// rendered together so both completed output and persisted summary remain
-    /// visible.
-    fn output_text(session: &Session) -> Cow<'_, str> {
-        match session.status {
-            Status::Draft if session.is_draft_session() => {
-                return Cow::Owned(Self::render_draft_session_preview(session));
-            }
-            Status::Canceled => {
-                return Cow::Borrowed(session.output.as_str());
-            }
-            Status::Review
-            | Status::AgentReview
-            | Status::Question
-            | Status::Draft
-            | Status::Done
-            | Status::InProgress
-            | Status::Queued
-            | Status::Rebasing
-            | Status::Merging => {}
+        for message in messages {
+            message.append_legacy_output(&mut output);
         }
 
-        Cow::Borrowed(session.output.as_str())
+        output
     }
 
     /// Renders the staged-draft guidance shown while a draft session remains
@@ -1410,11 +1468,67 @@ mod tests {
         .lines
     }
 
+    fn set_legacy_transcript(session: &mut Session, output: &str) {
+        let transcript = SessionTranscript::new(vec![SessionMessage::new(
+            0,
+            SessionMessageKind::LegacyTranscript,
+            output,
+        )]);
+        session.output = transcript.to_legacy_output();
+        session.transcript = Some(transcript);
+    }
+
+    fn set_conversation_transcript(
+        session: &mut Session,
+        messages: Vec<(SessionMessageKind, &str)>,
+    ) {
+        let transcript = SessionTranscript::new(
+            messages
+                .into_iter()
+                .enumerate()
+                .map(|(position, (kind, content))| {
+                    let position = i64::try_from(position).unwrap_or(i64::MAX);
+                    if kind.is_conversation_message() {
+                        SessionMessage::conversation(position, kind, content)
+                    } else {
+                        SessionMessage::new(position, kind, content)
+                    }
+                })
+                .collect(),
+        );
+        session.output = transcript.to_legacy_output();
+        session.transcript = Some(transcript);
+    }
+
+    #[test]
+    fn test_output_lines_ignore_flat_output_without_message_transcript() {
+        // Arrange
+        let mut session = session_fixture();
+        session.output = "legacy-only transcript text".to_string();
+        session.status = Status::Review;
+
+        // Act
+        let lines = output_lines(
+            &session,
+            Rect::new(0, 0, 80, 5),
+            line_context(None, None, None),
+            None,
+        );
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(!text.contains("legacy-only transcript text"));
+    }
+
     #[test]
     fn test_rendered_line_count_counts_wrapped_content() {
         // Arrange
         let mut session = session_fixture();
-        session.output = "word ".repeat(40);
+        set_legacy_transcript(&mut session, &"word ".repeat(40));
         let raw_line_count = u16::try_from(session.output.lines().count()).unwrap_or(u16::MAX);
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
         let output_layout_cache = SessionOutputLayoutCache::default();
@@ -1436,7 +1550,7 @@ mod tests {
     fn test_output_layout_cache_reuses_lines_for_matching_update_key() {
         // Arrange
         let mut session = session_fixture();
-        session.output = "## Heading\n\ncached body".to_string();
+        set_legacy_transcript(&mut session, "## Heading\n\ncached body");
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
         let output_layout_cache = SessionOutputLayoutCache::default();
         let context = SessionOutputLineContext {
@@ -1543,7 +1657,7 @@ mod tests {
         // Arrange
         let mut session = session_fixture();
         session.status = Status::InProgress;
-        session.output = " › running prompt".to_string();
+        set_legacy_transcript(&mut session, " › running prompt");
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
         let output_layout_cache = SessionOutputLayoutCache::default();
         let context = line_context(None, None, None);
@@ -1580,7 +1694,7 @@ mod tests {
     fn test_output_layout_cache_keys_workflow_notice() {
         // Arrange
         let mut session = session_fixture();
-        session.output = "implemented the feature".to_string();
+        set_legacy_transcript(&mut session, "implemented the feature");
         session.status = Status::Review;
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
         let output_layout_cache = SessionOutputLayoutCache::default();
@@ -1651,7 +1765,7 @@ mod tests {
     fn test_output_layout_cache_reuses_active_loader_layout_across_frames() {
         // Arrange
         let mut session = session_fixture();
-        session.output = "active output".to_string();
+        set_legacy_transcript(&mut session, "active output");
         session.status = Status::InProgress;
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
         let output_layout_cache = SessionOutputLayoutCache::default();
@@ -1745,7 +1859,7 @@ mod tests {
         for session_index in 0..=SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT {
             let mut session = session_fixture();
             session.id = SessionId::from(format!("loader-session-{session_index:02}"));
-            session.output = format!("active output {session_index}");
+            set_legacy_transcript(&mut session, &format!("active output {session_index}"));
             session.status = Status::InProgress;
 
             output_layout_cache.layout(
@@ -1776,7 +1890,10 @@ mod tests {
     fn test_output_lines_metadata_marks_status_loader_not_user_text() {
         // Arrange
         let mut session = session_fixture();
-        session.output = format!("{} pasted transcript glyph", Icon::TachyonLoader);
+        set_legacy_transcript(
+            &mut session,
+            &format!("{} pasted transcript glyph", Icon::TachyonLoader),
+        );
         session.status = Status::InProgress;
         let context = line_context(None, None, None);
 
@@ -1857,19 +1974,6 @@ mod tests {
     }
 
     #[test]
-    fn test_output_text_borrows_transcript_for_output_mode() {
-        // Arrange
-        let mut session = session_fixture();
-        session.output = "borrowed transcript".to_string();
-
-        // Act
-        let output_text = SessionOutput::output_text(&session);
-
-        // Assert
-        assert!(matches!(output_text, Cow::Borrowed("borrowed transcript")));
-    }
-
-    #[test]
     fn test_borrowed_paint_lines_reuse_cached_span_content() {
         // Arrange
         let cached_lines = [Line {
@@ -1896,7 +2000,7 @@ mod tests {
     fn test_output_lines_done_summary_mode_keeps_transcript_with_summary() {
         // Arrange
         let mut session = session_fixture();
-        session.output = "streamed output".to_string();
+        set_legacy_transcript(&mut session, "streamed output");
         session.summary = Some(summary_fixture());
         session.status = Status::Done;
 
@@ -2058,7 +2162,16 @@ mod tests {
     fn test_output_lines_done_output_mode_appends_structured_summary() {
         // Arrange
         let mut session = session_fixture();
-        session.output = "streamed output\n\n[Commit] No changes to commit.\n".to_string();
+        set_conversation_transcript(
+            &mut session,
+            vec![
+                (SessionMessageKind::AssistantAnswer, "streamed output"),
+                (
+                    SessionMessageKind::WorkflowNotice,
+                    "\n[Commit] No changes to commit.\n",
+                ),
+            ],
+        );
         session.summary = Some(summary_fixture());
         session.status = Status::Done;
 
@@ -2098,10 +2211,21 @@ mod tests {
     fn test_output_lines_places_summary_before_trailing_workflow_notices() {
         // Arrange
         let mut session = session_fixture();
-        session.output = "streamed output\n\n[Commit] No changes to commit.\n\n[Sync Assist] \
-                          Attempt 1/3. Resolving conflicts in:\n- \
-                          crates/agentty/src/runtime/worker.rs\n"
-            .to_string();
+        set_conversation_transcript(
+            &mut session,
+            vec![
+                (SessionMessageKind::AssistantAnswer, "streamed output"),
+                (
+                    SessionMessageKind::WorkflowNotice,
+                    "\n[Commit] No changes to commit.\n",
+                ),
+                (
+                    SessionMessageKind::WorkflowNotice,
+                    "\n[Sync Assist] Attempt 1/3. Resolving conflicts in:\n- \
+                     crates/agentty/src/runtime/worker.rs\n",
+                ),
+            ],
+        );
         session.summary = Some(summary_fixture());
         session.status = Status::Review;
 
@@ -2136,13 +2260,113 @@ mod tests {
         assert!(commit_index < sync_index);
     }
 
+    /// Verifies typed assistant answers that begin with a workflow-notice
+    /// prefix remain grouped with assistant output instead of being moved
+    /// below the summary.
+    #[test]
+    fn test_output_lines_typed_assistant_notice_prefix_stays_before_summary() {
+        // Arrange
+        let transcript = SessionTranscript::new(vec![
+            SessionMessage::conversation(0, SessionMessageKind::UserPrompt, "summarize merge"),
+            SessionMessage::conversation(
+                1,
+                SessionMessageKind::AssistantAnswer,
+                "Assistant output.\n[Merge] this is literal assistant text.",
+            ),
+        ]);
+        let mut session = session_fixture();
+        session.output = transcript.to_legacy_output();
+        session.summary = Some(summary_fixture());
+        session.transcript = Some(transcript);
+        session.status = Status::Review;
+
+        // Act
+        let lines = output_lines(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            line_context(None, None, None),
+            None,
+        );
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let assistant_notice_index = text
+            .find("[Merge] this is literal assistant text.")
+            .expect("assistant notice-looking line should be rendered");
+        let summary_index = text
+            .find("Change Summary")
+            .expect("structured summary should be rendered");
+
+        // Assert
+        assert!(assistant_notice_index < summary_index);
+    }
+
+    /// Verifies active-turn splitting uses typed user-prompt rows instead of
+    /// assistant text that happens to contain the prompt marker.
+    #[test]
+    fn test_typed_transcript_sections_ignore_assistant_prompt_markers() {
+        // Arrange
+        let transcript = SessionTranscript::new(vec![
+            SessionMessage::conversation(0, SessionMessageKind::UserPrompt, "previous prompt"),
+            SessionMessage::conversation(
+                1,
+                SessionMessageKind::AssistantAnswer,
+                "previous answer\n › quoted assistant marker",
+            ),
+            SessionMessage::new(
+                2,
+                SessionMessageKind::WorkflowNotice,
+                "\n[Commit] No changes to commit.\n",
+            ),
+            SessionMessage::conversation(3, SessionMessageKind::UserPrompt, "actual prompt"),
+            SessionMessage::conversation(
+                4,
+                SessionMessageKind::AssistantAnswer,
+                "streaming answer\n › quoted active output",
+            ),
+        ]);
+
+        // Act
+        let sections = SessionOutput::typed_transcript_sections(Status::InProgress, &transcript);
+
+        // Assert
+        assert!(
+            sections
+                .completed_turn
+                .contains(" › quoted assistant marker")
+        );
+        assert!(
+            sections
+                .trailing_notice
+                .as_deref()
+                .is_some_and(|text| text.contains("[Commit] No changes to commit."))
+        );
+        assert!(
+            sections
+                .active_turn
+                .as_deref()
+                .is_some_and(|text| text.starts_with(" › actual prompt"))
+        );
+    }
+
     /// Verifies merge failures render after focused review content, so the
     /// review summary remains visually grouped with the completed turn.
     #[test]
     fn test_output_lines_places_review_before_trailing_workflow_notices() {
         // Arrange
         let mut session = session_fixture();
-        session.output = "implemented fix\n\n[Merge Error] Cannot merge branch".to_string();
+        set_conversation_transcript(
+            &mut session,
+            vec![
+                (SessionMessageKind::AssistantAnswer, "implemented fix"),
+                (
+                    SessionMessageKind::WorkflowNotice,
+                    "\n[Merge Error] Cannot merge branch\n",
+                ),
+            ],
+        );
         session.summary = Some(summary_fixture());
         session.status = Status::Review;
         let review_text = "## Review\n\n### Project Impact\n\n- Documentation-only change.";
@@ -2215,7 +2439,7 @@ mod tests {
     fn test_output_lines_canceled_session_hides_review_text_when_available() {
         // Arrange
         let mut session = session_fixture();
-        session.output = "interrupted transcript".to_string();
+        set_legacy_transcript(&mut session, "interrupted transcript");
         session.status = Status::Canceled;
         let assisted_review = "## Review\n\n- Focused finding";
 
@@ -2274,8 +2498,13 @@ mod tests {
     fn test_output_lines_uses_transcript_for_completed_published_branch_push() {
         // Arrange
         let mut session = session_fixture();
-        session.output =
-            "\n[Branch Push] Auto-pushed published branch after completed turn.\n".to_string();
+        set_conversation_transcript(
+            &mut session,
+            vec![(
+                SessionMessageKind::WorkflowNotice,
+                "\n[Branch Push] Auto-pushed published branch after completed turn.\n",
+            )],
+        );
         session.published_branch_sync_status = PublishedBranchSyncStatus::Succeeded;
         session.published_upstream_ref = Some("origin/wt/session-id".to_string());
         session.status = Status::Review;
@@ -2334,7 +2563,7 @@ mod tests {
     fn test_output_lines_review_session_appends_structured_summary() {
         // Arrange
         let mut session = session_fixture();
-        session.output = "implemented the feature".to_string();
+        set_legacy_transcript(&mut session, "implemented the feature");
         session.summary = Some(summary_fixture());
         session.status = Status::Review;
 
@@ -2399,8 +2628,17 @@ mod tests {
     fn test_output_lines_in_progress_session_hides_summary_before_active_prompt() {
         // Arrange
         let mut session = session_fixture();
-        session.output =
-            " › hi\n\n[Commit] No changes to commit.\n\n › add hello world\n\n".to_string();
+        set_conversation_transcript(
+            &mut session,
+            vec![
+                (SessionMessageKind::UserPrompt, "hi"),
+                (
+                    SessionMessageKind::WorkflowNotice,
+                    "\n[Commit] No changes to commit.\n",
+                ),
+                (SessionMessageKind::UserPrompt, "add hello world"),
+            ],
+        );
         session.summary = Some(summary_fixture());
         session.status = Status::InProgress;
 
@@ -2437,8 +2675,18 @@ mod tests {
     fn test_output_lines_in_progress_session_shows_queued_messages_after_active_turn() {
         // Arrange
         let mut session = session_fixture();
-        session.output =
-            " › hi\n\n[Commit] No changes to commit.\n\n › add hello world\n\nworking".to_string();
+        set_conversation_transcript(
+            &mut session,
+            vec![
+                (SessionMessageKind::UserPrompt, "hi"),
+                (
+                    SessionMessageKind::WorkflowNotice,
+                    "\n[Commit] No changes to commit.\n",
+                ),
+                (SessionMessageKind::UserPrompt, "add hello world"),
+                (SessionMessageKind::AssistantAnswer, "working"),
+            ],
+        );
         session.queued_messages = vec!["follow up\nwith context".to_string()];
         session.summary = Some(summary_fixture());
         session.status = Status::InProgress;
@@ -2481,7 +2729,16 @@ mod tests {
     fn test_output_lines_in_progress_single_prompt_hides_summary() {
         // Arrange
         let mut session = session_fixture();
-        session.output = " › add hello world\n\nI added the README change.\n".to_string();
+        set_conversation_transcript(
+            &mut session,
+            vec![
+                (SessionMessageKind::UserPrompt, "add hello world"),
+                (
+                    SessionMessageKind::AssistantAnswer,
+                    "I added the README change.",
+                ),
+            ],
+        );
         session.summary = Some(summary_fixture());
         session.status = Status::InProgress;
 
@@ -2518,9 +2775,18 @@ mod tests {
     fn test_output_lines_in_progress_without_active_capture_hides_summary_before_last_prompt() {
         // Arrange
         let mut session = session_fixture();
-        session.output = " › hi\n\nHello!\n\n[Commit] No changes to commit.\n\n › review \
-                          project\n\n"
-            .to_string();
+        set_conversation_transcript(
+            &mut session,
+            vec![
+                (SessionMessageKind::UserPrompt, "hi"),
+                (SessionMessageKind::AssistantAnswer, "Hello!"),
+                (
+                    SessionMessageKind::WorkflowNotice,
+                    "\n[Commit] No changes to commit.\n",
+                ),
+                (SessionMessageKind::UserPrompt, "review project"),
+            ],
+        );
         session.summary = Some(summary_fixture());
         session.status = Status::InProgress;
 
@@ -2554,9 +2820,18 @@ mod tests {
     fn test_output_lines_in_progress_ignores_assistant_lines_that_look_like_prompts() {
         // Arrange
         let mut session = session_fixture();
-        session.output = " › hi\n\nprevious answer\n\n › actual prompt\n\nstreaming answer\n › \
-                          quoted output\n"
-            .to_string();
+        set_conversation_transcript(
+            &mut session,
+            vec![
+                (SessionMessageKind::UserPrompt, "hi"),
+                (SessionMessageKind::AssistantAnswer, "previous answer"),
+                (SessionMessageKind::UserPrompt, "actual prompt"),
+                (
+                    SessionMessageKind::AssistantAnswer,
+                    "streaming answer\n › quoted output",
+                ),
+            ],
+        );
         session.summary = Some(summary_fixture());
         session.status = Status::InProgress;
 
@@ -2591,7 +2866,7 @@ mod tests {
     fn test_output_lines_review_session_without_summary_keeps_transcript_only() {
         // Arrange
         let mut session = session_fixture();
-        session.output = "implemented the feature".to_string();
+        set_legacy_transcript(&mut session, "implemented the feature");
         session.status = Status::Review;
 
         // Act
@@ -2618,12 +2893,14 @@ mod tests {
     fn test_output_lines_render_markdown_tables() {
         // Arrange
         let mut session = session_fixture();
-        session.output = concat!(
-            "| Message kind | Storage |\n",
-            "| --- | --- |\n",
-            "| User prompt | Session.output |",
-        )
-        .to_string();
+        set_legacy_transcript(
+            &mut session,
+            concat!(
+                "| Message kind | Storage |\n",
+                "| --- | --- |\n",
+                "| User prompt | Session.output |",
+            ),
+        );
         session.status = Status::Review;
 
         // Act
@@ -2688,7 +2965,7 @@ mod tests {
     fn test_output_lines_done_summary_transition_preserves_transcript() {
         // Arrange
         let mut session = session_fixture();
-        session.output = "streamed output".to_string();
+        set_legacy_transcript(&mut session, "streamed output");
         session.summary = Some(summary_fixture());
         session.status = Status::Review;
         let review_lines = output_lines(
@@ -2710,7 +2987,6 @@ mod tests {
         session.status = Status::Done;
 
         // Act
-        let done_output_text = SessionOutput::output_text(&session);
         let done_lines = output_lines(
             &session,
             Rect::new(0, 0, 80, 8),
@@ -2726,7 +3002,6 @@ mod tests {
         // Assert
         assert!(review_text.contains("Change Summary"));
         assert!(review_text.contains("Added the structured protocol summary."));
-        assert_eq!(done_output_text, "streamed output");
         assert!(done_text.contains("Summary"));
         assert!(done_text.contains("Session now greets users on startup."));
         assert!(done_text.contains("Commit"));
@@ -2767,7 +3042,7 @@ mod tests {
     fn test_output_lines_uses_transcript_for_canceled_session() {
         // Arrange
         let mut session = session_fixture();
-        session.output = "streamed output".to_string();
+        set_legacy_transcript(&mut session, "streamed output");
         session.summary = Some(summary_fixture());
         session.status = Status::Canceled;
 
@@ -2793,7 +3068,7 @@ mod tests {
     fn test_output_lines_use_generic_in_progress_loader() {
         // Arrange
         let mut session = session_fixture();
-        session.output = "some output".to_string();
+        set_legacy_transcript(&mut session, "some output");
         session.status = Status::InProgress;
 
         // Act

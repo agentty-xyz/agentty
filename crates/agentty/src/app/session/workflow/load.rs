@@ -53,6 +53,7 @@ struct LoadedSessionInput {
     session_questions: Vec<QuestionItem>,
     session_summary: Option<String>,
     session_status: Status,
+    session_transcript: Option<SessionTranscript>,
     size: SessionSize,
 }
 
@@ -175,25 +176,25 @@ impl SessionManager {
         session_worktree_availability.insert(session_id.clone(), has_session_folder);
         let session_agent = parse_persisted_session_agent_model(Some(&row.agent), &row.model);
 
-        let (session_detail, session_output) =
+        let (session_detail, loaded_transcript) =
             load_active_session_detail(db, *active_session_id, &row.id).await;
 
-        let (session_output, session_status) =
+        let (session_output, session_status, session_transcript) =
             if let Some(existing_handle) = handles.get(&session_id) {
                 output_and_status_from_existing_handle(
                     existing_handle,
                     persisted_status,
-                    session_output.as_deref(),
+                    loaded_transcript.as_ref(),
                 )
             } else {
-                let output = insert_loaded_session_handle(
+                let (output, transcript) = insert_loaded_session_handle(
                     handles,
                     session_id.clone(),
                     persisted_status,
-                    session_output.as_deref(),
+                    loaded_transcript,
                 );
 
-                (output, persisted_status)
+                (output, persisted_status, transcript)
             };
         let review_request = parse_review_request(&row);
         let draft_attachments =
@@ -234,6 +235,7 @@ impl SessionManager {
             session_questions: questions,
             session_summary: session_detail.and_then(|detail| detail.summary),
             session_status,
+            session_transcript,
             size: persisted_size,
         }));
     }
@@ -279,11 +281,11 @@ impl SessionManager {
         else {
             return;
         };
-        let Ok(transcript_output) = load_session_transcript_output(db, session_id).await else {
+        let Ok(transcript) = load_session_transcript(db, session_id).await else {
             return;
         };
 
-        self.apply_session_detail(session_id, detail, transcript_output);
+        self.apply_session_detail(session_id, detail, transcript);
     }
 
     /// Builds one in-memory session snapshot from a database row plus the
@@ -320,6 +322,7 @@ impl SessionManager {
             status: input.session_status,
             summary: input.session_summary,
             title: input.row.title,
+            transcript: input.session_transcript,
             updated_at: input.row.updated_at,
             workflow_notice: None,
         }
@@ -332,8 +335,9 @@ impl SessionManager {
         &mut self,
         session_id: &str,
         detail: SessionDetailRow,
-        transcript_output: String,
+        transcript: SessionTranscript,
     ) {
+        let transcript_output = transcript.to_legacy_output();
         let session_output = if let Some(handles) = self.state.handles.get(session_id)
             && let Ok(mut handle_output) = handles.output.lock()
         {
@@ -345,6 +349,22 @@ impl SessionManager {
         } else {
             transcript_output
         };
+        let session_transcript = self
+            .state
+            .handles
+            .get(session_id)
+            .and_then(|handles| {
+                sync_handle_transcript_with_loaded_output(
+                    handles,
+                    Some(&transcript),
+                    &session_output,
+                )
+            })
+            .or_else(|| {
+                Some(transcript).filter(|transcript| {
+                    !transcript.is_empty() && transcript.to_legacy_output() == session_output
+                })
+            });
 
         let Some(session) = self.state.session_mut_for_id(session_id) else {
             return;
@@ -356,6 +376,7 @@ impl SessionManager {
         }
         session.summary = detail.summary;
         session.output = session_output;
+        session.transcript = session_transcript;
     }
 }
 
@@ -365,7 +386,7 @@ async fn load_active_session_detail(
     db: &AppRepositories,
     active_session_id: Option<&str>,
     row_id: &str,
-) -> (Option<SessionDetailRow>, Option<String>) {
+) -> (Option<SessionDetailRow>, Option<SessionTranscript>) {
     if active_session_id.is_none_or(|active_id| active_id != row_id) {
         return (None, None);
     }
@@ -379,9 +400,9 @@ async fn load_active_session_detail(
     else {
         return (None, None);
     };
-    let output = load_session_transcript_output(db, row_id).await.ok();
+    let transcript = load_session_transcript(db, row_id).await.ok();
 
-    (Some(detail), output)
+    (Some(detail), transcript)
 }
 
 /// Reads output/status from an existing handle while hydrating empty output
@@ -389,8 +410,9 @@ async fn load_active_session_detail(
 fn output_and_status_from_existing_handle(
     existing_handle: &SessionHandles,
     persisted_status: Status,
-    session_output: Option<&str>,
-) -> (String, Status) {
+    loaded_transcript: Option<&SessionTranscript>,
+) -> (String, Status, Option<SessionTranscript>) {
+    let loaded_output = loaded_transcript.map(SessionTranscript::to_legacy_output);
     let output_from_handle =
         existing_handle
             .output
@@ -398,7 +420,7 @@ fn output_and_status_from_existing_handle(
             .ok()
             .map_or_else(String::new, |mut output| {
                 if output.is_empty()
-                    && let Some(session_output) = session_output
+                    && let Some(session_output) = loaded_output.as_deref()
                 {
                     output.push_str(session_output);
                 }
@@ -415,8 +437,13 @@ fn output_and_status_from_existing_handle(
     if let Ok(mut handle_status) = existing_handle.status.lock() {
         *handle_status = merged_status;
     }
+    let transcript_from_handle = sync_handle_transcript_with_loaded_output(
+        existing_handle,
+        loaded_transcript,
+        &output_from_handle,
+    );
 
-    (output_from_handle, merged_status)
+    (output_from_handle, merged_status, transcript_from_handle)
 }
 
 /// Inserts a new runtime handle using active-session detail when it is
@@ -425,26 +452,58 @@ fn insert_loaded_session_handle(
     handles: &mut HashMap<SessionId, SessionHandles>,
     session_id: SessionId,
     persisted_status: Status,
-    session_output: Option<&str>,
-) -> String {
-    let output = session_output.map(str::to_string).unwrap_or_default();
-    handles.insert(
-        session_id,
-        SessionHandles::new(output.clone(), persisted_status),
-    );
+    loaded_transcript: Option<SessionTranscript>,
+) -> (String, Option<SessionTranscript>) {
+    let output = loaded_transcript
+        .as_ref()
+        .map(SessionTranscript::to_legacy_output)
+        .unwrap_or_default();
+    let session_transcript = loaded_transcript.filter(|transcript| !transcript.is_empty());
+    let session_handle = if let Some(transcript) = session_transcript.clone() {
+        SessionHandles::new_with_transcript(output.clone(), persisted_status, transcript)
+    } else {
+        SessionHandles::new(output.clone(), persisted_status)
+    };
+    handles.insert(session_id, session_handle);
 
-    output
+    (output, session_transcript)
 }
 
-/// Loads ordered session messages and serializes them into the render
-/// transcript snapshot.
-async fn load_session_transcript_output(
+/// Loads ordered session messages into the render transcript snapshot.
+async fn load_session_transcript(
     db: &AppRepositories,
     session_id: &str,
-) -> Result<String, DbError> {
+) -> Result<SessionTranscript, DbError> {
     let messages = db.sessions().load_session_messages(session_id).await?;
 
-    Ok(SessionTranscript::new(session_messages_from_rows(messages)).to_legacy_output())
+    Ok(SessionTranscript::new(session_messages_from_rows(messages)))
+}
+
+/// Synchronizes a handle transcript from loaded rows when those rows still
+/// match the handle's flat output buffer.
+fn sync_handle_transcript_with_loaded_output(
+    handles: &SessionHandles,
+    loaded_transcript: Option<&SessionTranscript>,
+    output_text: &str,
+) -> Option<SessionTranscript> {
+    let Ok(mut handle_transcript) = handles.transcript.lock() else {
+        return None;
+    };
+    let handle_transcript_matches_output = !handle_transcript.is_empty()
+        && (loaded_transcript == Some(&*handle_transcript)
+            || handle_transcript.to_legacy_output() == output_text);
+    if !handle_transcript_matches_output {
+        if let Some(loaded_transcript) = loaded_transcript {
+            handle_transcript.clone_from(loaded_transcript);
+        } else {
+            *handle_transcript = SessionTranscript::default();
+        }
+    }
+    if handle_transcript.is_empty() {
+        return None;
+    }
+
+    Some(handle_transcript.clone())
 }
 
 /// Converts database message rows into domain messages, preserving unknown
@@ -957,7 +1016,7 @@ mod tests {
     /// Ensures transcript loading returns database failures instead of
     /// converting them into empty transcript text.
     #[tokio::test]
-    async fn test_load_session_transcript_output_returns_query_errors() {
+    async fn test_load_session_transcript_returns_query_errors() {
         // Arrange
         let (db, pool) = AppRepositories::in_memory_with_pool().await;
         sqlx::query("DROP TABLE session_message")
@@ -966,7 +1025,7 @@ mod tests {
             .expect("failed to drop session_message table");
 
         // Act
-        let error = load_session_transcript_output(&db, "missing-session")
+        let error = load_session_transcript(&db, "missing-session")
             .await
             .expect_err("transcript load should fail");
 
@@ -1125,6 +1184,36 @@ mod tests {
 
         // Assert
         assert_eq!(merged_status, Status::InProgress);
+    }
+
+    #[test]
+    /// Verifies loaded message rows survive minor flat-output formatting
+    /// mismatches so message-only rendering does not blank older sessions.
+    fn sync_handle_transcript_with_loaded_output_uses_loaded_transcript_on_output_mismatch() {
+        // Arrange
+        let handles = SessionHandles::new(" › prompt\n\nanswer\n".to_string(), Status::Review);
+        let loaded_transcript = SessionTranscript::new(vec![
+            SessionMessage::conversation(0, SessionMessageKind::UserPrompt, "prompt"),
+            SessionMessage::conversation(1, SessionMessageKind::AssistantAnswer, "answer"),
+        ]);
+
+        // Act
+        let transcript = sync_handle_transcript_with_loaded_output(
+            &handles,
+            Some(&loaded_transcript),
+            " › prompt\n\nanswer\n",
+        );
+
+        // Assert
+        assert_eq!(transcript, Some(loaded_transcript.clone()));
+        assert_eq!(
+            handles.transcript.lock().ok().as_deref(),
+            Some(&loaded_transcript)
+        );
+        assert_eq!(
+            handles.output.lock().ok().as_deref().map(String::as_str),
+            Some(" › prompt\n\nanswer\n")
+        );
     }
 
     #[test]

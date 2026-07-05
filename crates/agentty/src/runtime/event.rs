@@ -449,6 +449,7 @@ mod tests {
             status: Status::Draft,
             summary: None,
             title: None,
+            transcript: None,
             updated_at: 0,
             workflow_notice: None,
         });

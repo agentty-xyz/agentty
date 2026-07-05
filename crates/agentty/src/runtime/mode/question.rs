@@ -1437,6 +1437,7 @@ mod tests {
             status: Status::Question,
             summary: None,
             title: None,
+            transcript: None,
             updated_at: 0,
             workflow_notice: None,
         });
@@ -1513,6 +1514,7 @@ mod tests {
             status: Status::Question,
             summary: None,
             title: None,
+            transcript: None,
             updated_at: 0,
             workflow_notice: None,
         });
@@ -3136,6 +3138,7 @@ mod tests {
             status: Status::Question,
             summary: None,
             title: None,
+            transcript: None,
             updated_at: 0,
             workflow_notice: None,
         });

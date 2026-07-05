@@ -182,6 +182,55 @@ sequenceDiagram
     Ok(())
 }
 
+/// Seeds one review-ready session whose assistant answer begins a line with a
+/// workflow-notice prefix that must remain assistant text.
+fn seed_session_with_typed_marker_collision(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let session_id = "typed-marker-0001";
+    common::seed_session(
+        env,
+        SessionSeed::regular(session_id, "gpt-5.5", "main", "Review")
+            .with_title("Typed marker collision"),
+    )?;
+
+    let runtime = common::seed_runtime()?;
+
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .append_session_message(
+                session_id,
+                SessionMessageKind::UserPrompt,
+                "explain merge label output",
+            )
+            .await?;
+        database
+            .sessions()
+            .append_session_message(
+                session_id,
+                SessionMessageKind::AssistantAnswer,
+                "Assistant output before summary.\n[Merge] this is literal assistant text.",
+            )
+            .await?;
+        database
+            .sessions()
+            .update_session_summary(
+                session_id,
+                r#"{"turn":"Kept marker-looking output in the assistant answer.","session":"Typed transcript rows preserve render grouping."}"#,
+            )
+            .await
+    })?;
+
+    std::fs::create_dir_all(test_support::session_folder(
+        &env.agentty_root.join("wt"),
+        session_id,
+    ))?;
+
+    Ok(())
+}
+
 /// Seeds one review-ready session plus its default source branch and
 /// propagates setup errors to the caller.
 fn seed_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
@@ -1030,6 +1079,47 @@ fn session_view_markdown_table_output() -> E2eResult {
                 assertion::assert_text_in_region(frame, "Assistant markdown", &full);
                 assertion::assert_text_in_region(frame, "Session.output", &full);
                 assertion::assert_not_visible(frame, "| --- | --- |");
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that typed assistant output is not reclassified as a workflow notice
+/// just because it starts a line with a notice-looking prefix.
+#[test]
+fn session_view_preserves_typed_assistant_marker_lines() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_typed_assistant_marker_lines")
+        .setup(seed_session_with_typed_marker_collision)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_text("[Merge] this is literal assistant text.", 5000)
+                    .capture_labeled(
+                        "typed_assistant_marker",
+                        "Typed assistant line that looks like a workflow notice",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                let view_text = frame.text_in_region(&full);
+                let assistant_notice_index = view_text
+                    .find("[Merge] this is literal assistant text.")
+                    .expect("assistant marker line should render");
+                let summary_index = view_text
+                    .find("Change Summary")
+                    .expect("summary should render");
+
+                assertion::assert_text_in_region(
+                    frame,
+                    "[Merge] this is literal assistant text.",
+                    &full,
+                );
+                assert!(assistant_notice_index < summary_index);
             },
         )?;
 

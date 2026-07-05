@@ -17,7 +17,7 @@ use crate::app::assist::AssistContext;
 use crate::app::service::SessionUpdateVersionMap;
 use crate::app::session::{Clock, SessionError, TurnAppliedState};
 use crate::domain::session::{SessionFollowUpTask, SessionId, SessionStats, Status};
-use crate::domain::session_message::SessionMessageKind;
+use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::channel::{AgentError, TurnResult};
 use crate::infra::db::{AppRepositories, SessionTurnMetadata};
@@ -53,6 +53,8 @@ pub(super) struct PostTurnContext {
     pub(super) session_update_versions: SessionUpdateVersionMap,
     /// Session identifier whose completed turn is being applied.
     pub(super) session_id: SessionId,
+    /// Shared typed transcript snapshot mirrored to the render layer.
+    pub(super) transcript: Arc<Mutex<SessionTranscript>>,
 }
 
 impl PostTurnContext {
@@ -70,6 +72,7 @@ impl PostTurnContext {
             review_request_client: Arc::clone(&context.review_request_client),
             session_update_versions: context.session_update_versions.clone(),
             session_id: context.session_id.clone(),
+            transcript: Arc::clone(&context.transcript),
         }
     }
 
@@ -293,6 +296,7 @@ async fn append_turn_error(context: &PostTurnContext, error_text: &str) {
     let message = format!("\n{}\n", error_text.trim());
     SessionTaskService::append_session_output(
         &context.output,
+        &context.transcript,
         &context.db,
         &context.app_event_tx,
         &context.session_update_versions,
@@ -321,6 +325,7 @@ async fn apply_successful_turn_result(
     if let Some(message) = build_assistant_transcript_output(&assistant_message) {
         SessionTaskService::append_session_output_message(
             &context.output,
+            &context.transcript,
             &context.db,
             &context.app_event_tx,
             &context.session_update_versions,
@@ -372,6 +377,7 @@ async fn apply_successful_turn_result(
         output: Arc::clone(&context.output),
         session_agent: turn_metadata.session_agent,
         session_update_versions: context.session_update_versions.clone(),
+        transcript: Arc::clone(&context.transcript),
     })
     .await;
     let review_request_commit_message = commit_outcome.map(|outcome| outcome.commit_message);
@@ -447,6 +453,7 @@ fn start_published_branch_auto_push(
             review_request_commit_message,
             session_id: context.session_id.clone(),
             session_update_versions: context.session_update_versions.clone(),
+            transcript: Arc::clone(&context.transcript),
         },
     );
 }
@@ -459,6 +466,7 @@ async fn handle_turn_persistence_failure(context: &PostTurnContext, error: &Sess
     ));
     SessionTaskService::append_session_output(
         &context.output,
+        &context.transcript,
         &context.db,
         &context.app_event_tx,
         &context.session_update_versions,

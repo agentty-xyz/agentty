@@ -21,7 +21,7 @@ use crate::app::session::{Clock, SessionError, unix_timestamp_from_system_time};
 use crate::app::{AppEvent, AppServices, SessionManager};
 use crate::domain::agent::AgentSelection;
 use crate::domain::session::{SessionId, SessionStats, Status};
-use crate::domain::session_message::SessionMessageKind;
+use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::infra::channel::{
     AgentChannel, AgentError, AgentRequestKind, TurnEvent, TurnPrompt, TurnRequest, TurnResult,
     create_agent_channel,
@@ -139,6 +139,7 @@ pub(super) struct SessionWorkerContext {
     /// Agent provider and model selected for this session.
     pub(super) session_agent: AgentSelection,
     pub(super) status: Arc<Mutex<Status>>,
+    pub(super) transcript: Arc<Mutex<SessionTranscript>>,
 }
 
 impl SessionWorkerContext {
@@ -208,6 +209,8 @@ struct SessionWorkerRebaseAssistClient {
     session_id: SessionId,
     /// Agent provider and model used for the rebase-assist utility prompt.
     session_agent: AgentSelection,
+    /// Shared typed transcript snapshot mirrored to the render layer.
+    transcript: Arc<Mutex<SessionTranscript>>,
 }
 
 impl SessionWorkerRebaseAssistClient {
@@ -224,6 +227,7 @@ impl SessionWorkerRebaseAssistClient {
             session_update_versions: context.session_update_versions.clone(),
             session_id: context.session_id.clone(),
             session_agent: context.session_agent,
+            transcript: Arc::clone(&context.transcript),
         }
     }
 
@@ -358,6 +362,7 @@ impl SessionWorkerRebaseAssistClient {
 
         SessionTaskService::append_session_output_message(
             &self.output,
+            &self.transcript,
             &self.db,
             &self.app_event_tx,
             &self.session_update_versions,
@@ -464,6 +469,7 @@ pub(super) struct SessionWorkerRuntime {
     session_agent: AgentSelection,
     session_id: SessionId,
     status: Arc<Mutex<Status>>,
+    transcript: Arc<Mutex<SessionTranscript>>,
 }
 
 /// Owns per-session worker queue senders and test channel overrides.
@@ -646,6 +652,7 @@ impl SessionWorkerService {
             session_id: runtime.session_id.clone(),
             session_agent: runtime.session_agent,
             status: Arc::clone(&runtime.status),
+            transcript: Arc::clone(&runtime.transcript),
         };
         let (sender, receiver) = mpsc::unbounded_channel();
         self.workers
@@ -852,6 +859,7 @@ impl SessionWorkerService {
             session_agent: context.session_agent,
             session_update_versions: context.session_update_versions.clone(),
             status: Arc::clone(&context.status),
+            transcript: Arc::clone(&context.transcript),
         })
         .await
     }
@@ -983,6 +991,7 @@ impl SessionManager {
             session_id: session.id.clone(),
             session_agent: session.agent,
             status: Arc::clone(&handles.status),
+            transcript: Arc::clone(&handles.transcript),
         })
     }
 }
@@ -1017,6 +1026,7 @@ async fn append_drained_prompt_to_output(context: &SessionWorkerContext, prompt:
 
     SessionTaskService::append_session_output_message(
         &context.output,
+        &context.transcript,
         &context.db,
         &context.app_event_tx,
         &context.session_update_versions,
@@ -1089,6 +1099,10 @@ mod tests {
             .expect("failed to insert session");
 
         project_id
+    }
+
+    fn empty_transcript() -> Arc<Mutex<SessionTranscript>> {
+        Arc::new(Mutex::new(SessionTranscript::default()))
     }
 
     /// Applies one turn result through the narrowed post-turn dependency set
@@ -1405,6 +1419,7 @@ mod tests {
             fs_client: Arc::new(mock_fs_client_with_existing_directories()),
             git_client: Arc::new(mock_git_client),
             output: Arc::clone(&output),
+            transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
@@ -1547,6 +1562,7 @@ mod tests {
             fs_client: Arc::new(mock_fs_client_with_existing_directories()),
             git_client: Arc::new(mock_git_client),
             output: Arc::new(Mutex::new(String::new())),
+            transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
@@ -1654,6 +1670,7 @@ mod tests {
             fs_client: Arc::new(mock_fs_client_with_existing_directories()),
             git_client: Arc::new(mock_git_client),
             output: Arc::clone(&output),
+            transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
@@ -1725,6 +1742,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
+            transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
@@ -1797,6 +1815,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
+            transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
@@ -1866,6 +1885,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
+            transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
@@ -1910,6 +1930,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
+            transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
@@ -2045,6 +2066,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
             output: Arc::new(Mutex::new(String::new())),
+            transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
@@ -2129,6 +2151,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(auto_commit_git_client(commit_message, &mut sequence)),
             output: Arc::new(Mutex::new(String::new())),
+            transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(review_metadata_sync_client(
                 base_dir.path(),
@@ -2210,6 +2233,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(auto_commit_git_client_with_push_failure(commit_message)),
             output: Arc::new(Mutex::new(String::new())),
+            transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
@@ -2526,6 +2550,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
             output: Arc::new(Mutex::new(String::new())),
+            transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
@@ -2629,6 +2654,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
             output: Arc::new(Mutex::new(String::new())),
+            transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::from([TurnPrompt::from_text(
                 "queued follow-up".to_string(),
             )]))),
@@ -2732,6 +2758,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
             output: Arc::clone(&output),
+            transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
@@ -2825,6 +2852,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
+            transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
@@ -2927,6 +2955,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
             output: Arc::clone(&output),
+            transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
@@ -3007,6 +3036,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
             output: Arc::new(Mutex::new(String::new())),
+            transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
@@ -3224,6 +3254,7 @@ mod tests {
             fs_client: Arc::new(fs::RealFsClient),
             git_client: Arc::new(mock_successful_conflict_rebase_git_client()),
             output: Arc::clone(&output),
+            transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
@@ -3447,6 +3478,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
+            transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
@@ -3519,6 +3551,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
+            transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
@@ -3605,6 +3638,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
+            transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
@@ -3698,6 +3732,7 @@ mod tests {
             fs_client: Arc::new(mock_fs_client_with_existing_directories()),
             git_client: Arc::new(mock_git_client),
             output: Arc::new(Mutex::new(String::new())),
+            transcript: empty_transcript(),
             queued_messages: Arc::clone(&queue_handle),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
@@ -3727,6 +3762,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
+            transcript: empty_transcript(),
             queued_messages: queue,
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),

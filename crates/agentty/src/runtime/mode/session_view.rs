@@ -1238,6 +1238,7 @@ mod tests {
     use super::*;
     use crate::app::review_loading_message;
     use crate::domain::agent::AgentModel;
+    use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
     use crate::infra::tmux::{MockTmuxClient, TmuxClient};
     use crate::ui::component::session_output::SessionOutputLineContext;
     use crate::ui::page::session_chat::SessionChatPage;
@@ -1604,8 +1605,6 @@ mod tests {
             .await
             .expect("failed to create draft session");
         app.mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: session_id.clone().into(),
             scroll_offset: Some(2),
         };
@@ -1866,7 +1865,13 @@ mod tests {
     async fn test_scroll_offset_down_does_not_jump_to_bottom_for_wrapped_output() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-        app.sessions.sessions_mut()[0].output = "word ".repeat(60);
+        let transcript = SessionTranscript::new(vec![SessionMessage::conversation(
+            0,
+            SessionMessageKind::AssistantAnswer,
+            "word ".repeat(60),
+        )]);
+        app.sessions.sessions_mut()[0].output = transcript.to_legacy_output();
+        app.sessions.sessions_mut()[0].transcript = Some(transcript);
         let metrics = ViewMetrics {
             total_lines: session_output_metric::rendered_output_line_count(
                 &app,

@@ -515,6 +515,7 @@ fn fresh_turn_cancel_token(
 async fn append_main_checkout_warning(context: &SessionWorkerContext, warning: String) {
     SessionTaskService::append_session_output(
         &context.output,
+        &context.transcript,
         &context.db,
         &context.app_event_tx,
         &context.session_update_versions,

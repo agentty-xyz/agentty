@@ -17,6 +17,7 @@ use crate::app::{AppEvent, branch_publish};
 use crate::domain::session::{
     PublishBranchAction, PublishedBranchSyncStatus, ReviewRequest, ReviewRequestState, SessionId,
 };
+use crate::domain::session_message::SessionTranscript;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::db::AppRepositories;
 
@@ -44,6 +45,8 @@ pub(super) struct PublishedBranchAutoPushStartInput {
     pub(super) session_id: SessionId,
     /// Per-app session update versions shared with the main runtime.
     pub(super) session_update_versions: crate::app::service::SessionUpdateVersionMap,
+    /// Shared typed transcript snapshot mirrored to the render layer.
+    pub(super) transcript: Arc<Mutex<SessionTranscript>>,
 }
 
 /// Starts one detached auto-push task for a session that already tracks a
@@ -78,6 +81,7 @@ pub(super) fn start_published_branch_auto_push(input: PublishedBranchAutoPushSta
         session_id: input.session_id,
         session_update_versions: input.session_update_versions,
         sync_operation_id,
+        transcript: input.transcript,
     };
     tokio::spawn(async move {
         run_published_branch_auto_push_task(auto_push_input).await;
@@ -107,6 +111,8 @@ pub(super) struct PublishedBranchAutoPushInput {
     pub(super) session_update_versions: crate::app::service::SessionUpdateVersionMap,
     /// Auto-push operation id used to ignore stale completion updates.
     pub(super) sync_operation_id: String,
+    /// Shared typed transcript snapshot mirrored to the render layer.
+    pub(super) transcript: Arc<Mutex<SessionTranscript>>,
 }
 
 /// Owned dependencies for one optional linked PR/MR metadata sync after push.
@@ -149,6 +155,7 @@ async fn run_published_branch_auto_push_task(input: PublishedBranchAutoPushInput
                 .format("Auto-pushed published branch after completed turn.");
             SessionTaskService::append_session_output(
                 &input.output,
+                &input.transcript,
                 &input.db,
                 &input.app_event_tx,
                 &input.session_update_versions,
@@ -169,6 +176,7 @@ async fn run_published_branch_auto_push_task(input: PublishedBranchAutoPushInput
             let message = TranscriptNotice::BranchPushError.format(failure.message);
             SessionTaskService::append_session_output(
                 &input.output,
+                &input.transcript,
                 &input.db,
                 &input.app_event_tx,
                 &input.session_update_versions,
@@ -332,6 +340,7 @@ async fn append_review_request_sync_warning(
     ));
     SessionTaskService::append_session_output(
         &input.output,
+        &input.transcript,
         &input.db,
         &input.app_event_tx,
         &input.session_update_versions,

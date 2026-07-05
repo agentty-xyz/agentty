@@ -138,6 +138,7 @@ impl SessionFixtureBuilder {
                 status: Status::Review,
                 summary: None,
                 title: None,
+                transcript: None,
                 updated_at: 0,
                 workflow_notice: None,
             },

@@ -10,6 +10,7 @@ use crate::app::AppEvent;
 use crate::app::service::SessionUpdateVersionMap;
 use crate::app::session::{RunAgentAssistTaskInput, SessionError, SessionTaskService};
 use crate::domain::agent::AgentSelection;
+use crate::domain::session_message::SessionTranscript;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::db::AppRepositories;
 
@@ -42,6 +43,8 @@ pub(super) struct AssistContext {
     pub(super) session_agent: AgentSelection,
     /// Per-app session update versions shared with the main runtime.
     pub(super) session_update_versions: SessionUpdateVersionMap,
+    /// Shared typed transcript snapshot mirrored to the render layer.
+    pub(super) transcript: Arc<Mutex<SessionTranscript>>,
 }
 
 /// Tracks repeated identical failures to stop non-progressing assist loops.
@@ -108,6 +111,7 @@ pub(super) async fn append_assist_header(
     ));
     SessionTaskService::append_session_output(
         &context.output,
+        &context.transcript,
         &context.db,
         &context.app_event_tx,
         &context.session_update_versions,
@@ -136,6 +140,7 @@ pub(super) async fn run_agent_assist(
         prompt: prompt.to_string(),
         session_agent: context.session_agent,
         session_update_versions: context.session_update_versions.clone(),
+        transcript: Arc::clone(&context.transcript),
     })
     .await
 }

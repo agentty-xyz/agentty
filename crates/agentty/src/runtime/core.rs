@@ -223,6 +223,7 @@ mod tests {
     use super::*;
     use crate::app::AppEvent;
     use crate::domain::session::{SessionHandles, Status};
+    use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
     use crate::test_support::SessionFixtureBuilder;
     use crate::ui::state::app_mode::AppMode;
 
@@ -537,8 +538,17 @@ mod tests {
             session.status = Status::InProgress;
         }
         if let Some(handles) = app.sessions.session_handles().get(session_id.as_str()) {
+            let transcript = SessionTranscript::new(vec![SessionMessage::conversation(
+                0,
+                SessionMessageKind::AssistantAnswer,
+                "synced output",
+            )]);
+            let transcript_output = transcript.to_legacy_output();
             if let Ok(mut output) = handles.output.lock() {
-                output.push_str("synced output");
+                output.clone_from(&transcript_output);
+            }
+            if let Ok(mut handle_transcript) = handles.transcript.lock() {
+                *handle_transcript = transcript;
             }
             if let Ok(mut status) = handles.status.lock() {
                 *status = Status::InProgress;

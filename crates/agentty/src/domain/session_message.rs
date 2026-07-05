@@ -1,6 +1,10 @@
 use std::fmt;
 use std::str::FromStr;
 
+const CLARIFICATION_HEADER: &str = "Clarifications:";
+const USER_PROMPT_CONTINUATION_PREFIX: &str = "   ";
+const USER_PROMPT_PREFIX: &str = " › ";
+
 /// Durable category for one saved session transcript message.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionMessageKind {
@@ -110,6 +114,7 @@ impl SessionMessage {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SessionTranscript {
     messages: Vec<SessionMessage>,
+    total_content_len: usize,
 }
 
 impl SessionTranscript {
@@ -129,7 +134,12 @@ impl SessionTranscript {
             messages = messages.split_off(legacy_checkpoint_index);
         }
 
-        Self { messages }
+        let total_content_len = messages.iter().map(|message| message.content.len()).sum();
+
+        Self {
+            messages,
+            total_content_len,
+        }
     }
 
     /// Returns whether the transcript contains no saved messages.
@@ -140,6 +150,28 @@ impl SessionTranscript {
     /// Returns the ordered transcript messages.
     pub fn messages(&self) -> &[SessionMessage] {
         &self.messages
+    }
+
+    /// Returns the total byte length of message content in this transcript.
+    pub fn total_content_len(&self) -> usize {
+        self.total_content_len
+    }
+
+    /// Appends one message to the in-memory transcript snapshot using the
+    /// same content normalization as durable storage.
+    pub fn append_message(&mut self, kind: SessionMessageKind, content: &str) {
+        let content = stored_message_content(kind, content);
+        if content.trim().is_empty() {
+            return;
+        }
+
+        let position = self
+            .messages
+            .last()
+            .map_or(0, |message| message.position.saturating_add(1));
+        self.total_content_len = self.total_content_len.saturating_add(content.len());
+        self.messages
+            .push(SessionMessage::new(position, kind, content));
     }
 
     /// Serializes the message store into formatted session-chat transcript
@@ -174,7 +206,7 @@ pub fn stored_message_content(kind: SessionMessageKind, content: &str) -> String
 
 impl SessionMessage {
     /// Appends this raw or compatibility message to a legacy transcript buffer.
-    fn append_legacy_output(&self, output: &mut String) {
+    pub(crate) fn append_legacy_output(&self, output: &mut String) {
         match self.kind {
             SessionMessageKind::UserPrompt => {
                 append_legacy_user_prompt(output, &self.content);
@@ -205,16 +237,43 @@ fn append_legacy_user_prompt(output: &mut String, content: &str) {
         output.push('\n');
     }
 
+    let is_clarification_prompt = content
+        .lines()
+        .next()
+        .is_some_and(|line| line.trim() == CLARIFICATION_HEADER);
+
     for (line_index, prompt_line) in content.split('\n').enumerate() {
+        if is_clarification_prompt && line_index > 0 && is_clarification_question_line(prompt_line)
+        {
+            output.push_str(USER_PROMPT_CONTINUATION_PREFIX);
+            output.push('\n');
+        }
+
         if line_index == 0 {
-            output.push_str(" › ");
+            output.push_str(USER_PROMPT_PREFIX);
         } else {
-            output.push_str("   ");
+            output.push_str(USER_PROMPT_CONTINUATION_PREFIX);
         }
         output.push_str(prompt_line);
         output.push('\n');
     }
     output.push('\n');
+}
+
+/// Returns true for raw clarification question rows like `1. Q: Need tests?`.
+fn is_clarification_question_line(line: &str) -> bool {
+    let trimmed_line = line.trim_start();
+    let digit_count = trimmed_line
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .count();
+    if digit_count == 0 {
+        return false;
+    }
+
+    let (_, suffix) = trimmed_line.split_at(digit_count);
+
+    suffix.starts_with(". Q: ")
 }
 
 /// Appends one raw assistant answer using legacy transcript spacing.
@@ -279,6 +338,44 @@ mod tests {
     }
 
     #[test]
+    fn test_session_transcript_serializes_clarification_prompt_with_question_spacing() {
+        // Arrange
+        let messages = vec![SessionMessage::conversation(
+            1,
+            SessionMessageKind::UserPrompt,
+            "Clarifications:\n1. Q: Need target branch?\n   A: main\n2. Q: Need tests?\n   A: yes",
+        )];
+
+        // Act
+        let transcript = SessionTranscript::new(messages);
+
+        // Assert
+        assert_eq!(
+            transcript.to_legacy_output(),
+            " › Clarifications:\n   \n   1. Q: Need target branch?\n      A: main\n   \n   2. Q: \
+             Need tests?\n      A: yes\n\n"
+        );
+    }
+
+    #[test]
+    fn test_session_transcript_serializes_prompt_spacing_after_assistant_answer() {
+        // Arrange
+        let messages = vec![
+            SessionMessage::conversation(0, SessionMessageKind::AssistantAnswer, "answer"),
+            SessionMessage::conversation(1, SessionMessageKind::UserPrompt, "next prompt"),
+        ];
+
+        // Act
+        let transcript = SessionTranscript::new(messages);
+
+        // Assert
+        assert_eq!(
+            transcript.to_legacy_output(),
+            "answer\n\n\n › next prompt\n\n"
+        );
+    }
+
+    #[test]
     fn test_session_transcript_uses_latest_legacy_checkpoint() {
         // Arrange
         let messages = vec![
@@ -298,6 +395,47 @@ mod tests {
         assert_eq!(
             transcript.to_legacy_output(),
             " › old prompt\n\nold answer\n\n[Sync Error] failed\nnew answer\n\n"
+        );
+    }
+
+    #[test]
+    fn test_session_transcript_append_message_uses_next_position() {
+        // Arrange
+        let mut transcript = SessionTranscript::new(vec![SessionMessage::conversation(
+            4,
+            SessionMessageKind::UserPrompt,
+            "prompt",
+        )]);
+
+        // Act
+        transcript.append_message(SessionMessageKind::AssistantAnswer, " answer\n");
+
+        // Assert
+        assert_eq!(
+            transcript.messages(),
+            &[
+                SessionMessage::conversation(4, SessionMessageKind::UserPrompt, "prompt"),
+                SessionMessage::conversation(5, SessionMessageKind::AssistantAnswer, "answer"),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_session_transcript_total_content_len_updates_on_append() {
+        // Arrange
+        let mut transcript = SessionTranscript::new(vec![SessionMessage::conversation(
+            4,
+            SessionMessageKind::UserPrompt,
+            "prompt",
+        )]);
+
+        // Act
+        transcript.append_message(SessionMessageKind::AssistantAnswer, " answer\n");
+
+        // Assert
+        assert_eq!(
+            transcript.total_content_len(),
+            "prompt".len() + "answer".len()
         );
     }
 

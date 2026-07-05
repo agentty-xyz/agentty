@@ -22,7 +22,7 @@ use crate::domain::agent::{AgentModel, AgentSelectionMetadata};
 use crate::domain::session::{
     COMMITTING_PROGRESS_LABEL, SessionHandles, SessionId, SessionSize, Status,
 };
-use crate::domain::session_message::SessionMessageKind;
+use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::setting::SettingName;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::agent;
@@ -172,6 +172,8 @@ pub(crate) struct RunAgentAssistTaskInput {
     pub(crate) session_agent: AgentSelection,
     /// Per-app session update versions shared with the main runtime.
     pub(crate) session_update_versions: SessionUpdateVersionMap,
+    /// Shared typed transcript snapshot mirrored to the render layer.
+    pub(crate) transcript: Arc<Mutex<SessionTranscript>>,
 }
 
 /// Typed payload for appending formatted transcript text while storing raw
@@ -342,6 +344,7 @@ impl SessionTaskService {
                 let message = TranscriptNotice::CommitError.format(&commit_error);
                 Self::append_session_output(
                     &context.output,
+                    &context.transcript,
                     &context.db,
                     &context.app_event_tx,
                     &context.session_update_versions,
@@ -597,6 +600,7 @@ impl SessionTaskService {
             output: Arc::clone(&context.output),
             session_agent: context.session_agent,
             session_update_versions: context.session_update_versions.clone(),
+            transcript: Arc::clone(&context.transcript),
         };
 
         run_agent_assist(&assist_context, &prompt)
@@ -895,6 +899,7 @@ impl SessionTaskService {
             prompt,
             session_agent,
             session_update_versions,
+            transcript,
         } = input;
         let assist_submission = Self::submit_utility_prompt_with_backend(
             session_agent,
@@ -915,6 +920,7 @@ impl SessionTaskService {
         if !answer_text.trim().is_empty() {
             Self::append_session_output_message(
                 &output,
+                &transcript,
                 &db,
                 &app_event_tx,
                 &session_update_versions,
@@ -1049,6 +1055,7 @@ impl SessionTaskService {
     /// durable message store.
     pub(crate) async fn append_session_output(
         output: &Arc<Mutex<String>>,
+        transcript: &Arc<Mutex<SessionTranscript>>,
         db: &AppRepositories,
         app_event_tx: &mpsc::UnboundedSender<AppEvent>,
         session_update_versions: &SessionUpdateVersionMap,
@@ -1065,6 +1072,12 @@ impl SessionTaskService {
                 );
             }
         }
+        Self::append_session_transcript_message(
+            transcript,
+            id,
+            SessionMessageKind::WorkflowNotice,
+            message,
+        );
         if let Err(error) = db
             .sessions()
             .append_session_message(id, SessionMessageKind::WorkflowNotice, message)
@@ -1083,6 +1096,7 @@ impl SessionTaskService {
     /// the in-memory handle buffer and message store.
     pub(crate) async fn append_session_output_message(
         output: &Arc<Mutex<String>>,
+        transcript: &Arc<Mutex<SessionTranscript>>,
         db: &AppRepositories,
         app_event_tx: &mpsc::UnboundedSender<AppEvent>,
         session_update_versions: &SessionUpdateVersionMap,
@@ -1099,6 +1113,7 @@ impl SessionTaskService {
                 );
             }
         }
+        Self::append_session_transcript_message(transcript, id, message.kind, message.raw_content);
         if let Err(error) = db
             .sessions()
             .append_session_message(id, message.kind, message.raw_content)
@@ -1111,6 +1126,25 @@ impl SessionTaskService {
             );
         }
         Self::emit_session_updated(app_event_tx, session_update_versions, id);
+    }
+
+    /// Appends one typed message to the live transcript snapshot.
+    fn append_session_transcript_message(
+        transcript: &Arc<Mutex<SessionTranscript>>,
+        id: &str,
+        kind: SessionMessageKind,
+        content: &str,
+    ) {
+        match transcript.lock() {
+            Ok(mut transcript) => transcript.append_message(kind, content),
+            Err(error) => {
+                warn!(
+                    session_id = id,
+                    error = %error,
+                    "failed to lock session transcript buffer"
+                );
+            }
+        }
     }
 
     /// Clears the transient thinking message for one session.
@@ -1337,6 +1371,7 @@ mod tests {
     use crate::app::service::AppServiceDeps;
     use crate::db::AppRepositories;
     use crate::domain::agent::AgentCliInfo;
+    use crate::domain::session_message::SessionMessage;
     use crate::infra::agent::tests::MockAgentBackend;
     use crate::infra::channel::AgentRequestKind;
     use crate::infra::fs;
@@ -1405,6 +1440,112 @@ mod tests {
             .insert_session("session-id", model, "main", "Review", project_id)
             .await
             .expect("failed to insert session");
+    }
+
+    #[tokio::test]
+    async fn test_append_session_output_updates_live_and_durable_workflow_transcript() {
+        // Arrange
+        let database = AppRepositories::in_memory().await;
+        insert_review_session(&database, AgentModel::Gpt55.as_str()).await;
+        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+        let output = Arc::new(Mutex::new(String::new()));
+        let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
+        let session_update_versions = Arc::default();
+
+        // Act
+        SessionTaskService::append_session_output(
+            &output,
+            &transcript,
+            &database,
+            &app_event_tx,
+            &session_update_versions,
+            "session-id",
+            "\n[Commit] No changes to commit.\n",
+        )
+        .await;
+
+        // Assert
+        assert_eq!(
+            output
+                .lock()
+                .expect("output lock should not be poisoned")
+                .as_str(),
+            "\n[Commit] No changes to commit.\n"
+        );
+        assert_eq!(
+            transcript
+                .lock()
+                .expect("transcript lock should not be poisoned")
+                .messages(),
+            &[SessionMessage::new(
+                0,
+                SessionMessageKind::WorkflowNotice,
+                "\n[Commit] No changes to commit.\n"
+            )]
+        );
+        let messages = database
+            .sessions()
+            .load_session_messages("session-id")
+            .await
+            .expect("failed to load persisted session messages");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].kind, "workflow_notice");
+        assert_eq!(messages[0].content, "\n[Commit] No changes to commit.\n");
+    }
+
+    #[tokio::test]
+    async fn test_append_session_output_message_updates_live_and_durable_typed_transcript() {
+        // Arrange
+        let database = AppRepositories::in_memory().await;
+        insert_review_session(&database, AgentModel::Gpt55.as_str()).await;
+        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+        let output = Arc::new(Mutex::new(String::new()));
+        let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
+        let session_update_versions = Arc::default();
+
+        // Act
+        SessionTaskService::append_session_output_message(
+            &output,
+            &transcript,
+            &database,
+            &app_event_tx,
+            &session_update_versions,
+            "session-id",
+            SessionOutputMessageAppend {
+                formatted_message: " › hello\n\n",
+                kind: SessionMessageKind::UserPrompt,
+                raw_content: " hello ",
+            },
+        )
+        .await;
+
+        // Assert
+        assert_eq!(
+            output
+                .lock()
+                .expect("output lock should not be poisoned")
+                .as_str(),
+            " › hello\n\n"
+        );
+        assert_eq!(
+            transcript
+                .lock()
+                .expect("transcript lock should not be poisoned")
+                .messages(),
+            &[SessionMessage::conversation(
+                0,
+                SessionMessageKind::UserPrompt,
+                "hello"
+            )]
+        );
+        let messages = database
+            .sessions()
+            .load_session_messages("session-id")
+            .await
+            .expect("failed to load persisted session messages");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].kind, "user_prompt");
+        assert_eq!(messages[0].content, "hello");
     }
 
     #[test]
@@ -1986,6 +2127,7 @@ mod tests {
             output: Arc::clone(&output),
             session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
             session_update_versions: Arc::default(),
+            transcript: Arc::new(Mutex::new(SessionTranscript::default())),
         };
 
         // Act
@@ -2023,6 +2165,7 @@ mod tests {
             output: Arc::clone(&output),
             session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
             session_update_versions: Arc::default(),
+            transcript: Arc::new(Mutex::new(SessionTranscript::default())),
         };
 
         // Act
@@ -2154,6 +2297,7 @@ mod tests {
             output: Arc::clone(&output),
             session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
             session_update_versions: Arc::default(),
+            transcript: Arc::new(Mutex::new(SessionTranscript::default())),
         };
 
         // Act
@@ -2349,6 +2493,7 @@ mod tests {
                 prompt: "Resolve conflict".to_string(),
                 session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus48),
                 session_update_versions: Arc::default(),
+                transcript: Arc::new(Mutex::new(SessionTranscript::default())),
             },
             &backend,
         )
@@ -2412,6 +2557,7 @@ mod tests {
                 prompt: "Resolve conflict".to_string(),
                 session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus48),
                 session_update_versions: Arc::default(),
+                transcript: Arc::new(Mutex::new(SessionTranscript::default())),
             },
             &backend,
         )
@@ -2463,6 +2609,7 @@ mod tests {
                 prompt: "Resolve conflict".to_string(),
                 session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus48),
                 session_update_versions: Arc::default(),
+                transcript: Arc::new(Mutex::new(SessionTranscript::default())),
             },
             &backend,
         )

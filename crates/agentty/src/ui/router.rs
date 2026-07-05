@@ -905,19 +905,28 @@ mod tests {
     use super::*;
     use crate::domain::agent::ReasoningLevel;
     use crate::domain::session::Status;
+    use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
     use crate::test_support::SessionFixtureBuilder;
 
     /// Builds one deterministic session fixture for router render tests.
     fn session_fixture(session_id: &str) -> Session {
-        SessionFixtureBuilder::new()
+        let transcript = SessionTranscript::new(vec![SessionMessage::conversation(
+            0,
+            SessionMessageKind::AssistantAnswer,
+            "Captured output",
+        )]);
+        let mut session = SessionFixtureBuilder::new()
             .id(session_id)
             .folder(PathBuf::from(format!("/tmp/{session_id}")))
-            .output("Captured output")
+            .output(transcript.to_legacy_output())
             .prompt("Prompt")
             .status(Status::Review)
             .summary(Some("Summary line for router test".to_string()))
             .title(Some("Router Session".to_string()))
-            .build()
+            .build();
+        session.transcript = Some(transcript);
+
+        session
     }
 
     /// Flattens a rendered test buffer into a plain string for text assertions.

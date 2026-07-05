@@ -566,6 +566,7 @@ mod tests {
                 status: Status::Review,
                 summary: None,
                 title: Some("Title".to_string()),
+                transcript: None,
                 updated_at: 0,
                 workflow_notice: None,
             }],

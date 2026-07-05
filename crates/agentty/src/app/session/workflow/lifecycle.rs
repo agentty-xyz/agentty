@@ -28,7 +28,7 @@ use crate::domain::session::{
     can_reply_to_session_in_stack as stack_can_reply_to_session,
     can_start_staged_session_in_stack as stack_can_start_staged_session,
 };
-use crate::domain::session_message::SessionMessageKind;
+use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::session_order;
 use crate::domain::setting::SettingName;
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -1066,6 +1066,7 @@ impl SessionManager {
 
         let handles = self.session_handles_or_err(&persisted_session_id)?;
         let output = Arc::clone(&handles.output);
+        let transcript = Arc::clone(&handles.transcript);
         let status_transition =
             StatusTransition::from_services(services, handles, persisted_session_id.clone());
         let app_event_tx = services.event_sender();
@@ -1077,6 +1078,7 @@ impl SessionManager {
         let initial_output = Self::formatted_prompt_output(&prompt, false);
         SessionTaskService::append_session_output_message(
             &output,
+            &transcript,
             services.db(),
             &app_event_tx,
             &services.session_update_versions(),
@@ -1773,6 +1775,7 @@ impl SessionManager {
         };
 
         let output = Arc::clone(&handles.output);
+        let transcript = Arc::clone(&handles.transcript);
         let status_transition =
             StatusTransition::from_services(services, handles, persisted_session_id.clone());
 
@@ -1798,6 +1801,7 @@ impl SessionManager {
         self.append_reply_prompt_line(
             services,
             &output,
+            &transcript,
             &app_event_tx,
             &persisted_session_id,
             &effective_prompt,
@@ -1818,7 +1822,7 @@ impl SessionManager {
         self.enqueue_reply_command(
             services,
             &output,
-            &app_event_tx,
+            &transcript,
             &persisted_session_id,
             &effective_prompt,
             command,
@@ -1936,6 +1940,7 @@ impl SessionManager {
         &mut self,
         services: &AppServices,
         output: &Arc<Mutex<String>>,
+        transcript: &Arc<Mutex<SessionTranscript>>,
         app_event_tx: &mpsc::UnboundedSender<AppEvent>,
         session_id: &str,
         prompt: &TurnPrompt,
@@ -1944,6 +1949,7 @@ impl SessionManager {
         let reply_line = Self::formatted_prompt_output(prompt, true);
         SessionTaskService::append_session_output_message(
             output,
+            transcript,
             services.db(),
             app_event_tx,
             &services.session_update_versions(),
@@ -2083,6 +2089,7 @@ impl SessionManager {
 
         SessionTaskService::append_session_output(
             &handles.output,
+            &handles.transcript,
             services.db(),
             &app_event_tx,
             &services.session_update_versions(),
@@ -2098,7 +2105,7 @@ impl SessionManager {
         &mut self,
         services: &AppServices,
         output: &Arc<Mutex<String>>,
-        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+        transcript: &Arc<Mutex<SessionTranscript>>,
         persisted_session_id: &str,
         prompt: &TurnPrompt,
         command: SessionCommand,
@@ -2110,10 +2117,12 @@ impl SessionManager {
             self.cleanup_prompt_attachment_files(services, prompt).await;
 
             let error_line = TranscriptNotice::ReplyError.format(error);
+            let app_event_tx = services.event_sender();
             SessionTaskService::append_session_output(
                 output,
+                transcript,
                 services.db(),
-                app_event_tx,
+                &app_event_tx,
                 &services.session_update_versions(),
                 persisted_session_id,
                 &error_line,
@@ -2514,6 +2523,7 @@ impl SessionManager {
 
         SessionTaskService::append_session_output(
             &handles.output,
+            &handles.transcript,
             services.db(),
             &app_event_tx,
             &services.session_update_versions(),

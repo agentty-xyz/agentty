@@ -15,13 +15,10 @@ use crate::infra::agent::protocol::AgentResponseSummary;
 use crate::ui::state::help_action::{self, ViewHelpState};
 use crate::ui::{markdown, style, text_util};
 
-const CLARIFICATION_HEADER_LINE: &str = " › Clarifications:";
 const REVIEW_SUGGESTIONS_HEADER: &str = "### Suggestions";
 const REVIEW_SUGGESTIONS_HEADER_WITH_HINT: &str =
     "### Suggestions (type \"/apply\" to verify and apply)";
 const SESSION_OUTPUT_DEFAULT_SUMMARY_TEXT: &str = "No changes";
-const USER_PROMPT_PREFIX: &str = " › ";
-const USER_PROMPT_CONTINUATION_PREFIX: &str = "   ";
 
 /// Formats the session title and metadata lines rendered above the output
 /// panel.
@@ -213,48 +210,6 @@ pub(crate) fn annotate_review_suggestions_header(review_markdown: &str) -> Strin
     annotated_lines.join("\n")
 }
 
-/// Adds visual spacing around user prompt blocks inside session output text.
-///
-/// Clarification blocks receive extra blank rows between numbered follow-up
-/// questions so grouped answers remain easy to scan.
-pub(crate) fn session_output_text_with_spaced_user_input(output_text: &str) -> String {
-    let raw_lines = output_text.split('\n').collect::<Vec<_>>();
-    let mut formatted_lines = Vec::with_capacity(raw_lines.len());
-    let mut line_index = 0;
-
-    while line_index < raw_lines.len() {
-        let line = raw_lines[line_index];
-        if !line.starts_with(USER_PROMPT_PREFIX) {
-            formatted_lines.push(line.to_string());
-            line_index += 1;
-
-            continue;
-        }
-
-        if formatted_lines
-            .last()
-            .is_some_and(|item: &String| !item.is_empty())
-        {
-            formatted_lines.push(String::new());
-        }
-
-        let block_end_index = user_prompt_block_end_index(&raw_lines, line_index);
-        formatted_lines.extend(format_prompt_block_lines(
-            &raw_lines[line_index..=block_end_index],
-        ));
-        line_index = block_end_index + 1;
-
-        let next_line_is_empty = raw_lines
-            .get(line_index)
-            .is_none_or(|next_line| next_line.is_empty());
-        if !next_line_is_empty {
-            formatted_lines.push(String::new());
-        }
-    }
-
-    formatted_lines.join("\n")
-}
-
 /// Returns borders used for the session output panel.
 ///
 /// Vertical borders stay hidden so terminal copy/select flows do not pick up
@@ -332,76 +287,6 @@ fn summary_section_text(summary_text: &str) -> &str {
     }
 
     trimmed_summary
-}
-
-/// Formats one prompt block and adds blank separators between clarification
-/// question groups.
-fn format_prompt_block_lines(raw_block_lines: &[&str]) -> Vec<String> {
-    if !is_clarification_prompt_block(raw_block_lines) {
-        return raw_block_lines.iter().map(ToString::to_string).collect();
-    }
-
-    let mut formatted_block_lines = Vec::with_capacity(raw_block_lines.len() + 2);
-    for (block_line_index, raw_block_line) in raw_block_lines.iter().enumerate() {
-        if block_line_index > 0 && is_clarification_question_line(raw_block_line) {
-            formatted_block_lines.push(USER_PROMPT_CONTINUATION_PREFIX.to_string());
-        }
-
-        formatted_block_lines.push((*raw_block_line).to_string());
-    }
-
-    formatted_block_lines
-}
-
-/// Returns true when a prompt block is the generated clarifications payload.
-fn is_clarification_prompt_block(raw_block_lines: &[&str]) -> bool {
-    raw_block_lines
-        .first()
-        .is_some_and(|line| line.trim_end() == CLARIFICATION_HEADER_LINE)
-}
-
-/// Returns true for numbered clarification question rows like
-/// `   1. Q: Need tests?`.
-fn is_clarification_question_line(raw_block_line: &str) -> bool {
-    let Some(line_without_prefix) = raw_block_line.strip_prefix(USER_PROMPT_CONTINUATION_PREFIX)
-    else {
-        return false;
-    };
-    let trimmed_line = line_without_prefix.trim_start();
-    let digit_count = trimmed_line
-        .chars()
-        .take_while(char::is_ascii_digit)
-        .count();
-    if digit_count == 0 {
-        return false;
-    }
-
-    let (_, suffix) = trimmed_line.split_at(digit_count);
-
-    suffix.starts_with(". Q: ")
-}
-
-/// Returns the final non-empty line index for one prompt block.
-fn user_prompt_block_end_index(raw_lines: &[&str], start_index: usize) -> usize {
-    let mut candidate_index = start_index + 1;
-
-    while candidate_index < raw_lines.len() {
-        let candidate_line = raw_lines[candidate_index];
-        if candidate_line.is_empty() || candidate_line.starts_with(USER_PROMPT_PREFIX) {
-            break;
-        }
-
-        candidate_index += 1;
-    }
-
-    if raw_lines
-        .get(candidate_index)
-        .is_some_and(|candidate_line| candidate_line.is_empty())
-    {
-        return candidate_index.saturating_sub(1).max(start_index);
-    }
-
-    start_index
 }
 
 /// Returns the loader label for active session states.

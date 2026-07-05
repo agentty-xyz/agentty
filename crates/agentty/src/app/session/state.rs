@@ -341,12 +341,22 @@ impl SessionState {
     /// pop) becomes visible on the very next sync without callers also having
     /// to mirror the change into the snapshot field.
     fn sync_session_with_handles(session: &mut Session, session_handles: &SessionHandles) {
-        if let Ok(output) = session_handles.output.lock() {
-            Self::sync_session_output(&mut session.output, output.as_str());
+        if let Ok(output) = session_handles.output.lock()
+            && Self::sync_session_output(&mut session.output, output.as_str())
+        {
+            session.transcript = None;
         }
 
         if let Ok(status) = session_handles.status.lock() {
             session.status = *status;
+        }
+
+        if let Ok(transcript) = session_handles.transcript.lock() {
+            let transcript_matches_output =
+                !transcript.is_empty() && transcript.to_legacy_output() == session.output;
+            if transcript_matches_output {
+                session.transcript = Some(transcript.clone());
+            }
         }
 
         session.queued_messages = session_handles.queued_message_transcripts();
@@ -356,7 +366,7 @@ impl SessionState {
     ///
     /// This keeps equal-length rewrites correct while reducing copy cost for
     /// append-heavy streams by pushing only the unseen suffix.
-    fn sync_session_output(session_output: &mut String, handle_output: &str) {
+    fn sync_session_output(session_output: &mut String, handle_output: &str) -> bool {
         let session_output_len = session_output.len();
         let handle_output_len = handle_output.len();
 
@@ -364,16 +374,24 @@ impl SessionState {
             if session_output != handle_output {
                 session_output.clear();
                 session_output.push_str(handle_output);
+
+                return true;
             }
         } else if handle_output_len > session_output_len
             && handle_output.starts_with(session_output.as_str())
             && let Some(appended_output) = handle_output.get(session_output_len..)
         {
             session_output.push_str(appended_output);
+
+            return true;
         } else {
             session_output.clear();
             session_output.push_str(handle_output);
+
+            return true;
         }
+
+        false
     }
 
     /// Advances the selected follow-up task for one session in the requested
@@ -435,6 +453,8 @@ mod tests {
 
     use super::*;
     use crate::domain::session::{Session, SessionHandles, SessionSize, SessionStats, Status};
+    use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
+    use crate::test_support::SessionFixtureBuilder;
 
     struct FixedClock {
         instant: Instant,
@@ -494,6 +514,7 @@ mod tests {
             status: Status::Review,
             summary: None,
             title: None,
+            transcript: None,
             updated_at: 0,
             workflow_notice: None,
         };
@@ -551,6 +572,7 @@ mod tests {
             status: Status::Draft,
             summary: None,
             title: None,
+            transcript: None,
             updated_at: 0,
             workflow_notice: None,
         };
@@ -597,6 +619,7 @@ mod tests {
             status: Status::InProgress,
             summary: None,
             title: None,
+            transcript: None,
             updated_at: 0,
             workflow_notice: None,
         };
@@ -609,6 +632,35 @@ mod tests {
         // Assert
         assert_eq!(session.output, "first line\nsecond line\n");
         assert_eq!(session.status, Status::InProgress);
+    }
+
+    #[test]
+    /// Verifies output changes clear stale typed transcript snapshots until a
+    /// database-backed refresh can hydrate matching rows again.
+    fn sync_session_with_handles_clears_stale_transcript_when_output_changes() {
+        // Arrange
+        let transcript = SessionTranscript::new(vec![SessionMessage::conversation(
+            0,
+            SessionMessageKind::UserPrompt,
+            "old prompt",
+        )]);
+        let mut session = SessionFixtureBuilder::new()
+            .output(transcript.to_legacy_output())
+            .status(Status::Review)
+            .build();
+        session.transcript = Some(transcript.clone());
+        let handles = SessionHandles::new_with_transcript(
+            "new output".to_string(),
+            Status::Review,
+            transcript,
+        );
+
+        // Act
+        SessionState::sync_session_with_handles(&mut session, &handles);
+
+        // Assert
+        assert_eq!(session.output, "new output");
+        assert_eq!(session.transcript, None);
     }
 
     #[test]
@@ -645,6 +697,7 @@ mod tests {
             status: Status::Review,
             summary: None,
             title: None,
+            transcript: None,
             updated_at: 0,
             workflow_notice: None,
         };
@@ -699,6 +752,7 @@ mod tests {
             status: Status::Review,
             summary: None,
             title: None,
+            transcript: None,
             updated_at: 0,
             workflow_notice: None,
         };
@@ -731,6 +785,7 @@ mod tests {
             status: Status::Review,
             summary: None,
             title: None,
+            transcript: None,
             updated_at: 0,
             workflow_notice: None,
         };
@@ -785,6 +840,7 @@ mod tests {
             status: Status::Review,
             summary: None,
             title: None,
+            transcript: None,
             updated_at: 0,
             workflow_notice: None,
         };
@@ -817,6 +873,7 @@ mod tests {
             status: Status::Review,
             summary: None,
             title: None,
+            transcript: None,
             updated_at: 0,
             workflow_notice: None,
         };
@@ -875,6 +932,7 @@ mod tests {
             status: Status::InProgress,
             summary: None,
             title: None,
+            transcript: None,
             updated_at: 0,
             workflow_notice: None,
         };
@@ -973,6 +1031,7 @@ mod tests {
             status: Status::Done,
             summary: None,
             title: None,
+            transcript: None,
             updated_at: 0,
             workflow_notice: None,
         };
@@ -1013,6 +1072,7 @@ mod tests {
             status: Status::Done,
             summary: None,
             title: None,
+            transcript: None,
             updated_at: 0,
             workflow_notice: None,
         };

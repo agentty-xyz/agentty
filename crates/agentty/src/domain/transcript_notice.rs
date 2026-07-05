@@ -95,33 +95,6 @@ impl TranscriptNotice {
     }
 }
 
-/// Prefixes that identify trailing transcript notices during session output
-/// rendering.
-pub(crate) const TRAILING_TRANSCRIPT_NOTICE_PREFIXES: &[&str] = &[
-    TranscriptNotice::Apply.prefix(),
-    TranscriptNotice::BranchPush.prefix(),
-    TranscriptNotice::BranchPushError.prefix(),
-    TranscriptNotice::Commit.prefix(),
-    TranscriptNotice::CommitAssist.prefix(),
-    TranscriptNotice::CommitError.prefix(),
-    TranscriptNotice::ContinueError.prefix(),
-    TranscriptNotice::Error.prefix(),
-    TranscriptNotice::ForkError.prefix(),
-    TranscriptNotice::FollowUpTaskError.prefix(),
-    TranscriptNotice::Merge.prefix(),
-    TranscriptNotice::MergeError.prefix(),
-    TranscriptNotice::MainCheckoutWarning.prefix(),
-    TranscriptNotice::PasteImageError.prefix(),
-    TranscriptNotice::QueueError.prefix(),
-    TranscriptNotice::Rebase.prefix(),
-    TranscriptNotice::RebaseAssist.prefix(),
-    TranscriptNotice::RebaseError.prefix(),
-    TranscriptNotice::ReplyError.prefix(),
-    TranscriptNotice::ReviewRequestSyncWarning.prefix(),
-    TranscriptNotice::StartError.prefix(),
-    TranscriptNotice::TurnMetadataError.prefix(),
-];
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,39 +124,5 @@ mod tests {
 
         // Assert
         assert_eq!(formatted, "[Commit] No changes to commit.");
-    }
-
-    #[test]
-    fn test_trailing_transcript_notice_prefixes_include_generated_labels() {
-        // Arrange
-        let generated_labels = [
-            TranscriptNotice::Apply,
-            TranscriptNotice::BranchPush,
-            TranscriptNotice::BranchPushError,
-            TranscriptNotice::Commit,
-            TranscriptNotice::CommitAssist,
-            TranscriptNotice::CommitError,
-            TranscriptNotice::ContinueError,
-            TranscriptNotice::Error,
-            TranscriptNotice::ForkError,
-            TranscriptNotice::FollowUpTaskError,
-            TranscriptNotice::Merge,
-            TranscriptNotice::MergeError,
-            TranscriptNotice::MainCheckoutWarning,
-            TranscriptNotice::PasteImageError,
-            TranscriptNotice::QueueError,
-            TranscriptNotice::Rebase,
-            TranscriptNotice::RebaseAssist,
-            TranscriptNotice::RebaseError,
-            TranscriptNotice::ReplyError,
-            TranscriptNotice::ReviewRequestSyncWarning,
-            TranscriptNotice::StartError,
-            TranscriptNotice::TurnMetadataError,
-        ];
-
-        // Act & Assert
-        for notice in generated_labels {
-            assert!(TRAILING_TRANSCRIPT_NOTICE_PREFIXES.contains(&notice.prefix()));
-        }
     }
 }

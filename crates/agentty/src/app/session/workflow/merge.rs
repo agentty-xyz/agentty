@@ -24,6 +24,7 @@ use crate::app::session::{Clock, SessionError};
 use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager};
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel};
 use crate::domain::session::{PublishedBranchSyncStatus, SessionId, Status};
+use crate::domain::session_message::SessionTranscript;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::agent;
 use crate::infra::agent::protocol::AgentResponseSummary;
@@ -144,6 +145,7 @@ struct MergeTaskInput {
     session_update_versions: SessionUpdateVersionMap,
     source_branch: String,
     status: Arc<Mutex<Status>>,
+    transcript: Arc<Mutex<SessionTranscript>>,
 }
 
 /// Metadata needed to finish a successful merge after git work completes.
@@ -180,6 +182,7 @@ struct RebaseAssistInput {
     rebase_plan: RebasePlan,
     session_agent: AgentSelection,
     session_update_versions: SessionUpdateVersionMap,
+    transcript: Arc<Mutex<SessionTranscript>>,
 }
 
 /// Input required to run a session rebase command to completion.
@@ -212,6 +215,8 @@ pub(super) struct RebaseCommandInput {
     pub(super) session_update_versions: SessionUpdateVersionMap,
     /// Shared session lifecycle status.
     pub(super) status: Arc<Mutex<Status>>,
+    /// Shared typed transcript snapshot mirrored to the render layer.
+    pub(super) transcript: Arc<Mutex<SessionTranscript>>,
 }
 
 /// Bundled context for finalizing one rebase task.
@@ -226,6 +231,19 @@ struct FinalizeRebaseInput<'a> {
     session_update_versions: &'a SessionUpdateVersionMap,
     /// Bound transition context for restoring `Review` after rebase cleanup.
     status_transition: &'a StatusTransition,
+    transcript: &'a Arc<Mutex<SessionTranscript>>,
+}
+
+/// Bundled context for starting post-rebase auto-publish.
+struct RebaseAutoPushInput<'a> {
+    app_event_tx: &'a mpsc::UnboundedSender<AppEvent>,
+    db: &'a AppRepositories,
+    folder: &'a Path,
+    git_client: &'a Arc<dyn GitClient>,
+    output: &'a Arc<Mutex<String>>,
+    session_id: &'a str,
+    session_update_versions: &'a SessionUpdateVersionMap,
+    transcript: &'a Arc<Mutex<SessionTranscript>>,
 }
 
 /// Bundled context for finalizing one merge task.
@@ -238,6 +256,7 @@ struct FinalizeMergeInput<'a> {
     session_update_versions: &'a SessionUpdateVersionMap,
     /// Bound transition context for restoring failed merges to `Review`.
     status_transition: &'a StatusTransition,
+    transcript: &'a Arc<Mutex<SessionTranscript>>,
 }
 
 /// Input context for assisted conflict resolution during `sync main`.
@@ -583,10 +602,11 @@ impl SessionMergeService {
         let handles = manager
             .session_handles_or_err(session_id)
             .map_err(|_| SessionError::HandlesNotFound)?;
-        let (child_pid, output, status) = (
+        let (child_pid, output, status, transcript) = (
             Arc::clone(&handles.child_pid),
             Arc::clone(&handles.output),
             Arc::clone(&handles.status),
+            Arc::clone(&handles.transcript),
         );
         let status_transition = StatusTransition::from_parts(
             app_event_tx.clone(),
@@ -636,6 +656,7 @@ impl SessionMergeService {
             session_update_versions,
             source_branch: session_branch(&id),
             status,
+            transcript,
         };
         tokio::spawn(async move {
             SessionManager::run_merge_task(merge_task_input).await;
@@ -1016,6 +1037,7 @@ impl SessionManager {
         let id = input.id.clone();
         let status = Arc::clone(&input.status);
         let session_update_versions = input.session_update_versions.clone();
+        let transcript = Arc::clone(&input.transcript);
 
         let merge_result = Self::execute_merge_workflow(input).await;
         let status_transition = StatusTransition::from_parts(
@@ -1034,6 +1056,7 @@ impl SessionManager {
             result: merge_result,
             session_update_versions: &session_update_versions,
             status_transition: &status_transition,
+            transcript: &transcript,
         })
         .await;
     }
@@ -1296,6 +1319,7 @@ impl SessionManager {
             rebase_plan: RebasePlan::target(input.base_branch.clone()),
             session_agent: input.session_agent,
             session_update_versions: input.session_update_versions.clone(),
+            transcript: Arc::clone(&input.transcript),
         }
     }
 
@@ -1361,6 +1385,7 @@ impl SessionManager {
             result,
             session_update_versions,
             status_transition,
+            transcript,
         } = input;
 
         match result {
@@ -1373,6 +1398,7 @@ impl SessionManager {
                 let merge_error = TranscriptNotice::MergeError.format(error);
                 SessionTaskService::append_session_output(
                     output,
+                    transcript,
                     db,
                     app_event_tx,
                     session_update_versions,
@@ -1686,6 +1712,7 @@ impl SessionManager {
             session_agent,
             session_update_versions,
             status,
+            transcript,
         } = input;
 
         let rebase_result: Result<String, SessionError> = async {
@@ -1710,6 +1737,7 @@ impl SessionManager {
                 rebase_plan,
                 session_agent,
                 session_update_versions: session_update_versions.clone(),
+                transcript: Arc::clone(&transcript),
             };
 
             Self::execute_rebase_workflow(rebase_input).await
@@ -1735,6 +1763,7 @@ impl SessionManager {
             rebase_result,
             session_update_versions: &session_update_versions,
             status_transition: &status_transition,
+            transcript: &transcript,
         })
         .await;
 
@@ -1969,6 +1998,7 @@ impl SessionManager {
             rebase_result,
             session_update_versions,
             status_transition,
+            transcript,
         } = input;
 
         let rebase_succeeded = rebase_result.is_ok();
@@ -1977,6 +2007,7 @@ impl SessionManager {
                 let rebase_message = TranscriptNotice::Rebase.format(message);
                 SessionTaskService::append_session_output(
                     output,
+                    transcript,
                     db,
                     app_event_tx,
                     session_update_versions,
@@ -1986,21 +2017,23 @@ impl SessionManager {
                 .await;
                 SessionTaskService::request_git_status_refresh(app_event_tx);
 
-                Self::start_auto_push_after_rebase(
-                    db,
+                Self::start_auto_push_after_rebase(RebaseAutoPushInput {
                     app_event_tx,
+                    db,
                     folder,
                     git_client,
                     output,
-                    id,
+                    session_id: id,
                     session_update_versions,
-                )
+                    transcript,
+                })
                 .await;
             }
             Err(error) => {
                 let rebase_error = TranscriptNotice::RebaseError.format(error);
                 SessionTaskService::append_session_output(
                     output,
+                    transcript,
                     db,
                     app_event_tx,
                     session_update_versions,
@@ -2028,15 +2061,18 @@ impl SessionManager {
 
     /// Starts a detached auto-push task when the rebased session has a
     /// previously published upstream branch.
-    async fn start_auto_push_after_rebase(
-        db: &AppRepositories,
-        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
-        folder: &Path,
-        git_client: &Arc<dyn GitClient>,
-        output: &Arc<Mutex<String>>,
-        session_id: &str,
-        session_update_versions: &SessionUpdateVersionMap,
-    ) {
+    async fn start_auto_push_after_rebase(input: RebaseAutoPushInput<'_>) {
+        let RebaseAutoPushInput {
+            app_event_tx,
+            db,
+            folder,
+            git_client,
+            output,
+            session_id,
+            session_update_versions,
+            transcript,
+        } = input;
+
         let published_upstream_ref = db
             .sessions()
             .load_session_published_upstream_ref(session_id)
@@ -2070,6 +2106,7 @@ impl SessionManager {
         let folder = folder.to_path_buf();
         let git_client = Arc::clone(git_client);
         let output = Arc::clone(output);
+        let transcript = Arc::clone(transcript);
         let session_id = SessionId::from(session_id);
         let auto_push_input = PublishedBranchAutoPushInput {
             app_event_tx,
@@ -2082,6 +2119,7 @@ impl SessionManager {
             session_id,
             session_update_versions: session_update_versions.clone(),
             sync_operation_id,
+            transcript,
         };
 
         tokio::spawn(async move {
@@ -2762,6 +2800,7 @@ impl SessionManager {
             output: Arc::clone(&input.output),
             session_agent: input.session_agent,
             session_update_versions: input.session_update_versions.clone(),
+            transcript: Arc::clone(&input.transcript),
         }
     }
 
@@ -2874,6 +2913,10 @@ mod tests {
         Arc::new(create_passthrough_mock_fs_client())
     }
 
+    fn empty_transcript() -> Arc<Mutex<SessionTranscript>> {
+        Arc::new(Mutex::new(SessionTranscript::default()))
+    }
+
     /// Builds rebase assistance input with the provided git client for unit
     /// tests.
     async fn build_rebase_assist_input_for_test(
@@ -2896,6 +2939,7 @@ mod tests {
                 git_client,
                 id: "session-123".into(),
                 output: Arc::new(Mutex::new(String::new())),
+                transcript: empty_transcript(),
                 rebase_plan: RebasePlan::target("main".to_string()),
                 session_agent: AgentSelection::new(
                     AgentKind::Antigravity,
@@ -2930,6 +2974,7 @@ mod tests {
                 git_client,
                 id: "session-123".into(),
                 output: Arc::new(Mutex::new(String::new())),
+                transcript: empty_transcript(),
                 repo_root,
                 session_update_versions: Arc::default(),
                 session_agent: AgentSelection::new(
@@ -3432,6 +3477,7 @@ mod tests {
             git_client: Arc::new(git::RealGitClient),
             id: "session-123".into(),
             output: Arc::new(Mutex::new(String::new())),
+            transcript: empty_transcript(),
             rebase_plan: RebasePlan::target("origin/main".to_string()),
             session_agent: AgentSelection::new(
                 AgentKind::Antigravity,
@@ -4663,6 +4709,7 @@ mod tests {
         let output = Arc::new(Mutex::new(String::new()));
         let session_update_versions = Arc::default();
         let status = Arc::new(Mutex::new(Status::Rebasing));
+        let transcript = empty_transcript();
         let status_transition = StatusTransition::from_parts(
             app_event_tx.clone(),
             Arc::new(crate::infra::clock::RealClock),
@@ -4693,6 +4740,7 @@ mod tests {
             rebase_result: Ok("Successfully synced wt/sess-rebase onto main".to_string()),
             session_update_versions: &session_update_versions,
             status_transition: &status_transition,
+            transcript: &transcript,
         })
         .await;
 
@@ -4754,6 +4802,7 @@ mod tests {
         let output = Arc::new(Mutex::new(String::new()));
         let session_update_versions = Arc::default();
         let status = Arc::new(Mutex::new(Status::Rebasing));
+        let transcript = empty_transcript();
         let status_transition = StatusTransition::from_parts(
             app_event_tx.clone(),
             Arc::new(crate::infra::clock::RealClock),
@@ -4775,6 +4824,7 @@ mod tests {
             rebase_result: Ok("Successfully synced wt/sess-no-push onto main".to_string()),
             session_update_versions: &session_update_versions,
             status_transition: &status_transition,
+            transcript: &transcript,
         })
         .await;
 
