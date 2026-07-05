@@ -229,7 +229,7 @@ fn render_markdown_input_line(
     }
 
     if let Some(next_line_index) =
-        render_mermaid_block_line(raw_lines, line_index, width, block_state, rendered_lines)
+        render_mermaid_block_line(raw_lines, line_index, width, *block_state, rendered_lines)
     {
         return next_line_index;
     }
@@ -254,7 +254,7 @@ fn render_mermaid_block_line(
     raw_lines: &[&str],
     line_index: usize,
     width: usize,
-    block_state: &BlockState,
+    block_state: BlockState,
     rendered_lines: &mut Vec<Line<'static>>,
 ) -> Option<usize> {
     let raw_line = raw_lines[line_index];

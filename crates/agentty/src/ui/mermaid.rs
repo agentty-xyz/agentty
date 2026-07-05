@@ -1034,12 +1034,14 @@ fn top_down_layer_top_rows(
     let layer_count = layout.layer_members.len();
     let mut layer_top_rows = Vec::with_capacity(layer_count);
     let mut next_row = 0;
-    for layer_index in 0..layer_count {
+    for region_edges_after_layer in region_edges.iter().take(layer_count.saturating_sub(1)) {
         layer_top_rows.push(next_row);
         next_row += NODE_BOX_HEIGHT;
-        if layer_index + 1 < layer_count {
-            next_row += region_edges[layer_index].len() + 2;
-        }
+        next_row += region_edges_after_layer.len() + 2;
+    }
+    if layer_count > 0 {
+        layer_top_rows.push(next_row);
+        next_row += NODE_BOX_HEIGHT;
     }
 
     (layer_top_rows, next_row)
