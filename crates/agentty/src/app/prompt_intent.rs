@@ -217,7 +217,7 @@ impl App {
             Err(error) => {
                 self.append_prompt_status_line(
                     context.session_id.as_str(),
-                    "Paste Image Error",
+                    TranscriptNotice::PasteImageError,
                     &clipboard_image::normalize_clipboard_image_error(&error),
                 )
                 .await;
@@ -492,8 +492,13 @@ impl App {
 
     /// Appends one prompt-mode status line to the session transcript shown
     /// above the composer.
-    async fn append_prompt_status_line(&self, session_id: &str, label: &str, message: &str) {
-        self.append_output_for_session(session_id, &format!("\n[{label}] {message}\n"))
+    async fn append_prompt_status_line(
+        &self,
+        session_id: &str,
+        notice: TranscriptNotice,
+        message: &str,
+    ) {
+        self.append_output_for_session(session_id, &notice.format(message))
             .await;
     }
 
@@ -549,7 +554,7 @@ impl App {
         if session_status != Status::Review {
             self.append_prompt_status_line(
                 &context.session_id,
-                "Apply",
+                TranscriptNotice::Apply,
                 "Apply is only available after a focused review completes (session status must be \
                  Review).",
             )
@@ -565,7 +570,7 @@ impl App {
         } else {
             self.append_prompt_status_line(
                 &context.session_id,
-                "Apply",
+                TranscriptNotice::Apply,
                 "No actionable suggestions available. Run a focused review first (f key).",
             )
             .await;
@@ -583,7 +588,7 @@ impl App {
             Err(err) => {
                 self.append_prompt_status_line(
                     &context.session_id,
-                    "Apply",
+                    TranscriptNotice::Apply,
                     &format!(
                         "Failed to read worktree diff: {err}. Review cache preserved; try /apply \
                          again."
@@ -601,7 +606,7 @@ impl App {
             self.clear_prompt_review_state();
             self.append_prompt_status_line(
                 &context.session_id,
-                "Apply",
+                TranscriptNotice::Apply,
                 "Review is stale; the worktree changed since it was generated. Run focused review \
                  again (f key).",
             )
@@ -613,7 +618,7 @@ impl App {
         let Some(suggestions) = review::review_suggestions(&cached_text) else {
             self.append_prompt_status_line(
                 &context.session_id,
-                "Apply",
+                TranscriptNotice::Apply,
                 "No actionable suggestions found in the current review.",
             )
             .await;

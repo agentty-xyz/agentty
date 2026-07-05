@@ -8,6 +8,8 @@ use std::fmt;
 /// aligned with summary render ordering.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TranscriptNotice {
+    /// Prompt `/apply` command status.
+    Apply,
     /// Automatic published-branch push result.
     BranchPush,
     /// Automatic published-branch push failure.
@@ -32,6 +34,8 @@ pub(crate) enum TranscriptNotice {
     MergeError,
     /// Main checkout changed during a provider turn.
     MainCheckoutWarning,
+    /// Prompt image-paste failure.
+    PasteImageError,
     /// Queued prompt failure.
     QueueError,
     /// Session sync workflow progress.
@@ -54,6 +58,7 @@ impl TranscriptNotice {
     /// Returns the bracketed transcript prefix for this notice kind.
     pub(crate) const fn prefix(self) -> &'static str {
         match self {
+            Self::Apply => "[Apply]",
             Self::BranchPush => "[Branch Push]",
             Self::BranchPushError => "[Branch Push Error]",
             Self::Commit => "[Commit]",
@@ -66,6 +71,7 @@ impl TranscriptNotice {
             Self::Merge => "[Merge]",
             Self::MergeError => "[Merge Error]",
             Self::MainCheckoutWarning => "[Main Checkout Warning]",
+            Self::PasteImageError => "[Paste Image Error]",
             Self::QueueError => "[Queue Error]",
             Self::Rebase => "[Sync]",
             Self::RebaseAssist => "[Sync Assist]",
@@ -92,6 +98,7 @@ impl TranscriptNotice {
 /// Prefixes that identify trailing transcript notices during session output
 /// rendering.
 pub(crate) const TRAILING_TRANSCRIPT_NOTICE_PREFIXES: &[&str] = &[
+    TranscriptNotice::Apply.prefix(),
     TranscriptNotice::BranchPush.prefix(),
     TranscriptNotice::BranchPushError.prefix(),
     TranscriptNotice::Commit.prefix(),
@@ -104,6 +111,7 @@ pub(crate) const TRAILING_TRANSCRIPT_NOTICE_PREFIXES: &[&str] = &[
     TranscriptNotice::Merge.prefix(),
     TranscriptNotice::MergeError.prefix(),
     TranscriptNotice::MainCheckoutWarning.prefix(),
+    TranscriptNotice::PasteImageError.prefix(),
     TranscriptNotice::QueueError.prefix(),
     TranscriptNotice::Rebase.prefix(),
     TranscriptNotice::RebaseAssist.prefix(),
@@ -149,6 +157,7 @@ mod tests {
     fn test_trailing_transcript_notice_prefixes_include_generated_labels() {
         // Arrange
         let generated_labels = [
+            TranscriptNotice::Apply,
             TranscriptNotice::BranchPush,
             TranscriptNotice::BranchPushError,
             TranscriptNotice::Commit,
@@ -161,6 +170,7 @@ mod tests {
             TranscriptNotice::Merge,
             TranscriptNotice::MergeError,
             TranscriptNotice::MainCheckoutWarning,
+            TranscriptNotice::PasteImageError,
             TranscriptNotice::QueueError,
             TranscriptNotice::Rebase,
             TranscriptNotice::RebaseAssist,
