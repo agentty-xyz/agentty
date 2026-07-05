@@ -7,6 +7,7 @@ use ag_agent::agent;
 use ag_agent::channel::AgentRequestKind;
 use ag_forge as forge;
 use ag_git as git;
+use ag_protocol::{AgentResponse, parse_agent_response_strict};
 use askama::Template;
 use tokio::sync::mpsc;
 use tracing::warn;
@@ -2308,7 +2309,7 @@ impl SessionManager {
             return None;
         }
 
-        if let Ok(protocol_response) = agent::protocol::parse_agent_response_strict(content) {
+        if let Ok(protocol_response) = parse_agent_response_strict(content) {
             return Self::parse_generated_session_title_from_protocol_response(&protocol_response);
         }
 
@@ -2320,7 +2321,7 @@ impl SessionManager {
     /// Extracts the first usable title candidate from protocol `answer`
     /// content.
     fn parse_generated_session_title_from_protocol_response(
-        protocol_response: &agent::protocol::AgentResponse,
+        protocol_response: &AgentResponse,
     ) -> Option<String> {
         for answer in protocol_response.answers() {
             if let Some(first_line) = Self::first_nonempty_line(&answer)

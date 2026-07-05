@@ -12,6 +12,7 @@ use std::sync::Arc;
 use ag_agent::agent;
 use ag_forge::{ForgeRemote, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewRequestClient};
 use ag_git::GitClient;
+use ag_protocol::AgentResponse;
 use askama::Template;
 use tokio::sync::mpsc;
 
@@ -375,7 +376,7 @@ impl TaskService {
             AgentModel,
             &'submit str,
         ) -> Pin<
-            Box<dyn Future<Output = Result<agent::AgentResponse, String>> + Send + 'submit>,
+            Box<dyn Future<Output = Result<AgentResponse, String>> + Send + 'submit>,
         >,
     {
         let review_prompt = Self::review_assist_prompt(review_diff, session_summary)?;
@@ -411,7 +412,7 @@ impl TaskService {
     }
 
     /// Extracts one non-empty review string from the agent response payload.
-    fn review_output_text(agent_response: &agent::AgentResponse) -> Result<String, AppError> {
+    fn review_output_text(agent_response: &AgentResponse) -> Result<String, AppError> {
         let review_text = agent_response.to_display_text();
         let review_text = review_text.trim();
         if review_text.is_empty() {
@@ -514,18 +515,17 @@ mod tests {
     use std::path::Path;
     use std::time::Duration;
 
-    use ag_agent::agent::protocol::AgentResponse;
     use ag_forge::{
         ForgeKind, MockReviewRequestClient, RequestedReview, RequestedReviewAudience,
         ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread,
     };
     use ag_git::MockGitClient;
+    use ag_protocol::{AgentResponse, parse_agent_response_strict};
 
     use super::*;
-
     struct PanickingAgentAvailabilityProbe;
 
-    impl ag_agent::agent::AgentAvailabilityProbe for PanickingAgentAvailabilityProbe {
+    impl agent::AgentAvailabilityProbe for PanickingAgentAvailabilityProbe {
         fn available_agent_kinds(&self) -> Vec<AgentKind> {
             vec![AgentKind::Claude]
         }
@@ -989,8 +989,8 @@ mod tests {
         let structured_json = r#"{"answer":"Review looks good.","questions":[],"summary":null}"#;
 
         // Act
-        let agent_response = agent::protocol::parse_agent_response_strict(structured_json)
-            .expect("structured response should parse");
+        let agent_response =
+            parse_agent_response_strict(structured_json).expect("structured response should parse");
         let display_text = agent_response.to_display_text();
 
         // Assert

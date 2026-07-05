@@ -3,9 +3,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub use ag_protocol::ProtocolSchemaInstructionMode;
 use ag_protocol::{
-    ProtocolRequestProfile, prepend_protocol_instructions as protocol_prepend_instructions,
+    ProtocolRequestProfile, ProtocolSchemaInstructionMode,
+    prepend_protocol_instructions as protocol_prepend_instructions,
     prepend_protocol_refresh_reminder as protocol_prepend_refresh_reminder,
 };
 use askama::Template;

@@ -4,7 +4,6 @@ use agent_client_protocol::schema::v1::CLIENT_METHOD_NAMES;
 use serde_json::Value;
 
 use super::usage;
-use crate::agent;
 
 /// Selects the most reliable final assistant payload for one Gemini turn.
 ///
@@ -25,10 +24,9 @@ pub(super) fn select_preferred_assistant_message(
         return completion_message.to_string();
     }
 
-    let streamed_is_protocol =
-        agent::protocol::parse_agent_response_strict(streamed_message).is_ok();
+    let streamed_is_protocol = ag_protocol::parse_agent_response_strict(streamed_message).is_ok();
     let completion_is_protocol =
-        agent::protocol::parse_agent_response_strict(completion_message).is_ok();
+        ag_protocol::parse_agent_response_strict(completion_message).is_ok();
 
     if completion_is_protocol && !streamed_is_protocol {
         return completion_message.to_string();

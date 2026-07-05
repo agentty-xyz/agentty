@@ -416,11 +416,11 @@ fn append_git_exclude_pattern(exclude_path: &Path, pattern: &str) -> Result<(), 
 mod tests {
     use std::path::PathBuf;
 
+    use ag_protocol::ProtocolSchemaInstructionMode;
     use tempfile::{TempDir, tempdir};
 
     use super::shared_prompt::{
-        CliPromptAccessRootMode, ProtocolSchemaInstructionMode, build_prompt_stdin_payload,
-        cli_prompt_access_directories,
+        CliPromptAccessRootMode, build_prompt_stdin_payload, cli_prompt_access_directories,
     };
     use super::*;
     use crate::channel::AgentRequestKind;

@@ -318,7 +318,7 @@ fn wrapped_text_height(text: &str, width: u16) -> u16 {
 mod tests {
     use std::path::PathBuf;
 
-    use ag_agent::agent::protocol::AgentResponseSummary;
+    use ag_protocol::AgentResponseSummary;
     use ratatui::style::{Modifier, Style};
     use ratatui::widgets::Borders;
 

@@ -1,11 +1,11 @@
 //! Codex app-server client orchestration.
 
+use ag_protocol::ProtocolSchemaInstructionMode;
 use tokio::sync::mpsc;
 
 use super::super::client::{ProviderRuntimeClient, RuntimeClientProvider, RuntimeClientRuntime};
 use super::super::stdio_transport::AppServerStdioTransport;
 use super::lifecycle::{self, CodexRuntimeState};
-use crate::agent::ProtocolSchemaInstructionMode;
 use crate::app_server::contract::BorrowedAppServerFuture;
 use crate::app_server::{
     AppServerError, AppServerFuture, AppServerStreamEvent, AppServerTurnRequest,

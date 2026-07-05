@@ -6,6 +6,9 @@
 use std::os::unix::process::ExitStatusExt as _;
 use std::sync::{Arc, Mutex};
 
+use ag_protocol::{
+    AgentResponse, AgentResponseSummary, ProtocolRequestProfile, build_protocol_repair_prompt,
+};
 use tokio::io::AsyncBufReadExt as _;
 use tokio::sync::mpsc;
 
@@ -235,7 +238,7 @@ async fn parse_or_repair_cli_response(
     req: &TurnRequest,
     backend: &Arc<dyn AgentBackend>,
     events: &mpsc::UnboundedSender<TurnEvent>,
-) -> Result<agent::AgentResponse, AgentError> {
+) -> Result<AgentResponse, AgentError> {
     let protocol_profile = req.request_kind.protocol_profile();
 
     let parse_error = match agent::parse_turn_response(kind, content, protocol_profile) {
@@ -247,7 +250,7 @@ async fn parse_or_repair_cli_response(
         "Protocol parse error; retrying schema repair for {kind}."
     )));
 
-    let repair_prompt = agent::protocol::build_protocol_repair_prompt(&parse_error, content);
+    let repair_prompt = build_protocol_repair_prompt(&parse_error, content);
 
     let repair_content = execute_cli_repair_turn(
         backend.as_ref(),
@@ -293,17 +296,17 @@ fn antigravity_plain_text_fallback(
     kind: AgentKind,
     original_content: &str,
     repair_content: &str,
-    protocol_profile: agent::ProtocolRequestProfile,
-) -> Option<agent::AgentResponse> {
+    protocol_profile: ProtocolRequestProfile,
+) -> Option<AgentResponse> {
     if kind != AgentKind::Antigravity {
         return None;
     }
 
     let fallback_content =
         non_empty_content(original_content).or_else(|| non_empty_content(repair_content))?;
-    let mut response = agent::AgentResponse::plain(fallback_content.to_string());
-    if matches!(protocol_profile, agent::ProtocolRequestProfile::SessionTurn) {
-        response.summary = Some(agent::protocol::AgentResponseSummary {
+    let mut response = AgentResponse::plain(fallback_content.to_string());
+    if matches!(protocol_profile, ProtocolRequestProfile::SessionTurn) {
+        response.summary = Some(AgentResponseSummary {
             session: String::new(),
             turn: String::new(),
         });
@@ -719,7 +722,7 @@ mod tests {
         // Assert
         assert_eq!(
             result.assistant_message.summary,
-            Some(agent::protocol::AgentResponseSummary {
+            Some(AgentResponseSummary {
                 turn: String::new(),
                 session: String::new(),
             })
@@ -984,7 +987,7 @@ mod tests {
         );
         assert_eq!(
             result.assistant_message.summary,
-            Some(agent::protocol::AgentResponseSummary {
+            Some(AgentResponseSummary {
                 session: String::new(),
                 turn: String::new(),
             })

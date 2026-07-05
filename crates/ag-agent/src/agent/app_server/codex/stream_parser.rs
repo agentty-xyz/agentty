@@ -1,9 +1,9 @@
 //! Codex app-server stream parsing helpers.
 
+use ag_protocol::parse_agent_response_strict;
 use serde_json::Value;
 
 use crate::agent;
-use crate::agent::protocol::parse_agent_response_strict;
 
 /// Extracted assistant message payload from one Codex stream line.
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -5,9 +5,9 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
+use ag_protocol::{AgentResponse, ProtocolRequestProfile};
 use tokio::sync::mpsc;
 
-use crate::agent::AgentResponse;
 use crate::model::agent::ReasoningLevel;
 use crate::model::turn_prompt::TurnPrompt;
 
@@ -38,14 +38,10 @@ pub enum AgentRequestKind {
 impl AgentRequestKind {
     /// Returns the protocol request profile derived from this request kind.
     #[must_use]
-    pub fn protocol_profile(&self) -> crate::agent::ProtocolRequestProfile {
+    pub fn protocol_profile(&self) -> ProtocolRequestProfile {
         match self {
-            Self::SessionStart | Self::SessionResume { .. } => {
-                crate::agent::ProtocolRequestProfile::SessionTurn
-            }
-            Self::UtilityPrompt | Self::AccountRead => {
-                crate::agent::ProtocolRequestProfile::UtilityPrompt
-            }
+            Self::SessionStart | Self::SessionResume { .. } => ProtocolRequestProfile::SessionTurn,
+            Self::UtilityPrompt | Self::AccountRead => ProtocolRequestProfile::UtilityPrompt,
         }
     }
 
@@ -248,14 +244,8 @@ mod tests {
         let resume_profile = resume.protocol_profile();
 
         // Assert
-        assert_eq!(
-            start_profile,
-            crate::agent::ProtocolRequestProfile::SessionTurn
-        );
-        assert_eq!(
-            resume_profile,
-            crate::agent::ProtocolRequestProfile::SessionTurn
-        );
+        assert_eq!(start_profile, ProtocolRequestProfile::SessionTurn);
+        assert_eq!(resume_profile, ProtocolRequestProfile::SessionTurn);
     }
 
     #[test]
@@ -270,10 +260,7 @@ mod tests {
         let session_output = request_kind.session_output();
 
         // Assert
-        assert_eq!(
-            protocol_profile,
-            crate::agent::ProtocolRequestProfile::UtilityPrompt
-        );
+        assert_eq!(protocol_profile, ProtocolRequestProfile::UtilityPrompt);
         assert_eq!(session_output, None);
     }
 
@@ -289,10 +276,7 @@ mod tests {
         let session_output = request_kind.session_output();
 
         // Assert
-        assert_eq!(
-            protocol_profile,
-            crate::agent::ProtocolRequestProfile::UtilityPrompt
-        );
+        assert_eq!(protocol_profile, ProtocolRequestProfile::UtilityPrompt);
         assert_eq!(session_output, None);
     }
 }

@@ -12,6 +12,9 @@ use ag_agent::channel::{
 };
 use ag_forge as forge;
 use ag_git::GitClient;
+use ag_protocol::AgentResponse;
+#[cfg(test)]
+use ag_protocol::AgentResponseSummary;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -360,7 +363,7 @@ impl SessionWorkerRebaseAssistClient {
     }
 
     /// Appends the utility prompt answer to the session transcript.
-    async fn append_assist_answer(&self, assistant_message: &agent::AgentResponse) {
+    async fn append_assist_answer(&self, assistant_message: &AgentResponse) {
         let answer_text = assistant_message.to_answer_display_text();
         if answer_text.trim().is_empty() {
             return;
@@ -1060,8 +1063,6 @@ async fn append_drained_prompt_to_output(context: &SessionWorkerContext, prompt:
 mod tests {
     use std::sync::Arc;
 
-    use ag_agent::agent::AgentResponse;
-    use ag_agent::agent::protocol::AgentResponseSummary;
     use ag_agent::channel::MockAgentChannel;
     use ag_git::{MockGitClient, RebaseStepResult};
     use mockall::Sequence;

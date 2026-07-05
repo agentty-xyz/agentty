@@ -1,6 +1,6 @@
 //! Session header, footer, and transcript display formatting.
 
-use ag_agent::agent::protocol::AgentResponseSummary;
+use ag_protocol::AgentResponseSummary;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Borders;

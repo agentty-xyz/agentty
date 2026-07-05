@@ -3,12 +3,18 @@
 use std::path::Path;
 use std::sync::Arc;
 
+#[cfg(test)]
+use ag_protocol::AgentResponseSummary;
+use ag_protocol::{
+    AgentResponse, ProtocolRequestProfile, ProtocolSchemaInstructionMode,
+    format_protocol_parse_debug_details, normalize_turn_response, parse_agent_response_strict,
+};
+
 use super::backend::{
     AgentBackend, AgentBackendError, AgentPromptTransport, AgentTransport, AppServerThoughtPolicy,
     BuildCommandRequest,
 };
-use super::prompt::{self, ProtocolSchemaInstructionMode};
-use super::protocol;
+use super::prompt;
 use super::response_parser::ParsedResponse;
 use crate::app_server::AppServerClient;
 use crate::model::agent::{AgentKind, AgentModel};
@@ -88,21 +94,18 @@ pub fn protocol_schema_instruction_mode(kind: AgentKind) -> ProtocolSchemaInstru
 pub fn parse_turn_response(
     kind: AgentKind,
     response_text: &str,
-    protocol_profile: protocol::ProtocolRequestProfile,
-) -> Result<protocol::AgentResponse, String> {
-    let response = protocol::parse_agent_response_strict(response_text).map_err(|error| {
+    protocol_profile: ProtocolRequestProfile,
+) -> Result<AgentResponse, String> {
+    let response = parse_agent_response_strict(response_text).map_err(|error| {
         format!(
             "Agent output did not match the required JSON schema from {kind}: \
              {error}\nprotocol_profile: \
              {protocol_profile:?}\ndebug_details:\n{}\nresponse:\n{response_text}",
-            protocol::format_protocol_parse_debug_details(response_text)
+            format_protocol_parse_debug_details(response_text)
         )
     })?;
 
-    Ok(protocol::normalize_turn_response(
-        response,
-        protocol_profile,
-    ))
+    Ok(normalize_turn_response(response, protocol_profile))
 }
 
 /// Returns whether one app-server assistant chunk should be treated as
@@ -338,12 +341,9 @@ mod tests {
             AgentKind::Gemini,
         ] {
             // Act
-            let error = parse_turn_response(
-                kind,
-                raw_response,
-                protocol::ProtocolRequestProfile::SessionTurn,
-            )
-            .expect_err("plain response should fail strict protocol parsing");
+            let error =
+                parse_turn_response(kind, raw_response, ProtocolRequestProfile::SessionTurn)
+                    .expect_err("plain response should fail strict protocol parsing");
 
             // Assert
             assert!(error.contains("debug_details:"));
@@ -363,7 +363,7 @@ mod tests {
         let result = parse_turn_response(
             AgentKind::Codex,
             raw_response,
-            protocol::ProtocolRequestProfile::SessionTurn,
+            ProtocolRequestProfile::SessionTurn,
         )
         .expect("valid protocol response should parse");
 
@@ -371,7 +371,7 @@ mod tests {
         assert_eq!(result.answer, "done");
         assert_eq!(
             result.summary,
-            Some(protocol::AgentResponseSummary {
+            Some(AgentResponseSummary {
                 session: String::new(),
                 turn: String::new(),
             })

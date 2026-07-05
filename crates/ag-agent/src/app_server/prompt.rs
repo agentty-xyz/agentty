@@ -2,6 +2,8 @@
 
 use std::path::Path;
 
+use ag_protocol::ProtocolSchemaInstructionMode;
+
 use crate::agent;
 use crate::agent::InstructionDeliveryMode;
 use crate::app_server::{AppServerError, AppServerTurnRequest};
@@ -48,7 +50,7 @@ pub(crate) fn turn_prompt_for_runtime(
     request_kind: &AgentRequestKind,
     replay_session_output: Option<&str>,
     instruction_delivery_mode: InstructionDeliveryMode,
-    schema_instruction_mode: agent::ProtocolSchemaInstructionMode,
+    schema_instruction_mode: ProtocolSchemaInstructionMode,
     workspace_root: &Path,
 ) -> Result<TurnPrompt, AppServerError> {
     let prompt = prompt.into();
@@ -187,7 +189,7 @@ mod tests {
             &request_kind,
             None,
             InstructionDeliveryMode::BootstrapFull,
-            agent::ProtocolSchemaInstructionMode::PromptSchema,
+            ProtocolSchemaInstructionMode::PromptSchema,
             Path::new(TEST_WORKSPACE_ROOT),
         );
 
@@ -211,7 +213,7 @@ mod tests {
             &request_kind,
             None,
             InstructionDeliveryMode::BootstrapFull,
-            agent::ProtocolSchemaInstructionMode::TransportSchema,
+            ProtocolSchemaInstructionMode::TransportSchema,
             Path::new(TEST_WORKSPACE_ROOT),
         );
 
@@ -240,7 +242,7 @@ mod tests {
             &request_kind,
             None,
             InstructionDeliveryMode::DeltaOnly,
-            agent::ProtocolSchemaInstructionMode::PromptSchema,
+            ProtocolSchemaInstructionMode::PromptSchema,
             Path::new(TEST_WORKSPACE_ROOT),
         );
 
@@ -262,7 +264,7 @@ mod tests {
             &request_kind,
             None,
             InstructionDeliveryMode::BootstrapFull,
-            agent::ProtocolSchemaInstructionMode::PromptSchema,
+            ProtocolSchemaInstructionMode::PromptSchema,
             Path::new(TEST_WORKSPACE_ROOT),
         );
 
@@ -287,7 +289,7 @@ mod tests {
             &request_kind,
             None,
             InstructionDeliveryMode::BootstrapFull,
-            agent::ProtocolSchemaInstructionMode::PromptSchema,
+            ProtocolSchemaInstructionMode::PromptSchema,
             Path::new(TEST_WORKSPACE_ROOT),
         );
 

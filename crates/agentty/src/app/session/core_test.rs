@@ -6,7 +6,6 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-use ag_agent::agent::AgentResponse;
 use ag_agent::agent::tests::MockAgentBackend;
 use ag_agent::app_server;
 use ag_agent::app_server::{AppServerTurnResponse, MockAppServerClient};
@@ -15,6 +14,7 @@ use ag_agent::channel::{
     TurnResult,
 };
 use ag_git as git;
+use ag_protocol::{AgentResponse, parse_agent_response_strict};
 use tempfile::tempdir;
 use tokio::sync::Barrier;
 
@@ -5303,7 +5303,7 @@ fn test_parse_merge_commit_message_response_with_protocol_message() {
     let content = r#"{"answer":"Title\n\n- Detail","questions":[],"summary":null}"#;
 
     // Act
-    let parsed = ag_agent::agent::protocol::parse_agent_response_strict(content)
+    let parsed = parse_agent_response_strict(content)
         .ok()
         .map(|response| response.to_answer_display_text())
         .filter(|answer_text| !answer_text.trim().is_empty());
@@ -5319,7 +5319,7 @@ fn test_parse_merge_commit_message_response_rejects_non_protocol_json() {
     let content = r#"{"title":"Title","description":"- Detail"}"#;
 
     // Act
-    let parsed = ag_agent::agent::protocol::parse_agent_response_strict(content)
+    let parsed = parse_agent_response_strict(content)
         .ok()
         .map(|response| response.to_answer_display_text())
         .filter(|answer_text| !answer_text.trim().is_empty());

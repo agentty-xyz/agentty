@@ -8,8 +8,8 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use ag_agent::agent;
-use ag_agent::agent::protocol::AgentResponseSummary;
 use ag_git::{self as git, GitClient};
+use ag_protocol::AgentResponseSummary;
 use askama::Template;
 use tokio::sync::mpsc;
 use tracing::warn;

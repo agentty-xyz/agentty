@@ -1,5 +1,7 @@
 //! Shared app-server restart and retry orchestration.
 
+use ag_protocol::ProtocolSchemaInstructionMode;
+
 use super::contract::{
     AppServerFuture, AppServerTurnRequest, AppServerTurnResponse, BorrowedAppServerFuture,
 };
@@ -8,7 +10,6 @@ use super::prompt::{
     instruction_delivery_mode_for_runtime, read_latest_session_output, turn_prompt_for_runtime,
 };
 use super::registry::{ActiveAppServerTurn, AppServerSessionRegistry};
-use crate::agent::ProtocolSchemaInstructionMode;
 use crate::model::turn_prompt::TurnPrompt;
 
 /// Callbacks for inspecting runtime state during turn execution.
@@ -352,8 +353,10 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
+    use ag_protocol::ProtocolSchemaInstructionMode;
+
     use super::*;
-    use crate::agent::{InstructionDeliveryMode, ProtocolSchemaInstructionMode};
+    use crate::agent::InstructionDeliveryMode;
     use crate::channel::AgentRequestKind;
     use crate::model::agent::ReasoningLevel;
     use crate::model::turn_prompt::TurnPrompt;

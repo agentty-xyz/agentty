@@ -1,4 +1,4 @@
-use ag_agent::agent::protocol::AgentResponseSummary;
+use ag_protocol::AgentResponseSummary;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
 use crate::ui::component::file_explorer::{FileExplorer, FileTreeItem};

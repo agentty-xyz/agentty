@@ -1413,7 +1413,7 @@ impl Component for SessionOutput<'_> {
 mod tests {
     use std::borrow::Cow;
 
-    use ag_agent::agent::protocol::AgentResponseSummary;
+    use ag_protocol::AgentResponseSummary;
     use ratatui::layout::Alignment;
     use ratatui::style::Style;
     use ratatui::text::Span;

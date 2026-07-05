@@ -1,9 +1,10 @@
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+use ag_protocol::agent_response_output_schema_json;
+
 use super::backend::{AgentBackend, AgentBackendError, BuildCommandRequest};
 use super::prompt::{CliPromptAccessRootMode, append_cli_prompt_access_directories};
-use crate::agent::protocol::agent_response_output_schema_json;
 
 /// Lists the Claude tools Agentty enables for unattended sessions.
 ///
@@ -119,11 +120,12 @@ mod tests {
     use std::ffi::OsStr;
     use std::path::PathBuf;
 
+    use ag_protocol::ProtocolSchemaInstructionMode;
     use serde_json::Value;
     use tempfile::tempdir;
 
     use super::*;
-    use crate::agent::prompt::{self as shared_prompt, ProtocolSchemaInstructionMode};
+    use crate::agent::prompt as shared_prompt;
     use crate::channel::AgentRequestKind;
     use crate::model::agent::ReasoningLevel;
     use crate::model::turn_prompt::TurnPromptAttachment;

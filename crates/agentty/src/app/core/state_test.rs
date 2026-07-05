@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ag_agent::agent::protocol::AgentResponseSummary;
+use ag_protocol::AgentResponseSummary;
 use mockall::predicate::eq;
 use serde_json;
 use tempfile::tempdir;

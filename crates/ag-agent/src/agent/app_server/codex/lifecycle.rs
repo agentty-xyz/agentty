@@ -3,13 +3,13 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use ag_protocol::agent_response_output_schema;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
 use super::super::stdio_transport::{AppServerRuntimeTransport, AppServerStdioTransport};
 use super::{policy, stream_parser, usage};
 use crate::agent;
-use crate::agent::protocol::agent_response_output_schema;
 use crate::app_server::{AppServerError, AppServerStreamEvent, AppServerTurnRequest};
 use crate::app_server_transport::{self, extract_json_error_message, response_id_matches};
 use crate::model::agent::{AgentKind, ReasoningLevel};

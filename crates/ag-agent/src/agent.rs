@@ -14,12 +14,10 @@ mod codex;
 mod gemini;
 mod instruction;
 mod prompt;
-pub mod protocol;
 mod provider;
 mod response_parser;
 mod submission;
 
-pub use ag_protocol::{AgentResponse, ProtocolRequestProfile};
 pub use availability::{
     AgentAvailabilityProbe, RealAgentAvailabilityProbe, StaticAgentAvailabilityProbe,
     executable_name,
@@ -29,9 +27,7 @@ pub use instruction::{
     InstructionDeliveryMode, normalize_instruction_conversation_id,
     plan_app_server_instruction_delivery,
 };
-pub use prompt::{
-    PromptPreparationRequest, ProtocolSchemaInstructionMode, diff_fence, prepare_prompt_text,
-};
+pub use prompt::{PromptPreparationRequest, diff_fence, prepare_prompt_text};
 pub use provider::{
     build_command_stdin_payload, cleanup_session_worktree_artifacts, create_app_server_client,
     create_backend, is_app_server_thought_chunk, parse_response, parse_stream_output_line,

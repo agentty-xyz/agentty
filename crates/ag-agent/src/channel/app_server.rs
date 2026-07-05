@@ -5,6 +5,9 @@
 
 use std::sync::Arc;
 
+#[cfg(test)]
+use ag_protocol::AgentResponseSummary;
+use ag_protocol::{AgentResponse, ProtocolRequestProfile, build_protocol_repair_prompt};
 use tokio::sync::mpsc;
 
 use crate::agent;
@@ -169,7 +172,7 @@ impl AgentChannel for AppServerAgentChannel {
 /// metadata from a repair turn when one was needed.
 struct AppServerParsedTurnResult {
     /// Parsed agent response from the successful attempt.
-    assistant_message: agent::AgentResponse,
+    assistant_message: AgentResponse,
     /// Provider conversation id from the latest successful attempt,
     /// falling back to the original response when the repair turn does
     /// not produce one.
@@ -195,7 +198,7 @@ struct AppServerParsedTurnResult {
 async fn parse_or_repair_app_server_response(
     kind: AgentKind,
     response: &crate::app_server::AppServerTurnResponse,
-    protocol_profile: agent::ProtocolRequestProfile,
+    protocol_profile: ProtocolRequestProfile,
     repair_request: AppServerTurnRequest,
     client: &Arc<dyn AppServerClient>,
     events: &mpsc::UnboundedSender<TurnEvent>,
@@ -217,8 +220,7 @@ async fn parse_or_repair_app_server_response(
         "Protocol parse error — retrying: {parse_error}"
     )));
 
-    let repair_prompt =
-        agent::protocol::build_protocol_repair_prompt(&parse_error, &response.assistant_message);
+    let repair_prompt = build_protocol_repair_prompt(&parse_error, &response.assistant_message);
 
     let repair_provider_conversation_id = response
         .provider_conversation_id
@@ -565,7 +567,7 @@ mod tests {
         // Assert
         assert_eq!(
             result.assistant_message.summary,
-            Some(agent::protocol::AgentResponseSummary {
+            Some(AgentResponseSummary {
                 turn: String::new(),
                 session: String::new(),
             })

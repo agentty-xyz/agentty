@@ -2,9 +2,9 @@
 
 use std::marker::PhantomData;
 
+use ag_protocol::ProtocolSchemaInstructionMode;
 use tokio::sync::mpsc;
 
-use crate::agent::ProtocolSchemaInstructionMode;
 use crate::app_server::contract::BorrowedAppServerFuture;
 use crate::app_server::{
     self, AppServerClient, AppServerError, AppServerFuture, AppServerSessionRegistry,
@@ -163,8 +163,9 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use ag_protocol::ProtocolSchemaInstructionMode;
+
     use super::*;
-    use crate::agent::ProtocolSchemaInstructionMode;
     use crate::channel::AgentRequestKind;
     use crate::model::agent::ReasoningLevel;
     use crate::model::turn_prompt::TurnPrompt;

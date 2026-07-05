@@ -8,6 +8,7 @@ use ag_agent::agent;
 use ag_agent::channel::{AgentError, TurnPrompt, TurnResult};
 use ag_forge as forge;
 use ag_git::GitClient;
+use ag_protocol::AgentResponse;
 use serde_json;
 use tokio::sync::mpsc;
 
@@ -140,7 +141,7 @@ impl TurnPersistence<'_> {
     /// from the canonical stored values.
     async fn apply(
         &self,
-        assistant_message: &agent::AgentResponse,
+        assistant_message: &AgentResponse,
         input_tokens: u64,
         output_tokens: u64,
         provider_conversation_id: Option<&str>,
@@ -485,7 +486,7 @@ async fn handle_turn_persistence_failure(context: &PostTurnContext, error: &Sess
 /// clarification prompts stay visible while thought-only responses are not
 /// persisted as final transcript output.
 pub(super) fn build_assistant_transcript_output(
-    assistant_message: &agent::AgentResponse,
+    assistant_message: &AgentResponse,
 ) -> Option<String> {
     let answer_text = assistant_message.to_answer_display_text();
     if !answer_text.trim().is_empty() {
@@ -517,9 +518,7 @@ pub(super) fn build_assistant_transcript_output(
 /// Review-mode rendering uses the raw JSON object so it can display separate
 /// `Current Turn` and `Session Changes` sections without reparsing answer
 /// markdown.
-pub(super) fn persisted_session_summary_payload(
-    assistant_message: &agent::AgentResponse,
-) -> String {
+pub(super) fn persisted_session_summary_payload(assistant_message: &AgentResponse) -> String {
     assistant_message
         .summary
         .as_ref()
@@ -529,8 +528,6 @@ pub(super) fn persisted_session_summary_payload(
 
 /// Builds the reducer-facing follow-up-task projection for one assistant
 /// response.
-fn turn_applied_follow_up_tasks(
-    _assistant_message: &agent::AgentResponse,
-) -> Vec<SessionFollowUpTask> {
+fn turn_applied_follow_up_tasks(_assistant_message: &AgentResponse) -> Vec<SessionFollowUpTask> {
     Vec::new()
 }

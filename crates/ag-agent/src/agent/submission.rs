@@ -9,9 +9,13 @@ use std::os::unix::process::ExitStatusExt as _;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use ag_protocol::{
+    AgentResponse, build_protocol_repair_prompt, format_protocol_parse_debug_details,
+    parse_agent_response_strict,
+};
+
 use super::backend::{AgentBackend, BuildCommandRequest};
 use super::cli::{error, stdin};
-use super::protocol::{AgentResponse, parse_agent_response_strict};
 use super::{
     ParsedResponse, create_app_server_client, create_backend, parse_response, transport_mode,
 };
@@ -199,10 +203,8 @@ pub async fn submit_one_shot_with_backend(
     let (agent_response, repair_stats) = match parse_one_shot_response(&parsed_response.content) {
         Ok(response) => (response, None),
         Err(parse_error) => {
-            let repair_prompt = super::protocol::build_protocol_repair_prompt(
-                &parse_error,
-                &parsed_response.content,
-            );
+            let repair_prompt =
+                build_protocol_repair_prompt(&parse_error, &parsed_response.content);
             let repair_response = execute_one_shot_command(backend, &repair_prompt, request)
                 .await
                 .map_err(|error| format!("{parse_error}\nrepair transport failed: {error}"))?;
@@ -240,7 +242,7 @@ fn parse_one_shot_response(content: &str) -> Result<AgentResponse, String> {
         format!(
             "One-shot agent output did not match the required JSON schema: \
              {error}\ndebug_details:\n{}\nresponse:\n{content}",
-            super::protocol::format_protocol_parse_debug_details(content)
+            format_protocol_parse_debug_details(content)
         )
     })
 }
@@ -266,8 +268,7 @@ async fn attempt_one_shot_app_server_repair(
     session_id: &str,
     provider_conversation_id: Option<&str>,
 ) -> Result<(AgentResponse, u64, u64), String> {
-    let repair_prompt =
-        super::protocol::build_protocol_repair_prompt(parse_error, malformed_response);
+    let repair_prompt = build_protocol_repair_prompt(parse_error, malformed_response);
 
     let (repair_stream_tx, _repair_stream_rx) = tokio::sync::mpsc::unbounded_channel();
     let repair_turn_request = AppServerTurnRequest {
