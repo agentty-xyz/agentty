@@ -1,43 +1,20 @@
-//! Shared prompt-shaping helpers for agent-facing Askama markdown templates.
+//! Shared prompt-shaping helpers for agent-facing markdown prompts.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+pub(crate) use ag_protocol::ProtocolSchemaInstructionMode;
+use ag_protocol::{
+    ProtocolRequestProfile, prepend_protocol_instructions as protocol_prepend_instructions,
+    prepend_protocol_refresh_reminder as protocol_prepend_refresh_reminder,
+};
 use askama::Template;
 
 use super::backend::{AgentBackendError, BuildCommandRequest};
 use super::instruction::InstructionDeliveryMode;
-use super::protocol::{self, ProtocolRequestProfile};
 use crate::domain::turn_prompt::{
     TurnPromptAttachment, TurnPromptContentPart, split_turn_prompt_content,
 };
-
-/// Marker used to detect whether protocol instructions are already included
-/// in a prompt.
-const PROTOCOL_INSTRUCTIONS_MARKER: &str = "Structured response protocol:";
-/// Marker used to detect whether the compact protocol reminder is already
-/// included in a prompt.
-const PROTOCOL_REFRESH_REMINDER_MARKER: &str = "Protocol refresh reminder:";
-
-/// Controls whether bootstrap prompt instructions include the full protocol
-/// JSON Schema text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProtocolSchemaInstructionMode {
-    /// Include the full self-descriptive JSON Schema in the prompt because
-    /// the provider does not enforce Agentty's response schema natively.
-    PromptSchema,
-    /// Omit the full schema text because the provider enforces the same
-    /// response schema through its transport-level structured output API.
-    TransportSchema,
-}
-
-impl ProtocolSchemaInstructionMode {
-    /// Returns whether bootstrap instructions should embed the full JSON
-    /// Schema text in the prompt body.
-    fn includes_response_json_schema(self) -> bool {
-        matches!(self, Self::PromptSchema)
-    }
-}
 
 /// Askama view model for rendering resume prompts with prior session output.
 #[derive(Template)]
@@ -48,71 +25,6 @@ struct ResumeWithSessionOutputPromptTemplate<'a> {
     /// Prior session output replayed into the follow-up prompt.
     session_output: &'a str,
 }
-
-/// Askama view model for rendering structured response protocol
-/// instructions with the shared self-descriptive JSON Schema for providers
-/// that need prompt-side enforcement.
-#[derive(Template)]
-#[template(path = "protocol_instruction_prompt.md", escape = "none")]
-struct ProtocolInstructionPromptTemplate<'a> {
-    /// User prompt appended after protocol instructions.
-    prompt: &'a str,
-    /// Request-family-specific instructions that reinforce the expected
-    /// response shape for the active prompt type.
-    protocol_usage_instructions: &'a str,
-    /// Pretty-printed self-descriptive JSON schema contract injected into the
-    /// prompt template.
-    response_json_schema: &'a str,
-}
-
-/// Askama view model for rendering policy-only protocol instructions.
-///
-/// Providers with native structured-output enforcement receive this smaller
-/// prompt contract so Agentty does not duplicate the full schema text in the
-/// model context.
-#[derive(Template)]
-#[template(path = "protocol_instruction_policy_prompt.md", escape = "none")]
-struct ProtocolInstructionPolicyPromptTemplate<'a> {
-    /// User prompt appended after protocol instructions.
-    prompt: &'a str,
-    /// Request-family-specific instructions that reinforce the expected
-    /// response shape for the active prompt type.
-    protocol_usage_instructions: &'a str,
-}
-
-/// Askama view model for rendering compact protocol refresh reminders.
-#[derive(Template)]
-#[template(path = "protocol_refresh_prompt.md", escape = "none")]
-struct ProtocolRefreshPromptTemplate<'a> {
-    /// Request-family-specific reminder that reinforces the expected response
-    /// shape for the active prompt type.
-    protocol_refresh_instructions: &'a str,
-    /// User prompt appended after the compact reminder.
-    prompt: &'a str,
-}
-
-/// Askama view model for rendering session-turn protocol usage guidance.
-#[derive(Template)]
-#[template(path = "protocol_instruction_session_turn_usage.md", escape = "none")]
-struct SessionTurnProtocolUsageInstructionsTemplate;
-
-/// Askama view model for rendering utility-prompt protocol usage guidance.
-#[derive(Template)]
-#[template(path = "protocol_instruction_utility_prompt_usage.md", escape = "none")]
-struct UtilityPromptProtocolUsageInstructionsTemplate;
-
-/// Askama view model for rendering session-turn compact refresh guidance.
-#[derive(Template)]
-#[template(path = "protocol_refresh_session_turn_instruction.md", escape = "none")]
-struct SessionTurnProtocolRefreshInstructionsTemplate;
-
-/// Askama view model for rendering utility-prompt compact refresh guidance.
-#[derive(Template)]
-#[template(
-    path = "protocol_refresh_utility_prompt_instruction.md",
-    escape = "none"
-)]
-struct UtilityPromptProtocolRefreshInstructionsTemplate;
 
 /// Shared prompt preparation input for one transport turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,22 +60,23 @@ pub(crate) fn prepare_prompt_text(
     request: PromptPreparationRequest<'_>,
 ) -> Result<String, AgentBackendError> {
     match request.instruction_delivery_mode {
-        InstructionDeliveryMode::BootstrapFull => prepend_protocol_instructions(
+        InstructionDeliveryMode::BootstrapFull => Ok(protocol_prepend_instructions(
             request.prompt,
             request.protocol_profile,
             request.schema_instruction_mode,
-        ),
-        InstructionDeliveryMode::DeltaOnly => {
-            prepend_protocol_refresh_reminder(request.prompt, request.protocol_profile)
-        }
+        )),
+        InstructionDeliveryMode::DeltaOnly => Ok(protocol_prepend_refresh_reminder(
+            request.prompt,
+            request.protocol_profile,
+        )),
         InstructionDeliveryMode::BootstrapWithReplay => {
             let prompt = build_resume_prompt(request.prompt, request.replay_session_output)?;
 
-            prepend_protocol_instructions(
+            Ok(protocol_prepend_instructions(
                 &prompt,
                 request.protocol_profile,
                 request.schema_instruction_mode,
-            )
+            ))
         }
     }
 }
@@ -189,106 +102,6 @@ pub(crate) fn build_resume_prompt(
     };
 
     render_template("resume_with_session_output_prompt.md", &template)
-}
-
-/// Prepends structured response protocol instructions to a prompt.
-///
-/// Tells agents to emit one top-level JSON object that matches Agentty's
-/// structured protocol while selecting the cheapest safe schema guidance for
-/// the current provider. Providers without native structured output receive
-/// the full JSON Schema in the prompt; providers with native enforcement get
-/// policy and field-routing instructions only. The shared prompt contract
-/// also requires repository-root-relative POSIX file paths, repository-defined
-/// quality checks for touched files and the affected dependency graph,
-/// cleanup of temporary session files, and full repository validation when
-/// targeted coverage is unclear. If the prompt already contains the protocol
-/// marker, this function returns the prompt unchanged to avoid duplicated
-/// guidance.
-///
-/// # Errors
-/// Returns an error if Askama template rendering fails.
-pub(crate) fn prepend_protocol_instructions(
-    prompt: &str,
-    profile: ProtocolRequestProfile,
-    schema_instruction_mode: ProtocolSchemaInstructionMode,
-) -> Result<String, AgentBackendError> {
-    if prompt.contains(PROTOCOL_INSTRUCTIONS_MARKER) {
-        return Ok(prompt.to_string());
-    }
-
-    let protocol_usage_instructions = render_protocol_usage_instructions(profile)?;
-    if !schema_instruction_mode.includes_response_json_schema() {
-        let template = ProtocolInstructionPolicyPromptTemplate {
-            prompt,
-            protocol_usage_instructions: &protocol_usage_instructions,
-        };
-
-        return render_template("protocol_instruction_policy_prompt.md", &template);
-    }
-
-    let response_json_schema = protocol::agent_response_json_schema_json();
-    let template = ProtocolInstructionPromptTemplate {
-        prompt,
-        protocol_usage_instructions: &protocol_usage_instructions,
-        response_json_schema: &response_json_schema,
-    };
-
-    render_template("protocol_instruction_prompt.md", &template)
-}
-
-/// Prepends a compact refresh reminder for providers that already received
-/// the full instruction contract in the active context.
-pub(crate) fn prepend_protocol_refresh_reminder(
-    prompt: &str,
-    profile: ProtocolRequestProfile,
-) -> Result<String, AgentBackendError> {
-    if prompt.contains(PROTOCOL_INSTRUCTIONS_MARKER)
-        || prompt.contains(PROTOCOL_REFRESH_REMINDER_MARKER)
-    {
-        return Ok(prompt.to_string());
-    }
-
-    let protocol_refresh_instructions = render_protocol_refresh_instructions(profile)?;
-    let template = ProtocolRefreshPromptTemplate {
-        protocol_refresh_instructions: &protocol_refresh_instructions,
-        prompt,
-    };
-
-    render_template("protocol_refresh_prompt.md", &template)
-}
-
-/// Returns request-family-specific protocol guidance for the shared prompt
-/// preamble from Askama-backed markdown templates.
-fn render_protocol_usage_instructions(
-    profile: ProtocolRequestProfile,
-) -> Result<String, AgentBackendError> {
-    match profile {
-        ProtocolRequestProfile::SessionTurn => render_template(
-            "protocol_instruction_session_turn_usage.md",
-            &SessionTurnProtocolUsageInstructionsTemplate,
-        ),
-        ProtocolRequestProfile::UtilityPrompt => render_template(
-            "protocol_instruction_utility_prompt_usage.md",
-            &UtilityPromptProtocolUsageInstructionsTemplate,
-        ),
-    }
-}
-
-/// Returns the compact reminder text for providers that already know the full
-/// schema and policy contract from Askama-backed markdown templates.
-fn render_protocol_refresh_instructions(
-    profile: ProtocolRequestProfile,
-) -> Result<String, AgentBackendError> {
-    match profile {
-        ProtocolRequestProfile::SessionTurn => render_template(
-            "protocol_refresh_session_turn_instruction.md",
-            &SessionTurnProtocolRefreshInstructionsTemplate,
-        ),
-        ProtocolRequestProfile::UtilityPrompt => render_template(
-            "protocol_refresh_utility_prompt_instruction.md",
-            &UtilityPromptProtocolRefreshInstructionsTemplate,
-        ),
-    }
 }
 
 /// Builds a full prompt payload to stream over stdin for CLI providers.
@@ -585,12 +398,11 @@ mod tests {
         let prompt = "Implement feature";
 
         // Act
-        let rendered_prompt = prepend_protocol_instructions(
+        let rendered_prompt = protocol_prepend_instructions(
             prompt,
             ProtocolRequestProfile::SessionTurn,
             ProtocolSchemaInstructionMode::PromptSchema,
-        )
-        .expect("protocol instruction prompt should render");
+        );
 
         // Assert
         assert!(rendered_prompt.contains("File path output requirements:"));
@@ -634,12 +446,11 @@ mod tests {
         let prompt = "Implement feature";
 
         // Act
-        let rendered_prompt = prepend_protocol_instructions(
+        let rendered_prompt = protocol_prepend_instructions(
             prompt,
             ProtocolRequestProfile::SessionTurn,
             ProtocolSchemaInstructionMode::TransportSchema,
-        )
-        .expect("protocol instruction prompt should render");
+        );
 
         // Assert
         assert!(rendered_prompt.contains("Structured response protocol:"));
@@ -654,20 +465,18 @@ mod tests {
     /// Ensures protocol instructions are not duplicated when already present.
     fn test_prepend_protocol_instructions_is_idempotent() {
         // Arrange
-        let prompt = prepend_protocol_instructions(
+        let prompt = protocol_prepend_instructions(
             "Implement feature",
             ProtocolRequestProfile::SessionTurn,
             ProtocolSchemaInstructionMode::PromptSchema,
-        )
-        .expect("protocol instruction prompt should render");
+        );
 
         // Act
-        let rendered_prompt = prepend_protocol_instructions(
+        let rendered_prompt = protocol_prepend_instructions(
             &prompt,
             ProtocolRequestProfile::UtilityPrompt,
             ProtocolSchemaInstructionMode::TransportSchema,
-        )
-        .expect("protocol instruction prompt should render");
+        );
 
         // Assert
         assert_eq!(rendered_prompt, prompt);
@@ -681,12 +490,11 @@ mod tests {
         let prompt = "Generate title";
 
         // Act
-        let rendered_prompt = prepend_protocol_instructions(
+        let rendered_prompt = protocol_prepend_instructions(
             prompt,
             ProtocolRequestProfile::UtilityPrompt,
             ProtocolSchemaInstructionMode::PromptSchema,
-        )
-        .expect("protocol instruction prompt should render");
+        );
 
         // Assert
         assert!(rendered_prompt.contains("Structured response protocol:"));
@@ -728,8 +536,7 @@ mod tests {
 
         // Act
         let rendered_prompt =
-            prepend_protocol_refresh_reminder(prompt, ProtocolRequestProfile::SessionTurn)
-                .expect("protocol refresh reminder should render");
+            protocol_prepend_refresh_reminder(prompt, ProtocolRequestProfile::SessionTurn);
 
         // Assert
         assert!(rendered_prompt.contains("Protocol refresh reminder:"));

@@ -5,7 +5,7 @@ use std::fmt;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::domain::question::QuestionItem;
+use crate::QuestionItem;
 
 /// Hard cap on the number of clarification questions extracted from one agent
 /// response. Prevents runaway output from flooding the question UI even when
@@ -127,7 +127,7 @@ pub struct AgentResponse {
 
 /// Structured response parsing failure details.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum AgentResponseParseError {
+pub enum AgentResponseParseError {
     /// Response was empty or whitespace-only.
     Empty,
     /// Response was JSON, but it did not satisfy the structured protocol
@@ -145,6 +145,8 @@ impl fmt::Display for AgentResponseParseError {
         }
     }
 }
+
+impl std::error::Error for AgentResponseParseError {}
 
 impl AgentResponse {
     /// Creates a plain response from raw text as one `answer` string.

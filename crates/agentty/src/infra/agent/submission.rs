@@ -198,11 +198,10 @@ pub(crate) async fn submit_one_shot_with_backend(
     let (agent_response, repair_stats) = match parse_one_shot_response(&parsed_response.content) {
         Ok(response) => (response, None),
         Err(parse_error) => {
-            let repair_prompt =
-                super::repair::build_protocol_repair_prompt(&parse_error, &parsed_response.content)
-                    .map_err(|error| {
-                        format!("{parse_error}\nrepair prompt build failed: {error}")
-                    })?;
+            let repair_prompt = super::protocol::build_protocol_repair_prompt(
+                &parse_error,
+                &parsed_response.content,
+            );
             let repair_response = execute_one_shot_command(backend, &repair_prompt, request)
                 .await
                 .map_err(|error| format!("{parse_error}\nrepair transport failed: {error}"))?;
@@ -267,8 +266,7 @@ async fn attempt_one_shot_app_server_repair(
     provider_conversation_id: Option<&str>,
 ) -> Result<(AgentResponse, u64, u64), String> {
     let repair_prompt =
-        super::repair::build_protocol_repair_prompt(parse_error, malformed_response)
-            .map_err(|error| format!("{parse_error}\nrepair prompt build failed: {error}"))?;
+        super::protocol::build_protocol_repair_prompt(parse_error, malformed_response);
 
     let (repair_stream_tx, _repair_stream_rx) = tokio::sync::mpsc::unbounded_channel();
     let repair_turn_request = AppServerTurnRequest {

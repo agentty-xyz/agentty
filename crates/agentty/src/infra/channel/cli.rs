@@ -246,12 +246,7 @@ async fn parse_or_repair_cli_response(
         "Protocol parse error; retrying schema repair for {kind}."
     )));
 
-    let repair_prompt = agent::repair::build_protocol_repair_prompt(&parse_error, content)
-        .map_err(|error| {
-            AgentError::Backend(format!(
-                "{parse_error}\nprotocol repair prompt build failed: {error}"
-            ))
-        })?;
+    let repair_prompt = agent::protocol::build_protocol_repair_prompt(&parse_error, content);
 
     let repair_content = execute_cli_repair_turn(
         backend.as_ref(),

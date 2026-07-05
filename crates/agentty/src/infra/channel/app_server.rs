@@ -217,12 +217,7 @@ async fn parse_or_repair_app_server_response(
     )));
 
     let repair_prompt =
-        agent::repair::build_protocol_repair_prompt(&parse_error, &response.assistant_message)
-            .map_err(|error| {
-                AgentError::Backend(format!(
-                    "{parse_error}\nprotocol repair prompt build failed: {error}"
-                ))
-            })?;
+        agent::protocol::build_protocol_repair_prompt(&parse_error, &response.assistant_message);
 
     let repair_provider_conversation_id = response
         .provider_conversation_id

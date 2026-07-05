@@ -13,7 +13,7 @@ use super::model::{
 /// change text exists. Some providers still emit `summary: null` for compliant
 /// session-turn JSON, so this fills in an empty summary object that downstream
 /// rendering already maps to `No changes`.
-pub(crate) fn normalize_turn_response(
+pub fn normalize_turn_response(
     mut response: AgentResponse,
     protocol_profile: ProtocolRequestProfile,
 ) -> AgentResponse {
@@ -44,9 +44,7 @@ pub(crate) fn normalize_turn_response(
 ///
 /// # Errors
 /// Returns [`AgentResponseParseError`] when no valid protocol payload is found.
-pub(crate) fn parse_agent_response_strict(
-    raw: &str,
-) -> Result<AgentResponse, AgentResponseParseError> {
+pub fn parse_agent_response_strict(raw: &str) -> Result<AgentResponse, AgentResponseParseError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(AgentResponseParseError::Empty);
@@ -102,7 +100,7 @@ pub(crate) fn parse_agent_response_strict(
 /// The report summarizes response sizing, markdown wrapping, JSON parse
 /// diagnostics, and any visible top-level keys so schema mismatch errors
 /// include enough context to diagnose malformed provider output quickly.
-pub(crate) fn format_protocol_parse_debug_details(raw: &str) -> String {
+pub fn format_protocol_parse_debug_details(raw: &str) -> String {
     let trimmed = raw.trim();
     let mut detail_lines = vec![
         format!("response_len: {} chars", raw.chars().count()),

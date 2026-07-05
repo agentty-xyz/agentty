@@ -22,6 +22,9 @@ module docstrings directly.
 - `crates/ag-git/`: Shared git library crate with worktree creation, repository
   metadata, commit/diff/push/pull sync, rebase/conflict handling, and squash-merge
   workflows behind the `GitClient` boundary.
+- `crates/ag-protocol/`: Shared structured response protocol library crate with
+  transport-neutral response models, schema generation, parser diagnostics, protocol
+  prompt envelopes, repair prompts, and turn prompt payload helpers.
 - `crates/agentty/`: Main TUI application crate with composition root, application,
   domain, infrastructure, runtime, and UI layers.
 - `crates/testty/`: Rust-native TUI end-to-end testing framework with PTY-driven
@@ -42,14 +45,16 @@ module docstrings directly.
   traits.
 - `domain/`: Pure business entities and logic — agent kinds and models, sessions and
   statuses, projects, settings keys, themes, structured questions, typed transcript
-  messages, prompt-composer logic, and turn prompt payloads. No I/O.
+  messages, prompt-composer logic, and compatibility re-exports for shared protocol
+  question and turn prompt payloads. No I/O.
 - `infra/`: External integrations behind traits — SQLite persistence (`infra/db/`
-  repositories), filesystem (`FsClient`), tmux, clipboard images, version checks,
-  project discovery, file indexing, and the agent stack: provider registry, per-provider
-  backends (`infra/agent/`), shared prompt preparation and access-root selection
-  (`infra/agent/prompt.rs`), transport channels (`infra/channel/`), app-server clients
-  plus shared command and stdio transport helpers (`infra/agent/app_server/`), and the
-  structured response protocol (`infra/agent/protocol/`).
+  repositories), git (`GitClient`, backed by `ag-git`), filesystem (`FsClient`), tmux,
+  clipboard images, version checks, project discovery, file indexing, and the agent
+  stack: provider registry, per-provider backends (`infra/agent/`), shared prompt
+  preparation and access-root selection (`infra/agent/prompt.rs`), transport channels
+  (`infra/channel/`), app-server clients plus shared command and stdio transport helpers
+  (`infra/agent/app_server/`), and the structured response protocol compatibility layer
+  backed by `ag-protocol` prompt-envelope, schema, and parser APIs.
 - `runtime/`: Terminal lifecycle and the event loop — terminal setup, the event-reader
   thread, key dispatch, one handler per `AppMode` under `runtime/mode/`, and shared mode
   helpers for session-output metrics.

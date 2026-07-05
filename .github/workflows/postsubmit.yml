@@ -28,6 +28,8 @@ jobs:
             hook: test-ag-forge-src
           - member: ag-git
             hook: test-ag-git-src
+          - member: ag-protocol
+            hook: test-ag-protocol-src
           - member: agentty
             hook: test-agentty-src
           - member: ag-xtask

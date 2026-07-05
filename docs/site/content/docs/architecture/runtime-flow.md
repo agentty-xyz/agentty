@@ -26,14 +26,15 @@ these constraints:
 
 ## Workspace Map
 
-| Path                      | Responsibility                                              |
-| ------------------------- | ----------------------------------------------------------- |
-| `crates/ag-forge/`        | Shared forge review-request library (`gh`/`glab` adapters). |
-| `crates/ag-git/`          | Shared git, worktree, sync, rebase, and merge library.      |
-| `crates/agentty/`         | Main TUI application crate.                                 |
-| `crates/testty/`          | TUI end-to-end testing framework.                           |
-| `crates/ag-xtask/`        | Workspace maintenance and automation commands.              |
-| `docs/site/content/docs/` | End-user and contributor documentation.                     |
+| Path                      | Responsibility                                                       |
+| ------------------------- | -------------------------------------------------------------------- |
+| `crates/ag-forge/`        | Shared forge review-request library (`gh`/`glab` adapters).          |
+| `crates/ag-git/`          | Shared git, worktree, sync, rebase, and merge library.               |
+| `crates/ag-protocol/`     | Shared structured response protocol and turn prompt payload library. |
+| `crates/agentty/`         | Main TUI application crate.                                          |
+| `crates/testty/`          | TUI end-to-end testing framework.                                    |
+| `crates/ag-xtask/`        | Workspace maintenance and automation commands.                       |
+| `docs/site/content/docs/` | End-user and contributor documentation.                              |
 
 ## Main Runtime Flow
 
@@ -236,14 +237,15 @@ flowchart TD
 ```
 
 <a id="architecture-key-types"></a> Key types (`infra/channel/contract.rs`, re-exported
-by `infra/channel.rs`, with prompt payloads owned by `domain/turn_prompt.rs`):
+by `infra/channel.rs`, with prompt payloads owned by `ag-protocol` and re-exported
+through `domain/turn_prompt.rs`):
 
-| Type               | Purpose                                                                                            |
-| ------------------ | -------------------------------------------------------------------------------------------------- |
-| `TurnRequest`      | Input payload: reasoning level, folder, model, prompt, request kind, and provider conversation id. |
-| `TurnEvent`        | Incremental stream events: `ThoughtDelta`, `Completed`, `Failed`, `PidUpdate`.                     |
-| `TurnResult`       | Normalized output: `assistant_message`, token counts, `provider_conversation_id`.                  |
-| `AgentRequestKind` | `SessionStart`, `SessionResume` (with optional output replay), or `UtilityPrompt`.                 |
+| Type               | Purpose                                                                                                               |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| `TurnRequest`      | Input payload: `reasoning_level`, folder, `live_session_output`, model, `request_kind`, prompt, and provider context. |
+| `TurnEvent`        | Incremental stream events: `ThoughtDelta`, `Completed`, `Failed`, `PidUpdate`.                                        |
+| `TurnResult`       | Normalized output: `assistant_message`, token counts, `provider_conversation_id`.                                     |
+| `AgentRequestKind` | `SessionStart`, `SessionResume` (with optional session output replay), or `UtilityPrompt`.                            |
 
 <a id="architecture-provider-conversation-id-flow"></a> App-server providers return a
 `provider_conversation_id` in `TurnResult`. Post-turn application persists it, along
@@ -270,11 +272,13 @@ compact reminder.
 <a id="architecture-agent-interaction-protocol"></a> Provider output is normalized to
 one structured response protocol (`answer`, `questions`, optional `summary`):
 
-1. Prompt builders in `crates/agentty/src/infra/agent/` prepend a shared protocol
-   preamble with a self-descriptive JSON schema. CLI turns resend it every turn;
-   persistent app-server turns reuse a compact reminder when the provider context
-   already received the full bootstrap, and replay the transcript when provider context
-   was lost.
+1. Prompt builders in `crates/agentty/src/infra/agent/` ask `crates/ag-protocol/src/` to
+   prepend the shared protocol preamble with a self-descriptive JSON schema. CLI turns
+   resend it every turn; persistent app-server turns reuse a compact reminder when the
+   provider context already received the full bootstrap, and replay the transcript when
+   provider context was lost. `crates/ag-protocol/src/` owns the shared response model,
+   schema, parser diagnostics, protocol prompt envelopes, repair prompts, and turn
+   prompt payloads.
 1. Channels emit transient loader updates as `TurnEvent::ThoughtDelta` values while the
    turn runs; assistant transcript output is appended once from the final parsed result.
 1. Final output must parse as the shared protocol JSON object. Claude, Gemini, and Codex
