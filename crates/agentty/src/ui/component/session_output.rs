@@ -143,6 +143,204 @@ struct SessionOutputLines {
     published_loader_line_index: Option<usize>,
 }
 
+/// One logical output block in the assembled session transcript panel.
+#[derive(Clone, Copy)]
+enum SessionOutputBlock {
+    ActiveTurn,
+    CompletedTranscript,
+    PublishedBranchSync,
+    QueuedMessage,
+    Review,
+    SessionTail,
+    Summary,
+    TrailingTranscriptNotice(TrailingTranscriptNoticePlacement),
+    WorkflowNotice,
+}
+
+/// Render placement for trailing transcript notices split from persisted
+/// output.
+#[derive(Clone, Copy)]
+enum TrailingTranscriptNoticePlacement {
+    AfterReview,
+    BeforeActiveTurn,
+}
+
+/// Controls whether a block separator is always emitted or only separates
+/// previously rendered content.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum SessionOutputSeparator {
+    Always,
+    AfterPreviousContent,
+}
+
+const SESSION_OUTPUT_BLOCK_ORDER: [SessionOutputBlock; 10] = [
+    SessionOutputBlock::CompletedTranscript,
+    SessionOutputBlock::TrailingTranscriptNotice(
+        TrailingTranscriptNoticePlacement::BeforeActiveTurn,
+    ),
+    SessionOutputBlock::Summary,
+    SessionOutputBlock::ActiveTurn,
+    SessionOutputBlock::QueuedMessage,
+    SessionOutputBlock::Review,
+    SessionOutputBlock::TrailingTranscriptNotice(TrailingTranscriptNoticePlacement::AfterReview),
+    SessionOutputBlock::WorkflowNotice,
+    SessionOutputBlock::PublishedBranchSync,
+    SessionOutputBlock::SessionTail,
+];
+
+/// Mutable state for assembling session-output blocks in display order.
+struct SessionOutputAssembly<'a> {
+    active_loader_line_index: Option<usize>,
+    active_progress: Option<&'a str>,
+    active_prompt_output: Option<&'a str>,
+    active_turn_has_visible_text: bool,
+    active_turn_text: Option<&'a str>,
+    completed_turn_text: &'a str,
+    inner_width: usize,
+    lines: Vec<Line<'static>>,
+    markdown_render_cache: Option<&'a markdown::MarkdownRenderCache>,
+    published_loader_line_index: Option<usize>,
+    review_model: AgentModel,
+    review_status_message: Option<&'a str>,
+    review_text: Option<&'a str>,
+    session: &'a Session,
+    status: Status,
+    trailing_notice_text: Option<&'a str>,
+}
+
+impl SessionOutputAssembly<'_> {
+    /// Appends all known output blocks in the canonical display order.
+    fn into_output_lines(mut self) -> SessionOutputLines {
+        for block in SESSION_OUTPUT_BLOCK_ORDER {
+            self.append_block(block);
+        }
+
+        SessionOutputLines {
+            active_loader_line_index: self.active_loader_line_index,
+            lines: self.lines,
+            published_loader_line_index: self.published_loader_line_index,
+        }
+    }
+
+    /// Appends one optional output block when its current inputs are visible.
+    fn append_block(&mut self, block: SessionOutputBlock) {
+        match block {
+            SessionOutputBlock::CompletedTranscript => self.append_completed_transcript(),
+            SessionOutputBlock::TrailingTranscriptNotice(placement) => {
+                self.append_trailing_transcript_notice(placement);
+            }
+            SessionOutputBlock::Summary => self.append_summary(),
+            SessionOutputBlock::ActiveTurn => self.append_active_turn(),
+            SessionOutputBlock::QueuedMessage => self.append_queued_messages(),
+            SessionOutputBlock::Review => self.append_review(),
+            SessionOutputBlock::WorkflowNotice => self.append_workflow_notice(),
+            SessionOutputBlock::PublishedBranchSync => self.append_published_branch_sync(),
+            SessionOutputBlock::SessionTail => self.append_session_tail(),
+        }
+    }
+
+    fn append_completed_transcript(&mut self) {
+        SessionOutput::append_markdown_lines(
+            &mut self.lines,
+            self.completed_turn_text,
+            self.inner_width,
+            self.markdown_render_cache,
+        );
+    }
+
+    fn append_trailing_transcript_notice(&mut self, placement: TrailingTranscriptNoticePlacement) {
+        let should_append = match placement {
+            TrailingTranscriptNoticePlacement::BeforeActiveTurn => {
+                self.active_turn_has_visible_text
+            }
+            TrailingTranscriptNoticePlacement::AfterReview => !self.active_turn_has_visible_text,
+        };
+        if !should_append {
+            return;
+        }
+
+        SessionOutput::append_trailing_transcript_notice_lines(
+            &mut self.lines,
+            self.trailing_notice_text,
+            self.inner_width,
+            self.markdown_render_cache,
+        );
+    }
+
+    fn append_summary(&mut self) {
+        if !SessionOutput::shows_summary_block(
+            self.status,
+            self.active_prompt_output,
+            self.active_turn_text,
+        ) {
+            return;
+        }
+
+        SessionOutput::append_summary_lines(
+            &mut self.lines,
+            self.session.summary.as_deref(),
+            self.inner_width,
+            self.markdown_render_cache,
+        );
+    }
+
+    fn append_active_turn(&mut self) {
+        SessionOutput::append_active_turn_lines(
+            &mut self.lines,
+            self.active_turn_text,
+            self.inner_width,
+            self.markdown_render_cache,
+        );
+    }
+
+    fn append_queued_messages(&mut self) {
+        SessionOutput::append_queued_message_lines(&mut self.lines, &self.session.queued_messages);
+    }
+
+    fn append_review(&mut self) {
+        if !SessionOutput::shows_review_lines(
+            self.status,
+            self.review_status_message,
+            self.review_text,
+        ) {
+            return;
+        }
+
+        SessionOutput::append_review_lines(
+            &mut self.lines,
+            self.review_status_message,
+            self.review_text,
+            self.inner_width,
+            self.markdown_render_cache,
+        );
+    }
+
+    fn append_workflow_notice(&mut self) {
+        SessionOutput::append_workflow_notice_lines(
+            &mut self.lines,
+            self.session.workflow_notice.as_deref(),
+            self.inner_width,
+            self.markdown_render_cache,
+        );
+    }
+
+    fn append_published_branch_sync(&mut self) {
+        if SessionOutput::append_published_branch_sync_lines(&mut self.lines, self.session) {
+            self.published_loader_line_index = Some(self.lines.len().saturating_sub(1));
+        }
+    }
+
+    fn append_session_tail(&mut self) {
+        self.active_loader_line_index = SessionOutput::append_session_tail_lines(
+            &mut self.lines,
+            self.status,
+            self.active_progress,
+            self.review_status_message,
+            self.review_model,
+        );
+    }
+}
+
 /// Cached session-output layout entry.
 struct SessionOutputLayoutCacheEntry {
     key: SessionOutputLayoutCacheKey,
@@ -530,7 +728,6 @@ impl<'a> SessionOutput<'a> {
             session_update_version: _,
         } = context;
         let status = session.status;
-        let mut published_loader_line_index = None;
         let output_text = Self::output_text(session);
         let (completed_turn_text, active_turn_text) =
             Self::transcript_sections(status, output_text.as_ref(), active_prompt_output);
@@ -547,80 +744,40 @@ impl<'a> SessionOutput<'a> {
         let active_turn_has_visible_text = active_turn_text
             .as_deref()
             .is_some_and(|text| !text.trim().is_empty());
-        let mut lines = Vec::new();
-        Self::append_markdown_lines(
-            &mut lines,
+        SessionOutputAssembly {
+            active_loader_line_index: None,
+            active_progress,
+            active_prompt_output,
+            active_turn_has_visible_text,
+            active_turn_text: active_turn_text.as_deref(),
             completed_turn_text,
             inner_width,
+            lines: Vec::new(),
             markdown_render_cache,
-        );
-        if active_turn_has_visible_text {
-            Self::append_trailing_transcript_notice_lines(
-                &mut lines,
-                trailing_notice_text,
-                inner_width,
-                markdown_render_cache,
-            );
-        }
-        let shows_summary_block = Self::shows_summary_block(
-            session.status,
-            active_prompt_output,
-            active_turn_text.as_deref(),
-        );
-        if shows_summary_block {
-            Self::append_summary_lines(
-                &mut lines,
-                session.summary.as_deref(),
-                inner_width,
-                markdown_render_cache,
-            );
-        }
-        Self::append_active_turn_lines(
-            &mut lines,
-            active_turn_text.as_deref(),
-            inner_width,
-            markdown_render_cache,
-        );
-        Self::append_queued_message_lines(&mut lines, &session.queued_messages);
-        if Self::shows_review_lines(session.status, review_status_message, review_text) {
-            Self::append_review_lines(
-                &mut lines,
-                review_status_message,
-                review_text,
-                inner_width,
-                markdown_render_cache,
-            );
-        }
-        if !active_turn_has_visible_text {
-            Self::append_trailing_transcript_notice_lines(
-                &mut lines,
-                trailing_notice_text,
-                inner_width,
-                markdown_render_cache,
-            );
-        }
-        Self::append_workflow_notice_lines(
-            &mut lines,
-            session.workflow_notice.as_deref(),
-            inner_width,
-            markdown_render_cache,
-        );
-        if Self::append_published_branch_sync_lines(&mut lines, session) {
-            published_loader_line_index = Some(lines.len().saturating_sub(1));
-        }
-
-        let active_loader_line_index = Self::append_session_tail_lines(
-            &mut lines,
-            status,
-            active_progress,
-            review_status_message,
+            published_loader_line_index: None,
             review_model,
-        );
+            review_status_message,
+            review_text,
+            session,
+            status,
+            trailing_notice_text,
+        }
+        .into_output_lines()
+    }
 
-        SessionOutputLines {
-            active_loader_line_index,
-            lines,
-            published_loader_line_index,
+    /// Trims trailing blank rows before appending a block separator.
+    fn append_block_separator(lines: &mut Vec<Line<'static>>, separator: SessionOutputSeparator) {
+        Self::trim_trailing_blank_lines(lines);
+
+        if separator == SessionOutputSeparator::Always || !lines.is_empty() {
+            lines.push(Line::from(""));
+        }
+    }
+
+    /// Removes blank rows from the end of already-assembled output blocks.
+    fn trim_trailing_blank_lines(lines: &mut Vec<Line<'static>>) {
+        while lines.last().is_some_and(|line| line.width() == 0) {
+            lines.pop();
         }
     }
 
@@ -639,11 +796,7 @@ impl<'a> SessionOutput<'a> {
             review_status_message,
             review_model,
         ) {
-            while lines.last().is_some_and(|line| line.width() == 0) {
-                lines.pop();
-            }
-
-            lines.push(Line::from(""));
+            Self::append_block_separator(lines, SessionOutputSeparator::Always);
             let active_loader_line_index =
                 Self::status_uses_tachyon_loader(status).then_some(lines.len());
             lines.push(status_line);
@@ -675,11 +828,7 @@ impl<'a> SessionOutput<'a> {
             return false;
         };
 
-        while lines.last().is_some_and(|line| line.width() == 0) {
-            lines.pop();
-        }
-
-        lines.push(Line::from(""));
+        Self::append_block_separator(lines, SessionOutputSeparator::Always);
         lines.push(sync_line);
 
         true
@@ -898,14 +1047,7 @@ impl<'a> SessionOutput<'a> {
         }
 
         if let Some(status_message) = Self::visible_review_status_message(review_status_message) {
-            while lines.last().is_some_and(|line| line.width() == 0) {
-                lines.pop();
-            }
-
-            if !lines.is_empty() {
-                lines.push(Line::from(""));
-            }
-
+            Self::append_block_separator(lines, SessionOutputSeparator::AfterPreviousContent);
             Self::append_plain_review_status_lines(lines, status_message, inner_width);
         }
     }
@@ -995,10 +1137,7 @@ impl<'a> SessionOutput<'a> {
             return;
         }
 
-        while lines.last().is_some_and(|line| line.width() == 0) {
-            lines.pop();
-        }
-        lines.push(Line::from(""));
+        Self::append_block_separator(lines, SessionOutputSeparator::Always);
 
         let queued_style = ratatui::style::Style::default()
             .fg(style::palette::text_subtle())
@@ -1060,14 +1199,7 @@ impl<'a> SessionOutput<'a> {
             return;
         }
 
-        while lines.last().is_some_and(|line| line.width() == 0) {
-            lines.pop();
-        }
-
-        if !lines.is_empty() {
-            lines.push(Line::from(""));
-        }
-
+        Self::append_block_separator(lines, SessionOutputSeparator::AfterPreviousContent);
         lines.extend(rendered_lines.iter().cloned());
     }
 
