@@ -358,7 +358,12 @@ mod tests {
             build_resume_prompt(prompt, session_output).expect("resume prompt should render");
 
         // Assert
+        let normalized_resume_prompt = resume_prompt.split_whitespace().collect::<Vec<_>>();
+        let normalized_resume_prompt = normalized_resume_prompt.join(" ");
         assert!(resume_prompt.contains("previous output line"));
+        assert!(normalized_resume_prompt.contains("Treat the user's new prompt as a follow-up"));
+        assert!(normalized_resume_prompt.contains("changes made during this Agentty session"));
+        assert!(normalized_resume_prompt.contains("preserve unrelated pre-existing work"));
         assert!(resume_prompt.contains("Continue and update tests"));
     }
 

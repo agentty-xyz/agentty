@@ -279,9 +279,11 @@ one structured response protocol (`answer`, `questions`, optional `summary`):
    prepend the shared protocol preamble with a self-descriptive JSON schema. CLI turns
    resend it every turn; persistent app-server turns reuse a compact reminder when the
    provider context already received the full bootstrap, and replay the transcript when
-   provider context was lost. `crates/ag-protocol/src/` owns the shared response model,
-   schema, parser diagnostics, protocol prompt envelopes, repair prompts, and turn
-   prompt payloads.
+   provider context was lost. Transcript replay frames the new prompt as a follow-up in
+   the whole-session context, so rollback wording applies to changes made during the
+   Agentty session unless the user explicitly says otherwise. `crates/ag-protocol/src/`
+   owns the shared response model, schema, parser diagnostics, protocol prompt
+   envelopes, repair prompts, and turn prompt payloads.
 1. Channels emit transient loader updates as `TurnEvent::ThoughtDelta` values while the
    turn runs; assistant transcript output is appended once from the final parsed result.
 1. Final output must parse as the shared protocol JSON object. Claude, Gemini, and Codex
