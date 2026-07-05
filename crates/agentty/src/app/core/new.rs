@@ -98,6 +98,7 @@ impl App {
         let StartupProjectContext {
             active_project_id,
             active_project_name,
+            initial_tab,
             project_items,
             startup_git_branch,
             startup_git_upstream_ref,
@@ -169,7 +170,7 @@ impl App {
             mode: crate::ui::state::app_mode::AppMode::List,
             needs_redraw: true,
             settings,
-            tabs: crate::app::tab::TabManager::default(),
+            tabs: crate::app::tab::TabManager::new(initial_tab),
             projects,
             services,
             sessions,

@@ -875,6 +875,91 @@ async fn test_new_with_clients_falls_back_from_stale_active_project_and_loads_cu
     );
 }
 
+#[tokio::test]
+async fn test_new_with_clients_restores_persisted_active_tab() {
+    // Arrange
+    let temp_dir = tempdir().expect("failed to create temp dir");
+    let agentty_home = temp_dir.path().join("agentty-home");
+    let project_path = temp_dir.path().join("project");
+    fs::create_dir_all(&agentty_home).expect("failed to create agentty home");
+    fs::create_dir_all(project_path.join(".git")).expect("failed to create project git marker");
+    let database = AppRepositories::in_memory().await;
+    database
+        .settings()
+        .upsert_setting(SettingName::ActiveTab, Tab::Review.as_str())
+        .await
+        .expect("failed to persist active tab");
+
+    // Act
+    let app = App::new_with_clients(
+        agentty_home,
+        project_path,
+        Some("main".to_string()),
+        database,
+        crate::test_support::test_app_clients(),
+    )
+    .await
+    .expect("failed to build app");
+
+    // Assert
+    assert_eq!(app.tabs.current(), Tab::Review);
+}
+
+#[tokio::test]
+async fn test_new_with_clients_defaults_to_sessions_when_active_project_exists() {
+    // Arrange
+    let temp_dir = tempdir().expect("failed to create temp dir");
+    let agentty_home = temp_dir.path().join("agentty-home");
+    let project_path = temp_dir.path().join("project");
+    fs::create_dir_all(&agentty_home).expect("failed to create agentty home");
+    fs::create_dir_all(project_path.join(".git")).expect("failed to create project git marker");
+    let database = AppRepositories::in_memory().await;
+    let project_id = database
+        .projects()
+        .upsert_project(&project_path.to_string_lossy(), Some("main".to_string()))
+        .await
+        .expect("failed to insert project");
+    database
+        .settings()
+        .set_active_project_id(project_id)
+        .await
+        .expect("failed to persist active project");
+
+    // Act
+    let app = App::new_with_clients(
+        agentty_home,
+        project_path,
+        Some("main".to_string()),
+        database,
+        crate::test_support::test_app_clients(),
+    )
+    .await
+    .expect("failed to build app");
+
+    // Assert
+    assert_eq!(app.tabs.current(), Tab::Sessions);
+}
+
+#[tokio::test]
+async fn test_persist_current_tab_stores_active_tab() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    app.tabs.set(Tab::Settings);
+
+    // Act
+    app.persist_current_tab().await;
+
+    // Assert
+    let persisted_tab = app
+        .services
+        .db()
+        .settings()
+        .get_setting(SettingName::ActiveTab)
+        .await
+        .expect("failed to load active tab");
+    assert_eq!(persisted_tab.as_deref(), Some(Tab::Settings.as_str()));
+}
+
 /// Builds a test app with one selected session, configurable open command,
 /// and injected tmux boundary.
 async fn new_test_app_with_selected_session(

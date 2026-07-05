@@ -7,6 +7,8 @@ use std::fmt;
 pub(crate) enum SettingName {
     /// Persists the active project selection.
     ActiveProjectId,
+    /// Persists the active list tab selection.
+    ActiveTab,
     /// Persists the selected reasoning-effort level.
     ReasoningLevel,
     /// Persists the provider that owns the fast-model default.
@@ -37,6 +39,7 @@ impl SettingName {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::ActiveProjectId => "ActiveProjectId",
+            Self::ActiveTab => "ActiveTab",
             Self::ReasoningLevel => "ReasoningLevel",
             Self::DefaultFastAgent => "DefaultFastAgent",
             Self::DefaultFastModel => "DefaultFastModel",
@@ -68,6 +71,7 @@ mod tests {
         // Arrange
         let settings = [
             (SettingName::ActiveProjectId, "ActiveProjectId"),
+            (SettingName::ActiveTab, "ActiveTab"),
             (SettingName::ReasoningLevel, "ReasoningLevel"),
             (SettingName::DefaultFastAgent, "DefaultFastAgent"),
             (SettingName::DefaultFastModel, "DefaultFastModel"),
@@ -99,6 +103,7 @@ mod tests {
         // Arrange
         let settings = [
             SettingName::ActiveProjectId,
+            SettingName::ActiveTab,
             SettingName::ReasoningLevel,
             SettingName::DefaultFastAgent,
             SettingName::DefaultFastModel,

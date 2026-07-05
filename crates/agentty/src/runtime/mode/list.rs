@@ -47,9 +47,11 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
         }
         KeyCode::Tab => {
             app.next_tab();
+            app.persist_current_tab().await;
         }
         KeyCode::BackTab => {
             app.previous_tab();
+            app.persist_current_tab().await;
         }
         KeyCode::Char('a')
             if app.tabs.current() == Tab::Sessions && key.modifiers == KeyModifiers::NONE =>
@@ -114,6 +116,7 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
         Tab::Projects => {
             if app.switch_selected_project().await.is_ok() {
                 app.tabs.set(Tab::Sessions);
+                app.persist_current_tab().await;
             }
         }
         Tab::Sessions => {

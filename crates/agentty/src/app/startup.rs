@@ -12,10 +12,12 @@ use super::task;
 use crate::app::service::AppServices;
 use crate::app::session::SessionManager;
 use crate::app::session_state::SessionState;
+use crate::app::tab::Tab;
 use crate::app::{AppError, session};
 use crate::domain::agent::{AgentKind, AgentModel};
 use crate::domain::project::{Project, ProjectListItem, project_name_from_path};
 use crate::domain::session_order;
+use crate::domain::setting::SettingName;
 use crate::infra::agent::AgentAvailabilityProbe;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs::FsClient;
@@ -27,6 +29,8 @@ pub(crate) struct StartupProjectContext {
     pub(crate) active_project_id: i64,
     /// Display label for the active project shown on first render.
     pub(crate) active_project_name: String,
+    /// Initial top-level tab selected for the first render.
+    pub(crate) initial_tab: Tab,
     /// Initial project list shown in the projects tab.
     pub(crate) project_items: Vec<ProjectListItem>,
     /// Startup git branch for the active project when detected.
@@ -109,6 +113,13 @@ impl AppStartup {
         git_branch: Option<String>,
         current_project_id: i64,
     ) -> Result<StartupProjectContext, AppError> {
+        let had_active_project_setting = db
+            .settings()
+            .load_active_project_id()
+            .await
+            .ok()
+            .flatten()
+            .is_some();
         let startup_active_project_id =
             Self::resolve_startup_active_project_id(db, fs_client, current_project_id).await;
         let startup_active_project = Self::load_project(
@@ -168,10 +179,12 @@ impl AppStartup {
         let project_items = Self::load_project_items(db, fs_client).await;
         let active_project_name =
             Self::project_title_for_id(&project_items, active_project_id, &startup_working_dir);
+        let initial_tab = Self::load_startup_tab(db, had_active_project_setting).await;
 
         Ok(StartupProjectContext {
             active_project_id,
             active_project_name,
+            initial_tab,
             project_items,
             startup_git_branch,
             startup_git_upstream_ref,
@@ -239,6 +252,30 @@ impl AppStartup {
         session_manager.refresh_session_branch_names().await;
 
         session_manager
+    }
+
+    /// Loads the initial list tab from settings, with a project-aware fallback.
+    pub(crate) async fn load_startup_tab(
+        db: &AppRepositories,
+        had_active_project_setting: bool,
+    ) -> Tab {
+        if let Some(tab) = db
+            .settings()
+            .get_setting(SettingName::ActiveTab)
+            .await
+            .ok()
+            .flatten()
+            .as_deref()
+            .and_then(Tab::from_str)
+        {
+            return tab;
+        }
+
+        if had_active_project_setting {
+            return Tab::Sessions;
+        }
+
+        Tab::Projects
     }
 
     /// Spawns app-wide background tasks that are not owned by the sync

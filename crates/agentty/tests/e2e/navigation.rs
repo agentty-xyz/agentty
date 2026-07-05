@@ -112,18 +112,42 @@ exit 1
     Ok(())
 }
 
-/// Verify that agentty startup renders the Projects tab as selected.
+/// Seeds the canonical project as the persisted active project.
+fn seed_active_project_setting(env: &BuilderEnv) -> E2eResult {
+    let runtime = common::seed_runtime()?;
+
+    runtime.block_on(async {
+        let canonical_workdir = env.workdir.canonicalize()?;
+        let database = common::open_database(env).await?;
+        let project_id = database
+            .projects()
+            .upsert_project(
+                &canonical_workdir.to_string_lossy(),
+                Some("main".to_string()),
+            )
+            .await?;
+        agentty::test_support::persist_active_project_id_for_test(&database, project_id).await?;
+
+        Ok::<(), Box<dyn std::error::Error>>(())
+    })?;
+
+    Ok(())
+}
+
+/// Verify that agentty startup renders the Sessions tab when an active
+/// project already exists.
 ///
 /// Launches agentty in a clean environment and asserts that the expected
 /// tabs and labels appear in the correct regions with appropriate styling.
 #[test]
-fn startup_shows_projects_tab() -> E2eResult {
+fn startup_shows_sessions_tab_for_active_project() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("startup")
         .with_git()
+        .setup(seed_active_project_setting)
         .zola(
             "Startup",
-            "Initial render with the Projects tab selected.",
+            "Launch agentty and land on the session list in seconds.",
             10,
         )
         .run(
@@ -131,12 +155,13 @@ fn startup_shows_projects_tab() -> E2eResult {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .viewing_pause_ms(3000)
-                    .capture_labeled("startup", "Initial render with Projects tab")
+                    .capture_labeled("startup", "Initial render with Sessions tab")
             },
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Agentty", &full);
                 assertion::assert_text_in_region(frame, "test-project", &full);
+                assertion::assert_text_in_region(frame, "No sessions", &full);
             },
         )?;
 

@@ -32,6 +32,10 @@ tabs, all accessible with `Tab`:
 - **Logs**: Inspect process-local system log events. Logs are not persisted; Agentty
   keeps the newest `1000` entries in memory.
 
+On startup, Agentty restores the last active list tab. If no tab has been saved yet but
+an active project is already persisted, Agentty opens on **Sessions** so you can resume
+project work without first selecting the project again.
+
 In session chat view, the status-colored session title renders in a header row above the
 output panel, with a metadata row showing the size bucket, `+added` / `-deleted` line
 totals, the cumulative active-work timer, the current model, the effective reasoning

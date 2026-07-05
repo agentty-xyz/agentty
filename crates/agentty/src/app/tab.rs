@@ -56,6 +56,23 @@ impl Tab {
         }
     }
 
+    /// Returns the stable persisted value used for startup restoration.
+    pub(crate) fn as_str(self) -> &'static str {
+        self.title()
+    }
+
+    /// Parses one persisted tab value.
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "Projects" => Some(Self::Projects),
+            "Sessions" => Some(Self::Sessions),
+            "Review" => Some(Self::Review),
+            "Settings" => Some(Self::Settings),
+            "Logs" => Some(Self::Logs),
+            _ => None,
+        }
+    }
+
     /// Returns whether the tab is global or tied to the active project.
     #[must_use]
     pub fn scope(self) -> TabScope {
@@ -104,6 +121,12 @@ pub struct TabManager {
 }
 
 impl TabManager {
+    /// Builds a manager with an explicit starting tab.
+    #[must_use]
+    pub fn new(current: Tab) -> Self {
+        Self { current }
+    }
+
     /// Returns the currently selected tab.
     #[must_use]
     pub fn current(&self) -> Tab {
@@ -161,6 +184,38 @@ mod tests {
                 TabScope::Project,
                 TabScope::Project
             ]
+        );
+    }
+
+    #[test]
+    fn test_tab_from_str_parses_persisted_values() {
+        // Arrange
+        let values = [
+            ("Projects", Some(Tab::Projects)),
+            ("Sessions", Some(Tab::Sessions)),
+            ("Review", Some(Tab::Review)),
+            ("Settings", Some(Tab::Settings)),
+            ("Logs", Some(Tab::Logs)),
+            ("Invalid", None),
+        ];
+
+        // Act & Assert
+        for (value, expected_tab) in values {
+            assert_eq!(Tab::from_str(value), expected_tab);
+        }
+    }
+
+    #[test]
+    fn test_tab_as_str_matches_persisted_values() {
+        // Arrange
+
+        // Act
+        let values = Tab::ALL.map(Tab::as_str);
+
+        // Assert
+        assert_eq!(
+            values,
+            ["Projects", "Sessions", "Review", "Settings", "Logs"]
         );
     }
 
@@ -227,6 +282,17 @@ mod tests {
 
         // Assert
         assert_eq!(manager.current(), Tab::Projects);
+    }
+
+    #[test]
+    fn test_tab_manager_new_uses_explicit_tab() {
+        // Arrange
+
+        // Act
+        let manager = TabManager::new(Tab::Sessions);
+
+        // Assert
+        assert_eq!(manager.current(), Tab::Sessions);
     }
 
     #[test]

@@ -46,6 +46,7 @@ use crate::domain::agent::AgentSelection;
 use crate::domain::agent::{AgentKind, ReasoningLevel};
 use crate::domain::input::InputState;
 use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, Session, SessionId, Status};
+use crate::domain::setting::SettingName;
 use crate::domain::system_log::{
     SystemLogBuffer, SystemLogCategory, SystemLogEvent, SystemLogLevel,
 };
@@ -319,6 +320,16 @@ impl App {
     pub fn previous_tab(&mut self) {
         self.tabs.previous();
         self.refresh_requested_reviews_if_review_tab(false);
+    }
+
+    /// Persists the active list tab for startup restoration.
+    pub(crate) async fn persist_current_tab(&self) {
+        let _ = self
+            .services
+            .db()
+            .settings()
+            .upsert_setting(SettingName::ActiveTab, self.tabs.current().as_str())
+            .await;
     }
 
     /// Refreshes requested reviews when the `Review` tab is visible.

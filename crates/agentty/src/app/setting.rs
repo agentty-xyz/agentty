@@ -920,6 +920,7 @@ impl SettingsManager {
             }
             SettingName::ReasoningLevel
             | SettingName::ActiveProjectId
+            | SettingName::ActiveTab
             | SettingName::DefaultFastAgent
             | SettingName::DefaultFastModel
             | SettingName::DefaultReviewAgent

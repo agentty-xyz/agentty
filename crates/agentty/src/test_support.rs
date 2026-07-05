@@ -21,8 +21,7 @@ use ratatui::widgets::TableState;
 use crate::app;
 #[cfg(test)]
 use crate::app::{App, SessionManager, SessionState};
-#[cfg(test)]
-use crate::db::Database;
+use crate::db::{Database, DbError};
 #[cfg(test)]
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel};
 #[cfg(test)]
@@ -30,6 +29,7 @@ use crate::domain::session::{
     PublishedBranchSyncStatus, ReviewRequest, Session, SessionHandles, SessionId, SessionSize,
     SessionStats, Status,
 };
+use crate::domain::setting::SettingName;
 #[cfg(test)]
 use crate::infra::{agent, app_server};
 #[cfg(test)]
@@ -38,6 +38,27 @@ use crate::ui::state::app_mode::AppMode;
 /// Returns the canonical session folder path for integration-test fixtures.
 pub fn session_folder(base: &Path, session_id: &str) -> PathBuf {
     app::session::session_folder(base, session_id)
+}
+
+/// Persists the active project id for integration-test database setup.
+pub async fn persist_active_project_id_for_test(
+    database: &Database,
+    project_id: i64,
+) -> Result<(), DbError> {
+    sqlx::query(
+        r"
+INSERT INTO setting (name, value)
+VALUES (?, ?)
+ON CONFLICT(name) DO UPDATE
+SET value = excluded.value
+",
+    )
+    .bind(SettingName::ActiveProjectId.as_str())
+    .bind(project_id.to_string())
+    .execute(database.pool())
+    .await?;
+
+    Ok(())
 }
 
 /// Deterministic [`crate::infra::clock::Clock`] implementation for unit-test
