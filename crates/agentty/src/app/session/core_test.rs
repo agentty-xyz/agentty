@@ -509,9 +509,6 @@ fn setup_mock_commit_and_branch_expectations(mock: &mut git::MockGitClient) {
     mock.expect_tracked_worktree_status()
         .times(0..)
         .returning(|_| Box::pin(async { Ok(String::new()) }));
-    mock.expect_head_hash()
-        .times(0..)
-        .returning(|_| Box::pin(async { Ok("main-before".to_string()) }));
     mock.expect_has_commits_since()
         .times(0..)
         .returning(|_, _| Box::pin(async { Ok(false) }));

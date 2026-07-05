@@ -1095,6 +1095,26 @@ mod tests {
         fs_client
     }
 
+    /// Builds one git client mock that detects the `wt/sess1` worktree and
+    /// resolves the given main repository root.
+    fn mock_git_client_detecting_main_repo(main_repo_root: PathBuf) -> MockGitClient {
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client
+            .expect_detect_git_info()
+            .once()
+            .returning(|_| Box::pin(async { Some("wt/sess1".to_string()) }));
+        mock_git_client
+            .expect_main_repo_root()
+            .once()
+            .returning(move |_| {
+                let main_repo_root = main_repo_root.clone();
+
+                Box::pin(async move { Ok(main_repo_root) })
+            });
+
+        mock_git_client
+    }
+
     /// Inserts one in-progress Antigravity-backed session for worker-flow
     /// tests.
     async fn insert_in_progress_test_session(db: &AppRepositories) -> i64 {
@@ -1407,20 +1427,7 @@ mod tests {
             .times(1)
             .returning(|_| Box::pin(async { Ok(()) }));
 
-        let mut mock_git_client = MockGitClient::new();
-        let main_repo_root = base_dir.path().join("main");
-        mock_git_client
-            .expect_detect_git_info()
-            .once()
-            .returning(|_| Box::pin(async { Some("wt/sess1".to_string()) }));
-        mock_git_client.expect_main_repo_root().once().returning({
-            let main_repo_root = main_repo_root.clone();
-
-            move |_| {
-                let main_repo_root = main_repo_root.clone();
-                Box::pin(async move { Ok(main_repo_root) })
-            }
-        });
+        let mut mock_git_client = mock_git_client_detecting_main_repo(base_dir.path().join("main"));
         mock_git_client
             .expect_tracked_worktree_status()
             .once()
@@ -1542,20 +1549,7 @@ mod tests {
                 })
             });
 
-        let mut mock_git_client = MockGitClient::new();
-        let main_repo_root = base_dir.path().join("main");
-        mock_git_client
-            .expect_detect_git_info()
-            .once()
-            .returning(|_| Box::pin(async { Some("wt/sess1".to_string()) }));
-        mock_git_client.expect_main_repo_root().once().returning({
-            let main_repo_root = main_repo_root.clone();
-
-            move |_| {
-                let main_repo_root = main_repo_root.clone();
-                Box::pin(async move { Ok(main_repo_root) })
-            }
-        });
+        let mut mock_git_client = mock_git_client_detecting_main_repo(base_dir.path().join("main"));
         mock_git_client
             .expect_tracked_worktree_status()
             .times(2)
@@ -1644,21 +1638,8 @@ mod tests {
                 })
             });
 
-        let main_repo_root = base_dir.path().join("main");
         let status_call_count = Arc::new(Mutex::new(0));
-        let mut mock_git_client = MockGitClient::new();
-        mock_git_client
-            .expect_detect_git_info()
-            .once()
-            .returning(|_| Box::pin(async { Some("wt/sess1".to_string()) }));
-        mock_git_client.expect_main_repo_root().once().returning({
-            let main_repo_root = main_repo_root.clone();
-
-            move |_| {
-                let main_repo_root = main_repo_root.clone();
-                Box::pin(async move { Ok(main_repo_root) })
-            }
-        });
+        let mut mock_git_client = mock_git_client_detecting_main_repo(base_dir.path().join("main"));
         mock_git_client
             .expect_tracked_worktree_status()
             .times(2)
@@ -1757,21 +1738,8 @@ mod tests {
                 })
             });
 
-        let main_repo_root = base_dir.path().join("main");
         let head_call_count = Arc::new(Mutex::new(0));
-        let mut mock_git_client = MockGitClient::new();
-        mock_git_client
-            .expect_detect_git_info()
-            .once()
-            .returning(|_| Box::pin(async { Some("wt/sess1".to_string()) }));
-        mock_git_client.expect_main_repo_root().once().returning({
-            let main_repo_root = main_repo_root.clone();
-
-            move |_| {
-                let main_repo_root = main_repo_root.clone();
-                Box::pin(async move { Ok(main_repo_root) })
-            }
-        });
+        let mut mock_git_client = mock_git_client_detecting_main_repo(base_dir.path().join("main"));
         mock_git_client
             .expect_tracked_worktree_status()
             .times(2)
@@ -3405,7 +3373,11 @@ mod tests {
     ) -> RebaseAssistWorkerHarness {
         let main_checkout_root = base_dir.join("main-checkout");
         std::fs::create_dir_all(&main_checkout_root).expect("failed to create main checkout");
-        let main_checkout_root = std::fs::canonicalize(&main_checkout_root)
+        // The worker canonicalizes the resolved main checkout root through the
+        // real filesystem client, so the mocks must expect the canonical path
+        // (on macOS `/var/...` resolves to `/private/var/...`).
+        let main_checkout_root = main_checkout_root
+            .canonicalize()
             .expect("failed to canonicalize main checkout");
 
         let output = Arc::new(Mutex::new(String::new()));
