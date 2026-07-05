@@ -25,6 +25,8 @@ use crate::db::{Database, DbError};
 #[cfg(test)]
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel};
 #[cfg(test)]
+use crate::domain::question::QuestionItem;
+#[cfg(test)]
 use crate::domain::session::{
     PublishedBranchSyncStatus, ReviewRequest, Session, SessionHandles, SessionId, SessionSize,
     SessionStats, Status,
@@ -201,6 +203,13 @@ impl SessionFixtureBuilder {
     /// Overrides the user prompt text.
     pub(crate) fn prompt(mut self, prompt: impl Into<String>) -> Self {
         self.session.prompt = prompt.into();
+
+        self
+    }
+
+    /// Overrides the pending clarification questions.
+    pub(crate) fn questions(mut self, questions: Vec<QuestionItem>) -> Self {
+        self.session.questions = questions;
 
         self
     }

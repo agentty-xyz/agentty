@@ -822,19 +822,120 @@ fn handle_question_at_mention_select(app: &mut App) {
 
 /// Stores one question response and runs follow-up reply when complete.
 async fn submit_response(app: &mut App, response: String) {
-    let Some((session_id, questions, responses)) = store_question_response(app, response) else {
+    let Some(completed_response) = store_question_response(app, response) else {
         return;
     };
 
-    let question_reply = build_question_reply_prompt(&questions, &responses);
+    let session_id = completed_response.session_id.clone();
+    let question_reply =
+        build_question_reply_prompt(&completed_response.questions, &completed_response.responses);
     app.mode = AppMode::View {
         review_status_message: None,
         review_text: None,
         session_id: session_id.clone(),
         scroll_offset: None,
     };
-    app.reply(&session_id, TurnPrompt::from_text(question_reply))
+    let reply_enqueued = app
+        .reply(&session_id, TurnPrompt::from_text(question_reply))
         .await;
+
+    // Optimistically advance the session out of `Question` once the reply is
+    // enqueued so the open-view question reconciliation does not re-open the
+    // just-answered panel before the worker transitions to `InProgress`. The
+    // reply eligibility check runs against the pre-reply `Question` status, so
+    // this must happen after `reply`. Skip the advance when the reply never
+    // reached the worker (for example a rejected stacked reply) so the pending
+    // question is not hidden behind a stalled `InProgress` state.
+    if reply_enqueued {
+        mark_session_in_progress(app, &session_id);
+    } else {
+        restore_completed_question_response(app, completed_response);
+    }
+}
+
+struct CompletedQuestionResponse {
+    questions: Vec<QuestionItem>,
+    responses: Vec<String>,
+    review_status_message: Option<String>,
+    review_text: Option<String>,
+    scroll_offset: Option<u16>,
+    session_id: SessionId,
+}
+
+/// Restores the final question and answer when reply enqueue fails.
+///
+/// `store_question_response` has already consumed the completed question-mode
+/// vectors by this point. Rebuilding the panel at the final question keeps all
+/// earlier answers plus the just-entered final answer visible so pressing
+/// `Enter` retries the same clarification reply instead of discarding input.
+fn restore_completed_question_response(
+    app: &mut App,
+    mut completed_response: CompletedQuestionResponse,
+) {
+    let Some(final_response) = completed_response.responses.pop() else {
+        return;
+    };
+    if completed_response.questions.is_empty() {
+        return;
+    }
+
+    let current_index = completed_response
+        .responses
+        .len()
+        .min(completed_response.questions.len().saturating_sub(1));
+    let selected_option_index =
+        completed_response
+            .questions
+            .get(current_index)
+            .and_then(|question| {
+                question
+                    .options
+                    .iter()
+                    .position(|option| option == &final_response)
+            });
+    let input = if selected_option_index.is_some() || final_response == NO_ANSWER {
+        InputState::default()
+    } else {
+        InputState::with_text(final_response)
+    };
+
+    app.mode = AppMode::Question {
+        at_mention_state: None,
+        current_index,
+        focus: QuestionFocus::Answer,
+        input,
+        questions: completed_response.questions,
+        responses: completed_response.responses,
+        review_status_message: completed_response.review_status_message,
+        review_text: completed_response.review_text,
+        scroll_offset: completed_response.scroll_offset,
+        selected_option_index,
+        session_id: completed_response.session_id,
+    };
+}
+
+/// Optimistically advances one session's live handle and snapshot status to
+/// [`Status::InProgress`] so a submitted answer is reflected immediately.
+///
+/// Both the shared handle and the render snapshot are updated so the next
+/// `sync_from_handles` sweep does not revert the snapshot back to `Question`.
+/// The session worker persists the authoritative transition when it dequeues
+/// the reply command.
+fn mark_session_in_progress(app: &mut App, session_id: &str) {
+    if let Some(handles) = app.sessions.session_handles().get(session_id)
+        && let Ok(mut handle_status) = handles.status.lock()
+    {
+        *handle_status = Status::InProgress;
+    }
+
+    if let Some(session) = app
+        .sessions
+        .sessions_mut()
+        .iter_mut()
+        .find(|session| session.id == session_id)
+    {
+        session.status = Status::InProgress;
+    }
 }
 
 /// Ends the question turn without sending a reply to the agent.
@@ -912,16 +1013,16 @@ async fn end_turn_no_answer(app: &mut App) {
 
 /// Writes one response into question mode and returns completion payload when
 /// all questions are answered.
-fn store_question_response(
-    app: &mut App,
-    response: String,
-) -> Option<(SessionId, Vec<QuestionItem>, Vec<String>)> {
+fn store_question_response(app: &mut App, response: String) -> Option<CompletedQuestionResponse> {
     let AppMode::Question {
         at_mention_state,
         current_index,
         input,
         questions,
+        review_status_message,
+        review_text,
         responses,
+        scroll_offset,
         selected_option_index,
         session_id,
         ..
@@ -940,11 +1041,14 @@ fn store_question_response(
         return None;
     }
 
-    Some((
-        session_id.clone(),
-        std::mem::take(questions),
-        std::mem::take(responses),
-    ))
+    Some(CompletedQuestionResponse {
+        questions: std::mem::take(questions),
+        responses: std::mem::take(responses),
+        review_status_message: review_status_message.clone(),
+        review_text: review_text.clone(),
+        scroll_offset: *scroll_offset,
+        session_id: session_id.clone(),
+    })
 }
 
 /// Returns a normalized user response, falling back to `no answer`.
@@ -1573,8 +1677,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_enter_on_last_question_transitions_to_view_mode() {
-        // Arrange — free-text mode on last question.
+    async fn test_handle_enter_on_last_question_restores_answer_when_reply_is_not_enqueued() {
+        // Arrange — free-text mode on last question with no matching session handle.
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::Question {
             at_mention_state: None,
@@ -1604,10 +1708,125 @@ mod tests {
         // Assert
         assert!(matches!(
             app.mode,
-            AppMode::View {
+            AppMode::Question {
+                current_index: 0,
+                ref input,
+                ref questions,
+                ref responses,
+                selected_option_index: None,
                 ref session_id,
                 ..
             } if session_id == "missing-session"
+                && questions.len() == 1
+                && responses.is_empty()
+                && input.text() == "March 4, 2026"
+        ));
+    }
+
+    #[tokio::test]
+    async fn mark_session_in_progress_advances_snapshot_and_handle_status() {
+        // Arrange — a session sits in `Question` with a matching runtime handle.
+        use crate::domain::session::SessionHandles;
+
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        let session_id = "session-in-progress";
+        app.sessions.push_session(
+            crate::test_support::SessionFixtureBuilder::new()
+                .id(session_id)
+                .folder(std::path::PathBuf::from("/tmp/test"))
+                .status(Status::Question)
+                .build(),
+        );
+        app.sessions.session_handles_mut().insert(
+            session_id.to_string().into(),
+            SessionHandles::new(String::new(), Status::Question),
+        );
+
+        // Act
+        mark_session_in_progress(&mut app, session_id);
+
+        // Assert — both the snapshot and the shared handle advance to
+        // InProgress so sync_from_handles keeps the session off `Question`.
+        let session = app
+            .sessions
+            .sessions()
+            .iter()
+            .find(|session| session.id == session_id)
+            .expect("session should exist");
+        assert_eq!(session.status, Status::InProgress);
+
+        let handles = app
+            .sessions
+            .session_handles()
+            .get(session_id)
+            .expect("handle should exist");
+        assert_eq!(
+            *handles.status.lock().expect("lock should succeed"),
+            Status::InProgress
+        );
+    }
+
+    #[tokio::test]
+    async fn submit_response_keeps_question_status_when_reply_is_not_enqueued() {
+        // Arrange — a viewed `Question` session with no runtime handle, so the
+        // reply cannot be enqueued on any worker and `App::reply` reports
+        // failure.
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        let session_id = "session-no-handle";
+        let questions = vec![
+            QuestionItem::with_options(
+                "Use the default target branch?",
+                vec!["Yes".to_string(), "No".to_string()],
+            ),
+            QuestionItem::new("Which tests should be added?"),
+        ];
+        app.sessions.push_session(
+            crate::test_support::SessionFixtureBuilder::new()
+                .id(session_id)
+                .folder(std::path::PathBuf::from("/tmp/test"))
+                .status(Status::Question)
+                .questions(questions.clone())
+                .build(),
+        );
+        app.mode = AppMode::Question {
+            at_mention_state: None,
+            review_status_message: None,
+            review_text: None,
+            session_id: session_id.into(),
+            questions,
+            responses: vec!["Yes".to_string()],
+            current_index: 1,
+            focus: QuestionFocus::Answer,
+            input: InputState::default(),
+            scroll_offset: None,
+            selected_option_index: None,
+        };
+
+        // Act — answer the final question so `submit_response` attempts the reply.
+        submit_response(&mut app, "Unit and integration tests".to_string()).await;
+
+        // Assert — the failed reply leaves the session on `Question` instead of
+        // stranding it behind an optimistic `InProgress` no worker will advance,
+        // and restores the panel with the completed answers ready to retry.
+        let session = app
+            .sessions
+            .sessions()
+            .iter()
+            .find(|session| session.id == session_id)
+            .expect("session should exist");
+        assert_eq!(session.status, Status::Question);
+        assert!(matches!(
+            app.mode,
+            AppMode::Question {
+                current_index: 1,
+                ref input,
+                ref questions,
+                ref responses,
+                selected_option_index: None,
+                ..
+            } if questions.len() == 2
+                && responses == &vec!["Yes".to_string()]
+                && input.text() == "Unit and integration tests"
         ));
     }
 

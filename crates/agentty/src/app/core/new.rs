@@ -175,6 +175,7 @@ impl App {
             services,
             sessions,
             question_progress: std::collections::HashMap::new(),
+            question_reconcile_reload_attempted: None,
             requested_review_generation: 0,
             requested_review_comment_fetches: std::collections::HashSet::new(),
             requested_review_selected_index: None,

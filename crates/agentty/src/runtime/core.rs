@@ -135,9 +135,13 @@ where
     /// Runs one render/event cycle and returns the continuation result.
     ///
     /// Pending app events are reduced before draw so touched sessions refresh
-    /// from their live handles without a full per-frame session sweep.
+    /// from their live handles without a full per-frame session sweep. The open
+    /// session view then reconciles into the clarification panel when its
+    /// session has reached `Status::Question`, covering cases where the live
+    /// `AgentResponseReceived` projection did not flip the view.
     async fn run_cycle(&mut self) -> io::Result<EventResult> {
         self.app.process_pending_app_events().await;
+        self.app.reconcile_open_session_question_mode().await;
         render_frame(
             self.app,
             self.terminal,
