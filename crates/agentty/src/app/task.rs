@@ -18,7 +18,7 @@ use tokio::sync::mpsc;
 
 use crate::app::error::AppError;
 use crate::app::{AppEvent, UpdateStatus};
-use crate::domain::agent::{AgentCliInfo, AgentKind, AgentModel, ReasoningLevel};
+use crate::domain::agent::{AgentCliInfo, AgentKind, AgentSelection, ReasoningLevel};
 use crate::domain::session::SessionId;
 use crate::domain::system_log::{SystemLogCategory, SystemLogEvent, SystemLogLevel};
 use crate::version;
@@ -49,7 +49,7 @@ pub(super) struct ReviewAssistTaskInput {
     /// completion event so the reducer can store it without re-reading cache.
     pub(super) diff_hash: u64,
     pub(super) review_diff: String,
-    pub(super) review_model: AgentModel,
+    pub(super) review_selection: AgentSelection,
     pub(super) session_folder: PathBuf,
     pub(super) session_id: SessionId,
     pub(super) session_summary: Option<String>,
@@ -291,7 +291,7 @@ impl TaskService {
             app_event_tx,
             diff_hash,
             review_diff,
-            review_model,
+            review_selection,
             session_folder,
             session_id,
             session_summary,
@@ -300,7 +300,7 @@ impl TaskService {
         tokio::spawn(async move {
             let review_result = Self::review_assist_text(
                 &session_folder,
-                review_model,
+                review_selection,
                 &review_diff,
                 session_summary.as_deref(),
             )
@@ -317,27 +317,22 @@ impl TaskService {
     /// content.
     async fn review_assist_text(
         session_folder: &Path,
-        review_model: AgentModel,
+        review_selection: AgentSelection,
         review_diff: &str,
         session_summary: Option<&str>,
     ) -> Result<String, AppError> {
         Self::review_assist_text_with_submitter(
             session_folder,
-            review_model,
+            review_selection,
             review_diff,
             session_summary,
-            |review_folder, review_model, review_prompt| {
+            |review_folder, review_selection, review_prompt| {
                 Box::pin(async move {
-                    let agent_kind = crate::agent::resolve_agent_kind_for_model(
-                        review_model,
-                        AgentKind::ALL,
-                        AgentKind::Antigravity,
-                    );
                     agent::submit_one_shot(agent::OneShotRequest {
-                        agent_kind,
+                        agent_kind: review_selection.kind(),
                         child_pid: None,
                         folder: review_folder,
-                        model: review_model,
+                        model: review_selection.model(),
                         prompt: review_prompt,
                         request_kind: ag_agent::channel::AgentRequestKind::UtilityPrompt,
                         reasoning_level: ReasoningLevel::default(),
@@ -365,7 +360,7 @@ impl TaskService {
     /// failure paths can be tested without subprocess execution.
     async fn review_assist_text_with_submitter<Submitter>(
         session_folder: &Path,
-        review_model: AgentModel,
+        review_selection: AgentSelection,
         review_diff: &str,
         session_summary: Option<&str>,
         submitter: Submitter,
@@ -373,14 +368,14 @@ impl TaskService {
     where
         Submitter: for<'submit> FnOnce(
             &'submit Path,
-            AgentModel,
+            AgentSelection,
             &'submit str,
         ) -> Pin<
             Box<dyn Future<Output = Result<AgentResponse, String>> + Send + 'submit>,
         >,
     {
         let review_prompt = Self::review_assist_prompt(review_diff, session_summary)?;
-        let agent_response = submitter(session_folder, review_model, &review_prompt)
+        let agent_response = submitter(session_folder, review_selection, &review_prompt)
             .await
             .map_err(AppError::Workflow)?;
 
@@ -523,6 +518,8 @@ mod tests {
     use ag_protocol::{AgentResponse, parse_agent_response_strict};
 
     use super::*;
+    use crate::domain::agent::AgentModel;
+
     struct PanickingAgentAvailabilityProbe;
 
     impl agent::AgentAvailabilityProbe for PanickingAgentAvailabilityProbe {
@@ -746,13 +743,13 @@ mod tests {
     async fn review_assist_text_with_submitter_returns_workflow_error_on_submit_failure() {
         // Arrange
         let session_folder = Path::new("/tmp/review-assist-submit-error");
-        let review_model = AgentModel::ClaudeSonnet5;
+        let review_selection = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5);
         let review_diff = "diff --git a/src/lib.rs b/src/lib.rs";
 
         // Act
         let result = TaskService::review_assist_text_with_submitter(
             session_folder,
-            review_model,
+            review_selection,
             review_diff,
             None,
             |_, _, _| Box::pin(async { Err("submit failed".to_string()) }),
@@ -766,6 +763,41 @@ mod tests {
             "expected AppError::Workflow, got: {error:?}"
         );
         assert_eq!(error.to_string(), "submit failed");
+    }
+
+    #[tokio::test]
+    /// Ensures review assist keeps the selected provider for shared Gemini
+    /// model ids instead of resolving the model to the first available
+    /// provider.
+    async fn review_assist_text_with_submitter_preserves_review_selection_provider() {
+        // Arrange
+        let session_folder = Path::new("/tmp/review-assist-provider");
+        let review_selection =
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini35Flash);
+        let review_diff = "diff --git a/src/lib.rs b/src/lib.rs";
+
+        // Act
+        let result = TaskService::review_assist_text_with_submitter(
+            session_folder,
+            review_selection,
+            review_diff,
+            None,
+            |_, submitted_selection, _| {
+                Box::pin(async move {
+                    assert_eq!(submitted_selection.kind(), AgentKind::Antigravity);
+                    assert_eq!(submitted_selection.model(), AgentModel::Gemini35Flash);
+
+                    Ok(AgentResponse::plain("Review completed."))
+                })
+            },
+        )
+        .await;
+
+        // Assert
+        assert_eq!(
+            result.expect("review output should be returned"),
+            "Review completed."
+        );
     }
 
     #[test]

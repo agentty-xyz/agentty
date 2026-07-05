@@ -1396,7 +1396,7 @@ impl App {
 
         spawn_review_assist(
             self.services.event_sender(),
-            self.settings.default_review_selection.model(),
+            self.settings.default_review_selection,
             session_id,
             session_folder,
             diff_hash,

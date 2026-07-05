@@ -843,7 +843,7 @@ impl App {
             self.sessions.state_mut(),
             self.services.git_client(),
             self.services.event_sender(),
-            self.settings.default_review_selection.model(),
+            self.settings.default_review_selection,
         )
         .await;
 
@@ -1645,7 +1645,7 @@ impl App {
             self.sessions.state_mut(),
             self.services.git_client(),
             self.services.event_sender(),
-            self.settings.default_review_selection.model(),
+            self.settings.default_review_selection,
         )
         .await;
     }

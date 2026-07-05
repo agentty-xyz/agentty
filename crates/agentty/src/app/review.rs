@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 use super::core::AppEvent;
 use super::task;
 use crate::app::session_state::SessionState;
-use crate::domain::agent::AgentModel;
+use crate::domain::agent::{AgentModel, AgentSelection};
 use crate::domain::session::{SessionId, Status};
 use crate::infra::db::SessionFocusedReviewRow;
 
@@ -180,7 +180,7 @@ pub(crate) fn cancel_pending_review(
 /// Spawns one focused review-assist task for the provided session diff.
 pub(crate) fn start_review_assist(
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
-    review_model: AgentModel,
+    review_selection: AgentSelection,
     session_id: &str,
     session_folder: &Path,
     diff_hash: u64,
@@ -193,7 +193,7 @@ pub(crate) fn start_review_assist(
         review_diff: review_diff.to_string(),
         session_folder: session_folder.to_path_buf(),
         session_id: SessionId::from(session_id),
-        review_model,
+        review_selection,
         session_summary: session_summary.map(str::to_string),
     });
 }
@@ -246,7 +246,7 @@ pub(crate) async fn auto_start_reviews(
     session_state: &mut SessionState,
     git_client: Arc<dyn GitClient>,
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
-    review_model: AgentModel,
+    review_selection: AgentSelection,
 ) {
     for session_id in session_ids {
         let Some((current_status, session_folder, base_branch, session_summary)) = session_state
@@ -309,7 +309,7 @@ pub(crate) async fn auto_start_reviews(
         mark_session_agent_review(session_state, session_id);
         start_review_assist(
             app_event_tx.clone(),
-            review_model,
+            review_selection,
             session_id,
             &session_folder,
             new_hash,
