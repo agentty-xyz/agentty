@@ -24,6 +24,10 @@ use crate::ui::text_util::inline_text;
 /// sessions, and unstarted draft sessions, and `Tab` cycles tabs forward while
 /// `Shift+Tab` cycles backward.
 pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResult> {
+    if app.tabs.current() == Tab::Settings && app.settings.is_selector_dropdown_open() {
+        return handle_settings_selector_dropdown(app, key).await;
+    }
+
     if app.tabs.current() == Tab::Settings && app.settings.is_editing_text_input() {
         return handle_settings_text_input(app, key).await;
     }
@@ -157,12 +161,41 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
             }
         }
         Tab::Settings => {
-            app.settings.handle_enter(&app.services).await;
+            app.settings.handle_enter();
         }
         Tab::Review => {
             app.open_selected_requested_review();
         }
         Tab::Logs => {}
+    }
+
+    Ok(EventResult::Continue)
+}
+
+/// Handles key input while a settings selector dropdown is open.
+async fn handle_settings_selector_dropdown(
+    app: &mut App,
+    key: KeyEvent,
+) -> io::Result<EventResult> {
+    match key.code {
+        KeyCode::Esc => {
+            app.settings.close_selector_dropdown();
+        }
+        KeyCode::Char(character) if character.eq_ignore_ascii_case(&'q') => {
+            app.settings.close_selector_dropdown();
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+            app.settings.next_selector_dropdown_option();
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            app.settings.previous_selector_dropdown_option();
+        }
+        KeyCode::Enter => {
+            app.settings
+                .select_selector_dropdown_option(&app.services)
+                .await;
+        }
+        _ => {}
     }
 
     Ok(EventResult::Continue)
@@ -329,6 +362,7 @@ mod tests {
     use super::*;
     use crate::app::{AppEvent, MockSyncMainRunner, SyncMainOutcome, SyncSessionStartError};
     use crate::domain::question::QuestionItem;
+    use crate::domain::theme::ColorTheme;
 
     /// Builds a settings-focused test app with the `Open Commands` row
     /// selected.
@@ -895,6 +929,80 @@ mod tests {
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
         assert!(app.settings.is_editing_text_input());
+    }
+
+    #[tokio::test]
+    async fn test_handle_enter_key_opens_settings_selector_dropdown() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        app.tabs.set(Tab::Settings);
+        app.settings.table_state.select(Some(0));
+
+        // Act
+        let event_result = handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("failed to handle key");
+        let selector_dropdown = app
+            .settings
+            .selector_dropdown()
+            .expect("expected settings selector dropdown");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert_eq!(selector_dropdown.row_index, 0);
+        assert_eq!(selector_dropdown.selected_index, 0);
+        assert_eq!(selector_dropdown.options[0].label, "Agentty Default");
+    }
+
+    #[tokio::test]
+    async fn test_settings_selector_dropdown_keys_select_theme_value() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        app.tabs.set(Tab::Settings);
+        app.settings.table_state.select(Some(0));
+        handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("failed to open settings selector dropdown");
+
+        // Act
+        handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to move dropdown selection");
+        let event_result = handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("failed to select dropdown option");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert_eq!(app.settings.theme, ColorTheme::Hacker);
+        assert!(!app.settings.is_selector_dropdown_open());
+    }
+
+    #[tokio::test]
+    async fn test_settings_selector_dropdown_q_closes_without_quit_confirmation() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        app.tabs.set(Tab::Settings);
+        app.settings.table_state.select(Some(0));
+        handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("failed to open settings selector dropdown");
+
+        // Act
+        let event_result = handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to close settings selector dropdown");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(!app.settings.is_selector_dropdown_open());
+        assert!(matches!(app.mode, AppMode::List));
     }
 
     #[tokio::test]

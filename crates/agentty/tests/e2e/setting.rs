@@ -120,7 +120,7 @@ fn settings_tab_shows_content() {
 /// selection down, then `k` to move back up. The test confirms the selected
 /// row by seeding deterministic retired Opus model values, observing startup
 /// migration to `claude-opus-4-8`, and then checking which selector advances
-/// through the current Claude model list after each `Enter` press.
+/// through the current Claude model list after each dropdown selection.
 #[test]
 fn settings_jk_navigation() {
     // Arrange, Act, Assert
@@ -151,12 +151,19 @@ fn settings_jk_navigation() {
                     .viewing_pause_ms(1500)
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(1500)
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(1500)
                     .capture_labeled("moved_down", "Selection moved down three rows")
                     .press_key("k")
+                    .wait_for_stable_frame(200, 3000)
+                    .viewing_pause_ms(1500)
+                    .press_key("Enter")
+                    .wait_for_stable_frame(200, 3000)
+                    .press_key("j")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(1500)
                     .press_key("Enter")
@@ -181,31 +188,29 @@ fn settings_jk_navigation() {
                 let moved_down_frame = common::frame_from_capture(&report.captures[1]);
                 assertion::assert_match_count(&moved_down_frame, "claude-opus-4-6", 0);
                 assertion::assert_match_count(&moved_down_frame, "claude/claude-opus-4-8", 2);
-                assertion::assert_match_count(&moved_down_frame, "claude/claude-sonnet-5", 0);
-                assertion::assert_match_count(&moved_down_frame, "claude/claude-fable-5", 1);
+                assertion::assert_match_count(&moved_down_frame, "claude/claude-sonnet-5", 1);
 
                 let moved_up_frame = common::frame_from_capture(&report.captures[2]);
                 assertion::assert_match_count(&moved_up_frame, "claude-opus-4-6", 0);
                 assertion::assert_match_count(&moved_up_frame, "claude/claude-opus-4-8", 1);
-                assertion::assert_match_count(&moved_up_frame, "claude/claude-sonnet-5", 1);
-                assertion::assert_match_count(&moved_up_frame, "claude/claude-fable-5", 1);
+                assertion::assert_match_count(&moved_up_frame, "claude/claude-sonnet-5", 2);
             },
         )
         .expect("feature test failed");
 }
 
-/// Verify that `Enter` cycles a selector setting value.
+/// Verify that selector settings are edited through dropdowns.
 ///
-/// Opens the Settings tab, moves to the project reasoning row, and presses
-/// `Enter` to cycle its value. Captures before and after to show the change in
-/// the GIF.
+/// Opens the Settings tab, moves to the project reasoning row, opens the
+/// dropdown, and selects the next value. Captures before, during, and after
+/// to show the dropdown workflow in the GIF.
 #[test]
-fn settings_enter_cycles_value() {
+fn settings_dropdown_selects_value() {
     // Arrange, Act, Assert
     FeatureTest::new("settings_edit")
         .zola(
             "Settings editing",
-            "Press Enter to cycle setting values or edit text fields.",
+            "Open dropdowns to select setting values or edit text fields.",
             154,
         )
         .run(
@@ -218,11 +223,17 @@ fn settings_enter_cycles_value() {
                     .viewing_pause_ms(2000)
                     .press_key("j")
                     .wait_for_stable_frame(200, 3000)
-                    .capture_labeled("before_edit", "Reasoning Level before cycling")
+                    .capture_labeled("before_edit", "Reasoning Level before selection")
+                    .press_key("Enter")
+                    .wait_for_stable_frame(200, 3000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled("dropdown", "Reasoning Level dropdown")
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(2500)
-                    .capture_labeled("after_edit", "Reasoning Level after cycling")
+                    .capture_labeled("after_edit", "Reasoning Level after dropdown selection")
             },
             |frame, report| {
                 let full = Region::full(frame.cols(), frame.rows());
@@ -230,15 +241,24 @@ fn settings_enter_cycles_value() {
 
                 assert_eq!(
                     report.captures.len(),
-                    2,
-                    "Expected 2 captures (before and after cycling)"
+                    3,
+                    "Expected 3 captures (before, dropdown, and after selection)"
                 );
 
                 let before_frame = common::frame_from_capture(&report.captures[0]);
                 let before_full = Region::full(before_frame.cols(), before_frame.rows());
                 assertion::assert_text_in_region(&before_frame, "high", &before_full);
 
-                let after_frame = common::frame_from_capture(&report.captures[1]);
+                let dropdown_frame = common::frame_from_capture(&report.captures[1]);
+                let dropdown_full = Region::full(dropdown_frame.cols(), dropdown_frame.rows());
+                assertion::assert_text_in_region(
+                    &dropdown_frame,
+                    "Select setting value",
+                    &dropdown_full,
+                );
+                assertion::assert_text_in_region(&dropdown_frame, "xhigh", &dropdown_full);
+
+                let after_frame = common::frame_from_capture(&report.captures[2]);
                 let after_full = Region::full(after_frame.cols(), after_frame.rows());
                 assertion::assert_text_in_region(&after_frame, "xhigh", &after_full);
             },
@@ -246,7 +266,7 @@ fn settings_enter_cycles_value() {
         .expect("feature test failed");
 }
 
-/// Verify that the `Theme` settings row cycles through `Agentty Default`,
+/// Verify that the `Theme` settings row dropdown selects `Agentty Default`,
 /// `Agentty Green`, and `Dark Horizon` and wraps back to `Agentty Default`.
 #[test]
 fn settings_theme_switch() {
@@ -254,7 +274,7 @@ fn settings_theme_switch() {
     FeatureTest::new("settings_theme_switch")
         .zola(
             "Settings theme switch",
-            "Cycle Agentty through the Agentty Default, Agentty Green, and Dark Horizon themes.",
+            "Select Agentty Default, Agentty Green, and Dark Horizon themes from settings.",
             155,
         )
         .run(
@@ -268,6 +288,10 @@ fn settings_theme_switch() {
                     .capture_labeled("before_theme_switch", "Theme setting before switching")
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
+                    .press_key("Enter")
+                    .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(2500)
                     .capture_labeled(
                         "after_theme_switch_agentty_green",
@@ -275,11 +299,19 @@ fn settings_theme_switch() {
                     )
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
+                    .press_key("Enter")
+                    .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(2500)
                     .capture_labeled(
                         "after_theme_switch_dark_horizon",
                         "Dark Horizon theme selected",
                     )
+                    .press_key("Enter")
+                    .wait_for_stable_frame(200, 3000)
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(2500)

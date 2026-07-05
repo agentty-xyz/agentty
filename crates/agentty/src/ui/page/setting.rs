@@ -1,17 +1,24 @@
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::Style;
-use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap};
 
-use crate::app::setting::SettingsManager;
+use crate::app::setting::{SettingsManager, SettingsSelectorDropdown};
 use crate::ui::state::help_action;
-use crate::ui::{Page, layout, style};
+use crate::ui::text_util::truncate_with_ellipsis;
+use crate::ui::{Page, layout, overlay, style};
 
 /// Uses row-background highlighting without a textual cursor glyph.
 const ROW_HIGHLIGHT_SYMBOL: &str = "";
 /// Horizontal spacing between settings-table columns.
 const TABLE_COLUMN_SPACING: u16 = 2;
+/// Minimum dropdown height that leaves room for one option and the help hint.
+const DROPDOWN_MIN_HEIGHT: u16 = 6;
+/// Minimum dropdown width sized for setting values and selector hints.
+const DROPDOWN_MIN_WIDTH: u16 = 36;
+/// Percentage of the active section width used by the dropdown panel.
+const DROPDOWN_WIDTH_PERCENT: u16 = 58;
 
 /// Renders the settings page table and inline editing hints.
 pub struct SettingsPage<'a> {
@@ -43,20 +50,21 @@ impl Page for SettingsPage<'_> {
         let selected_style = Style::default().bg(style::palette::surface_selection());
         let global_rows = settings_table_rows(self.manager.global_settings_rows());
         let project_rows = settings_table_rows(self.manager.project_settings_rows());
+        let global_row_count = global_rows.len();
 
         let project_section_title = self.project_section_title();
         let global_section_title = "Global settings".to_string();
 
         let global_table_state =
-            section_table_state(&self.manager.table_state, 0, global_rows.len());
+            section_table_state(&self.manager.table_state, 0, global_row_count);
         let project_table_state = section_table_state(
             &self.manager.table_state,
-            global_rows.len(),
+            global_row_count,
             project_rows.len(),
         );
 
         let section_heights = [
-            settings_section_height(global_rows.len()),
+            settings_section_height(global_row_count),
             settings_section_height(project_rows.len()),
         ];
         let table_chunks = Layout::default()
@@ -96,6 +104,16 @@ impl Page for SettingsPage<'_> {
         let footer = Paragraph::new(settings_footer_line(self.manager));
 
         f.render_widget(footer, areas.footer_area);
+
+        if let Some(selector_dropdown) = self.manager.selector_dropdown() {
+            render_settings_selector_dropdown(
+                f,
+                areas.main_area,
+                &table_chunks,
+                global_row_count,
+                &selector_dropdown,
+            );
+        }
     }
 }
 
@@ -137,17 +155,217 @@ fn section_table_state(
     section_table_state
 }
 
+/// Renders the open settings selector dropdown over the active settings
+/// section.
+fn render_settings_selector_dropdown(
+    f: &mut Frame,
+    main_area: Rect,
+    table_chunks: &[Rect],
+    global_row_count: usize,
+    selector_dropdown: &SettingsSelectorDropdown,
+) {
+    let popup_area = settings_selector_dropdown_area(
+        main_area,
+        table_chunks,
+        global_row_count,
+        selector_dropdown,
+    );
+    let lines =
+        settings_selector_dropdown_lines(selector_dropdown, popup_area.width, popup_area.height);
+
+    let dropdown = Paragraph::new(lines)
+        .alignment(Alignment::Left)
+        .wrap(Wrap { trim: true })
+        .block(overlay::overlay_block(
+            "Select setting value",
+            style::palette::accent(),
+        ));
+
+    overlay::clear_popup_area(f, popup_area);
+    f.render_widget(dropdown, popup_area);
+}
+
+/// Calculates the dropdown panel area from the selected row and section.
+fn settings_selector_dropdown_area(
+    main_area: Rect,
+    table_chunks: &[Rect],
+    global_row_count: usize,
+    selector_dropdown: &SettingsSelectorDropdown,
+) -> Rect {
+    let (section_area, local_row_index) =
+        selected_dropdown_section(table_chunks, global_row_count, selector_dropdown.row_index);
+    let width = settings_selector_dropdown_width(main_area, section_area);
+    let height = settings_selector_dropdown_height(main_area, selector_dropdown.options.len());
+    let row_y = section_area
+        .y
+        .saturating_add(1)
+        .saturating_add(u16::try_from(local_row_index).unwrap_or(u16::MAX));
+
+    let preferred_x = section_area.x.saturating_add(section_area.width / 2);
+    let preferred_y = row_y.saturating_add(1);
+    let max_x = main_area
+        .x
+        .saturating_add(main_area.width.saturating_sub(width));
+    let max_y = main_area
+        .y
+        .saturating_add(main_area.height.saturating_sub(height));
+    let x = preferred_x.min(max_x).max(main_area.x);
+    let y = preferred_y.min(max_y).max(main_area.y);
+
+    Rect::new(x, y, width, height)
+}
+
+/// Returns the section rectangle and local row index for the dropdown row.
+fn selected_dropdown_section(
+    table_chunks: &[Rect],
+    global_row_count: usize,
+    row_index: usize,
+) -> (Rect, usize) {
+    if row_index < global_row_count {
+        return (table_chunks[0], row_index);
+    }
+
+    (table_chunks[1], row_index.saturating_sub(global_row_count))
+}
+
+/// Returns the dropdown width bounded to the visible page area.
+fn settings_selector_dropdown_width(main_area: Rect, section_area: Rect) -> u16 {
+    let section_width = section_area.width.saturating_sub(TABLE_COLUMN_SPACING);
+    let preferred_width = section_width
+        .saturating_mul(DROPDOWN_WIDTH_PERCENT)
+        .saturating_div(100);
+
+    preferred_width
+        .max(DROPDOWN_MIN_WIDTH)
+        .min(section_width)
+        .min(main_area.width)
+        .max(1)
+}
+
+/// Returns the dropdown height required for options and footer hint.
+fn settings_selector_dropdown_height(main_area: Rect, option_count: usize) -> u16 {
+    let inner_line_count = option_count.saturating_add(2);
+    let required_height = overlay::overlay_required_height(inner_line_count);
+
+    required_height
+        .max(DROPDOWN_MIN_HEIGHT)
+        .min(main_area.height)
+        .max(1)
+}
+
+/// Builds styled dropdown lines for the visible selector options and the help
+/// hint.
+fn settings_selector_dropdown_lines(
+    selector_dropdown: &SettingsSelectorDropdown,
+    popup_width: u16,
+    popup_height: u16,
+) -> Vec<Line<'static>> {
+    let label_width = overlay::overlay_content_width(popup_width)
+        .saturating_sub(2)
+        .max(1);
+    let option_count = selector_dropdown.options.len();
+    let selected_index = selector_dropdown
+        .selected_index
+        .min(option_count.saturating_sub(1));
+    let visible_option_count = settings_selector_visible_option_count(popup_height, option_count);
+    let window_start =
+        settings_selector_option_window_start(option_count, selected_index, visible_option_count);
+    let window_end = window_start
+        .saturating_add(visible_option_count)
+        .min(option_count);
+    let mut lines: Vec<Line<'static>> = selector_dropdown
+        .options
+        .iter()
+        .enumerate()
+        .skip(window_start)
+        .take(window_end.saturating_sub(window_start))
+        .map(|(option_index, option)| {
+            settings_selector_dropdown_option_line(
+                option.label.as_str(),
+                label_width,
+                selected_index == option_index,
+            )
+        })
+        .collect();
+
+    lines.push(Line::from(""));
+    lines.push(
+        Line::from(vec![Span::styled(
+            "j/k: move | Enter: select | Esc/q: close",
+            Style::default().fg(style::palette::text_muted()),
+        )])
+        .alignment(Alignment::Center),
+    );
+
+    lines
+}
+
+/// Returns how many option rows fit inside the dropdown content area.
+fn settings_selector_visible_option_count(popup_height: u16, option_count: usize) -> usize {
+    let dropdown_chrome_height = overlay::overlay_required_height(0);
+    let content_height = popup_height.saturating_sub(dropdown_chrome_height);
+    let footer_line_count = 2;
+    let visible_option_count = usize::from(content_height).saturating_sub(footer_line_count);
+
+    visible_option_count.max(1).min(option_count)
+}
+
+/// Returns the first option index for a bounded dropdown window centered near
+/// the selected option.
+fn settings_selector_option_window_start(
+    option_count: usize,
+    selected_index: usize,
+    visible_option_count: usize,
+) -> usize {
+    if option_count <= visible_option_count {
+        return 0;
+    }
+
+    let centered_start = selected_index.saturating_sub(visible_option_count / 2);
+
+    centered_start.min(option_count.saturating_sub(visible_option_count))
+}
+
+/// Builds one option line for the settings selector dropdown.
+fn settings_selector_dropdown_option_line(
+    option_label: &str,
+    label_width: usize,
+    is_selected: bool,
+) -> Line<'static> {
+    let option_label = truncate_with_ellipsis(option_label, label_width);
+
+    if is_selected {
+        let selected_label = format!("> {option_label:<label_width$}");
+
+        return Line::from(Span::styled(
+            selected_label,
+            Style::default()
+                .fg(style::palette::surface_overlay())
+                .bg(style::palette::accent())
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+
+    Line::from(vec![
+        Span::styled("  ", Style::default().fg(style::palette::text_subtle())),
+        Span::styled(option_label, Style::default().fg(style::palette::text())),
+    ])
+}
+
 /// Returns the footer help content for settings mode.
 ///
-/// Inline text editing keeps using the manager-provided hint string, while
-/// list mode uses the shared styled help-action rendering.
+/// Inline text editing and selector dropdowns keep using the manager-provided
+/// hint string, while list mode uses the shared styled help-action rendering.
 fn settings_footer_line(manager: &SettingsManager) -> Line<'static> {
-    settings_footer_line_for_mode(manager.is_editing_text_input(), manager.footer_hint())
+    settings_footer_line_for_mode(
+        manager.is_editing_text_input() || manager.is_selector_dropdown_open(),
+        manager.footer_hint(),
+    )
 }
 
 /// Returns the footer help content for either list mode or inline-edit mode.
-fn settings_footer_line_for_mode(is_editing_text_input: bool, footer_hint: &str) -> Line<'static> {
-    if is_editing_text_input {
+fn settings_footer_line_for_mode(uses_inline_hint: bool, footer_hint: &str) -> Line<'static> {
+    if uses_inline_hint {
         return Line::from(footer_hint.to_string());
     }
 
@@ -181,6 +399,7 @@ fn settings_row_height(setting_value: &str) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::setting::SettingsSelectorDropdownOption;
 
     #[test]
     fn test_row_highlight_symbol_uses_background_only_selection() {
@@ -307,6 +526,108 @@ mod tests {
 
         // Assert
         assert_eq!(section_state.selected(), None);
+    }
+
+    #[test]
+    fn test_settings_selector_dropdown_lines_highlight_selected_option() {
+        // Arrange
+        let selector_dropdown = SettingsSelectorDropdown {
+            options: vec![
+                SettingsSelectorDropdownOption {
+                    label: "Agentty Default".to_string(),
+                },
+                SettingsSelectorDropdownOption {
+                    label: "Agentty Green".to_string(),
+                },
+            ],
+            row_index: 0,
+            selected_index: 1,
+        };
+
+        // Act
+        let lines = settings_selector_dropdown_lines(&selector_dropdown, 48, 8);
+
+        // Assert
+        assert_eq!(lines.len(), 4);
+        assert_eq!(lines[1].spans[0].style.bg, Some(style::palette::accent()));
+        assert!(lines[1].to_string().contains("> Agentty Green"));
+        assert!(lines[3].to_string().contains("Enter: select"));
+    }
+
+    #[test]
+    fn test_settings_selector_dropdown_lines_window_to_selected_option() {
+        // Arrange
+        let selector_dropdown = SettingsSelectorDropdown {
+            options: (0..12)
+                .map(|option_index| SettingsSelectorDropdownOption {
+                    label: format!("Option {option_index}"),
+                })
+                .collect(),
+            row_index: 2,
+            selected_index: 10,
+        };
+
+        // Act
+        let lines = settings_selector_dropdown_lines(&selector_dropdown, 48, 7);
+        let dropdown_text = lines
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(dropdown_text.contains("> Option 10"));
+        assert!(!dropdown_text.contains("Option 0"));
+        assert!(lines.len() <= 5);
+    }
+
+    #[test]
+    fn test_settings_selector_option_window_start_keeps_tail_selection_visible() {
+        // Arrange
+        let option_count = 12;
+        let selected_index = 11;
+        let visible_option_count = 3;
+
+        // Act
+        let window_start = settings_selector_option_window_start(
+            option_count,
+            selected_index,
+            visible_option_count,
+        );
+
+        // Assert
+        assert_eq!(window_start, 9);
+    }
+
+    #[test]
+    fn test_settings_selector_dropdown_area_stays_in_main_area() {
+        // Arrange
+        let main_area = Rect::new(0, 0, 80, 18);
+        let table_chunks = vec![Rect::new(0, 0, 80, 3), Rect::new(0, 3, 80, 8)];
+        let selector_dropdown = SettingsSelectorDropdown {
+            options: vec![
+                SettingsSelectorDropdownOption {
+                    label: "low".to_string(),
+                },
+                SettingsSelectorDropdownOption {
+                    label: "medium".to_string(),
+                },
+                SettingsSelectorDropdownOption {
+                    label: "high".to_string(),
+                },
+            ],
+            row_index: 3,
+            selected_index: 2,
+        };
+
+        // Act
+        let area = settings_selector_dropdown_area(main_area, &table_chunks, 1, &selector_dropdown);
+
+        // Assert
+        assert!(area.x >= main_area.x);
+        assert!(area.y >= main_area.y);
+        assert!(area.x.saturating_add(area.width) <= main_area.x.saturating_add(main_area.width));
+        assert!(area.y.saturating_add(area.height) <= main_area.y.saturating_add(main_area.height));
     }
 
     #[test]

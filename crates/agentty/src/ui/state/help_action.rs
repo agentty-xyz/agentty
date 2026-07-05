@@ -286,7 +286,11 @@ pub(crate) fn session_list_footer_actions(
 pub(crate) fn settings_actions() -> Vec<HelpAction> {
     let mut actions = list_base_actions();
     actions.push(HelpAction::new("nav", "j/k", "Navigate settings"));
-    actions.push(HelpAction::new("edit", "Enter", "Edit setting"));
+    actions.push(HelpAction::new(
+        "open/edit",
+        "Enter",
+        "Open selector or edit text setting",
+    ));
     actions.push(HelpAction::new("next tab", "Tab", "Switch tab"));
     actions.push(HelpAction::new("help", "?", "Help"));
 
@@ -298,7 +302,7 @@ pub(crate) fn settings_footer_actions() -> Vec<HelpAction> {
     vec![
         HelpAction::new("quit", "q", "Quit"),
         HelpAction::new("nav", "j/k", "Navigate settings"),
-        HelpAction::new("edit", "Enter", "Edit setting"),
+        HelpAction::new("open/edit", "Enter", "Open selector or edit text setting"),
         HelpAction::new("help", "?", "Help"),
     ]
 }

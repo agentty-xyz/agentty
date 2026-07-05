@@ -70,10 +70,10 @@ then probes `--version` and refreshes the Projects tab's **Agent CLIs** rows wit
 current version. Rows show `updating...` until that refresh completes.
 
 <a id="backends-persistent-defaults"></a> For persistent defaults, choose a default
-model in the **Settings** tab (`Tab` to navigate, `Enter` to edit). The selected model
-is stored with its backend as `agent/model`, which keeps shared Gemini model ids tied to
-the selected Gemini or Antigravity provider. Stored defaults that point at an
-unavailable backend fall back to the first available backend default.
+model in the **Settings** tab (`Tab` to navigate, `Enter` to open the selector). The
+selected model is stored with its backend as `agent/model`, which keeps shared Gemini
+model ids tied to the selected Gemini or Antigravity provider. Stored defaults that
+point at an unavailable backend fall back to the first available backend default.
 
 <a id="backends-reasoning-level"></a> For Codex and Claude sessions, the **Settings**
 tab also exposes `Default Reasoning Level` (`low`, `medium`, `high`, `xhigh`). The
@@ -125,4 +125,5 @@ You can also switch the reasoning level for the current session with the `/reaso
 slash command. The picker preselects the current effective reasoning level.
 
 <a id="backends-switching-default-model"></a> To change the **default model**
-persistently, use the **Settings** tab (`Tab` to navigate to it, `Enter` to edit).
+persistently, use the **Settings** tab (`Tab` to navigate to it, `Enter` to open the
+selector).

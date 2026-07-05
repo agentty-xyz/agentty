@@ -331,9 +331,10 @@ staged.
 
 <a id="usage-settings-scope"></a> Settings for models, reasoning, commit trailers, and
 open commands are stored per active project; the `Theme` setting is global. The Settings
-tab renders these scopes as `Global settings` and `'<project>' settings`. When
-`Open Commands` contains multiple entries (one command per line), pressing `o` in a
-session opens a selector popup.
+tab renders these scopes as `Global settings` and `'<project>' settings`. Rows with
+fixed choices open dropdowns; use `j` / `k` to move through options and `Enter` to save
+the highlighted value. When `Open Commands` contains multiple entries (one command per
+line), pressing `o` in a session opens a selector popup.
 
 ## Auto-Update
 

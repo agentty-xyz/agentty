@@ -32,16 +32,28 @@ highlighted in the table with a `* ` prefix and accented row text.
 
 ## Settings
 
-| Key | Action | |-----|--------| | `q` | Quit | | `j` / `k` | Navigate settings | |
-`Enter` | Edit setting / finish text edit | | `Esc` | Finish text edit | | `Alt+Enter`
-or `Shift+Enter` | Add newline while editing `Open Commands` | | `Up` / `Down` / `Left`
-/ `Right` | Move cursor while editing `Open Commands` | | `Tab` | Switch tab | | `?` |
-Help |
+<table>
+<thead>
+<tr><th>Key</th><th>Action</th></tr>
+</thead>
+<tbody>
+<tr><td><code>q</code></td><td>Quit; closes an open selector dropdown first</td></tr>
+<tr><td><code>j</code> / <code>k</code></td><td>Navigate settings; move inside an open selector dropdown</td></tr>
+<tr><td><code>Enter</code></td><td>Open selector dropdown, select highlighted option, or finish text edit</td></tr>
+<tr><td><code>Esc</code></td><td>Close selector dropdown or finish text edit</td></tr>
+<tr><td><code>Alt+Enter</code> or <code>Shift+Enter</code></td><td>Add newline while editing <code>Open Commands</code></td></tr>
+<tr><td><code>Up</code> / <code>Down</code> / <code>Left</code> / <code>Right</code></td><td>Move cursor while editing <code>Open Commands</code></td></tr>
+<tr><td><code>Tab</code></td><td>Switch tab</td></tr>
+<tr><td><code>?</code></td><td>Help</td></tr>
+</tbody>
+</table>
 
 <a id="usage-settings-options"></a> The page is split into `Global settings` for the
 app-wide `Theme` row (`Agentty Default`, `Agentty Green`, or `Dark Horizon`) and
 `'<project>' settings` for the reasoning level, model defaults, commit coauthor toggle,
-and `Open Commands` rows described in [Workflow](@/docs/usage/workflow.md).
+and `Open Commands` rows described in [Workflow](@/docs/usage/workflow.md). Selector
+rows open dropdowns; use `j` / `k` to move through the dropdown and `Enter` to save the
+highlighted value.
 
 ## Logs
 

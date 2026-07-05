@@ -131,6 +131,20 @@ pub(crate) async fn load_default_smart_agent_selection_from_repositories(
     fallback_selection
 }
 
+/// Render-ready option for an open settings selector dropdown.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SettingsSelectorDropdownOption {
+    pub label: String,
+}
+
+/// Render-ready snapshot for the currently open settings selector dropdown.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SettingsSelectorDropdown {
+    pub options: Vec<SettingsSelectorDropdownOption>,
+    pub row_index: usize,
+    pub selected_index: usize,
+}
+
 /// Declares how a settings row is edited.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingControl {
@@ -219,6 +233,21 @@ impl SettingRow {
             Self::Theme => SettingName::Theme,
         }
     }
+
+    /// Returns this row's table index.
+    fn table_index(self) -> usize {
+        Self::ALL
+            .iter()
+            .position(|row| *row == self)
+            .unwrap_or_default()
+    }
+}
+
+/// Tracks the active selector dropdown and highlighted option.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SelectorDropdownState {
+    row: SettingRow,
+    selected_index: usize,
 }
 
 /// Manages user-configurable application settings.
@@ -251,6 +280,7 @@ pub struct SettingsManager {
     open_command_input: Option<InputState>,
     /// Active project identifier that owns these persisted settings.
     project_id: i64,
+    selector_dropdown: Option<SelectorDropdownState>,
     use_last_used_model_as_default: bool,
 }
 
@@ -322,13 +352,14 @@ impl SettingsManager {
             include_coauthored_by_agentty,
             open_command_input: None,
             project_id,
+            selector_dropdown: None,
             use_last_used_model_as_default,
         }
     }
 
     /// Moves the settings selection to the next row.
     pub fn next(&mut self) {
-        if !self.is_editing_text_input() {
+        if !self.is_editing_text_input() && !self.is_selector_dropdown_open() {
             let next_index = (self.selected_row_index() + 1) % SettingRow::ROW_COUNT;
             self.table_state.select(Some(next_index));
         }
@@ -336,7 +367,7 @@ impl SettingsManager {
 
     /// Moves the settings selection to the previous row.
     pub fn previous(&mut self) {
-        if !self.is_editing_text_input() {
+        if !self.is_editing_text_input() && !self.is_selector_dropdown_open() {
             let current_index = self.selected_row_index();
             let previous_index = if current_index == 0 {
                 SettingRow::ROW_COUNT - 1
@@ -348,12 +379,12 @@ impl SettingsManager {
     }
 
     /// Handles the primary action for the selected setting row.
-    pub async fn handle_enter(&mut self, services: &AppServices) {
+    pub fn handle_enter(&mut self) {
         let selected_row = self.selected_row();
 
         match selected_row.control() {
             SettingControl::Selector => {
-                self.cycle_selector_row(services, selected_row).await;
+                self.open_selector_dropdown(selected_row);
             }
             SettingControl::TextInput => {
                 self.toggle_text_input(selected_row);
@@ -365,6 +396,76 @@ impl SettingsManager {
     #[must_use]
     pub fn is_editing_text_input(&self) -> bool {
         self.editing_text_row.is_some()
+    }
+
+    /// Returns whether a selector dropdown is currently open.
+    #[must_use]
+    pub fn is_selector_dropdown_open(&self) -> bool {
+        self.selector_dropdown.is_some()
+    }
+
+    /// Returns the render-ready selector dropdown snapshot, when one is open.
+    #[must_use]
+    pub fn selector_dropdown(&self) -> Option<SettingsSelectorDropdown> {
+        let selector_dropdown = self.selector_dropdown?;
+        let options = self.selector_options_for_row(selector_dropdown.row);
+        if options.is_empty() {
+            return None;
+        }
+
+        let selected_index = selector_dropdown
+            .selected_index
+            .min(options.len().saturating_sub(1));
+
+        Some(SettingsSelectorDropdown {
+            options: options
+                .into_iter()
+                .map(|option| SettingsSelectorDropdownOption {
+                    label: option.label,
+                })
+                .collect(),
+            row_index: selector_dropdown.row.table_index(),
+            selected_index,
+        })
+    }
+
+    /// Moves the active selector dropdown highlight to the next option.
+    pub fn next_selector_dropdown_option(&mut self) {
+        self.move_selector_dropdown_option(SelectorDropdownDirection::Next);
+    }
+
+    /// Moves the active selector dropdown highlight to the previous option.
+    pub fn previous_selector_dropdown_option(&mut self) {
+        self.move_selector_dropdown_option(SelectorDropdownDirection::Previous);
+    }
+
+    /// Closes the active selector dropdown without changing the setting value.
+    pub fn close_selector_dropdown(&mut self) {
+        self.selector_dropdown = None;
+    }
+
+    /// Applies the highlighted selector dropdown option and closes the
+    /// dropdown.
+    pub async fn select_selector_dropdown_option(&mut self, services: &AppServices) {
+        let Some(selector_dropdown) = self.selector_dropdown else {
+            return;
+        };
+
+        let options = self.selector_options_for_row(selector_dropdown.row);
+        let selected_value = options
+            .get(
+                selector_dropdown
+                    .selected_index
+                    .min(options.len().saturating_sub(1)),
+            )
+            .map(|option| option.value);
+
+        if let Some(selected_value) = selected_value {
+            self.apply_selector_value(services, selector_dropdown.row, selected_value)
+                .await;
+        }
+
+        self.close_selector_dropdown();
     }
 
     /// Returns whether the `Open Commands` multiline editor is currently
@@ -456,10 +557,12 @@ impl SettingsManager {
         if self.is_editing_text_input_for(SettingRow::OpenCommand) {
             "Editing open commands: one command per line, Alt+Enter/Shift+Enter inserts newline, \
              Enter/Esc finish"
+        } else if self.is_selector_dropdown_open() {
+            "Selecting setting value: j/k move, Enter select, Esc/q close"
         } else if self.is_editing_text_input() {
             "Editing setting value: type text, Enter to finish, Esc to cancel"
         } else {
-            "Settings: Enter cycles selector values or starts text editing"
+            "Settings: Enter opens selectors or starts text editing"
         }
     }
 
@@ -482,6 +585,175 @@ impl SettingsManager {
     /// Returns the currently selected settings row.
     fn selected_row(&self) -> SettingRow {
         SettingRow::from_index(self.selected_row_index())
+    }
+
+    /// Opens a selector dropdown for the provided row.
+    fn open_selector_dropdown(&mut self, row: SettingRow) {
+        if !matches!(row.control(), SettingControl::Selector) {
+            return;
+        }
+
+        let options = self.selector_options_for_row(row);
+        if options.is_empty() {
+            return;
+        }
+
+        let selected_index = self.current_selector_option_index(row, &options);
+        self.selector_dropdown = Some(SelectorDropdownState {
+            row,
+            selected_index,
+        });
+    }
+
+    /// Moves the active selector dropdown highlight in the requested
+    /// direction.
+    fn move_selector_dropdown_option(&mut self, direction: SelectorDropdownDirection) {
+        let Some(selector_dropdown) = self.selector_dropdown else {
+            return;
+        };
+
+        let option_count = self.selector_options_for_row(selector_dropdown.row).len();
+        if option_count == 0 {
+            self.close_selector_dropdown();
+
+            return;
+        }
+
+        let selected_index = match direction {
+            SelectorDropdownDirection::Next => {
+                (selector_dropdown.selected_index + 1) % option_count
+            }
+            SelectorDropdownDirection::Previous => {
+                if selector_dropdown.selected_index == 0 {
+                    option_count - 1
+                } else {
+                    selector_dropdown.selected_index - 1
+                }
+            }
+        };
+
+        self.selector_dropdown = Some(SelectorDropdownState {
+            row: selector_dropdown.row,
+            selected_index,
+        });
+    }
+
+    /// Builds all options for the selector row in UI display order.
+    fn selector_options_for_row(&self, row: SettingRow) -> Vec<SettingSelectorOption> {
+        match row {
+            SettingRow::ReasoningLevel => ReasoningLevel::ALL
+                .iter()
+                .copied()
+                .map(|reasoning_level| SettingSelectorOption {
+                    label: reasoning_level.codex().to_string(),
+                    value: SettingSelectorValue::ReasoningLevel(reasoning_level),
+                })
+                .collect(),
+            SettingRow::DefaultSmartModel => self.default_smart_model_selector_options(),
+            SettingRow::DefaultFastModel | SettingRow::DefaultReviewModel => {
+                self.explicit_model_selector_options()
+            }
+            SettingRow::IncludeCoauthoredByAgentty => vec![
+                SettingSelectorOption {
+                    label: bool_setting_display(false),
+                    value: SettingSelectorValue::Bool(false),
+                },
+                SettingSelectorOption {
+                    label: bool_setting_display(true),
+                    value: SettingSelectorValue::Bool(true),
+                },
+            ],
+            SettingRow::OpenCommand => Vec::new(),
+            SettingRow::Theme => ColorTheme::ALL
+                .iter()
+                .copied()
+                .map(|theme| SettingSelectorOption {
+                    label: theme.label().to_string(),
+                    value: SettingSelectorValue::Theme(theme),
+                })
+                .collect(),
+        }
+    }
+
+    /// Builds selector options for the smart-model setting, including the
+    /// dynamic last-used option.
+    fn default_smart_model_selector_options(&self) -> Vec<SettingSelectorOption> {
+        let mut options = self.explicit_model_selector_options();
+        options.push(SettingSelectorOption {
+            label: "Last used model as default".to_string(),
+            value: SettingSelectorValue::LastUsedModel,
+        });
+
+        options
+    }
+
+    /// Builds model selector options for locally available agent providers.
+    fn explicit_model_selector_options(&self) -> Vec<SettingSelectorOption> {
+        self.selectable_model_options()
+            .into_iter()
+            .map(|option| {
+                let selection = option.selection();
+
+                SettingSelectorOption {
+                    label: display_model_selector_value(selection),
+                    value: SettingSelectorValue::ModelSelection(selection),
+                }
+            })
+            .collect()
+    }
+
+    /// Finds the option index that currently matches the persisted row value.
+    fn current_selector_option_index(
+        &self,
+        row: SettingRow,
+        options: &[SettingSelectorOption],
+    ) -> usize {
+        options
+            .iter()
+            .position(|option| option.is_current_for(self, row))
+            .unwrap_or_default()
+    }
+
+    /// Applies one selected dropdown value to the target row.
+    async fn apply_selector_value(
+        &mut self,
+        services: &AppServices,
+        row: SettingRow,
+        value: SettingSelectorValue,
+    ) {
+        match (row, value) {
+            (SettingRow::ReasoningLevel, SettingSelectorValue::ReasoningLevel(reasoning_level)) => {
+                self.reasoning_level = reasoning_level;
+                self.persist_reasoning_level_setting(services).await;
+            }
+            (SettingRow::DefaultSmartModel, SettingSelectorValue::LastUsedModel) => {
+                self.use_last_used_model_as_default = true;
+                self.persist_default_smart_model_settings(services).await;
+            }
+            (SettingRow::DefaultSmartModel, SettingSelectorValue::ModelSelection(selection)) => {
+                self.default_smart_selection = selection;
+                self.use_last_used_model_as_default = false;
+                self.persist_default_smart_model_settings(services).await;
+            }
+            (SettingRow::DefaultFastModel, SettingSelectorValue::ModelSelection(selection)) => {
+                self.default_fast_selection = selection;
+                self.persist_default_fast_model_setting(services).await;
+            }
+            (SettingRow::DefaultReviewModel, SettingSelectorValue::ModelSelection(selection)) => {
+                self.default_review_selection = selection;
+                self.persist_default_review_model_setting(services).await;
+            }
+            (SettingRow::IncludeCoauthoredByAgentty, SettingSelectorValue::Bool(is_enabled)) => {
+                self.include_coauthored_by_agentty = is_enabled;
+                self.persist_include_coauthored_by_agentty_setting(services)
+                    .await;
+            }
+            (SettingRow::Theme, SettingSelectorValue::Theme(theme)) => {
+                self.theme = theme;
+                self.persist_theme_setting(services).await;
+            }
+            _ => {}
+        }
     }
 
     /// Returns whether a specific text-input row is currently being edited.
@@ -627,41 +899,6 @@ impl SettingsManager {
             .map_or_else(|| self.open_command.chars().count(), |input| input.cursor)
     }
 
-    /// Cycles selector-type rows and persists their updated values.
-    async fn cycle_selector_row(&mut self, services: &AppServices, row: SettingRow) {
-        if matches!(row.control(), SettingControl::TextInput) {
-            return;
-        }
-
-        match row.setting_name() {
-            SettingName::ReasoningLevel => {
-                self.cycle_reasoning_level_selector(services).await;
-            }
-            SettingName::DefaultSmartModel => {
-                self.cycle_default_smart_model_selector(services).await;
-            }
-            SettingName::DefaultFastModel => {
-                self.cycle_default_fast_model_selector(services).await;
-            }
-            SettingName::DefaultReviewModel => {
-                self.cycle_default_review_model_selector(services).await;
-            }
-            SettingName::IncludeCoauthoredByAgentty => {
-                self.toggle_include_coauthored_by_agentty_selector(services)
-                    .await;
-            }
-            SettingName::Theme => {
-                self.cycle_theme_selector(services).await;
-            }
-            SettingName::ActiveProjectId
-            | SettingName::DefaultFastAgent
-            | SettingName::DefaultReviewAgent
-            | SettingName::DefaultSmartAgent
-            | SettingName::OpenCommand
-            | SettingName::LastUsedModelAsDefault => {}
-        }
-    }
-
     /// Persists the current value for a text-input row.
     async fn persist_text_setting(&self, services: &AppServices, row: SettingRow) {
         if !matches!(row.control(), SettingControl::TextInput) {
@@ -695,94 +932,10 @@ impl SettingsManager {
         }
     }
 
-    /// Cycles the reasoning-level selector through all supported values.
-    async fn cycle_reasoning_level_selector(&mut self, services: &AppServices) {
-        let current_index = ReasoningLevel::ALL
-            .iter()
-            .position(|level| *level == self.reasoning_level)
-            .unwrap_or(0);
-        let next_index = (current_index + 1) % ReasoningLevel::ALL.len();
-        self.reasoning_level = ReasoningLevel::ALL[next_index];
-
-        self.persist_reasoning_level_setting(services).await;
-    }
-
-    /// Cycles the smart-model selector through all explicit models and the
-    /// `Last used model as default` option.
-    async fn cycle_default_smart_model_selector(&mut self, services: &AppServices) {
-        let all_options = self.selectable_model_options();
-        let explicit_model_count = all_options.len();
-        let current_selection = self.default_smart_selection;
-        let current_index = if self.use_last_used_model_as_default {
-            explicit_model_count
-        } else {
-            all_options
-                .iter()
-                .position(|option| option.matches(current_selection))
-                .or_else(|| {
-                    all_options
-                        .iter()
-                        .position(|option| option.model == self.default_smart_selection.model())
-                })
-                .unwrap_or(0)
-        };
-        let next_index = (current_index + 1) % (explicit_model_count + 1);
-
-        if next_index == explicit_model_count {
-            self.use_last_used_model_as_default = true;
-        } else {
-            let next_option = all_options[next_index];
-            self.default_smart_selection = next_option.selection();
-            self.use_last_used_model_as_default = false;
-        }
-
-        self.persist_default_smart_model_settings(services).await;
-    }
-
-    /// Cycles the fast-model selector through all explicit models.
-    async fn cycle_default_fast_model_selector(&mut self, services: &AppServices) {
-        let Some(next_option) =
-            next_model_option(self.default_fast_selection, &self.available_agent_kinds)
-        else {
-            return;
-        };
-        self.default_fast_selection = next_option.selection();
-
-        self.persist_default_fast_model_setting(services).await;
-    }
-
-    /// Cycles the review-model selector through all explicit models.
-    async fn cycle_default_review_model_selector(&mut self, services: &AppServices) {
-        let Some(next_option) =
-            next_model_option(self.default_review_selection, &self.available_agent_kinds)
-        else {
-            return;
-        };
-        self.default_review_selection = next_option.selection();
-
-        self.persist_default_review_model_setting(services).await;
-    }
-
     /// Returns all selectable model options whose provider is locally
     /// runnable.
     fn selectable_model_options(&self) -> Vec<ModelSelectorOption> {
         selectable_model_options(&self.available_agent_kinds)
-    }
-
-    /// Toggles whether generated session commit messages include the
-    /// `Co-Authored-By` trailer for the active project.
-    async fn toggle_include_coauthored_by_agentty_selector(&mut self, services: &AppServices) {
-        self.include_coauthored_by_agentty = !self.include_coauthored_by_agentty;
-
-        self.persist_include_coauthored_by_agentty_setting(services)
-            .await;
-    }
-
-    /// Cycles the terminal color theme selector through all available themes.
-    async fn cycle_theme_selector(&mut self, services: &AppServices) {
-        self.theme = self.theme.next();
-
-        self.persist_theme_setting(services).await;
     }
 
     /// Atomically persists smart-model selector values (`DefaultSmartAgent`,
@@ -925,6 +1078,59 @@ enum TextCursorDirection {
     Up,
 }
 
+/// Selector dropdown navigation direction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SelectorDropdownDirection {
+    Next,
+    Previous,
+}
+
+/// One selectable value in a settings dropdown.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SettingSelectorOption {
+    label: String,
+    value: SettingSelectorValue,
+}
+
+impl SettingSelectorOption {
+    /// Returns whether this option represents the manager's current row value.
+    fn is_current_for(&self, manager: &SettingsManager, row: SettingRow) -> bool {
+        match (row, self.value) {
+            (SettingRow::ReasoningLevel, SettingSelectorValue::ReasoningLevel(reasoning_level)) => {
+                manager.reasoning_level == reasoning_level
+            }
+            (SettingRow::DefaultSmartModel, SettingSelectorValue::LastUsedModel) => {
+                manager.use_last_used_model_as_default
+            }
+            (SettingRow::DefaultSmartModel, SettingSelectorValue::ModelSelection(selection)) => {
+                !manager.use_last_used_model_as_default
+                    && manager.default_smart_selection == selection
+            }
+            (SettingRow::DefaultFastModel, SettingSelectorValue::ModelSelection(selection)) => {
+                manager.default_fast_selection == selection
+            }
+            (SettingRow::DefaultReviewModel, SettingSelectorValue::ModelSelection(selection)) => {
+                manager.default_review_selection == selection
+            }
+            (SettingRow::IncludeCoauthoredByAgentty, SettingSelectorValue::Bool(is_enabled)) => {
+                manager.include_coauthored_by_agentty == is_enabled
+            }
+            (SettingRow::Theme, SettingSelectorValue::Theme(theme)) => manager.theme == theme,
+            _ => false,
+        }
+    }
+}
+
+/// Typed value carried by a selector dropdown option.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SettingSelectorValue {
+    Bool(bool),
+    LastUsedModel,
+    ModelSelection(AgentSelection),
+    ReasoningLevel(ReasoningLevel),
+    Theme(ColorTheme),
+}
+
 /// One provider-owned model option shown by settings selectors.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ModelSelectorOption {
@@ -933,12 +1139,6 @@ struct ModelSelectorOption {
 }
 
 impl ModelSelectorOption {
-    /// Returns whether this option exactly matches the selected provider and
-    /// model.
-    fn matches(self, selection: AgentSelection) -> bool {
-        self.agent_kind == selection.kind() && self.model == selection.model()
-    }
-
     /// Returns this provider-owned option as a coherent agent/model
     /// selection.
     fn selection(self) -> AgentSelection {
@@ -1028,31 +1228,6 @@ fn selectable_model_options(available_agent_kinds: &[AgentKind]) -> Vec<ModelSel
                 .map(move |model| ModelSelectorOption { agent_kind, model })
         })
         .collect()
-}
-
-/// Returns the next provider-owned model option from the explicit selectable
-/// list.
-fn next_model_option(
-    current_selection: AgentSelection,
-    available_agent_kinds: &[AgentKind],
-) -> Option<ModelSelectorOption> {
-    let options = selectable_model_options(available_agent_kinds);
-    if options.is_empty() {
-        return None;
-    }
-
-    let current_index = options
-        .iter()
-        .position(|option| option.matches(current_selection))
-        .or_else(|| {
-            options
-                .iter()
-                .position(|option| option.model == current_selection.model())
-        })
-        .unwrap_or(0);
-    let next_index = (current_index + 1) % options.len();
-
-    Some(options[next_index])
 }
 
 /// Resolves one stored model against the currently available agent kinds.
@@ -1287,6 +1462,7 @@ mod tests {
             include_coauthored_by_agentty: false,
             open_command_input: None,
             project_id: 1,
+            selector_dropdown: None,
             use_last_used_model_as_default: false,
         }
     }
@@ -1820,6 +1996,25 @@ mod tests {
     }
 
     #[test]
+    fn footer_hint_returns_selector_dropdown_hint_when_dropdown_is_open() {
+        // Arrange
+        let mut manager = new_settings_manager();
+        manager.selector_dropdown = Some(SelectorDropdownState {
+            row: SettingRow::Theme,
+            selected_index: 0,
+        });
+
+        // Act
+        let footer_hint = manager.footer_hint();
+
+        // Assert
+        assert_eq!(
+            footer_hint,
+            "Selecting setting value: j/k move, Enter select, Esc/q close"
+        );
+    }
+
+    #[test]
     fn open_commands_returns_single_trimmed_command() {
         // Arrange
         let mut manager = new_settings_manager();
@@ -2011,36 +2206,34 @@ mod tests {
         assert_eq!(rows[0].1, "Agentty Green");
     }
 
-    #[tokio::test]
-    async fn handle_enter_toggles_open_command_editing_state() {
+    #[test]
+    fn handle_enter_toggles_open_command_editing_state() {
         // Arrange
-        let (services, _) = test_services().await;
         let mut manager = new_settings_manager();
         manager.open_command = "nvim .".to_string();
         select_row(&mut manager, 6);
 
         // Act
-        manager.handle_enter(&services).await;
+        manager.handle_enter();
 
         // Assert
         assert!(manager.is_editing_open_commands());
         assert!(manager.open_command_input.is_some());
 
         // Act
-        manager.handle_enter(&services).await;
+        manager.handle_enter();
 
         // Assert
         assert!(!manager.is_editing_open_commands());
         assert!(manager.open_command_input.is_none());
     }
 
-    #[tokio::test]
-    async fn next_and_previous_do_not_move_selection_while_editing_open_commands() {
+    #[test]
+    fn next_and_previous_do_not_move_selection_while_editing_open_commands() {
         // Arrange
-        let (services, _) = test_services().await;
         let mut manager = new_settings_manager();
         select_row(&mut manager, 6);
-        manager.handle_enter(&services).await;
+        manager.handle_enter();
 
         // Act
         manager.next();
@@ -2048,6 +2241,22 @@ mod tests {
 
         // Assert
         assert_eq!(manager.table_state.selected(), Some(6));
+    }
+
+    #[test]
+    fn next_and_previous_do_not_move_selection_while_selector_dropdown_is_open() {
+        // Arrange
+        let mut manager = new_settings_manager();
+        select_row(&mut manager, 0);
+        manager.handle_enter();
+
+        // Act
+        manager.next();
+        manager.previous();
+
+        // Assert
+        assert_eq!(manager.table_state.selected(), Some(0));
+        assert!(manager.is_selector_dropdown_open());
     }
 
     #[tokio::test]
@@ -2073,7 +2282,7 @@ mod tests {
         let (services, project_id) = test_services().await;
         let mut manager = SettingsManager::new(&services, project_id).await;
         select_row(&mut manager, 6);
-        manager.handle_enter(&services).await;
+        manager.handle_enter();
 
         // Act
         manager.append_selected_text_character(&services, 'n').await;
@@ -2094,17 +2303,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handle_enter_toggles_coauthor_setting_and_persists_value() {
+    async fn selector_dropdown_selects_coauthor_setting_and_persists_value() {
         // Arrange
         let (services, project_id) = test_services().await;
         let mut manager = SettingsManager::new(&services, project_id).await;
         select_row(&mut manager, 5);
 
         // Act
-        manager.handle_enter(&services).await;
+        manager.handle_enter();
+        manager.next_selector_dropdown_option();
+        manager.select_selector_dropdown_option(&services).await;
 
         // Assert
         assert!(manager.include_coauthored_by_agentty);
+        assert!(!manager.is_selector_dropdown_open());
         assert_eq!(
             services
                 .db()
@@ -2117,34 +2329,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handle_enter_cycles_theme_setting_and_persists_value() {
+    async fn selector_dropdown_selects_theme_setting_and_persists_value() {
         // Arrange
         let (services, project_id) = test_services().await;
         let mut manager = SettingsManager::new(&services, project_id).await;
         select_row(&mut manager, 0);
 
         // Act
-        manager.handle_enter(&services).await;
-        let theme_after_first_cycle = manager.theme;
-        let persisted_theme_after_first_cycle = services
-            .db()
-            .settings()
-            .get_setting(SettingName::Theme)
-            .await
-            .expect("failed to load theme setting");
+        manager.handle_enter();
+        let dropdown = manager
+            .selector_dropdown()
+            .expect("expected theme selector dropdown");
+        assert_eq!(dropdown.row_index, 0);
+        assert_eq!(dropdown.selected_index, 0);
+        assert_eq!(dropdown.options[1].label, "Agentty Green");
 
-        manager.handle_enter(&services).await;
-        let theme_after_second_cycle = manager.theme;
-        let persisted_theme_after_second_cycle = services
-            .db()
-            .settings()
-            .get_setting(SettingName::Theme)
-            .await
-            .expect("failed to load theme setting");
-
-        manager.handle_enter(&services).await;
-        let theme_after_wrap_cycle = manager.theme;
-        let persisted_theme_after_wrap_cycle = services
+        manager.next_selector_dropdown_option();
+        manager.select_selector_dropdown_option(&services).await;
+        let selected_theme = manager.theme;
+        let persisted_theme = services
             .db()
             .settings()
             .get_setting(SettingName::Theme)
@@ -2152,20 +2355,10 @@ mod tests {
             .expect("failed to load theme setting");
 
         // Assert
-        assert_eq!(theme_after_first_cycle, ColorTheme::Hacker);
+        assert_eq!(selected_theme, ColorTheme::Hacker);
         assert_eq!(
-            persisted_theme_after_first_cycle,
+            persisted_theme,
             Some(ColorTheme::Hacker.as_str().to_string())
-        );
-        assert_eq!(theme_after_second_cycle, ColorTheme::DarkHorizon);
-        assert_eq!(
-            persisted_theme_after_second_cycle,
-            Some(ColorTheme::DarkHorizon.as_str().to_string())
-        );
-        assert_eq!(theme_after_wrap_cycle, ColorTheme::Current);
-        assert_eq!(
-            persisted_theme_after_wrap_cycle,
-            Some(ColorTheme::Current.as_str().to_string())
         );
     }
 
@@ -2197,7 +2390,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cycling_default_smart_model_persists_last_used_flag_and_wraps_back() {
+    async fn selector_dropdown_persists_last_used_flag_and_explicit_smart_model() {
         // Arrange
         let (services, project_id) = test_services().await;
         let mut manager = SettingsManager::new(&services, project_id).await;
@@ -2208,7 +2401,13 @@ mod tests {
         select_row(&mut manager, 2);
 
         // Act
-        manager.handle_enter(&services).await;
+        manager.handle_enter();
+        let dropdown = manager
+            .selector_dropdown()
+            .expect("expected smart model selector dropdown");
+        assert_eq!(dropdown.selected_index, options.len() - 1);
+        manager.next_selector_dropdown_option();
+        manager.select_selector_dropdown_option(&services).await;
 
         // Assert
         assert!(manager.use_last_used_model_as_default);
@@ -2223,7 +2422,9 @@ mod tests {
         );
 
         // Act
-        manager.handle_enter(&services).await;
+        manager.handle_enter();
+        manager.next_selector_dropdown_option();
+        manager.select_selector_dropdown_option(&services).await;
 
         // Assert
         assert!(!manager.use_last_used_model_as_default);

@@ -7,6 +7,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- agentty: open settings selector dropdowns for fixed-choice values instead of cycling
+  values directly with `Enter`.
+
 ## [v0.11.1] - 2026-07-01
 
 ### Added

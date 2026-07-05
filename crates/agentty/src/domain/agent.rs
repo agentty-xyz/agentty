@@ -385,7 +385,7 @@ pub fn resolve_prompt_model_agent_kind(
 }
 
 impl ReasoningLevel {
-    /// All selectable reasoning-effort levels in UI cycle order.
+    /// All selectable reasoning-effort levels in UI display order.
     pub const ALL: [Self; 4] = [Self::Low, Self::Medium, Self::High, Self::XHigh];
 
     /// Returns the stable persisted identifier for this level.
