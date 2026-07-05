@@ -32,8 +32,6 @@ pub enum ConfirmationIntent {
 /// confirmations and overlays.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConfirmationViewMode {
-    pub review_status_message: Option<String>,
-    pub review_text: Option<String>,
     pub scroll_offset: Option<u16>,
     pub session_id: SessionId,
 }
@@ -43,8 +41,6 @@ impl ConfirmationViewMode {
     #[must_use]
     pub fn into_view_mode(self) -> AppMode {
         AppMode::View {
-            review_status_message: self.review_status_message,
-            review_text: self.review_text,
             session_id: self.session_id,
             scroll_offset: self.scroll_offset,
         }
@@ -99,8 +95,6 @@ pub struct QuestionModeSnapshot {
     pub current_index: usize,
     pub input: InputState,
     pub questions: Vec<QuestionItem>,
-    pub review_status_message: Option<String>,
-    pub review_text: Option<String>,
     pub responses: Vec<String>,
     pub scroll_offset: Option<u16>,
     pub selected_option_index: Option<usize>,
@@ -117,8 +111,6 @@ impl QuestionModeSnapshot {
             focus: QuestionFocus::Answer,
             input: self.input,
             questions: self.questions,
-            review_status_message: self.review_status_message,
-            review_text: self.review_text,
             responses: self.responses,
             scroll_offset: self.scroll_offset,
             selected_option_index: self.selected_option_index,
@@ -234,12 +226,6 @@ pub enum AppMode {
         attachment_state: PromptAttachmentState,
         /// Prompt-history navigation state for `Up`/`Down`.
         history_state: PromptHistoryState,
-        /// Focused-review status text preserved while the composer is open so
-        /// canceling the prompt restores the same session output view.
-        review_status_message: Option<String>,
-        /// Focused-review output preserved while the composer is open so the
-        /// session transcript remains stable until a new prompt is submitted.
-        review_text: Option<String>,
         /// Slash-command selection state for the current prompt input.
         slash_state: PromptSlashState,
         /// Session whose prompt composer is currently active.
@@ -251,11 +237,6 @@ pub enum AppMode {
         scroll_offset: Option<u16>,
     },
     View {
-        /// Optional status line shown while review text is loading or
-        /// unavailable.
-        review_status_message: Option<String>,
-        /// Agent-assisted review text for the active session.
-        review_text: Option<String>,
         session_id: SessionId,
         scroll_offset: Option<u16>,
     },
@@ -287,12 +268,6 @@ pub enum AppMode {
     Question {
         /// File/directory mention dropdown state for the free-text input.
         at_mention_state: Option<PromptAtMentionState>,
-        /// Focused-review status text kept visible above the clarification
-        /// panel while a review is still loading or has failed.
-        review_status_message: Option<String>,
-        /// Focused-review output kept visible above the clarification panel so
-        /// question mode does not hide the latest assisted review block.
-        review_text: Option<String>,
         /// Session receiving the follow-up clarification reply.
         session_id: SessionId,
         /// Ordered clarification prompts emitted by the model.
@@ -330,8 +305,6 @@ pub enum HelpContext {
         can_rebase_session_branch: bool,
         can_reply_to_session: bool,
         can_start_staged_session: bool,
-        review_status_message: Option<String>,
-        review_text: Option<String>,
         publish_pull_request_action: Option<PublishBranchAction>,
         session_id: SessionId,
         session_state: ViewSessionState,
@@ -391,15 +364,11 @@ impl HelpContext {
         match self {
             HelpContext::List { .. } => AppMode::List,
             HelpContext::View {
-                review_status_message,
-                review_text,
                 publish_pull_request_action: _,
                 session_id,
                 scroll_offset,
                 ..
             } => AppMode::View {
-                review_status_message,
-                review_text,
                 session_id,
                 scroll_offset,
             },
@@ -431,16 +400,12 @@ impl HelpContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::review_loading_message;
-    use crate::domain::agent::AgentModel;
     use crate::domain::session::PublishBranchAction;
 
     #[test]
-    fn test_confirmation_view_mode_into_view_mode_restores_snapshot_values() {
+    fn test_confirmation_view_mode_into_view_mode_restores_view_identity() {
         // Arrange
         let confirmation_view_mode = ConfirmationViewMode {
-            review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
-            review_text: Some("Critical finding".to_string()),
             scroll_offset: Some(7),
             session_id: "session-id".into(),
         };
@@ -452,13 +417,9 @@ mod tests {
         assert!(matches!(
             mode,
             AppMode::View {
-                review_status_message: Some(ref review_status_message),
-                review_text: Some(ref review_text),
                 ref session_id,
                 scroll_offset: Some(7),
             } if session_id == "session-id"
-                && review_status_message == &review_loading_message(AgentModel::Gpt55)
-                && review_text == "Critical finding"
         ));
     }
 
@@ -472,8 +433,6 @@ mod tests {
             can_rebase_session_branch: true,
             can_reply_to_session: true,
             can_start_staged_session: false,
-            review_status_message: None,
-            review_text: None,
             publish_pull_request_action: None,
             session_id: "session-id".into(),
             session_state: ViewSessionState::InProgress,
@@ -505,8 +464,6 @@ mod tests {
             can_rebase_session_branch: true,
             can_reply_to_session: true,
             can_start_staged_session: false,
-            review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
-            review_text: Some("Ready".to_string()),
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
             session_id: "session-id".into(),
             session_state: ViewSessionState::InProgress,
@@ -521,13 +478,9 @@ mod tests {
             mode,
             AppMode::View {
                 ref session_id,
-                review_status_message: Some(ref review_status_message),
-                review_text: Some(ref review_text),
                 scroll_offset: Some(4),
                 ..
             } if session_id == "session-id"
-                && review_status_message == &review_loading_message(AgentModel::Gpt55)
-                && review_text == "Ready"
         ));
     }
 
@@ -541,8 +494,6 @@ mod tests {
             can_rebase_session_branch: true,
             can_reply_to_session: true,
             can_start_staged_session: false,
-            review_status_message: None,
-            review_text: None,
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
             session_id: "session-id".into(),
             session_state: ViewSessionState::Interactive,

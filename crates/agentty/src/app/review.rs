@@ -13,7 +13,6 @@ use crate::app::session_state::SessionState;
 use crate::domain::agent::AgentModel;
 use crate::domain::session::{SessionId, Status};
 use crate::infra::db::SessionFocusedReviewRow;
-use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
 
 /// Cached focused review state for a session.
 #[derive(Debug)]
@@ -97,14 +96,6 @@ pub(crate) struct FocusedReviewPersistence {
 /// prepared.
 const REVIEW_LOADING_MESSAGE_PREFIX: &str = "Reviewing changes with";
 
-/// Mutable render-state target for one focused-review-capable mode.
-struct ReviewModeTarget<'a> {
-    /// Status banner shown while focused review loads or fails.
-    review_status_message: &'a mut Option<String>,
-    /// Generated focused review text shown in the active mode.
-    review_text: &'a mut Option<String>,
-}
-
 /// Computes a deterministic `FNV-1a` hash of diff text for focused-review
 /// cache invalidation.
 pub(crate) fn diff_content_hash(diff: &str) -> u64 {
@@ -128,18 +119,18 @@ pub(crate) fn review_loading_message(review_model: AgentModel) -> String {
 
 /// Returns the focused-review render state that should be restored for one
 /// session when reopening session view.
-pub(crate) fn review_view_state(
-    review_cache: &HashMap<SessionId, ReviewCacheEntry>,
+pub(crate) fn review_view_state<'a>(
+    review_cache: &'a HashMap<SessionId, ReviewCacheEntry>,
     session_id: &str,
     review_model: AgentModel,
-) -> (Option<String>, Option<String>) {
+) -> (Option<String>, Option<&'a str>) {
     let Some(cache_entry) = review_cache.get(session_id) else {
         return (None, None);
     };
 
     match cache_entry {
         ReviewCacheEntry::Loading { .. } => (Some(review_loading_message(review_model)), None),
-        ReviewCacheEntry::Ready { text, .. } => (None, Some(text.clone())),
+        ReviewCacheEntry::Ready { text, .. } => (None, Some(text.as_str())),
         ReviewCacheEntry::Failed { error, .. } => (
             Some(format!("Review assist unavailable: {}", error.trim())),
             None,
@@ -168,14 +159,13 @@ pub(crate) fn review_cache_from_rows(
         .collect()
 }
 
-/// Cancels an in-flight focused review for a session and clears active render
-/// state so a later stale review-assist result is ignored.
+/// Cancels an in-flight focused review for a session so a later stale
+/// review-assist result is ignored.
 ///
 /// Returns `true` when a loading review was removed, letting callers clear any
 /// matching persisted review state from durable storage.
 pub(crate) fn cancel_pending_review(
     review_cache: &mut HashMap<SessionId, ReviewCacheEntry>,
-    mode: &mut AppMode,
     session_id: &str,
 ) -> bool {
     let Some(ReviewCacheEntry::Loading { .. }) = review_cache.get(session_id) else {
@@ -183,10 +173,6 @@ pub(crate) fn cancel_pending_review(
     };
 
     review_cache.remove(session_id);
-    if let Some(mode_target) = review_mode_target(mode, session_id) {
-        *mode_target.review_status_message = None;
-        *mode_target.review_text = None;
-    }
 
     true
 }
@@ -226,20 +212,15 @@ pub(crate) fn mark_session_agent_review(session_state: &mut SessionState, sessio
 /// Applies review assist updates for all sessions in one reducer batch.
 pub(crate) fn apply_review_updates(
     review_cache: &mut HashMap<SessionId, ReviewCacheEntry>,
-    mode: &mut AppMode,
     session_state: &mut SessionState,
     review_updates: HashMap<SessionId, ReviewUpdate>,
 ) -> Vec<FocusedReviewPersistence> {
     let mut persistence_updates = Vec::new();
 
     for (session_id, review_update) in review_updates {
-        if let Some(persistence_update) = apply_review_update(
-            review_cache,
-            mode,
-            session_state,
-            &session_id,
-            review_update,
-        ) {
+        if let Some(persistence_update) =
+            apply_review_update(review_cache, session_state, &session_id, review_update)
+        {
             persistence_updates.push(persistence_update);
         }
     }
@@ -263,7 +244,6 @@ pub(crate) async fn auto_start_reviews(
     review_cache: &mut HashMap<SessionId, ReviewCacheEntry>,
     session_ids: &HashSet<SessionId>,
     session_state: &mut SessionState,
-    mode: &mut AppMode,
     git_client: Arc<dyn GitClient>,
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
     review_model: AgentModel,
@@ -327,13 +307,6 @@ pub(crate) async fn auto_start_reviews(
             },
         );
         mark_session_agent_review(session_state, session_id);
-        if let Some(mode_target) = review_mode_target(mode, session_id) {
-            apply_review_loading(
-                mode_target.review_status_message,
-                mode_target.review_text,
-                review_model,
-            );
-        }
         start_review_assist(
             app_event_tx.clone(),
             review_model,
@@ -346,20 +319,9 @@ pub(crate) async fn auto_start_reviews(
     }
 }
 
-/// Sets loading status fields for the active review render mode.
-fn apply_review_loading(
-    review_status_message: &mut Option<String>,
-    review_text: &mut Option<String>,
-    review_model: AgentModel,
-) {
-    *review_status_message = Some(review_loading_message(review_model));
-    *review_text = None;
-}
-
-/// Applies one review assist update to cache and active render state.
+/// Applies one review assist update to cache and session review status.
 fn apply_review_update(
     review_cache: &mut HashMap<SessionId, ReviewCacheEntry>,
-    mode: &mut AppMode,
     session_state: &mut SessionState,
     session_id: &str,
     review_update: ReviewUpdate,
@@ -383,14 +345,6 @@ fn apply_review_update(
         ReviewCacheEntry::from_result(diff_hash, &result),
     );
     restore_session_review_status(session_state, session_id);
-
-    if let Some(mode_target) = review_mode_target(mode, session_id) {
-        apply_review_result(
-            mode_target.review_status_message,
-            mode_target.review_text,
-            result,
-        );
-    }
 
     Some(persistence_update)
 }
@@ -431,94 +385,6 @@ fn update_transient_review_status(
     }
 }
 
-/// Returns the focused-review render fields for the active mode.
-fn review_mode_target<'a>(mode: &'a mut AppMode, session_id: &str) -> Option<ReviewModeTarget<'a>> {
-    match mode {
-        AppMode::View {
-            review_status_message,
-            review_text,
-            session_id: view_session_id,
-            ..
-        }
-        | AppMode::Prompt {
-            review_status_message,
-            review_text,
-            session_id: view_session_id,
-            ..
-        }
-        | AppMode::Question {
-            review_status_message,
-            review_text,
-            session_id: view_session_id,
-            ..
-        } if view_session_id == session_id => Some(ReviewModeTarget {
-            review_status_message,
-            review_text,
-        }),
-        AppMode::Help {
-            context:
-                HelpContext::View {
-                    review_status_message,
-                    review_text,
-                    session_id: view_session_id,
-                    ..
-                },
-            ..
-        } if view_session_id == session_id => Some(ReviewModeTarget {
-            review_status_message,
-            review_text,
-        }),
-        AppMode::OpenCommandSelector { restore_view, .. }
-        | AppMode::PublishBranchInput { restore_view, .. }
-        | AppMode::ViewInfoPopup { restore_view, .. } => {
-            confirmation_review_mode_target(restore_view, session_id)
-        }
-        AppMode::List
-        | AppMode::ReviewDetail { .. }
-        | AppMode::SessionCreation { .. }
-        | AppMode::Confirmation { .. }
-        | AppMode::SyncBlockedPopup { .. }
-        | AppMode::Prompt { .. }
-        | AppMode::Question { .. }
-        | AppMode::Diff { .. }
-        | AppMode::Help { .. }
-        | AppMode::View { .. } => None,
-    }
-}
-
-/// Returns focused-review fields stored in one confirmation restore view.
-fn confirmation_review_mode_target<'a>(
-    restore_view: &'a mut ConfirmationViewMode,
-    session_id: &str,
-) -> Option<ReviewModeTarget<'a>> {
-    if restore_view.session_id != session_id {
-        return None;
-    }
-
-    Some(ReviewModeTarget {
-        review_status_message: &mut restore_view.review_status_message,
-        review_text: &mut restore_view.review_text,
-    })
-}
-
-/// Applies one review assist result to render-state fields.
-fn apply_review_result(
-    review_status_message: &mut Option<String>,
-    review_text: &mut Option<String>,
-    result: Result<String, String>,
-) {
-    match result {
-        Ok(text) => {
-            *review_status_message = None;
-            *review_text = Some(text);
-        }
-        Err(error) => {
-            *review_status_message = Some(format!("Review assist unavailable: {}", error.trim()));
-            *review_text = None;
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -528,11 +394,7 @@ mod tests {
 
     use super::*;
     use crate::app::session_state::SessionState;
-    use crate::domain::input::InputState;
-    use crate::domain::question::QuestionItem;
     use crate::infra::clock::RealClock;
-    use crate::ui::state::app_mode::QuestionFocus;
-    use crate::ui::state::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
 
     /// Builds empty session state for review reducer tests that only need mode
     /// field updates.
@@ -660,22 +522,12 @@ mod tests {
         let diff_hash = 19;
         let review_text = "## Review\nPersist this finding.";
         let mut review_cache = loading_review_cache(&session_id, diff_hash);
-        let mut mode = AppMode::View {
-            review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
-            review_text: None,
-            scroll_offset: None,
-            session_id: session_id.clone(),
-        };
         let mut session_state = empty_session_state();
         let review_updates = successful_review_update(&session_id, diff_hash, review_text);
 
         // Act
-        let persistence_updates = apply_review_updates(
-            &mut review_cache,
-            &mut mode,
-            &mut session_state,
-            review_updates,
-        );
+        let persistence_updates =
+            apply_review_updates(&mut review_cache, &mut session_state, review_updates);
 
         // Assert
         assert_eq!(
@@ -694,12 +546,6 @@ mod tests {
         let session_id = SessionId::from("session-failed-review");
         let diff_hash = 29;
         let mut review_cache = loading_review_cache(&session_id, diff_hash);
-        let mut mode = AppMode::View {
-            review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
-            review_text: None,
-            scroll_offset: None,
-            session_id: session_id.clone(),
-        };
         let mut session_state = empty_session_state();
         let review_updates = HashMap::from([(
             session_id.clone(),
@@ -710,12 +556,8 @@ mod tests {
         )]);
 
         // Act
-        let persistence_updates = apply_review_updates(
-            &mut review_cache,
-            &mut mode,
-            &mut session_state,
-            review_updates,
-        );
+        let persistence_updates =
+            apply_review_updates(&mut review_cache, &mut session_state, review_updates);
 
         // Assert
         assert_eq!(
@@ -728,102 +570,23 @@ mod tests {
         );
     }
 
-    /// Verifies completed review output updates preserved prompt-mode render
-    /// fields so the session output panel can show the result while the
-    /// composer remains open.
     #[test]
-    fn apply_review_updates_writes_success_to_prompt_mode() {
+    fn apply_review_updates_writes_success_to_cache() {
         // Arrange
-        let session_id = SessionId::from("session-prompt-review");
+        let session_id = SessionId::from("session-cache-review");
         let diff_hash = 11;
-        let review_text = "## Review\nPrompt-mode finding.";
+        let review_text = "## Review\nCache-backed finding.";
         let mut review_cache = loading_review_cache(&session_id, diff_hash);
-        let mut mode = AppMode::Prompt {
-            at_mention_state: None,
-            attachment_state: PromptAttachmentState::default(),
-            history_state: PromptHistoryState::default(),
-            input: InputState::default(),
-            review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
-            review_text: None,
-            scroll_offset: None,
-            session_id: session_id.clone(),
-            slash_state: PromptSlashState::default(),
-        };
         let mut session_state = empty_session_state();
         let review_updates = successful_review_update(&session_id, diff_hash, review_text);
 
         // Act
-        apply_review_updates(
-            &mut review_cache,
-            &mut mode,
-            &mut session_state,
-            review_updates,
-        );
+        apply_review_updates(&mut review_cache, &mut session_state, review_updates);
 
         // Assert
         assert!(matches!(
             review_cache.get(session_id.as_str()),
             Some(ReviewCacheEntry::Ready { text, .. }) if text == review_text
-        ));
-        assert!(matches!(
-            mode,
-            AppMode::Prompt {
-                review_status_message: None,
-                review_text: Some(ref rendered_review_text),
-                ..
-            } if rendered_review_text == review_text
-        ));
-    }
-
-    /// Verifies completed review output updates question-mode render fields so
-    /// clarification sessions keep the focused review visible above the
-    /// question panel.
-    #[test]
-    fn apply_review_updates_writes_success_to_question_mode() {
-        // Arrange
-        let session_id = SessionId::from("session-question-review");
-        let diff_hash = 17;
-        let review_text = "## Review\nQuestion-mode finding.";
-        let mut review_cache = loading_review_cache(&session_id, diff_hash);
-        let mut mode = AppMode::Question {
-            at_mention_state: None,
-            current_index: 0,
-            focus: QuestionFocus::Answer,
-            input: InputState::default(),
-            questions: vec![QuestionItem {
-                options: Vec::new(),
-                text: "Need more detail?".to_string(),
-            }],
-            responses: Vec::new(),
-            review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
-            review_text: None,
-            scroll_offset: None,
-            selected_option_index: None,
-            session_id: session_id.clone(),
-        };
-        let mut session_state = empty_session_state();
-        let review_updates = successful_review_update(&session_id, diff_hash, review_text);
-
-        // Act
-        apply_review_updates(
-            &mut review_cache,
-            &mut mode,
-            &mut session_state,
-            review_updates,
-        );
-
-        // Assert
-        assert!(matches!(
-            review_cache.get(session_id.as_str()),
-            Some(ReviewCacheEntry::Ready { text, .. }) if text == review_text
-        ));
-        assert!(matches!(
-            mode,
-            AppMode::Question {
-                review_status_message: None,
-                review_text: Some(ref rendered_review_text),
-                ..
-            } if rendered_review_text == review_text
         ));
     }
 
@@ -836,37 +599,18 @@ mod tests {
             session_id.clone(),
             ReviewCacheEntry::Suppressed { diff_hash },
         )]);
-        let mut mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
-            scroll_offset: None,
-            session_id: session_id.clone(),
-        };
         let mut session_state = empty_session_state();
         let review_updates =
             successful_review_update(&session_id, diff_hash, "## Review\nShould not be rendered.");
 
         // Act
-        apply_review_updates(
-            &mut review_cache,
-            &mut mode,
-            &mut session_state,
-            review_updates,
-        );
+        apply_review_updates(&mut review_cache, &mut session_state, review_updates);
 
         // Assert
         assert!(matches!(
             review_cache.get(session_id.as_str()),
             Some(ReviewCacheEntry::Suppressed { diff_hash: cached_hash })
                 if *cached_hash == diff_hash
-        ));
-        assert!(matches!(
-            mode,
-            AppMode::View {
-                review_status_message: None,
-                review_text: None,
-                ..
-            }
         ));
     }
 }

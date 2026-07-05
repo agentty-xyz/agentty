@@ -772,8 +772,6 @@ impl App {
             at_mention_state: None,
             attachment_state: crate::ui::state::prompt::PromptAttachmentState::default(),
             history_state: crate::ui::state::prompt::PromptHistoryState::new(Vec::new()),
-            review_status_message: None,
-            review_text: None,
             slash_state: self.prompt_slash_state(),
             session_id: SessionId::from(session_id.as_str()),
             input: InputState::default(),
@@ -988,7 +986,7 @@ impl App {
 
     /// Returns the focused-review output state that should be shown when one
     /// session view is reopened.
-    pub(crate) fn review_view_state(&self, session_id: &str) -> (Option<String>, Option<String>) {
+    pub(crate) fn review_view_state(&self, session_id: &str) -> (Option<String>, Option<&str>) {
         review_view_state(
             &self.review_cache,
             session_id,
@@ -1357,7 +1355,7 @@ impl App {
                 .sessions()
                 .update_session_focused_review(session_id, None, None)
                 .await?;
-            cancel_pending_review(&mut self.review_cache, &mut self.mode, session_id);
+            cancel_pending_review(&mut self.review_cache, session_id);
         }
 
         self.sessions
@@ -1645,11 +1643,7 @@ impl App {
             return;
         }
 
-        let (review_status_message, review_text) = self.review_view_state(target_session_id);
-
         self.mode = AppMode::View {
-            review_status_message,
-            review_text,
             session_id: SessionId::from(target_session_id),
             scroll_offset: None,
         };
@@ -1749,8 +1743,6 @@ impl App {
             ),
         };
 
-        let (review_status_message, review_text) = self.review_view_state(session_id);
-
         self.mode = AppMode::Question {
             at_mention_state: None,
             current_index,
@@ -1758,8 +1750,6 @@ impl App {
             input,
             questions,
             responses,
-            review_status_message,
-            review_text,
             scroll_offset: None,
             selected_option_index,
             session_id: SessionId::from(session_id),

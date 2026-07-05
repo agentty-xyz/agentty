@@ -6,7 +6,7 @@ use ratatui::backend::Backend;
 use ratatui::layout::{Constraint, Layout, Rect};
 use tracing::warn;
 
-use crate::app::{App, ReviewCacheEntry, diff_content_hash, review_loading_message};
+use crate::app::{App, ReviewCacheEntry, diff_content_hash};
 use crate::domain::session::SessionId;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::runtime::mode::confirmation::ConfirmationDecision;
@@ -628,25 +628,29 @@ async fn handle_regenerate_review_confirmation(
         .unwrap_or_else(|error| format!("Failed to run git diff: {error}"));
 
     if diff.trim().is_empty() || diff.starts_with("Failed to run git diff:") {
-        let mut view_mode = restore_view.unwrap_or(ConfirmationViewMode {
-            review_status_message: None,
-            review_text: None,
+        let view_mode = restore_view.unwrap_or(ConfirmationViewMode {
             scroll_offset: None,
             session_id: session_id.clone(),
         });
-        view_mode.review_status_message = None;
-        view_mode.review_text = if diff.trim().is_empty() {
-            Some("No diff changes found for review.".to_string())
+        let diff_hash = diff_content_hash(&diff);
+        let review_text = if diff.trim().is_empty() {
+            "No diff changes found for review.".to_string()
         } else {
-            Some(diff)
+            diff
         };
+        app.review_cache.insert(
+            session_id,
+            ReviewCacheEntry::Ready {
+                diff_hash,
+                text: review_text,
+            },
+        );
         app.mode = view_mode.into_view_mode();
 
         return Ok(EventResult::Continue);
     }
 
     let diff_hash = diff_content_hash(&diff);
-    let review_model = app.settings.default_review_selection.model();
     app.review_cache
         .insert(session_id.clone(), ReviewCacheEntry::Loading { diff_hash });
     let _ = app
@@ -663,14 +667,10 @@ async fn handle_regenerate_review_confirmation(
         session_summary.as_deref(),
     );
 
-    let mut view_mode = restore_view.unwrap_or(ConfirmationViewMode {
-        review_status_message: None,
-        review_text: None,
+    let view_mode = restore_view.unwrap_or(ConfirmationViewMode {
         scroll_offset: None,
         session_id,
     });
-    view_mode.review_status_message = Some(review_loading_message(review_model));
-    view_mode.review_text = None;
     app.mode = view_mode.into_view_mode();
 
     Ok(EventResult::Continue)
@@ -684,7 +684,6 @@ mod tests {
     use mockall::predicate::eq;
 
     use super::*;
-    use crate::domain::agent::AgentModel;
     use crate::infra::tmux::MockTmuxClient;
     use crate::ui::state::app_mode::ConfirmationViewMode;
 
@@ -792,8 +791,6 @@ mod tests {
             loading_label: "Refreshing review request...".to_string(),
             message: "Review request refreshed.".to_string(),
             restore_view: ConfirmationViewMode {
-                review_status_message: None,
-                review_text: None,
                 scroll_offset: Some(2),
                 session_id: "session-id".into(),
             },
@@ -922,8 +919,6 @@ mod tests {
         source_session.status = crate::domain::session::Status::Done;
         source_session.title = Some("Done source".to_string());
         app.mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: source_session_id.clone().into(),
             scroll_offset: Some(0),
         };
@@ -968,8 +963,6 @@ mod tests {
             confirmation_message: "Add this session to merge queue?".to_string(),
             confirmation_title: "Confirm Merge".to_string(),
             restore_view: Some(ConfirmationViewMode {
-                review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
-                review_text: Some("Review output".to_string()),
                 scroll_offset: Some(6),
                 session_id: session_id.clone().into(),
             }),
@@ -986,13 +979,9 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::View {
-                review_status_message: Some(ref review_status_message),
-                review_text: Some(ref review_text),
                 session_id: ref session_id_in_mode,
                 scroll_offset: Some(6),
             } if session_id_in_mode == &session_id
-                && review_status_message == &review_loading_message(AgentModel::Gpt55)
-                && review_text == "Review output"
         ));
     }
 
@@ -1012,8 +1001,6 @@ mod tests {
                 .to_string(),
             confirmation_title: "Confirm Continue".to_string(),
             restore_view: Some(ConfirmationViewMode {
-                review_status_message: None,
-                review_text: None,
                 scroll_offset: Some(4),
                 session_id: session_id.clone().into(),
             }),
@@ -1068,8 +1055,6 @@ mod tests {
                 .to_string(),
             confirmation_title: "Confirm Continue".to_string(),
             restore_view: Some(ConfirmationViewMode {
-                review_status_message: None,
-                review_text: None,
                 scroll_offset: Some(4),
                 session_id: source_session_id.clone().into(),
             }),
@@ -1122,8 +1107,6 @@ mod tests {
             confirmation_message: "Add this session to merge queue?".to_string(),
             confirmation_title: "Confirm Merge".to_string(),
             restore_view: Some(ConfirmationViewMode {
-                review_status_message: None,
-                review_text: None,
                 scroll_offset: Some(2),
                 session_id: session_id.clone().into(),
             }),
@@ -1140,8 +1123,6 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::View {
-                review_status_message: None,
-                review_text: None,
                 session_id: ref session_id_in_mode,
                 scroll_offset: Some(2),
             } if session_id_in_mode == &session_id
@@ -1161,8 +1142,6 @@ mod tests {
             locked_upstream_ref: None,
             publish_branch_action: crate::domain::session::PublishBranchAction::Push,
             restore_view: ConfirmationViewMode {
-                review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
-                review_text: Some("Critical finding".to_string()),
                 scroll_offset: Some(7),
                 session_id: "session-id".into(),
             },
@@ -1179,13 +1158,9 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::View {
-                review_status_message: Some(ref status_message),
-                review_text: Some(ref review_text),
                 ref session_id,
                 scroll_offset: Some(7),
             } if session_id == "session-id"
-                && status_message == &review_loading_message(AgentModel::Gpt55)
-                && review_text == "Critical finding"
         ));
     }
 
@@ -1209,8 +1184,6 @@ mod tests {
             locked_upstream_ref: None,
             publish_branch_action: crate::domain::session::PublishBranchAction::PublishPullRequest,
             restore_view: ConfirmationViewMode {
-                review_status_message: None,
-                review_text: None,
                 scroll_offset: Some(4),
                 session_id: session_id.into(),
             },
@@ -1246,8 +1219,6 @@ mod tests {
             locked_upstream_ref: None,
             publish_branch_action: crate::domain::session::PublishBranchAction::Push,
             restore_view: ConfirmationViewMode {
-                review_status_message: None,
-                review_text: None,
                 scroll_offset: None,
                 session_id: "session-id".into(),
             },
@@ -1288,8 +1259,6 @@ mod tests {
                 locked_upstream_ref: None,
                 publish_branch_action: crate::domain::session::PublishBranchAction::Push,
                 restore_view: ConfirmationViewMode {
-                    review_status_message: None,
-                    review_text: None,
                     scroll_offset: None,
                     session_id: "session-id".into(),
                 },
@@ -1328,8 +1297,6 @@ mod tests {
             locked_upstream_ref: None,
             publish_branch_action: crate::domain::session::PublishBranchAction::Push,
             restore_view: ConfirmationViewMode {
-                review_status_message: None,
-                review_text: None,
                 scroll_offset: None,
                 session_id: "session-id".into(),
             },
@@ -1360,8 +1327,6 @@ mod tests {
             locked_upstream_ref: Some("origin/review/custom".to_string()),
             publish_branch_action: crate::domain::session::PublishBranchAction::Push,
             restore_view: ConfirmationViewMode {
-                review_status_message: None,
-                review_text: None,
                 scroll_offset: None,
                 session_id: "session-id".into(),
             },
@@ -1418,8 +1383,6 @@ mod tests {
         app.mode = AppMode::OpenCommandSelector {
             commands: vec!["cargo test".to_string(), "npm run dev".to_string()],
             restore_view: ConfirmationViewMode {
-                review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
-                review_text: Some("Critical finding".to_string()),
                 scroll_offset: Some(3),
                 session_id: "session-id".into(),
             },
@@ -1438,13 +1401,9 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::View {
-                review_status_message: Some(ref status_message),
-                review_text: Some(ref review_text),
                 ref session_id,
                 scroll_offset: Some(3),
             } if session_id == "session-id"
-                && status_message == &review_loading_message(AgentModel::Gpt55)
-                && review_text == "Critical finding"
         ));
     }
 
@@ -1455,8 +1414,6 @@ mod tests {
         app.mode = AppMode::OpenCommandSelector {
             commands: vec!["cargo test".to_string(), "npm run dev".to_string()],
             restore_view: ConfirmationViewMode {
-                review_status_message: None,
-                review_text: None,
                 scroll_offset: None,
                 session_id: "session-id".into(),
             },
@@ -1488,8 +1445,6 @@ mod tests {
         app.mode = AppMode::OpenCommandSelector {
             commands: Vec::new(),
             restore_view: ConfirmationViewMode {
-                review_status_message: None,
-                review_text: None,
                 scroll_offset: None,
                 session_id: "session-id".into(),
             },
@@ -1521,8 +1476,6 @@ mod tests {
         app.mode = AppMode::OpenCommandSelector {
             commands: vec!["cargo test".to_string()],
             restore_view: ConfirmationViewMode {
-                review_status_message: None,
-                review_text: None,
                 scroll_offset: Some(4),
                 session_id: "session-id".into(),
             },
@@ -1541,8 +1494,6 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::View {
-                review_status_message: None,
-                review_text: None,
                 ref session_id,
                 scroll_offset: Some(4),
             } if session_id == "session-id"
@@ -1572,8 +1523,6 @@ mod tests {
         app.mode = AppMode::OpenCommandSelector {
             commands: vec!["cargo test".to_string(), "npm run dev".to_string()],
             restore_view: ConfirmationViewMode {
-                review_status_message: None,
-                review_text: None,
                 scroll_offset: Some(2),
                 session_id: expected_session_id.clone().into(),
             },
@@ -1592,8 +1541,6 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::View {
-                review_status_message: None,
-                review_text: None,
                 ref session_id,
                 scroll_offset: Some(2),
             } if session_id == &expected_session_id
@@ -1607,8 +1554,6 @@ mod tests {
         app.mode = AppMode::OpenCommandSelector {
             commands: vec!["cargo test".to_string(), "npm run dev".to_string()],
             restore_view: ConfirmationViewMode {
-                review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
-                review_text: Some("Critical finding".to_string()),
                 scroll_offset: Some(1),
                 session_id: "session-id".into(),
             },
@@ -1631,15 +1576,11 @@ mod tests {
                 ref commands,
                 restore_view:
                     ConfirmationViewMode {
-                        review_status_message: Some(ref status_message),
-                        review_text: Some(ref review_text),
                         scroll_offset: Some(1),
                         ref session_id,
                     },
             } if commands == &vec!["cargo test".to_string(), "npm run dev".to_string()]
                 && session_id == "session-id"
-                && status_message == &review_loading_message(AgentModel::Gpt55)
-                && review_text == "Critical finding"
         ));
     }
 
@@ -1657,8 +1598,6 @@ mod tests {
             confirmation_message: "Regenerate focused review?".to_string(),
             confirmation_title: "Confirm Regenerate".to_string(),
             restore_view: Some(ConfirmationViewMode {
-                review_status_message: None,
-                review_text: Some("Previous review".to_string()),
                 scroll_offset: Some(4),
                 session_id: session_id.clone().into(),
             }),
@@ -1675,10 +1614,9 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::View {
-                review_text: Some(ref review_text),
                 scroll_offset: Some(4),
                 ..
-            } if review_text == "Previous review"
+            }
         ));
     }
 
@@ -1706,8 +1644,6 @@ mod tests {
             confirmation_message: "Regenerate focused review?".to_string(),
             confirmation_title: "Confirm Regenerate".to_string(),
             restore_view: Some(ConfirmationViewMode {
-                review_status_message: None,
-                review_text: Some("Old review".to_string()),
                 scroll_offset: None,
                 session_id: session_id.clone().into(),
             }),
@@ -1721,14 +1657,7 @@ mod tests {
 
         // Assert — view is restored with loading state, cache shows new Loading entry
         assert!(matches!(event_result, Ok(EventResult::Continue)));
-        assert!(matches!(
-            app.mode,
-            AppMode::View {
-                review_status_message: Some(_),
-                review_text: None,
-                ..
-            }
-        ));
+        assert!(matches!(app.mode, AppMode::View { .. }));
         assert!(matches!(
             app.review_cache.get(session_id.as_str()),
             Some(ReviewCacheEntry::Loading { .. })

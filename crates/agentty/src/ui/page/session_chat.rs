@@ -55,6 +55,8 @@ pub struct SessionChatPage<'a> {
     /// Shared fully assembled output-layout cache for scroll metrics and
     /// frame rendering.
     pub output_layout_cache: &'a SessionOutputLayoutCache,
+    pub review_status_message: Option<&'a str>,
+    pub review_text: Option<&'a str>,
     pub scroll_offset: Option<u16>,
     pub session_index: usize,
     /// Observable update version for the rendered session snapshot.
@@ -79,6 +81,10 @@ pub struct SessionChatPageInput<'a> {
     pub mode: &'a AppMode,
     /// Shared output-layout cache for this render pass.
     pub output_layout_cache: &'a SessionOutputLayoutCache,
+    /// Focused-review status text for the rendered session.
+    pub review_status_message: Option<&'a str>,
+    /// Focused-review output for the rendered session.
+    pub review_text: Option<&'a str>,
     /// Current vertical output scroll offset.
     pub scroll_offset: Option<u16>,
     /// Index of the session being rendered.
@@ -101,6 +107,8 @@ impl<'a> SessionChatPage<'a> {
             markdown_render_cache,
             mode,
             output_layout_cache,
+            review_status_message,
+            review_text,
             scroll_offset,
             session_index,
             session_update_version,
@@ -116,6 +124,8 @@ impl<'a> SessionChatPage<'a> {
             markdown_render_cache,
             mode,
             output_layout_cache,
+            review_status_message,
+            review_text,
             scroll_offset,
             session_index,
             session_update_version,
@@ -154,61 +164,6 @@ impl<'a> SessionChatPage<'a> {
         )
     }
 
-    /// Returns focused-review status text for the active session transcript.
-    ///
-    /// Prompt mode preserves the last focused-review loader text so the output
-    /// panel does not flicker when users open the composer and then cancel.
-    fn review_status_message(&self) -> Option<&str> {
-        match self.mode {
-            AppMode::View {
-                review_status_message,
-                ..
-            }
-            | AppMode::Prompt {
-                review_status_message,
-                ..
-            }
-            | AppMode::Question {
-                review_status_message,
-                ..
-            } => review_status_message.as_deref(),
-            AppMode::OpenCommandSelector { restore_view, .. }
-            | AppMode::PublishBranchInput { restore_view, .. }
-            | AppMode::ViewInfoPopup { restore_view, .. } => {
-                restore_view.review_status_message.as_deref()
-            }
-            AppMode::List
-            | AppMode::ReviewDetail { .. }
-            | AppMode::SessionCreation { .. }
-            | AppMode::Confirmation { .. }
-            | AppMode::SyncBlockedPopup { .. }
-            | AppMode::Diff { .. }
-            | AppMode::Help { .. } => None,
-        }
-    }
-
-    /// Returns focused-review text for the active session transcript.
-    ///
-    /// Prompt mode preserves the appended focused review until the next prompt
-    /// is submitted so reopening the composer does not hide the review block.
-    fn review_text(&self) -> Option<&str> {
-        match self.mode {
-            AppMode::View { review_text, .. }
-            | AppMode::Prompt { review_text, .. }
-            | AppMode::Question { review_text, .. } => review_text.as_deref(),
-            AppMode::OpenCommandSelector { restore_view, .. }
-            | AppMode::PublishBranchInput { restore_view, .. }
-            | AppMode::ViewInfoPopup { restore_view, .. } => restore_view.review_text.as_deref(),
-            AppMode::List
-            | AppMode::ReviewDetail { .. }
-            | AppMode::SessionCreation { .. }
-            | AppMode::Confirmation { .. }
-            | AppMode::SyncBlockedPopup { .. }
-            | AppMode::Diff { .. }
-            | AppMode::Help { .. } => None,
-        }
-    }
-
     /// Prepares prompt-panel layout and suggestion data once for a render
     /// pass.
     fn prepare_prompt_panel(&self, area: Rect, session: &Session) -> Option<PreparedPromptPanel> {
@@ -216,7 +171,6 @@ impl<'a> SessionChatPage<'a> {
             at_mention_state,
             attachment_state,
             input,
-            review_text,
             slash_state,
             ..
         } = self.mode
@@ -229,7 +183,7 @@ impl<'a> SessionChatPage<'a> {
         // the slash dropdown to avoid implying the menu is actionable. The
         // `@` mention dropdown is still useful for editing queued messages.
         let suppress_slash_dropdown = session.status == crate::domain::session::Status::InProgress;
-        let allow_apply_command = review::has_actionable_review_suggestions(review_text.as_deref());
+        let allow_apply_command = review::has_actionable_review_suggestions(self.review_text);
         let suggestion_list = if suppress_slash_dropdown && input.text().starts_with('/') {
             None
         } else {
@@ -283,8 +237,8 @@ impl<'a> SessionChatPage<'a> {
             .output_layout_cache(self.output_layout_cache)
             .session_update_version(self.session_update_version);
         output = output.active_prompt_output(self.active_prompt_output);
-        output = output.review_status_message(self.review_status_message());
-        output = output.review_text(self.review_text());
+        output = output.review_status_message(self.review_status_message);
+        output = output.review_text(self.review_text);
         if let Some(scroll_offset) = self.scroll_offset {
             output = output.scroll_offset(scroll_offset);
         }
@@ -630,6 +584,8 @@ mod tests {
             markdown_render_cache: test_markdown_render_cache(),
             mode,
             output_layout_cache: test_output_layout_cache(),
+            review_status_message: None,
+            review_text: None,
             scroll_offset: None,
             session_index: 0,
             session_update_version: 0,
@@ -676,8 +632,6 @@ mod tests {
         let mut session = session_fixture();
         session.status = Status::Done;
         let mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: "session-id".into(),
             scroll_offset: None,
         };
@@ -706,8 +660,6 @@ mod tests {
         let mut session = session_fixture();
         session.status = Status::Canceled;
         let mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: "session-id".into(),
             scroll_offset: None,
         };
@@ -788,37 +740,34 @@ mod tests {
     }
 
     #[test]
-    fn test_review_text_reads_preserved_prompt_review_output() {
+    fn test_review_text_reads_snapshot_for_prompt_output() {
         // Arrange
         let session = session_fixture();
         let mode = AppMode::Prompt {
             at_mention_state: None,
             attachment_state: PromptAttachmentState::default(),
             history_state: PromptHistoryState::default(),
-            review_status_message: None,
-            review_text: Some("Focused review".to_string()),
             slash_state: PromptSlashState::default(),
             session_id: "session-id".into(),
             input: InputState::default(),
             scroll_offset: None,
         };
-        let page = test_session_chat_page(&session, &mode);
+        let mut page = test_session_chat_page(&session, &mode);
+        page.review_text = Some("Focused review");
 
         // Act
-        let review_text = page.review_text();
+        let review_text = page.review_text;
 
         // Assert
         assert_eq!(review_text, Some("Focused review"));
     }
 
     #[test]
-    fn test_review_text_reads_preserved_question_review_output() {
+    fn test_review_text_reads_snapshot_for_question_output() {
         // Arrange
         let session = session_fixture();
         let mode = AppMode::Question {
             at_mention_state: None,
-            review_status_message: Some("Reviewing changes with gpt-5.5".to_string()),
-            review_text: Some("Focused review".to_string()),
             session_id: "session-id".into(),
             questions: vec![QuestionItem::new("Need tests?")],
             responses: Vec::new(),
@@ -828,11 +777,13 @@ mod tests {
             scroll_offset: None,
             selected_option_index: None,
         };
-        let page = test_session_chat_page(&session, &mode);
+        let mut page = test_session_chat_page(&session, &mode);
+        page.review_status_message = Some("Reviewing changes with gpt-5.5");
+        page.review_text = Some("Focused review");
 
         // Act
-        let review_text = page.review_text();
-        let review_status_message = page.review_status_message();
+        let review_text = page.review_text;
+        let review_status_message = page.review_status_message;
 
         // Assert
         assert_eq!(review_text, Some("Focused review"));
@@ -871,8 +822,8 @@ mod tests {
                 active_prompt_output: None,
                 active_progress: None,
                 review_model: AgentModel::Gpt55,
-                review_status_message: Some("Reviewing changes with gpt-5.5"),
-                review_text: Some("## Review\n\n- Focused finding"),
+                review_status_message: None,
+                review_text: Some("## Review\n\n- Finding"),
                 session_update_version: 0,
             },
             &markdown_render_cache,
@@ -889,8 +840,6 @@ mod tests {
         let session = session_fixture();
         let mode = AppMode::Question {
             at_mention_state: None,
-            review_status_message: None,
-            review_text: None,
             session_id: "session-id".into(),
             questions: vec![QuestionItem {
                 options: Vec::new(),
@@ -927,8 +876,6 @@ mod tests {
         let question = "Need a detailed migration plan with rollback guidance?".to_string();
         let mode = AppMode::Question {
             at_mention_state: None,
-            review_status_message: None,
-            review_text: None,
             session_id: "session-id".into(),
             questions: vec![QuestionItem {
                 options: Vec::new(),
@@ -977,8 +924,6 @@ mod tests {
         let session = session_fixture();
         let mode = AppMode::Question {
             at_mention_state: None,
-            review_status_message: None,
-            review_text: None,
             session_id: "session-id".into(),
             questions: vec![QuestionItem {
                 options: vec!["Yes".to_string(), "No".to_string()],
@@ -1018,8 +963,6 @@ mod tests {
         let session = session_fixture();
         let mode = AppMode::Question {
             at_mention_state: None,
-            review_status_message: None,
-            review_text: None,
             session_id: "session-id".into(),
             questions: vec![QuestionItem {
                 options: vec![

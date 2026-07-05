@@ -265,8 +265,6 @@ impl App {
         }
 
         self.mode = AppMode::View {
-            review_status_message: self.prompt_review_status_message(),
-            review_text: self.prompt_review_text(),
             scroll_offset: context.scroll_offset,
             session_id: context.session_id.clone(),
         };
@@ -354,8 +352,6 @@ impl App {
     /// Restores view mode for the session that owned prompt input.
     fn restore_prompt_session_view(&mut self, context: &PromptIntentContext) {
         self.mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             scroll_offset: None,
             session_id: context.session_id.clone(),
         };
@@ -429,41 +425,6 @@ impl App {
                 error = %error,
                 "failed to update session reasoning level from prompt slash command"
             );
-        }
-    }
-
-    /// Returns the preserved focused-review status text stored in prompt
-    /// mode.
-    fn prompt_review_status_message(&self) -> Option<String> {
-        match &self.mode {
-            AppMode::Prompt {
-                review_status_message,
-                ..
-            } => review_status_message.clone(),
-            _ => None,
-        }
-    }
-
-    /// Returns the preserved focused-review output stored in prompt mode.
-    fn prompt_review_text(&self) -> Option<String> {
-        match &self.mode {
-            AppMode::Prompt { review_text, .. } => review_text.clone(),
-            _ => None,
-        }
-    }
-
-    /// Drops the preserved focused-review text and status message held in
-    /// prompt mode so a subsequent cancel cannot restore invalidated review
-    /// content.
-    fn clear_prompt_review_state(&mut self) {
-        if let AppMode::Prompt {
-            review_status_message,
-            review_text,
-            ..
-        } = &mut self.mode
-        {
-            *review_status_message = None;
-            *review_text = None;
         }
     }
 
@@ -598,7 +559,6 @@ impl App {
 
         if current_hash != cached_hash {
             self.review_cache.remove(context.session_id.as_str());
-            self.clear_prompt_review_state();
             self.append_prompt_status_line(
                 &context.session_id,
                 TranscriptNotice::Apply,
@@ -628,8 +588,6 @@ impl App {
         self.reply(&context.session_id, prompt).await;
 
         self.mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             scroll_offset: None,
             session_id: context.session_id.clone(),
         };

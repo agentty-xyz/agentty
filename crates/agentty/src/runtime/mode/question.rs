@@ -240,31 +240,13 @@ fn question_view_metrics(app: &App, terminal_size: Rect) -> QuestionViewMetrics 
         .iter()
         .position(|session| session.id == *session_id);
 
-    let (review_status_message, review_text) = match &app.mode {
-        AppMode::Question {
-            review_status_message,
-            review_text,
-            ..
-        } => (review_status_message.as_deref(), review_text.as_deref()),
-        AppMode::List
-        | AppMode::ReviewDetail { .. }
-        | AppMode::SessionCreation { .. }
-        | AppMode::Confirmation { .. }
-        | AppMode::SyncBlockedPopup { .. }
-        | AppMode::Prompt { .. }
-        | AppMode::View { .. }
-        | AppMode::Diff { .. }
-        | AppMode::Help { .. }
-        | AppMode::OpenCommandSelector { .. }
-        | AppMode::PublishBranchInput { .. }
-        | AppMode::ViewInfoPopup { .. } => (None, None),
-    };
+    let (review_status_message, review_text) = app.review_view_state(session_id);
     let total_lines = session_index.map_or(0, |index| {
         session_output_metric::rendered_output_line_count(
             app,
             session_id,
             index,
-            review_status_message,
+            review_status_message.as_deref(),
             review_text,
             output_width,
         )
@@ -362,8 +344,6 @@ fn take_question_snapshot(app: &mut App) -> Option<QuestionModeSnapshot> {
         current_index,
         input,
         questions,
-        review_status_message,
-        review_text,
         responses,
         scroll_offset,
         selected_option_index,
@@ -376,8 +356,6 @@ fn take_question_snapshot(app: &mut App) -> Option<QuestionModeSnapshot> {
             current_index,
             input,
             questions,
-            review_status_message,
-            review_text,
             responses,
             scroll_offset,
             selected_option_index,
@@ -830,8 +808,6 @@ async fn submit_response(app: &mut App, response: String) {
     let question_reply =
         build_question_reply_prompt(&completed_response.questions, &completed_response.responses);
     app.mode = AppMode::View {
-        review_status_message: None,
-        review_text: None,
         session_id: session_id.clone(),
         scroll_offset: None,
     };
@@ -1001,11 +977,7 @@ async fn end_turn_no_answer(app: &mut App) {
         session.status = Status::Review;
     }
 
-    let (review_status_message, review_text) = app.review_view_state(&session_id);
-
     app.mode = AppMode::View {
-        review_status_message,
-        review_text,
         session_id,
         scroll_offset: None,
     };
@@ -1115,8 +1087,6 @@ mod tests {
             input: InputState::default(),
             questions: vec![QuestionItem::new("Need a target branch?")],
             responses: Vec::new(),
-            review_status_message: None,
-            review_text: None,
             scroll_offset: None,
             selected_option_index: None,
             session_id: session_id.into(),
@@ -1153,8 +1123,6 @@ mod tests {
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::Question {
             at_mention_state: None,
-            review_status_message: None,
-            review_text: None,
             session_id: "missing-session".into(),
             questions: vec![
                 QuestionItem {
@@ -1208,8 +1176,6 @@ mod tests {
         );
         app.mode = AppMode::Question {
             at_mention_state: None,
-            review_status_message: None,
-            review_text: None,
             session_id: "session-ctrl-c".into(),
             questions: vec![
                 QuestionItem {
@@ -1242,10 +1208,8 @@ mod tests {
             app.mode,
             AppMode::View {
                 ref session_id,
-                review_status_message: None,
-                review_text: Some(ref review_text),
                 ..
-            } if session_id == "session-ctrl-c" && review_text == "Focused review"
+            } if session_id == "session-ctrl-c"
         ));
     }
 
@@ -1263,8 +1227,6 @@ mod tests {
         );
         app.mode = AppMode::Question {
             at_mention_state: None,
-            review_status_message: None,
-            review_text: None,
             session_id: "session-esc".into(),
             questions: vec![QuestionItem {
                 options: Vec::new(),
@@ -1291,10 +1253,8 @@ mod tests {
             app.mode,
             AppMode::View {
                 ref session_id,
-                review_status_message: None,
-                review_text: Some(ref review_text),
                 ..
-            } if session_id == "session-esc" && review_text == "Focused review"
+            } if session_id == "session-esc"
         ));
     }
 
@@ -1305,8 +1265,6 @@ mod tests {
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::Question {
             at_mention_state: None,
-            review_status_message: None,
-            review_text: None,
             session_id: "session-q-chat".into(),
             questions: vec![QuestionItem {
                 options: Vec::new(),
@@ -1339,8 +1297,6 @@ mod tests {
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::Question {
             at_mention_state: None,
-            review_status_message: None,
-            review_text: None,
             session_id: "session-q-options".into(),
             questions: vec![QuestionItem {
                 options: vec!["Yes".to_string(), "No".to_string()],
@@ -1414,8 +1370,6 @@ mod tests {
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::Question {
             at_mention_state: None,
-            review_status_message: None,
-            review_text: None,
             session_id: "session-q-text".into(),
             questions: vec![QuestionItem {
                 options: Vec::new(),
@@ -1488,8 +1442,6 @@ mod tests {
         });
         app.mode = AppMode::Question {
             at_mention_state: None,
-            review_status_message: None,
-            review_text: None,
             session_id: session_id.into(),
             questions: vec![QuestionItem {
                 options: Vec::new(),
@@ -1570,8 +1522,6 @@ mod tests {
         );
         app.mode = AppMode::Question {
             at_mention_state: None,
-            review_status_message: None,
-            review_text: None,
             session_id: session_id.into(),
             questions: vec![QuestionItem {
                 options: Vec::new(),
@@ -1636,8 +1586,6 @@ mod tests {
             .expect("failed to open timing window");
         app.mode = AppMode::Question {
             at_mention_state: None,
-            review_status_message: None,
-            review_text: None,
             session_id: session_id.into(),
             questions: vec![QuestionItem {
                 options: Vec::new(),
@@ -1682,8 +1630,6 @@ mod tests {
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::Question {
             at_mention_state: None,
-            review_status_message: None,
-            review_text: None,
             session_id: "missing-session".into(),
             questions: vec![QuestionItem {
                 options: vec!["Today".to_string(), "Tomorrow".to_string()],
@@ -1836,8 +1782,6 @@ mod tests {
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::Question {
             at_mention_state: None,
-            review_status_message: None,
-            review_text: None,
             session_id: "session-id".into(),
             questions: vec![QuestionItem {
                 options: vec!["Default".to_string()],
@@ -1888,8 +1832,6 @@ mod tests {
     fn question_mode_with_options() -> AppMode {
         AppMode::Question {
             at_mention_state: None,
-            review_status_message: None,
-            review_text: None,
             session_id: "session-id".into(),
             questions: vec![QuestionItem {
                 options: vec![
@@ -2057,8 +1999,6 @@ mod tests {
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::Question {
             at_mention_state: None,
-            review_status_message: None,
-            review_text: None,
             session_id: "missing-session".into(),
             questions: vec![
                 QuestionItem {
@@ -2318,8 +2258,6 @@ mod tests {
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::Question {
             at_mention_state: None,
-            review_status_message: None,
-            review_text: None,
             session_id: "missing-session".into(),
             questions: vec![
                 QuestionItem {
@@ -2634,8 +2572,6 @@ mod tests {
 
         AppMode::Question {
             at_mention_state: None,
-            review_status_message: None,
-            review_text: None,
             session_id: "session-id".into(),
             questions: vec![QuestionItem {
                 options: Vec::new(),
@@ -3082,8 +3018,6 @@ mod tests {
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::Question {
             at_mention_state: None,
-            review_status_message: None,
-            review_text: None,
             session_id: "missing-session".into(),
             questions: vec![
                 QuestionItem {
@@ -3129,8 +3063,6 @@ mod tests {
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::Question {
             at_mention_state: None,
-            review_status_message: None,
-            review_text: None,
             session_id: "session-esc-chat".into(),
             questions: vec![QuestionItem {
                 options: vec!["Yes".to_string()],
@@ -3210,8 +3142,6 @@ mod tests {
 
         app.mode = AppMode::Question {
             at_mention_state: None,
-            review_status_message: None,
-            review_text: None,
             session_id: session_id.into(),
             questions: vec![QuestionItem {
                 options: vec!["A".to_string()],

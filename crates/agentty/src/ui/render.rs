@@ -16,6 +16,14 @@ use crate::infra::review_comment_cache::ReviewCommentCache;
 use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
 use crate::ui::{component, markdown, page, router};
 
+/// Focused-review display state projected from the app cache for one visible
+/// session.
+pub struct SessionReviewSnapshot<'a> {
+    pub session_id: &'a str,
+    pub status_message: Option<String>,
+    pub text: Option<&'a str>,
+}
+
 /// A trait for UI pages that enforces a standard rendering interface.
 pub trait Page {
     /// Renders a page in the provided frame and area.
@@ -60,6 +68,9 @@ pub struct RenderContext<'a> {
     pub projects: &'a [ProjectListItem],
     /// Shared cache of inline review-request comments keyed by session id.
     pub review_comment_cache: &'a ReviewCommentCache,
+    /// Focused-review state for the visible session, projected from the app
+    /// cache for this render pass.
+    pub session_review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
     /// Project-scoped requested PR/MR review list state.
     pub requested_reviews: &'a RequestedReviewState,
     /// Selected requested-review item index for the review list, excluding
@@ -336,8 +347,6 @@ mod tests {
         let session_id = "session-view-mode";
         let session = session_fixture(session_id, "/tmp/session-view-folder");
         let mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: session_id.into(),
             scroll_offset: None,
         };
@@ -384,8 +393,6 @@ mod tests {
         let mut session = session_fixture(session_id, "/tmp/session-view-folder");
         session.published_upstream_ref = Some("origin/wt/upstream".to_string());
         let mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: session_id.into(),
             scroll_offset: None,
         };
@@ -435,8 +442,6 @@ mod tests {
             loading_label: "Publishing branch".to_string(),
             message: "Published".to_string(),
             restore_view: ConfirmationViewMode {
-                review_status_message: None,
-                review_text: None,
                 scroll_offset: None,
                 session_id: session_id.into(),
             },
@@ -570,8 +575,6 @@ mod tests {
         let mut session = session_fixture(session_id, "/tmp/session-status-folder");
         session.published_upstream_ref = Some("origin/wt/session-status".to_string());
         let mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: session_id.into(),
             scroll_offset: None,
         };
@@ -625,8 +628,6 @@ mod tests {
         let session_id = "session-unpublished-status";
         let session = session_fixture(session_id, "/tmp/session-unpublished-status-folder");
         let mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: session_id.into(),
             scroll_offset: None,
         };
@@ -680,8 +681,6 @@ mod tests {
         let session_id = "legacy";
         let session = session_fixture(session_id, "/tmp/session-legacy-folder");
         let mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: session_id.into(),
             scroll_offset: None,
         };

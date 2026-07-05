@@ -1005,8 +1005,6 @@ mod tests {
             at_mention_state,
             attachment_state: PromptAttachmentState::default(),
             history_state: PromptHistoryState::new(Vec::new()),
-            review_status_message: None,
-            review_text: None,
             slash_state: PromptSlashState::default(),
             session_id: session_id.into(),
             input: InputState::with_text(input_text.to_string()),
@@ -2261,8 +2259,6 @@ mod tests {
             at_mention_state: None,
             attachment_state: PromptAttachmentState::default(),
             history_state: PromptHistoryState::new(Vec::new()),
-            review_status_message: None,
-            review_text: None,
             input: InputState::with_text("follow up".to_string()),
             session_id: "missing-session".into(),
             slash_state: PromptSlashState::default(),
@@ -2558,29 +2554,13 @@ mod tests {
                 text: "Focused review".to_string(),
             },
         );
-        if let AppMode::Prompt {
-            review_status_message,
-            review_text,
-            ..
-        } = &mut app.mode
-        {
-            *review_status_message = None;
-            *review_text = Some("Focused review".to_string());
-        }
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
         handle_prompt_submit_key(&mut app, &prompt_context).await;
 
         // Assert
-        assert!(matches!(
-            app.mode,
-            AppMode::View {
-                review_status_message: None,
-                review_text: None,
-                ..
-            }
-        ));
+        assert!(matches!(app.mode, AppMode::View { .. }));
         assert!(!app.review_cache.contains_key(session_id.as_str()));
     }
 
@@ -2624,29 +2604,13 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("follow up", None).await;
         app.sessions.sessions_mut()[0].status = crate::domain::session::Status::Review;
-        if let AppMode::Prompt {
-            review_status_message,
-            review_text,
-            ..
-        } = &mut app.mode
-        {
-            *review_status_message = None;
-            *review_text = Some("Focused review".to_string());
-        }
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
         handle_prompt_cancel_key(&mut app, &prompt_context).await;
 
         // Assert
-        assert!(matches!(
-            app.mode,
-            AppMode::View {
-                review_status_message: None,
-                review_text: Some(ref review_text),
-                ..
-            } if review_text == "Focused review"
-        ));
+        assert!(matches!(app.mode, AppMode::View { .. }));
     }
 
     #[tokio::test]
@@ -2744,15 +2708,6 @@ mod tests {
                 text: "## Review\n### Suggestions\n- Fix the typo.".to_string(),
             },
         );
-        if let AppMode::Prompt {
-            review_status_message,
-            review_text,
-            ..
-        } = &mut app.mode
-        {
-            *review_status_message = Some("stale status".to_string());
-            *review_text = Some("## Review\n### Suggestions\n- Fix the typo.".to_string());
-        }
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
@@ -2761,22 +2716,7 @@ mod tests {
 
         // Assert
         assert!(!app.review_cache.contains_key(session_id.as_str()));
-        let AppMode::Prompt {
-            review_status_message,
-            review_text,
-            ..
-        } = &app.mode
-        else {
-            unreachable!("expected AppMode::Prompt after stale-hash bail-out");
-        };
-        assert!(
-            review_status_message.is_none(),
-            "stale review status must be cleared so cancel cannot restore it",
-        );
-        assert!(
-            review_text.is_none(),
-            "stale review text must be cleared so cancel cannot restore it",
-        );
+        assert!(matches!(app.mode, AppMode::Prompt { .. }));
     }
 
     #[tokio::test]

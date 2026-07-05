@@ -778,7 +778,6 @@ impl App {
 
         let focused_review_persistence = apply_review_updates(
             &mut self.review_cache,
-            &mut self.mode,
             self.sessions.state_mut(),
             event_batch.review_updates,
         );
@@ -842,7 +841,6 @@ impl App {
             &mut self.review_cache,
             &event_batch.session_ids,
             self.sessions.state_mut(),
-            &mut self.mode,
             self.services.git_client(),
             self.services.event_sender(),
             self.settings.default_review_selection.model(),
@@ -1444,14 +1442,11 @@ impl App {
         }
 
         if self.is_viewing_session(session_id) {
-            let (review_status_message, review_text) = self.question_mode_review_state(session_id);
             self.mode = AppMode::Question {
                 at_mention_state: None,
                 selected_option_index: question::default_option_index(&questions, 0),
                 session_id: session_id.into(),
                 questions,
-                review_status_message,
-                review_text,
                 responses: Vec::new(),
                 current_index: 0,
                 focus: QuestionFocus::Answer,
@@ -1511,45 +1506,6 @@ impl App {
             | AppMode::Confirmation { .. }
             | AppMode::SyncBlockedPopup { .. }
             | AppMode::Help { .. } => false,
-        }
-    }
-
-    /// Returns the focused-review state that should remain visible when the
-    /// UI enters clarification-question mode for the provided session.
-    fn question_mode_review_state(&self, session_id: &str) -> (Option<String>, Option<String>) {
-        match &self.mode {
-            AppMode::View {
-                review_status_message,
-                review_text,
-                ..
-            }
-            | AppMode::Prompt {
-                review_status_message,
-                review_text,
-                ..
-            }
-            | AppMode::Question {
-                review_status_message,
-                review_text,
-                ..
-            } => (review_status_message.clone(), review_text.clone()),
-            AppMode::OpenCommandSelector { restore_view, .. }
-            | AppMode::PublishBranchInput { restore_view, .. }
-            | AppMode::ViewInfoPopup { restore_view, .. } => (
-                restore_view.review_status_message.clone(),
-                restore_view.review_text.clone(),
-            ),
-            AppMode::Diff {
-                session_id: diff_session_id,
-                ..
-            } if diff_session_id == session_id => self.review_view_state(session_id),
-            AppMode::List
-            | AppMode::ReviewDetail { .. }
-            | AppMode::SessionCreation { .. }
-            | AppMode::Confirmation { .. }
-            | AppMode::SyncBlockedPopup { .. }
-            | AppMode::Diff { .. }
-            | AppMode::Help { .. } => (None, None),
         }
     }
 
@@ -1651,7 +1607,6 @@ impl App {
         review_updates.insert(SessionId::from(session_id), review_update);
         apply_review_updates(
             &mut self.review_cache,
-            &mut self.mode,
             self.sessions.state_mut(),
             review_updates,
         );
@@ -1688,7 +1643,6 @@ impl App {
             &mut self.review_cache,
             session_ids,
             self.sessions.state_mut(),
-            &mut self.mode,
             self.services.git_client(),
             self.services.event_sender(),
             self.settings.default_review_selection.model(),

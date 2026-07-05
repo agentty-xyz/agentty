@@ -1,11 +1,14 @@
 //! Draw helpers and render-facing accessors for the app core module.
 
+use std::collections::HashMap;
+
 use ratatui::Frame;
 
 use super::state::{App, UpdateStatus};
-use crate::app::session;
 use crate::app::tab::Tab;
-use crate::domain::session::{PublishedBranchSyncStatus, Session, Status};
+use crate::app::{ReviewCacheEntry, review, session};
+use crate::domain::agent::AgentModel;
+use crate::domain::session::{PublishedBranchSyncStatus, Session, SessionId, Status};
 use crate::ui;
 use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
 use crate::ui::style;
@@ -110,6 +113,11 @@ impl App {
         let review_comment_cache = self.services.review_comment_cache();
         let requested_review_selected_index = self.requested_review_selected_index();
         let mode = &self.mode;
+        let session_review_snapshot = visible_session_review_snapshot(
+            mode,
+            &self.review_cache,
+            self.settings.default_review_selection.model(),
+        );
         let requested_review_table_state = &mut self.requested_review_table_state;
         let project_render_parts = self.projects.render_parts();
         let session_render_parts = self.sessions.render_parts();
@@ -135,6 +143,7 @@ impl App {
                 project_table_state: project_render_parts.table_state,
                 projects: project_render_parts.project_items,
                 review_comment_cache: &review_comment_cache,
+                session_review_snapshot: session_review_snapshot.as_ref(),
                 requested_reviews: &self.requested_reviews,
                 requested_review_selected_index,
                 requested_review_table_state,
@@ -198,4 +207,47 @@ impl App {
             )
             || session.published_branch_sync_status == PublishedBranchSyncStatus::InProgress
     }
+}
+
+/// Projects focused-review cache state for the session currently visible behind
+/// the active mode without cloning the cached review body during rendering.
+fn visible_session_review_snapshot<'a>(
+    mode: &'a AppMode,
+    review_cache: &'a HashMap<SessionId, ReviewCacheEntry>,
+    review_model: AgentModel,
+) -> Option<ui::SessionReviewSnapshot<'a>> {
+    let session_id = match mode {
+        AppMode::View { session_id, .. }
+        | AppMode::Prompt { session_id, .. }
+        | AppMode::Question { session_id, .. }
+        | AppMode::Diff { session_id, .. } => session_id,
+        AppMode::Confirmation {
+            restore_view: Some(restore_view),
+            ..
+        }
+        | AppMode::OpenCommandSelector { restore_view, .. }
+        | AppMode::PublishBranchInput { restore_view, .. }
+        | AppMode::ViewInfoPopup { restore_view, .. } => &restore_view.session_id,
+        AppMode::Help {
+            context: HelpContext::View { session_id, .. },
+            ..
+        }
+        | AppMode::Help {
+            context: HelpContext::Diff { session_id, .. },
+            ..
+        } => session_id,
+        AppMode::List
+        | AppMode::ReviewDetail { .. }
+        | AppMode::SessionCreation { .. }
+        | AppMode::Confirmation { .. }
+        | AppMode::SyncBlockedPopup { .. }
+        | AppMode::Help { .. } => return None,
+    };
+    let (status_message, text) = review::review_view_state(review_cache, session_id, review_model);
+
+    Some(ui::SessionReviewSnapshot {
+        session_id: session_id.as_str(),
+        status_message,
+        text,
+    })
 }

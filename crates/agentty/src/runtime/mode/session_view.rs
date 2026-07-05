@@ -11,9 +11,7 @@ use crate::app::prompt_intent::{
 use crate::app::session::{SessionTaskService, remote_branch_name_from_upstream_ref};
 use crate::app::{
     self, App, AppEvent, ReviewCacheEntry, diff_content_hash, is_review_loading_status_message,
-    review_loading_message,
 };
-use crate::domain::agent::AgentModel;
 use crate::domain::input::InputState;
 use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, SessionId, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -29,8 +27,6 @@ use crate::ui::state::prompt::{PromptAttachmentState, PromptHistoryState};
 
 #[derive(Clone)]
 struct ViewContext {
-    review_status_message: Option<String>,
-    review_text: Option<String>,
     scroll_offset: Option<u16>,
     session_id: SessionId,
     session_index: usize,
@@ -45,17 +41,13 @@ struct ViewMetrics {
 /// Pending review and scroll updates produced by one key event in session-view
 /// mode.
 struct ViewPendingUpdate {
-    review_status_message: Option<String>,
-    review_text: Option<String>,
     scroll_offset: Option<u16>,
 }
 
 impl ViewPendingUpdate {
-    /// Builds update state seeded from the current view mode values.
+    /// Builds update state seeded from the current view scroll.
     fn from_context(view_context: &ViewContext) -> Self {
         Self {
-            review_status_message: view_context.review_status_message.clone(),
-            review_text: view_context.review_text.clone(),
             scroll_offset: view_context.scroll_offset,
         }
     }
@@ -225,12 +217,7 @@ where
         return Ok(EventResult::Continue);
     }
 
-    apply_view_scroll_and_output_mode(
-        app,
-        pending_update.review_status_message,
-        pending_update.review_text,
-        pending_update.scroll_offset,
-    );
+    apply_view_scroll_and_output_mode(app, pending_update.scroll_offset);
 
     Ok(EventResult::Continue)
 }
@@ -457,10 +444,7 @@ async fn handle_workflow_view_key(
             open_merge_confirmation(app, view_context);
         }
         KeyCode::Char('r') if view_session_snapshot.can_rebase_session() => {
-            if rebase_view_session(app, &view_context.session_id).await {
-                pending_update.review_status_message = None;
-                pending_update.review_text = None;
-            }
+            rebase_view_session(app, &view_context.session_id).await;
         }
         KeyCode::Char('c')
             if key.modifiers.contains(event::KeyModifiers::CONTROL)
@@ -553,8 +537,6 @@ async fn open_worktree_for_view_session(app: &mut App, view_context: &ViewContex
 /// confirmation is dismissed.
 fn confirmation_view_mode(view_context: &ViewContext) -> ConfirmationViewMode {
     ConfirmationViewMode {
-        review_status_message: view_context.review_status_message.clone(),
-        review_text: view_context.review_text.clone(),
         scroll_offset: view_context.scroll_offset,
         session_id: view_context.session_id.clone(),
     }
@@ -572,15 +554,15 @@ async fn open_or_regenerate_review(
     view_context: &ViewContext,
     pending_update: &mut ViewPendingUpdate,
 ) {
-    let is_loading = pending_update
-        .review_status_message
+    let (review_status_message, review_text) = app.review_view_state(&view_context.session_id);
+    let is_loading = review_status_message
         .as_deref()
         .is_some_and(is_review_loading_status_message);
     if is_loading {
         return;
     }
 
-    if pending_update.review_text.is_some() || pending_update.review_status_message.is_some() {
+    if review_text.is_some() || review_status_message.is_some() {
         app.mode = AppMode::Confirmation {
             confirmation_intent: ConfirmationIntent::RegenerateReview,
             confirmation_message: "Regenerate focused review?".to_string(),
@@ -593,13 +575,7 @@ async fn open_or_regenerate_review(
         return;
     }
 
-    open_review_output_mode(
-        app,
-        view_context,
-        &mut pending_update.review_status_message,
-        &mut pending_update.review_text,
-    )
-    .await;
+    open_review_output_mode(app, view_context).await;
 
     pending_update.scroll_offset = None;
 }
@@ -647,21 +623,12 @@ fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSe
 
 /// Applies in-place updates for active view review status/text and scroll
 /// position.
-fn apply_view_scroll_and_output_mode(
-    app: &mut App,
-    review_status_message: Option<String>,
-    review_text: Option<String>,
-    scroll_offset: Option<u16>,
-) {
+fn apply_view_scroll_and_output_mode(app: &mut App, scroll_offset: Option<u16>) {
     if let AppMode::View {
-        review_status_message: view_review_status_message,
-        review_text: view_review_text,
         scroll_offset: view_scroll_offset,
         ..
     } = &mut app.mode
     {
-        *view_review_status_message = review_status_message;
-        *view_review_text = review_text;
         *view_scroll_offset = scroll_offset;
     }
 }
@@ -916,8 +883,6 @@ fn switch_view_to_prompt(
         at_mention_state: None,
         attachment_state: PromptAttachmentState::default(),
         history_state,
-        review_status_message: view_context.review_status_message.clone(),
-        review_text: view_context.review_text.clone(),
         slash_state: app.prompt_slash_state(),
         session_id: view_context.session_id.clone(),
         input,
@@ -969,8 +934,6 @@ fn open_view_help_overlay(
             can_rebase_session_branch: view_session_snapshot.can_rebase_session_branch(),
             can_reply_to_session: view_session_snapshot.can_reply_to_session(),
             can_start_staged_session: view_session_snapshot.can_start_staged_session(),
-            review_status_message: view_context.review_status_message.clone(),
-            review_text: view_context.review_text.clone(),
             publish_pull_request_action: view_session_snapshot.publish_pull_request_action,
             session_id: view_context.session_id.clone(),
             session_state: view_session_snapshot.session_state,
@@ -1008,18 +971,11 @@ fn open_publish_branch_input(
 }
 
 fn view_context(app: &mut App) -> Option<ViewContext> {
-    let (review_status_message, review_text, session_id, scroll_offset) = match &app.mode {
+    let (session_id, scroll_offset) = match &app.mode {
         AppMode::View {
-            review_status_message,
-            review_text,
             session_id,
             scroll_offset,
-        } => (
-            review_status_message.clone(),
-            review_text.clone(),
-            session_id.clone(),
-            *scroll_offset,
-        ),
+        } => (session_id.clone(), *scroll_offset),
         _ => return None,
     };
 
@@ -1030,8 +986,6 @@ fn view_context(app: &mut App) -> Option<ViewContext> {
     };
 
     Some(ViewContext {
-        review_status_message,
-        review_text,
         scroll_offset,
         session_id,
         session_index,
@@ -1049,12 +1003,13 @@ where
     let terminal_size = terminal.size().map_err(crate::runtime::backend_err)?;
     let view_height = terminal_size.height.saturating_sub(5);
     let output_width = terminal_size.width.saturating_sub(2);
+    let (review_status_message, review_text) = app.review_view_state(&view_context.session_id);
     let total_lines = session_output_metric::rendered_output_line_count(
         app,
         &view_context.session_id,
         view_context.session_index,
-        view_context.review_status_message.as_deref(),
-        view_context.review_text.as_deref(),
+        review_status_message.as_deref(),
+        review_text,
         output_width,
     );
 
@@ -1150,68 +1105,45 @@ fn half_page_scroll_step(metrics: ViewMetrics) -> u16 {
 /// immediately. The resulting review is appended into the normal session
 /// output panel instead of replacing it, and successful review text is
 /// persisted for restart hydration.
-async fn open_review_output_mode(
-    app: &mut App,
-    view_context: &ViewContext,
-    review_status_message: &mut Option<String>,
-    review_text: &mut Option<String>,
-) {
-    let review_is_loading = review_status_message
-        .as_deref()
-        .is_some_and(is_review_loading_status_message);
-    if review_text.is_some() || review_is_loading {
-        return;
-    }
-
+async fn open_review_output_mode(app: &mut App, view_context: &ViewContext) {
     if let Some(cached) = app.review_cache.get(view_context.session_id.as_str()) {
-        match cached {
-            ReviewCacheEntry::Loading { .. } => {
-                let review_model = review_assist_model(app);
-                *review_status_message = Some(review_loading_message(review_model));
-                *review_text = None;
-            }
-            ReviewCacheEntry::Ready { text, .. } => {
-                *review_status_message = None;
-                *review_text = Some(text.clone());
-            }
-            ReviewCacheEntry::Failed { error, .. } => {
-                *review_status_message =
-                    Some(format!("Review assist unavailable: {}", error.trim()));
-                *review_text = None;
-            }
-            ReviewCacheEntry::Suppressed { .. } => {}
-        }
-
         if !matches!(cached, ReviewCacheEntry::Suppressed { .. }) {
             return;
         }
     }
 
     let Some(session) = app.sessions.session_at(view_context.session_index) else {
-        *review_status_message = None;
-        *review_text = Some(String::new());
-
         return;
     };
     let session_folder = session.folder.clone();
     let session_summary = session.summary.clone();
     let diff = load_view_session_diff(app, view_context).await;
     if diff.trim().is_empty() {
-        *review_status_message = None;
-        *review_text = Some(REVIEW_NO_DIFF_MESSAGE.to_string());
+        app.review_cache.insert(
+            view_context.session_id.clone(),
+            ReviewCacheEntry::Ready {
+                diff_hash: diff_content_hash(&diff),
+                text: REVIEW_NO_DIFF_MESSAGE.to_string(),
+            },
+        );
 
         return;
     }
 
     if diff.starts_with("Failed to run git diff:") {
-        *review_status_message = None;
-        *review_text = Some(diff);
+        let diff_hash = diff_content_hash(&diff);
+        app.review_cache.insert(
+            view_context.session_id.clone(),
+            ReviewCacheEntry::Ready {
+                diff_hash,
+                text: diff,
+            },
+        );
 
         return;
     }
 
     let diff_hash = diff_content_hash(&diff);
-    let review_model = review_assist_model(app);
     app.review_cache.insert(
         view_context.session_id.clone(),
         ReviewCacheEntry::Loading { diff_hash },
@@ -1222,8 +1154,6 @@ async fn open_review_output_mode(
         .sessions()
         .update_session_focused_review(&view_context.session_id, None, None)
         .await;
-    *review_status_message = Some(review_loading_message(review_model));
-    *review_text = None;
     app.start_review_assist(
         &view_context.session_id,
         &session_folder,
@@ -1255,11 +1185,6 @@ async fn show_diff_for_view_session(app: &mut App, view_context: &ViewContext) -
     };
 
     true
-}
-
-/// Returns the configured model used for review assist generation.
-fn review_assist_model(app: &App) -> AgentModel {
-    app.settings.default_review_selection.model()
 }
 
 /// Loads the session worktree diff against its base branch.
@@ -1311,6 +1236,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::app::review_loading_message;
+    use crate::domain::agent::AgentModel;
     use crate::infra::tmux::{MockTmuxClient, TmuxClient};
     use crate::ui::component::session_output::SessionOutputLineContext;
     use crate::ui::page::session_chat::SessionChatPage;
@@ -1527,8 +1454,6 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
         app.mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: "missing-session".into(),
             scroll_offset: Some(2),
         };
@@ -1546,8 +1471,6 @@ mod tests {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: session_id.clone().into(),
             scroll_offset: Some(4),
         };
@@ -1569,8 +1492,6 @@ mod tests {
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.sessions.sessions_mut()[0].status = Status::Done;
         app.mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: session_id.into(),
             scroll_offset: Some(1),
         };
@@ -1592,8 +1513,6 @@ mod tests {
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.sessions.sessions_mut()[0].status = Status::Canceled;
         app.mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: session_id.into(),
             scroll_offset: Some(1),
         };
@@ -1620,8 +1539,6 @@ mod tests {
             .await
             .expect("failed to create draft session");
         app.mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: session_id.into(),
             scroll_offset: Some(1),
         };
@@ -1660,8 +1577,6 @@ mod tests {
         session.parent_session_id = Some(parent_session_id.clone().into());
         session.prompt = "staged child draft".to_string();
         app.mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: session_id.into(),
             scroll_offset: Some(1),
         };
@@ -1754,8 +1669,6 @@ mod tests {
         session.parent_session_id = Some(parent_session_id.into());
         session.prompt = "staged child draft".to_string();
         app.mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: session_id.into(),
             scroll_offset: Some(1),
         };
@@ -1794,8 +1707,6 @@ mod tests {
         child_session.parent_session_id = Some(parent_session_id.clone().into());
         child_session.status = Status::Review;
         app.mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: parent_session_id.clone().into(),
             scroll_offset: Some(1),
         };
@@ -1835,8 +1746,6 @@ mod tests {
         child_session.parent_session_id = Some(parent_session_id.clone().into());
         child_session.status = Status::InProgress;
         app.mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: parent_session_id.clone().into(),
             scroll_offset: Some(1),
         };
@@ -1859,8 +1768,6 @@ mod tests {
         app.sessions
             .set_session_worktree_available(&session_id, false);
         app.mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: session_id.into(),
             scroll_offset: Some(1),
         };
@@ -1878,8 +1785,6 @@ mod tests {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: session_id.into(),
             scroll_offset: Some(1),
         };
@@ -2012,35 +1917,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_apply_view_scroll_and_output_mode_updates_review_state() {
+    async fn test_apply_view_scroll_and_output_mode_updates_scroll_state() {
         // Arrange
         let (mut app, _base_dir, expected_session_id) = new_test_app_with_session().await;
-        let expected_status_message = review_loading_message(AgentModel::Gpt55);
         app.mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: expected_session_id.clone().into(),
             scroll_offset: Some(3),
         };
 
         // Act
-        apply_view_scroll_and_output_mode(
-            &mut app,
-            Some(expected_status_message.clone()),
-            None,
-            Some(1),
-        );
+        apply_view_scroll_and_output_mode(&mut app, Some(1));
 
         // Assert
         assert!(matches!(
             app.mode,
             AppMode::View {
-                review_status_message: Some(ref actual_status_message),
-                review_text: None,
                 ref session_id,
                 scroll_offset: Some(1),
             } if session_id == &expected_session_id
-                && actual_status_message == &expected_status_message
         ));
     }
 
@@ -2066,22 +1960,6 @@ mod tests {
 
         // Assert
         assert!(!is_loading);
-    }
-
-    #[tokio::test]
-    async fn test_review_assist_model_returns_default_review_model_setting() {
-        // Arrange
-        let (mut app, _base_dir, _session_id) = new_test_app_with_session().await;
-        app.settings.default_review_selection = crate::domain::agent::AgentSelection::new(
-            crate::domain::agent::AgentKind::Claude,
-            AgentModel::ClaudeOpus48,
-        );
-
-        // Act
-        let review_model = review_assist_model(&app);
-
-        // Assert
-        assert_eq!(review_model, AgentModel::ClaudeOpus48);
     }
 
     #[tokio::test]
@@ -2129,31 +2007,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_open_review_output_mode_reuses_cached_review_text() {
+    async fn test_open_review_output_mode_leaves_existing_cache_unchanged() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.review_cache.insert(
+            session_id.clone().into(),
+            ReviewCacheEntry::Ready {
+                diff_hash: 123,
+                text: "Cached review".to_string(),
+            },
+        );
         let view_context = ViewContext {
-            review_status_message: None,
-            review_text: None,
             scroll_offset: None,
             session_id: session_id.into(),
             session_index: 0,
         };
-        let mut next_review_status_message = None;
-        let mut next_review_text = Some("Cached review".to_string());
 
         // Act
-        open_review_output_mode(
-            &mut app,
-            &view_context,
-            &mut next_review_status_message,
-            &mut next_review_text,
-        )
-        .await;
+        open_review_output_mode(&mut app, &view_context).await;
 
         // Assert
-        assert_eq!(next_review_status_message, None);
-        assert_eq!(next_review_text.as_deref(), Some("Cached review"));
+        let (review_status_message, review_text) = app.review_view_state(&view_context.session_id);
+        assert_eq!(review_status_message, None);
+        assert_eq!(review_text, Some("Cached review"));
     }
 
     #[tokio::test]
@@ -2169,30 +2045,21 @@ mod tests {
         std::fs::write(session_folder.join("README.md"), "review test content\n")
             .expect("failed to update readme");
         let view_context = ViewContext {
-            review_status_message: None,
-            review_text: None,
             scroll_offset: None,
             session_id: session_id.into(),
             session_index: 0,
         };
-        let mut next_review_status_message = None;
-        let mut next_review_text = None;
 
         // Act
-        open_review_output_mode(
-            &mut app,
-            &view_context,
-            &mut next_review_status_message,
-            &mut next_review_text,
-        )
-        .await;
+        open_review_output_mode(&mut app, &view_context).await;
 
         // Assert
+        let (review_status_message, review_text) = app.review_view_state(&view_context.session_id);
         assert_eq!(
-            next_review_status_message,
+            review_status_message,
             Some(review_loading_message(AgentModel::ClaudeOpus48))
         );
-        assert_eq!(next_review_text, None);
+        assert_eq!(review_text, None);
         assert_eq!(app.sessions.sessions()[0].status, Status::AgentReview);
         assert!(matches!(
             app.review_cache.get(&view_context.session_id),
@@ -2205,57 +2072,43 @@ mod tests {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         let view_context = ViewContext {
-            review_status_message: None,
-            review_text: None,
             scroll_offset: None,
             session_id: session_id.into(),
             session_index: 0,
         };
-        let mut next_review_status_message = None;
-        let mut next_review_text = None;
 
         // Act
-        open_review_output_mode(
-            &mut app,
-            &view_context,
-            &mut next_review_status_message,
-            &mut next_review_text,
-        )
-        .await;
+        open_review_output_mode(&mut app, &view_context).await;
 
         // Assert
-        assert_eq!(next_review_status_message, None);
-        assert_eq!(next_review_text.as_deref(), Some(REVIEW_NO_DIFF_MESSAGE));
-        assert!(!app.review_cache.contains_key(&view_context.session_id));
+        let (review_status_message, review_text) = app.review_view_state(&view_context.session_id);
+        assert_eq!(review_status_message, None);
+        assert_eq!(review_text, Some(REVIEW_NO_DIFF_MESSAGE));
+        assert!(matches!(
+            app.review_cache.get(&view_context.session_id),
+            Some(ReviewCacheEntry::Ready {
+                diff_hash,
+                text,
+            }) if *diff_hash == diff_content_hash("") && text == REVIEW_NO_DIFF_MESSAGE
+        ));
     }
 
     #[tokio::test]
-    async fn test_open_review_output_mode_clears_stale_session_selection() {
+    async fn test_open_review_output_mode_ignores_stale_session_selection() {
         // Arrange
         let (app, _base_dir, session_id) = new_test_app_with_session().await;
         let view_context = ViewContext {
-            review_status_message: None,
-            review_text: None,
             scroll_offset: None,
             session_id: session_id.into(),
             session_index: 99,
         };
         let mut app = app;
-        let mut next_review_status_message = None;
-        let mut next_review_text = None;
 
         // Act
-        open_review_output_mode(
-            &mut app,
-            &view_context,
-            &mut next_review_status_message,
-            &mut next_review_text,
-        )
-        .await;
+        open_review_output_mode(&mut app, &view_context).await;
 
         // Assert
-        assert_eq!(next_review_status_message, None);
-        assert_eq!(next_review_text, Some(String::new()));
+        assert!(!app.review_cache.contains_key(&view_context.session_id));
     }
 
     #[tokio::test]
@@ -2266,8 +2119,6 @@ mod tests {
         std::fs::write(session_folder.join("README.md"), "updated content")
             .expect("failed to write diff fixture");
         let context = ViewContext {
-            review_status_message: None,
-            review_text: None,
             scroll_offset: Some(0),
             session_id: session_id.clone().into(),
             session_index: 0,
@@ -2293,14 +2144,10 @@ mod tests {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: session_id.clone().into(),
             scroll_offset: Some(0),
         };
         let context = ViewContext {
-            review_status_message: None,
-            review_text: None,
             scroll_offset: Some(0),
             session_id: session_id.clone().into(),
             session_index: 0,
@@ -2328,8 +2175,6 @@ mod tests {
         let non_git_dir = tempdir().expect("failed to create non-git dir");
         app.sessions.sessions_mut()[0].folder = non_git_dir.path().to_path_buf();
         let context = ViewContext {
-            review_status_message: None,
-            review_text: None,
             scroll_offset: Some(0),
             session_id: session_id.clone().into(),
             session_index: 0,
@@ -2358,8 +2203,6 @@ mod tests {
         // Arrange
         let (app, _base_dir, session_id) = new_test_app_with_session().await;
         let context = ViewContext {
-            review_status_message: None,
-            review_text: None,
             scroll_offset: Some(0),
             session_id: session_id.into(),
             session_index: 99,
@@ -2392,8 +2235,6 @@ mod tests {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.mode = AppMode::View {
-            review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
-            review_text: Some("Critical finding".to_string()),
             session_id: session_id.clone().into(),
             scroll_offset: Some(5),
         };
@@ -2410,8 +2251,6 @@ mod tests {
                 ref confirmation_message,
                 ref confirmation_title,
                 restore_view: Some(ConfirmationViewMode {
-                    review_status_message: Some(ref status_message),
-                    review_text: Some(ref review_text),
                     scroll_offset: Some(5),
                     session_id: ref restored_session_id,
                 }),
@@ -2421,8 +2260,6 @@ mod tests {
                 && confirmation_message == "Add this session to merge queue?"
                 && restored_session_id == &session_id
                 && mode_session_id == &session_id
-                && status_message == &review_loading_message(AgentModel::Gpt55)
-                && review_text == "Critical finding"
         ));
     }
 
@@ -2432,8 +2269,6 @@ mod tests {
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.settings.open_command = "cargo test\nnpm run dev".to_string();
         app.mode = AppMode::View {
-            review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
-            review_text: Some("Critical finding".to_string()),
             session_id: session_id.clone().into(),
             scroll_offset: Some(4),
         };
@@ -2449,16 +2284,12 @@ mod tests {
                 ref commands,
                 restore_view:
                     ConfirmationViewMode {
-                        review_status_message: Some(ref status_message),
-                        review_text: Some(ref review_text),
                         session_id: ref restored_session_id,
             scroll_offset: Some(4),
                     },
                 selected_command_index: 0,
             } if commands == &vec!["cargo test".to_string(), "npm run dev".to_string()]
                 && restored_session_id == &session_id
-                && status_message == &review_loading_message(AgentModel::Gpt55)
-                && review_text == "Critical finding"
         ));
     }
 
@@ -2479,8 +2310,6 @@ mod tests {
             new_test_app_with_session_and_tmux_client(Arc::new(mock_tmux_client)).await;
         app.settings.open_command = "cargo test".to_string();
         app.mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: session_id.clone().into(),
             scroll_offset: Some(2),
         };
@@ -2493,8 +2322,6 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::View {
-                review_status_message: None,
-                review_text: None,
                 session_id: ref mode_session_id,
             scroll_offset: Some(2),
             } if mode_session_id == &session_id
@@ -2521,8 +2348,6 @@ mod tests {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         let view_context = ViewContext {
-            review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
-            review_text: Some("Critical finding".to_string()),
             scroll_offset: Some(3),
             session_id: session_id.clone().into(),
             session_index: 0,
@@ -2553,8 +2378,6 @@ mod tests {
                     can_mutate_session_branch: true,
                     can_open_worktree: true,
                     can_start_staged_session: false,
-                    review_status_message: Some(ref status_message),
-                    review_text: Some(ref review_text),
                     publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
                     session_id: ref session_id_in_mode,
                     session_state: ViewSessionState::Review,
@@ -2563,8 +2386,6 @@ mod tests {
                 },
                 scroll_offset: 0,
             } if session_id_in_mode == &session_id
-                && status_message == &review_loading_message(AgentModel::Gpt55)
-                && review_text == "Critical finding"
         ));
     }
 
@@ -2573,8 +2394,6 @@ mod tests {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         let view_context = ViewContext {
-            review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
-            review_text: Some("Critical finding".to_string()),
             scroll_offset: Some(5),
             session_id: session_id.clone().into(),
             session_index: 0,
@@ -2597,8 +2416,6 @@ mod tests {
                 publish_branch_action: PublishBranchAction::PublishPullRequest,
                 restore_view:
                     ConfirmationViewMode {
-                        review_status_message: Some(ref status_message),
-                        review_text: Some(ref review_text),
                         session_id: ref restored_session_id,
             scroll_offset: Some(5),
                     },
@@ -2606,8 +2423,6 @@ mod tests {
                 && input_state.cursor == 0
                 && input_state.text().is_empty()
                 && restored_session_id == &session_id
-                && status_message == &review_loading_message(AgentModel::Gpt55)
-                && review_text == "Critical finding"
         ));
     }
 
@@ -2618,8 +2433,6 @@ mod tests {
         app.sessions.sessions_mut()[0].published_upstream_ref =
             Some("origin/review/custom".to_string());
         let view_context = ViewContext {
-            review_status_message: None,
-            review_text: None,
             scroll_offset: Some(1),
             session_id: session_id.into(),
             session_index: 0,
@@ -2767,27 +2580,18 @@ mod tests {
             },
         );
         let view_context = ViewContext {
-            review_status_message: None,
-            review_text: None,
             scroll_offset: None,
             session_id: session_id.into(),
             session_index: 0,
         };
-        let mut next_review_status_message = None;
-        let mut next_review_text = None;
 
         // Act
-        open_review_output_mode(
-            &mut app,
-            &view_context,
-            &mut next_review_status_message,
-            &mut next_review_text,
-        )
-        .await;
+        open_review_output_mode(&mut app, &view_context).await;
 
         // Assert
-        assert_eq!(next_review_status_message, None);
-        assert_eq!(next_review_text.as_deref(), Some(cached_text));
+        let (review_status_message, review_text) = app.review_view_state(&view_context.session_id);
+        assert_eq!(review_status_message, None);
+        assert_eq!(review_text, Some(cached_text));
     }
 
     #[tokio::test]
@@ -2803,30 +2607,21 @@ mod tests {
             ReviewCacheEntry::Loading { diff_hash: 456 },
         );
         let view_context = ViewContext {
-            review_status_message: None,
-            review_text: None,
             scroll_offset: None,
             session_id: session_id.into(),
             session_index: 0,
         };
-        let mut next_review_status_message = None;
-        let mut next_review_text = None;
 
         // Act
-        open_review_output_mode(
-            &mut app,
-            &view_context,
-            &mut next_review_status_message,
-            &mut next_review_text,
-        )
-        .await;
+        open_review_output_mode(&mut app, &view_context).await;
 
         // Assert
+        let (review_status_message, review_text) = app.review_view_state(&view_context.session_id);
         assert_eq!(
-            next_review_status_message,
+            review_status_message,
             Some(review_loading_message(AgentModel::ClaudeOpus48))
         );
-        assert_eq!(next_review_text, None);
+        assert_eq!(review_text, None);
     }
 
     #[tokio::test]
@@ -2834,8 +2629,6 @@ mod tests {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         let view_context = ViewContext {
-            review_status_message: None,
-            review_text: None,
             scroll_offset: Some(5),
             session_id: session_id.into(),
             session_index: 0,
@@ -2861,8 +2654,6 @@ mod tests {
             },
         );
         let view_context = ViewContext {
-            review_status_message: None,
-            review_text: Some("Old review".to_string()),
             scroll_offset: None,
             session_id: session_id.clone().into(),
             session_index: 0,
@@ -2892,10 +2683,11 @@ mod tests {
             session_id.clone().into(),
             ReviewCacheEntry::Loading { diff_hash: 42 },
         );
-        let loading_message = review_loading_message(app.settings.default_review_selection.model());
+        app.mode = AppMode::View {
+            scroll_offset: None,
+            session_id: session_id.clone().into(),
+        };
         let view_context = ViewContext {
-            review_status_message: Some(loading_message.clone()),
-            review_text: None,
             scroll_offset: None,
             session_id: session_id.clone().into(),
             session_index: 0,
@@ -2910,7 +2702,13 @@ mod tests {
             app.review_cache.get(session_id.as_str()),
             Some(ReviewCacheEntry::Loading { diff_hash: 42 })
         ));
-        assert_eq!(pending_update.review_status_message, Some(loading_message));
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                ref session_id,
+                ..
+            } if session_id == &view_context.session_id
+        ));
     }
 
     #[tokio::test]
@@ -2918,8 +2716,6 @@ mod tests {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: session_id.clone().into(),
             scroll_offset: Some(2),
         };
@@ -2975,8 +2771,6 @@ mod tests {
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.sessions.sessions_mut()[0].status = Status::Review;
         app.mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: session_id.clone().into(),
             scroll_offset: Some(2),
         };
@@ -3019,13 +2813,9 @@ mod tests {
             app.mode,
             AppMode::View {
                 ref session_id,
-                review_status_message: None,
-                review_text: None,
                 scroll_offset: Some(2),
             } if session_id == &view_context.session_id
         ));
-        assert_eq!(pending_update.review_status_message, None);
-        assert_eq!(pending_update.review_text, None);
         assert!(!app.review_cache.contains_key(session_id.as_str()));
     }
 
@@ -3050,8 +2840,6 @@ mod tests {
             text: "Open the sibling session.".to_string(),
         }];
         app.mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: session_id.into(),
             scroll_offset: Some(0),
         };
@@ -3096,8 +2884,6 @@ mod tests {
         source_session.summary = Some("# Summary\n\nKeep going.".to_string());
         source_session.title = Some("Done source".to_string());
         app.mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: source_session_id.clone().into(),
             scroll_offset: Some(0),
         };
@@ -3143,8 +2929,6 @@ mod tests {
             .expect("expected source session")
             .status = Status::Canceled;
         app.mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: source_session_id.clone().into(),
             scroll_offset: Some(0),
         };
@@ -3176,8 +2960,6 @@ mod tests {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.mode = AppMode::View {
-            review_status_message: Some("Review loading".to_string()),
-            review_text: Some("Focused review".to_string()),
             session_id: session_id.clone().into(),
             scroll_offset: Some(2),
         };
@@ -3220,15 +3002,11 @@ mod tests {
             app.mode,
             AppMode::Prompt {
                 ref input,
-                ref review_status_message,
-                ref review_text,
                 ref session_id,
-            scroll_offset: Some(2),
+                scroll_offset: Some(2),
                 ..
             } if input.text() == "/"
                 && input.cursor == 1
-                && review_status_message.as_deref() == Some("Review loading")
-                && review_text.as_deref() == Some("Focused review")
                 && session_id == &view_context.session_id
         ));
     }
@@ -3238,8 +3016,6 @@ mod tests {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: session_id.clone().into(),
             scroll_offset: Some(2),
         };
@@ -3293,8 +3069,6 @@ mod tests {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: session_id.clone().into(),
             scroll_offset: Some(2),
         };
@@ -3350,8 +3124,6 @@ mod tests {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: session_id.clone().into(),
             scroll_offset: Some(2),
         };
@@ -3413,20 +3185,18 @@ mod tests {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         let view_context = ViewContext {
-            review_status_message: None,
-            review_text: Some("review text".to_string()),
             scroll_offset: Some(10),
             session_id: session_id.into(),
             session_index: 0,
         };
         let pending_update = ViewPendingUpdate::from_context(&view_context);
 
-        // Act — q always returns to list without mutating pending review state.
+        // Act
         app.mode = AppMode::List;
 
         // Assert
         assert!(matches!(app.mode, AppMode::List));
-        assert_eq!(pending_update.review_text.as_deref(), Some("review text"));
+        assert_eq!(pending_update.scroll_offset, Some(10));
     }
 
     #[tokio::test]

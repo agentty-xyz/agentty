@@ -138,10 +138,7 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
                     let questions = session.questions.clone();
                     app.enter_question_mode(session_id.as_str(), questions);
                 } else {
-                    let (review_status_message, review_text) = app.review_view_state(&session_id);
                     app.mode = AppMode::View {
-                        review_status_message,
-                        review_text,
                         session_id,
                         scroll_offset: None,
                     };
@@ -333,8 +330,6 @@ pub(crate) fn open_session_prompt(app: &mut App, session_id: String) {
         at_mention_state: None,
         attachment_state: PromptAttachmentState::default(),
         history_state: PromptHistoryState::new(Vec::new()),
-        review_status_message: None,
-        review_text: None,
         slash_state: app.prompt_slash_state(),
         session_id: session_id.into(),
         input: InputState::default(),
@@ -608,11 +603,9 @@ mod tests {
             app.mode,
             AppMode::View {
                 ref session_id,
-                review_status_message: None,
-                review_text: Some(ref review_text),
                 scroll_offset: None,
                 ..
-            } if session_id == &expected_session_id && review_text == "Focused review"
+            } if session_id == &expected_session_id
         ));
     }
 
@@ -661,8 +654,6 @@ mod tests {
             AppMode::Question {
                 ref session_id,
                 ref questions,
-                review_status_message: None,
-                review_text: Some(ref review_text),
                 current_index: 0,
                 ref responses,
                 ref input,
@@ -670,7 +661,6 @@ mod tests {
                 ..
             } if session_id == &expected_session_id
                 && questions == &expected_questions
-                && review_text == "Focused review"
                 && responses.is_empty()
                 && input.text().is_empty()
         ));
@@ -846,8 +836,6 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::View {
-                review_status_message: None,
-                review_text: None,
                 ref session_id,
                 scroll_offset: None,
             } if session_id == &expected_session_id
@@ -879,8 +867,6 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::View {
-                review_status_message: None,
-                review_text: None,
                 ref session_id,
                 scroll_offset: None,
             } if session_id == &expected_session_id

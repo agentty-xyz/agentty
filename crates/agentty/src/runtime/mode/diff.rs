@@ -97,11 +97,7 @@ fn handle_exit_key(app: &mut App, key: KeyEvent) -> bool {
         app.mode = if let Some(snapshot) = restore_question {
             snapshot.into_question_mode()
         } else {
-            let (review_status_message, review_text) = app.review_view_state(&session_id);
-
             AppMode::View {
-                review_status_message,
-                review_text,
                 session_id,
                 scroll_offset: None,
             }
@@ -387,11 +383,9 @@ mod tests {
             app.mode,
             AppMode::View {
                 ref session_id,
-                review_status_message: None,
-                review_text: Some(ref review_text),
                 scroll_offset: None,
                 ..
-            } if session_id == "session-id" && review_text == "Focused review"
+            } if session_id == "session-id"
         ));
     }
 
@@ -855,8 +849,6 @@ mod tests {
                     options: Vec::new(),
                     text: "Q?".to_string(),
                 }],
-                review_status_message: None,
-                review_text: None,
                 responses: Vec::new(),
                 scroll_offset: None,
                 selected_option_index: None,
@@ -907,8 +899,6 @@ mod tests {
                     text: "Q2?".to_string(),
                 },
             ],
-            review_status_message: None,
-            review_text: None,
             responses: vec!["answer-1".to_string()],
             scroll_offset: None,
             selected_option_index: None,

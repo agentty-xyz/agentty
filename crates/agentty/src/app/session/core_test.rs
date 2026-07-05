@@ -2975,8 +2975,6 @@ async fn test_refresh_sessions_if_needed_remaps_view_mode_index() {
     .await;
     let selected_session_id = app.sessions.sessions()[1].id.clone();
     app.mode = AppMode::View {
-        review_status_message: None,
-        review_text: None,
         session_id: selected_session_id.clone(),
         scroll_offset: None,
     };
@@ -4390,8 +4388,6 @@ async fn test_rebase_session_cancels_pending_focused_review() {
         .expect("failed to seed persisted focused review");
     crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::AgentReview);
     app.mode = AppMode::View {
-        review_status_message: Some(crate::app::review_loading_message(AgentModel::Gpt55)),
-        review_text: None,
         session_id: session_id.clone().into(),
         scroll_offset: None,
     };
@@ -4406,14 +4402,7 @@ async fn test_rebase_session_cancels_pending_focused_review() {
     // Assert
     assert!(result.is_ok(), "rebase should succeed: {:?}", result.err());
     assert!(!app.review_cache.contains_key(session_id.as_str()));
-    assert!(matches!(
-        app.mode,
-        AppMode::View {
-            review_status_message: None,
-            review_text: None,
-            ..
-        }
-    ));
+    assert!(matches!(app.mode, AppMode::View { .. }));
 
     // Act
     app.apply_app_events(AppEvent::ReviewPrepared {
@@ -4425,14 +4414,7 @@ async fn test_rebase_session_cancels_pending_focused_review() {
 
     // Assert
     assert!(!app.review_cache.contains_key(session_id.as_str()));
-    assert!(matches!(
-        app.mode,
-        AppMode::View {
-            review_status_message: None,
-            review_text: None,
-            ..
-        }
-    ));
+    assert!(matches!(app.mode, AppMode::View { .. }));
     let restarted_app = new_test_app_with_git_and_db(dir.path(), db).await;
     assert!(!restarted_app.review_cache.contains_key(session_id.as_str()));
 }
@@ -4459,8 +4441,6 @@ async fn test_rebase_session_cleanup_failure_does_not_start_sync() {
         .expect("failed to seed persisted focused review");
     crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::AgentReview);
     app.mode = AppMode::View {
-        review_status_message: Some(crate::app::review_loading_message(AgentModel::Gpt55)),
-        review_text: None,
         session_id: session_id.clone().into(),
         scroll_offset: None,
     };
@@ -4479,14 +4459,7 @@ async fn test_rebase_session_cleanup_failure_does_not_start_sync() {
     // Assert
     assert!(result.is_err(), "cleanup failure should reject sync");
     assert!(app.review_cache.contains_key(session_id.as_str()));
-    assert!(matches!(
-        app.mode,
-        AppMode::View {
-            review_status_message: Some(_),
-            review_text: None,
-            ..
-        }
-    ));
+    assert!(matches!(app.mode, AppMode::View { .. }));
     assert_eq!(
         session_status_or_done(&app, &session_id),
         Status::AgentReview

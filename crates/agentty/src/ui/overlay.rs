@@ -12,7 +12,7 @@ use crate::infra::review_comment_cache::ReviewCommentCache;
 use crate::ui::router::{ListBackgroundRenderContext, render_list_background};
 use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, DiffRightPanel, HelpContext};
 use crate::ui::style::palette;
-use crate::ui::{Component, Page, component, markdown, page};
+use crate::ui::{Component, Page, SessionReviewSnapshot, component, markdown, page};
 
 const OVERLAY_HORIZONTAL_PADDING: u16 = 2;
 const OVERLAY_VERTICAL_PADDING: u16 = 1;
@@ -88,6 +88,8 @@ pub(crate) struct ViewInfoPopupRenderContext<'a> {
     pub(crate) message: &'a str,
     /// Restored session view rendered behind the popup.
     pub(crate) restore_view: &'a ConfirmationViewMode,
+    /// Focused-review state for the restored session background.
+    pub(crate) review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
     /// Session progress messages keyed by session id.
     pub(crate) session_progress_messages: &'a HashMap<SessionId, String>,
     /// Latest observable update versions keyed by session id.
@@ -115,6 +117,8 @@ pub(crate) struct HelpOverlayRenderContext<'a, 'state> {
     /// Shared review-comment cache used to restore the review-comments page
     /// behind help overlays opened from that page.
     pub(crate) review_comment_cache: &'a ReviewCommentCache,
+    /// Focused-review state for the restored session background.
+    pub(crate) review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
     /// Help overlay vertical scroll position.
     pub(crate) scroll_offset: u16,
     /// Session progress messages keyed by session id.
@@ -140,6 +144,8 @@ struct HelpBackgroundRenderContext<'a, 'state> {
     /// Shared review-comment cache used to restore diff review comments behind
     /// help.
     review_comment_cache: &'a ReviewCommentCache,
+    /// Focused-review state for the restored session background.
+    review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
     /// Session progress messages keyed by session id.
     session_progress_messages: &'a HashMap<SessionId, String>,
     /// Latest observable update versions keyed by session id.
@@ -236,6 +242,7 @@ pub(crate) fn render_view_info_popup(
         loading_label,
         message,
         restore_view,
+        review_snapshot,
         session_progress_messages,
         session_update_versions,
         sessions,
@@ -262,6 +269,12 @@ pub(crate) fn render_view_info_popup(
             markdown_render_cache,
             mode: &background_mode,
             output_layout_cache,
+            review_status_message: review_snapshot
+                .filter(|snapshot| snapshot.session_id == restore_view.session_id.as_str())
+                .and_then(|snapshot| snapshot.status_message.as_deref()),
+            review_text: review_snapshot
+                .filter(|snapshot| snapshot.session_id == restore_view.session_id.as_str())
+                .and_then(|snapshot| snapshot.text),
             scroll_offset: restore_view.scroll_offset,
             session_index,
             session_update_version,
@@ -305,6 +318,7 @@ pub(crate) fn render_help(f: &mut Frame, area: Rect, context: HelpOverlayRenderC
         markdown_render_cache,
         output_layout_cache,
         review_comment_cache,
+        review_snapshot,
         scroll_offset,
         session_progress_messages,
         session_update_versions,
@@ -321,6 +335,7 @@ pub(crate) fn render_help(f: &mut Frame, area: Rect, context: HelpOverlayRenderC
             markdown_render_cache,
             output_layout_cache,
             review_comment_cache,
+            review_snapshot,
             session_progress_messages,
             session_update_versions,
             wall_clock_unix_seconds,
@@ -411,8 +426,6 @@ fn overlay_title_style(border_color: Color) -> Style {
 enum ResolvedHelpBackground<'a> {
     List,
     View {
-        review_status_message: &'a Option<String>,
-        review_text: &'a Option<String>,
         scroll_offset: Option<u16>,
         session_id: &'a str,
         session_index: usize,
@@ -436,8 +449,6 @@ fn resolve_help_background<'a>(
     match help_context {
         HelpContext::List { .. } => Some(ResolvedHelpBackground::List),
         HelpContext::View {
-            review_status_message,
-            review_text,
             session_id,
             scroll_offset,
             ..
@@ -445,8 +456,6 @@ fn resolve_help_background<'a>(
             .iter()
             .position(|session| session.id == *session_id)
             .map(|session_index| ResolvedHelpBackground::View {
-                review_status_message,
-                review_text,
                 scroll_offset: *scroll_offset,
                 session_id,
                 session_index,
@@ -481,6 +490,7 @@ fn render_help_background(f: &mut Frame, area: Rect, context: HelpBackgroundRend
         markdown_render_cache,
         output_layout_cache,
         review_comment_cache,
+        review_snapshot,
         session_progress_messages,
         session_update_versions,
         wall_clock_unix_seconds,
@@ -492,15 +502,11 @@ fn render_help_background(f: &mut Frame, area: Rect, context: HelpBackgroundRend
             render_list_background(f, area, list_background, wall_clock_unix_seconds);
         }
         Some(ResolvedHelpBackground::View {
-            review_status_message,
-            review_text,
             session_id,
             session_index,
             scroll_offset,
         }) => {
             let bg_mode = AppMode::View {
-                review_status_message: review_status_message.clone(),
-                review_text: review_text.clone(),
                 session_id: session_id.into(),
                 scroll_offset,
             };
@@ -518,6 +524,12 @@ fn render_help_background(f: &mut Frame, area: Rect, context: HelpBackgroundRend
                 markdown_render_cache,
                 mode: &bg_mode,
                 output_layout_cache,
+                review_status_message: review_snapshot
+                    .filter(|snapshot| snapshot.session_id == session_id)
+                    .and_then(|snapshot| snapshot.status_message.as_deref()),
+                review_text: review_snapshot
+                    .filter(|snapshot| snapshot.session_id == session_id)
+                    .and_then(|snapshot| snapshot.text),
                 scroll_offset,
                 session_index,
                 session_update_version,
@@ -732,8 +744,6 @@ mod tests {
             can_rebase_session_branch: true,
             can_reply_to_session: true,
             can_start_staged_session: false,
-            review_status_message: None,
-            review_text: None,
             publish_pull_request_action: None,
             session_id: "missing-session".into(),
             session_state: crate::ui::state::help_action::ViewSessionState::Done,

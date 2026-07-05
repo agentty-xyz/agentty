@@ -17,7 +17,9 @@ use crate::ui::overlay::{
 use crate::ui::state::app_mode::{
     AppMode, ConfirmationIntent, ConfirmationViewMode, DiffRightPanel,
 };
-use crate::ui::{Component, Page, RenderContext, component, markdown, overlay, page};
+use crate::ui::{
+    Component, Page, RenderContext, SessionReviewSnapshot, component, markdown, overlay, page,
+};
 
 /// Borrowed list-background view into shared route state.
 pub(crate) struct ListBackgroundRenderContext<'a, 'state> {
@@ -86,6 +88,7 @@ struct SessionChatRenderContext<'a> {
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
     mode: &'a AppMode,
     output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
+    review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
     session_id: &'a str,
     session_progress_messages: &'a HashMap<SessionId, String>,
     session_update_versions: &'a HashMap<SessionId, u64>,
@@ -106,6 +109,7 @@ struct PublishBranchOverlayContext<'a> {
     output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
     input: &'a InputState,
     locked_upstream_ref: Option<&'a str>,
+    review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
     restore_view: &'a ConfirmationViewMode,
     session_progress_messages: &'a HashMap<SessionId, String>,
     session_update_versions: &'a HashMap<SessionId, u64>,
@@ -122,6 +126,7 @@ struct RouteAuxContext<'a> {
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
     output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
     review_comment_cache: &'a ReviewCommentCache,
+    review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
     session_progress_messages: &'a HashMap<SessionId, String>,
     session_update_versions: &'a HashMap<SessionId, u64>,
     session_worktree_availability: &'a HashMap<SessionId, bool>,
@@ -147,6 +152,7 @@ impl<'a> RouteAuxContext<'a> {
             markdown_render_cache: self.markdown_render_cache,
             mode,
             output_layout_cache: self.output_layout_cache,
+            review_snapshot: self.review_snapshot,
             session_id,
             session_progress_messages: self.session_progress_messages,
             session_update_versions: self.session_update_versions,
@@ -172,6 +178,7 @@ impl<'a> RouteAuxContext<'a> {
             default_reasoning_level: self.default_reasoning_level,
             markdown_render_cache: self.markdown_render_cache,
             output_layout_cache: self.output_layout_cache,
+            review_snapshot: self.review_snapshot,
             restore_view,
             session_progress_messages: self.session_progress_messages,
             session_update_versions: self.session_update_versions,
@@ -199,6 +206,7 @@ impl<'a> RouteAuxContext<'a> {
             output_layout_cache: self.output_layout_cache,
             input: mode_context.input,
             locked_upstream_ref: mode_context.locked_upstream_ref,
+            review_snapshot: self.review_snapshot,
             restore_view: mode_context.restore_view,
             session_progress_messages: self.session_progress_messages,
             session_update_versions: self.session_update_versions,
@@ -225,6 +233,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         requested_review_table_state,
         requested_reviews,
         review_comment_cache,
+        session_review_snapshot,
         session_progress_messages,
         session_update_versions,
         session_worktree_availability,
@@ -262,6 +271,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         markdown_render_cache,
         output_layout_cache,
         review_comment_cache,
+        review_snapshot: session_review_snapshot,
         session_progress_messages,
         session_update_versions,
         session_worktree_availability,
@@ -350,6 +360,7 @@ fn render_list_or_overlay_mode(
                 markdown_render_cache: aux.markdown_render_cache,
                 output_layout_cache: aux.output_layout_cache,
                 review_comment_cache: aux.review_comment_cache,
+                review_snapshot: aux.review_snapshot,
                 scroll_offset: *scroll_offset,
                 session_progress_messages: aux.session_progress_messages,
                 session_update_versions: aux.session_update_versions,
@@ -454,6 +465,7 @@ fn render_view_info_popup_mode(
             is_loading: *is_loading,
             loading_label,
             message,
+            review_snapshot: aux.review_snapshot,
             restore_view,
             session_progress_messages: aux.session_progress_messages,
             session_update_versions: aux.session_update_versions,
@@ -487,6 +499,8 @@ struct SessionOverlayRenderContext<'a> {
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
     /// Shared output-layout cache for the restored session transcript.
     output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
+    /// Focused-review state for the restored session background.
+    review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
     /// Session view restored after the overlay closes.
     restore_view: &'a ConfirmationViewMode,
     /// Active progress messages keyed by session id.
@@ -512,6 +526,7 @@ impl SessionOverlayRenderContext<'_> {
             markdown_render_cache: self.markdown_render_cache,
             mode: background_mode,
             output_layout_cache: self.output_layout_cache,
+            review_snapshot: self.review_snapshot,
             session_id: &self.restore_view.session_id,
             session_progress_messages: self.session_progress_messages,
             session_update_versions: self.session_update_versions,
@@ -535,6 +550,7 @@ impl<'context> PublishBranchOverlayContext<'context> {
             default_reasoning_level: self.default_reasoning_level,
             markdown_render_cache: self.markdown_render_cache,
             output_layout_cache: self.output_layout_cache,
+            review_snapshot: self.review_snapshot,
             restore_view: self.restore_view,
             session_progress_messages: self.session_progress_messages,
             session_update_versions: self.session_update_versions,
@@ -728,6 +744,7 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         markdown_render_cache,
         mode,
         output_layout_cache,
+        review_snapshot,
         session_id,
         session_progress_messages,
         session_update_versions,
@@ -759,6 +776,12 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         markdown_render_cache,
         mode,
         output_layout_cache,
+        review_status_message: review_snapshot
+            .filter(|snapshot| snapshot.session_id == session_id)
+            .and_then(|snapshot| snapshot.status_message.as_deref()),
+        review_text: review_snapshot
+            .filter(|snapshot| snapshot.session_id == session_id)
+            .and_then(|snapshot| snapshot.text),
         scroll_offset,
         session_index,
         session_update_version,
@@ -914,8 +937,6 @@ mod tests {
         let session_id = "session-1234";
         let sessions = vec![session_fixture(session_id)];
         let mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: session_id.into(),
             scroll_offset: None,
         };
@@ -941,6 +962,7 @@ mod tests {
                         markdown_render_cache: &cache,
                         output_layout_cache: &output_layout_cache,
                         review_comment_cache: &review_comment_cache,
+                        review_snapshot: None,
                         session_progress_messages: &progress_messages,
                         session_update_versions: &session_update_versions,
                         session_worktree_availability: &HashMap::new(),
@@ -962,8 +984,6 @@ mod tests {
         let backend = ratatui::backend::TestBackend::new(80, 20);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: "missing-session".into(),
             scroll_offset: None,
         };
@@ -992,6 +1012,7 @@ mod tests {
                         markdown_render_cache: &cache,
                         output_layout_cache: &output_layout_cache,
                         review_comment_cache: &review_comment_cache,
+                        review_snapshot: None,
                         session_progress_messages: &progress_messages,
                         session_update_versions: &session_update_versions,
                         session_worktree_availability: &HashMap::new(),
@@ -1046,6 +1067,7 @@ mod tests {
                         markdown_render_cache: &cache,
                         output_layout_cache: &output_layout_cache,
                         review_comment_cache: &review_comment_cache,
+                        review_snapshot: None,
                         session_progress_messages: &progress_messages,
                         session_update_versions: &session_update_versions,
                         session_worktree_availability: &HashMap::new(),
@@ -1075,8 +1097,6 @@ mod tests {
             selected_confirmation_index: 0,
         };
         let view_mode = ConfirmationViewMode {
-            review_status_message: None,
-            review_text: None,
             scroll_offset: None,
             session_id: session_id.into(),
         };
@@ -1095,6 +1115,7 @@ mod tests {
                         default_reasoning_level: ReasoningLevel::High,
                         markdown_render_cache: &cache,
                         output_layout_cache: &output_layout_cache,
+                        review_snapshot: None,
                         restore_view: &view_mode,
                         session_progress_messages: &progress_messages,
                         session_update_versions: &session_update_versions,

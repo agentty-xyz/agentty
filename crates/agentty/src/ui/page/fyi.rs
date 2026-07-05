@@ -136,8 +136,6 @@ mod tests {
     fn current_page_messages_returns_session_chat_guidance_for_view_mode() {
         // Arrange
         let mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: "session-id".into(),
             scroll_offset: None,
         };

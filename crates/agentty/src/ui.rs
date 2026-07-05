@@ -26,6 +26,8 @@ pub use render::Component;
 pub use render::Page;
 /// Immutable data required to draw a single UI frame.
 pub use render::RenderContext;
+/// Focused-review display state for the visible session.
+pub use render::SessionReviewSnapshot;
 /// Renders a complete frame including status bar, content area, and footer.
 pub use render::render;
 /// UI-owned cache store shared by render and scroll-metric paths.

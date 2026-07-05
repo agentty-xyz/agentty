@@ -11,7 +11,7 @@ use super::*;
 use crate::app::branch_publish::{BranchPublishActionUpdate, BranchPublishTaskSuccess};
 use crate::app::review::ReviewUpdate;
 use crate::app::session_state::SessionGitStatus;
-use crate::app::{AppServiceDeps, diff_content_hash, review_loading_message};
+use crate::app::{AppServiceDeps, diff_content_hash};
 use crate::domain::agent::AgentModel;
 use crate::domain::file_entry::FileEntry;
 use crate::domain::question::QuestionItem;
@@ -54,8 +54,6 @@ fn test_turn_applied_state(
 /// tests.
 fn test_confirmation_view_mode(session_id: &str) -> ConfirmationViewMode {
     ConfirmationViewMode {
-        review_status_message: None,
-        review_text: None,
         scroll_offset: None,
         session_id: session_id.into(),
     }
@@ -1022,8 +1020,6 @@ async fn new_test_app_with_selected_session(
 fn branch_publish_popup_helpers_format_copy() {
     // Arrange
     let expected_restore_view = ConfirmationViewMode {
-        review_status_message: None,
-        review_text: None,
         scroll_offset: Some(2),
         session_id: "session-1".into(),
     };
@@ -1478,8 +1474,6 @@ async fn apply_branch_publish_action_update_sets_success_popup() {
     )
     .await;
     let expected_restore_view = ConfirmationViewMode {
-        review_status_message: None,
-        review_text: None,
         scroll_offset: Some(1),
         session_id: "session-1".into(),
     };
@@ -1536,8 +1530,6 @@ async fn apply_branch_publish_action_update_sets_pull_request_success_popup() {
     )
     .await;
     let expected_restore_view = ConfirmationViewMode {
-        review_status_message: None,
-        review_text: None,
         scroll_offset: Some(1),
         session_id: "session-1".into(),
     };
@@ -1596,8 +1588,6 @@ async fn apply_branch_publish_action_update_sets_gitlab_merge_request_success_po
     )
     .await;
     let expected_restore_view = ConfirmationViewMode {
-        review_status_message: None,
-        review_text: None,
         scroll_offset: Some(2),
         session_id: "session-1".into(),
     };
@@ -2808,8 +2798,6 @@ async fn apply_app_events_agent_response_switches_view_mode_to_question_mode() {
             PathBuf::from("/tmp/session-question-view"),
         ));
     app.mode = AppMode::View {
-        review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
-        review_text: Some("Focused review".to_string()),
         session_id: "session-1".into(),
         scroll_offset: None,
     };
@@ -2852,8 +2840,6 @@ async fn apply_app_events_agent_response_switches_view_mode_to_question_mode() {
         AppMode::Question {
             ref session_id,
             ref questions,
-            review_status_message: Some(ref review_status_message),
-            review_text: Some(ref review_text),
             ref responses,
             current_index: 0,
             ref input,
@@ -2861,8 +2847,6 @@ async fn apply_app_events_agent_response_switches_view_mode_to_question_mode() {
             ..
         } if session_id == "session-1"
             && questions == &expected_questions
-            && review_status_message == &review_loading_message(AgentModel::Gpt55)
-            && review_text == "Focused review"
             && responses.is_empty()
             && input.text().is_empty()
     ));
@@ -3426,8 +3410,6 @@ async fn apply_app_events_agent_response_starts_auto_review_when_snapshot_alread
         SessionHandles::new(String::new(), Status::Review),
     );
     app.mode = AppMode::View {
-        review_status_message: None,
-        review_text: None,
         session_id: session_id.into(),
         scroll_offset: None,
     };
@@ -3459,14 +3441,9 @@ async fn apply_app_events_agent_response_starts_auto_review_when_snapshot_alread
     assert!(matches!(
         app.mode,
         AppMode::View {
-            ref review_status_message,
             session_id: ref mode_session_id,
             ..
-        } if review_status_message.as_deref()
-            == Some(
-                review_loading_message(app.settings.default_review_selection.model()).as_str()
-            )
-            && mode_session_id == session_id
+        } if mode_session_id == session_id
     ));
 }
 
@@ -3635,8 +3612,6 @@ async fn apply_app_events_session_updated_keeps_done_view_review_state() {
         SessionHandles::new("Merge finished".to_string(), Status::Done),
     );
     app.mode = AppMode::View {
-        review_status_message: Some(review_loading_message(AgentModel::Gpt55)),
-        review_text: Some("Review text".to_string()),
         session_id: "session-1".into(),
         scroll_offset: Some(9),
     };
@@ -3701,8 +3676,6 @@ async fn apply_app_events_refresh_keeps_viewed_merging_session_without_worktree(
         SessionHandles::new("Merging".to_string(), Status::Merging),
     );
     app.mode = AppMode::View {
-        review_status_message: None,
-        review_text: None,
         session_id: "session-1".into(),
         scroll_offset: None,
     };

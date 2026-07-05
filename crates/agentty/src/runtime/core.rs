@@ -525,8 +525,6 @@ mod tests {
         );
 
         app.mode = AppMode::View {
-            review_status_message: None,
-            review_text: None,
             session_id: session_id.clone().into(),
             scroll_offset: None,
         };
