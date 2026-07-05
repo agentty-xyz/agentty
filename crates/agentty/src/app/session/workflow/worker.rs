@@ -1149,6 +1149,35 @@ mod tests {
         });
     }
 
+    fn expect_clean_main_checkout_snapshot(
+        mock_git_client: &mut MockGitClient,
+        main_repo_root: PathBuf,
+    ) {
+        mock_git_client
+            .expect_detect_git_info()
+            .once()
+            .returning(|_| Box::pin(async { Some("wt/sess1".to_string()) }));
+        mock_git_client
+            .expect_main_repo_root()
+            .once()
+            .returning(move |_| {
+                let main_repo_root = main_repo_root.clone();
+
+                Box::pin(async move { Ok(main_repo_root) })
+            });
+        mock_git_client
+            .expect_tracked_worktree_status()
+            .once()
+            .returning(|_| Box::pin(async { Ok(String::new()) }));
+        mock_git_client
+            .expect_head_hash()
+            .once()
+            .returning(|_| Box::pin(async { Ok("main-before".to_string()) }));
+        mock_git_client
+            .expect_diff()
+            .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+    }
+
     /// Applies one turn result through the narrowed post-turn dependency set
     /// cloned from a full worker context.
     async fn apply_worker_turn_result(
@@ -1417,8 +1446,6 @@ mod tests {
             .expect_run_turn()
             .returning(|_session_id, _req, _events| {
                 Box::pin(async {
-                    // Simulate a long-running app-server turn that never
-                    // completes on its own.
                     tokio::time::sleep(std::time::Duration::from_hours(1)).await;
                     unreachable!("should be cancelled before completing")
                 })
@@ -1428,18 +1455,8 @@ mod tests {
             .times(1)
             .returning(|_| Box::pin(async { Ok(()) }));
 
-        let mut mock_git_client = mock_git_client_detecting_main_repo(base_dir.path().join("main"));
-        mock_git_client
-            .expect_tracked_worktree_status()
-            .once()
-            .returning(|_| Box::pin(async { Ok(String::new()) }));
-        mock_git_client
-            .expect_head_hash()
-            .once()
-            .returning(|_| Box::pin(async { Ok("main-before".to_string()) }));
-        mock_git_client
-            .expect_diff()
-            .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+        let mut mock_git_client = MockGitClient::new();
+        expect_clean_main_checkout_snapshot(&mut mock_git_client, base_dir.path().join("main"));
 
         let cancel_token = Arc::new(Mutex::new(CancellationToken::new()));
         let output = Arc::new(Mutex::new(String::new()));
@@ -3221,7 +3238,14 @@ mod tests {
         .expect("failed to create conflict directory");
         std::fs::write(
             conflict_file,
-            "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> incoming\n",
+            concat!(
+                "<<",
+                "<<<< HEAD\nours\n",
+                "===",
+                "====\ntheirs\n",
+                ">>",
+                ">>>>> incoming\n"
+            ),
         )
         .expect("failed to write conflict file");
     }
@@ -3377,7 +3401,7 @@ mod tests {
         // The worker canonicalizes the resolved main checkout root through the
         // real filesystem client, so the mocks must expect the canonical path
         // (on macOS `/var/...` resolves to `/private/var/...`).
-        let main_checkout_root = main_checkout_root
+        let expected_main_checkout_root = main_checkout_root
             .canonicalize()
             .expect("failed to canonicalize main checkout");
 
@@ -3387,7 +3411,7 @@ mod tests {
             app_event_tx: mpsc::unbounded_channel().0,
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             channel: Arc::new(mock_existing_session_rebase_channel(
-                main_checkout_root.clone(),
+                expected_main_checkout_root,
             )),
             child_pid: Arc::new(Mutex::new(None)),
             clock: Arc::new(crate::infra::clock::RealClock),

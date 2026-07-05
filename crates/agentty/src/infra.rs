@@ -8,6 +8,8 @@ pub mod db;
 pub mod file_index;
 /// Filesystem trait boundary used by app orchestration.
 pub mod fs;
+/// Agentty data-directory path resolution.
+pub mod home;
 /// Process-management utilities for agent subprocess lifecycle.
 pub(crate) mod process;
 /// Startup project-discovery boundary for home-directory repository scans.

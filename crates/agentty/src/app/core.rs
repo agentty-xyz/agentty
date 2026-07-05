@@ -13,4 +13,6 @@ pub(crate) use events::AppEvent;
 #[cfg(test)]
 pub(crate) use state::AppClients;
 pub(crate) use state::SyncReviewRequestTaskResult;
-pub use state::{AGENTTY_WT_DIR, App, UpdateStatus, agentty_home};
+pub use state::{AGENTTY_WT_DIR, App, UpdateStatus};
+
+pub use crate::infra::home::agentty_home;

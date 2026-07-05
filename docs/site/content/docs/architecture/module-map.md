@@ -54,13 +54,13 @@ module docstrings directly.
   settings keys, themes, structured questions, typed transcript messages,
   prompt-composer logic, and compatibility re-exports for `ag-agent` provider models
   plus shared protocol question and turn prompt payloads. No I/O.
-- `infra/`: External integrations behind traits — SQLite persistence (`infra/db/`
-  repositories), git (`GitClient`, backed by `ag-git`), filesystem (`FsClient`), tmux,
-  clipboard images, version checks, project discovery, and file indexing. Clipboard
-  image capture delegates host clipboard reads to `ag-clipboard`, then owns temp-file
-  persistence and attachment metadata. Agent backend, channel, app-server, and provider
-  registry APIs are owned by `crates/ag-agent/` and imported directly by Agentty
-  callers.
+- `infra/`: External integrations behind traits — Agentty data-root resolution, SQLite
+  persistence (`infra/db/` repositories), git (`GitClient`, backed by `ag-git`),
+  filesystem (`FsClient`), tmux, clipboard images, version checks, project discovery,
+  and file indexing. Clipboard image capture delegates host clipboard reads to
+  `ag-clipboard`, then owns temp-file persistence and attachment metadata. Agent
+  backend, channel, app-server, and provider registry APIs are owned by
+  `crates/ag-agent/` and imported directly by Agentty callers.
 - `runtime/`: Terminal lifecycle and the event loop — terminal setup, the event-reader
   thread, key dispatch, one handler per `AppMode` under `runtime/mode/`, and shared mode
   helpers for session-output metrics.

@@ -1,8 +1,7 @@
 //! App state definitions and workflow glue for the app core module.
 
 use std::collections::{HashMap, HashSet};
-use std::env;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use ag_agent::{agent, app_server};
@@ -66,29 +65,6 @@ use crate::{app, ui};
 /// Relative directory name used for session git worktrees within the
 /// `agentty` home directory.
 pub const AGENTTY_WT_DIR: &str = "wt";
-/// Returns the resolved `agentty` home directory.
-///
-/// The `AGENTTY_ROOT` environment variable takes precedence when set to a
-/// non-empty path. Otherwise the resolver falls back to `~/.agentty`, then to
-/// a relative `.agentty` directory when no home directory is available.
-pub fn agentty_home() -> PathBuf {
-    let agentty_root = env::var_os("AGENTTY_ROOT").map(PathBuf::from);
-    let home_dir = dirs::home_dir();
-
-    resolve_agentty_home(agentty_root, home_dir)
-}
-
-/// Resolves the agentty home directory from optional root and home paths.
-///
-/// When `agentty_root` is present and non-empty, it takes precedence. When no
-/// override is available, the resolver falls back to `home_dir/.agentty`, then
-/// finally to a relative `.agentty` directory.
-fn resolve_agentty_home(agentty_root: Option<PathBuf>, home_dir: Option<PathBuf>) -> PathBuf {
-    agentty_root
-        .filter(|path| !path.as_os_str().is_empty())
-        .or_else(|| home_dir.map(|path| path.join(".agentty")))
-        .unwrap_or_else(|| PathBuf::from(".agentty"))
-}
 
 /// Background auto-update progress state for the status bar.
 #[derive(Clone, Debug, Eq, PartialEq)]

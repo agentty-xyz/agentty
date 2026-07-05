@@ -222,9 +222,6 @@ fn create_mock_git_client_for_successful_noop_merges(
     mock.expect_squash_merge_diff()
         .times(expected_merge_count)
         .returning(|_, _, _| Box::pin(async { Ok(String::new()) }));
-    mock.expect_head_hash()
-        .times(expected_merge_count)
-        .returning(|_| Box::pin(async { Ok("parent-tip".to_string()) }));
     mock.expect_remove_worktree()
         .times(expected_merge_count)
         .returning(|worktree_path| {

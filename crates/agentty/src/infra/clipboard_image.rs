@@ -10,9 +10,9 @@ use ag_clipboard::Clipboard;
 use image::codecs::png::PngEncoder;
 use image::{ExtendedColorType, ImageEncoder};
 
-use crate::app;
 use crate::infra::clock::Clock;
 use crate::infra::fs::{self, FsClient};
+use crate::infra::home;
 
 /// Boxed async result used by [`ClipboardImageClient`] trait methods.
 pub(crate) type ClipboardImageFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
@@ -190,7 +190,7 @@ pub(crate) fn normalize_clipboard_image_error(error: &ClipboardError) -> String 
 /// Returns [`ClipboardError::EmptySessionId`] when `session_id` is empty.
 pub(crate) fn clipboard_image_directory(session_id: &str) -> Result<PathBuf, ClipboardError> {
     let session_id = session_temp_directory_name(session_id)?;
-    let agentty_root = app::agentty_home();
+    let agentty_root = home::agentty_home();
 
     Ok(agentty_root.join("tmp").join(session_id).join("images"))
 }
@@ -416,7 +416,7 @@ mod tests {
     fn test_clipboard_image_directory_uses_agentty_tmp_path_for_session_id() {
         // Arrange
         let session_id = "session-123";
-        let agentty_root = app::agentty_home();
+        let agentty_root = home::agentty_home();
 
         // Act
         let image_directory =
@@ -433,7 +433,7 @@ mod tests {
     fn test_build_clipboard_image_path_uses_png_extension_in_images_directory() {
         // Arrange
         let session_id = "session-123";
-        let expected_directory = app::agentty_home()
+        let expected_directory = home::agentty_home()
             .join("tmp")
             .join("session-123")
             .join("images");
