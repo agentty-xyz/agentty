@@ -125,6 +125,63 @@ fn seed_session_with_markdown_table(env: &BuilderEnv) -> Result<(), Box<dyn std:
     Ok(())
 }
 
+/// Seeds one review-ready session whose transcript contains mermaid flowchart,
+/// entity-relationship, and sequence fenced blocks.
+fn seed_session_with_mermaid_output(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    common::seed_session(
+        env,
+        SessionSeed::regular("mermaid-chat-0001", "claude-opus-4-8", "main", "Review")
+            .with_title("Mermaid diagram output"),
+    )?;
+
+    let runtime = common::seed_runtime()?;
+
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .append_session_message(
+                "mermaid-chat-0001",
+                SessionMessageKind::LegacyTranscript,
+                "\
+Here is the merge flow and the data model:
+
+```mermaid
+flowchart TD
+    A[User starts session] --> B{Choose action}
+    B -->|Ask agent| C[Send prompt]
+    B -->|Review changes| D[Open diff view]
+    C --> E[Agent works in worktree]
+    E --> F[Run checks]
+    F --> G[Report result]
+    D --> G
+```
+
+```mermaid
+erDiagram
+    CUSTOMER ||--o{ ORDER : places
+    CUSTOMER ||--|| ACCOUNT : owns
+```
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Agentty
+    participant Agent
+    User->>Agentty: Start new session
+    Agentty->>Agent: Send prompt
+    Agent-->>Agentty: Stream result
+```
+",
+            )
+            .await
+    })?;
+
+    std::fs::create_dir_all(env.agentty_root.join("wt").join("mermaid-"))?;
+
+    Ok(())
+}
+
 /// Seeds one review-ready session plus its default source branch and
 /// propagates setup errors to the caller.
 fn seed_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
@@ -2067,6 +2124,52 @@ fn review_comments_preview_opens_from_diff_page() -> E2eResult {
                     !view_text.contains("Resolved comment should stay hidden."),
                     "resolved review-thread comments should be hidden"
                 );
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify session output renders mermaid flowchart, entity-relationship, and
+/// sequence fenced blocks as Unicode diagrams instead of raw mermaid source.
+#[test]
+fn session_view_mermaid_output() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_mermaid_output")
+        .with_terminal_size(160, 72)
+        .setup(seed_session_with_mermaid_output)
+        .zola(
+            "Mermaid diagrams in chat",
+            "Agent replies that contain mermaid flowcharts, ER diagrams, or sequence diagrams \
+             render as Unicode diagrams directly in the session chat.",
+            43,
+        )
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_text("Stream result", 5000)
+                    .wait_for_stable_frame(300, 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "session_mermaid_output",
+                        "Session chat with rendered mermaid diagrams",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "User starts session", &full);
+                assertion::assert_text_in_region(frame, "Report result", &full);
+                assertion::assert_text_in_region(frame, "▼", &full);
+                assertion::assert_text_in_region(frame, "CUSTOMER", &full);
+                assertion::assert_text_in_region(frame, "places", &full);
+                assertion::assert_text_in_region(frame, "Start new session", &full);
+                assertion::assert_text_in_region(frame, "Stream result", &full);
+                assertion::assert_not_visible(frame, "flowchart TD");
+                assertion::assert_not_visible(frame, "erDiagram");
+                assertion::assert_not_visible(frame, "sequenceDiagram");
             },
         )?;
 

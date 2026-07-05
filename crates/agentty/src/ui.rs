@@ -5,6 +5,7 @@ pub mod icon;
 pub mod input_layout;
 pub mod layout;
 pub mod markdown;
+pub mod mermaid;
 pub mod overlay;
 pub mod page;
 pub mod prompt_format;

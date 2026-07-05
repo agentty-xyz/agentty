@@ -7,6 +7,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- agentty: render complete ```` ```mermaid ```` fenced blocks in session chat markdown
+  as Unicode diagrams for simple `graph`/`flowchart`, `erDiagram`, and `sequenceDiagram`
+  diagrams.
+
 ### Changed
 
 - agentty: open settings selector dropdowns for fixed-choice values instead of cycling

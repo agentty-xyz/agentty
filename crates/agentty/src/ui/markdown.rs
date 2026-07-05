@@ -8,8 +8,8 @@ use ratatui::text::{Line, Span};
 use rustc_hash::FxHasher;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::ui::style;
 use crate::ui::text_util::wrap_styled_line;
+use crate::ui::{mermaid, style};
 
 const USER_PROMPT_PREFIX: &str = " › ";
 const CLARIFICATION_HEADER: &str = "Clarifications:";
@@ -193,6 +193,17 @@ pub fn render_markdown(text: &str, width: usize) -> Vec<Line<'static>> {
             &mut rendered_lines,
         ) {
             line_index += 1;
+            continue;
+        }
+
+        if matches!(block_state, BlockState::Paragraph)
+            && is_mermaid_fence(raw_line)
+            && let Some((diagram_lines, next_line_index)) =
+                render_mermaid_block(&raw_lines, line_index, width)
+        {
+            rendered_lines.extend(diagram_lines);
+            line_index = next_line_index;
+
             continue;
         }
 
@@ -717,6 +728,61 @@ fn render_stats_line(raw_line: &str, width: usize) -> Vec<Line<'static>> {
     }
 
     wrap_verbatim_line(raw_line, Style::default(), width)
+}
+
+/// Returns whether the line opens a ```` ```mermaid ```` fenced block.
+fn is_mermaid_fence(raw_line: &str) -> bool {
+    raw_line.trim() == "```mermaid"
+}
+
+/// Renders one complete ```` ```mermaid ```` fenced block as diagram lines.
+///
+/// Returns the rendered diagram plus the index just past the closing fence
+/// when the block is complete, the diagram type is supported, and the diagram
+/// fits `width`. Any other case returns `None` so the block keeps the plain
+/// fenced-code presentation.
+fn render_mermaid_block(
+    raw_lines: &[&str],
+    start_index: usize,
+    width: usize,
+) -> Option<(Vec<Line<'static>>, usize)> {
+    let mut source = String::new();
+    let mut next_line_index = start_index + 1;
+    let mut source_byte_count = 0_usize;
+    let mut source_line_count = 0_usize;
+
+    loop {
+        let raw_line = raw_lines.get(next_line_index)?;
+        next_line_index += 1;
+        if is_fence_delimiter(raw_line) {
+            break;
+        }
+
+        source_line_count += 1;
+        if source_line_count > mermaid::MAX_SOURCE_LINE_COUNT {
+            return None;
+        }
+
+        let newline_byte_count = usize::from(source_line_count > 1);
+        source_byte_count = source_byte_count
+            .checked_add(newline_byte_count)?
+            .checked_add(raw_line.len())?;
+        if source_byte_count > mermaid::MAX_SOURCE_BYTE_COUNT {
+            return None;
+        }
+
+        if source_line_count > 1 {
+            source.push('\n');
+        }
+        source.push_str(raw_line);
+    }
+
+    let diagram = mermaid::render_mermaid(&source)?;
+    if diagram.width > width {
+        return None;
+    }
+
+    Some((diagram.lines, next_line_index))
 }
 
 /// Parses a GitHub-style markdown table starting at `start_index`.
@@ -1607,6 +1673,7 @@ fn find_matching_single_asterisk(characters: &[char], start_index: usize) -> Opt
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write;
     use std::sync::Arc;
 
     use super::*;
@@ -1972,6 +2039,135 @@ mod tests {
         // Assert
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].to_string(), "**raw**");
+        assert_eq!(lines[0].spans[0].style, code_block_style());
+    }
+
+    #[test]
+    fn test_render_markdown_renders_mermaid_block_as_diagram() {
+        // Arrange
+        let input = "```mermaid\ngraph TD\n    A[Start] --> B[Finish]\n```";
+
+        // Act
+        let lines = render_markdown(input, 80);
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(text.contains("Start"));
+        assert!(text.contains("Finish"));
+        assert!(text.contains("┌"));
+        assert!(text.contains("▼"));
+        assert!(!text.contains("graph TD"));
+        assert!(!text.contains("```"));
+    }
+
+    #[test]
+    fn test_render_markdown_keeps_code_fallback_for_unsupported_mermaid() {
+        // Arrange
+        let input = "```mermaid\nclassDiagram\n    A <|-- B\n```";
+
+        // Act
+        let lines = render_markdown(input, 80);
+
+        // Assert
+        assert_eq!(lines[0].to_string(), "classDiagram");
+        assert_eq!(lines[0].spans[0].style, code_block_style());
+    }
+
+    #[test]
+    fn test_render_markdown_renders_sequence_mermaid_block_as_diagram() {
+        // Arrange
+        let input = concat!(
+            "```mermaid\n",
+            "sequenceDiagram\n",
+            "    participant User\n",
+            "    participant Agentty\n",
+            "    User->>Agentty: Start session\n",
+            "```\n",
+        );
+
+        // Act
+        let lines = render_markdown(input, 120);
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(text.contains("User"));
+        assert!(text.contains("Agentty"));
+        assert!(text.contains("Start session"));
+        assert!(!text.contains("sequenceDiagram"));
+    }
+
+    #[test]
+    fn test_render_markdown_keeps_code_fallback_for_unclosed_mermaid_fence() {
+        // Arrange
+        let input = "```mermaid\ngraph TD\n    A[Start] --> B[Finish]";
+
+        // Act
+        let lines = render_markdown(input, 80);
+
+        // Assert
+        assert_eq!(lines[0].to_string(), "graph TD");
+        assert_eq!(lines[0].spans[0].style, code_block_style());
+    }
+
+    #[test]
+    fn test_render_markdown_keeps_code_fallback_for_diagram_wider_than_width() {
+        // Arrange
+        let input = "```mermaid\ngraph LR\n    A[Start] --> B[Finish]\n```";
+
+        // Act
+        let lines = render_markdown(input, 10);
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(text.contains("graph LR"));
+        assert!(!text.contains("┌"));
+    }
+
+    #[test]
+    fn test_render_markdown_keeps_code_fallback_for_line_limited_mermaid_source() {
+        // Arrange
+        let mut input = String::from("```mermaid\ngraph TD");
+        for node_index in 0..mermaid::MAX_SOURCE_LINE_COUNT {
+            write!(&mut input, "\n    N{node_index}").expect("writing to String should succeed");
+        }
+        input.push_str("\n```");
+
+        // Act
+        let lines = render_markdown(&input, 80);
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(text.contains("graph TD"));
+        assert!(!text.contains("┌"));
+    }
+
+    #[test]
+    fn test_render_markdown_keeps_code_fallback_for_byte_limited_mermaid_source() {
+        // Arrange
+        let label = "x".repeat(mermaid::MAX_SOURCE_BYTE_COUNT);
+        let input = format!("```mermaid\ngraph TD\n    A[{label}]\n```");
+
+        // Act
+        let lines = render_markdown(&input, 80);
+
+        // Assert
+        assert_eq!(lines[0].to_string(), "graph TD");
         assert_eq!(lines[0].spans[0].style, code_block_style());
     }
 

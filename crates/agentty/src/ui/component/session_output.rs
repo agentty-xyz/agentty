@@ -2616,6 +2616,40 @@ mod tests {
         assert!(!text.contains("| --- | --- |"));
     }
 
+    #[test]
+    fn test_output_lines_render_mermaid_diagrams() {
+        // Arrange
+        let mut session = session_fixture();
+        session.output = concat!(
+            "```mermaid\n",
+            "graph TD\n",
+            "    A[Start] --> B[Finish]\n",
+            "```",
+        )
+        .to_string();
+        session.status = Status::Review;
+
+        // Act
+        let lines = output_lines(
+            &session,
+            Rect::new(0, 0, 80, 12),
+            line_context(None, None, None),
+            None,
+        );
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(text.contains("Start"));
+        assert!(text.contains("Finish"));
+        assert!(text.contains("┌"));
+        assert!(text.contains("▼"));
+        assert!(!text.contains("graph TD"));
+    }
+
     /// Verifies the done-summary transition renders the rewritten summary
     /// payload while preserving the completed transcript.
     #[test]
