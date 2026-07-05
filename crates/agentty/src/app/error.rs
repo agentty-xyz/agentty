@@ -17,7 +17,7 @@ pub enum AppError {
 
     /// A git operation failed at the app layer.
     #[error("{0}")]
-    Git(#[from] crate::infra::git::GitError),
+    Git(#[from] ag_git::GitError),
 
     /// A workflow-specific or startup failure with a contextual message.
     #[error("{0}")]

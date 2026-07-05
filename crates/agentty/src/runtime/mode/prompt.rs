@@ -863,8 +863,8 @@ mod tests {
     /// Replaces the app-level git client with a caller-provided mock by
     /// rebuilding `AppServices` through its public constructor, preserving
     /// the remaining shared dependencies.
-    fn install_mock_git_client(app: &mut App, mock_git_client: crate::infra::git::MockGitClient) {
-        let mock_git_client: std::sync::Arc<dyn crate::infra::git::GitClient> =
+    fn install_mock_git_client(app: &mut App, mock_git_client: ag_git::MockGitClient) {
+        let mock_git_client: std::sync::Arc<dyn ag_git::GitClient> =
             std::sync::Arc::new(mock_git_client);
         let base_path = app.services.base_path().to_path_buf();
         let db = app.services.db().clone();
@@ -2929,10 +2929,10 @@ mod tests {
             },
         );
 
-        let mut mock_git_client = crate::infra::git::MockGitClient::new();
+        let mut mock_git_client = ag_git::MockGitClient::new();
         mock_git_client.expect_diff().returning(|_, _| {
             Box::pin(async {
-                Err(crate::infra::git::GitError::OutputParse(
+                Err(ag_git::GitError::OutputParse(
                     "simulated git failure".to_string(),
                 ))
             })

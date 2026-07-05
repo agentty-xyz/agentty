@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use ag_git::GitClient;
 use tokio::sync::mpsc;
 
 use crate::app::AppEvent;
@@ -11,7 +12,6 @@ use crate::app::session::{RunAgentAssistTaskInput, SessionError, SessionTaskServ
 use crate::domain::agent::AgentSelection;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::db::AppRepositories;
-use crate::infra::git::GitClient;
 
 /// Policy knobs controlling one assisted recovery loop.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

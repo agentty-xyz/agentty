@@ -20,6 +20,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ag-git"
+version = "0.11.1"
+dependencies = [
+ "mockall",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "ag-xtask"
 version = "0.11.1"
 dependencies = [
@@ -84,6 +94,7 @@ name = "agentty"
 version = "0.11.1"
 dependencies = [
  "ag-forge",
+ "ag-git",
  "agent-client-protocol",
  "arboard",
  "askama",

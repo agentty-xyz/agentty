@@ -87,7 +87,7 @@ impl MainCheckoutSnapshot {
     }
 
     /// Converts main-checkout tracked status failures into workflow errors.
-    fn status_error(error: &crate::infra::git::GitError) -> SessionError {
+    fn status_error(error: &ag_git::GitError) -> SessionError {
         SessionError::Workflow(format!(
             "Session isolation violation: failed to inspect main checkout tracked status: {error}"
         ))

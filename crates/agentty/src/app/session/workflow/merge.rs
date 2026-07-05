@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
+use ag_git::{self as git, GitClient};
 use askama::Template;
 use tokio::sync::mpsc;
 use tracing::warn;
@@ -28,7 +29,6 @@ use crate::infra::agent;
 use crate::infra::agent::protocol::AgentResponseSummary;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs::{self as fs, FsClient};
-use crate::infra::git::{self as git, GitClient};
 
 const REBASE_ASSIST_POLICY: AssistPolicy = AssistPolicy {
     max_attempts: 3,
@@ -2876,11 +2876,11 @@ impl SessionManager {
 
 #[cfg(test)]
 mod tests {
+    use ag_git::GitError;
     use mockall::Sequence;
     use tempfile::{TempDir, tempdir};
 
     use super::*;
-    use crate::infra::git::GitError;
 
     /// Builds a filesystem mock that delegates operations to local disk.
     fn create_passthrough_mock_fs_client() -> fs::MockFsClient {

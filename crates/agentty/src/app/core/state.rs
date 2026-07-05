@@ -11,6 +11,7 @@ use ag_forge::{
     RealReviewRequestClient, RequestedReview, RequestedReviewAudience, ReviewCommentSnapshot,
     ReviewRequestClient,
 };
+use ag_git::{GitClient, RealGitClient};
 #[cfg(test)]
 use app::branch_publish::detected_forge_kind_from_git_push_error;
 #[cfg(test)]
@@ -53,7 +54,6 @@ use crate::domain::turn_prompt::TurnPrompt;
 #[cfg(test)]
 use crate::infra::db;
 use crate::infra::fs::{FsClient, RealFsClient};
-use crate::infra::git::{GitClient, RealGitClient};
 use crate::infra::project_discovery::{ProjectDiscoveryClient, RealProjectDiscoveryClient};
 use crate::infra::tmux::{RealTmuxClient, TmuxClient};
 use crate::infra::{agent, app_server};

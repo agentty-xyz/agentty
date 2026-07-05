@@ -6,6 +6,8 @@ Contains the workspace member crates.
 
 - `crates/ag-forge/` holds forge review-request types and provider integrations shared
   across the workspace.
+- `crates/ag-git/` holds reusable git, worktree, sync, rebase, and squash-merge
+  operations shared across the workspace.
 - `crates/ag-xtask/` holds workspace maintenance utilities, including migration checks
   and generated workspace-map output.
 - `crates/agentty/` is the main TUI application crate with `app`, `domain`, `infra`,

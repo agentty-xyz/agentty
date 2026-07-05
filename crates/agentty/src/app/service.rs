@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use ag_forge::ReviewRequestClient;
+use ag_git::GitClient;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
@@ -17,7 +18,6 @@ use crate::infra::app_server::AppServerClient;
 use crate::infra::clipboard_image::{ClipboardImageClient, RealClipboardImageClient};
 use crate::infra::clock::Clock;
 use crate::infra::fs::FsClient;
-use crate::infra::git::GitClient;
 use crate::infra::review_comment_cache::ReviewCommentCache;
 
 /// Shared per-app session redraw version counters keyed by session id.

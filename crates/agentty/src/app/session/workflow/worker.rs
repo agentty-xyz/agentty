@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ag_forge as forge;
+use ag_git::GitClient;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -27,7 +28,6 @@ use crate::infra::channel::{
 };
 use crate::infra::db::{AppRepositories, SessionOperationRow};
 use crate::infra::fs::FsClient;
-use crate::infra::git::GitClient;
 use crate::infra::{agent, process};
 
 const RESTART_FAILURE_REASON: &str = "Interrupted by app restart";
@@ -1034,6 +1034,7 @@ async fn append_drained_prompt_to_output(context: &SessionWorkerContext, prompt:
 mod tests {
     use std::sync::Arc;
 
+    use ag_git::{MockGitClient, RebaseStepResult};
     use mockall::Sequence;
     use serde_json;
     use tempfile::tempdir;
@@ -1054,7 +1055,6 @@ mod tests {
     use crate::infra::channel::MockAgentChannel;
     use crate::infra::db::AppRepositories;
     use crate::infra::fs;
-    use crate::infra::git::{MockGitClient, RebaseStepResult};
 
     /// Builds one filesystem mock that treats every probed path as an
     /// existing directory.
@@ -2399,7 +2399,7 @@ mod tests {
             })
             .returning(|_, _| {
                 Box::pin(async {
-                    Err(crate::infra::git::GitError::CommandFailed {
+                    Err(ag_git::GitError::CommandFailed {
                         command: "git push origin wt/session-id".to_string(),
                         stderr: "fatal: remote rejected the push".to_string(),
                     })
@@ -2712,7 +2712,7 @@ mod tests {
             .once()
             .returning(|_, _| {
                 Box::pin(async {
-                    Err(crate::infra::git::GitError::CommandFailed {
+                    Err(ag_git::GitError::CommandFailed {
                         command: "git push origin wt/session-id".to_string(),
                         stderr:
                             "fatal: could not read username for 'https://github.com/openai/agentty': terminal prompts disabled"

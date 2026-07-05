@@ -29,7 +29,7 @@ pub type GitFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 ///
 /// Production uses [`RealGitClient`], while tests can inject
 /// `MockGitClient` to avoid flaky multi-command process workflows.
-#[cfg_attr(test, mockall::automock)]
+#[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
 pub trait GitClient: Send + Sync {
     /// Detects the current branch name for the repository containing `dir`.
     ///

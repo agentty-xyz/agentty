@@ -720,7 +720,7 @@ mod tests {
         let entries = vec![
             FileEntry {
                 is_dir: false,
-                path: "crates/agentty/src/infra/git.rs".to_string(),
+                path: "crates/ag-git/src/setting/lib.rs".to_string(),
             },
             FileEntry {
                 is_dir: false,

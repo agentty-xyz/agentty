@@ -307,6 +307,7 @@ mod tests {
     use std::time::{Duration, Instant, SystemTime};
 
     use ag_forge as forge;
+    use ag_git as git;
     use ratatui::widgets::TableState;
     use tempfile::tempdir;
     use tokio::sync::mpsc;
@@ -320,7 +321,7 @@ mod tests {
         SessionHandles, Status,
     };
     use crate::infra::db::AppRepositories;
-    use crate::infra::{fs, git};
+    use crate::infra::fs;
 
     /// Builds a filesystem mock that delegates directory checks to local disk.
     fn create_passthrough_mock_fs_client() -> fs::MockFsClient {
@@ -641,7 +642,7 @@ mod tests {
             })
             .returning(|_| {
                 Box::pin(async {
-                    Err(crate::infra::git::GitError::Io(std::io::Error::new(
+                    Err(ag_git::GitError::Io(std::io::Error::new(
                         std::io::ErrorKind::NotFound,
                         "missing worktree",
                     )))
