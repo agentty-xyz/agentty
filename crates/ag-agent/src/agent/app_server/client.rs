@@ -259,6 +259,7 @@ mod tests {
         let request = AppServerTurnRequest {
             folder: std::env::temp_dir(),
             live_session_output: None,
+            main_checkout_root: None,
             model: "test-model".to_string(),
             persisted_instruction_conversation_id: None,
             prompt: TurnPrompt::from_text("Hello".to_string()),

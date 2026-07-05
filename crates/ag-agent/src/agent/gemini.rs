@@ -64,10 +64,11 @@ mod tests {
             BuildCommandRequest {
                 attachments: &[],
                 folder: temp_directory.path(),
-                prompt: "Generate title",
-                request_kind: &utility_request_kind(),
+                main_checkout_root: None,
                 model: "gemini-3.5-flash",
+                prompt: "Generate title",
                 reasoning_level: ReasoningLevel::default(),
+                request_kind: &utility_request_kind(),
             },
         )
         .expect("command should build");

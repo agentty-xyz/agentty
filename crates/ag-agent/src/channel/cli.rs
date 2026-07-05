@@ -58,10 +58,11 @@ fn build_command_request<'a>(
     BuildCommandRequest {
         attachments: &request.prompt.attachments,
         folder: &request.folder,
-        prompt: prompt_text,
-        request_kind: &request.request_kind,
+        main_checkout_root: request.main_checkout_root.as_deref(),
         model: &request.model,
+        prompt: prompt_text,
         reasoning_level: request.reasoning_level,
+        request_kind: &request.request_kind,
     }
 }
 
@@ -390,10 +391,11 @@ async fn execute_cli_repair_turn(
     let build_request = BuildCommandRequest {
         attachments: &prompt_payload.attachments,
         folder,
-        prompt: repair_prompt,
-        request_kind,
+        main_checkout_root: None,
         model,
+        prompt: repair_prompt,
         reasoning_level,
+        request_kind,
     };
     let command = backend
         .build_command(build_request)
@@ -490,6 +492,7 @@ mod tests {
         TurnRequest {
             folder,
             live_session_output: None,
+            main_checkout_root: None,
             model: "claude-sonnet-5".to_string(),
             request_kind: AgentRequestKind::SessionStart,
             prompt: "Write a test".into(),
@@ -526,6 +529,7 @@ mod tests {
         let request = TurnRequest {
             folder: PathBuf::from("/tmp/session"),
             live_session_output: None,
+            main_checkout_root: Some(PathBuf::from("/tmp/main")),
             model: "claude-sonnet-5".to_string(),
             request_kind: AgentRequestKind::SessionStart,
             prompt: TurnPrompt::from("Review @src/main.rs"),
@@ -540,6 +544,10 @@ mod tests {
 
         // Assert
         assert_eq!(build_request.prompt, "Review \"src/main.rs\"");
+        assert_eq!(
+            build_request.main_checkout_root,
+            Some(std::path::Path::new("/tmp/main"))
+        );
     }
 
     #[tokio::test]

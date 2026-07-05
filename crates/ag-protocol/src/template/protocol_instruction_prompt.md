@@ -9,6 +9,15 @@ File path output requirements:
   `git pull`, `git fetch`, `git merge`, `git rebase`, `git checkout`, `git switch`,
   `git restore`, `git reset`, `git clean`, `git branch -d`, `git worktree remove`).
 
+Workspace isolation requirements:
+
+- Your workspace root is `{{ workspace_root }}`. It is also the process working
+  directory.
+- Create, modify, and delete files only inside the workspace root. Anything outside that
+  root is read-only.
+- Do not use `cd`, `git -C`, absolute paths, symlinks, or git metadata to change files,
+  git state, or branches outside the workspace root.
+
 Quality check requirements:
 
 - Before finalizing code changes, run the repository-defined quality checks needed for

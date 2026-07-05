@@ -124,6 +124,7 @@ pub async fn submit_one_shot_with_app_server_client(
     let turn_request = AppServerTurnRequest {
         folder: request.folder.to_path_buf(),
         live_session_output: None,
+        main_checkout_root: None,
         model: request.model.provider_model_str().to_string(),
         prompt: crate::model::turn_prompt::TurnPrompt::from_agent_data(request.prompt.to_string()),
         request_kind: request.request_kind.clone(),
@@ -272,6 +273,7 @@ async fn attempt_one_shot_app_server_repair(
     let repair_turn_request = AppServerTurnRequest {
         folder: request.folder.to_path_buf(),
         live_session_output: None,
+        main_checkout_root: None,
         model: request.model.provider_model_str().to_string(),
         prompt: crate::model::turn_prompt::TurnPrompt::from_agent_data(repair_prompt),
         request_kind: request.request_kind,
@@ -317,10 +319,11 @@ async fn execute_one_shot_command(
     let build_request = BuildCommandRequest {
         attachments: &prompt_payload.attachments,
         folder: request.folder,
-        prompt,
-        request_kind: &request.request_kind,
+        main_checkout_root: None,
         model: request.model.provider_model_str(),
+        prompt,
         reasoning_level: request.reasoning_level,
+        request_kind: &request.request_kind,
     };
     let command = backend
         .build_command(build_request)

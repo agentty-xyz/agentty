@@ -48,6 +48,8 @@ live session starts:
 - Before each turn, Agentty verifies that the session folder still exists, is on its
   expected `wt/<hash>` branch, and resolves to a linked worktree rather than the main
   checkout.
+- Agent prompts repeat that the session worktree is the only writable root for normal
+  turns.
 - If worktree creation fails (e.g., git is not installed or permissions are
   insufficient), session creation fails atomically and displays an error.
 

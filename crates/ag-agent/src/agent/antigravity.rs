@@ -48,9 +48,10 @@ impl AgentBackend for AntigravityBackend {
         let BuildCommandRequest {
             attachments,
             folder,
+            main_checkout_root: _main_checkout_root,
+            model,
             prompt: _prompt,
             request_kind: _request_kind,
-            model,
             reasoning_level: _reasoning_level,
         } = request;
         let mut command = Command::new("agy");
@@ -506,10 +507,11 @@ mod tests {
             BuildCommandRequest {
                 attachments: &[],
                 folder: temp_directory.path(),
-                prompt: "Write tests",
-                request_kind: &session_start_request_kind(),
+                main_checkout_root: None,
                 model: requested_model,
+                prompt: "Write tests",
                 reasoning_level: ReasoningLevel::default(),
+                request_kind: &session_start_request_kind(),
             },
         )
         .expect("command should build");
@@ -563,10 +565,11 @@ mod tests {
             BuildCommandRequest {
                 attachments: &[],
                 folder: &session_folder,
-                prompt: "Write tests",
-                request_kind: &session_start_request_kind(),
+                main_checkout_root: None,
                 model: requested_model,
+                prompt: "Write tests",
                 reasoning_level: ReasoningLevel::default(),
+                request_kind: &session_start_request_kind(),
             },
         )
         .expect("command should build");
@@ -764,10 +767,11 @@ mod tests {
             BuildCommandRequest {
                 attachments: &[attachment],
                 folder: temp_directory.path(),
-                prompt: "Review [Image #1]",
-                request_kind: &session_start_request_kind(),
+                main_checkout_root: None,
                 model: requested_model,
+                prompt: "Review [Image #1]",
                 reasoning_level: ReasoningLevel::default(),
+                request_kind: &session_start_request_kind(),
             },
         )
         .expect("command should build");
@@ -832,10 +836,11 @@ mod tests {
             BuildCommandRequest {
                 attachments: &[],
                 folder: temp_directory.path(),
-                prompt: "continue work",
-                request_kind: &request_kind,
+                main_checkout_root: None,
                 model: AgentModel::Gemini31ProPreview.provider_model_str(),
+                prompt: "continue work",
                 reasoning_level: ReasoningLevel::default(),
+                request_kind: &request_kind,
             },
             ProtocolSchemaInstructionMode::PromptSchema,
             "Antigravity",

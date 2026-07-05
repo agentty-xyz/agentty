@@ -245,12 +245,12 @@ flowchart TD
 `crates/ag-agent/src/channel.rs` and Agentty `infra/channel`, with prompt payloads owned
 by `ag-protocol` and re-exported through `domain/turn_prompt.rs`):
 
-| Type               | Purpose                                                                                                               |
-| ------------------ | --------------------------------------------------------------------------------------------------------------------- |
-| `TurnRequest`      | Input payload: `reasoning_level`, folder, `live_session_output`, model, `request_kind`, prompt, and provider context. |
-| `TurnEvent`        | Incremental stream events: `ThoughtDelta`, `Completed`, `Failed`, `PidUpdate`.                                        |
-| `TurnResult`       | Normalized output: `assistant_message`, token counts, `provider_conversation_id`.                                     |
-| `AgentRequestKind` | `SessionStart`, `SessionResume` (with optional session output replay), or `UtilityPrompt`.                            |
+| Type               | Purpose                                                                                                                                     |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TurnRequest`      | Input payload: `reasoning_level`, folder, `live_session_output`, `main_checkout_root`, model, `request_kind`, prompt, and provider context. |
+| `TurnEvent`        | Incremental stream events: `ThoughtDelta`, `Completed`, `Failed`, `PidUpdate`.                                                              |
+| `TurnResult`       | Normalized output: `assistant_message`, token counts, `provider_conversation_id`.                                                           |
+| `AgentRequestKind` | `SessionStart`, `SessionResume` (with optional session output replay), or `UtilityPrompt`.                                                  |
 
 <a id="architecture-provider-conversation-id-flow"></a> App-server providers return a
 `provider_conversation_id` in `TurnResult`. Post-turn application persists it, along
@@ -263,14 +263,16 @@ compact reminder.
 - Before every worker-dispatched turn, `workflow/isolation.rs` verifies the session
   folder exists, is checked out on the expected `wt/<hash>` branch, and resolves to a
   linked worktree with a distinct main checkout.
-- The worker snapshots the main checkout's tracked-file git status before and after each
-  turn and appends a `[Main Checkout Warning]` transcript notice when it changed.
+- The worker snapshots the main checkout's tracked-file git status and `HEAD` hash
+  before and after each turn and appends a `[Main Checkout Warning]` transcript notice
+  when either changed.
 - Merge and `sync main` workflows require a clean target checkout before changing
   base-branch state.
 - Provider permission policies are scoped per transport: Codex turns run with a
-  non-interactive approval policy and workspace-write sandbox, Gemini ACP requests
-  prefer one-shot allow options, and CLI-backed providers run from the session worktree
-  process directory.
+  non-interactive approval policy and workspace-write sandbox, Claude turns receive
+  session-scoped settings that deny writes to the known main checkout, Gemini ACP
+  requests prefer one-shot allow options, and CLI-backed providers run from the session
+  worktree process directory.
 
 ## Agent Interaction Protocol Flow
 

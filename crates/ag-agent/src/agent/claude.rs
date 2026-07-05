@@ -34,8 +34,9 @@ impl AgentBackend for ClaudeBackend {
         let BuildCommandRequest {
             attachments,
             folder,
-            request_kind,
+            main_checkout_root,
             model,
+            request_kind,
             prompt: _prompt,
             reasoning_level,
         } = request;
@@ -54,6 +55,7 @@ impl AgentBackend for ClaudeBackend {
 
         command.arg("-p");
         command.arg("--allowedTools").arg(CLAUDE_ALLOWED_TOOLS);
+        append_claude_workspace_settings(&mut command, folder, main_checkout_root);
         command.arg("--input-format").arg("text");
         command.arg("--strict-mcp-config");
         command.arg("--verbose");
@@ -72,11 +74,52 @@ impl AgentBackend for ClaudeBackend {
     }
 }
 
+/// Appends per-turn Claude Code settings that keep known non-session
+/// checkouts read-only.
+fn append_claude_workspace_settings(
+    command: &mut Command,
+    workspace_folder: &Path,
+    main_checkout_root: Option<&Path>,
+) {
+    let mut deny_rules = Vec::new();
+    let mut deny_write_paths = Vec::new();
+    if let Some(main_checkout_root) = main_checkout_root {
+        let main_checkout_rule_path = claude_absolute_permission_path(main_checkout_root);
+        deny_rules.push(format!("Edit({main_checkout_rule_path}/**)"));
+        deny_write_paths.push(main_checkout_root.to_string_lossy().into_owned());
+    }
+
+    let settings = serde_json::json!({
+        "permissions": {
+            "deny": deny_rules,
+        },
+        "sandbox": {
+            "enabled": true,
+            "filesystem": {
+                "allowWrite": [workspace_folder.to_string_lossy().into_owned()],
+                "denyWrite": deny_write_paths,
+            }
+        }
+    });
+
+    command.arg("--settings").arg(settings.to_string());
+}
+
+/// Returns a Claude Code permission-rule absolute path using the `//`
+/// prefix required by `Read` and `Edit` path rules.
+fn claude_absolute_permission_path(path: &Path) -> String {
+    let path = path.to_string_lossy().replace('\\', "/");
+    let path_without_root = path.trim_start_matches('/');
+
+    format!("//{path_without_root}")
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::OsStr;
     use std::path::PathBuf;
 
+    use serde_json::Value;
     use tempfile::tempdir;
 
     use super::*;
@@ -93,11 +136,40 @@ mod tests {
         AgentRequestKind::UtilityPrompt
     }
 
+    fn settings_argument(command: &Command) -> Value {
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        let settings_position = args
+            .iter()
+            .position(|arg| arg == "--settings")
+            .expect("--settings flag should be present");
+
+        serde_json::from_str(&args[settings_position + 1]).expect("settings JSON should parse")
+    }
+
+    #[test]
+    /// Verifies Claude permission-rule paths use slash separators for glob
+    /// matching even when given a Windows-style checkout path.
+    fn test_claude_absolute_permission_path_normalizes_windows_separators() {
+        // Arrange
+        let path = Path::new(r"C:\Users\dev\project");
+
+        // Act
+        let rule_path = claude_absolute_permission_path(path);
+
+        // Assert
+        assert_eq!(rule_path, "//C:/Users/dev/project");
+        assert!(!rule_path.contains('\\'));
+    }
+
     #[test]
     /// Verifies Claude sessions allow Agentty's required write-capable tools.
     fn test_claude_auto_edit_mode_uses_write_capable_allowed_tools() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
+        let main_checkout_root = temp_directory.path().join("main");
         let backend = ClaudeBackend;
 
         // Act
@@ -106,10 +178,11 @@ mod tests {
             BuildCommandRequest {
                 attachments: &[],
                 folder: temp_directory.path(),
-                prompt: "Plan prompt",
-                request_kind: &session_start_request_kind(),
+                main_checkout_root: Some(main_checkout_root.as_path()),
                 model: "claude-sonnet-5",
+                prompt: "Plan prompt",
                 reasoning_level: ReasoningLevel::default(),
+                request_kind: &session_start_request_kind(),
             },
         )
         .expect("command should build");
@@ -126,11 +199,28 @@ mod tests {
         assert!(debug_command.contains("MultiEdit"));
         assert!(debug_command.contains("Write"));
         assert!(debug_command.contains("--strict-mcp-config"));
+        assert!(debug_command.contains("--settings"));
         assert!(debug_command.contains("--effort"));
         assert!(debug_command.contains("--output-format"));
         assert!(debug_command.contains("stream-json"));
         assert!(!debug_command.contains("--permission-mode"));
         assert!(!args.iter().any(String::is_empty));
+
+        let settings = settings_argument(&command);
+        let deny_rules = settings
+            .pointer("/permissions/deny")
+            .and_then(Value::as_array)
+            .expect("deny rules should be present");
+        assert!(deny_rules.iter().any(|rule| {
+            rule.as_str()
+                .is_some_and(|rule| rule.starts_with("Edit(//") && rule.ends_with("/main/**)"))
+        }));
+        assert_eq!(
+            settings
+                .pointer("/sandbox/enabled")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
     }
 
     #[test]
@@ -147,10 +237,11 @@ mod tests {
             BuildCommandRequest {
                 attachments: &[],
                 folder: temp_directory.path(),
-                prompt: "Use Opus",
-                request_kind: &session_start_request_kind(),
+                main_checkout_root: None,
                 model: "claude-opus-4-8",
+                prompt: "Use Opus",
                 reasoning_level: ReasoningLevel::default(),
+                request_kind: &session_start_request_kind(),
             },
         )
         .expect("command should build");
@@ -185,10 +276,11 @@ mod tests {
                 BuildCommandRequest {
                     attachments: &[],
                     folder: temp_directory.path(),
-                    prompt: "Do work",
-                    request_kind: &session_start_request_kind(),
+                    main_checkout_root: None,
                     model: "claude-sonnet-5",
+                    prompt: "Do work",
                     reasoning_level,
+                    request_kind: &session_start_request_kind(),
                 },
             )
             .expect("command should build");
@@ -234,10 +326,11 @@ mod tests {
             BuildCommandRequest {
                 attachments: &attachments,
                 folder: temp_directory.path(),
-                prompt: "Inspect [Image #1] and [Image #2]",
-                request_kind: &session_start_request_kind(),
+                main_checkout_root: None,
                 model: "claude-sonnet-5",
+                prompt: "Inspect [Image #1] and [Image #2]",
                 reasoning_level: ReasoningLevel::default(),
+                request_kind: &session_start_request_kind(),
             },
         )
         .expect("command should build");
@@ -268,10 +361,11 @@ mod tests {
                 BuildCommandRequest {
                     attachments: &[],
                     folder: temp_directory.path(),
-                    prompt: "Plan prompt",
-                    request_kind: &session_start_request_kind(),
+                    main_checkout_root: None,
                     model: "claude-sonnet-5",
+                    prompt: "Plan prompt",
                     reasoning_level: ReasoningLevel::default(),
+                    request_kind: &session_start_request_kind(),
                 },
                 ProtocolSchemaInstructionMode::TransportSchema,
                 "Claude",
@@ -300,10 +394,11 @@ mod tests {
             BuildCommandRequest {
                 attachments: &[],
                 folder: temp_directory.path(),
-                prompt: "Generate title",
-                request_kind: &utility_request_kind(),
+                main_checkout_root: None,
                 model: "claude-sonnet-5",
+                prompt: "Generate title",
                 reasoning_level: ReasoningLevel::default(),
+                request_kind: &utility_request_kind(),
             },
         )
         .expect("command should build");
@@ -313,10 +408,11 @@ mod tests {
                 BuildCommandRequest {
                     attachments: &[],
                     folder: temp_directory.path(),
-                    prompt: "Generate title",
-                    request_kind: &utility_request_kind(),
+                    main_checkout_root: None,
                     model: "claude-sonnet-5",
+                    prompt: "Generate title",
                     reasoning_level: ReasoningLevel::default(),
+                    request_kind: &utility_request_kind(),
                 },
                 ProtocolSchemaInstructionMode::TransportSchema,
                 "Claude",
@@ -349,10 +445,11 @@ mod tests {
             BuildCommandRequest {
                 attachments: &[],
                 folder: temp_directory.path(),
-                prompt: "Return protocol response",
-                request_kind: &session_start_request_kind(),
+                main_checkout_root: None,
                 model: "claude-sonnet-5",
+                prompt: "Return protocol response",
                 reasoning_level: ReasoningLevel::default(),
+                request_kind: &session_start_request_kind(),
             },
         )
         .expect("command should build");
@@ -362,10 +459,11 @@ mod tests {
                 BuildCommandRequest {
                     attachments: &[],
                     folder: temp_directory.path(),
-                    prompt: "Return protocol response",
-                    request_kind: &session_start_request_kind(),
+                    main_checkout_root: None,
                     model: "claude-sonnet-5",
+                    prompt: "Return protocol response",
                     reasoning_level: ReasoningLevel::default(),
+                    request_kind: &session_start_request_kind(),
                 },
                 ProtocolSchemaInstructionMode::TransportSchema,
                 "Claude",

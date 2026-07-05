@@ -77,6 +77,9 @@ pub struct TurnRequest {
     /// transcript than the snapshot captured at enqueue time. CLI channels
     /// ignore this field.
     pub live_session_output: Option<Arc<Mutex<String>>>,
+    /// Main repository checkout that must remain read-only during the turn,
+    /// when Agentty can resolve it.
+    pub main_checkout_root: Option<PathBuf>,
     /// Provider-specific model identifier.
     pub model: String,
     /// Canonical request kind that drives transport behavior and protocol

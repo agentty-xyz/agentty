@@ -59,10 +59,11 @@ pub(super) async fn start_runtime(
         .build_command(agent::BuildCommandRequest {
             attachments: &[],
             folder: request.folder.as_path(),
-            prompt: "",
-            request_kind: &request_kind,
+            main_checkout_root: request.main_checkout_root.as_deref(),
             model: &request.model,
+            prompt: "",
             reasoning_level: request.reasoning_level,
+            request_kind: &request_kind,
         })
         .map_err(|error| {
             AppServerError::Provider(format!(

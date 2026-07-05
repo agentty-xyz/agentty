@@ -67,6 +67,7 @@ dependencies = [
 name = "ag-protocol"
 version = "0.12.0"
 dependencies = [
+ "askama",
  "schemars 1.2.1",
  "serde",
  "serde_json",

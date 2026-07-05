@@ -1,5 +1,7 @@
 //! Shared app-server prompt shaping helpers.
 
+use std::path::Path;
+
 use crate::agent;
 use crate::agent::InstructionDeliveryMode;
 use crate::app_server::{AppServerError, AppServerTurnRequest};
@@ -47,6 +49,7 @@ pub(crate) fn turn_prompt_for_runtime(
     replay_session_output: Option<&str>,
     instruction_delivery_mode: InstructionDeliveryMode,
     schema_instruction_mode: agent::ProtocolSchemaInstructionMode,
+    workspace_root: &Path,
 ) -> Result<TurnPrompt, AppServerError> {
     let prompt = prompt.into();
     let agent_prompt = prompt.agent_text();
@@ -56,6 +59,7 @@ pub(crate) fn turn_prompt_for_runtime(
         protocol_profile: request_kind.protocol_profile(),
         replay_session_output,
         schema_instruction_mode,
+        workspace_root,
     })
     .map_err(|error| AppServerError::PromptRender(error.to_string()))?;
 
@@ -89,6 +93,9 @@ mod tests {
     use super::*;
     use crate::model::agent::ReasoningLevel;
 
+    /// Workspace root used by app-server prompt shaping tests.
+    const TEST_WORKSPACE_ROOT: &str = "/tmp/agentty-wt/session-1";
+
     /// Returns one persisted bootstrap marker that matches the active
     /// app-server instruction contract for session turns.
     fn persisted_instruction_conversation_id_for_session_turn(
@@ -104,6 +111,7 @@ mod tests {
         let request = AppServerTurnRequest {
             folder: PathBuf::from("/tmp/test"),
             live_session_output: Some(live_output),
+            main_checkout_root: None,
             model: "test-model".to_string(),
             prompt: TurnPrompt::from("hello"),
             provider_conversation_id: None,
@@ -127,6 +135,7 @@ mod tests {
         let request = AppServerTurnRequest {
             folder: PathBuf::from("/tmp/test"),
             live_session_output: Some(live_output),
+            main_checkout_root: None,
             model: "test-model".to_string(),
             prompt: TurnPrompt::from("hello"),
             provider_conversation_id: None,
@@ -149,6 +158,7 @@ mod tests {
         let request = AppServerTurnRequest {
             folder: PathBuf::from("/tmp/test"),
             live_session_output: None,
+            main_checkout_root: None,
             model: "test-model".to_string(),
             prompt: TurnPrompt::from("hello"),
             provider_conversation_id: None,
@@ -178,12 +188,15 @@ mod tests {
             None,
             InstructionDeliveryMode::BootstrapFull,
             agent::ProtocolSchemaInstructionMode::PromptSchema,
+            Path::new(TEST_WORKSPACE_ROOT),
         );
 
         // Assert
         let turn_prompt = result.expect("prompt rendering should succeed");
         assert!(turn_prompt.text.contains("fix the bug"));
         assert!(turn_prompt.text.contains("Structured response protocol:"));
+        assert!(turn_prompt.text.contains("Anything outside that"));
+        assert!(turn_prompt.text.contains("root is read-only."));
     }
 
     #[test]
@@ -199,6 +212,7 @@ mod tests {
             None,
             InstructionDeliveryMode::BootstrapFull,
             agent::ProtocolSchemaInstructionMode::TransportSchema,
+            Path::new(TEST_WORKSPACE_ROOT),
         );
 
         // Assert
@@ -227,6 +241,7 @@ mod tests {
             None,
             InstructionDeliveryMode::DeltaOnly,
             agent::ProtocolSchemaInstructionMode::PromptSchema,
+            Path::new(TEST_WORKSPACE_ROOT),
         );
 
         // Assert
@@ -248,6 +263,7 @@ mod tests {
             None,
             InstructionDeliveryMode::BootstrapFull,
             agent::ProtocolSchemaInstructionMode::PromptSchema,
+            Path::new(TEST_WORKSPACE_ROOT),
         );
 
         // Assert
@@ -272,6 +288,7 @@ mod tests {
             None,
             InstructionDeliveryMode::BootstrapFull,
             agent::ProtocolSchemaInstructionMode::PromptSchema,
+            Path::new(TEST_WORKSPACE_ROOT),
         );
 
         // Assert
@@ -286,6 +303,7 @@ mod tests {
         let request = AppServerTurnRequest {
             folder: PathBuf::from("/tmp/test"),
             live_session_output: None,
+            main_checkout_root: None,
             model: "test-model".to_string(),
             prompt: TurnPrompt::from("hello"),
             provider_conversation_id: Some("thread-123".to_string()),

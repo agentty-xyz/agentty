@@ -1,5 +1,7 @@
 You are helping resolve git rebase conflicts while rebasing onto `{{ base_branch }}`.
 
+{{ workspace_note }}
+
 Resolve conflicts in only these files:
 
 {{ conflicted_files }}

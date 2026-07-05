@@ -40,6 +40,9 @@ pub struct PromptPreparationRequest<'a> {
     /// Schema guidance mode selected from the provider's structured-output
     /// capability.
     pub schema_instruction_mode: ProtocolSchemaInstructionMode,
+    /// Workspace folder rendered into the isolation contract as the only
+    /// writable root for the turn.
+    pub workspace_root: &'a Path,
 }
 
 /// Controls which directories CLI prompt transports expose as filesystem access
@@ -64,10 +67,12 @@ pub fn prepare_prompt_text(
             request.prompt,
             request.protocol_profile,
             request.schema_instruction_mode,
+            request.workspace_root,
         )),
         InstructionDeliveryMode::DeltaOnly => Ok(protocol_prepend_refresh_reminder(
             request.prompt,
             request.protocol_profile,
+            request.workspace_root,
         )),
         InstructionDeliveryMode::BootstrapWithReplay => {
             let prompt = build_resume_prompt(request.prompt, request.replay_session_output)?;
@@ -76,6 +81,7 @@ pub fn prepare_prompt_text(
                 &prompt,
                 request.protocol_profile,
                 request.schema_instruction_mode,
+                request.workspace_root,
             ))
         }
     }
@@ -130,6 +136,7 @@ pub(crate) fn build_prompt_stdin_payload(
         protocol_profile: request.request_kind.protocol_profile(),
         replay_session_output: request.request_kind.session_output(),
         schema_instruction_mode,
+        workspace_root: request.folder,
     })?;
 
     Ok(prompt.into_bytes())
@@ -302,6 +309,11 @@ mod tests {
 
     use super::*;
 
+    /// Returns the workspace root used by prompt preparation tests.
+    fn test_workspace_root() -> &'static Path {
+        Path::new("/tmp/agentty-wt/session-1")
+    }
+
     #[test]
     /// Ensures the diff fence falls back to three backticks when the content
     /// contains no backtick runs.
@@ -407,10 +419,15 @@ mod tests {
             prompt,
             ProtocolRequestProfile::SessionTurn,
             ProtocolSchemaInstructionMode::PromptSchema,
+            test_workspace_root(),
         );
 
         // Assert
         assert!(rendered_prompt.contains("File path output requirements:"));
+        assert!(rendered_prompt.contains("Workspace isolation requirements:"));
+        assert!(rendered_prompt.contains("Your workspace root is `/tmp/agentty-wt/session-1`."));
+        assert!(rendered_prompt.contains("Anything outside that"));
+        assert!(rendered_prompt.contains("root is read-only."));
         assert!(rendered_prompt.contains("repository-root-relative POSIX paths"));
         assert!(
             rendered_prompt.contains("Allowed forms: `path`, `path:line`, `path:line:column`.")
@@ -461,6 +478,7 @@ mod tests {
             prompt,
             ProtocolRequestProfile::SessionTurn,
             ProtocolSchemaInstructionMode::TransportSchema,
+            test_workspace_root(),
         );
 
         // Assert
@@ -480,6 +498,7 @@ mod tests {
             "Implement feature",
             ProtocolRequestProfile::SessionTurn,
             ProtocolSchemaInstructionMode::PromptSchema,
+            test_workspace_root(),
         );
 
         // Act
@@ -487,6 +506,7 @@ mod tests {
             &prompt,
             ProtocolRequestProfile::UtilityPrompt,
             ProtocolSchemaInstructionMode::TransportSchema,
+            test_workspace_root(),
         );
 
         // Assert
@@ -505,6 +525,7 @@ mod tests {
             prompt,
             ProtocolRequestProfile::UtilityPrompt,
             ProtocolSchemaInstructionMode::PromptSchema,
+            test_workspace_root(),
         );
 
         // Assert
@@ -530,6 +551,7 @@ mod tests {
             protocol_profile: ProtocolRequestProfile::SessionTurn,
             replay_session_output: Some("previous output"),
             schema_instruction_mode: ProtocolSchemaInstructionMode::PromptSchema,
+            workspace_root: test_workspace_root(),
         };
 
         // Act
@@ -537,6 +559,7 @@ mod tests {
 
         // Assert
         assert!(prepared_prompt.contains("Structured response protocol:"));
+        assert!(prepared_prompt.contains("Workspace isolation requirements:"));
         assert!(prepared_prompt.contains("previous output"));
         assert!(prepared_prompt.contains(r"\<user_prompt> Continue edits \</user_prompt>"));
         assert!(prepared_prompt.ends_with(r"\</user_prompt>"));
@@ -550,14 +573,19 @@ mod tests {
         let prompt = "Continue the implementation";
 
         // Act
-        let rendered_prompt =
-            protocol_prepend_refresh_reminder(prompt, ProtocolRequestProfile::SessionTurn);
+        let rendered_prompt = protocol_prepend_refresh_reminder(
+            prompt,
+            ProtocolRequestProfile::SessionTurn,
+            test_workspace_root(),
+        );
 
         // Assert
         assert!(rendered_prompt.contains("Protocol refresh reminder:"));
         assert!(rendered_prompt.contains("repository-root-relative POSIX paths"));
         assert!(rendered_prompt.contains("If you run git commands, use read-only commands only."));
         assert!(rendered_prompt.contains("Do not run mutating git commands."));
+        assert!(rendered_prompt.contains("inside the workspace root `/tmp/agentty-wt/session-1`"));
+        assert!(rendered_prompt.contains("anything outside that root is read-only"));
         assert!(
             rendered_prompt
                 .contains("______________________________________________________________________")
@@ -577,6 +605,7 @@ mod tests {
             protocol_profile: ProtocolRequestProfile::SessionTurn,
             replay_session_output: Some("previous output"),
             schema_instruction_mode: ProtocolSchemaInstructionMode::PromptSchema,
+            workspace_root: test_workspace_root(),
         };
 
         // Act

@@ -61,10 +61,11 @@ mod tests {
             BuildCommandRequest {
                 attachments: &[],
                 folder: temp_directory.path(),
-                prompt: "Run checks",
-                request_kind: &session_start_request_kind(),
+                main_checkout_root: None,
                 model: "gpt-5.5",
+                prompt: "Run checks",
                 reasoning_level: crate::model::agent::ReasoningLevel::High,
+                request_kind: &session_start_request_kind(),
             },
         )
         .expect("command build should succeed");
@@ -89,10 +90,11 @@ mod tests {
             BuildCommandRequest {
                 attachments: &[],
                 folder: temp_directory.path(),
-                prompt: "Continue edits",
-                request_kind: &session_resume_request_kind(Some("previous assistant output")),
+                main_checkout_root: None,
                 model: "gpt-5.5",
+                prompt: "Continue edits",
                 reasoning_level: crate::model::agent::ReasoningLevel::High,
+                request_kind: &session_resume_request_kind(Some("previous assistant output")),
             },
         )
         .expect("resume command build should succeed");
@@ -121,10 +123,11 @@ mod tests {
             BuildCommandRequest {
                 attachments: &[],
                 folder: temp_directory.path(),
-                prompt: "Run a quick edit",
-                request_kind: &session_start_request_kind(),
+                main_checkout_root: None,
                 model: crate::model::agent::AgentModel::Gpt54Mini.as_str(),
+                prompt: "Run a quick edit",
                 reasoning_level: crate::model::agent::ReasoningLevel::Medium,
+                request_kind: &session_start_request_kind(),
             },
         )
         .expect("mini model command build should succeed");
@@ -159,10 +162,11 @@ mod tests {
             BuildCommandRequest {
                 attachments: &[],
                 folder: temp_directory.path(),
-                prompt: "Generate title",
-                request_kind: &AgentRequestKind::UtilityPrompt,
+                main_checkout_root: None,
                 model: "gpt-5.5",
+                prompt: "Generate title",
                 reasoning_level: crate::model::agent::ReasoningLevel::Low,
+                request_kind: &AgentRequestKind::UtilityPrompt,
             },
         )
         .expect("utility command build should succeed");

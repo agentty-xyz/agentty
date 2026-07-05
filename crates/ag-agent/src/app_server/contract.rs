@@ -55,6 +55,9 @@ pub struct AppServerTurnRequest {
     /// this buffer instead of the stale `session_output` snapshot, ensuring
     /// content streamed before the crash is included in the replay prompt.
     pub live_session_output: Option<Arc<Mutex<String>>>,
+    /// Main repository checkout that must remain read-only during the turn,
+    /// when Agentty can resolve it.
+    pub main_checkout_root: Option<PathBuf>,
     /// Provider-specific model identifier.
     pub model: String,
     /// Structured prompt payload for this turn.

@@ -15,7 +15,7 @@ use super::merge::{
     ExistingSessionRebaseAssistClient, RebaseAssistFuture, RebaseAssistMode, RebaseCommandInput,
 };
 use super::task::SessionOutputMessageAppend;
-use super::{SessionTaskService, session_folder, turn};
+use super::{SessionTaskService, isolation, session_folder, turn};
 use crate::app::service::SessionUpdateVersionMap;
 use crate::app::session::{Clock, SessionError, unix_timestamp_from_system_time};
 use crate::app::{AppEvent, AppServices, SessionManager};
@@ -201,6 +201,9 @@ struct SessionWorkerRebaseAssistClient {
     db: AppRepositories,
     /// Session worktree folder where the utility prompt runs.
     folder: PathBuf,
+    /// Main repository checkout that must remain read-only during assist
+    /// turns.
+    main_checkout_root: PathBuf,
     /// Shared transcript buffer for assist summaries.
     output: Arc<Mutex<String>>,
     /// Per-app session update versions for targeted refresh events.
@@ -215,7 +218,7 @@ struct SessionWorkerRebaseAssistClient {
 
 impl SessionWorkerRebaseAssistClient {
     /// Clones the worker fields needed to run a rebase-assist utility turn.
-    fn from_context(context: &SessionWorkerContext) -> Self {
+    fn from_context(context: &SessionWorkerContext, main_checkout_root: PathBuf) -> Self {
         Self {
             app_event_tx: context.app_event_tx.clone(),
             cancel_token: Arc::clone(&context.cancel_token),
@@ -223,6 +226,7 @@ impl SessionWorkerRebaseAssistClient {
             child_pid: Arc::clone(&context.child_pid),
             db: context.db.clone(),
             folder: context.folder.clone(),
+            main_checkout_root,
             output: Arc::clone(&context.output),
             session_update_versions: context.session_update_versions.clone(),
             session_id: context.session_id.clone(),
@@ -259,6 +263,7 @@ impl SessionWorkerRebaseAssistClient {
         let req = TurnRequest {
             folder: self.folder.clone(),
             live_session_output: Some(Arc::clone(&self.output)),
+            main_checkout_root: Some(self.main_checkout_root.clone()),
             model: self.session_agent.model().provider_model_str().to_string(),
             request_kind: AgentRequestKind::UtilityPrompt,
             prompt: TurnPrompt::from_agent_data(prompt),
@@ -843,7 +848,17 @@ impl SessionWorkerService {
         context: &SessionWorkerContext,
         base_branch: String,
     ) -> Result<(), SessionError> {
-        let assist_client = Arc::new(SessionWorkerRebaseAssistClient::from_context(context));
+        let validation = isolation::validate_session_worktree(
+            context.fs_client.as_ref(),
+            context.git_client.as_ref(),
+            &context.folder,
+            &context.session_id,
+        )
+        .await?;
+        let assist_client = Arc::new(SessionWorkerRebaseAssistClient::from_context(
+            context,
+            validation.main_repo_root,
+        ));
         SessionManager::run_rebase_command(RebaseCommandInput {
             app_event_tx: context.app_event_tx.clone(),
             assist_mode: RebaseAssistMode::ExistingSession(assist_client),
@@ -1403,6 +1418,10 @@ mod tests {
             .once()
             .returning(|_| Box::pin(async { Ok(String::new()) }));
         mock_git_client
+            .expect_head_hash()
+            .once()
+            .returning(|_| Box::pin(async { Ok("main-before".to_string()) }));
+        mock_git_client
             .expect_diff()
             .returning(|_, _| Box::pin(async { Ok(String::new()) }));
 
@@ -1539,6 +1558,10 @@ mod tests {
             .times(2)
             .returning(|_| Box::pin(async { Ok(String::new()) }));
         mock_git_client
+            .expect_head_hash()
+            .times(2)
+            .returning(|_| Box::pin(async { Ok("main-before".to_string()) }));
+        mock_git_client
             .expect_diff()
             .returning(|_, _| Box::pin(async { Ok(String::new()) }));
         mock_git_client
@@ -1652,6 +1675,10 @@ mod tests {
                 })
             });
         mock_git_client
+            .expect_head_hash()
+            .times(2)
+            .returning(|_| Box::pin(async { Ok("main-before".to_string()) }));
+        mock_git_client
             .expect_diff()
             .returning(|_, _| Box::pin(async { Ok(String::new()) }));
         mock_git_client
@@ -1693,6 +1720,121 @@ mod tests {
 
         // Assert
         assert!(result.is_ok(), "main checkout changes should warn only");
+        let output_text = output.lock().expect("output lock poisoned");
+        assert!(output_text.contains("[Main Checkout Warning]"));
+        assert!(output_text.contains("done"));
+    }
+
+    #[tokio::test]
+    /// Verifies a turn that moves the main checkout `HEAD` records a warning
+    /// even when tracked-file status stays clean.
+    async fn test_run_channel_turn_warns_when_main_checkout_head_changes() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let db = AppRepositories::in_memory().await;
+        insert_in_progress_test_session(&db).await;
+
+        let mut mock_channel = MockAgentChannel::new();
+        mock_channel
+            .expect_run_turn()
+            .once()
+            .returning(|_session_id, _req, _events| {
+                Box::pin(async {
+                    Ok(TurnResult {
+                        assistant_message: AgentResponse {
+                            answer: "done".to_string(),
+                            questions: Vec::new(),
+                            summary: None,
+                        },
+                        context_reset: false,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        provider_conversation_id: None,
+                    })
+                })
+            });
+
+        let main_repo_root = base_dir.path().join("main");
+        let head_call_count = Arc::new(Mutex::new(0));
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client
+            .expect_detect_git_info()
+            .once()
+            .returning(|_| Box::pin(async { Some("wt/sess1".to_string()) }));
+        mock_git_client.expect_main_repo_root().once().returning({
+            let main_repo_root = main_repo_root.clone();
+
+            move |_| {
+                let main_repo_root = main_repo_root.clone();
+                Box::pin(async move { Ok(main_repo_root) })
+            }
+        });
+        mock_git_client
+            .expect_tracked_worktree_status()
+            .times(2)
+            .returning(|_| Box::pin(async { Ok(String::new()) }));
+        mock_git_client
+            .expect_head_hash()
+            .times(2)
+            .returning(move |_| {
+                let head_call_count = Arc::clone(&head_call_count);
+
+                Box::pin(async move {
+                    let mut call_count = head_call_count
+                        .lock()
+                        .expect("head call count lock poisoned");
+                    *call_count += 1;
+                    if *call_count == 1 {
+                        Ok("main-before".to_string())
+                    } else {
+                        Ok("main-after".to_string())
+                    }
+                })
+            });
+        mock_git_client
+            .expect_diff()
+            .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+        mock_git_client
+            .expect_is_worktree_clean()
+            .returning(|_| Box::pin(async { Ok(true) }));
+
+        let output = Arc::new(Mutex::new(String::new()));
+        let context = SessionWorkerContext {
+            app_event_tx: mpsc::unbounded_channel().0,
+            cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+            channel: Arc::new(mock_channel),
+            child_pid: Arc::new(Mutex::new(None)),
+            clock: Arc::new(crate::infra::clock::RealClock),
+            db: db.clone(),
+            folder: base_dir.path().to_path_buf(),
+            fs_client: Arc::new(mock_fs_client_with_existing_directories()),
+            git_client: Arc::new(mock_git_client),
+            output: Arc::clone(&output),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
+            session_update_versions: Arc::default(),
+            session_id: "sess1".into(),
+            session_agent: AgentSelection::new(
+                crate::domain::agent::AgentKind::Antigravity,
+                AgentModel::Gemini3FlashPreview,
+            ),
+            status: Arc::new(Mutex::new(Status::InProgress)),
+        };
+
+        // Act
+        let result = run_channel_turn(
+            &context,
+            default_turn_metadata(),
+            AgentRequestKind::SessionStart,
+            "test prompt".into(),
+        )
+        .await;
+
+        // Assert
+        assert!(
+            result.is_ok(),
+            "main checkout `HEAD` changes should warn only"
+        );
         let output_text = output.lock().expect("output lock poisoned");
         assert!(output_text.contains("[Main Checkout Warning]"));
         assert!(output_text.contains("done"));
@@ -1758,6 +1900,7 @@ mod tests {
         let req = TurnRequest {
             folder: context.folder.clone(),
             live_session_output: None,
+            main_checkout_root: None,
             model: "gemini-3-flash-preview".to_string(),
             request_kind: AgentRequestKind::SessionStart,
             prompt: "test".into(),
@@ -1831,6 +1974,7 @@ mod tests {
         let req = TurnRequest {
             folder: context.folder.clone(),
             live_session_output: None,
+            main_checkout_root: None,
             model: "gemini-3-flash-preview".to_string(),
             request_kind: AgentRequestKind::SessionStart,
             prompt: "test".into(),
@@ -3134,14 +3278,15 @@ mod tests {
     }
 
     /// Builds the mock channel expected for one existing-session rebase turn.
-    fn mock_existing_session_rebase_channel() -> MockAgentChannel {
+    fn mock_existing_session_rebase_channel(main_checkout_root: PathBuf) -> MockAgentChannel {
         let mut mock_channel = MockAgentChannel::new();
         mock_channel
             .expect_run_turn()
             .times(1)
-            .withf(|session_id, request, _| {
+            .withf(move |session_id, request, _| {
                 session_id == "sess1"
                     && request.request_kind == AgentRequestKind::UtilityPrompt
+                    && request.main_checkout_root.as_ref() == Some(&main_checkout_root)
                     && request.provider_conversation_id.as_deref() == Some("thread-before")
                     && request.persisted_instruction_conversation_id.as_deref()
                         == Some("instruction-before")
@@ -3171,9 +3316,22 @@ mod tests {
     }
 
     /// Builds the git mock expected for one assisted rebase conflict.
-    fn mock_successful_conflict_rebase_git_client() -> MockGitClient {
+    fn mock_successful_conflict_rebase_git_client(main_checkout_root: PathBuf) -> MockGitClient {
         let mut mock_git_client = MockGitClient::new();
         let mut sequence = Sequence::new();
+        mock_git_client
+            .expect_detect_git_info()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Box::pin(async { Some("wt/sess1".to_string()) }));
+        mock_git_client
+            .expect_main_repo_root()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(move |_| {
+                let main_checkout_root = main_checkout_root.clone();
+                Box::pin(async move { Ok(main_checkout_root) })
+            });
         mock_git_client
             .expect_is_worktree_clean()
             .times(1)
@@ -3241,18 +3399,25 @@ mod tests {
         base_dir: PathBuf,
         db: AppRepositories,
     ) -> RebaseAssistWorkerHarness {
+        let main_checkout_root = base_dir.join("main-checkout");
+        std::fs::create_dir_all(&main_checkout_root).expect("failed to create main checkout");
+
         let output = Arc::new(Mutex::new(String::new()));
         let status = Arc::new(Mutex::new(Status::Rebasing));
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
-            channel: Arc::new(mock_existing_session_rebase_channel()),
+            channel: Arc::new(mock_existing_session_rebase_channel(
+                main_checkout_root.clone(),
+            )),
             child_pid: Arc::new(Mutex::new(None)),
             clock: Arc::new(crate::infra::clock::RealClock),
             db: db.clone(),
             folder: base_dir,
             fs_client: Arc::new(fs::RealFsClient),
-            git_client: Arc::new(mock_successful_conflict_rebase_git_client()),
+            git_client: Arc::new(mock_successful_conflict_rebase_git_client(
+                main_checkout_root,
+            )),
             output: Arc::clone(&output),
             transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
@@ -3714,6 +3879,10 @@ mod tests {
             .times(0..)
             .returning(|_| Box::pin(async { Ok(String::new()) }));
         mock_git_client
+            .expect_head_hash()
+            .times(0..)
+            .returning(|_| Box::pin(async { Ok("main-before".to_string()) }));
+        mock_git_client
             .expect_diff()
             .returning(|_, _| Box::pin(async { Ok(String::new()) }));
         mock_git_client
@@ -3900,6 +4069,10 @@ mod tests {
             .expect_tracked_worktree_status()
             .times(2)
             .returning(|_| Box::pin(async { Ok(String::new()) }));
+        mock_git_client
+            .expect_head_hash()
+            .times(2)
+            .returning(|_| Box::pin(async { Ok("main-before".to_string()) }));
         mock_git_client
             .expect_is_worktree_clean()
             .times(1)

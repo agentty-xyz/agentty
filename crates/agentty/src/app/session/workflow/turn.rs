@@ -28,15 +28,15 @@ use crate::infra::process;
 /// consumer's next await/try-receive cycle.
 const TURN_EVENT_PROGRESS_COALESCE_BUDGET: usize = 64;
 
-/// Main-checkout tracked-file status captured before one provider turn.
+/// Main-checkout status captured before one provider turn.
 struct MainCheckoutSnapshot {
+    head_hash: String,
     main_repo_root: PathBuf,
     tracked_status_output: String,
 }
 
 impl MainCheckoutSnapshot {
-    /// Captures the main repository checkout tracked status before a provider
-    /// turn.
+    /// Captures the main repository checkout status before a provider turn.
     ///
     /// # Errors
     /// Returns a workflow error when the session folder is not a valid linked
@@ -54,19 +54,24 @@ impl MainCheckoutSnapshot {
             .tracked_worktree_status(validation.main_repo_root.clone())
             .await
             .map_err(|error| Self::status_error(&error))?;
+        let head_hash = context
+            .git_client
+            .head_hash(validation.main_repo_root.clone())
+            .await
+            .map_err(|error| Self::head_hash_error(&error))?;
 
         Ok(Self {
+            head_hash,
             main_repo_root: validation.main_repo_root,
             tracked_status_output,
         })
     }
 
-    /// Builds a warning when a provider turn changed tracked files in the main
-    /// checkout.
+    /// Builds a warning when a provider turn changed the main checkout.
     ///
     /// # Errors
-    /// Returns a workflow error when the main-checkout tracked status cannot
-    /// be read after the provider turn.
+    /// Returns a workflow error when main-checkout status cannot be read after
+    /// the provider turn.
     async fn changed_warning(
         &self,
         context: &SessionWorkerContext,
@@ -76,10 +81,15 @@ impl MainCheckoutSnapshot {
             .tracked_worktree_status(self.main_repo_root.clone())
             .await
             .map_err(|error| Self::status_error(&error))?;
-        if current_status != self.tracked_status_output {
+        let current_head_hash = context
+            .git_client
+            .head_hash(self.main_repo_root.clone())
+            .await
+            .map_err(|error| Self::head_hash_error(&error))?;
+        if current_status != self.tracked_status_output || current_head_hash != self.head_hash {
             return Ok(Some(TranscriptNotice::MainCheckoutWarning.format(
-                "Tracked files in the main checkout changed during this turn. Continuing this \
-                 session; merge and sync actions still require a clean main checkout.",
+                "The main checkout changed during this turn. Continuing this session; merge and \
+                 sync actions still require a clean main checkout.",
             )));
         }
 
@@ -90,6 +100,13 @@ impl MainCheckoutSnapshot {
     fn status_error(error: &ag_git::GitError) -> SessionError {
         SessionError::Workflow(format!(
             "Session isolation violation: failed to inspect main checkout tracked status: {error}"
+        ))
+    }
+
+    /// Converts main-checkout `HEAD` hash failures into workflow errors.
+    fn head_hash_error(error: &ag_git::GitError) -> SessionError {
+        SessionError::Workflow(format!(
+            "Session isolation violation: failed to inspect main checkout `HEAD`: {error}"
         ))
     }
 }
@@ -185,6 +202,7 @@ pub(super) async fn run_channel_turn(
     let req = TurnRequest {
         folder: context.folder.clone(),
         live_session_output: Some(Arc::clone(&context.output)),
+        main_checkout_root: Some(main_checkout_snapshot.main_repo_root.clone()),
         model: turn_metadata
             .session_agent
             .model()

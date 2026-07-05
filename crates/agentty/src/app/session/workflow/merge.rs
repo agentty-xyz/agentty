@@ -49,6 +49,34 @@ pub(crate) struct SessionMergeService;
 struct RebaseAssistPromptTemplate<'a> {
     base_branch: &'a str,
     conflicted_files: &'a str,
+    workspace_note: &'a str,
+}
+
+/// Identifies which repository checkout a rebase-conflict assist runs in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RebaseAssistWorkspace {
+    /// The session's isolated git worktree used by session merge rebases.
+    SessionWorktree,
+    /// The user's main repository checkout used by user-triggered sync
+    /// rebases.
+    MainCheckout,
+}
+
+impl RebaseAssistWorkspace {
+    /// Returns the prompt note that tells the assist agent which checkout it
+    /// is editing and how far its write access extends.
+    fn note(self) -> &'static str {
+        match self {
+            Self::SessionWorktree => {
+                "You are working inside the session's isolated git worktree; keep every change \
+                 inside this worktree and never touch the repository's main checkout."
+            }
+            Self::MainCheckout => {
+                "You are working inside the user's main repository checkout for a user-approved \
+                 sync; change only the conflicted files listed below."
+            }
+        }
+    }
 }
 
 /// Boxed async result used by sync conflict assistance boundary methods.
@@ -1657,7 +1685,11 @@ impl SessionManager {
         input: &SyncRebaseAssistInput,
         conflicted_files: &[String],
     ) -> Result<(), SessionError> {
-        let prompt = Self::rebase_assist_prompt(&input.base_branch, conflicted_files)?;
+        let prompt = Self::rebase_assist_prompt(
+            &input.base_branch,
+            conflicted_files,
+            RebaseAssistWorkspace::MainCheckout,
+        )?;
         input
             .sync_assist_client
             .resolve_rebase_conflicts(input.folder.clone(), prompt, input.session_agent)
@@ -2672,8 +2704,11 @@ impl SessionManager {
         input: &RebaseAssistInput,
         conflicted_files: &[String],
     ) -> Result<(), SessionError> {
-        let prompt =
-            Self::rebase_assist_prompt(input.rebase_plan.target_label(), conflicted_files)?;
+        let prompt = Self::rebase_assist_prompt(
+            input.rebase_plan.target_label(),
+            conflicted_files,
+            RebaseAssistWorkspace::SessionWorktree,
+        )?;
         match &input.assist_mode {
             RebaseAssistMode::ExistingSession(assist_client) => assist_client
                 .resolve_rebase_conflicts(prompt)
@@ -2741,11 +2776,13 @@ impl SessionManager {
     fn rebase_assist_prompt(
         base_branch: &str,
         conflicted_files: &[String],
+        workspace: RebaseAssistWorkspace,
     ) -> Result<String, SessionError> {
         let conflicted_files = Self::format_conflicted_file_list(conflicted_files);
         let template = RebaseAssistPromptTemplate {
             base_branch,
             conflicted_files: &conflicted_files,
+            workspace_note: workspace.note(),
         };
 
         template.render().map_err(|error| {
@@ -3054,13 +3091,18 @@ mod tests {
         let conflicted_files = vec!["src/lib.rs".to_string(), "README.md".to_string()];
 
         // Act
-        let prompt = SessionManager::rebase_assist_prompt(base_branch, &conflicted_files)
-            .expect("rebase assist prompt should render");
+        let prompt = SessionManager::rebase_assist_prompt(
+            base_branch,
+            &conflicted_files,
+            RebaseAssistWorkspace::SessionWorktree,
+        )
+        .expect("rebase assist prompt should render");
 
         // Assert
         assert!(prompt.contains("rebasing onto `main`"));
         assert!(prompt.contains("- src/lib.rs"));
         assert!(prompt.contains("- README.md"));
+        assert!(prompt.contains("session's isolated git worktree"));
         assert!(prompt.contains("repository-defined quality checks"));
         assert!(prompt.contains("affected dependencies or dependents"));
     }

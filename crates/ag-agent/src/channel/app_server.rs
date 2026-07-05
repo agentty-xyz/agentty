@@ -69,6 +69,7 @@ impl AgentChannel for AppServerAgentChannel {
             let request = AppServerTurnRequest {
                 folder: req.folder,
                 live_session_output: req.live_session_output,
+                main_checkout_root: req.main_checkout_root,
                 model: req.model,
                 prompt: req.prompt,
                 request_kind: req.request_kind,
@@ -227,6 +228,7 @@ async fn parse_or_repair_app_server_response(
     let repair_turn_request = AppServerTurnRequest {
         folder: repair_request.folder,
         live_session_output: None,
+        main_checkout_root: repair_request.main_checkout_root,
         model: repair_request.model,
         prompt: crate::model::turn_prompt::TurnPrompt::from_agent_data(repair_prompt),
         request_kind: repair_request.request_kind,
@@ -282,6 +284,7 @@ mod tests {
         TurnRequest {
             folder: PathBuf::from("/tmp"),
             live_session_output: None,
+            main_checkout_root: Some(PathBuf::from("/tmp/main")),
             model: "gpt-5.5".to_string(),
             request_kind: AgentRequestKind::SessionStart,
             prompt: "Do something".into(),

@@ -1,25 +1,75 @@
 //! Protocol-owned prompt envelopes for agent-facing instruction text.
 
+use std::path::Path;
+
+use askama::Template;
+
 use crate::{ProtocolRequestProfile, agent_response_json_schema_json};
 
 const PROTOCOL_INSTRUCTIONS_MARKER: &str = "Structured response protocol:";
 const PROTOCOL_REFRESH_REMINDER_MARKER: &str = "Protocol refresh reminder:";
 const REPAIR_RESPONSE_PREVIEW_MAX_CHARS: usize = 500;
 
-const PROTOCOL_INSTRUCTION_PROMPT_TEMPLATE: &str =
-    include_str!("template/protocol_instruction_prompt.md");
-const PROTOCOL_INSTRUCTION_POLICY_PROMPT_TEMPLATE: &str =
-    include_str!("template/protocol_instruction_policy_prompt.md");
-const PROTOCOL_INSTRUCTION_SESSION_TURN_USAGE_TEMPLATE: &str =
-    include_str!("template/protocol_instruction_session_turn_usage.md");
-const PROTOCOL_INSTRUCTION_UTILITY_PROMPT_USAGE_TEMPLATE: &str =
-    include_str!("template/protocol_instruction_utility_prompt_usage.md");
-const PROTOCOL_REFRESH_PROMPT_TEMPLATE: &str = include_str!("template/protocol_refresh_prompt.md");
-const PROTOCOL_REFRESH_SESSION_TURN_INSTRUCTION_TEMPLATE: &str =
-    include_str!("template/protocol_refresh_session_turn_instruction.md");
-const PROTOCOL_REFRESH_UTILITY_PROMPT_INSTRUCTION_TEMPLATE: &str =
-    include_str!("template/protocol_refresh_utility_prompt_instruction.md");
-const PROTOCOL_REPAIR_PROMPT_TEMPLATE: &str = include_str!("template/protocol_repair_prompt.md");
+/// Askama view model for full protocol instructions with prompt-side schema.
+#[derive(Template)]
+#[template(path = "protocol_instruction_prompt.md", escape = "none")]
+struct ProtocolInstructionPromptTemplate<'a> {
+    prompt: &'a str,
+    protocol_usage_instructions: &'a str,
+    response_json_schema: &'a str,
+    workspace_root: &'a str,
+}
+
+/// Askama view model for protocol instructions when the transport enforces
+/// the response schema.
+#[derive(Template)]
+#[template(path = "protocol_instruction_policy_prompt.md", escape = "none")]
+struct ProtocolInstructionPolicyPromptTemplate<'a> {
+    prompt: &'a str,
+    protocol_usage_instructions: &'a str,
+    workspace_root: &'a str,
+}
+
+/// Askama view model for session-turn protocol usage instructions.
+#[derive(Template)]
+#[template(path = "protocol_instruction_session_turn_usage.md", escape = "none")]
+struct ProtocolInstructionSessionTurnUsageTemplate;
+
+/// Askama view model for one-shot protocol usage instructions.
+#[derive(Template)]
+#[template(path = "protocol_instruction_utility_prompt_usage.md", escape = "none")]
+struct ProtocolInstructionUtilityPromptUsageTemplate;
+
+/// Askama view model for compact refresh reminders.
+#[derive(Template)]
+#[template(path = "protocol_refresh_prompt.md", escape = "none")]
+struct ProtocolRefreshPromptTemplate<'a> {
+    prompt: &'a str,
+    protocol_refresh_instructions: &'a str,
+    workspace_root: &'a str,
+}
+
+/// Askama view model for session-turn refresh instructions.
+#[derive(Template)]
+#[template(path = "protocol_refresh_session_turn_instruction.md", escape = "none")]
+struct ProtocolRefreshSessionTurnInstructionTemplate;
+
+/// Askama view model for one-shot refresh instructions.
+#[derive(Template)]
+#[template(
+    path = "protocol_refresh_utility_prompt_instruction.md",
+    escape = "none"
+)]
+struct ProtocolRefreshUtilityPromptInstructionTemplate;
+
+/// Askama view model for repair prompts after protocol parse failures.
+#[derive(Template)]
+#[template(path = "protocol_repair_prompt.md", escape = "none")]
+struct ProtocolRepairPromptTemplate<'a> {
+    parse_error: &'a str,
+    response_json_schema: &'a str,
+    response_preview: &'a str,
+}
 
 /// Controls whether bootstrap prompt instructions include the full protocol
 /// JSON Schema text.
@@ -47,52 +97,56 @@ impl ProtocolSchemaInstructionMode {
 /// structured protocol while selecting the cheapest safe schema guidance for
 /// the current provider. Providers without native structured output receive
 /// the full JSON Schema in the prompt; providers with native enforcement get
-/// policy and field-routing instructions only. If the prompt already contains
-/// the protocol marker, this function returns the prompt unchanged to avoid
+/// policy and field-routing instructions only. `workspace_root` names the
+/// only writable directory for the turn. If the prompt already contains the
+/// protocol marker, this function returns the prompt unchanged to avoid
 /// duplicated guidance.
 #[must_use]
 pub fn prepend_protocol_instructions(
     prompt: &str,
     profile: ProtocolRequestProfile,
     schema_instruction_mode: ProtocolSchemaInstructionMode,
+    workspace_root: &Path,
 ) -> String {
     if prompt.contains(PROTOCOL_INSTRUCTIONS_MARKER) {
         return prompt.to_string();
     }
 
     let protocol_usage_instructions = render_protocol_usage_instructions(profile);
+    let workspace_root = workspace_root.display().to_string();
     if !schema_instruction_mode.includes_response_json_schema() {
-        return render_template(
-            PROTOCOL_INSTRUCTION_POLICY_PROMPT_TEMPLATE,
-            &[
-                (
-                    "{{ protocol_usage_instructions }}",
-                    &protocol_usage_instructions,
-                ),
-                ("{{ prompt }}", prompt),
-            ],
-        );
+        let template = ProtocolInstructionPolicyPromptTemplate {
+            prompt,
+            protocol_usage_instructions: &protocol_usage_instructions,
+            workspace_root: &workspace_root,
+        };
+
+        return render_template("protocol_instruction_policy_prompt.md", &template);
     }
 
     let response_json_schema = agent_response_json_schema_json();
+    let template = ProtocolInstructionPromptTemplate {
+        prompt,
+        protocol_usage_instructions: &protocol_usage_instructions,
+        response_json_schema: &response_json_schema,
+        workspace_root: &workspace_root,
+    };
 
-    render_template(
-        PROTOCOL_INSTRUCTION_PROMPT_TEMPLATE,
-        &[
-            (
-                "{{ protocol_usage_instructions }}",
-                &protocol_usage_instructions,
-            ),
-            ("{{ response_json_schema }}", &response_json_schema),
-            ("{{ prompt }}", prompt),
-        ],
-    )
+    render_template("protocol_instruction_prompt.md", &template)
 }
 
 /// Prepends a compact refresh reminder for providers that already received
 /// the full instruction contract in the active context.
+///
+/// The reminder repeats the workspace-isolation boundary for
+/// `workspace_root` so long-lived provider contexts keep the rule even after
+/// provider-side context compaction.
 #[must_use]
-pub fn prepend_protocol_refresh_reminder(prompt: &str, profile: ProtocolRequestProfile) -> String {
+pub fn prepend_protocol_refresh_reminder(
+    prompt: &str,
+    profile: ProtocolRequestProfile,
+    workspace_root: &Path,
+) -> String {
     if prompt.contains(PROTOCOL_INSTRUCTIONS_MARKER)
         || prompt.contains(PROTOCOL_REFRESH_REMINDER_MARKER)
     {
@@ -100,17 +154,14 @@ pub fn prepend_protocol_refresh_reminder(prompt: &str, profile: ProtocolRequestP
     }
 
     let protocol_refresh_instructions = render_protocol_refresh_instructions(profile);
+    let workspace_root = workspace_root.display().to_string();
+    let template = ProtocolRefreshPromptTemplate {
+        prompt,
+        protocol_refresh_instructions: &protocol_refresh_instructions,
+        workspace_root: &workspace_root,
+    };
 
-    render_template(
-        PROTOCOL_REFRESH_PROMPT_TEMPLATE,
-        &[
-            (
-                "{{ protocol_refresh_instructions }}",
-                &protocol_refresh_instructions,
-            ),
-            ("{{ prompt }}", prompt),
-        ],
-    )
+    render_template("protocol_refresh_prompt.md", &template)
 }
 
 /// Builds the protocol repair prompt text for one failed parse attempt.
@@ -122,38 +173,48 @@ pub fn prepend_protocol_refresh_reminder(prompt: &str, profile: ProtocolRequestP
 pub fn build_protocol_repair_prompt(parse_error: &str, malformed_response: &str) -> String {
     let response_json_schema = agent_response_json_schema_json();
     let response_preview = truncate_preview(malformed_response, REPAIR_RESPONSE_PREVIEW_MAX_CHARS);
+    let template = ProtocolRepairPromptTemplate {
+        parse_error,
+        response_json_schema: &response_json_schema,
+        response_preview: &response_preview,
+    };
 
-    render_template(
-        PROTOCOL_REPAIR_PROMPT_TEMPLATE,
-        &[
-            ("{{ parse_error }}", parse_error),
-            ("{{ response_json_schema }}", &response_json_schema),
-            ("{{ response_preview }}", &response_preview),
-        ],
-    )
+    render_template("protocol_repair_prompt.md", &template)
 }
 
 fn render_protocol_usage_instructions(profile: ProtocolRequestProfile) -> String {
     if matches!(profile, ProtocolRequestProfile::SessionTurn) {
-        return trim_template(PROTOCOL_INSTRUCTION_SESSION_TURN_USAGE_TEMPLATE);
+        return render_template(
+            "protocol_instruction_session_turn_usage.md",
+            &ProtocolInstructionSessionTurnUsageTemplate,
+        );
     }
 
-    trim_template(PROTOCOL_INSTRUCTION_UTILITY_PROMPT_USAGE_TEMPLATE)
+    render_template(
+        "protocol_instruction_utility_prompt_usage.md",
+        &ProtocolInstructionUtilityPromptUsageTemplate,
+    )
 }
 
 fn render_protocol_refresh_instructions(profile: ProtocolRequestProfile) -> String {
     if matches!(profile, ProtocolRequestProfile::SessionTurn) {
-        return trim_template(PROTOCOL_REFRESH_SESSION_TURN_INSTRUCTION_TEMPLATE);
+        return render_template(
+            "protocol_refresh_session_turn_instruction.md",
+            &ProtocolRefreshSessionTurnInstructionTemplate,
+        );
     }
 
-    trim_template(PROTOCOL_REFRESH_UTILITY_PROMPT_INSTRUCTION_TEMPLATE)
+    render_template(
+        "protocol_refresh_utility_prompt_instruction.md",
+        &ProtocolRefreshUtilityPromptInstructionTemplate,
+    )
 }
 
-fn render_template(template: &str, replacements: &[(&str, &str)]) -> String {
-    let mut rendered = template.to_string();
-    for (placeholder, value) in replacements {
-        rendered = rendered.replace(placeholder, value);
-    }
+fn render_template(template_name: &str, template: &impl Template) -> String {
+    let rendered = match template.render() {
+        Ok(rendered) => rendered,
+        Err(error) => format!("Failed to render `{template_name}`: {error}"),
+    };
 
     trim_template(&rendered)
 }
@@ -177,6 +238,11 @@ fn truncate_preview(raw: &str, max_chars: usize) -> String {
 mod tests {
     use super::*;
 
+    /// Returns the workspace root used by envelope rendering tests.
+    fn test_workspace_root() -> &'static Path {
+        Path::new("/tmp/agentty-wt/session-1")
+    }
+
     #[test]
     /// Ensures session prompts include the critical protocol contract markers.
     fn test_prepend_protocol_instructions_adds_session_protocol_instructions() {
@@ -188,10 +254,15 @@ mod tests {
             prompt,
             ProtocolRequestProfile::SessionTurn,
             ProtocolSchemaInstructionMode::PromptSchema,
+            test_workspace_root(),
         );
 
         // Assert
         assert!(rendered_prompt.contains("File path output requirements:"));
+        assert!(rendered_prompt.contains("Workspace isolation requirements:"));
+        assert!(rendered_prompt.contains("Your workspace root is `/tmp/agentty-wt/session-1`."));
+        assert!(rendered_prompt.contains("Anything outside that"));
+        assert!(rendered_prompt.contains("root is read-only."));
         assert!(rendered_prompt.contains("repository-root-relative POSIX paths"));
         assert!(
             rendered_prompt.contains("Allowed forms: `path`, `path:line`, `path:line:column`.")
@@ -242,10 +313,15 @@ mod tests {
             prompt,
             ProtocolRequestProfile::SessionTurn,
             ProtocolSchemaInstructionMode::TransportSchema,
+            test_workspace_root(),
         );
 
         // Assert
         assert!(rendered_prompt.contains("Structured response protocol:"));
+        assert!(rendered_prompt.contains("Workspace isolation requirements:"));
+        assert!(rendered_prompt.contains("Your workspace root is `/tmp/agentty-wt/session-1`."));
+        assert!(rendered_prompt.contains("Anything outside that"));
+        assert!(rendered_prompt.contains("root is read-only."));
         assert!(rendered_prompt.contains("provider enforces Agentty's response JSON schema"));
         assert!(rendered_prompt.contains("Return a single JSON object"));
         assert!(!rendered_prompt.contains("Follow this JSON Schema exactly."));
@@ -261,6 +337,7 @@ mod tests {
             "Implement feature",
             ProtocolRequestProfile::SessionTurn,
             ProtocolSchemaInstructionMode::PromptSchema,
+            test_workspace_root(),
         );
 
         // Act
@@ -268,6 +345,7 @@ mod tests {
             &prompt,
             ProtocolRequestProfile::UtilityPrompt,
             ProtocolSchemaInstructionMode::TransportSchema,
+            test_workspace_root(),
         );
 
         // Assert
@@ -286,6 +364,7 @@ mod tests {
             prompt,
             ProtocolRequestProfile::UtilityPrompt,
             ProtocolSchemaInstructionMode::PromptSchema,
+            test_workspace_root(),
         );
 
         // Assert
@@ -305,14 +384,15 @@ mod tests {
     /// placeholders so prompt content cannot trigger recursive expansion.
     fn test_prepend_protocol_instructions_preserves_prompt_placeholders() {
         // Arrange
-        let prompt =
-            "Keep these literal: {{ response_json_schema }} {{ protocol_usage_instructions }}";
+        let prompt = "Keep these literal: {{ response_json_schema }} {{ \
+                      protocol_usage_instructions }} {{ workspace_root }}";
 
         // Act
         let rendered_prompt = prepend_protocol_instructions(
             prompt,
             ProtocolRequestProfile::UtilityPrompt,
             ProtocolSchemaInstructionMode::PromptSchema,
+            test_workspace_root(),
         );
 
         // Assert
@@ -327,14 +407,19 @@ mod tests {
         let prompt = "Continue the implementation";
 
         // Act
-        let rendered_prompt =
-            prepend_protocol_refresh_reminder(prompt, ProtocolRequestProfile::SessionTurn);
+        let rendered_prompt = prepend_protocol_refresh_reminder(
+            prompt,
+            ProtocolRequestProfile::SessionTurn,
+            test_workspace_root(),
+        );
 
         // Assert
         assert!(rendered_prompt.contains("Protocol refresh reminder:"));
         assert!(rendered_prompt.contains("repository-root-relative POSIX paths"));
         assert!(rendered_prompt.contains("If you run git commands, use read-only commands only."));
         assert!(rendered_prompt.contains("Do not run mutating git commands."));
+        assert!(rendered_prompt.contains("inside the workspace root `/tmp/agentty-wt/session-1`"));
+        assert!(rendered_prompt.contains("anything outside that root is read-only"));
         assert!(
             rendered_prompt
                 .contains("______________________________________________________________________")
@@ -348,11 +433,14 @@ mod tests {
     /// placeholders so prompt content cannot trigger recursive expansion.
     fn test_prepend_protocol_refresh_reminder_preserves_prompt_placeholders() {
         // Arrange
-        let prompt = "Keep this literal: {{ protocol_refresh_instructions }}";
+        let prompt = "Keep this literal: {{ protocol_refresh_instructions }} {{ workspace_root }}";
 
         // Act
-        let rendered_prompt =
-            prepend_protocol_refresh_reminder(prompt, ProtocolRequestProfile::SessionTurn);
+        let rendered_prompt = prepend_protocol_refresh_reminder(
+            prompt,
+            ProtocolRequestProfile::SessionTurn,
+            test_workspace_root(),
+        );
 
         // Assert
         assert!(rendered_prompt.ends_with(prompt));

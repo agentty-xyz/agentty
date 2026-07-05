@@ -335,6 +335,7 @@ where
         session_output.as_deref(),
         instruction_delivery_mode,
         schema_instruction_mode,
+        &request.folder,
     ) {
         Ok(prompt) => Ok(prompt),
         Err(error) => {
@@ -408,6 +409,7 @@ mod tests {
             Some("prior context"),
             InstructionDeliveryMode::BootstrapFull,
             ProtocolSchemaInstructionMode::PromptSchema,
+            std::path::Path::new("/tmp/agentty-wt/session-1"),
         )
         .expect("turn prompt should render");
 
@@ -429,6 +431,7 @@ mod tests {
             Some("assistant: proposed plan"),
             InstructionDeliveryMode::BootstrapWithReplay,
             ProtocolSchemaInstructionMode::PromptSchema,
+            std::path::Path::new("/tmp/agentty-wt/session-1"),
         )
         .expect("turn prompt should render");
 
@@ -451,6 +454,7 @@ mod tests {
             None,
             InstructionDeliveryMode::BootstrapFull,
             ProtocolSchemaInstructionMode::PromptSchema,
+            std::path::Path::new("/tmp/agentty-wt/session-1"),
         )
         .expect("turn prompt should render");
 
@@ -466,6 +470,7 @@ mod tests {
         let request = AppServerTurnRequest {
             folder: PathBuf::from("/tmp"),
             live_session_output: Some(live_output),
+            main_checkout_root: None,
             model: "model-a".to_string(),
             prompt: "Do work".into(),
             request_kind: session_resume_request_kind(Some("stale snapshot")),
@@ -489,6 +494,7 @@ mod tests {
         let request = AppServerTurnRequest {
             folder: PathBuf::from("/tmp"),
             live_session_output: Some(live_output),
+            main_checkout_root: None,
             model: "model-a".to_string(),
             prompt: "Do work".into(),
             request_kind: session_resume_request_kind(Some("stale snapshot")),
@@ -511,6 +517,7 @@ mod tests {
         let request = AppServerTurnRequest {
             folder: PathBuf::from("/tmp"),
             live_session_output: None,
+            main_checkout_root: None,
             model: "model-a".to_string(),
             prompt: "Do work".into(),
             request_kind: session_resume_request_kind(Some("stale snapshot")),
@@ -533,6 +540,7 @@ mod tests {
         let request = AppServerTurnRequest {
             folder: PathBuf::from("/tmp"),
             live_session_output: None,
+            main_checkout_root: None,
             model: "model-a".to_string(),
             prompt: "Do work".into(),
             request_kind: session_start_request_kind(),
@@ -557,6 +565,7 @@ mod tests {
         let request = AppServerTurnRequest {
             folder: PathBuf::from("/tmp"),
             live_session_output: Some(live_output),
+            main_checkout_root: Some(PathBuf::from("/tmp/project")),
             model: "model-a".to_string(),
             prompt: "Do work".into(),
             request_kind: session_resume_request_kind(Some("stale snapshot")),
@@ -633,6 +642,7 @@ mod tests {
         let request = AppServerTurnRequest {
             folder: PathBuf::from("/tmp"),
             live_session_output: None,
+            main_checkout_root: None,
             model: "model-a".to_string(),
             prompt: "Do work".into(),
             request_kind: session_resume_request_kind(Some("previous output")),
@@ -715,6 +725,7 @@ mod tests {
         let request = AppServerTurnRequest {
             folder: PathBuf::from("/tmp"),
             live_session_output: None,
+            main_checkout_root: None,
             model: "model-a".to_string(),
             prompt: "Do work".into(),
             request_kind: session_resume_request_kind(Some("previous output")),
@@ -786,6 +797,7 @@ mod tests {
         let request = AppServerTurnRequest {
             folder: PathBuf::from("/tmp"),
             live_session_output: None,
+            main_checkout_root: None,
             model: "model-a".to_string(),
             prompt: "Do work".into(),
             request_kind: session_resume_request_kind(Some("previous output")),

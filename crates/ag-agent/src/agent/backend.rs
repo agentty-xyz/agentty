@@ -48,16 +48,19 @@ pub struct BuildCommandRequest<'a> {
     pub attachments: &'a [TurnPromptAttachment],
     /// Working directory where the command will run.
     pub folder: &'a Path,
-    /// User prompt to send.
-    pub prompt: &'a str,
-    /// Canonical request kind that drives execution and protocol semantics.
-    pub request_kind: &'a AgentRequestKind,
+    /// Main repository checkout that must remain read-only during the turn,
+    /// when Agentty can resolve it.
+    pub main_checkout_root: Option<&'a Path>,
     /// Provider-specific model identifier.
     pub model: &'a str,
+    /// User prompt to send.
+    pub prompt: &'a str,
     /// Reasoning effort preference for this turn.
     ///
     /// Ignored by backends/models that do not support reasoning effort.
     pub reasoning_level: ReasoningLevel,
+    /// Canonical request kind that drives execution and protocol semantics.
+    pub request_kind: &'a AgentRequestKind,
 }
 
 /// Error type for backend setup and command construction failures.

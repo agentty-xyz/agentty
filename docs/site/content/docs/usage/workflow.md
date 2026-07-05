@@ -213,6 +213,10 @@ local base branch. If the rebase stops on conflicts, Agentty asks the existing a
 session to resolve only the conflicted files, then stages the edits and continues the
 rebase itself.
 
+During normal turns, the agent prompt names the session worktree as the only writable
+root. If Agentty detects that the main checkout's tracked status or `HEAD` changed
+during a turn, it appends a `[Main Checkout Warning]` notice to the transcript.
+
 ### Continuing a Done Session
 
 Pressing `c` on a **Done** session opens a confirmation, then creates a brand-new draft
