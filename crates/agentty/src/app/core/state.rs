@@ -141,21 +141,6 @@ pub(crate) struct SyncReviewRequestTaskResult {
     pub(crate) summary: Option<crate::domain::session::ReviewRequestSummary>,
 }
 
-/// Token-usage totals for one model used by the `/stats` prompt command.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct SessionStatsUsage {
-    pub input_tokens: u64,
-    pub model: String,
-    pub output_tokens: u64,
-}
-
-/// Session statistics payload returned by [`App::stats_for_session`].
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct SessionStatsSnapshot {
-    pub session_duration_seconds: Option<i64>,
-    pub usage_rows_result: Result<Vec<SessionStatsUsage>, String>,
-}
-
 /// External clients used to compose [`App`] startup dependencies.
 pub(crate) struct AppClients {
     pub(super) agent_availability_probe: Arc<dyn agent::AgentAvailabilityProbe>,
@@ -1311,42 +1296,6 @@ impl App {
         self.sessions
             .cleanup_prompt_attachment_files(&self.services, prompt)
             .await;
-    }
-
-    /// Loads slash-command stats data for one session through the app layer.
-    pub(crate) async fn stats_for_session(&self, session_id: &str) -> SessionStatsSnapshot {
-        let session_duration_seconds = match self
-            .services
-            .db()
-            .sessions()
-            .load_session_timestamps(session_id)
-            .await
-        {
-            Ok(Some((created_at, updated_at))) => Some((updated_at - created_at).max(0)),
-            Ok(None) | Err(_) => None,
-        };
-        let usage_rows_result = self
-            .services
-            .db()
-            .usage()
-            .load_session_usage(session_id)
-            .await
-            .map_err(|e| e.to_string())
-            .map(|usage_rows| {
-                usage_rows
-                    .into_iter()
-                    .map(|row| SessionStatsUsage {
-                        input_tokens: row.input_tokens.unsigned_abs(),
-                        model: row.model,
-                        output_tokens: row.output_tokens.unsigned_abs(),
-                    })
-                    .collect()
-            });
-
-        SessionStatsSnapshot {
-            session_duration_seconds,
-            usage_rows_result,
-        }
     }
 
     /// Starts squash-merge workflow for a review-ready session.

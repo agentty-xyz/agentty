@@ -12,5 +12,5 @@ mod state;
 pub(crate) use events::AppEvent;
 #[cfg(test)]
 pub(crate) use state::AppClients;
+pub(crate) use state::SyncReviewRequestTaskResult;
 pub use state::{AGENTTY_WT_DIR, App, UpdateStatus, agentty_home};
-pub(crate) use state::{SessionStatsUsage, SyncReviewRequestTaskResult};

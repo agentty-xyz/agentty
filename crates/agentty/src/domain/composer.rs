@@ -803,7 +803,6 @@ fn command_description(command: &str) -> &'static str {
         "/model" => "Choose an agent and model for this session.",
         "/qe:check" => "Send the quality-enforcement check prompt.",
         "/reasoning" => "Override the reasoning level for this session.",
-        "/stats" => "Check session stats.",
         _ => "Prompt slash command.",
     }
 }
@@ -811,7 +810,7 @@ fn command_description(command: &str) -> &'static str {
 /// Returns all slash commands whose fuzzy characters match the current input.
 fn prompt_slash_commands(input: &str, allow_apply_command: bool) -> Vec<&'static str> {
     let lowered = input.to_lowercase();
-    let mut commands = vec!["/apply", "/model", "/qe:check", "/reasoning", "/stats"];
+    let mut commands = vec!["/apply", "/model", "/qe:check", "/reasoning"];
     if !allow_apply_command {
         commands.retain(|command| *command != "/apply");
     }
@@ -1405,7 +1404,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(labels, vec!["/model", "/qe:check", "/reasoning", "/stats"]);
+        assert_eq!(labels, vec!["/model", "/qe:check", "/reasoning"]);
         assert_eq!(suggestion_list.selected_index, 0);
     }
 

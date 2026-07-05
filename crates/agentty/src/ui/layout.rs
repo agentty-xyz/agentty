@@ -765,7 +765,6 @@ mod tests {
         // Assert
         assert!(labels.contains(&"/model"));
         assert!(labels.contains(&"/reasoning"));
-        assert!(labels.contains(&"/stats"));
     }
 
     #[test]
@@ -785,7 +784,7 @@ mod tests {
         let labels: Vec<&str> = menu.items.iter().map(|item| item.label.as_str()).collect();
 
         // Assert
-        assert_eq!(labels, vec!["/model", "/qe:check", "/reasoning", "/stats"]);
+        assert_eq!(labels, vec!["/model", "/qe:check", "/reasoning"]);
         assert_eq!(menu.selected_index, 0);
     }
 

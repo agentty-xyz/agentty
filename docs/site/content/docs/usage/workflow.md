@@ -329,8 +329,7 @@ as `/o` for `/model` and `/qc` for `/qe:check`.
 | Command | Description | |---------|-------------| | `/apply` | Verify focused-review
 suggestions, then apply the still-valid ones. | | `/model` | Switch the model for the
 current session. | | `/qe:check` | Run a read-only quality-enforcement audit prompt. | |
-`/reasoning` | Override the reasoning level for the current session. | | `/stats` | Show
-token usage statistics for the session. |
+`/reasoning` | Override the reasoning level for the current session. |
 
 `/apply` requires a completed focused review (`f` key). `/model` and `/reasoning` only
 offer locally available backends; see [Agents & Models](@/docs/agents/backends.md).

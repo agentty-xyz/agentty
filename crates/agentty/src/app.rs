@@ -25,8 +25,8 @@ mod task;
 
 #[cfg(test)]
 pub(crate) use core::AppClients;
+pub(crate) use core::AppEvent;
 pub use core::{AGENTTY_WT_DIR, App, UpdateStatus, agentty_home};
-pub(crate) use core::{AppEvent, SessionStatsUsage};
 
 pub use error::AppError;
 pub use project::ProjectManager;

@@ -848,10 +848,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::app::prompt_intent::{
-        TokenUsageRow, build_apply_review_prompt, build_stats_markdown, format_duration,
-        format_stats_metric_line,
-    };
+    use crate::app::prompt_intent::build_apply_review_prompt;
     use crate::domain::agent::ReasoningLevel;
     use crate::domain::file_entry::FileEntry;
     use crate::infra::db::Database;
@@ -1442,28 +1439,8 @@ mod tests {
         // Assert
         assert_eq!(
             commands,
-            vec!["/apply", "/model", "/qe:check", "/reasoning", "/stats"]
+            vec!["/apply", "/model", "/qe:check", "/reasoning"]
         );
-    }
-
-    #[test]
-    fn test_prompt_slash_commands_match_stats() {
-        // Arrange & Act
-        let suggestion_list = crate::ui::state::prompt::build_prompt_slash_suggestion_list(
-            "/s",
-            &PromptSlashState::default(),
-            AgentKind::Codex,
-            true,
-        )
-        .expect("expected suggestion list");
-        let commands = suggestion_list
-            .items
-            .into_iter()
-            .map(|item| item.label)
-            .collect::<Vec<_>>();
-
-        // Assert
-        assert_eq!(commands, vec!["/stats", "/reasoning"]);
     }
 
     #[test]
@@ -1747,32 +1724,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_prompt_slash_submit_runs_stats_command_and_resets_slash_state() {
-        // Arrange
-        let (mut app, _base_dir) = new_test_prompt_app("/stats", None).await;
-        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
-
-        // Act
-        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
-            .await;
-
-        // Assert
-        app.sessions.sync_from_handles();
-        if let AppMode::Prompt {
-            input, slash_state, ..
-        } = &app.mode
-        {
-            assert_eq!(input.text(), "");
-            assert_eq!(*slash_state, PromptSlashState::default());
-        }
-        assert!(
-            app.sessions.sessions()[0]
-                .output
-                .contains("## Session Stats")
-        );
-    }
-
-    #[tokio::test]
     async fn test_handle_prompt_slash_submit_prefills_reasoning_selection_from_default_setting() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("/reasoning", None).await;
@@ -1813,7 +1764,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_prompt_slash_submit_clamps_stale_command_selection() {
         // Arrange
-        let (mut app, _base_dir) = new_test_prompt_app("/stats", None).await;
+        let (mut app, _base_dir) = new_test_prompt_app("/reasoning", None).await;
         if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
             slash_state.selected_index = 99;
         }
@@ -1824,19 +1775,11 @@ mod tests {
             .await;
 
         // Assert
-        app.sessions.sync_from_handles();
-        if let AppMode::Prompt {
-            input, slash_state, ..
-        } = &app.mode
-        {
-            assert_eq!(input.text(), "");
-            assert_eq!(*slash_state, PromptSlashState::default());
+        if let AppMode::Prompt { slash_state, .. } = &app.mode {
+            assert_eq!(slash_state.stage, PromptSlashStage::Reasoning);
+            assert_eq!(slash_state.selected_agent, None);
+            assert_eq!(slash_state.selected_index, 2);
         }
-        assert!(
-            app.sessions.sessions()[0]
-                .output
-                .contains("## Session Stats")
-        );
     }
 
     /// Verifies slash submit ignores unmatched commands and preserves the
@@ -2726,93 +2669,6 @@ mod tests {
         assert!(matches!(app.mode, AppMode::View { .. }));
         assert!(image_path.exists());
         assert!(image_directory.exists());
-    }
-
-    #[test]
-    fn test_format_duration_zero() {
-        // Arrange & Act
-        let result = format_duration(0);
-
-        // Assert
-        assert_eq!(result, "00:00:00");
-    }
-
-    #[test]
-    fn test_format_duration_mixed() {
-        // Arrange & Act
-        let result = format_duration(3661);
-
-        // Assert
-        assert_eq!(result, "01:01:01");
-    }
-
-    #[test]
-    fn test_format_duration_large() {
-        // Arrange & Act
-        let result = format_duration(86400);
-
-        // Assert
-        assert_eq!(result, "24:00:00");
-    }
-
-    #[test]
-    fn test_format_stats_metric_line_uses_tab_delimiter() {
-        // Arrange & Act
-        let session_line = format_stats_metric_line("Session ID", "session-id");
-        let error_line = format_stats_metric_line("Error", "boom");
-
-        // Assert
-        assert_eq!(session_line, "Session ID\tsession-id");
-        assert_eq!(error_line, "Error\tboom");
-    }
-
-    #[test]
-    fn test_build_stats_markdown_renders_aligned_usage_table_without_box() {
-        // Arrange
-        let usage_rows_result = Ok(vec![TokenUsageRow {
-            in_tokens: "1.2k".to_string(),
-            model: "gemini-2.5-flash".to_string(),
-            out_tokens: "650".to_string(),
-        }]);
-
-        // Act
-        let result = build_stats_markdown("session-id", "00:20:15", usage_rows_result);
-
-        // Assert
-        assert!(result.starts_with("\n## Session Stats\n\n```stats\n"));
-        assert!(result.contains("Session ID\tsession-id"));
-        assert!(result.contains("Session Time\t00:20:15"));
-        assert!(result.contains("Tokens Usage"));
-        assert!(result.contains("Model"));
-        assert!(result.contains("gemini-2.5-flash"));
-        assert!(result.contains("1.2k"));
-        assert!(result.contains("650"));
-        assert!(!result.contains('+'));
-        assert!(!result.contains('|'));
-
-        let session_id_index = result.find("Session ID").expect("expected session id");
-        let session_time_index = result.find("Session Time").expect("expected session time");
-        let token_usage_index = result
-            .find("Tokens Usage")
-            .expect("expected token usage title");
-        let model_header_index = result.find("Model").expect("expected model header");
-
-        assert!(session_id_index < session_time_index);
-        assert!(session_time_index < token_usage_index);
-        assert!(token_usage_index < model_header_index);
-    }
-
-    #[test]
-    fn test_build_stats_markdown_renders_no_usage_message() {
-        // Arrange
-        let usage_rows_result = Ok(Vec::new());
-
-        // Act
-        let result = build_stats_markdown("session-id", "00:20:15", usage_rows_result);
-
-        // Assert
-        assert!(result.contains("Tokens Usage"));
-        assert!(result.contains("No token usage recorded."));
     }
 
     #[test]

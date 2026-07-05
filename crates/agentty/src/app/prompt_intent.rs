@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use tracing::warn;
 
-use crate::app::{App, ReviewCacheEntry, SessionStatsUsage, diff_content_hash};
+use crate::app::{App, ReviewCacheEntry, diff_content_hash};
 use crate::domain::agent::{AgentKind, ReasoningLevel};
 use crate::domain::review;
 use crate::domain::session::{SessionId, Status};
@@ -14,7 +14,6 @@ use crate::ui::state::prompt::{
     PromptSlashStage, PromptSuggestionSelection, drain_prompt_submission,
     insert_prompt_local_image, resolve_prompt_slash_selection,
 };
-use crate::ui::text_util::format_token_count;
 
 /// Checked-in prompt body submitted by the `/qe:check` slash command.
 const QE_CHECK_PROMPT: &str = include_str!("qe_check_prompt.md");
@@ -138,10 +137,6 @@ impl App {
                 } else {
                     self.reset_prompt_slash_state();
                 }
-            }
-            Some(PromptSuggestionSelection::Command("/stats")) => {
-                self.reset_prompt_slash_input();
-                self.handle_stats_prompt_command(context).await;
             }
             Some(PromptSuggestionSelection::Command("/qe:check")) => {
                 self.reset_prompt_slash_input();
@@ -642,21 +637,6 @@ impl App {
         true
     }
 
-    /// Handles `/stats` by loading stats through the app layer and appending
-    /// the rendered output to the session transcript.
-    async fn handle_stats_prompt_command(&self, context: &PromptIntentContext) {
-        let session_stats = self.stats_for_session(&context.session_id).await;
-        let session_time = session_stats
-            .session_duration_seconds
-            .map_or_else(|| "Unavailable".to_string(), format_duration);
-        let usage_rows_result = build_token_usage_rows(session_stats.usage_rows_result);
-        let stats_output =
-            build_stats_markdown(&context.session_id, &session_time, usage_rows_result);
-
-        self.append_output_for_session(&context.session_id, &stats_output)
-            .await;
-    }
-
     /// Handles `/qe:check` by submitting the checked-in quality-enforcement
     /// prompt as the next agent turn.
     async fn handle_qe_check_prompt_command(&mut self, context: &PromptIntentContext) {
@@ -685,123 +665,6 @@ pub(crate) fn build_apply_review_prompt(suggestions: &str) -> TurnPrompt {
          anything. Apply only the suggestions that are still correct and relevant; explain any \
          suggestions you leave unapplied.\n\n{suggestions}"
     ))
-}
-
-/// One rendered token-usage row used by the `/stats` command transcript.
-pub(crate) struct TokenUsageRow {
-    /// Formatted input-token count.
-    pub(crate) in_tokens: String,
-    /// Provider model name.
-    pub(crate) model: String,
-    /// Formatted output-token count.
-    pub(crate) out_tokens: String,
-}
-
-/// Converts loaded token usage data into rendered table rows.
-pub(crate) fn build_token_usage_rows(
-    usage_rows_result: Result<Vec<SessionStatsUsage>, String>,
-) -> Result<Vec<TokenUsageRow>, String> {
-    match usage_rows_result {
-        Ok(usage_rows) => {
-            let rows = usage_rows
-                .into_iter()
-                .map(|row| TokenUsageRow {
-                    in_tokens: format_token_count(row.input_tokens),
-                    model: row.model,
-                    out_tokens: format_token_count(row.output_tokens),
-                })
-                .collect();
-
-            Ok(rows)
-        }
-        Err(error) => Err(error),
-    }
-}
-
-/// Renders one `/stats` transcript block.
-pub(crate) fn build_stats_markdown(
-    session_id: &str,
-    session_time: &str,
-    usage_rows_result: Result<Vec<TokenUsageRow>, String>,
-) -> String {
-    let mut lines = vec![
-        format_stats_metric_line("Session ID", session_id),
-        format_stats_metric_line("Session Time", session_time),
-        String::new(),
-        "Tokens Usage".to_string(),
-    ];
-
-    lines.extend(build_token_usage_lines(usage_rows_result));
-
-    format!(
-        "\n## Session Stats\n\n```stats\n{}\n```\n",
-        lines.join("\n")
-    )
-}
-
-/// Renders one tab-delimited metric line for the `/stats` block.
-pub(crate) fn format_stats_metric_line(metric: &str, value: &str) -> String {
-    format!("{metric}\t{value}")
-}
-
-/// Renders token usage lines or a compact fallback message.
-pub(crate) fn build_token_usage_lines(
-    usage_rows_result: Result<Vec<TokenUsageRow>, String>,
-) -> Vec<String> {
-    match usage_rows_result {
-        Ok(usage_rows) if usage_rows.is_empty() => vec!["No token usage recorded.".to_string()],
-        Ok(usage_rows) => render_token_usage_table_lines(&usage_rows),
-        Err(error) => vec![
-            "Usage unavailable.".to_string(),
-            format_stats_metric_line("Error", &error),
-        ],
-    }
-}
-
-/// Renders the aligned token usage table body without box-drawing
-/// characters.
-pub(crate) fn render_token_usage_table_lines(usage_rows: &[TokenUsageRow]) -> Vec<String> {
-    let model_width = usage_rows
-        .iter()
-        .map(|row| row.model.chars().count())
-        .max()
-        .unwrap_or_default()
-        .max("Model".chars().count());
-    let in_width = usage_rows
-        .iter()
-        .map(|row| row.in_tokens.chars().count())
-        .max()
-        .unwrap_or_default()
-        .max("In".chars().count());
-    let out_width = usage_rows
-        .iter()
-        .map(|row| row.out_tokens.chars().count())
-        .max()
-        .unwrap_or_default()
-        .max("Out".chars().count());
-
-    let mut lines = vec![format!(
-        "{:<model_width$}  {:>in_width$}  {:>out_width$}",
-        "Model", "In", "Out"
-    )];
-
-    lines.extend(usage_rows.iter().map(|row| {
-        format!(
-            "{:<model_width$}  {:>in_width$}  {:>out_width$}",
-            row.model, row.in_tokens, row.out_tokens
-        )
-    }));
-
-    lines
-}
-
-/// Formats elapsed seconds as `HH:MM:SS` for `/stats` output.
-pub(crate) fn format_duration(total_seconds: i64) -> String {
-    let hours = total_seconds / 3600;
-    let minutes = (total_seconds % 3600) / 60;
-    let seconds = total_seconds % 60;
-
-    format!("{hours:02}:{minutes:02}:{seconds:02}")
 }
 
 #[cfg(test)]
