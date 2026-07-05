@@ -679,6 +679,35 @@ fn session_list_model_reasoning_level() -> E2eResult {
     Ok(())
 }
 
+/// Verify that the session chat header shows the selected agent immediately
+/// before the model name.
+#[test]
+fn session_chat_header_agent_model() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_chat_header_agent_model")
+        .with_git()
+        .setup(seed_review_ready_session)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_text("Agent: codex  Model: gpt-5.5", 5000)
+                    .capture_labeled(
+                        "agent_model_header",
+                        "Session chat header showing agent before model",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Agent: codex  Model: gpt-5.5", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
 /// Verify that the selected session row renders on the dedicated selection
 /// surface, distinct from the base surface used by the table header.
 ///

@@ -154,9 +154,10 @@ fn session_metadata_base_text(
     let input_tokens = text_util::format_token_count(session.stats.input_tokens);
     let output_tokens = text_util::format_token_count(session.stats.output_tokens);
     format!(
-        "Size: {}  Lines: +{added_lines} / -{deleted_lines}  Timer: {timer}  Model: {}  \
-         Reasoning: {}  Tokens: {input_tokens}/{output_tokens}",
+        "Size: {}  Lines: +{added_lines} / -{deleted_lines}  Timer: {timer}  Agent: {}  Model: \
+         {}  Reasoning: {}  Tokens: {input_tokens}/{output_tokens}",
         session.size,
+        session.agent.kind(),
         session.agent.model().as_str(),
         reasoning_level.as_str(),
     )
@@ -513,14 +514,16 @@ mod tests {
     fn test_session_header_lines_keeps_review_request_url_on_same_line_if_it_fits() {
         // Arrange
         let session = session_with_review_request("https://github.com/agentty-xyz/agentty/pull/42");
+        let header_width = 180;
 
         // Act
-        let header_lines = session_header_lines(&session, 160, ReasoningLevel::default(), 0);
+        let header_lines =
+            session_header_lines(&session, header_width, ReasoningLevel::default(), 0);
         let metadata_line = header_lines[1].to_string();
 
         // Assert
         assert_eq!(header_lines.len(), 2);
-        assert_eq!(metadata_line.chars().count(), 160);
+        assert_eq!(metadata_line.chars().count(), usize::from(header_width));
         assert!(metadata_line.contains("Tokens: 0/0"));
         assert!(metadata_line.ends_with("https://github.com/agentty-xyz/agentty/pull/42"));
     }
@@ -553,5 +556,21 @@ mod tests {
         // Assert
         assert!(metadata_text.contains("Tokens: 0/0"));
         assert!(!metadata_text.contains("https://example.test/pull/42"));
+    }
+
+    #[test]
+    fn test_session_metadata_text_prints_agent_before_model() {
+        // Arrange
+        let mut session = SessionFixtureBuilder::new().build();
+        session.agent = crate::domain::agent::AgentSelection::new(
+            crate::domain::agent::AgentKind::Codex,
+            AgentModel::Gpt55,
+        );
+
+        // Act
+        let metadata_text = session_metadata_text(&session, 160, ReasoningLevel::default(), 0);
+
+        // Assert
+        assert!(metadata_text.contains("Agent: codex  Model: gpt-5.5"));
     }
 }
