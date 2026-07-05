@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use ag_agent::agent::protocol::AgentResponseSummary;
 use mockall::predicate::eq;
 use serde_json;
 use tempfile::tempdir;
@@ -20,7 +21,6 @@ use crate::domain::session::{
     SESSION_DATA_DIR, SessionFollowUpTask, SessionHandles, SessionSize, SessionStats, Status,
 };
 use crate::domain::setting::SettingName;
-use crate::infra::agent::protocol::AgentResponseSummary;
 use crate::infra::db::AppRepositories;
 use crate::infra::project_discovery::{HOME_PROJECT_SCAN_MAX_RESULTS, RealProjectDiscoveryClient};
 use crate::infra::tmux::{MockTmuxClient, TmuxClient};

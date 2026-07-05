@@ -1,5 +1,6 @@
 //! Session-scoped persistence adapters and query helpers.
 
+use ag_agent::agent;
 use async_trait::async_trait;
 use sqlx::SqlitePool;
 
@@ -7,7 +8,6 @@ use super::review::SessionReviewRequestRow;
 use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
 use crate::domain::session::{SessionFollowUpTask, SessionId, SessionStats};
 use crate::domain::session_message::{SessionMessageKind, stored_message_content};
-use crate::infra::agent;
 use crate::infra::db::DbError;
 
 /// Transactional turn-metadata payload persisted after one completed agent

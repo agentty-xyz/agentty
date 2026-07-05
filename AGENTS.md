@@ -131,7 +131,7 @@ repository's current session.
 - **Imports:** Always place imports at the top of the file. Do not use local `use`
   statements within functions or other blocks.
   - For internal crate paths, prefer module-oriented imports and namespace usage by
-    default (for example, `use crate::infra::agent;` and `agent::create_backend(...)`).
+    default (for example, `use ag_agent::agent;` and `agent::create_backend(...)`).
   - Use direct item imports only when they materially improve readability (for example,
     frequently used traits/types like `AppMode`, `PathBuf`, `Arc`, or small focused
     groups in braces).

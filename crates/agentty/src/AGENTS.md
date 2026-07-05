@@ -38,8 +38,7 @@ When changing architecture-level behavior under `src/`, update:
   `runtime/mode/`.
 - Keep the key-type tables/field descriptions in `runtime-flow.md` aligned with
   `crates/ag-agent/src/channel/contract.rs` (re-exported by
-  `crates/ag-agent/src/channel.rs` and `infra/channel`) for `TurnRequest`, `TurnEvent`,
-  and `TurnResult`.
+  `crates/ag-agent/src/channel.rs`) for `TurnRequest`, `TurnEvent`, and `TurnResult`.
 - Keep `testability-boundaries.md` aligned with active
   `#[cfg_attr(test, mockall::automock)]` trait boundaries that guard
   external/time/process integrations.

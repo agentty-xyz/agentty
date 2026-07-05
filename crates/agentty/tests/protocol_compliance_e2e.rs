@@ -2,11 +2,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use agentty::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
-use agentty::infra::app_server_router::RoutingAppServerClient;
-use agentty::infra::channel::{
+use ag_agent::app_server_router::RoutingAppServerClient;
+use ag_agent::channel::{
     AgentChannel, AgentRequestKind, StartSessionRequest, TurnRequest, create_agent_channel,
 };
+use agentty::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
@@ -268,6 +268,7 @@ fn build_turn_request(folder: PathBuf, model: AgentModel) -> TurnRequest {
     TurnRequest {
         folder,
         live_session_output: None,
+        main_checkout_root: None,
         model: model.provider_model_str().to_string(),
         request_kind: AgentRequestKind::SessionStart,
         prompt: PROTOCOL_COMPLIANCE_PROMPT.to_string().into(),

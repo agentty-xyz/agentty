@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 
+use ag_agent::agent;
 use ag_forge::{ForgeRemote, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewRequestClient};
 use ag_git::GitClient;
 use askama::Template;
@@ -19,7 +20,6 @@ use crate::app::{AppEvent, UpdateStatus};
 use crate::domain::agent::{AgentCliInfo, AgentKind, AgentModel, ReasoningLevel};
 use crate::domain::session::SessionId;
 use crate::domain::system_log::{SystemLogCategory, SystemLogEvent, SystemLogLevel};
-use crate::infra::agent;
 use crate::version;
 
 /// Stateless helpers for app-scoped one-shot background tasks and app-server
@@ -338,7 +338,7 @@ impl TaskService {
                         folder: review_folder,
                         model: review_model,
                         prompt: review_prompt,
-                        request_kind: crate::infra::channel::AgentRequestKind::UtilityPrompt,
+                        request_kind: ag_agent::channel::AgentRequestKind::UtilityPrompt,
                         reasoning_level: ReasoningLevel::default(),
                     })
                     .await
@@ -514,6 +514,7 @@ mod tests {
     use std::path::Path;
     use std::time::Duration;
 
+    use ag_agent::agent::protocol::AgentResponse;
     use ag_forge::{
         ForgeKind, MockReviewRequestClient, RequestedReview, RequestedReviewAudience,
         ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread,
@@ -521,11 +522,10 @@ mod tests {
     use ag_git::MockGitClient;
 
     use super::*;
-    use crate::infra::agent::protocol::AgentResponse;
 
     struct PanickingAgentAvailabilityProbe;
 
-    impl crate::infra::agent::AgentAvailabilityProbe for PanickingAgentAvailabilityProbe {
+    impl ag_agent::agent::AgentAvailabilityProbe for PanickingAgentAvailabilityProbe {
         fn available_agent_kinds(&self) -> Vec<AgentKind> {
             vec![AgentKind::Claude]
         }

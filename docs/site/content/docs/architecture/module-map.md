@@ -22,7 +22,7 @@ module docstrings directly.
   unsupported-backend reporting.
 - `crates/ag-agent/`: Shared agent backend library crate with provider model metadata,
   prompt templates, CLI and app-server transports, provider-neutral channel contracts,
-  app-server routing, and compatibility re-exports for the moved Agentty agent APIs.
+  app-server routing, provider registries, and provider availability probes.
 - `crates/ag-forge/`: Shared forge review-request library crate with normalized
   review-request types, GitHub/GitLab remote detection, and the `gh`/`glab` adapters
   behind the `ReviewRequestClient` and `ForgeCommandRunner` boundaries.
@@ -56,12 +56,11 @@ module docstrings directly.
   plus shared protocol question and turn prompt payloads. No I/O.
 - `infra/`: External integrations behind traits — SQLite persistence (`infra/db/`
   repositories), git (`GitClient`, backed by `ag-git`), filesystem (`FsClient`), tmux,
-  clipboard images, version checks, project discovery, file indexing, and the agent
-  stack. Clipboard image capture delegates host clipboard reads to `ag-clipboard`, then
-  owns temp-file persistence and attachment metadata. Agent backend, channel,
-  app-server, and provider registry APIs are owned by `crates/ag-agent/` and re-exported
-  through `infra/agent`, `infra/channel`, `infra/app_server`, `infra/app_server_router`,
-  and `infra/app_server_transport` for Agentty callers.
+  clipboard images, version checks, project discovery, and file indexing. Clipboard
+  image capture delegates host clipboard reads to `ag-clipboard`, then owns temp-file
+  persistence and attachment metadata. Agent backend, channel, app-server, and provider
+  registry APIs are owned by `crates/ag-agent/` and imported directly by Agentty
+  callers.
 - `runtime/`: Terminal lifecycle and the event loop — terminal setup, the event-reader
   thread, key dispatch, one handler per `AppMode` under `runtime/mode/`, and shared mode
   helpers for session-output metrics.

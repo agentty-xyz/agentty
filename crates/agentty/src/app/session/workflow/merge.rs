@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
+use ag_agent::agent;
+use ag_agent::agent::protocol::AgentResponseSummary;
 use ag_git::{self as git, GitClient};
 use askama::Template;
 use tokio::sync::mpsc;
@@ -26,8 +28,6 @@ use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel
 use crate::domain::session::{PublishedBranchSyncStatus, SessionId, Status};
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::transcript_notice::TranscriptNotice;
-use crate::infra::agent;
-use crate::infra::agent::protocol::AgentResponseSummary;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs::{self as fs, FsClient};
 
@@ -490,7 +490,7 @@ impl RealSyncAssistClient {
             folder: &folder,
             model: session_agent.model(),
             prompt: &prompt,
-            request_kind: crate::infra::channel::AgentRequestKind::UtilityPrompt,
+            request_kind: ag_agent::channel::AgentRequestKind::UtilityPrompt,
             reasoning_level: ReasoningLevel::default(),
         })
         .await

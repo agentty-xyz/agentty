@@ -318,6 +318,7 @@ fn wrapped_text_height(text: &str, width: u16) -> u16 {
 mod tests {
     use std::path::PathBuf;
 
+    use ag_agent::agent::protocol::AgentResponseSummary;
     use ratatui::style::{Modifier, Style};
     use ratatui::widgets::Borders;
 
@@ -329,7 +330,6 @@ mod tests {
         COMMITTING_PROGRESS_LABEL, PublishedBranchSyncStatus, Session, Status,
     };
     use crate::domain::theme::ColorTheme;
-    use crate::infra::agent::protocol::AgentResponseSummary;
     use crate::ui::input_layout::*;
     use crate::ui::prompt_format::*;
     use crate::ui::question_format::*;

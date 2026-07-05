@@ -4,6 +4,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use ag_agent::agent;
 use ag_git::{self as git, GitClient};
 use askama::Template;
 use tokio::sync::mpsc;
@@ -25,7 +26,6 @@ use crate::domain::session::{
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::setting::SettingName;
 use crate::domain::transcript_notice::TranscriptNotice;
-use crate::infra::agent;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs::FsClient;
 
@@ -820,7 +820,7 @@ impl SessionTaskService {
                 folder,
                 model: session_agent.model(),
                 prompt: &prompt,
-                request_kind: crate::infra::channel::AgentRequestKind::UtilityPrompt,
+                request_kind: ag_agent::channel::AgentRequestKind::UtilityPrompt,
                 reasoning_level: crate::domain::agent::ReasoningLevel::default(),
             },
         )
@@ -843,7 +843,7 @@ impl SessionTaskService {
                         folder,
                         model: session_agent.model(),
                         prompt: &truncated_prompt,
-                        request_kind: crate::infra::channel::AgentRequestKind::UtilityPrompt,
+                        request_kind: ag_agent::channel::AgentRequestKind::UtilityPrompt,
                         reasoning_level: crate::domain::agent::ReasoningLevel::default(),
                     },
                 )
@@ -910,7 +910,7 @@ impl SessionTaskService {
                 folder: &folder,
                 model: session_agent.model(),
                 prompt: &prompt,
-                request_kind: crate::infra::channel::AgentRequestKind::UtilityPrompt,
+                request_kind: ag_agent::channel::AgentRequestKind::UtilityPrompt,
                 reasoning_level: crate::domain::agent::ReasoningLevel::default(),
             },
         )
@@ -1365,6 +1365,8 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant, SystemTime};
 
+    use ag_agent::agent::tests::MockAgentBackend;
+    use ag_agent::channel::AgentRequestKind;
     use ag_git::{GitError, MockGitClient};
 
     use super::*;
@@ -1372,8 +1374,6 @@ mod tests {
     use crate::db::AppRepositories;
     use crate::domain::agent::AgentCliInfo;
     use crate::domain::session_message::SessionMessage;
-    use crate::infra::agent::tests::MockAgentBackend;
-    use crate::infra::channel::AgentRequestKind;
     use crate::infra::fs;
 
     /// Mutable test clock used to drive deterministic status-transition timing

@@ -3,6 +3,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use ag_agent::agent;
+use ag_agent::channel::AgentRequestKind;
 use ag_forge as forge;
 use ag_git as git;
 use askama::Template;
@@ -33,9 +35,8 @@ use crate::domain::session_order;
 use crate::domain::setting::SettingName;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
-use crate::infra::channel::AgentRequestKind;
+use crate::infra::db;
 use crate::infra::fs::{FsClient, FsError};
-use crate::infra::{agent, db};
 
 /// Maximum accepted length for generated session titles.
 ///
@@ -2949,8 +2950,8 @@ mod test_support {
                 AgentSelection::new(AgentKind::Antigravity, session_model),
                 |session| session.agent,
             );
-            let channel: Arc<dyn crate::infra::channel::AgentChannel> =
-                Arc::new(crate::infra::channel::cli::CliAgentChannel::with_backend(
+            let channel: Arc<dyn ag_agent::channel::AgentChannel> =
+                Arc::new(ag_agent::channel::cli::CliAgentChannel::with_backend(
                     backend,
                     session_agent.kind(),
                 ));

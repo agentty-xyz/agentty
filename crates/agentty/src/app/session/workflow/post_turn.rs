@@ -4,6 +4,8 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use ag_agent::agent;
+use ag_agent::channel::{AgentError, TurnPrompt, TurnResult};
 use ag_forge as forge;
 use ag_git::GitClient;
 use serde_json;
@@ -19,10 +21,8 @@ use crate::app::session::{Clock, SessionError, TurnAppliedState};
 use crate::domain::session::{SessionFollowUpTask, SessionId, SessionStats, Status};
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::transcript_notice::TranscriptNotice;
-use crate::infra::channel::{AgentError, TurnResult};
 use crate::infra::db::{AppRepositories, SessionTurnMetadata};
 use crate::infra::fs::FsClient;
-use crate::infra::{agent, channel};
 
 /// Narrow dependency set used to apply a completed provider turn.
 ///
@@ -46,7 +46,7 @@ pub(super) struct PostTurnContext {
     /// Shared transcript buffer receiving final response text and notices.
     pub(super) output: Arc<Mutex<String>>,
     /// In-memory queue checked before starting detached auto-push effects.
-    pub(super) queued_messages: Arc<Mutex<VecDeque<channel::TurnPrompt>>>,
+    pub(super) queued_messages: Arc<Mutex<VecDeque<TurnPrompt>>>,
     /// Forge boundary used for optional linked PR/MR metadata refresh.
     pub(super) review_request_client: Arc<dyn forge::ReviewRequestClient>,
     /// Per-app session update versions shared with the main runtime.

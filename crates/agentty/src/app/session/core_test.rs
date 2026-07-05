@@ -6,6 +6,14 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
+use ag_agent::agent::AgentResponse;
+use ag_agent::agent::tests::MockAgentBackend;
+use ag_agent::app_server;
+use ag_agent::app_server::{AppServerTurnResponse, MockAppServerClient};
+use ag_agent::channel::{
+    AgentRequestKind, MockAgentChannel, TurnPrompt, TurnPromptAttachment, TurnPromptTextSource,
+    TurnResult,
+};
 use ag_git as git;
 use tempfile::tempdir;
 use tokio::sync::Barrier;
@@ -19,14 +27,6 @@ use crate::domain::session::{
     DailyActivity, SESSION_DATA_DIR, Session, SessionHandles, SessionSize, SessionStats, Status,
 };
 use crate::domain::setting::SettingName;
-use crate::infra::agent::AgentResponse;
-use crate::infra::agent::tests::MockAgentBackend;
-use crate::infra::app_server;
-use crate::infra::app_server::{AppServerTurnResponse, MockAppServerClient};
-use crate::infra::channel::{
-    AgentRequestKind, MockAgentChannel, TurnPrompt, TurnPromptAttachment, TurnPromptTextSource,
-    TurnResult,
-};
 use crate::infra::clock::RealClock;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs::{self as fs, FsClient};
@@ -142,6 +142,14 @@ fn create_mock_backend() -> MockAgentBackend {
 /// Allows branch discovery calls to fall back to defaults in tests that do
 /// not care about exact detected refs.
 fn allow_detect_git_info(mock: &mut git::MockGitClient) {
+    allow_detect_git_info_with_head_hash(mock, true);
+}
+
+fn allow_detect_git_info_without_head_hash(mock: &mut git::MockGitClient) {
+    allow_detect_git_info_with_head_hash(mock, false);
+}
+
+fn allow_detect_git_info_with_head_hash(mock: &mut git::MockGitClient, allow_head_hash: bool) {
     mock.expect_detect_git_info().times(0..).returning(|path| {
         let branch_name = path
             .file_name()
@@ -168,9 +176,11 @@ fn allow_detect_git_info(mock: &mut git::MockGitClient) {
     mock.expect_tracked_worktree_status()
         .times(0..)
         .returning(|_| Box::pin(async { Ok(String::new()) }));
-    mock.expect_head_hash()
-        .times(0..)
-        .returning(|_| Box::pin(async { Ok("main-before".to_string()) }));
+    if allow_head_hash {
+        mock.expect_head_hash()
+            .times(0..)
+            .returning(|_| Box::pin(async { Ok("main-before".to_string()) }));
+    }
     mock.expect_fetch_remote()
         .times(0..)
         .returning(|_| Box::pin(async { Ok(()) }));
@@ -193,7 +203,7 @@ fn create_mock_git_client_for_successful_noop_merges(
     repo_root: PathBuf,
 ) -> git::MockGitClient {
     let mut mock = git::MockGitClient::new();
-    allow_detect_git_info(&mut mock);
+    allow_detect_git_info_without_head_hash(&mut mock);
     mock.expect_find_git_repo_root()
         .times(expected_merge_count)
         .returning(move |_| {
@@ -5296,7 +5306,7 @@ fn test_parse_merge_commit_message_response_with_protocol_message() {
     let content = r#"{"answer":"Title\n\n- Detail","questions":[],"summary":null}"#;
 
     // Act
-    let parsed = crate::infra::agent::protocol::parse_agent_response_strict(content)
+    let parsed = ag_agent::agent::protocol::parse_agent_response_strict(content)
         .ok()
         .map(|response| response.to_answer_display_text())
         .filter(|answer_text| !answer_text.trim().is_empty());
@@ -5312,7 +5322,7 @@ fn test_parse_merge_commit_message_response_rejects_non_protocol_json() {
     let content = r#"{"title":"Title","description":"- Detail"}"#;
 
     // Act
-    let parsed = crate::infra::agent::protocol::parse_agent_response_strict(content)
+    let parsed = ag_agent::agent::protocol::parse_agent_response_strict(content)
         .ok()
         .map(|response| response.to_answer_display_text())
         .filter(|answer_text| !answer_text.trim().is_empty());

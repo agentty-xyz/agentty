@@ -242,8 +242,8 @@ flowchart TD
 
 <a id="architecture-key-types"></a> Key types
 (`crates/ag-agent/src/channel/contract.rs`, re-exported by
-`crates/ag-agent/src/channel.rs` and Agentty `infra/channel`, with prompt payloads owned
-by `ag-protocol` and re-exported through `domain/turn_prompt.rs`):
+`crates/ag-agent/src/channel.rs`, with prompt payloads owned by `ag-protocol` and
+re-exported through `domain/turn_prompt.rs`):
 
 | Type               | Purpose                                                                                                                                     |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |

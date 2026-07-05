@@ -5,6 +5,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use ag_agent::{agent, app_server};
 #[cfg(test)]
 use ag_forge as forge;
 use ag_forge::{
@@ -58,7 +59,6 @@ use crate::infra::db;
 use crate::infra::fs::{FsClient, RealFsClient};
 use crate::infra::project_discovery::{ProjectDiscoveryClient, RealProjectDiscoveryClient};
 use crate::infra::tmux::{RealTmuxClient, TmuxClient};
-use crate::infra::{agent, app_server};
 use crate::runtime::mode::{at_mention, question};
 use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, QuestionFocus};
 use crate::{app, ui};

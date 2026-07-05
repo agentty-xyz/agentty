@@ -5,6 +5,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use ag_agent::agent;
+use ag_agent::channel::{
+    AgentChannel, AgentError, AgentRequestKind, TurnEvent, TurnPrompt, TurnRequest, TurnResult,
+    create_agent_channel,
+};
 use ag_forge as forge;
 use ag_git::GitClient;
 use tokio::sync::mpsc;
@@ -22,13 +27,9 @@ use crate::app::{AppEvent, AppServices, SessionManager};
 use crate::domain::agent::AgentSelection;
 use crate::domain::session::{SessionId, SessionStats, Status};
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
-use crate::infra::channel::{
-    AgentChannel, AgentError, AgentRequestKind, TurnEvent, TurnPrompt, TurnRequest, TurnResult,
-    create_agent_channel,
-};
 use crate::infra::db::{AppRepositories, SessionOperationRow};
 use crate::infra::fs::FsClient;
-use crate::infra::{agent, process};
+use crate::infra::process;
 
 const RESTART_FAILURE_REASON: &str = "Interrupted by app restart";
 const CANCEL_BEFORE_EXECUTION_REASON: &str = "Session canceled before execution";
@@ -1059,6 +1060,9 @@ async fn append_drained_prompt_to_output(context: &SessionWorkerContext, prompt:
 mod tests {
     use std::sync::Arc;
 
+    use ag_agent::agent::AgentResponse;
+    use ag_agent::agent::protocol::AgentResponseSummary;
+    use ag_agent::channel::MockAgentChannel;
     use ag_git::{MockGitClient, RebaseStepResult};
     use mockall::Sequence;
     use serde_json;
@@ -1075,9 +1079,6 @@ mod tests {
     use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
     use crate::domain::question::QuestionItem;
     use crate::domain::session::{PublishedBranchSyncStatus, ReviewRequest, ReviewRequestState};
-    use crate::infra::agent::AgentResponse;
-    use crate::infra::agent::protocol::AgentResponseSummary;
-    use crate::infra::channel::MockAgentChannel;
     use crate::infra::db::AppRepositories;
     use crate::infra::fs;
 
@@ -1118,6 +1119,13 @@ mod tests {
 
     fn empty_transcript() -> Arc<Mutex<SessionTranscript>> {
         Arc::new(Mutex::new(SessionTranscript::default()))
+    }
+
+    fn cancel_token_after_short_delay(cancel_token: Arc<Mutex<CancellationToken>>) {
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            cancel_token.lock().expect("cancel token lock").cancel();
+        });
     }
 
     /// Applies one turn result through the narrowed post-turn dependency set
@@ -1450,12 +1458,7 @@ mod tests {
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
-        // Cancel the token shortly after the turn starts.
-        let token_handle = Arc::clone(&cancel_token);
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            token_handle.lock().expect("cancel token lock").cancel();
-        });
+        cancel_token_after_short_delay(Arc::clone(&cancel_token));
 
         // Act
         let result = run_channel_turn(
@@ -1810,6 +1813,7 @@ mod tests {
             fs_client: Arc::new(mock_fs_client_with_existing_directories()),
             git_client: Arc::new(mock_git_client),
             output: Arc::clone(&output),
+            transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
@@ -3401,6 +3405,8 @@ mod tests {
     ) -> RebaseAssistWorkerHarness {
         let main_checkout_root = base_dir.join("main-checkout");
         std::fs::create_dir_all(&main_checkout_root).expect("failed to create main checkout");
+        let main_checkout_root = std::fs::canonicalize(&main_checkout_root)
+            .expect("failed to canonicalize main checkout");
 
         let output = Arc::new(Mutex::new(String::new()));
         let status = Arc::new(Mutex::new(Status::Rebasing));

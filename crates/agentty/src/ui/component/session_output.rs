@@ -1413,6 +1413,7 @@ impl Component for SessionOutput<'_> {
 mod tests {
     use std::borrow::Cow;
 
+    use ag_agent::agent::protocol::AgentResponseSummary;
     use ratatui::layout::Alignment;
     use ratatui::style::Style;
     use ratatui::text::Span;
@@ -1420,7 +1421,6 @@ mod tests {
 
     use super::*;
     use crate::domain::session::PublishedBranchSyncStatus;
-    use crate::infra::agent::protocol::AgentResponseSummary;
 
     /// Builds one output-line context with defaults suitable for tests.
     fn line_context<'a>(

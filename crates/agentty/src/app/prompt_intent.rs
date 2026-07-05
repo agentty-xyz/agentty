@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use ag_agent::agent;
 use tracing::warn;
 
 use crate::app::{App, ReviewCacheEntry, diff_content_hash};
@@ -8,7 +9,7 @@ use crate::domain::review;
 use crate::domain::session::{SessionId, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
-use crate::infra::{agent, clipboard_image};
+use crate::infra::clipboard_image;
 use crate::ui::state::app_mode::AppMode;
 use crate::ui::state::prompt::{
     PromptSlashStage, PromptSuggestionSelection, drain_prompt_submission,

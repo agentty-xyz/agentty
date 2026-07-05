@@ -1,6 +1,6 @@
+use ag_agent::agent::protocol::AgentResponseSummary;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
-use crate::infra::agent::protocol::AgentResponseSummary;
 use crate::ui::component::file_explorer::{FileExplorer, FileTreeItem};
 
 const BORDER_HORIZONTAL_WIDTH: u16 = 2;

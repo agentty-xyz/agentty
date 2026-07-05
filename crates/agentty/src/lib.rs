@@ -9,8 +9,7 @@ pub mod runtime;
 #[doc(hidden)]
 pub mod test_support;
 
-// Re-exports for backward compatibility and convenience
-pub use ag_git as git;
+// Public convenience re-exports.
 pub use domain::agent;
 pub use infra::{db, version};
 pub use ui::icon;

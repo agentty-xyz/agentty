@@ -1395,6 +1395,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
+    use ag_agent::app_server;
     use ag_forge as forge;
     use ag_git as git;
     use ratatui::widgets::TableState;
@@ -1402,7 +1403,7 @@ mod tests {
 
     use super::*;
     use crate::db::AppRepositories;
-    use crate::infra::{app_server, fs};
+    use crate::infra::fs;
 
     /// Builds app services backed by an in-memory database for settings tests.
     async fn test_services() -> (AppServices, i64) {

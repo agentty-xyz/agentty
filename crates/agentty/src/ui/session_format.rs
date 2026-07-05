@@ -1,5 +1,6 @@
 //! Session header, footer, and transcript display formatting.
 
+use ag_agent::agent::protocol::AgentResponseSummary;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Borders;
@@ -11,7 +12,6 @@ use crate::domain::session::{
     COMMITTING_PROGRESS_LABEL, PublishedBranchSyncStatus, Session, Status,
 };
 use crate::icon::Icon;
-use crate::infra::agent::protocol::AgentResponseSummary;
 use crate::ui::state::help_action::{self, ViewHelpState};
 use crate::ui::{markdown, style, text_util};
 

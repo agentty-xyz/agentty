@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use ag_agent::agent::AgentAvailabilityProbe;
 use ag_git::{GitClient, detect_git_info};
 use ratatui::widgets::TableState;
 use tokio::sync::mpsc;
@@ -18,7 +19,6 @@ use crate::domain::agent::{AgentKind, AgentModel};
 use crate::domain::project::{Project, ProjectListItem, project_name_from_path};
 use crate::domain::session_order;
 use crate::domain::setting::SettingName;
-use crate::infra::agent::AgentAvailabilityProbe;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs::FsClient;
 use crate::infra::project_discovery::ProjectDiscoveryClient;

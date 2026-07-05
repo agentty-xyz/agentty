@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use ag_agent::app_server::AppServerClient;
 use ag_forge::ReviewRequestClient;
 use ag_git::GitClient;
 use tokio::sync::mpsc;
@@ -14,7 +15,6 @@ use crate::app::AppEvent;
 use crate::db::AppRepositories;
 use crate::domain::agent::{AgentCliInfo, AgentKind};
 use crate::domain::session::SessionId;
-use crate::infra::app_server::AppServerClient;
 use crate::infra::clipboard_image::{ClipboardImageClient, RealClipboardImageClient};
 use crate::infra::clock::Clock;
 use crate::infra::fs::FsClient;
