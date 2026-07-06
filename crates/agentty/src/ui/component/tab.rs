@@ -147,7 +147,7 @@ mod tests {
         // Assert
         assert_eq!(
             rendered_tabs,
-            " Projects | Project: None | Sessions | Review | Settings | Logs "
+            " Projects | Project: None | Sessions | Inbox | Settings | Logs "
         );
     }
 
@@ -189,7 +189,7 @@ mod tests {
         // Assert
         assert_eq!(
             rendered_tabs,
-            " Projects | Project: Primary | Sessions | Review | Settings | Logs "
+            " Projects | Project: Primary | Sessions | Inbox | Settings | Logs "
         );
         assert_eq!(spans[2].style.fg, Some(style::palette::accent_soft()));
         assert!(spans[2].style.add_modifier.contains(Modifier::BOLD));
