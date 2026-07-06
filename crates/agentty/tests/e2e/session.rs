@@ -123,6 +123,36 @@ fn seed_session_with_markdown_table(env: &BuilderEnv) -> Result<(), Box<dyn std:
     Ok(())
 }
 
+/// Seeds one review-ready session whose transcript contains inline markdown
+/// styling adjacent to punctuation.
+fn seed_session_with_inline_markdown_punctuation(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    common::seed_session(
+        env,
+        SessionSeed::regular("inline-md-0001", "claude-opus-4-8", "main", "Review")
+            .with_title("Inline markdown punctuation"),
+    )?;
+
+    let runtime = common::seed_runtime()?;
+
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .append_session_message(
+                "inline-md-0001",
+                SessionMessageKind::LegacyTranscript,
+                "Use (`session_messages_from_rows`), then [`Image #1`].\n",
+            )
+            .await
+    })?;
+
+    std::fs::create_dir_all(env.agentty_root.join("wt").join("inline-m"))?;
+
+    Ok(())
+}
+
 /// Seeds one review-ready session whose transcript contains mermaid flowchart,
 /// entity-relationship, and sequence fenced blocks.
 fn seed_session_with_mermaid_output(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
@@ -1077,6 +1107,40 @@ fn session_view_markdown_table_output() -> E2eResult {
                 assertion::assert_text_in_region(frame, "Assistant markdown", &full);
                 assertion::assert_text_in_region(frame, "Session.output", &full);
                 assertion::assert_not_visible(frame, "| --- | --- |");
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that inline markdown styling adjacent to punctuation does not add
+/// spaces inside brackets or parentheses.
+#[test]
+fn session_view_inline_markdown_punctuation_spacing() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_inline_markdown_punctuation_spacing")
+        .setup(seed_session_with_inline_markdown_punctuation)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_text("[Image #1]", 5000)
+                    .capture_labeled(
+                        "inline_markdown_punctuation",
+                        "Session view with inline markdown punctuation spacing",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(
+                    frame,
+                    "Use (session_messages_from_rows), then [Image #1].",
+                    &full,
+                );
+                assertion::assert_not_visible(frame, "( session_messages_from_rows )");
+                assertion::assert_not_visible(frame, "[ Image #1 ]");
             },
         )?;
 

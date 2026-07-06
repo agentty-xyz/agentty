@@ -2064,6 +2064,22 @@ mod tests {
     }
 
     #[test]
+    fn test_render_markdown_keeps_inline_style_punctuation_adjacent() {
+        // Arrange
+        let input = "Use (`session_messages_from_rows`), then [`Image #1`].";
+
+        // Act
+        let lines = render_markdown(input, 80);
+
+        // Assert
+        assert_eq!(lines.len(), 1);
+        assert_eq!(
+            lines[0].to_string(),
+            "Use (session_messages_from_rows), then [Image #1]."
+        );
+    }
+
+    #[test]
     fn test_render_markdown_leaves_unmatched_inline_delimiters_literal() {
         // Arrange
         let input = "text **bold";

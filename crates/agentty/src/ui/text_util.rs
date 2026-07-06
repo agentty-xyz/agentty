@@ -5,6 +5,12 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
 
+struct StyledWord {
+    leading_space_style: Option<Style>,
+    spans: Vec<Span<'static>>,
+    width: usize,
+}
+
 /// Wrap plain text into terminal-width lines for output panes.
 pub fn wrap_lines(text: &str, width: usize) -> Vec<Line<'_>> {
     let mut wrapped = Vec::new();
@@ -122,9 +128,11 @@ pub fn truncate_spans_with_ellipsis(
 
 /// Returns the terminal display width of a string slice.
 fn span_display_width(text: &str) -> usize {
-    text.chars()
-        .map(|character| UnicodeWidthChar::width(character).unwrap_or(0))
-        .sum()
+    text.chars().map(character_display_width).sum()
+}
+
+fn character_display_width(character: char) -> usize {
+    UnicodeWidthChar::width(character).unwrap_or(0)
 }
 
 /// Takes the leading prefix of `text` that fits within `columns` terminal
@@ -162,36 +170,32 @@ pub fn wrap_styled_line(spans: Vec<Span<'static>>, width: usize) -> Vec<Line<'st
         return vec![Line::from(spans)];
     }
 
+    let words = styled_words(spans);
+    if words.is_empty() {
+        return vec![Line::from("")];
+    }
+
     let mut wrapped_lines: Vec<Line<'static>> = Vec::new();
     let mut current_spans: Vec<Span<'static>> = Vec::new();
     let mut current_width: usize = 0;
-    let mut needs_space = false;
 
-    for span in spans {
-        let style = span.style;
-        let content = span.content.into_owned();
+    for word in words {
+        let space_width = usize::from(word.leading_space_style.is_some() && current_width > 0);
 
-        for word in content.split_whitespace() {
-            let word_len = word.chars().count();
-            let additional_space_width = usize::from(needs_space && current_width > 0);
-
-            if current_width + additional_space_width + word_len > width
-                && !current_spans.is_empty()
-            {
-                wrapped_lines.push(Line::from(std::mem::take(&mut current_spans)));
-                current_width = 0;
-                needs_space = false;
-            }
-
-            if needs_space && current_width > 0 {
-                current_spans.push(Span::styled(" ".to_string(), style));
-                current_width += 1;
-            }
-
-            current_spans.push(Span::styled(word.to_string(), style));
-            current_width += word_len;
-            needs_space = true;
+        if current_width + space_width + word.width > width && !current_spans.is_empty() {
+            wrapped_lines.push(Line::from(std::mem::take(&mut current_spans)));
+            current_width = 0;
         }
+
+        if current_width > 0
+            && let Some(space_style) = word.leading_space_style
+        {
+            current_spans.push(Span::styled(" ".to_string(), space_style));
+            current_width += 1;
+        }
+
+        current_width += word.width;
+        current_spans.extend(word.spans);
     }
 
     if !current_spans.is_empty() {
@@ -203,6 +207,86 @@ pub fn wrap_styled_line(spans: Vec<Span<'static>>, width: usize) -> Vec<Line<'st
     }
 
     wrapped_lines
+}
+
+fn styled_words(spans: Vec<Span<'static>>) -> Vec<StyledWord> {
+    let mut words = Vec::new();
+    let mut word_spans = Vec::new();
+    let mut word_width = 0;
+    let mut leading_space_style = None;
+    let mut next_space_style = None;
+    let mut has_previous_word = false;
+
+    for span in spans {
+        let style = span.style;
+        let content = span.content.into_owned();
+
+        for character in content.chars() {
+            if character.is_whitespace() {
+                flush_styled_word(
+                    &mut words,
+                    &mut word_spans,
+                    &mut word_width,
+                    &mut leading_space_style,
+                    &mut has_previous_word,
+                );
+                if has_previous_word {
+                    next_space_style = Some(style);
+                }
+
+                continue;
+            }
+
+            if word_spans.is_empty() {
+                leading_space_style = next_space_style.take();
+            }
+
+            push_styled_character(&mut word_spans, style, character);
+            word_width += character_display_width(character);
+        }
+    }
+
+    flush_styled_word(
+        &mut words,
+        &mut word_spans,
+        &mut word_width,
+        &mut leading_space_style,
+        &mut has_previous_word,
+    );
+
+    words
+}
+
+fn flush_styled_word(
+    words: &mut Vec<StyledWord>,
+    word_spans: &mut Vec<Span<'static>>,
+    word_width: &mut usize,
+    leading_space_style: &mut Option<Style>,
+    has_previous_word: &mut bool,
+) {
+    if word_spans.is_empty() {
+        return;
+    }
+
+    words.push(StyledWord {
+        leading_space_style: leading_space_style.take(),
+        spans: std::mem::take(word_spans),
+        width: *word_width,
+    });
+    *word_width = 0;
+    *has_previous_word = true;
+}
+
+fn push_styled_character(spans: &mut Vec<Span<'static>>, style: Style, character: char) {
+    if let Some(last_span) = spans.last_mut()
+        && last_span.style == style
+    {
+        last_span.content.to_mut().push(character);
+
+        return;
+    }
+
+    spans.push(Span::styled(character.to_string(), style));
 }
 
 /// Returns the total number of terminal rows that `lines` occupy when
@@ -461,6 +545,29 @@ mod tests {
         // Assert
         assert_eq!(wrapped.len(), 1);
         assert_eq!(wrapped[0].to_string(), "hello world");
+    }
+
+    #[test]
+    fn test_wrap_styled_line_preserves_adjacent_span_boundaries() {
+        // Arrange
+        let code_style = Style::default().fg(Color::Yellow);
+        let spans = vec![
+            Span::raw("Use (".to_string()),
+            Span::styled("session_messages_from_rows".to_string(), code_style),
+            Span::raw("), then [".to_string()),
+            Span::styled("Image #1".to_string(), code_style),
+            Span::raw("].".to_string()),
+        ];
+
+        // Act
+        let wrapped = wrap_styled_line(spans, 80);
+
+        // Assert
+        assert_eq!(wrapped.len(), 1);
+        assert_eq!(
+            wrapped[0].to_string(),
+            "Use (session_messages_from_rows), then [Image #1]."
+        );
     }
 
     #[test]
