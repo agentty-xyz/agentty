@@ -23,7 +23,7 @@ tabs, all accessible with `Tab`:
 - **Sessions**: List, create, and manage agent sessions for the active project. Rows
   show a size marker prefix (for example `[XL]`), the current `agent/model` with its
   reasoning level, and a live active-work `Timer` column.
-- **Review**: Read-only list of open GitHub pull requests or GitLab merge requests that
+- **Inbox**: Read-only list of open GitHub pull requests or GitLab merge requests that
   request your review in the active project, including drafts. Press `s` to refresh and
   `Enter` to open a read-only detail page with the description and comment threads.
 - **Settings**: Configure the color theme, default reasoning level, smart/fast/review

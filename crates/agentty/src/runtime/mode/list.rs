@@ -667,7 +667,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_review_tab_navigation_selects_loaded_reviews() {
+    async fn test_inbox_tab_navigation_selects_loaded_reviews() {
         // Arrange
         let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
         app.tabs.set(Tab::Review);
@@ -693,7 +693,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_review_tab_enter_opens_selected_review_detail() {
+    async fn test_inbox_tab_enter_opens_selected_review_detail() {
         // Arrange
         let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
         app.tabs.set(Tab::Review);
@@ -725,7 +725,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_review_tab_enter_uses_grouped_selection_order_after_mixed_provider_order() {
+    async fn test_inbox_tab_enter_uses_grouped_selection_order_after_mixed_provider_order() {
         // Arrange
         let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
         app.tabs.set(Tab::Review);

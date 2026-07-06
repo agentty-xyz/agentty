@@ -13,8 +13,8 @@ use crate::common::{BuilderEnv, FeatureTest};
 type E2eResult = Result<(), Box<dyn std::error::Error>>;
 
 /// Seeds a GitHub remote and `gh` stub that returns personal and group-sourced
-/// requested reviews for the Review tab feature scenario.
-fn seed_review_tab_requested_reviews(env: &BuilderEnv) -> E2eResult {
+/// requested reviews for the Inbox tab feature scenario.
+fn seed_inbox_tab_requested_reviews(env: &BuilderEnv) -> E2eResult {
     let output = Command::new("git")
         .args([
             "remote",
@@ -204,7 +204,7 @@ fn tab_key_switches_tabs() -> E2eResult {
 /// Verify that pressing Tab cycles through all primary tabs in order.
 ///
 /// Starts on Projects and asserts each successive tab becomes selected:
-/// Sessions, Review, Settings, Logs.
+/// Sessions, Inbox, Settings, Logs.
 #[test]
 fn tab_cycles_through_all_tabs() -> E2eResult {
     // Arrange, Act, Assert
@@ -223,9 +223,9 @@ fn tab_cycles_through_all_tabs() -> E2eResult {
                     .compose(&common::switch_to_tab("Sessions"))
                     .viewing_pause_ms(2000)
                     .capture_labeled("sessions", "Sessions tab selected")
-                    .compose(&common::switch_to_tab("Review"))
+                    .compose(&common::switch_to_tab("Inbox"))
                     .viewing_pause_ms(2000)
-                    .capture_labeled("review", "Review tab selected")
+                    .capture_labeled("inbox", "Inbox tab selected")
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(2500)
                     .capture_labeled("settings", "Settings tab selected")
@@ -240,16 +240,16 @@ fn tab_cycles_through_all_tabs() -> E2eResult {
                 assert_eq!(
                     report.captures.len(),
                     4,
-                    "Expected 4 captures (sessions, review, settings, logs)"
+                    "Expected 4 captures (sessions, inbox, settings, logs)"
                 );
 
                 let sessions_frame = common::frame_from_capture(&report.captures[0]);
                 let sessions_full = Region::full(sessions_frame.cols(), sessions_frame.rows());
                 assertion::assert_text_in_region(&sessions_frame, "No sessions", &sessions_full);
 
-                let review_frame = common::frame_from_capture(&report.captures[1]);
-                let review_full = Region::full(review_frame.cols(), review_frame.rows());
-                assertion::assert_text_in_region(&review_frame, "Review Requests", &review_full);
+                let inbox_frame = common::frame_from_capture(&report.captures[1]);
+                let inbox_full = Region::full(inbox_frame.cols(), inbox_frame.rows());
+                assertion::assert_text_in_region(&inbox_frame, "Review Requests", &inbox_full);
 
                 let settings_frame = common::frame_from_capture(&report.captures[2]);
                 let settings_full = Region::full(settings_frame.cols(), settings_frame.rows());
@@ -273,7 +273,7 @@ fn logs_tab_shows_process_system_logs() -> E2eResult {
             scenario
                 .compose(&common::wait_for_agentty_startup())
                 .compose(&common::switch_to_tab("Sessions"))
-                .compose(&common::switch_to_tab("Review"))
+                .compose(&common::switch_to_tab("Inbox"))
                 .compose(&common::switch_to_tab("Settings"))
                 .compose(&common::switch_to_tab("Logs"))
                 .viewing_pause_ms(1500)
@@ -290,25 +290,25 @@ fn logs_tab_shows_process_system_logs() -> E2eResult {
     Ok(())
 }
 
-/// Verify that the Review tab renders requested PR/MR review state at a
+/// Verify that the Inbox tab renders requested PR/MR review state at a
 /// width that leaves grouped review headings and titles inspectable.
 #[test]
-fn review_tab_shows_requested_reviews_page() -> E2eResult {
+fn inbox_tab_shows_requested_reviews_page() -> E2eResult {
     // Arrange, Act, Assert
-    FeatureTest::new("review_tab")
+    FeatureTest::new("inbox_tab")
         .with_git()
         .with_terminal_size(120, 36)
-        .setup(seed_review_tab_requested_reviews)
+        .setup(seed_inbox_tab_requested_reviews)
         .run(
             |scenario| {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::switch_to_tab("Review"))
+                    .compose(&common::switch_to_tab("Inbox"))
                     .wait_for_text("Requested from you", 5000)
                     .wait_for_text("Requested from your groups", 5000)
                     .viewing_pause_ms(1500)
-                    .capture_labeled("review", "Review tab selected")
+                    .capture_labeled("inbox", "Inbox tab selected")
                     .press_key("Enter")
                     .wait_for_text("Review Request", 5000)
                     .wait_for_text("Loading comments...", 5000)
@@ -350,27 +350,27 @@ fn review_tab_shows_requested_reviews_page() -> E2eResult {
                     &full,
                 );
 
-                let review_frame = common::frame_from_capture(&report.captures[0]);
-                let review_full = Region::full(review_frame.cols(), review_frame.rows());
-                assertion::assert_text_in_region(&review_frame, "Review Requests", &review_full);
-                assertion::assert_text_in_region(&review_frame, "Requested from you", &review_full);
+                let inbox_frame = common::frame_from_capture(&report.captures[0]);
+                let inbox_full = Region::full(inbox_frame.cols(), inbox_frame.rows());
+                assertion::assert_text_in_region(&inbox_frame, "Review Requests", &inbox_full);
+                assertion::assert_text_in_region(&inbox_frame, "Requested from you", &inbox_full);
                 assertion::assert_text_in_region(
-                    &review_frame,
+                    &inbox_frame,
                     "PR #42 Review personal parser",
-                    &review_full,
+                    &inbox_full,
                 );
-                assertion::assert_text_in_region(&review_frame, "octocat", &review_full);
+                assertion::assert_text_in_region(&inbox_frame, "octocat", &inbox_full);
                 assertion::assert_text_in_region(
-                    &review_frame,
+                    &inbox_frame,
                     "Requested from your groups",
-                    &review_full,
+                    &inbox_full,
                 );
                 assertion::assert_text_in_region(
-                    &review_frame,
+                    &inbox_frame,
                     "PR #43 Review team parser",
-                    &review_full,
+                    &inbox_full,
                 );
-                assertion::assert_text_in_region(&review_frame, "team-lead", &review_full);
+                assertion::assert_text_in_region(&inbox_frame, "team-lead", &inbox_full);
 
                 let loading_frame = common::frame_from_capture(&report.captures[1]);
                 let loading_full = Region::full(loading_frame.cols(), loading_frame.rows());
@@ -450,7 +450,7 @@ fn startup_shows_footer_hints() -> E2eResult {
 /// Verify that `BackTab` (Shift+Tab) cycles tabs in reverse order.
 ///
 /// Starts on Projects (first tab), navigates forward to Logs (last tab),
-/// then presses `BackTab` to cycle back through Settings, Review, Sessions,
+/// then presses `BackTab` to cycle back through Settings, Inbox, Sessions,
 /// and Projects.
 #[test]
 fn backtab_cycles_tabs_reverse() -> E2eResult {
@@ -467,7 +467,7 @@ fn backtab_cycles_tabs_reverse() -> E2eResult {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::switch_to_tab("Review"))
+                    .compose(&common::switch_to_tab("Inbox"))
                     .compose(&common::switch_to_tab("Settings"))
                     .compose(&common::switch_to_tab("Logs"))
                     .viewing_pause_ms(2000)
@@ -475,9 +475,9 @@ fn backtab_cycles_tabs_reverse() -> E2eResult {
                     .compose(&common::switch_to_tab_reverse("Settings"))
                     .viewing_pause_ms(1500)
                     .capture_labeled("back_to_settings", "Settings tab after first BackTab")
-                    .compose(&common::switch_to_tab_reverse("Review"))
+                    .compose(&common::switch_to_tab_reverse("Inbox"))
                     .viewing_pause_ms(1500)
-                    .capture_labeled("back_to_review", "Review tab after second BackTab")
+                    .capture_labeled("back_to_inbox", "Inbox tab after second BackTab")
                     .compose(&common::switch_to_tab_reverse("Sessions"))
                     .viewing_pause_ms(1500)
                     .capture_labeled("back_to_sessions", "Sessions tab after third BackTab")
@@ -497,9 +497,9 @@ fn backtab_cycles_tabs_reverse() -> E2eResult {
                     &settings_full,
                 );
 
-                let review_frame = common::frame_from_capture(&report.captures[2]);
-                let review_full = Region::full(review_frame.cols(), review_frame.rows());
-                assertion::assert_text_in_region(&review_frame, "Review Requests", &review_full);
+                let inbox_frame = common::frame_from_capture(&report.captures[2]);
+                let inbox_full = Region::full(inbox_frame.cols(), inbox_frame.rows());
+                assertion::assert_text_in_region(&inbox_frame, "Review Requests", &inbox_full);
 
                 let sessions_frame = common::frame_from_capture(&report.captures[3]);
                 let sessions_full = Region::full(sessions_frame.cols(), sessions_frame.rows());

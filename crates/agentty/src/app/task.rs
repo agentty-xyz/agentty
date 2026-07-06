@@ -184,7 +184,7 @@ impl TaskService {
     /// Loads and normalizes the comment snapshot for one requested review.
     ///
     /// This is triggered lazily when users open a specific review detail page
-    /// so the top-level Review tab does not perform one comment API request
+    /// so the top-level Inbox tab does not perform one comment API request
     /// per listed PR or MR.
     pub(super) async fn load_requested_review_comment_snapshot(
         working_dir: PathBuf,

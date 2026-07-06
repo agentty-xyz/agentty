@@ -18,8 +18,8 @@ const TABLE_COLUMN_SPACING: u16 = 2;
 const ROW_HIGHLIGHT_SYMBOL: &str = "";
 /// Requested-review provider row cap surfaced by the footer when reached.
 const REQUESTED_REVIEW_DISPLAY_LIMIT: usize = 100;
-/// Page renderer for PRs and MRs requesting the current user's review.
-pub struct ReviewListPage<'a> {
+/// Inbox page renderer for PRs and MRs requesting the current user's review.
+pub struct InboxPage<'a> {
     /// Current requested-review cache snapshot to render.
     requested_reviews: &'a RequestedReviewState,
     /// Selected requested-review item index, excluding section heading rows.
@@ -28,7 +28,7 @@ pub struct ReviewListPage<'a> {
     table_state: &'a mut TableState,
 }
 
-impl<'a> ReviewListPage<'a> {
+impl<'a> InboxPage<'a> {
     /// Creates a requested-review list renderer from the current app cache.
     pub fn new(
         requested_reviews: &'a RequestedReviewState,
@@ -43,7 +43,7 @@ impl<'a> ReviewListPage<'a> {
     }
 }
 
-impl Page for ReviewListPage<'_> {
+impl Page for InboxPage<'_> {
     /// Renders the requested-review table plus loading, empty, and error
     /// states with compact tab-page spacing.
     fn render(&mut self, f: &mut Frame, area: Rect) {
@@ -397,7 +397,7 @@ mod tests {
         // Act
         terminal
             .draw(|frame| {
-                ReviewListPage::new(&state, Some(0), &mut table_state).render(frame, frame.area());
+                InboxPage::new(&state, Some(0), &mut table_state).render(frame, frame.area());
             })
             .expect("failed to draw");
 
@@ -440,7 +440,7 @@ mod tests {
         // Act
         terminal
             .draw(|frame| {
-                ReviewListPage::new(&state, Some(0), &mut table_state).render(frame, frame.area());
+                InboxPage::new(&state, Some(0), &mut table_state).render(frame, frame.area());
             })
             .expect("failed to draw");
 
@@ -468,7 +468,7 @@ mod tests {
         // Act
         terminal
             .draw(|frame| {
-                ReviewListPage::new(&state, None, &mut table_state).render(frame, frame.area());
+                InboxPage::new(&state, None, &mut table_state).render(frame, frame.area());
             })
             .expect("failed to draw");
 
@@ -501,7 +501,7 @@ mod tests {
         // Act
         terminal
             .draw(|frame| {
-                ReviewListPage::new(&state, Some(0), &mut table_state).render(frame, frame.area());
+                InboxPage::new(&state, Some(0), &mut table_state).render(frame, frame.area());
             })
             .expect("failed to draw");
 
@@ -539,7 +539,7 @@ mod tests {
         // Act
         terminal
             .draw(|frame| {
-                ReviewListPage::new(&state, Some(1), &mut table_state).render(frame, frame.area());
+                InboxPage::new(&state, Some(1), &mut table_state).render(frame, frame.area());
             })
             .expect("failed to draw");
 
@@ -630,14 +630,14 @@ mod tests {
         // Act
         terminal
             .draw(|frame| {
-                ReviewListPage::new(&state, Some(20), &mut table_state).render(frame, frame.area());
+                InboxPage::new(&state, Some(20), &mut table_state).render(frame, frame.area());
             })
             .expect("failed to draw selected row");
         let offset_after_first_render = table_state.offset();
 
         terminal
             .draw(|frame| {
-                ReviewListPage::new(&state, Some(19), &mut table_state).render(frame, frame.area());
+                InboxPage::new(&state, Some(19), &mut table_state).render(frame, frame.area());
             })
             .expect("failed to draw previous selected row");
 

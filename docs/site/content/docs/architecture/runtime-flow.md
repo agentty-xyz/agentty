@@ -382,7 +382,7 @@ orchestration paths:
   reused.
 - Background review-request sync: review-ready sessions with a published branch or
   linked request are polled; merged requests move the session to `Done`, closed requests
-  to `Canceled`. The Review tab loads comment snapshots on demand with generation-scoped
+  to `Canceled`. The Inbox tab loads comment snapshots on demand with generation-scoped
   deduplication.
 
 ## Persistence and Recovery Boundaries

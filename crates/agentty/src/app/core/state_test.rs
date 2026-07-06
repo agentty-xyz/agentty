@@ -589,7 +589,7 @@ async fn open_selected_requested_review_reuses_in_flight_comment_fetch() {
     assert!(app.requested_review_comment_fetches.is_empty());
 }
 
-/// Verifies an explicit Review tab refresh prevents older in-flight
+/// Verifies an explicit Inbox tab refresh prevents older in-flight
 /// comment snapshots from repopulating the refreshed list row.
 #[tokio::test]
 async fn refresh_requested_reviews_ignores_stale_comment_snapshot_completion() {

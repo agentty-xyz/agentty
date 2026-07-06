@@ -973,7 +973,7 @@ fn session_list_selected_row_uses_selection_surface() -> E2eResult {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::switch_to_tab("Review"))
+                    .compose(&common::switch_to_tab("Inbox"))
                     .compose(&common::switch_to_tab("Settings"))
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
@@ -995,7 +995,7 @@ fn session_list_selected_row_uses_selection_surface() -> E2eResult {
                         "selected_row_highlight",
                         "Selected session row on the dedicated selection surface",
                     )
-                    .compose(&common::switch_to_tab("Review"))
+                    .compose(&common::switch_to_tab("Inbox"))
                     .compose(&common::switch_to_tab("Settings"))
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)

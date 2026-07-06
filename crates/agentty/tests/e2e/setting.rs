@@ -93,7 +93,7 @@ fn settings_tab_shows_content() {
                     .compose(&common::wait_for_agentty_startup())
                     .viewing_pause_ms(1500)
                     .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::switch_to_tab("Review"))
+                    .compose(&common::switch_to_tab("Inbox"))
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(3000)
                     .capture_labeled("settings_tab", "Settings tab with all rows")
@@ -136,7 +136,7 @@ fn settings_jk_navigation() {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::switch_to_tab("Review"))
+                    .compose(&common::switch_to_tab("Inbox"))
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(2000)
                     .capture_labeled("initial", "Settings tab at first row")
@@ -218,7 +218,7 @@ fn settings_dropdown_selects_value() {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::switch_to_tab("Review"))
+                    .compose(&common::switch_to_tab("Inbox"))
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(2000)
                     .press_key("j")
@@ -282,7 +282,7 @@ fn settings_theme_switch() {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::switch_to_tab("Review"))
+                    .compose(&common::switch_to_tab("Inbox"))
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(2000)
                     .capture_labeled("before_theme_switch", "Theme setting before switching")
@@ -378,7 +378,7 @@ fn settings_help_shows_edit_hint() {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::switch_to_tab("Review"))
+                    .compose(&common::switch_to_tab("Inbox"))
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(2000)
                     .compose(&common::open_help_overlay())

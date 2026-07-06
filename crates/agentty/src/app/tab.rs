@@ -50,7 +50,7 @@ impl Tab {
         match self {
             Tab::Projects => "Projects",
             Tab::Sessions => "Sessions",
-            Tab::Review => "Review",
+            Tab::Review => "Inbox",
             Tab::Settings => "Settings",
             Tab::Logs => "Logs",
         }
@@ -66,7 +66,7 @@ impl Tab {
         match value {
             "Projects" => Some(Self::Projects),
             "Sessions" => Some(Self::Sessions),
-            "Review" => Some(Self::Review),
+            "Inbox" => Some(Self::Review),
             "Settings" => Some(Self::Settings),
             "Logs" => Some(Self::Logs),
             _ => None,
@@ -163,7 +163,7 @@ mod tests {
         // Assert
         assert_eq!(
             titles,
-            ["Projects", "Sessions", "Review", "Settings", "Logs"]
+            ["Projects", "Sessions", "Inbox", "Settings", "Logs"]
         );
     }
 
@@ -193,7 +193,7 @@ mod tests {
         let values = [
             ("Projects", Some(Tab::Projects)),
             ("Sessions", Some(Tab::Sessions)),
-            ("Review", Some(Tab::Review)),
+            ("Inbox", Some(Tab::Review)),
             ("Settings", Some(Tab::Settings)),
             ("Logs", Some(Tab::Logs)),
             ("Invalid", None),
@@ -215,7 +215,7 @@ mod tests {
         // Assert
         assert_eq!(
             values,
-            ["Projects", "Sessions", "Review", "Settings", "Logs"]
+            ["Projects", "Sessions", "Inbox", "Settings", "Logs"]
         );
     }
 

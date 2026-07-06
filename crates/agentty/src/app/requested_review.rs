@@ -1,8 +1,8 @@
-//! Requested-review list state for the top-level review tab.
+//! Requested-review list state for the top-level Inbox tab.
 
 use ag_forge::RequestedReview;
 
-/// Project-scoped cache backing the top-level `Review` tab.
+/// Project-scoped cache backing the top-level `Inbox` tab.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum RequestedReviewState {
     /// No requested-review fetch has started for the active project.

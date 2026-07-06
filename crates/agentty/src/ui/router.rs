@@ -868,7 +868,7 @@ pub(crate) fn render_list_background(
             .render(f, chunks[1]);
         }
         Tab::Review => {
-            page::review_list::ReviewListPage::new(
+            page::inbox::InboxPage::new(
                 shared.requested_reviews,
                 shared.requested_review_selected_index,
                 &mut *shared.requested_review_table_state,

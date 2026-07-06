@@ -287,13 +287,13 @@ impl App {
     /// Cycles the active list tab forward.
     pub fn next_tab(&mut self) {
         self.tabs.next();
-        self.refresh_requested_reviews_if_review_tab(false);
+        self.refresh_requested_reviews_if_inbox_tab(false);
     }
 
     /// Cycles the active list tab backward.
     pub fn previous_tab(&mut self) {
         self.tabs.previous();
-        self.refresh_requested_reviews_if_review_tab(false);
+        self.refresh_requested_reviews_if_inbox_tab(false);
     }
 
     /// Persists the active list tab for startup restoration.
@@ -306,9 +306,9 @@ impl App {
             .await;
     }
 
-    /// Refreshes requested reviews when the `Review` tab is visible.
+    /// Refreshes requested reviews when the `Inbox` tab is visible.
     pub fn refresh_requested_reviews_for_current_project(&mut self) {
-        self.refresh_requested_reviews_if_review_tab(true);
+        self.refresh_requested_reviews_if_inbox_tab(true);
     }
 
     /// Scrolls the system log view one line toward newer entries.
@@ -365,7 +365,7 @@ impl App {
         self.requested_review_table_state = TableState::default();
     }
 
-    /// Moves selection to the next requested review in the `Review` tab.
+    /// Moves selection to the next requested review in the `Inbox` tab.
     pub(crate) fn next_requested_review(&mut self) {
         let Some(item_count) = self.requested_review_item_count() else {
             self.requested_review_selected_index = None;
@@ -379,7 +379,7 @@ impl App {
         });
     }
 
-    /// Moves selection to the previous requested review in the `Review` tab.
+    /// Moves selection to the previous requested review in the `Inbox` tab.
     pub(crate) fn previous_requested_review(&mut self) {
         let Some(item_count) = self.requested_review_item_count() else {
             self.requested_review_selected_index = None;
@@ -437,7 +437,7 @@ impl App {
     }
 
     /// Caches a lazily loaded requested-review comment snapshot back onto the
-    /// loaded Review tab row so reopening the same detail page avoids another
+    /// loaded Inbox tab row so reopening the same detail page avoids another
     /// comment API call.
     pub(super) fn cache_requested_review_comment_snapshot(
         &mut self,
@@ -558,7 +558,7 @@ impl App {
             git_upstream_ref,
             project.path,
         );
-        self.refresh_requested_reviews_if_review_tab(true);
+        self.refresh_requested_reviews_if_inbox_tab(true);
         self.settings = SettingsManager::new(&self.services, project.id).await;
         let default_session_model = SessionManager::load_default_session_model(
             &self.services,
@@ -575,7 +575,7 @@ impl App {
     }
 
     /// Starts a requested-review list fetch when the visible tab needs one.
-    fn refresh_requested_reviews_if_review_tab(&mut self, force: bool) {
+    fn refresh_requested_reviews_if_inbox_tab(&mut self, force: bool) {
         if self.tabs.current() != Tab::Review {
             return;
         }
