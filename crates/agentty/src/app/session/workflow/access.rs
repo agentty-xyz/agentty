@@ -130,10 +130,7 @@ mod tests {
     fn test_session_handles_or_err_returns_handles() {
         // Arrange
         let mut handles = HashMap::new();
-        handles.insert(
-            "sess-1".into(),
-            SessionHandles::new(String::new(), Status::Review),
-        );
+        handles.insert("sess-1".into(), SessionHandles::new(Status::Review));
         let manager = test_support::session_manager_with_handles(Vec::new(), handles);
 
         // Act
@@ -164,7 +161,10 @@ mod tests {
         let mut handles = HashMap::new();
         handles.insert(
             "sess-1".into(),
-            SessionHandles::new("output".to_string(), Status::Review),
+            SessionHandles::new_with_transcript(
+                Status::Review,
+                crate::test_support::assistant_transcript("output"),
+            ),
         );
         let manager = test_support::session_manager_with_handles(vec![session], handles);
 
@@ -176,11 +176,12 @@ mod tests {
         if let Ok((found_session, found_handles)) = result {
             assert_eq!(found_session.id, "sess-1");
             let output = found_handles
-                .output
+                .transcript
                 .lock()
-                .expect("failed to lock output")
-                .clone();
-            assert_eq!(output, "output");
+                .expect("failed to lock transcript")
+                .replay_text()
+                .unwrap_or_default();
+            assert_eq!(output, "output\n\n");
         }
     }
 
@@ -188,10 +189,7 @@ mod tests {
     fn test_session_and_handles_fails_when_session_missing() {
         // Arrange
         let mut handles = HashMap::new();
-        handles.insert(
-            "sess-1".into(),
-            SessionHandles::new(String::new(), Status::Review),
-        );
+        handles.insert("sess-1".into(), SessionHandles::new(Status::Review));
         let manager = test_support::session_manager_with_handles(Vec::new(), handles);
 
         // Act

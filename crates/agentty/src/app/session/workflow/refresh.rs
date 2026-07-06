@@ -412,7 +412,10 @@ mod tests {
         let mut handles = HashMap::new();
         handles.insert(
             session.id.clone(),
-            SessionHandles::new(session.output.clone(), session.status),
+            SessionHandles::new_with_transcript(
+                session.status,
+                session.transcript.clone().unwrap_or_default(),
+            ),
         );
 
         SessionManager::new(

@@ -684,8 +684,17 @@ mod tests {
     use mockall::predicate::eq;
 
     use super::*;
+    use crate::domain::session_message::SessionTranscript;
     use crate::infra::tmux::MockTmuxClient;
     use crate::ui::state::app_mode::ConfirmationViewMode;
+
+    fn session_replay_text(session: &crate::domain::session::Session) -> String {
+        session
+            .transcript
+            .as_ref()
+            .and_then(SessionTranscript::replay_text)
+            .unwrap_or_default()
+    }
 
     #[test]
     fn test_content_area_for_terminal_excludes_global_bars() {
@@ -1128,7 +1137,7 @@ mod tests {
             } if session_id_in_mode == &session_id
         ));
         app.sessions.sync_from_handles();
-        let output = app.sessions.sessions()[0].output.clone();
+        let output = session_replay_text(&app.sessions.sessions()[0]);
         assert!(output.contains("[Merge Error]"));
     }
 

@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ag_agent::channel::{
-    AgentError, AgentRequestKind, TurnEvent, TurnPrompt, TurnRequest, TurnResult,
+    AgentError, AgentRequestKind, LiveTranscript, TurnEvent, TurnPrompt, TurnRequest, TurnResult,
 };
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -17,6 +17,7 @@ use crate::app::session::SessionError;
 use crate::app::{AppEvent, SessionManager, setting};
 use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel};
 use crate::domain::session::{SessionId, Status};
+use crate::domain::session_message::SessionTranscript;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::db::AppRepositories;
 use crate::infra::process;
@@ -28,7 +29,31 @@ use crate::infra::process;
 /// consumer's next await/try-receive cycle.
 const TURN_EVENT_PROGRESS_COALESCE_BUDGET: usize = 64;
 
-/// Main-checkout status captured before one provider turn.
+/// Live transcript source exposed to provider transports for replay.
+#[derive(Debug)]
+struct LiveSessionTranscript {
+    transcript: Arc<Mutex<SessionTranscript>>,
+}
+
+impl LiveTranscript for LiveSessionTranscript {
+    fn replay_text(&self) -> Option<String> {
+        self.transcript
+            .lock()
+            .ok()
+            .and_then(|transcript| transcript.replay_text())
+    }
+}
+
+/// Builds a replay source backed by the session's typed transcript handle.
+pub(super) fn live_transcript_source(
+    transcript: &Arc<Mutex<SessionTranscript>>,
+) -> Arc<dyn LiveTranscript> {
+    Arc::new(LiveSessionTranscript {
+        transcript: Arc::clone(transcript),
+    })
+}
+
+/// Main-checkout tracked-file status captured before one provider turn.
 struct MainCheckoutSnapshot {
     head_hash: String,
     main_repo_root: PathBuf,
@@ -132,6 +157,7 @@ pub(super) async fn run_channel_turn(
     context: &SessionWorkerContext,
     turn_metadata: TurnMetadata,
     request_kind: AgentRequestKind,
+    replay_transcript: Option<String>,
     prompt: TurnPrompt,
 ) -> Result<(), SessionError> {
     // Swap in a fresh token so stale cancellations from previous
@@ -139,25 +165,7 @@ pub(super) async fn run_channel_turn(
     // `run_turn_with_cancellation` for the duration of this turn.
     let turn_cancel_token = fresh_turn_cancel_token(context)?;
 
-    if matches!(request_kind, AgentRequestKind::SessionResume { .. }) {
-        // Best-effort: questions persistence failure is non-critical.
-        let _ = context
-            .db
-            .sessions()
-            .update_session_questions(&context.session_id, "")
-            .await;
-
-        // Best-effort: status transition failure is non-critical.
-        let status_transition = StatusTransition::from_parts(
-            context.app_event_tx.clone(),
-            Arc::clone(&context.clock),
-            context.db.clone(),
-            context.session_id.clone(),
-            Arc::clone(&context.session_update_versions),
-            Arc::clone(&context.status),
-        );
-        let _ = status_transition.apply(Status::InProgress).await;
-    }
+    prepare_resume_turn(context, &request_kind).await;
 
     let main_checkout_snapshot = match MainCheckoutSnapshot::capture(context).await {
         Ok(snapshot) => snapshot,
@@ -201,7 +209,7 @@ pub(super) async fn run_channel_turn(
 
     let req = TurnRequest {
         folder: context.folder.clone(),
-        live_session_output: Some(Arc::clone(&context.output)),
+        live_transcript: Some(live_transcript_source(&context.transcript)),
         main_checkout_root: Some(main_checkout_snapshot.main_repo_root.clone()),
         model: turn_metadata
             .session_agent
@@ -209,6 +217,7 @@ pub(super) async fn run_channel_turn(
             .provider_model_str()
             .to_string(),
         request_kind: request_kind.clone(),
+        replay_transcript,
         prompt: prompt.clone(),
         provider_conversation_id,
         persisted_instruction_conversation_id,
@@ -249,6 +258,29 @@ pub(super) async fn run_channel_turn(
     post_turn::finalize_channel_turn(&finalizer_context, &result).await;
 
     result.map(|_| ())
+}
+
+/// Applies best-effort state cleanup before a resume turn starts.
+async fn prepare_resume_turn(context: &SessionWorkerContext, request_kind: &AgentRequestKind) {
+    if !matches!(request_kind, AgentRequestKind::SessionResume) {
+        return;
+    }
+
+    let _ = context
+        .db
+        .sessions()
+        .update_session_questions(&context.session_id, "")
+        .await;
+
+    let status_transition = StatusTransition::from_parts(
+        context.app_event_tx.clone(),
+        Arc::clone(&context.clock),
+        context.db.clone(),
+        context.session_id.clone(),
+        Arc::clone(&context.session_update_versions),
+        Arc::clone(&context.status),
+    );
+    let _ = status_transition.apply(Status::InProgress).await;
 }
 
 /// Runs one agent turn with cancellation support.
@@ -531,8 +563,7 @@ fn fresh_turn_cancel_token(
 
 /// Appends one main-checkout warning to the live and persisted transcript.
 async fn append_main_checkout_warning(context: &SessionWorkerContext, warning: String) {
-    SessionTaskService::append_session_output(
-        &context.output,
+    SessionTaskService::append_workflow_notice(
         &context.transcript,
         &context.db,
         &context.app_event_tx,

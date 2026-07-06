@@ -1412,7 +1412,6 @@ mod tests {
                 crate::domain::agent::AgentKind::Antigravity,
                 crate::domain::agent::AgentModel::Gemini3FlashPreview,
             ),
-            output: String::new(),
             parent_session_id: None,
             project_name: String::new(),
             prompt: String::new(),
@@ -1489,7 +1488,6 @@ mod tests {
                 crate::domain::agent::AgentKind::Antigravity,
                 crate::domain::agent::AgentModel::Gemini3FlashPreview,
             ),
-            output: String::new(),
             parent_session_id: None,
             project_name: String::new(),
             prompt: String::new(),
@@ -1510,7 +1508,7 @@ mod tests {
         });
         app.sessions.session_handles_mut().insert(
             session_id.to_string().into(),
-            SessionHandles::new(String::new(), Status::Question),
+            SessionHandles::new(Status::Question),
         );
         app.mode = AppMode::Question {
             at_mention_state: None,
@@ -1677,7 +1675,7 @@ mod tests {
         );
         app.sessions.session_handles_mut().insert(
             session_id.to_string().into(),
-            SessionHandles::new(String::new(), Status::Question),
+            SessionHandles::new(Status::Question),
         );
 
         // Act
@@ -3111,7 +3109,6 @@ mod tests {
                 crate::domain::agent::AgentKind::Antigravity,
                 crate::domain::agent::AgentModel::Gemini3FlashPreview,
             ),
-            output: String::new(),
             parent_session_id: None,
             project_name: String::new(),
             prompt: String::new(),

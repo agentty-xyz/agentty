@@ -531,7 +531,7 @@ mod tests {
         let mut handles = HashMap::new();
         handles.insert(
             session_id.to_string().into(),
-            SessionHandles::new(String::new(), Status::Review),
+            SessionHandles::new(Status::Review),
         );
 
         let state = SessionState::new(
@@ -550,7 +550,6 @@ mod tests {
                     crate::domain::agent::AgentKind::Codex,
                     AgentModel::Gpt55,
                 ),
-                output: String::new(),
                 parent_session_id: None,
                 project_name: "project".to_string(),
                 prompt: String::new(),

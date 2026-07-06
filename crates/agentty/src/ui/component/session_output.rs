@@ -938,10 +938,10 @@ impl<'a> SessionOutput<'a> {
 
         SessionOutputTextSections {
             active_turn: (!active_messages.is_empty())
-                .then(|| Self::messages_to_legacy_output(active_messages)),
-            completed_turn: Self::messages_to_legacy_output(completed_messages),
+                .then(|| Self::messages_to_display_text(active_messages)),
+            completed_turn: Self::messages_to_display_text(completed_messages),
             trailing_notice: (!trailing_notice_messages.is_empty())
-                .then(|| Self::messages_to_legacy_output(trailing_notice_messages)),
+                .then(|| Self::messages_to_display_text(trailing_notice_messages)),
         }
     }
 
@@ -976,16 +976,10 @@ impl<'a> SessionOutput<'a> {
         (notice_start < messages.len()).then_some(notice_start)
     }
 
-    /// Serializes a message slice through the compatibility transcript
-    /// formatter without losing the message boundaries used for splitting.
-    fn messages_to_legacy_output(messages: &[SessionMessage]) -> String {
-        let mut output = String::new();
-
-        for message in messages {
-            message.append_legacy_output(&mut output);
-        }
-
-        output
+    /// Formats a message slice without losing the boundaries used for
+    /// splitting.
+    fn messages_to_display_text(messages: &[SessionMessage]) -> String {
+        SessionTranscript::display_text_for_messages(messages)
     }
 
     /// Renders the staged-draft guidance shown while a draft session remains
@@ -1010,8 +1004,14 @@ impl<'a> SessionOutput<'a> {
             let _ = write!(output, "\n\n{draft_note}\n");
         }
 
-        if !session.output.trim().is_empty() {
-            let _ = write!(output, "\n\n{}", session.output.trim());
+        if let Some(transcript_text) = session
+            .transcript
+            .as_ref()
+            .and_then(SessionTranscript::replay_text)
+            .map(|text| text.trim().to_string())
+            .filter(|text| !text.is_empty())
+        {
+            let _ = write!(output, "\n\n{transcript_text}");
         }
 
         output
@@ -1469,13 +1469,12 @@ mod tests {
         .lines
     }
 
-    fn set_legacy_transcript(session: &mut Session, output: &str) {
-        let transcript = SessionTranscript::new(vec![SessionMessage::new(
+    fn set_assistant_transcript(session: &mut Session, output: &str) {
+        let transcript = SessionTranscript::new(vec![SessionMessage::conversation(
             0,
-            SessionMessageKind::LegacyTranscript,
+            SessionMessageKind::AssistantAnswer,
             output,
         )]);
-        session.output = transcript.to_legacy_output();
         session.transcript = Some(transcript);
     }
 
@@ -1497,40 +1496,24 @@ mod tests {
                 })
                 .collect(),
         );
-        session.output = transcript.to_legacy_output();
         session.transcript = Some(transcript);
-    }
-
-    #[test]
-    fn test_output_lines_ignore_flat_output_without_message_transcript() {
-        // Arrange
-        let mut session = session_fixture();
-        session.output = "legacy-only transcript text".to_string();
-        session.status = Status::Review;
-
-        // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 5),
-            line_context(None, None, None),
-            None,
-        );
-        let text = lines
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Assert
-        assert!(!text.contains("legacy-only transcript text"));
     }
 
     #[test]
     fn test_rendered_line_count_counts_wrapped_content() {
         // Arrange
         let mut session = session_fixture();
-        set_legacy_transcript(&mut session, &"word ".repeat(40));
-        let raw_line_count = u16::try_from(session.output.lines().count()).unwrap_or(u16::MAX);
+        set_assistant_transcript(&mut session, &"word ".repeat(40));
+        let raw_line_count = u16::try_from(
+            session
+                .transcript
+                .as_ref()
+                .and_then(SessionTranscript::replay_text)
+                .unwrap_or_default()
+                .lines()
+                .count(),
+        )
+        .unwrap_or(u16::MAX);
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
         let output_layout_cache = SessionOutputLayoutCache::default();
 
@@ -1551,7 +1534,7 @@ mod tests {
     fn test_output_layout_cache_reuses_lines_for_matching_update_key() {
         // Arrange
         let mut session = session_fixture();
-        set_legacy_transcript(&mut session, "## Heading\n\ncached body");
+        set_assistant_transcript(&mut session, "## Heading\n\ncached body");
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
         let output_layout_cache = SessionOutputLayoutCache::default();
         let context = SessionOutputLineContext {
@@ -1658,7 +1641,7 @@ mod tests {
         // Arrange
         let mut session = session_fixture();
         session.status = Status::InProgress;
-        set_legacy_transcript(&mut session, " › running prompt");
+        set_assistant_transcript(&mut session, " › running prompt");
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
         let output_layout_cache = SessionOutputLayoutCache::default();
         let context = line_context(None, None, None);
@@ -1695,7 +1678,7 @@ mod tests {
     fn test_output_layout_cache_keys_workflow_notice() {
         // Arrange
         let mut session = session_fixture();
-        set_legacy_transcript(&mut session, "implemented the feature");
+        set_assistant_transcript(&mut session, "implemented the feature");
         session.status = Status::Review;
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
         let output_layout_cache = SessionOutputLayoutCache::default();
@@ -1721,9 +1704,14 @@ mod tests {
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join("\n");
+        let transcript_text = session
+            .transcript
+            .as_ref()
+            .and_then(SessionTranscript::replay_text)
+            .unwrap_or_default();
 
         // Assert
-        assert!(!session.output.contains("[Commit] No changes to commit."));
+        assert!(!transcript_text.contains("[Commit] No changes to commit."));
         assert!(!Arc::ptr_eq(&base_layout.lines, &notice_layout.lines));
         assert!(notice_text.contains("[Commit] No changes to commit."));
     }
@@ -1766,7 +1754,7 @@ mod tests {
     fn test_output_layout_cache_reuses_active_loader_layout_across_frames() {
         // Arrange
         let mut session = session_fixture();
-        set_legacy_transcript(&mut session, "active output");
+        set_assistant_transcript(&mut session, "active output");
         session.status = Status::InProgress;
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
         let output_layout_cache = SessionOutputLayoutCache::default();
@@ -1860,7 +1848,7 @@ mod tests {
         for session_index in 0..=SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT {
             let mut session = session_fixture();
             session.id = SessionId::from(format!("loader-session-{session_index:02}"));
-            set_legacy_transcript(&mut session, &format!("active output {session_index}"));
+            set_assistant_transcript(&mut session, &format!("active output {session_index}"));
             session.status = Status::InProgress;
 
             output_layout_cache.layout(
@@ -1891,7 +1879,7 @@ mod tests {
     fn test_output_lines_metadata_marks_status_loader_not_user_text() {
         // Arrange
         let mut session = session_fixture();
-        set_legacy_transcript(
+        set_assistant_transcript(
             &mut session,
             &format!("{} pasted transcript glyph", Icon::TachyonLoader),
         );
@@ -2001,7 +1989,7 @@ mod tests {
     fn test_output_lines_done_summary_mode_keeps_transcript_with_summary() {
         // Arrange
         let mut session = session_fixture();
-        set_legacy_transcript(&mut session, "streamed output");
+        set_assistant_transcript(&mut session, "streamed output");
         session.summary = Some(summary_fixture());
         session.status = Status::Done;
 
@@ -2056,7 +2044,10 @@ mod tests {
         // Arrange
         let mut session = session_fixture();
         session.is_draft = true;
-        session.output = "[Paste Image Error] Clipboard is unavailable.".to_string();
+        set_assistant_transcript(
+            &mut session,
+            "[Paste Image Error] Clipboard is unavailable.",
+        );
         session.prompt = "First draft".to_string();
 
         // Act
@@ -2276,7 +2267,6 @@ mod tests {
             ),
         ]);
         let mut session = session_fixture();
-        session.output = transcript.to_legacy_output();
         session.summary = Some(summary_fixture());
         session.transcript = Some(transcript);
         session.status = Status::Review;
@@ -2440,7 +2430,7 @@ mod tests {
     fn test_output_lines_canceled_session_hides_review_text_when_available() {
         // Arrange
         let mut session = session_fixture();
-        set_legacy_transcript(&mut session, "interrupted transcript");
+        set_assistant_transcript(&mut session, "interrupted transcript");
         session.status = Status::Canceled;
         let assisted_review = "## Review\n\n- Focused finding";
 
@@ -2564,7 +2554,7 @@ mod tests {
     fn test_output_lines_review_session_appends_structured_summary() {
         // Arrange
         let mut session = session_fixture();
-        set_legacy_transcript(&mut session, "implemented the feature");
+        set_assistant_transcript(&mut session, "implemented the feature");
         session.summary = Some(summary_fixture());
         session.status = Status::Review;
 
@@ -2867,7 +2857,7 @@ mod tests {
     fn test_output_lines_review_session_without_summary_keeps_transcript_only() {
         // Arrange
         let mut session = session_fixture();
-        set_legacy_transcript(&mut session, "implemented the feature");
+        set_assistant_transcript(&mut session, "implemented the feature");
         session.status = Status::Review;
 
         // Act
@@ -2894,7 +2884,7 @@ mod tests {
     fn test_output_lines_render_markdown_tables() {
         // Arrange
         let mut session = session_fixture();
-        set_legacy_transcript(
+        set_assistant_transcript(
             &mut session,
             concat!(
                 "| Message kind | Storage |\n",
@@ -2930,7 +2920,7 @@ mod tests {
     fn test_output_lines_render_mermaid_diagrams() {
         // Arrange
         let mut session = session_fixture();
-        set_legacy_transcript(
+        set_assistant_transcript(
             &mut session,
             concat!(
                 "```mermaid\n",
@@ -2968,7 +2958,7 @@ mod tests {
     fn test_output_lines_done_summary_transition_preserves_transcript() {
         // Arrange
         let mut session = session_fixture();
-        set_legacy_transcript(&mut session, "streamed output");
+        set_assistant_transcript(&mut session, "streamed output");
         session.summary = Some(summary_fixture());
         session.status = Status::Review;
         let review_lines = output_lines(
@@ -3045,7 +3035,7 @@ mod tests {
     fn test_output_lines_uses_transcript_for_canceled_session() {
         // Arrange
         let mut session = session_fixture();
-        set_legacy_transcript(&mut session, "streamed output");
+        set_assistant_transcript(&mut session, "streamed output");
         session.summary = Some(summary_fixture());
         session.status = Status::Canceled;
 
@@ -3071,7 +3061,7 @@ mod tests {
     fn test_output_lines_use_generic_in_progress_loader() {
         // Arrange
         let mut session = session_fixture();
-        set_legacy_transcript(&mut session, "some output");
+        set_assistant_transcript(&mut session, "some output");
         session.status = Status::InProgress;
 
         // Act

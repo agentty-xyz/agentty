@@ -327,71 +327,26 @@ impl SessionState {
 
     /// Synchronizes one session snapshot from shared runtime handles.
     ///
-    /// Output synchronization prefers an append-only fast path: when runtime
-    /// output extends the existing snapshot with the same prefix, only the
-    /// newly appended suffix is copied. Equal-length rewrites and non-prefix
-    /// changes still fall back to full replacement so edits are never missed.
     /// Re-projects per-session render state from the runtime handles into the
     /// snapshot.
     ///
-    /// The handles are the single source of truth for `output`, `status`, and
-    /// the in-memory chat queue. `queued_messages` is rebuilt from
-    /// `SessionHandles::queued_message_transcripts()` so any handle-driven
-    /// mutation (lifecycle enqueue, worker drain between turns, runtime LIFO
-    /// pop) becomes visible on the very next sync without callers also having
-    /// to mirror the change into the snapshot field.
+    /// The handles are the single source of truth for `status`, the typed
+    /// transcript, and the in-memory chat queue. `queued_messages` is rebuilt
+    /// from `SessionHandles::queued_message_transcripts()` so any
+    /// handle-driven mutation (lifecycle enqueue, worker drain between
+    /// turns, runtime LIFO pop) becomes visible on the very next sync
+    /// without callers also having to mirror the change into the snapshot
+    /// field.
     fn sync_session_with_handles(session: &mut Session, session_handles: &SessionHandles) {
-        if let Ok(output) = session_handles.output.lock()
-            && Self::sync_session_output(&mut session.output, output.as_str())
-        {
-            session.transcript = None;
-        }
-
         if let Ok(status) = session_handles.status.lock() {
             session.status = *status;
         }
 
         if let Ok(transcript) = session_handles.transcript.lock() {
-            let transcript_matches_output =
-                !transcript.is_empty() && transcript.to_legacy_output() == session.output;
-            if transcript_matches_output {
-                session.transcript = Some(transcript.clone());
-            }
+            session.transcript = (!transcript.is_empty()).then(|| transcript.clone());
         }
 
         session.queued_messages = session_handles.queued_message_transcripts();
-    }
-
-    /// Synchronizes one output snapshot from its shared runtime output buffer.
-    ///
-    /// This keeps equal-length rewrites correct while reducing copy cost for
-    /// append-heavy streams by pushing only the unseen suffix.
-    fn sync_session_output(session_output: &mut String, handle_output: &str) -> bool {
-        let session_output_len = session_output.len();
-        let handle_output_len = handle_output.len();
-
-        if session_output_len == handle_output_len {
-            if session_output != handle_output {
-                session_output.clear();
-                session_output.push_str(handle_output);
-
-                return true;
-            }
-        } else if handle_output_len > session_output_len
-            && handle_output.starts_with(session_output.as_str())
-            && let Some(appended_output) = handle_output.get(session_output_len..)
-        {
-            session_output.push_str(appended_output);
-
-            return true;
-        } else {
-            session_output.clear();
-            session_output.push_str(handle_output);
-
-            return true;
-        }
-
-        false
     }
 
     /// Advances the selected follow-up task for one session in the requested
@@ -480,9 +435,17 @@ mod tests {
         }
     }
 
+    fn session_replay_text(session: &Session) -> String {
+        session
+            .transcript
+            .as_ref()
+            .and_then(SessionTranscript::replay_text)
+            .unwrap_or_default()
+    }
+
     #[test]
-    /// Verifies handle output replaces session output even when lengths match.
-    fn sync_from_handles_updates_output_when_same_length_content_changes() {
+    /// Verifies handle transcript replaces the session transcript snapshot.
+    fn sync_from_handles_updates_transcript_snapshot() {
         // Arrange
         let session_id = "sess-1".to_string();
         let session = Session {
@@ -499,7 +462,6 @@ mod tests {
                 crate::domain::agent::AgentKind::Antigravity,
                 crate::domain::agent::AgentKind::Antigravity.default_model(),
             ),
-            output: "old".to_string(),
             parent_session_id: None,
             project_name: "project".to_string(),
             prompt: "prompt".to_string(),
@@ -514,13 +476,16 @@ mod tests {
             status: Status::Review,
             summary: None,
             title: None,
-            transcript: None,
+            transcript: Some(crate::test_support::assistant_transcript("old")),
             updated_at: 0,
             workflow_notice: None,
         };
         let handles: HashMap<SessionId, SessionHandles> = HashMap::from([(
             session_id.into(),
-            SessionHandles::new("new".to_string(), Status::Review),
+            SessionHandles::new_with_transcript(
+                Status::Review,
+                crate::test_support::assistant_transcript("new"),
+            ),
         )]);
         let mut state = SessionState::new(
             handles,
@@ -535,13 +500,13 @@ mod tests {
         state.sync_from_handles();
 
         // Assert
-        assert_eq!(state.sessions[0].output, "new");
+        assert_eq!(session_replay_text(&state.sessions[0]), "new\n\n");
         assert_eq!(state.sessions[0].status, Status::Review);
     }
 
     #[test]
-    /// Verifies direct single-session sync updates output and status together.
-    fn sync_session_with_handles_equal_length_sync() {
+    /// Verifies direct single-session sync updates transcript and status.
+    fn sync_session_with_handles_updates_transcript_and_status() {
         // Arrange
         let mut session = Session {
             base_branch: "main".to_string(),
@@ -557,7 +522,6 @@ mod tests {
                 crate::domain::agent::AgentKind::Antigravity,
                 crate::domain::agent::AgentKind::Antigravity.default_model(),
             ),
-            output: "Old".to_string(),
             parent_session_id: None,
             project_name: "project".to_string(),
             prompt: "prompt".to_string(),
@@ -572,23 +536,26 @@ mod tests {
             status: Status::Draft,
             summary: None,
             title: None,
-            transcript: None,
+            transcript: Some(crate::test_support::assistant_transcript("Old")),
             updated_at: 0,
             workflow_notice: None,
         };
-        let handles = SessionHandles::new("New".to_string(), Status::InProgress);
+        let handles = SessionHandles::new_with_transcript(
+            Status::InProgress,
+            crate::test_support::assistant_transcript("New"),
+        );
 
         // Act
         SessionState::sync_session_with_handles(&mut session, &handles);
 
         // Assert
-        assert_eq!(session.output, "New");
+        assert_eq!(session_replay_text(&session), "New\n\n");
         assert_eq!(session.status, Status::InProgress);
     }
 
     #[test]
-    /// Verifies append-only output sync copies only the new suffix.
-    fn sync_session_with_handles_appends_suffix_for_extended_output() {
+    /// Verifies extended handle transcripts replace the session snapshot.
+    fn sync_session_with_handles_replaces_with_extended_transcript() {
         // Arrange
         let mut session = Session {
             base_branch: "main".to_string(),
@@ -604,7 +571,6 @@ mod tests {
                 crate::domain::agent::AgentKind::Antigravity,
                 crate::domain::agent::AgentKind::Antigravity.default_model(),
             ),
-            output: "first line\n".to_string(),
             parent_session_id: None,
             project_name: "project".to_string(),
             prompt: "prompt".to_string(),
@@ -619,48 +585,44 @@ mod tests {
             status: Status::InProgress,
             summary: None,
             title: None,
-            transcript: None,
+            transcript: Some(crate::test_support::assistant_transcript("first line\n")),
             updated_at: 0,
             workflow_notice: None,
         };
-        let handles =
-            SessionHandles::new("first line\nsecond line\n".to_string(), Status::InProgress);
-
-        // Act
-        SessionState::sync_session_with_handles(&mut session, &handles);
-
-        // Assert
-        assert_eq!(session.output, "first line\nsecond line\n");
-        assert_eq!(session.status, Status::InProgress);
-    }
-
-    #[test]
-    /// Verifies output changes clear stale typed transcript snapshots until a
-    /// database-backed refresh can hydrate matching rows again.
-    fn sync_session_with_handles_clears_stale_transcript_when_output_changes() {
-        // Arrange
-        let transcript = SessionTranscript::new(vec![SessionMessage::conversation(
-            0,
-            SessionMessageKind::UserPrompt,
-            "old prompt",
-        )]);
-        let mut session = SessionFixtureBuilder::new()
-            .output(transcript.to_legacy_output())
-            .status(Status::Review)
-            .build();
-        session.transcript = Some(transcript.clone());
         let handles = SessionHandles::new_with_transcript(
-            "new output".to_string(),
-            Status::Review,
-            transcript,
+            Status::InProgress,
+            crate::test_support::assistant_transcript("first line\nsecond line\n"),
         );
 
         // Act
         SessionState::sync_session_with_handles(&mut session, &handles);
 
         // Assert
-        assert_eq!(session.output, "new output");
-        assert_eq!(session.transcript, None);
+        assert_eq!(session_replay_text(&session), "first line\nsecond line\n\n");
+        assert_eq!(session.status, Status::InProgress);
+    }
+
+    #[test]
+    /// Verifies handle transcript changes replace stale typed snapshots.
+    fn sync_session_with_handles_replaces_stale_transcript() {
+        // Arrange
+        let transcript = SessionTranscript::new(vec![SessionMessage::conversation(
+            0,
+            SessionMessageKind::UserPrompt,
+            "old prompt",
+        )]);
+        let mut session = SessionFixtureBuilder::new().status(Status::Review).build();
+        session.transcript = Some(transcript);
+        let handles = SessionHandles::new_with_transcript(
+            Status::Review,
+            crate::test_support::assistant_transcript("new output"),
+        );
+
+        // Act
+        SessionState::sync_session_with_handles(&mut session, &handles);
+
+        // Assert
+        assert_eq!(session_replay_text(&session), "new output\n\n");
     }
 
     #[test]
@@ -682,7 +644,6 @@ mod tests {
                 crate::domain::agent::AgentKind::Antigravity,
                 crate::domain::agent::AgentKind::Antigravity.default_model(),
             ),
-            output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),
             prompt: "prompt".to_string(),
@@ -737,7 +698,6 @@ mod tests {
                 crate::domain::agent::AgentKind::Antigravity,
                 crate::domain::agent::AgentKind::Antigravity.default_model(),
             ),
-            output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),
             prompt: "prompt".to_string(),
@@ -770,7 +730,6 @@ mod tests {
                 crate::domain::agent::AgentKind::Antigravity,
                 crate::domain::agent::AgentKind::Antigravity.default_model(),
             ),
-            output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),
             prompt: "prompt".to_string(),
@@ -825,7 +784,6 @@ mod tests {
                 crate::domain::agent::AgentKind::Antigravity,
                 crate::domain::agent::AgentKind::Antigravity.default_model(),
             ),
-            output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),
             prompt: "prompt".to_string(),
@@ -858,7 +816,6 @@ mod tests {
                 crate::domain::agent::AgentKind::Antigravity,
                 crate::domain::agent::AgentKind::Antigravity.default_model(),
             ),
-            output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),
             prompt: "prompt".to_string(),
@@ -899,9 +856,8 @@ mod tests {
     }
 
     #[test]
-    /// Verifies non-prefix changes still use full replacement when lengths
-    /// differ.
-    fn sync_session_with_handles_replaces_output_when_prefix_changes() {
+    /// Verifies non-prefix transcript changes still replace the snapshot.
+    fn sync_session_with_handles_replaces_transcript_when_prefix_changes() {
         // Arrange
         let mut session = Session {
             base_branch: "main".to_string(),
@@ -917,7 +873,6 @@ mod tests {
                 crate::domain::agent::AgentKind::Antigravity,
                 crate::domain::agent::AgentKind::Antigravity.default_model(),
             ),
-            output: "abc".to_string(),
             parent_session_id: None,
             project_name: "project".to_string(),
             prompt: "prompt".to_string(),
@@ -932,17 +887,20 @@ mod tests {
             status: Status::InProgress,
             summary: None,
             title: None,
-            transcript: None,
+            transcript: Some(crate::test_support::assistant_transcript("abc")),
             updated_at: 0,
             workflow_notice: None,
         };
-        let handles = SessionHandles::new("xyzq".to_string(), Status::Review);
+        let handles = SessionHandles::new_with_transcript(
+            Status::Review,
+            crate::test_support::assistant_transcript("xyzq"),
+        );
 
         // Act
         SessionState::sync_session_with_handles(&mut session, &handles);
 
         // Assert
-        assert_eq!(session.output, "xyzq");
+        assert_eq!(session_replay_text(&session), "xyzq\n\n");
         assert_eq!(session.status, Status::Review);
     }
 
@@ -1016,7 +974,6 @@ mod tests {
                 crate::domain::agent::AgentKind::Antigravity,
                 crate::domain::agent::AgentKind::Antigravity.default_model(),
             ),
-            output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),
             prompt: "prompt".to_string(),
@@ -1057,7 +1014,6 @@ mod tests {
                 crate::domain::agent::AgentKind::Antigravity,
                 crate::domain::agent::AgentKind::Antigravity.default_model(),
             ),
-            output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),
             prompt: "prompt".to_string(),

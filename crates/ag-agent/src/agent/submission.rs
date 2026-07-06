@@ -127,11 +127,12 @@ pub async fn submit_one_shot_with_app_server_client(
     let (stream_tx, _stream_rx) = tokio::sync::mpsc::unbounded_channel();
     let turn_request = AppServerTurnRequest {
         folder: request.folder.to_path_buf(),
-        live_session_output: None,
+        live_transcript: None,
         main_checkout_root: None,
         model: request.model.provider_model_str().to_string(),
         prompt: crate::model::turn_prompt::TurnPrompt::from_agent_data(request.prompt.to_string()),
         request_kind: request.request_kind.clone(),
+        replay_transcript: None,
         provider_conversation_id: None,
         persisted_instruction_conversation_id: None,
         reasoning_level: request.reasoning_level,
@@ -273,11 +274,12 @@ async fn attempt_one_shot_app_server_repair(
     let (repair_stream_tx, _repair_stream_rx) = tokio::sync::mpsc::unbounded_channel();
     let repair_turn_request = AppServerTurnRequest {
         folder: request.folder.to_path_buf(),
-        live_session_output: None,
+        live_transcript: None,
         main_checkout_root: None,
         model: request.model.provider_model_str().to_string(),
         prompt: crate::model::turn_prompt::TurnPrompt::from_agent_data(repair_prompt),
         request_kind: request.request_kind,
+        replay_transcript: None,
         provider_conversation_id: provider_conversation_id.map(String::from),
         persisted_instruction_conversation_id: None,
         reasoning_level: request.reasoning_level,
@@ -321,6 +323,7 @@ async fn execute_one_shot_command(
         attachments: &prompt_payload.attachments,
         folder: request.folder,
         main_checkout_root: None,
+        replay_transcript: None,
         model: request.model.provider_model_str(),
         prompt,
         reasoning_level: request.reasoning_level,

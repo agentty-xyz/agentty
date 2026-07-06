@@ -33,8 +33,6 @@ pub(super) struct PublishedBranchAutoPushStartInput {
     pub(super) folder: PathBuf,
     /// Git boundary used for the remote push operation.
     pub(super) git_client: Arc<dyn GitClient>,
-    /// Shared transcript buffer used to append push failure messages.
-    pub(super) output: Arc<Mutex<String>>,
     /// Published upstream reference that provides the remote branch target.
     pub(super) published_upstream_ref: String,
     /// Forge boundary used for optional linked PR/MR metadata refresh.
@@ -75,7 +73,6 @@ pub(super) fn start_published_branch_auto_push(input: PublishedBranchAutoPushSta
         db: input.db,
         folder: input.folder,
         git_client: input.git_client,
-        output: input.output,
         published_upstream_ref: input.published_upstream_ref,
         review_request_metadata_sync,
         session_id: input.session_id,
@@ -99,8 +96,6 @@ pub(super) struct PublishedBranchAutoPushInput {
     pub(super) folder: PathBuf,
     /// Git boundary used for the remote push operation.
     pub(super) git_client: Arc<dyn GitClient>,
-    /// Shared transcript buffer used to append push failure messages.
-    pub(super) output: Arc<Mutex<String>>,
     /// Published upstream reference that provides the remote branch target.
     pub(super) published_upstream_ref: String,
     /// Optional metadata sync payload used after a successful post-turn push.
@@ -153,8 +148,7 @@ async fn run_published_branch_auto_push_task(input: PublishedBranchAutoPushInput
 
             let message = TranscriptNotice::BranchPush
                 .format("Auto-pushed published branch after completed turn.");
-            SessionTaskService::append_session_output(
-                &input.output,
+            SessionTaskService::append_workflow_notice(
                 &input.transcript,
                 &input.db,
                 &input.app_event_tx,
@@ -174,8 +168,7 @@ async fn run_published_branch_auto_push_task(input: PublishedBranchAutoPushInput
         }
         Err(failure) => {
             let message = TranscriptNotice::BranchPushError.format(failure.message);
-            SessionTaskService::append_session_output(
-                &input.output,
+            SessionTaskService::append_workflow_notice(
                 &input.transcript,
                 &input.db,
                 &input.app_event_tx,
@@ -338,8 +331,7 @@ async fn append_review_request_sync_warning(
     let message = TranscriptNotice::ReviewRequestSyncWarning.format(format!(
         "Failed to update linked review-request metadata: {error}"
     ));
-    SessionTaskService::append_session_output(
-        &input.output,
+    SessionTaskService::append_workflow_notice(
         &input.transcript,
         &input.db,
         &input.app_event_tx,

@@ -109,6 +109,29 @@ async fn insert_session_fixture(
         .expect("failed to insert session fixture");
 }
 
+/// Inserts one raw session-message row for migration compatibility tests.
+async fn insert_session_message_row(
+    database: &Database,
+    session_id: &str,
+    position: i64,
+    kind: &str,
+    content: &str,
+) {
+    sqlx::query(
+        r"
+INSERT INTO session_message (session_id, position, kind, content)
+VALUES (?, ?, ?, ?)
+",
+    )
+    .bind(session_id)
+    .bind(position)
+    .bind(kind)
+    .bind(content)
+    .execute(database.pool())
+    .await
+    .expect("failed to insert raw session message row");
+}
+
 /// Loads one session row by identifier through `load_sessions()`.
 async fn load_session_row(database: &Database, session_id: &str) -> SessionRow {
     database
@@ -206,8 +229,8 @@ async fn test_load_sessions_maps_joined_session_fields() {
     assert_review_request_row(&session_row);
 }
 
-/// Verifies message appends write ordered rows for the canonical
-/// transcript store without updating the legacy backup column.
+/// Verifies message appends write ordered rows for the canonical transcript
+/// store.
 #[tokio::test]
 async fn test_append_session_message_writes_message_rows() {
     // Arrange
@@ -277,6 +300,75 @@ async fn test_append_session_message_writes_message_rows() {
     assert_eq!(messages[2].content, "\n[Sync Error] failed\n");
 }
 
+/// Verifies legacy transcript checkpoints keep their old collapse semantics
+/// before becoming workflow notices.
+#[tokio::test]
+async fn test_convert_legacy_transcript_messages_keeps_latest_checkpoint() {
+    // Arrange
+    let database = Database::open_in_memory()
+        .await
+        .expect("failed to open in-memory db");
+    let project_id = database
+        .projects()
+        .upsert_project("/tmp/project", Some("main".to_string()))
+        .await
+        .expect("failed to insert project");
+    insert_session_fixture(&database, "session-a", "main", "Review", project_id).await;
+    insert_session_fixture(&database, "session-b", "main", "Review", project_id).await;
+    insert_session_message_row(&database, "session-a", 0, "user_prompt", "old prompt").await;
+    insert_session_message_row(&database, "session-a", 1, "assistant_answer", "old answer").await;
+    insert_session_message_row(
+        &database,
+        "session-a",
+        2,
+        "legacy_transcript",
+        "old prompt\nold answer\n",
+    )
+    .await;
+    insert_session_message_row(&database, "session-a", 3, "assistant_answer", "new answer").await;
+    insert_session_message_row(&database, "session-b", 0, "transcript_chunk", "chunk text").await;
+
+    // Act
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/055_convert_legacy_transcript_messages.sql"
+    ))
+    .execute(database.pool())
+    .await
+    .expect("failed to run legacy transcript conversion migration");
+
+    // Assert
+    let checkpoint_messages = database
+        .sessions()
+        .load_session_messages("session-a")
+        .await
+        .expect("failed to load session-a messages");
+    assert_eq!(checkpoint_messages.len(), 2);
+    assert_eq!(checkpoint_messages[0].position, 2);
+    assert_eq!(
+        checkpoint_messages[0].kind,
+        SessionMessageKind::WorkflowNotice.as_str()
+    );
+    assert_eq!(checkpoint_messages[0].content, "old prompt\nold answer\n");
+    assert_eq!(checkpoint_messages[1].position, 3);
+    assert_eq!(
+        checkpoint_messages[1].kind,
+        SessionMessageKind::AssistantAnswer.as_str()
+    );
+    assert_eq!(checkpoint_messages[1].content, "new answer");
+
+    let chunk_messages = database
+        .sessions()
+        .load_session_messages("session-b")
+        .await
+        .expect("failed to load session-b messages");
+    assert_eq!(chunk_messages.len(), 1);
+    assert_eq!(
+        chunk_messages[0].kind,
+        SessionMessageKind::WorkflowNotice.as_str()
+    );
+    assert_eq!(chunk_messages[0].content, "chunk text");
+}
+
 /// Verifies canonical transcript appends refresh session list ordering
 /// metadata.
 #[tokio::test]
@@ -321,111 +413,9 @@ async fn test_append_session_message_refreshes_session_updated_at() {
     );
 }
 
-/// Verifies the legacy-output backfill appends to existing canonical
-/// transcript rows instead of replacing them.
+/// Verifies session detail loads transcript metadata from message rows.
 #[tokio::test]
-async fn test_session_message_backfill_preserves_existing_messages() {
-    // Arrange
-    let options = SqliteConnectOptions::new().filename(":memory:");
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(options)
-        .await
-        .expect("failed to open in-memory pool");
-    sqlx::query(
-        r"
-CREATE TABLE session (
-    id TEXT PRIMARY KEY NOT NULL,
-    output TEXT NOT NULL,
-    created_at INTEGER NOT NULL
-)
-",
-    )
-    .execute(&pool)
-    .await
-    .expect("failed to create session table");
-    sqlx::query(
-        r"
-CREATE TABLE session_message (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT NOT NULL,
-    position INTEGER NOT NULL,
-    kind TEXT NOT NULL,
-    content TEXT NOT NULL,
-    created_at INTEGER NOT NULL DEFAULT 0
-)
-",
-    )
-    .execute(&pool)
-    .await
-    .expect("failed to create session_message table");
-    sqlx::query(
-        r"
-INSERT INTO session (id, output, created_at)
-VALUES ('session-a', 'legacy transcript with workflow notice', 100)
-",
-    )
-    .execute(&pool)
-    .await
-    .expect("failed to insert session row");
-    sqlx::query(
-        r"
-INSERT INTO session_message (session_id, position, kind, content, created_at)
-VALUES
-    ('session-a', 0, 'user_prompt', 'Prompt text', 101),
-    ('session-a', 1, 'assistant_answer', 'Answer text', 102)
-",
-    )
-    .execute(&pool)
-    .await
-    .expect("failed to insert existing messages");
-
-    // Act
-    sqlx::query(include_str!(
-        "../../../migrations/050_backfill_session_message.sql"
-    ))
-    .execute(&pool)
-    .await
-    .expect("failed to run session_message backfill");
-
-    // Assert
-    let messages: Vec<(i64, String, String)> = sqlx::query_as(
-        r"
-SELECT position, kind, content
-FROM session_message
-WHERE session_id = 'session-a'
-ORDER BY position
-",
-    )
-    .fetch_all(&pool)
-    .await
-    .expect("failed to load backfilled messages");
-    assert_eq!(
-        messages,
-        vec![
-            (
-                0,
-                SessionMessageKind::UserPrompt.as_str().to_string(),
-                "Prompt text".to_string()
-            ),
-            (
-                1,
-                SessionMessageKind::AssistantAnswer.as_str().to_string(),
-                "Answer text".to_string()
-            ),
-            (
-                2,
-                SessionMessageKind::LegacyTranscript.as_str().to_string(),
-                "legacy transcript with workflow notice".to_string()
-            ),
-        ]
-    );
-}
-
-/// Verifies session detail loads transcript metadata without reading
-/// legacy formatted output.
-#[tokio::test]
-async fn test_load_session_detail_omits_legacy_output() {
+async fn test_load_session_detail_reads_message_transcript() {
     // Arrange
     let database = Database::open_in_memory()
         .await

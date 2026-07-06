@@ -259,7 +259,7 @@ mod tests {
         let client = ProviderRuntimeClient::<TestProvider>::new();
         let request = AppServerTurnRequest {
             folder: std::env::temp_dir(),
-            live_session_output: None,
+            live_transcript: None,
             main_checkout_root: None,
             model: "test-model".to_string(),
             persisted_instruction_conversation_id: None,
@@ -267,6 +267,7 @@ mod tests {
             provider_conversation_id: None,
             reasoning_level: ReasoningLevel::High,
             request_kind: AgentRequestKind::SessionStart,
+            replay_transcript: None,
             session_id: "session-1".to_string(),
         };
         let (stream_tx, _stream_rx) = mpsc::unbounded_channel();

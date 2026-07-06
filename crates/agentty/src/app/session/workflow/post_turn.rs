@@ -12,7 +12,7 @@ use ag_protocol::AgentResponse;
 use serde_json;
 use tokio::sync::mpsc;
 
-use super::task::SessionOutputMessageAppend;
+use super::task::SessionTranscriptMessageAppend;
 use super::worker::{SessionWorkerContext, TurnMetadata};
 use super::{SessionTaskService, StatusTransition, published_branch};
 use crate::app::AppEvent;
@@ -44,8 +44,6 @@ pub(super) struct PostTurnContext {
     pub(super) folder: PathBuf,
     /// Git boundary used by auto-commit and published-branch auto-push.
     pub(super) git_client: Arc<dyn GitClient>,
-    /// Shared transcript buffer receiving final response text and notices.
-    pub(super) output: Arc<Mutex<String>>,
     /// In-memory queue checked before starting detached auto-push effects.
     pub(super) queued_messages: Arc<Mutex<VecDeque<TurnPrompt>>>,
     /// Forge boundary used for optional linked PR/MR metadata refresh.
@@ -68,7 +66,6 @@ impl PostTurnContext {
             db: context.db.clone(),
             folder: context.folder.clone(),
             git_client: Arc::clone(&context.git_client),
-            output: Arc::clone(&context.output),
             queued_messages: Arc::clone(&context.queued_messages),
             review_request_client: Arc::clone(&context.review_request_client),
             session_update_versions: context.session_update_versions.clone(),
@@ -203,13 +200,13 @@ impl TurnPersistence<'_> {
 
 /// Applies the turn result: appends the final response, persists follow-up
 /// metadata, updates stats, and runs auto-commit. Returns `Ok(Status)` on
-/// success or `Err(description)` on turn failure after appending the error to
-/// session output.
+/// success or `Err(description)` on turn failure after appending the error as
+/// a workflow notice.
 ///
 /// The final parsed response appends non-empty protocol `answer` text once the
 /// turn completes. When no `answer` text exists, worker output falls back to
 /// joined question text so clarification prompts remain visible while
-/// thought-only responses are not persisted as final transcript output.
+/// thought-only responses are not persisted as assistant messages.
 ///
 /// The raw agent `summary` payload is stored only in the session row. The
 /// reducer receives a matching [`TurnAppliedState`] projection so the active UI
@@ -295,8 +292,7 @@ pub(super) fn status_update_after_turn_result(
 /// Appends one terminal turn error to the live and persisted transcript.
 async fn append_turn_error(context: &PostTurnContext, error_text: &str) {
     let message = format!("\n{}\n", error_text.trim());
-    SessionTaskService::append_session_output(
-        &context.output,
+    SessionTaskService::append_workflow_notice(
         &context.transcript,
         &context.db,
         &context.app_event_tx,
@@ -323,16 +319,14 @@ async fn apply_successful_turn_result(
         provider_conversation_id,
     } = result;
 
-    if let Some(message) = build_assistant_transcript_output(&assistant_message) {
-        SessionTaskService::append_session_output_message(
-            &context.output,
+    if let Some(message) = build_assistant_message_content(&assistant_message) {
+        SessionTaskService::append_session_transcript_message(
             &context.transcript,
             &context.db,
             &context.app_event_tx,
             &context.session_update_versions,
             &context.session_id,
-            SessionOutputMessageAppend {
-                formatted_message: message.as_str(),
+            SessionTranscriptMessageAppend {
                 kind: SessionMessageKind::AssistantAnswer,
                 raw_content: message.as_str(),
             },
@@ -375,7 +369,6 @@ async fn apply_successful_turn_result(
         folder: context.folder.clone(),
         git_client: Arc::clone(&context.git_client),
         id: context.session_id.to_string(),
-        output: Arc::clone(&context.output),
         session_agent: turn_metadata.session_agent,
         session_update_versions: context.session_update_versions.clone(),
         transcript: Arc::clone(&context.transcript),
@@ -448,7 +441,6 @@ fn start_published_branch_auto_push(
             db: context.db.clone(),
             folder: context.folder.clone(),
             git_client: Arc::clone(&context.git_client),
-            output: Arc::clone(&context.output),
             published_upstream_ref,
             review_request_client: Arc::clone(&context.review_request_client),
             review_request_commit_message,
@@ -465,8 +457,7 @@ async fn handle_turn_persistence_failure(context: &PostTurnContext, error: &Sess
     let message = TranscriptNotice::TurnMetadataError.format(format!(
         "Failed to persist completed turn metadata: {error}"
     ));
-    SessionTaskService::append_session_output(
-        &context.output,
+    SessionTaskService::append_workflow_notice(
         &context.transcript,
         &context.db,
         &context.app_event_tx,
@@ -479,15 +470,13 @@ async fn handle_turn_persistence_failure(context: &PostTurnContext, error: &Sess
     let _ = context.app_event_tx.send(AppEvent::RefreshSessions);
 }
 
-/// Builds the persisted transcript chunk for one parsed assistant response.
+/// Builds the persisted assistant message for one parsed response.
 ///
 /// Prefers the top-level `answer` text so normal chat output stays concise.
 /// Falls back to joined question text when no answer is present so
 /// clarification prompts stay visible while thought-only responses are not
-/// persisted as final transcript output.
-pub(super) fn build_assistant_transcript_output(
-    assistant_message: &AgentResponse,
-) -> Option<String> {
+/// persisted as assistant messages.
+pub(super) fn build_assistant_message_content(assistant_message: &AgentResponse) -> Option<String> {
     let answer_text = assistant_message.to_answer_display_text();
     if !answer_text.trim().is_empty() {
         return Some(format!("{}\n\n", answer_text.trim_end()));

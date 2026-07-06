@@ -47,7 +47,6 @@ struct LoadedSessionInput {
     row: SessionListRow,
     session_agent: AgentSelection,
     session_id: SessionId,
-    session_output: String,
     session_prompt: String,
     session_queued_messages: Vec<String>,
     session_questions: Vec<QuestionItem>,
@@ -179,22 +178,22 @@ impl SessionManager {
         let (session_detail, loaded_transcript) =
             load_active_session_detail(db, *active_session_id, &row.id).await;
 
-        let (session_output, session_status, session_transcript) =
+        let (session_status, session_transcript) =
             if let Some(existing_handle) = handles.get(&session_id) {
-                output_and_status_from_existing_handle(
+                status_and_transcript_from_existing_handle(
                     existing_handle,
                     persisted_status,
                     loaded_transcript.as_ref(),
                 )
             } else {
-                let (output, transcript) = insert_loaded_session_handle(
+                let transcript = insert_loaded_session_handle(
                     handles,
                     session_id.clone(),
                     persisted_status,
                     loaded_transcript,
                 );
 
-                (output, persisted_status, transcript)
+                (persisted_status, transcript)
             };
         let review_request = parse_review_request(&row);
         let draft_attachments =
@@ -226,7 +225,6 @@ impl SessionManager {
             row,
             session_agent,
             session_id,
-            session_output,
             session_prompt: session_detail
                 .as_ref()
                 .map(|detail| detail.prompt.clone())
@@ -302,7 +300,6 @@ impl SessionManager {
             in_progress_started_at: input.row.in_progress_started_at,
             in_progress_total_seconds: input.row.in_progress_total_seconds,
             is_draft: input.row.is_draft,
-            output: input.session_output,
             parent_session_id: input.parent_session_id,
             project_name: input.project_name,
             prompt: input.session_prompt,
@@ -330,41 +327,19 @@ impl SessionManager {
 
     /// Applies one lazily loaded detail row and message transcript to the
     /// session snapshot and its shared runtime handle without clobbering live
-    /// in-process output.
+    /// in-process transcript messages.
     fn apply_session_detail(
         &mut self,
         session_id: &str,
         detail: SessionDetailRow,
         transcript: SessionTranscript,
     ) {
-        let transcript_output = transcript.to_legacy_output();
-        let session_output = if let Some(handles) = self.state.handles.get(session_id)
-            && let Ok(mut handle_output) = handles.output.lock()
-        {
-            if handle_output.is_empty() {
-                handle_output.clone_from(&transcript_output);
-            }
-
-            handle_output.clone()
-        } else {
-            transcript_output
-        };
         let session_transcript = self
             .state
             .handles
             .get(session_id)
-            .and_then(|handles| {
-                sync_handle_transcript_with_loaded_output(
-                    handles,
-                    Some(&transcript),
-                    &session_output,
-                )
-            })
-            .or_else(|| {
-                Some(transcript).filter(|transcript| {
-                    !transcript.is_empty() && transcript.to_legacy_output() == session_output
-                })
-            });
+            .and_then(|handles| sync_handle_transcript_with_loaded(handles, Some(&transcript)))
+            .or_else(|| Some(transcript).filter(|transcript| !transcript.is_empty()));
 
         let Some(session) = self.state.session_mut_for_id(session_id) else {
             return;
@@ -375,7 +350,6 @@ impl SessionManager {
             session.questions = parse_questions_json(&questions).unwrap_or_default();
         }
         session.summary = detail.summary;
-        session.output = session_output;
         session.transcript = session_transcript;
     }
 }
@@ -405,28 +379,13 @@ async fn load_active_session_detail(
     (Some(detail), transcript)
 }
 
-/// Reads output/status from an existing handle while hydrating empty output
-/// from lazily loaded detail when the session has become active.
-fn output_and_status_from_existing_handle(
+/// Reads status/transcript from an existing handle while hydrating an empty
+/// transcript from lazily loaded detail when the session has become active.
+fn status_and_transcript_from_existing_handle(
     existing_handle: &SessionHandles,
     persisted_status: Status,
     loaded_transcript: Option<&SessionTranscript>,
-) -> (String, Status, Option<SessionTranscript>) {
-    let loaded_output = loaded_transcript.map(SessionTranscript::to_legacy_output);
-    let output_from_handle =
-        existing_handle
-            .output
-            .lock()
-            .ok()
-            .map_or_else(String::new, |mut output| {
-                if output.is_empty()
-                    && let Some(session_output) = loaded_output.as_deref()
-                {
-                    output.push_str(session_output);
-                }
-
-                output.clone()
-            });
+) -> (Status, Option<SessionTranscript>) {
     let status_from_handle = existing_handle
         .status
         .lock()
@@ -437,36 +396,29 @@ fn output_and_status_from_existing_handle(
     if let Ok(mut handle_status) = existing_handle.status.lock() {
         *handle_status = merged_status;
     }
-    let transcript_from_handle = sync_handle_transcript_with_loaded_output(
-        existing_handle,
-        loaded_transcript,
-        &output_from_handle,
-    );
+    let transcript_from_handle =
+        sync_handle_transcript_with_loaded(existing_handle, loaded_transcript);
 
-    (output_from_handle, merged_status, transcript_from_handle)
+    (merged_status, transcript_from_handle)
 }
 
 /// Inserts a new runtime handle using active-session detail when it is
-/// available and returns the output snapshot stored in that handle.
+/// available and returns the transcript snapshot stored in that handle.
 fn insert_loaded_session_handle(
     handles: &mut HashMap<SessionId, SessionHandles>,
     session_id: SessionId,
     persisted_status: Status,
     loaded_transcript: Option<SessionTranscript>,
-) -> (String, Option<SessionTranscript>) {
-    let output = loaded_transcript
-        .as_ref()
-        .map(SessionTranscript::to_legacy_output)
-        .unwrap_or_default();
+) -> Option<SessionTranscript> {
     let session_transcript = loaded_transcript.filter(|transcript| !transcript.is_empty());
     let session_handle = if let Some(transcript) = session_transcript.clone() {
-        SessionHandles::new_with_transcript(output.clone(), persisted_status, transcript)
+        SessionHandles::new_with_transcript(persisted_status, transcript)
     } else {
-        SessionHandles::new(output.clone(), persisted_status)
+        SessionHandles::new(persisted_status)
     };
     handles.insert(session_id, session_handle);
 
-    (output, session_transcript)
+    session_transcript
 }
 
 /// Loads ordered session messages into the render transcript snapshot.
@@ -479,25 +431,19 @@ async fn load_session_transcript(
     Ok(SessionTranscript::new(session_messages_from_rows(messages)))
 }
 
-/// Synchronizes a handle transcript from loaded rows when those rows still
-/// match the handle's flat output buffer.
-fn sync_handle_transcript_with_loaded_output(
+/// Synchronizes a handle transcript from loaded rows when the handle does not
+/// already have live transcript messages.
+fn sync_handle_transcript_with_loaded(
     handles: &SessionHandles,
     loaded_transcript: Option<&SessionTranscript>,
-    output_text: &str,
 ) -> Option<SessionTranscript> {
     let Ok(mut handle_transcript) = handles.transcript.lock() else {
         return None;
     };
-    let handle_transcript_matches_output = !handle_transcript.is_empty()
-        && (loaded_transcript == Some(&*handle_transcript)
-            || handle_transcript.to_legacy_output() == output_text);
-    if !handle_transcript_matches_output {
-        if let Some(loaded_transcript) = loaded_transcript {
-            handle_transcript.clone_from(loaded_transcript);
-        } else {
-            *handle_transcript = SessionTranscript::default();
-        }
+    if handle_transcript.is_empty()
+        && let Some(loaded_transcript) = loaded_transcript
+    {
+        handle_transcript.clone_from(loaded_transcript);
     }
     if handle_transcript.is_empty() {
         return None;
@@ -506,17 +452,15 @@ fn sync_handle_transcript_with_loaded_output(
     Some(handle_transcript.clone())
 }
 
-/// Converts database message rows into domain messages, preserving unknown
-/// kind content as exact legacy transcript text.
+/// Converts database message rows into domain messages, skipping unknown
+/// message kinds left by older database revisions.
 fn session_messages_from_rows(rows: Vec<SessionMessageRow>) -> Vec<SessionMessage> {
     rows.into_iter()
-        .map(|row| {
-            let kind = row
-                .kind
+        .filter_map(|row| {
+            row.kind
                 .parse::<SessionMessageKind>()
-                .unwrap_or(SessionMessageKind::LegacyTranscript);
-
-            SessionMessage::new(row.position, kind, row.content)
+                .ok()
+                .map(|kind| SessionMessage::new(row.position, kind, row.content))
         })
         .collect()
 }
@@ -630,6 +574,28 @@ mod tests {
     use crate::infra::db::SessionReviewRequestRow;
     use crate::infra::fs;
 
+    fn session_replay_text(session: &Session) -> String {
+        session
+            .transcript
+            .as_ref()
+            .and_then(SessionTranscript::replay_text)
+            .unwrap_or_default()
+    }
+
+    fn assistant_transcript(content: impl AsRef<str>) -> SessionTranscript {
+        SessionTranscript::new(vec![SessionMessage::conversation(
+            0,
+            SessionMessageKind::AssistantAnswer,
+            content.as_ref(),
+        )])
+    }
+
+    fn assistant_replay_text(content: impl AsRef<str>) -> String {
+        assistant_transcript(content)
+            .replay_text()
+            .expect("assistant transcript should have replay text")
+    }
+
     /// Returns a filesystem mock that reports the supplied directories as
     /// existing and treats missing staged-draft metadata files as absent.
     fn create_folder_lookup_mock(existing_folders: Vec<PathBuf>) -> fs::MockFsClient {
@@ -673,11 +639,7 @@ mod tests {
             .await
             .expect("failed to insert session");
         db.sessions()
-            .append_session_message(
-                session_id,
-                SessionMessageKind::LegacyTranscript,
-                "DB Output",
-            )
+            .append_session_message(session_id, SessionMessageKind::AssistantAnswer, "DB Output")
             .await
             .expect("failed to append persisted message");
 
@@ -690,7 +652,7 @@ mod tests {
         let live_status = Status::Review;
         handles.insert(
             session_id.to_string().into(),
-            SessionHandles::new(live_output.clone(), live_status),
+            SessionHandles::new_with_transcript(live_status, assistant_transcript(&live_output)),
         );
 
         // Act
@@ -710,19 +672,23 @@ mod tests {
             .iter()
             .find(|session| session.id == session_id)
             .expect("missing reloaded session");
-        assert_eq!(session.output, live_output);
+        assert_eq!(
+            session_replay_text(session),
+            assistant_replay_text(&live_output)
+        );
         assert_eq!(session.status, live_status);
 
         let handle = handles
             .get(session_id)
             .expect("missing existing runtime handle");
         let handle_output = handle
-            .output
+            .transcript
             .lock()
-            .expect("failed to lock handle output")
-            .clone();
+            .expect("failed to lock handle transcript")
+            .replay_text()
+            .unwrap_or_default();
         let handle_status = *handle.status.lock().expect("failed to lock handle status");
-        assert_eq!(handle_output, live_output);
+        assert_eq!(handle_output, assistant_replay_text(&live_output));
         assert_eq!(handle_status, live_status);
     }
 
@@ -828,7 +794,7 @@ mod tests {
         db.sessions()
             .append_session_message(
                 session_id,
-                SessionMessageKind::LegacyTranscript,
+                SessionMessageKind::AssistantAnswer,
                 "persisted output",
             )
             .await
@@ -841,7 +807,10 @@ mod tests {
         let mut handles: HashMap<SessionId, SessionHandles> = HashMap::new();
         handles.insert(
             session_id.to_string().into(),
-            SessionHandles::new("Live Output".to_string(), Status::Review),
+            SessionHandles::new_with_transcript(
+                Status::Review,
+                assistant_transcript("Live Output"),
+            ),
         );
 
         // Act
@@ -861,7 +830,10 @@ mod tests {
             .iter()
             .find(|session| session.id == session_id)
             .expect("missing reloaded session");
-        assert_eq!(session.output, "Live Output");
+        assert_eq!(
+            session_replay_text(session),
+            assistant_replay_text("Live Output")
+        );
         assert_eq!(session.prompt, "persisted prompt");
         assert_eq!(
             session.questions,
@@ -910,7 +882,7 @@ mod tests {
         db.sessions()
             .append_session_message(
                 session_id,
-                SessionMessageKind::LegacyTranscript,
+                SessionMessageKind::AssistantAnswer,
                 "large output",
             )
             .await
@@ -938,14 +910,18 @@ mod tests {
             .iter()
             .find(|session| session.id == session_id)
             .expect("missing reloaded session");
-        assert!(session.output.is_empty());
+        assert_eq!(session_replay_text(session), "");
         assert!(session.prompt.is_empty());
         assert!(session.questions.is_empty());
         assert!(session.summary.is_none());
 
         let handle = handles.get(session_id).expect("missing runtime handle");
-        let handle_output = handle.output.lock().expect("failed to lock output");
-        assert!(handle_output.is_empty());
+        let handle_output = handle
+            .transcript
+            .lock()
+            .expect("failed to lock transcript")
+            .replay_text();
+        assert_eq!(handle_output, None);
     }
 
     /// Ensures active reload hydrates an existing empty handle from persisted
@@ -974,7 +950,7 @@ mod tests {
         db.sessions()
             .append_session_message(
                 session_id,
-                SessionMessageKind::LegacyTranscript,
+                SessionMessageKind::AssistantAnswer,
                 "persisted output",
             )
             .await
@@ -986,7 +962,7 @@ mod tests {
         let mut handles: HashMap<SessionId, SessionHandles> = HashMap::new();
         handles.insert(
             session_id.to_string().into(),
-            SessionHandles::new(String::new(), Status::Review),
+            SessionHandles::new(Status::Review),
         );
 
         // Act
@@ -1006,11 +982,19 @@ mod tests {
             .iter()
             .find(|session| session.id == session_id)
             .expect("missing reloaded session");
-        assert_eq!(session.output, "persisted output");
+        assert_eq!(
+            session_replay_text(session),
+            assistant_replay_text("persisted output")
+        );
 
         let handle = handles.get(session_id).expect("missing runtime handle");
-        let handle_output = handle.output.lock().expect("failed to lock output");
-        assert_eq!(handle_output.as_str(), "persisted output");
+        let handle_output = handle
+            .transcript
+            .lock()
+            .expect("failed to lock transcript")
+            .replay_text()
+            .unwrap_or_default();
+        assert_eq!(handle_output, assistant_replay_text("persisted output"));
     }
 
     /// Ensures transcript loading returns database failures instead of
@@ -1064,7 +1048,7 @@ mod tests {
         let mut handles: HashMap<SessionId, SessionHandles> = HashMap::new();
         handles.insert(
             session_id.to_string().into(),
-            SessionHandles::new("output".to_string(), Status::Review),
+            SessionHandles::new_with_transcript(Status::Review, assistant_transcript("output")),
         );
 
         // Act
@@ -1187,32 +1171,25 @@ mod tests {
     }
 
     #[test]
-    /// Verifies loaded message rows survive minor flat-output formatting
-    /// mismatches so message-only rendering does not blank older sessions.
-    fn sync_handle_transcript_with_loaded_output_uses_loaded_transcript_on_output_mismatch() {
+    /// Verifies loaded message rows do not replace an existing live
+    /// transcript snapshot.
+    fn sync_handle_transcript_with_loaded_keeps_existing_live_transcript() {
         // Arrange
-        let handles = SessionHandles::new(" › prompt\n\nanswer\n".to_string(), Status::Review);
-        let loaded_transcript = SessionTranscript::new(vec![
+        let live_transcript = SessionTranscript::new(vec![
             SessionMessage::conversation(0, SessionMessageKind::UserPrompt, "prompt"),
             SessionMessage::conversation(1, SessionMessageKind::AssistantAnswer, "answer"),
         ]);
+        let handles = SessionHandles::new_with_transcript(Status::Review, live_transcript.clone());
+        let loaded_transcript = assistant_transcript("loaded answer");
 
         // Act
-        let transcript = sync_handle_transcript_with_loaded_output(
-            &handles,
-            Some(&loaded_transcript),
-            " › prompt\n\nanswer\n",
-        );
+        let transcript = sync_handle_transcript_with_loaded(&handles, Some(&loaded_transcript));
 
         // Assert
-        assert_eq!(transcript, Some(loaded_transcript.clone()));
+        assert_eq!(transcript, Some(live_transcript.clone()));
         assert_eq!(
             handles.transcript.lock().ok().as_deref(),
-            Some(&loaded_transcript)
-        );
-        assert_eq!(
-            handles.output.lock().ok().as_deref().map(String::as_str),
-            Some(" › prompt\n\nanswer\n")
+            Some(&live_transcript)
         );
     }
 

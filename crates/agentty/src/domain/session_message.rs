@@ -8,30 +8,21 @@ const USER_PROMPT_PREFIX: &str = " › ";
 /// Durable category for one saved session transcript message.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionMessageKind {
-    /// Generic append-only transcript fragment used only for compatibility
-    /// serialization of legacy transcript text.
-    TranscriptChunk,
     /// Raw user prompt text without TUI prompt markers or transcript padding.
     UserPrompt,
     /// Raw assistant answer text without transcript padding.
     AssistantAnswer,
-    /// Generic workflow notice used only for compatibility serialization of
-    /// legacy transcript text.
+    /// Generic workflow notice emitted by Agentty session workflows.
     WorkflowNotice,
-    /// Exact legacy transcript copied into one message when precise parsing is
-    /// not available.
-    LegacyTranscript,
 }
 
 impl SessionMessageKind {
     /// Returns the stable database string for this message kind.
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::TranscriptChunk => "transcript_chunk",
             Self::UserPrompt => "user_prompt",
             Self::AssistantAnswer => "assistant_answer",
             Self::WorkflowNotice => "workflow_notice",
-            Self::LegacyTranscript => "legacy_transcript",
         }
     }
 
@@ -53,11 +44,9 @@ impl FromStr for SessionMessageKind {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
-            "transcript_chunk" => Ok(Self::TranscriptChunk),
             "user_prompt" => Ok(Self::UserPrompt),
             "assistant_answer" => Ok(Self::AssistantAnswer),
             "workflow_notice" => Ok(Self::WorkflowNotice),
-            "legacy_transcript" => Ok(Self::LegacyTranscript),
             _ => Err(SessionMessageKindParseError {
                 value: value.to_string(),
             }),
@@ -119,20 +108,8 @@ pub struct SessionTranscript {
 
 impl SessionTranscript {
     /// Creates an ordered transcript from persisted messages.
-    ///
-    /// A `LegacyTranscript` row is a lossless checkpoint copied from the
-    /// historical `session.output` column. When it appears after earlier
-    /// canonical rows, those earlier rows are still preserved in the database
-    /// but are already represented by the checkpoint text, so rendering starts
-    /// from the latest checkpoint and continues with later rows.
     pub fn new(mut messages: Vec<SessionMessage>) -> Self {
         messages.sort_by_key(|message| message.position);
-        if let Some(legacy_checkpoint_index) = messages
-            .iter()
-            .rposition(|message| message.kind == SessionMessageKind::LegacyTranscript)
-        {
-            messages = messages.split_off(legacy_checkpoint_index);
-        }
 
         let total_content_len = messages.iter().map(|message| message.content.len()).sum();
 
@@ -174,17 +151,25 @@ impl SessionTranscript {
             .push(SessionMessage::new(position, kind, content));
     }
 
-    /// Serializes the message store into formatted session-chat transcript
-    /// text.
+    /// Returns formatted transcript text for replay when content exists.
     ///
-    /// User and assistant rows store raw content, so this method injects the
-    /// legacy prompt marker and transcript spacing only at the compatibility
-    /// boundary. Legacy fragment kinds are appended unchanged.
-    pub fn to_legacy_output(&self) -> String {
+    /// User and assistant rows store raw content, so replay injects the prompt
+    /// marker and transcript spacing only for display and provider replay.
+    pub fn replay_text(&self) -> Option<String> {
+        let output = Self::display_text_for_messages(&self.messages);
+        if output.trim().is_empty() {
+            return None;
+        }
+
+        Some(output)
+    }
+
+    /// Formats one ordered message slice for session output display.
+    pub(crate) fn display_text_for_messages(messages: &[SessionMessage]) -> String {
         let mut output = String::new();
 
-        for message in &self.messages {
-            message.append_legacy_output(&mut output);
+        for message in messages {
+            message.append_display_text(&mut output);
         }
 
         output
@@ -194,8 +179,8 @@ impl SessionTranscript {
 /// Returns the durable message content for one kind.
 ///
 /// Conversation rows store raw user/assistant text with outer whitespace
-/// removed. Compatibility rows preserve their exact formatted content so a
-/// migrated legacy transcript can round-trip without spacing changes.
+/// removed. Workflow notices preserve exact content so status blocks keep their
+/// spacing.
 pub fn stored_message_content(kind: SessionMessageKind, content: &str) -> String {
     if kind.is_conversation_message() {
         return normalized_message_content(content);
@@ -205,18 +190,16 @@ pub fn stored_message_content(kind: SessionMessageKind, content: &str) -> String
 }
 
 impl SessionMessage {
-    /// Appends this raw or compatibility message to a legacy transcript buffer.
-    pub(crate) fn append_legacy_output(&self, output: &mut String) {
+    /// Appends this message to a formatted transcript display buffer.
+    pub(crate) fn append_display_text(&self, output: &mut String) {
         match self.kind {
             SessionMessageKind::UserPrompt => {
-                append_legacy_user_prompt(output, &self.content);
+                append_user_prompt_display_text(output, &self.content);
             }
             SessionMessageKind::AssistantAnswer => {
-                append_legacy_assistant_answer(output, &self.content);
+                append_assistant_answer_display_text(output, &self.content);
             }
-            SessionMessageKind::TranscriptChunk
-            | SessionMessageKind::WorkflowNotice
-            | SessionMessageKind::LegacyTranscript => output.push_str(&self.content),
+            SessionMessageKind::WorkflowNotice => output.push_str(&self.content),
         }
     }
 }
@@ -226,8 +209,8 @@ pub fn normalized_message_content(content: &str) -> String {
     content.trim().to_string()
 }
 
-/// Appends one raw user prompt using the legacy transcript marker and spacing.
-fn append_legacy_user_prompt(output: &mut String, content: &str) {
+/// Appends one raw user prompt using the session transcript marker and spacing.
+fn append_user_prompt_display_text(output: &mut String, content: &str) {
     let content = content.trim();
     if content.is_empty() {
         return;
@@ -276,8 +259,8 @@ fn is_clarification_question_line(line: &str) -> bool {
     suffix.starts_with(". Q: ")
 }
 
-/// Appends one raw assistant answer using legacy transcript spacing.
-fn append_legacy_assistant_answer(output: &mut String, content: &str) {
+/// Appends one raw assistant answer using session transcript spacing.
+fn append_assistant_answer_display_text(output: &mut String, content: &str) {
     let content = content.trim();
     if content.is_empty() {
         return;
@@ -307,7 +290,7 @@ mod tests {
     }
 
     #[test]
-    fn test_session_transcript_serializes_messages_by_position() {
+    fn test_session_transcript_formats_messages_by_position() {
         // Arrange
         let messages = vec![
             SessionMessage::conversation(2, SessionMessageKind::AssistantAnswer, " answer\n"),
@@ -318,11 +301,14 @@ mod tests {
         let transcript = SessionTranscript::new(messages);
 
         // Assert
-        assert_eq!(transcript.to_legacy_output(), " › prompt\n\nanswer\n\n");
+        assert_eq!(
+            transcript.replay_text().expect("expected replay text"),
+            " › prompt\n\nanswer\n\n"
+        );
     }
 
     #[test]
-    fn test_session_transcript_serializes_multiline_user_prompt() {
+    fn test_session_transcript_formats_multiline_user_prompt() {
         // Arrange
         let messages = vec![SessionMessage::conversation(
             1,
@@ -334,11 +320,14 @@ mod tests {
         let transcript = SessionTranscript::new(messages);
 
         // Assert
-        assert_eq!(transcript.to_legacy_output(), " › first\n   second\n\n");
+        assert_eq!(
+            transcript.replay_text().expect("expected replay text"),
+            " › first\n   second\n\n"
+        );
     }
 
     #[test]
-    fn test_session_transcript_serializes_clarification_prompt_with_question_spacing() {
+    fn test_session_transcript_formats_clarification_prompt_with_question_spacing() {
         // Arrange
         let messages = vec![SessionMessage::conversation(
             1,
@@ -351,14 +340,14 @@ mod tests {
 
         // Assert
         assert_eq!(
-            transcript.to_legacy_output(),
+            transcript.replay_text().expect("expected replay text"),
             " › Clarifications:\n   \n   1. Q: Need target branch?\n      A: main\n   \n   2. Q: \
              Need tests?\n      A: yes\n\n"
         );
     }
 
     #[test]
-    fn test_session_transcript_serializes_prompt_spacing_after_assistant_answer() {
+    fn test_session_transcript_formats_prompt_spacing_after_assistant_answer() {
         // Arrange
         let messages = vec![
             SessionMessage::conversation(0, SessionMessageKind::AssistantAnswer, "answer"),
@@ -370,31 +359,8 @@ mod tests {
 
         // Assert
         assert_eq!(
-            transcript.to_legacy_output(),
+            transcript.replay_text().expect("expected replay text"),
             "answer\n\n\n › next prompt\n\n"
-        );
-    }
-
-    #[test]
-    fn test_session_transcript_uses_latest_legacy_checkpoint() {
-        // Arrange
-        let messages = vec![
-            SessionMessage::conversation(0, SessionMessageKind::UserPrompt, "old prompt"),
-            SessionMessage::new(
-                1,
-                SessionMessageKind::LegacyTranscript,
-                " › old prompt\n\nold answer\n\n[Sync Error] failed\n",
-            ),
-            SessionMessage::conversation(2, SessionMessageKind::AssistantAnswer, "new answer"),
-        ];
-
-        // Act
-        let transcript = SessionTranscript::new(messages);
-
-        // Assert
-        assert_eq!(
-            transcript.to_legacy_output(),
-            " › old prompt\n\nold answer\n\n[Sync Error] failed\nnew answer\n\n"
         );
     }
 

@@ -32,9 +32,9 @@ pub fn plan_app_server_instruction_delivery(
     request_kind: &AgentRequestKind,
     current_provider_conversation_id: Option<&str>,
     persisted_instruction_conversation_id: Option<&str>,
-    should_replay_session_output: bool,
+    should_replay_transcript: bool,
 ) -> InstructionDeliveryMode {
-    if should_replay_session_output {
+    if should_replay_transcript {
         return InstructionDeliveryMode::BootstrapWithReplay;
     }
 
@@ -68,9 +68,7 @@ mod tests {
 
         // Act
         let mode = plan_app_server_instruction_delivery(
-            &AgentRequestKind::SessionResume {
-                session_output: None,
-            },
+            &AgentRequestKind::SessionResume,
             Some("thread-123"),
             persisted_instruction_conversation_id.as_deref(),
             false,
@@ -90,9 +88,7 @@ mod tests {
 
         // Act
         let mode = plan_app_server_instruction_delivery(
-            &AgentRequestKind::SessionResume {
-                session_output: Some("previous output".to_string()),
-            },
+            &AgentRequestKind::SessionResume,
             Some("thread-456"),
             persisted_instruction_conversation_id.as_deref(),
             true,
@@ -111,9 +107,7 @@ mod tests {
 
         // Act
         let mode = plan_app_server_instruction_delivery(
-            &AgentRequestKind::SessionResume {
-                session_output: None,
-            },
+            &AgentRequestKind::SessionResume,
             Some("thread-456"),
             persisted_instruction_conversation_id.as_deref(),
             false,

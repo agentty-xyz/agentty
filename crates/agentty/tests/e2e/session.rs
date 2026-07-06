@@ -65,10 +65,8 @@ fn seed_session_with_beautified_agent_error(
             .sessions()
             .append_session_message(
                 "agent-error-0001",
-                SessionMessageKind::LegacyTranscript,
+                SessionMessageKind::AssistantAnswer,
                 "\
- › hi
-
 Agent command failed with exit code 1.
 
 stdout:
@@ -109,12 +107,12 @@ fn seed_session_with_markdown_table(env: &BuilderEnv) -> Result<(), Box<dyn std:
             .sessions()
             .append_session_message(
                 "markdown-table-0001",
-                SessionMessageKind::LegacyTranscript,
+                SessionMessageKind::AssistantAnswer,
                 "\
 | Message kind | Storage |
 | --- | --- |
-| User prompt | Session.output |
-| Assistant markdown | Session.output |
+| User prompt | session_message |
+| Assistant markdown | session_message |
 ",
             )
             .await
@@ -142,7 +140,7 @@ fn seed_session_with_mermaid_output(env: &BuilderEnv) -> Result<(), Box<dyn std:
             .sessions()
             .append_session_message(
                 "mermaid-chat-0001",
-                SessionMessageKind::LegacyTranscript,
+                SessionMessageKind::AssistantAnswer,
                 "\
 Here is the merge flow and the data model:
 
@@ -2068,10 +2066,10 @@ fn terminal_session_continue_opens_seeded_prompt() -> E2eResult {
     Ok(())
 }
 
-/// Verify that completed published-branch auto-push feedback is rendered as
-/// transcript output rather than as a transient status line.
+/// Verify that completed published-branch auto-push feedback is rendered as a
+/// transcript message rather than as a transient status line.
 #[test]
-fn published_branch_push_notice_renders_as_transcript_output() -> E2eResult {
+fn published_branch_push_notice_renders_as_transcript_message() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("published_branch_push_notice")
         .with_git()
@@ -2086,7 +2084,7 @@ fn published_branch_push_notice_renders_as_transcript_output() -> E2eResult {
                     .viewing_pause_ms(1500)
                     .capture_labeled(
                         "published_branch_push_notice",
-                        "Published branch auto-push completion rendered in transcript output",
+                        "Published branch auto-push completion rendered as a transcript message",
                     )
             },
             |frame, _report| {

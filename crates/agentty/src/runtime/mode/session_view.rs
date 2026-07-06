@@ -1061,7 +1061,15 @@ fn session_prompt_history_entries(session: &crate::domain::session::Session) -> 
         return vec![session.prompt.clone()];
     }
 
-    prompt_history_entries(&session.output)
+    let Some(transcript_text) = session
+        .transcript
+        .as_ref()
+        .and_then(crate::domain::session_message::SessionTranscript::replay_text)
+    else {
+        return Vec::new();
+    };
+
+    prompt_history_entries(&transcript_text)
 }
 
 fn scroll_offset_down(scroll_offset: Option<u16>, metrics: ViewMetrics, step: u16) -> Option<u16> {
@@ -1242,6 +1250,14 @@ mod tests {
     use crate::infra::tmux::{MockTmuxClient, TmuxClient};
     use crate::ui::component::session_output::SessionOutputLineContext;
     use crate::ui::page::session_chat::SessionChatPage;
+
+    fn session_replay_text(session: &crate::domain::session::Session) -> String {
+        session
+            .transcript
+            .as_ref()
+            .and_then(SessionTranscript::replay_text)
+            .unwrap_or_default()
+    }
 
     /// Builds one git-backed test app with one created session and an
     /// injected tmux boundary.
@@ -1801,9 +1817,15 @@ mod tests {
     async fn test_view_total_lines_counts_wrapped_output_lines() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-        app.sessions.sessions_mut()[0].output = "word ".repeat(40);
-        let raw_line_count =
-            u16::try_from(app.sessions.sessions()[0].output.lines().count()).unwrap_or(u16::MAX);
+        app.sessions.sessions_mut()[0].transcript = Some(
+            crate::test_support::assistant_transcript("word ".repeat(40)),
+        );
+        let raw_line_count = u16::try_from(
+            session_replay_text(&app.sessions.sessions()[0])
+                .lines()
+                .count(),
+        )
+        .unwrap_or(u16::MAX);
 
         // Act
         let total_lines =
@@ -1870,7 +1892,6 @@ mod tests {
             SessionMessageKind::AssistantAnswer,
             "word ".repeat(60),
         )]);
-        app.sessions.sessions_mut()[0].output = transcript.to_legacy_output();
         app.sessions.sessions_mut()[0].transcript = Some(transcript);
         let metrics = ViewMetrics {
             total_lines: session_output_metric::rendered_output_line_count(
@@ -2231,7 +2252,7 @@ mod tests {
 
         // Assert
         app.sessions.sync_from_handles();
-        let output = app.sessions.sessions()[0].output.clone();
+        let output = session_replay_text(&app.sessions.sessions()[0]);
         assert_eq!(output, "line one");
     }
 
@@ -2344,7 +2365,7 @@ mod tests {
 
         // Assert
         app.sessions.sync_from_handles();
-        let output = app.sessions.sessions()[0].output.clone();
+        let output = session_replay_text(&app.sessions.sessions()[0]);
         assert!(output.contains("[Sync Error]"));
     }
 
@@ -3217,7 +3238,7 @@ mod tests {
             .await;
         app.sessions.session_handles_mut().insert(
             session_id.clone().into(),
-            crate::domain::session::SessionHandles::new(String::new(), Status::InProgress),
+            crate::domain::session::SessionHandles::new(Status::InProgress),
         );
 
         // Act
@@ -3255,8 +3276,7 @@ mod tests {
             .sessions()
             .update_session_status_with_timing_at(&session_id, &Status::InProgress.to_string(), 0)
             .await;
-        let handles =
-            crate::domain::session::SessionHandles::new(String::new(), Status::InProgress);
+        let handles = crate::domain::session::SessionHandles::new(Status::InProgress);
         if let Ok(mut guard) = handles.child_pid.lock() {
             *guard = Some(child_pid);
         }
@@ -3289,8 +3309,7 @@ mod tests {
             .sessions()
             .update_session_status_with_timing_at(&session_id, &Status::InProgress.to_string(), 0)
             .await;
-        let handles =
-            crate::domain::session::SessionHandles::new(String::new(), Status::InProgress);
+        let handles = crate::domain::session::SessionHandles::new(Status::InProgress);
         let cancel_token = std::sync::Arc::clone(&handles.cancel_token);
         app.sessions
             .session_handles_mut()
@@ -3324,7 +3343,7 @@ mod tests {
             .await;
         app.sessions.session_handles_mut().insert(
             session_id.clone().into(),
-            crate::domain::session::SessionHandles::new(String::new(), Status::Review),
+            crate::domain::session::SessionHandles::new(Status::Review),
         );
 
         // Act
@@ -3355,8 +3374,7 @@ mod tests {
             .sessions()
             .update_session_status_with_timing_at(&session_id, &Status::InProgress.to_string(), 0)
             .await;
-        let handles =
-            crate::domain::session::SessionHandles::new(String::new(), Status::InProgress);
+        let handles = crate::domain::session::SessionHandles::new(Status::InProgress);
         let cancel_token = std::sync::Arc::clone(&handles.cancel_token);
         let queued_messages = std::sync::Arc::clone(&handles.queued_messages);
         {
@@ -3430,8 +3448,7 @@ mod tests {
             .sessions()
             .update_session_status_with_timing_at(&session_id, &Status::InProgress.to_string(), 0)
             .await;
-        let handles =
-            crate::domain::session::SessionHandles::new(String::new(), Status::InProgress);
+        let handles = crate::domain::session::SessionHandles::new(Status::InProgress);
         let cancel_token = std::sync::Arc::clone(&handles.cancel_token);
         let queued_messages = std::sync::Arc::clone(&handles.queued_messages);
         {
@@ -3500,8 +3517,7 @@ mod tests {
             .sessions()
             .update_session_status_with_timing_at(&session_id, &Status::InProgress.to_string(), 0)
             .await;
-        let handles =
-            crate::domain::session::SessionHandles::new(String::new(), Status::InProgress);
+        let handles = crate::domain::session::SessionHandles::new(Status::InProgress);
         let cancel_token = std::sync::Arc::clone(&handles.cancel_token);
         app.sessions
             .session_handles_mut()
@@ -3548,8 +3564,7 @@ mod tests {
             .sessions()
             .update_session_status_with_timing_at(&session_id, &Status::InProgress.to_string(), 0)
             .await;
-        let handles =
-            crate::domain::session::SessionHandles::new(String::new(), Status::InProgress);
+        let handles = crate::domain::session::SessionHandles::new(Status::InProgress);
         let queued_messages = std::sync::Arc::clone(&handles.queued_messages);
         {
             let mut queued = queued_messages.lock().expect("queued_messages lock");

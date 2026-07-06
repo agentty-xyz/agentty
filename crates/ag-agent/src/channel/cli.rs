@@ -62,6 +62,7 @@ fn build_command_request<'a>(
         attachments: &request.prompt.attachments,
         folder: &request.folder,
         main_checkout_root: request.main_checkout_root.as_deref(),
+        replay_transcript: request.replay_transcript.as_deref(),
         model: &request.model,
         prompt: prompt_text,
         reasoning_level: request.reasoning_level,
@@ -395,6 +396,7 @@ async fn execute_cli_repair_turn(
         attachments: &prompt_payload.attachments,
         folder,
         main_checkout_root: None,
+        replay_transcript: None,
         model,
         prompt: repair_prompt,
         reasoning_level,
@@ -494,10 +496,11 @@ mod tests {
     fn make_turn_request(folder: PathBuf) -> TurnRequest {
         TurnRequest {
             folder,
-            live_session_output: None,
+            live_transcript: None,
             main_checkout_root: None,
             model: "claude-sonnet-5".to_string(),
             request_kind: AgentRequestKind::SessionStart,
+            replay_transcript: None,
             prompt: "Write a test".into(),
             provider_conversation_id: None,
             persisted_instruction_conversation_id: None,
@@ -531,10 +534,11 @@ mod tests {
         // Arrange
         let request = TurnRequest {
             folder: PathBuf::from("/tmp/session"),
-            live_session_output: None,
+            live_transcript: None,
             main_checkout_root: Some(PathBuf::from("/tmp/main")),
             model: "claude-sonnet-5".to_string(),
             request_kind: AgentRequestKind::SessionStart,
+            replay_transcript: None,
             prompt: TurnPrompt::from("Review @src/main.rs"),
             provider_conversation_id: None,
             persisted_instruction_conversation_id: None,

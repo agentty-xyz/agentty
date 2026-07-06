@@ -565,6 +565,7 @@ mod tests {
     use crate::domain::input::InputState;
     use crate::domain::question::QuestionItem;
     use crate::domain::session::Status;
+    use crate::domain::session_message::SessionTranscript;
     use crate::ui::state::app_mode::QuestionFocus;
     use crate::ui::state::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
 
@@ -714,8 +715,19 @@ mod tests {
     fn test_rendered_output_line_count_counts_wrapped_content() {
         // Arrange
         let mut session = session_fixture();
-        session.output = "word ".repeat(40);
-        let raw_line_count = u16::try_from(session.output.lines().count()).unwrap_or(u16::MAX);
+        session.transcript = Some(crate::test_support::assistant_transcript(
+            "word ".repeat(40),
+        ));
+        let raw_line_count = u16::try_from(
+            session
+                .transcript
+                .as_ref()
+                .and_then(SessionTranscript::replay_text)
+                .unwrap_or_default()
+                .lines()
+                .count(),
+        )
+        .unwrap_or(u16::MAX);
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
         let output_layout_cache = SessionOutputLayoutCache::default();
 

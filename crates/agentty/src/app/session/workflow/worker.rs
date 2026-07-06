@@ -22,7 +22,7 @@ use uuid::Uuid;
 use super::merge::{
     ExistingSessionRebaseAssistClient, RebaseAssistFuture, RebaseAssistMode, RebaseCommandInput,
 };
-use super::task::SessionOutputMessageAppend;
+use super::task::SessionTranscriptMessageAppend;
 use super::{SessionTaskService, isolation, session_folder, turn};
 use crate::app::service::SessionUpdateVersionMap;
 use crate::app::session::{Clock, SessionError, unix_timestamp_from_system_time};
@@ -74,6 +74,8 @@ pub(super) enum SessionCommand {
         operation_id: String,
         /// Whether this is a first-message start or a follow-up resume.
         request_kind: AgentRequestKind,
+        /// Replayable transcript text captured when this turn was queued.
+        replay_transcript: Option<String>,
         /// Structured user prompt payload.
         prompt: TurnPrompt,
         /// Per-turn metadata consumed during and after turn execution.
@@ -98,7 +100,7 @@ impl SessionCommand {
                 ..
             } => "start_prompt",
             Self::Run {
-                request_kind: AgentRequestKind::SessionResume { .. },
+                request_kind: AgentRequestKind::SessionResume,
                 ..
             } => "reply",
             Self::Run {
@@ -129,7 +131,6 @@ pub(super) struct SessionWorkerContext {
     pub(super) folder: PathBuf,
     pub(super) fs_client: Arc<dyn FsClient>,
     pub(super) git_client: Arc<dyn GitClient>,
-    pub(super) output: Arc<Mutex<String>>,
     /// In-memory queue of prompts staged while the session is `InProgress`.
     ///
     /// Shared with [`SessionHandles::queued_messages`]. The worker drains
@@ -208,8 +209,6 @@ struct SessionWorkerRebaseAssistClient {
     /// Main repository checkout that must remain read-only during assist
     /// turns.
     main_checkout_root: PathBuf,
-    /// Shared transcript buffer for assist summaries.
-    output: Arc<Mutex<String>>,
     /// Per-app session update versions for targeted refresh events.
     session_update_versions: SessionUpdateVersionMap,
     /// Session identifier whose provider conversation is reused.
@@ -231,7 +230,6 @@ impl SessionWorkerRebaseAssistClient {
             db: context.db.clone(),
             folder: context.folder.clone(),
             main_checkout_root,
-            output: Arc::clone(&context.output),
             session_update_versions: context.session_update_versions.clone(),
             session_id: context.session_id.clone(),
             session_agent: context.session_agent,
@@ -266,10 +264,11 @@ impl SessionWorkerRebaseAssistClient {
             .flatten();
         let req = TurnRequest {
             folder: self.folder.clone(),
-            live_session_output: Some(Arc::clone(&self.output)),
+            live_transcript: Some(turn::live_transcript_source(&self.transcript)),
             main_checkout_root: Some(self.main_checkout_root.clone()),
             model: self.session_agent.model().provider_model_str().to_string(),
             request_kind: AgentRequestKind::UtilityPrompt,
+            replay_transcript: None,
             prompt: TurnPrompt::from_agent_data(prompt),
             provider_conversation_id,
             persisted_instruction_conversation_id,
@@ -369,15 +368,13 @@ impl SessionWorkerRebaseAssistClient {
             return;
         }
 
-        SessionTaskService::append_session_output_message(
-            &self.output,
+        SessionTaskService::append_session_transcript_message(
             &self.transcript,
             &self.db,
             &self.app_event_tx,
             &self.session_update_versions,
             &self.session_id,
-            SessionOutputMessageAppend {
-                formatted_message: &answer_text,
+            SessionTranscriptMessageAppend {
                 kind: SessionMessageKind::AssistantAnswer,
                 raw_content: &answer_text,
             },
@@ -469,7 +466,6 @@ pub(super) struct SessionWorkerRuntime {
     cancel_token: Arc<Mutex<CancellationToken>>,
     child_pid: Arc<Mutex<Option<u32>>>,
     folder: PathBuf,
-    output: Arc<Mutex<String>>,
     queued_messages: Arc<Mutex<VecDeque<TurnPrompt>>>,
     review_request_client: Arc<dyn forge::ReviewRequestClient>,
     /// Per-app session update versions shared with the main runtime.
@@ -654,7 +650,6 @@ impl SessionWorkerService {
             folder: runtime.folder.clone(),
             fs_client: services.fs_client(),
             git_client: services.git_client(),
-            output: Arc::clone(&runtime.output),
             queued_messages: Arc::clone(&runtime.queued_messages),
             review_request_client: Arc::clone(&runtime.review_request_client),
             session_update_versions: Arc::clone(&runtime.session_update_versions),
@@ -789,12 +784,11 @@ impl SessionWorkerService {
                 .insert_session_operation(&operation_id, &context.session_id, "reply")
                 .await;
             let published_upstream_ref = context.load_published_upstream_ref().await;
-            append_drained_prompt_to_output(context, &prompt).await;
+            append_drained_prompt_to_transcript(context, &prompt).await;
             let command = SessionCommand::Run {
                 operation_id,
-                request_kind: AgentRequestKind::SessionResume {
-                    session_output: None,
-                },
+                request_kind: AgentRequestKind::SessionResume,
+                replay_transcript: None,
                 prompt,
                 turn_metadata: TurnMetadata {
                     published_upstream_ref,
@@ -836,10 +830,20 @@ impl SessionWorkerService {
             }
             SessionCommand::Run {
                 request_kind,
+                replay_transcript,
                 prompt,
                 turn_metadata,
                 ..
-            } => turn::run_channel_turn(context, turn_metadata, request_kind, prompt).await,
+            } => {
+                turn::run_channel_turn(
+                    context,
+                    turn_metadata,
+                    request_kind,
+                    replay_transcript,
+                    prompt,
+                )
+                .await
+            }
         }
     }
 
@@ -874,7 +878,6 @@ impl SessionWorkerService {
             fs_client: Arc::clone(&context.fs_client),
             git_client: Arc::clone(&context.git_client),
             id: context.session_id.clone(),
-            output: Arc::clone(&context.output),
             session_agent: context.session_agent,
             session_update_versions: context.session_update_versions.clone(),
             status: Arc::clone(&context.status),
@@ -1003,7 +1006,6 @@ impl SessionManager {
             cancel_token: Arc::clone(&handles.cancel_token),
             child_pid: Arc::clone(&handles.child_pid),
             folder: session.folder.clone(),
-            output: Arc::clone(&handles.output),
             queued_messages: Arc::clone(&handles.queued_messages),
             review_request_client: services.review_request_client(),
             session_update_versions: services.session_update_versions(),
@@ -1015,43 +1017,19 @@ impl SessionManager {
     }
 }
 
-/// Appends one drained queued prompt to the session transcript and shared
-/// output buffer so it renders alongside the normal reply prompt line once
-/// the queued turn starts running.
-///
-/// Mirrors the formatting used by [`SessionManager::formatted_prompt_output`]
-/// from the live reply path: the first line uses `USER_PROMPT_PREFIX` and
-/// continuation lines use `USER_PROMPT_CONTINUATION_PREFIX` so blank lines
-/// inside the prompt do not look like a transcript boundary.
-async fn append_drained_prompt_to_output(context: &SessionWorkerContext, prompt: &TurnPrompt) {
-    const USER_PROMPT_PREFIX: &str = " › ";
-    const USER_PROMPT_CONTINUATION_PREFIX: &str = "   ";
-
-    let prompt_text = prompt.transcript_text();
-    let prompt_lines = prompt_text.split('\n').collect::<Vec<_>>();
-    let mut formatted_lines = Vec::with_capacity(prompt_lines.len());
-    for (line_index, prompt_line) in prompt_lines.into_iter().enumerate() {
-        let prefix = if line_index == 0 {
-            USER_PROMPT_PREFIX
-        } else {
-            USER_PROMPT_CONTINUATION_PREFIX
-        };
-
-        formatted_lines.push(format!("{prefix}{prompt_line}"));
-    }
-    let prompt_block = formatted_lines.join("\n");
-    let message = format!("\n{prompt_block}\n\n");
+/// Appends one drained queued prompt to the typed session transcript so it
+/// renders alongside the normal reply prompt line once the queued turn starts
+/// running.
+async fn append_drained_prompt_to_transcript(context: &SessionWorkerContext, prompt: &TurnPrompt) {
     let prompt_transcript_text = prompt.transcript_text();
 
-    SessionTaskService::append_session_output_message(
-        &context.output,
+    SessionTaskService::append_session_transcript_message(
         &context.transcript,
         &context.db,
         &context.app_event_tx,
         &context.session_update_versions,
         &context.session_id,
-        SessionOutputMessageAppend {
-            formatted_message: &message,
+        SessionTranscriptMessageAppend {
             kind: SessionMessageKind::UserPrompt,
             raw_content: &prompt_transcript_text,
         },
@@ -1070,7 +1048,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::super::post_turn::{
-        PostTurnContext, apply_turn_result, build_assistant_transcript_output,
+        PostTurnContext, apply_turn_result, build_assistant_message_content,
         persisted_session_summary_payload, status_update_after_turn_result,
     };
     use super::super::turn::{
@@ -1178,6 +1156,14 @@ mod tests {
             .returning(|_, _| Box::pin(async { Ok(String::new()) }));
     }
 
+    fn transcript_text(transcript: &Arc<Mutex<SessionTranscript>>) -> String {
+        transcript
+            .lock()
+            .ok()
+            .and_then(|transcript| transcript.replay_text())
+            .unwrap_or_default()
+    }
+
     /// Applies one turn result through the narrowed post-turn dependency set
     /// cloned from a full worker context.
     async fn apply_worker_turn_result(
@@ -1224,6 +1210,7 @@ mod tests {
         let start_command = SessionCommand::Run {
             operation_id: "op-start".to_string(),
             request_kind: AgentRequestKind::SessionStart,
+            replay_transcript: None,
             prompt: "prompt".into(),
             turn_metadata: TurnMetadata {
                 published_upstream_ref: None,
@@ -1235,9 +1222,8 @@ mod tests {
         };
         let resume_command = SessionCommand::Run {
             operation_id: "op-resume".to_string(),
-            request_kind: AgentRequestKind::SessionResume {
-                session_output: None,
-            },
+            request_kind: AgentRequestKind::SessionResume,
+            replay_transcript: None,
             prompt: "prompt".into(),
             turn_metadata: TurnMetadata {
                 published_upstream_ref: None,
@@ -1250,6 +1236,7 @@ mod tests {
         let account_read_command = SessionCommand::Run {
             operation_id: "op-account-read".to_string(),
             request_kind: AgentRequestKind::AccountRead,
+            replay_transcript: None,
             prompt: "prompt".into(),
             turn_metadata: TurnMetadata {
                 published_upstream_ref: None,
@@ -1317,8 +1304,9 @@ mod tests {
     }
 
     #[test]
-    /// Ensures transcript output prefers `answer` messages when available.
-    fn test_build_assistant_transcript_output_prefers_answer_messages() {
+    /// Ensures assistant message content prefers `answer` messages when
+    /// available.
+    fn test_build_assistant_message_content_prefers_answer_messages() {
         // Arrange
         let response = AgentResponse {
             answer: "Implemented the fix.".to_string(),
@@ -1327,19 +1315,19 @@ mod tests {
         };
 
         // Act
-        let transcript_output = build_assistant_transcript_output(&response);
+        let message_content = build_assistant_message_content(&response);
 
         // Assert
         assert_eq!(
-            transcript_output,
+            message_content,
             Some("Implemented the fix.\n\n".to_string())
         );
     }
 
     #[test]
-    /// Ensures transcript output falls back to question text when no answers
-    /// are present.
-    fn test_build_assistant_transcript_output_falls_back_to_question_text() {
+    /// Ensures assistant message content falls back to question text when no
+    /// answers are present.
+    fn test_build_assistant_message_content_falls_back_to_question_text() {
         // Arrange
         let response = AgentResponse {
             answer: String::new(),
@@ -1348,18 +1336,18 @@ mod tests {
         };
 
         // Act
-        let transcript_output = build_assistant_transcript_output(&response);
+        let message_content = build_assistant_message_content(&response);
 
         // Assert
         assert_eq!(
-            transcript_output,
+            message_content,
             Some("Should I apply the patch?\n\n".to_string())
         );
     }
 
     #[test]
-    /// Ensures blank protocol messages do not append empty transcript output.
-    fn test_build_assistant_transcript_output_returns_none_for_blank_messages() {
+    /// Ensures blank protocol messages do not append empty transcript messages.
+    fn test_build_assistant_message_content_returns_none_for_blank_messages() {
         // Arrange
         let response = AgentResponse {
             answer: String::new(),
@@ -1368,10 +1356,10 @@ mod tests {
         };
 
         // Act
-        let transcript_output = build_assistant_transcript_output(&response);
+        let message_content = build_assistant_message_content(&response);
 
         // Assert
-        assert_eq!(transcript_output, None);
+        assert_eq!(message_content, None);
     }
 
     #[test]
@@ -1405,8 +1393,8 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies non-output events do not append transcript content.
-    async fn test_consume_turn_events_ignores_pid_only_events_for_transcript_output() {
+    /// Verifies process-only events do not append transcript content.
+    async fn test_consume_turn_events_ignores_pid_only_events_for_transcript_messages() {
         // Arrange
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
@@ -1459,7 +1447,7 @@ mod tests {
         expect_clean_main_checkout_snapshot(&mut mock_git_client, base_dir.path().join("main"));
 
         let cancel_token = Arc::new(Mutex::new(CancellationToken::new()));
-        let output = Arc::new(Mutex::new(String::new()));
+        let transcript = empty_transcript();
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
             cancel_token: Arc::clone(&cancel_token),
@@ -1470,8 +1458,7 @@ mod tests {
             folder: base_dir.path().to_path_buf(),
             fs_client: Arc::new(mock_fs_client_with_existing_directories()),
             git_client: Arc::new(mock_git_client),
-            output: Arc::clone(&output),
-            transcript: empty_transcript(),
+            transcript: Arc::clone(&transcript),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
@@ -1490,6 +1477,7 @@ mod tests {
             &context,
             default_turn_metadata(),
             AgentRequestKind::SessionStart,
+            None,
             "test prompt".into(),
         )
         .await;
@@ -1500,10 +1488,10 @@ mod tests {
             error_message.contains("[Stopped]"),
             "error should contain [Stopped], got: {error_message}"
         );
-        let output_text = output.lock().expect("output lock").clone();
+        let output_text = transcript_text(&transcript);
         assert!(
             output_text.contains("[Stopped]"),
-            "stopped message should be appended to output, got: {output_text}"
+            "stopped message should be appended to transcript, got: {output_text}"
         );
         assert_eq!(
             *context.status.lock().expect("status lock poisoned"),
@@ -1599,7 +1587,6 @@ mod tests {
             folder: base_dir.path().to_path_buf(),
             fs_client: Arc::new(mock_fs_client_with_existing_directories()),
             git_client: Arc::new(mock_git_client),
-            output: Arc::new(Mutex::new(String::new())),
             transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
@@ -1616,6 +1603,7 @@ mod tests {
             &context,
             default_turn_metadata(),
             AgentRequestKind::SessionStart,
+            None,
             "test prompt".into(),
         )
         .await;
@@ -1687,7 +1675,7 @@ mod tests {
             .expect_is_worktree_clean()
             .returning(|_| Box::pin(async { Ok(true) }));
 
-        let output = Arc::new(Mutex::new(String::new()));
+        let transcript = empty_transcript();
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
@@ -1698,8 +1686,7 @@ mod tests {
             folder: base_dir.path().to_path_buf(),
             fs_client: Arc::new(mock_fs_client_with_existing_directories()),
             git_client: Arc::new(mock_git_client),
-            output: Arc::clone(&output),
-            transcript: empty_transcript(),
+            transcript: Arc::clone(&transcript),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
@@ -1716,13 +1703,14 @@ mod tests {
             &context,
             default_turn_metadata(),
             AgentRequestKind::SessionStart,
+            None,
             "test prompt".into(),
         )
         .await;
 
         // Assert
         assert!(result.is_ok(), "main checkout changes should warn only");
-        let output_text = output.lock().expect("output lock poisoned");
+        let output_text = transcript_text(&transcript);
         assert!(output_text.contains("[Main Checkout Warning]"));
         assert!(output_text.contains("done"));
     }
@@ -1787,7 +1775,7 @@ mod tests {
             .expect_is_worktree_clean()
             .returning(|_| Box::pin(async { Ok(true) }));
 
-        let output = Arc::new(Mutex::new(String::new()));
+        let transcript = empty_transcript();
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
@@ -1798,8 +1786,7 @@ mod tests {
             folder: base_dir.path().to_path_buf(),
             fs_client: Arc::new(mock_fs_client_with_existing_directories()),
             git_client: Arc::new(mock_git_client),
-            output: Arc::clone(&output),
-            transcript: empty_transcript(),
+            transcript: Arc::clone(&transcript),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
@@ -1816,6 +1803,7 @@ mod tests {
             &context,
             default_turn_metadata(),
             AgentRequestKind::SessionStart,
+            None,
             "test prompt".into(),
         )
         .await;
@@ -1825,7 +1813,7 @@ mod tests {
             result.is_ok(),
             "main checkout `HEAD` changes should warn only"
         );
-        let output_text = output.lock().expect("output lock poisoned");
+        let output_text = transcript_text(&transcript);
         assert!(output_text.contains("[Main Checkout Warning]"));
         assert!(output_text.contains("done"));
     }
@@ -1873,7 +1861,6 @@ mod tests {
             folder: std::env::temp_dir(),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
-            output: Arc::new(Mutex::new(String::new())),
             transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
@@ -1889,10 +1876,11 @@ mod tests {
 
         let req = TurnRequest {
             folder: context.folder.clone(),
-            live_session_output: None,
+            live_transcript: None,
             main_checkout_root: None,
             model: "gemini-3-flash-preview".to_string(),
             request_kind: AgentRequestKind::SessionStart,
+            replay_transcript: None,
             prompt: "test".into(),
             provider_conversation_id: None,
             persisted_instruction_conversation_id: None,
@@ -1947,7 +1935,6 @@ mod tests {
             folder: std::env::temp_dir(),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
-            output: Arc::new(Mutex::new(String::new())),
             transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
@@ -1963,10 +1950,11 @@ mod tests {
 
         let req = TurnRequest {
             folder: context.folder.clone(),
-            live_session_output: None,
+            live_transcript: None,
             main_checkout_root: None,
             model: "gemini-3-flash-preview".to_string(),
             request_kind: AgentRequestKind::SessionStart,
+            replay_transcript: None,
             prompt: "test".into(),
             provider_conversation_id: None,
             persisted_instruction_conversation_id: None,
@@ -2018,7 +2006,6 @@ mod tests {
             folder: std::env::temp_dir(),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
-            output: Arc::new(Mutex::new(String::new())),
             transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
@@ -2063,7 +2050,6 @@ mod tests {
             folder: std::env::temp_dir(),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
-            output: Arc::new(Mutex::new(String::new())),
             transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
@@ -2089,7 +2075,7 @@ mod tests {
 
     #[tokio::test]
     /// Verifies thought deltas update the loader state without appending
-    /// transcript output.
+    /// transcript messages.
     async fn test_consume_turn_events_routes_thought_delta_to_progress_state_only() {
         // Arrange
         let (event_tx, event_rx) = mpsc::unbounded_channel();
@@ -2199,7 +2185,6 @@ mod tests {
             folder: base_dir.path().to_path_buf(),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
-            output: Arc::new(Mutex::new(String::new())),
             transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
@@ -2254,7 +2239,7 @@ mod tests {
                 turn: "- Updated the worker flow.".to_string(),
             })
         );
-        let output = context.output.lock().expect("output lock poisoned");
+        let output = transcript_text(&context.transcript);
         assert!(output.starts_with("Implemented the change.\n\n"));
         assert!(!output.contains("[Commit] No changes to commit."));
         assert!(!output.contains("## Change Summary"));
@@ -2284,7 +2269,6 @@ mod tests {
             folder,
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(auto_commit_git_client(commit_message, &mut sequence)),
-            output: Arc::new(Mutex::new(String::new())),
             transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(review_metadata_sync_client(
@@ -2366,7 +2350,6 @@ mod tests {
             folder: base_dir.path().join("sess1"),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(auto_commit_git_client_with_push_failure(commit_message)),
-            output: Arc::new(Mutex::new(String::new())),
             transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
@@ -2683,7 +2666,6 @@ mod tests {
             folder: base_dir.path().join("sess1"),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
-            output: Arc::new(Mutex::new(String::new())),
             transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
@@ -2787,7 +2769,6 @@ mod tests {
             folder: base_dir.path().join("sess1"),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
-            output: Arc::new(Mutex::new(String::new())),
             transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::from([TurnPrompt::from_text(
                 "queued follow-up".to_string(),
@@ -2880,7 +2861,7 @@ mod tests {
                     })
                 })
             });
-        let output = Arc::new(Mutex::new(String::new()));
+        let transcript = empty_transcript();
         let context = SessionWorkerContext {
             app_event_tx,
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
@@ -2891,8 +2872,7 @@ mod tests {
             folder: base_dir.path().join("sess1"),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
-            output: Arc::clone(&output),
-            transcript: empty_transcript(),
+            transcript: Arc::clone(&transcript),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
@@ -2933,7 +2913,7 @@ mod tests {
         })
         .await
         .expect("timed out waiting for sync events");
-        let output = output.lock().expect("output lock poisoned");
+        let output = transcript_text(&transcript);
 
         // Assert
         assert_eq!(status, Status::Review);
@@ -2985,7 +2965,6 @@ mod tests {
             folder: base_dir.path().to_path_buf(),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
-            output: Arc::new(Mutex::new(String::new())),
             transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
@@ -3025,7 +3004,7 @@ mod tests {
             .await
             .expect_err("turn result should fail when metadata persistence fails");
         let events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
-        let output = context.output.lock().expect("output lock poisoned");
+        let output = transcript_text(&context.transcript);
 
         // Assert
         assert!(
@@ -3052,7 +3031,7 @@ mod tests {
     #[tokio::test]
     /// Verifies persisted assistant text stays unchanged when summaries are
     /// stored only in structured session metadata.
-    async fn test_apply_turn_result_keeps_summary_out_of_transcript_output() {
+    async fn test_apply_turn_result_keeps_summary_out_of_assistant_messages() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
         let db = AppRepositories::in_memory().await;
@@ -3077,7 +3056,9 @@ mod tests {
             .expect_is_worktree_clean()
             .times(1)
             .returning(|_| Box::pin(async { Ok(true) }));
-        let output = Arc::new(Mutex::new("Hey! How can I help you today?".to_string()));
+        let transcript = Arc::new(Mutex::new(crate::test_support::assistant_transcript(
+            "Hey! How can I help you today?",
+        )));
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
@@ -3088,8 +3069,7 @@ mod tests {
             folder: base_dir.path().to_path_buf(),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
-            output: Arc::clone(&output),
-            transcript: empty_transcript(),
+            transcript: Arc::clone(&transcript),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
@@ -3126,12 +3106,14 @@ mod tests {
         let status = apply_worker_turn_result(&context, turn_metadata, turn_result)
             .await
             .expect("turn result should succeed");
-        let output = output.lock().expect("output lock poisoned");
+        let output = transcript_text(&transcript);
 
         // Assert
         assert_eq!(status, Status::Review);
         assert!(
-            output.starts_with("Hey! How can I help you today?Hey! How can I help you today?\n\n")
+            output.starts_with(
+                "Hey! How can I help you today?\n\nHey! How can I help you today?\n\n"
+            )
         );
         assert!(!output.contains("[Commit] No changes to commit."));
         assert!(!output.contains("## Change Summary"));
@@ -3169,7 +3151,6 @@ mod tests {
             folder: base_dir.path().to_path_buf(),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
-            output: Arc::new(Mutex::new(String::new())),
             transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
@@ -3223,7 +3204,6 @@ mod tests {
     struct RebaseAssistWorkerHarness {
         context: SessionWorkerContext,
         db: AppRepositories,
-        output: Arc<Mutex<String>>,
         status: Arc<Mutex<Status>>,
     }
 
@@ -3405,7 +3385,6 @@ mod tests {
             .canonicalize()
             .expect("failed to canonicalize main checkout");
 
-        let output = Arc::new(Mutex::new(String::new()));
         let status = Arc::new(Mutex::new(Status::Rebasing));
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
@@ -3421,7 +3400,6 @@ mod tests {
             git_client: Arc::new(mock_successful_conflict_rebase_git_client(
                 main_checkout_root,
             )),
-            output: Arc::clone(&output),
             transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
@@ -3437,7 +3415,6 @@ mod tests {
         RebaseAssistWorkerHarness {
             context,
             db,
-            output,
             status,
         }
     }
@@ -3470,7 +3447,7 @@ mod tests {
             .get_session_instruction_conversation_id("sess1")
             .await
             .expect("failed to load instruction conversation id");
-        let output_text = harness.output.lock().expect("output lock").clone();
+        let output_text = transcript_text(&harness.context.transcript);
         let final_status = *harness.status.lock().expect("status lock");
 
         // Assert
@@ -3645,7 +3622,6 @@ mod tests {
             folder: base_dir.path().to_path_buf(),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
-            output: Arc::new(Mutex::new(String::new())),
             transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
@@ -3718,7 +3694,6 @@ mod tests {
             folder: base_dir.path().to_path_buf(),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
-            output: Arc::new(Mutex::new(String::new())),
             transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
@@ -3805,7 +3780,6 @@ mod tests {
             folder: base_dir.path().to_path_buf(),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
-            output: Arc::new(Mutex::new(String::new())),
             transcript: empty_transcript(),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
@@ -3903,7 +3877,6 @@ mod tests {
             folder: base_dir.path().to_path_buf(),
             fs_client: Arc::new(mock_fs_client_with_existing_directories()),
             git_client: Arc::new(mock_git_client),
-            output: Arc::new(Mutex::new(String::new())),
             transcript: empty_transcript(),
             queued_messages: Arc::clone(&queue_handle),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
@@ -3933,7 +3906,6 @@ mod tests {
             folder: PathBuf::new(),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
-            output: Arc::new(Mutex::new(String::new())),
             transcript: empty_transcript(),
             queued_messages: queue,
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),

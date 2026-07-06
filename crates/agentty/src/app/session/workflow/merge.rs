@@ -167,7 +167,6 @@ struct MergeTaskInput {
     fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
     id: SessionId,
-    output: Arc<Mutex<String>>,
     repo_root: PathBuf,
     session_agent: AgentSelection,
     session_update_versions: SessionUpdateVersionMap,
@@ -206,7 +205,6 @@ struct RebaseAssistInput {
     fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
     id: SessionId,
-    output: Arc<Mutex<String>>,
     rebase_plan: RebasePlan,
     session_agent: AgentSelection,
     session_update_versions: SessionUpdateVersionMap,
@@ -215,7 +213,7 @@ struct RebaseAssistInput {
 
 /// Input required to run a session rebase command to completion.
 pub(super) struct RebaseCommandInput {
-    /// Reducer event sender used for status/output updates.
+    /// Reducer event sender used for status and transcript updates.
     pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
     /// Agent submission mode used when rebase conflicts need edits.
     pub(super) assist_mode: RebaseAssistMode,
@@ -233,10 +231,8 @@ pub(super) struct RebaseCommandInput {
     pub(super) fs_client: Arc<dyn FsClient>,
     /// Git boundary used for rebase commands.
     pub(super) git_client: Arc<dyn GitClient>,
-    /// Session identifier receiving output/status updates.
+    /// Session identifier receiving transcript/status updates.
     pub(super) id: SessionId,
-    /// Shared transcript buffer mirrored to persistence and UI.
-    pub(super) output: Arc<Mutex<String>>,
     /// Agent/model selection used by agent-assisted conflict prompts.
     pub(super) session_agent: AgentSelection,
     /// Per-app update versions for targeted session refresh events.
@@ -254,7 +250,6 @@ struct FinalizeRebaseInput<'a> {
     folder: &'a Path,
     git_client: &'a Arc<dyn GitClient>,
     id: &'a str,
-    output: &'a Arc<Mutex<String>>,
     rebase_result: Result<String, SessionError>,
     session_update_versions: &'a SessionUpdateVersionMap,
     /// Bound transition context for restoring `Review` after rebase cleanup.
@@ -268,7 +263,6 @@ struct RebaseAutoPushInput<'a> {
     db: &'a AppRepositories,
     folder: &'a Path,
     git_client: &'a Arc<dyn GitClient>,
-    output: &'a Arc<Mutex<String>>,
     session_id: &'a str,
     session_update_versions: &'a SessionUpdateVersionMap,
     transcript: &'a Arc<Mutex<SessionTranscript>>,
@@ -279,7 +273,6 @@ struct FinalizeMergeInput<'a> {
     app_event_tx: &'a mpsc::UnboundedSender<AppEvent>,
     db: &'a AppRepositories,
     id: &'a str,
-    output: &'a Arc<Mutex<String>>,
     result: Result<String, SessionError>,
     session_update_versions: &'a SessionUpdateVersionMap,
     /// Bound transition context for restoring failed merges to `Review`.
@@ -630,9 +623,8 @@ impl SessionMergeService {
         let handles = manager
             .session_handles_or_err(session_id)
             .map_err(|_| SessionError::HandlesNotFound)?;
-        let (child_pid, output, status, transcript) = (
+        let (child_pid, status, transcript) = (
             Arc::clone(&handles.child_pid),
-            Arc::clone(&handles.output),
             Arc::clone(&handles.status),
             Arc::clone(&handles.transcript),
         );
@@ -678,7 +670,6 @@ impl SessionMergeService {
             fs_client,
             git_client,
             id: id.clone(),
-            output,
             repo_root,
             session_agent,
             session_update_versions,
@@ -1058,7 +1049,6 @@ impl SessionManager {
     }
 
     async fn run_merge_task(input: MergeTaskInput) {
-        let output = Arc::clone(&input.output);
         let clock = Arc::clone(&input.clock);
         let db = input.db.clone();
         let app_event_tx = input.app_event_tx.clone();
@@ -1080,7 +1070,6 @@ impl SessionManager {
             app_event_tx: &app_event_tx,
             db: &db,
             id: &id,
-            output: &output,
             result: merge_result,
             session_update_versions: &session_update_versions,
             status_transition: &status_transition,
@@ -1106,7 +1095,6 @@ impl SessionManager {
             fs_client,
             git_client,
             id,
-            output: _,
             repo_root,
             source_branch,
             session_update_versions,
@@ -1343,7 +1331,6 @@ impl SessionManager {
             fs_client: Arc::clone(&input.fs_client),
             git_client: Arc::clone(&input.git_client),
             id: input.id.clone(),
-            output: Arc::clone(&input.output),
             rebase_plan: RebasePlan::target(input.base_branch.clone()),
             session_agent: input.session_agent,
             session_update_versions: input.session_update_versions.clone(),
@@ -1409,7 +1396,6 @@ impl SessionManager {
             app_event_tx,
             db,
             id,
-            output,
             result,
             session_update_versions,
             status_transition,
@@ -1424,8 +1410,7 @@ impl SessionManager {
             }
             Err(error) => {
                 let merge_error = TranscriptNotice::MergeError.format(error);
-                SessionTaskService::append_session_output(
-                    output,
+                SessionTaskService::append_workflow_notice(
                     transcript,
                     db,
                     app_event_tx,
@@ -1740,7 +1725,6 @@ impl SessionManager {
             fs_client,
             git_client,
             id,
-            output,
             session_agent,
             session_update_versions,
             status,
@@ -1765,7 +1749,6 @@ impl SessionManager {
                 fs_client: Arc::clone(&fs_client),
                 git_client: Arc::clone(&git_client),
                 id: id.clone(),
-                output: Arc::clone(&output),
                 rebase_plan,
                 session_agent,
                 session_update_versions: session_update_versions.clone(),
@@ -1791,7 +1774,6 @@ impl SessionManager {
             folder: &folder,
             git_client: &git_client,
             id: &id,
-            output: &output,
             rebase_result,
             session_update_versions: &session_update_versions,
             status_transition: &status_transition,
@@ -2026,7 +2008,6 @@ impl SessionManager {
             folder,
             git_client,
             id,
-            output,
             rebase_result,
             session_update_versions,
             status_transition,
@@ -2037,8 +2018,7 @@ impl SessionManager {
         match rebase_result {
             Ok(message) => {
                 let rebase_message = TranscriptNotice::Rebase.format(message);
-                SessionTaskService::append_session_output(
-                    output,
+                SessionTaskService::append_workflow_notice(
                     transcript,
                     db,
                     app_event_tx,
@@ -2054,7 +2034,6 @@ impl SessionManager {
                     db,
                     folder,
                     git_client,
-                    output,
                     session_id: id,
                     session_update_versions,
                     transcript,
@@ -2063,8 +2042,7 @@ impl SessionManager {
             }
             Err(error) => {
                 let rebase_error = TranscriptNotice::RebaseError.format(error);
-                SessionTaskService::append_session_output(
-                    output,
+                SessionTaskService::append_workflow_notice(
                     transcript,
                     db,
                     app_event_tx,
@@ -2099,7 +2077,6 @@ impl SessionManager {
             db,
             folder,
             git_client,
-            output,
             session_id,
             session_update_versions,
             transcript,
@@ -2137,7 +2114,6 @@ impl SessionManager {
         let db = db.clone();
         let folder = folder.to_path_buf();
         let git_client = Arc::clone(git_client);
-        let output = Arc::clone(output);
         let transcript = Arc::clone(transcript);
         let session_id = SessionId::from(session_id);
         let auto_push_input = PublishedBranchAutoPushInput {
@@ -2145,7 +2121,6 @@ impl SessionManager {
             db,
             folder,
             git_client,
-            output,
             published_upstream_ref,
             review_request_metadata_sync: None,
             session_id,
@@ -2834,7 +2809,6 @@ impl SessionManager {
             folder: input.folder.clone(),
             git_client: Arc::clone(&input.git_client),
             id: input.id.to_string(),
-            output: Arc::clone(&input.output),
             session_agent: input.session_agent,
             session_update_versions: input.session_update_versions.clone(),
             transcript: Arc::clone(&input.transcript),
@@ -2975,7 +2949,6 @@ mod tests {
                 fs_client: test_fs_client(),
                 git_client,
                 id: "session-123".into(),
-                output: Arc::new(Mutex::new(String::new())),
                 transcript: empty_transcript(),
                 rebase_plan: RebasePlan::target("main".to_string()),
                 session_agent: AgentSelection::new(
@@ -3010,7 +2983,6 @@ mod tests {
                 fs_client: test_fs_client(),
                 git_client,
                 id: "session-123".into(),
-                output: Arc::new(Mutex::new(String::new())),
                 transcript: empty_transcript(),
                 repo_root,
                 session_update_versions: Arc::default(),
@@ -3518,7 +3490,6 @@ mod tests {
             fs_client: test_fs_client(),
             git_client: Arc::new(git::RealGitClient),
             id: "session-123".into(),
-            output: Arc::new(Mutex::new(String::new())),
             transcript: empty_transcript(),
             rebase_plan: RebasePlan::target("origin/main".to_string()),
             session_agent: AgentSelection::new(
@@ -4748,7 +4719,6 @@ mod tests {
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
         let temp_dir = tempdir().expect("failed to create temp dir");
         let folder = temp_dir.path().join("sess-rebase");
-        let output = Arc::new(Mutex::new(String::new()));
         let session_update_versions = Arc::default();
         let status = Arc::new(Mutex::new(Status::Rebasing));
         let transcript = empty_transcript();
@@ -4778,7 +4748,6 @@ mod tests {
             folder: &folder,
             git_client: &git_client,
             id: "sess-rebase",
-            output: &output,
             rebase_result: Ok("Successfully synced wt/sess-rebase onto main".to_string()),
             session_update_versions: &session_update_versions,
             status_transition: &status_transition,
@@ -4812,8 +4781,12 @@ mod tests {
         assert_eq!(sync_events[1].2, PublishedBranchSyncStatus::Succeeded);
         assert_eq!(sync_events[0].1, sync_events[1].1);
 
-        let output_text = output.lock().expect("output lock poisoned").clone();
-        assert!(output_text.contains("[Sync] Successfully synced"));
+        let transcript_text = transcript
+            .lock()
+            .expect("transcript lock poisoned")
+            .replay_text()
+            .unwrap_or_default();
+        assert!(transcript_text.contains("[Sync] Successfully synced"));
     }
 
     #[tokio::test]
@@ -4841,7 +4814,6 @@ mod tests {
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
         let temp_dir = tempdir().expect("failed to create temp dir");
         let folder = temp_dir.path().join("sess-no-push");
-        let output = Arc::new(Mutex::new(String::new()));
         let session_update_versions = Arc::default();
         let status = Arc::new(Mutex::new(Status::Rebasing));
         let transcript = empty_transcript();
@@ -4862,7 +4834,6 @@ mod tests {
             folder: &folder,
             git_client: &git_client,
             id: "sess-no-push",
-            output: &output,
             rebase_result: Ok("Successfully synced wt/sess-no-push onto main".to_string()),
             session_update_versions: &session_update_versions,
             status_transition: &status_transition,
@@ -4892,7 +4863,11 @@ mod tests {
             "should emit one stacked parent sync completion event"
         );
 
-        let output_text = output.lock().expect("output lock poisoned").clone();
-        assert!(output_text.contains("[Sync] Successfully synced"));
+        let transcript_text = transcript
+            .lock()
+            .expect("transcript lock poisoned")
+            .replay_text()
+            .unwrap_or_default();
+        assert!(transcript_text.contains("[Sync] Successfully synced"));
     }
 }

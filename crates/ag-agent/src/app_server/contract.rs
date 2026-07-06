@@ -3,12 +3,12 @@
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use tokio::sync::mpsc;
 
 use crate::app_server::AppServerError;
-use crate::channel::AgentRequestKind;
+use crate::channel::{AgentRequestKind, LiveTranscript};
 use crate::model::agent::ReasoningLevel;
 use crate::model::turn_prompt::TurnPrompt;
 
@@ -49,12 +49,12 @@ pub enum AppServerStreamEvent {
 pub struct AppServerTurnRequest {
     /// Session worktree folder where the provider runtime executes.
     pub folder: PathBuf,
-    /// Live in-memory session output buffer updated by the streaming consumer.
+    /// Live in-memory transcript source updated by the streaming consumer.
     ///
-    /// When set, restart-and-retry reads the latest accumulated output from
-    /// this buffer instead of the stale `session_output` snapshot, ensuring
-    /// content streamed before the crash is included in the replay prompt.
-    pub live_session_output: Option<Arc<Mutex<String>>>,
+    /// When set, restart-and-retry reads the latest accumulated transcript
+    /// from this source instead of the queued snapshot, ensuring content
+    /// streamed before the crash is included in the replay prompt.
+    pub live_transcript: Option<Arc<dyn LiveTranscript>>,
     /// Main repository checkout that must remain read-only during the turn,
     /// when Agentty can resolve it.
     pub main_checkout_root: Option<PathBuf>,
@@ -65,6 +65,8 @@ pub struct AppServerTurnRequest {
     /// Canonical request kind that drives transport behavior and protocol
     /// semantics for this turn.
     pub request_kind: AgentRequestKind,
+    /// Replayable transcript text captured when the turn was queued.
+    pub replay_transcript: Option<String>,
     /// Provider-native thread/session id used to resume context in a newly
     /// started runtime.
     pub provider_conversation_id: Option<String>,

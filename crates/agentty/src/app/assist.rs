@@ -37,8 +37,6 @@ pub(super) struct AssistContext {
     pub(super) git_client: Arc<dyn GitClient>,
     /// Session identifier receiving assist output updates.
     pub(super) id: String,
-    /// Shared output buffer mirrored to persistence and UI.
-    pub(super) output: Arc<Mutex<String>>,
     /// Agent/model selection used when invoking agent-assisted recovery.
     pub(super) session_agent: AgentSelection,
     /// Per-app session update versions shared with the main runtime.
@@ -109,8 +107,7 @@ pub(super) async fn append_assist_header(
     let assist_header = notice.format(format!(
         "Attempt {assist_attempt}/{max_assist_attempts}. {assist_action}\n{detail}"
     ));
-    SessionTaskService::append_session_output(
-        &context.output,
+    SessionTaskService::append_workflow_notice(
         &context.transcript,
         &context.db,
         &context.app_event_tx,
@@ -136,7 +133,6 @@ pub(super) async fn run_agent_assist(
         db: context.db.clone(),
         folder: context.folder.clone(),
         id: context.id.clone(),
-        output: Arc::clone(&context.output),
         prompt: prompt.to_string(),
         session_agent: context.session_agent,
         session_update_versions: context.session_update_versions.clone(),

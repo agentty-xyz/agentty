@@ -918,7 +918,6 @@ mod tests {
         let mut session = SessionFixtureBuilder::new()
             .id(session_id)
             .folder(PathBuf::from(format!("/tmp/{session_id}")))
-            .output(transcript.to_legacy_output())
             .prompt("Prompt")
             .status(Status::Review)
             .summary(Some("Summary line for router test".to_string()))

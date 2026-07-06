@@ -98,8 +98,8 @@ channels:
 - **Turn event stream** (`TurnEvent`): `AgentChannel` implementations stream transient
   loader-thought and PID updates to the session turn consumer while the final transcript
   waits for the completed turn result.
-- **Session handles** (`SessionHandles`): shared `Arc<Mutex<...>>` output, status, PID,
-  and queued-message state. Handles are the single source of truth for live session
+- **Session handles** (`SessionHandles`): shared `Arc<Mutex<...>>` transcript, status,
+  PID, and queued-message state. Handles are the single source of truth for live session
   data; the reducer re-projects them into render snapshots on `SessionUpdated` without a
   full DB reload.
 
@@ -125,12 +125,12 @@ loader updates), and applies side effects in stable order. Key behaviors:
 by `crates/agentty/src/ui/page/session_chat.rs` and
 `crates/agentty/src/ui/component/session_output.rs`. The durable transcript is the
 ordered `session_message` rows (typed `UserPrompt`, `AssistantAnswer`, `WorkflowNotice`,
-and `LegacyTranscript` rows); the component layers synthetic content on top at render
-time: the `session.summary` block, focused review text, the in-progress published-branch
-sync row, and the animated loader row. Completed published-branch auto-push results are
-persisted as `WorkflowNotice` transcript rows instead of synthetic render rows.
-Structured clarification questions render in the bottom question panel
-(`AppMode::Question`), not inside the output component.
+rows); the component layers synthetic content on top at render time: the
+`session.summary` block, focused review text, the in-progress published-branch sync row,
+and the animated loader row. Completed published-branch auto-push results are persisted
+as `WorkflowNotice` transcript rows instead of synthetic render rows. Structured
+clarification questions render in the bottom question panel (`AppMode::Question`), not
+inside the output component.
 
 `App` owns one shared `RenderCacheStore` for markdown, diff, and session-output layout
 caches. Changes in this area should keep caches bounded and route layout/count helpers
@@ -245,12 +245,12 @@ flowchart TD
 `crates/ag-agent/src/channel.rs`, with prompt payloads owned by `ag-protocol` and
 re-exported through `domain/turn_prompt.rs`):
 
-| Type               | Purpose                                                                                                                                     |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `TurnRequest`      | Input payload: `reasoning_level`, folder, `live_session_output`, `main_checkout_root`, model, `request_kind`, prompt, and provider context. |
-| `TurnEvent`        | Incremental stream events: `ThoughtDelta`, `Completed`, `Failed`, `PidUpdate`.                                                              |
-| `TurnResult`       | Normalized output: `assistant_message`, token counts, `provider_conversation_id`.                                                           |
-| `AgentRequestKind` | `SessionStart`, `SessionResume` (with optional session output replay), or `UtilityPrompt`.                                                  |
+| Type               | Purpose                                                                                                                                                               |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TurnRequest`      | Input payload: `reasoning_level`, folder, `live_transcript`, `main_checkout_root`, optional `replay_transcript`, model, `request_kind`, prompt, and provider context. |
+| `TurnEvent`        | Incremental stream events: `ThoughtDelta`, `Completed`, `Failed`, `PidUpdate`.                                                                                        |
+| `TurnResult`       | Normalized output: `assistant_message`, token counts, `provider_conversation_id`.                                                                                     |
+| `AgentRequestKind` | `SessionStart`, `SessionResume`, or `UtilityPrompt`; replay text lives on `TurnRequest` rather than the request kind.                                                 |
 
 <a id="architecture-provider-conversation-id-flow"></a> App-server providers return a
 `provider_conversation_id` in `TurnResult`. Post-turn application persists it, along

@@ -13,7 +13,7 @@ use tokio::sync::mpsc;
 use tracing::warn;
 use uuid::Uuid;
 
-use super::task::SessionOutputMessageAppend;
+use super::task::SessionTranscriptMessageAppend;
 use super::worker::{SessionCommand, TurnMetadata};
 use super::{
     SessionTaskService, StatusTransition, draft, isolation, session_branch, session_folder,
@@ -64,8 +64,8 @@ struct BuildSessionCommandInput {
     is_first_message: bool,
     published_upstream_ref: Option<String>,
     prompt: TurnPrompt,
+    replay_transcript: Option<String>,
     session_agent: AgentSelection,
-    session_output: Option<String>,
 }
 
 /// Intermediate values captured while preparing a session reply.
@@ -1067,7 +1067,6 @@ impl SessionManager {
         };
 
         let handles = self.session_handles_or_err(&persisted_session_id)?;
-        let output = Arc::clone(&handles.output);
         let transcript = Arc::clone(&handles.transcript);
         let status_transition =
             StatusTransition::from_services(services, handles, persisted_session_id.clone());
@@ -1078,15 +1077,13 @@ impl SessionManager {
 
         let prompt_transcript_text = prompt.transcript_text();
         let initial_output = Self::formatted_prompt_output(&prompt, false);
-        SessionTaskService::append_session_output_message(
-            &output,
+        SessionTaskService::append_session_transcript_message(
             &transcript,
             services.db(),
             &app_event_tx,
             &services.session_update_versions(),
             &persisted_session_id,
-            SessionOutputMessageAppend {
-                formatted_message: &initial_output,
+            SessionTranscriptMessageAppend {
                 kind: SessionMessageKind::UserPrompt,
                 raw_content: &prompt_transcript_text,
             },
@@ -1105,6 +1102,7 @@ impl SessionManager {
         let command = SessionCommand::Run {
             operation_id,
             request_kind: AgentRequestKind::SessionStart,
+            replay_transcript: None,
             prompt: prompt.clone(),
             turn_metadata: TurnMetadata {
                 published_upstream_ref: None,
@@ -1754,7 +1752,7 @@ impl SessionManager {
             return false;
         };
         let should_replay_history = self.should_replay_history(session_id);
-        let (session_output, is_first_message, persisted_session_id, title_to_save) =
+        let (replay_transcript, is_first_message, persisted_session_id, title_to_save) =
             match self.prepare_reply_context(session_index, &prompt, should_replay_history) {
                 Ok(Some(reply_context)) => reply_context,
                 Ok(None) => return false,
@@ -1776,7 +1774,6 @@ impl SessionManager {
             return false;
         };
 
-        let output = Arc::clone(&handles.output);
         let transcript = Arc::clone(&handles.transcript);
         let status_transition =
             StatusTransition::from_services(services, handles, persisted_session_id.clone());
@@ -1802,7 +1799,6 @@ impl SessionManager {
 
         self.append_reply_prompt_line(
             services,
-            &output,
             &transcript,
             &app_event_tx,
             &persisted_session_id,
@@ -1818,12 +1814,11 @@ impl SessionManager {
             is_first_message,
             published_upstream_ref,
             prompt: effective_prompt.clone(),
+            replay_transcript,
             session_agent,
-            session_output,
         });
         self.enqueue_reply_command(
             services,
-            &output,
             &transcript,
             &persisted_session_id,
             &effective_prompt,
@@ -1880,17 +1875,20 @@ impl SessionManager {
             title_to_save = Some(title);
         }
 
-        let session_output = if !is_first_message
+        let replay_transcript = if !is_first_message
             && (should_replay_history
                 || agent::transport_mode(session.agent.kind()).uses_app_server())
         {
-            Some(session.output.clone())
+            session
+                .transcript
+                .as_ref()
+                .and_then(SessionTranscript::replay_text)
         } else {
             None
         };
 
         Ok(Some((
-            session_output,
+            replay_transcript,
             is_first_message,
             session.id.clone(),
             title_to_save,
@@ -1941,7 +1939,6 @@ impl SessionManager {
     async fn append_reply_prompt_line(
         &mut self,
         services: &AppServices,
-        output: &Arc<Mutex<String>>,
         transcript: &Arc<Mutex<SessionTranscript>>,
         app_event_tx: &mpsc::UnboundedSender<AppEvent>,
         session_id: &str,
@@ -1949,15 +1946,13 @@ impl SessionManager {
     ) {
         let prompt_transcript_text = prompt.transcript_text();
         let reply_line = Self::formatted_prompt_output(prompt, true);
-        SessionTaskService::append_session_output_message(
-            output,
+        SessionTaskService::append_session_transcript_message(
             transcript,
             services.db(),
             app_event_tx,
             &services.session_update_versions(),
             session_id,
-            SessionOutputMessageAppend {
-                formatted_message: &reply_line,
+            SessionTranscriptMessageAppend {
                 kind: SessionMessageKind::UserPrompt,
                 raw_content: &prompt_transcript_text,
             },
@@ -2054,19 +2049,20 @@ impl SessionManager {
             is_first_message,
             published_upstream_ref,
             prompt,
+            replay_transcript,
             session_agent,
-            session_output,
         } = input;
         let operation_id = Uuid::new_v4().to_string();
         let request_kind = if is_first_message {
             AgentRequestKind::SessionStart
         } else {
-            AgentRequestKind::SessionResume { session_output }
+            AgentRequestKind::SessionResume
         };
 
         SessionCommand::Run {
             operation_id,
             request_kind,
+            replay_transcript,
             prompt,
             turn_metadata: TurnMetadata {
                 published_upstream_ref,
@@ -2089,8 +2085,7 @@ impl SessionManager {
         };
         let app_event_tx = services.event_sender();
 
-        SessionTaskService::append_session_output(
-            &handles.output,
+        SessionTaskService::append_workflow_notice(
             &handles.transcript,
             services.db(),
             &app_event_tx,
@@ -2106,7 +2101,6 @@ impl SessionManager {
     async fn enqueue_reply_command(
         &mut self,
         services: &AppServices,
-        output: &Arc<Mutex<String>>,
         transcript: &Arc<Mutex<SessionTranscript>>,
         persisted_session_id: &str,
         prompt: &TurnPrompt,
@@ -2120,8 +2114,7 @@ impl SessionManager {
 
             let error_line = TranscriptNotice::ReplyError.format(error);
             let app_event_tx = services.event_sender();
-            SessionTaskService::append_session_output(
-                output,
+            SessionTaskService::append_workflow_notice(
                 transcript,
                 services.db(),
                 &app_event_tx,
@@ -2523,8 +2516,7 @@ impl SessionManager {
         };
         let app_event_tx = services.event_sender();
 
-        SessionTaskService::append_session_output(
-            &handles.output,
+        SessionTaskService::append_workflow_notice(
             &handles.transcript,
             services.db(),
             &app_event_tx,
@@ -2991,7 +2983,10 @@ mod tests {
         let mut handles = HashMap::new();
         handles.insert(
             session.id.clone(),
-            SessionHandles::new(session.output.clone(), session.status),
+            SessionHandles::new_with_transcript(
+                session.status,
+                session.transcript.clone().unwrap_or_default(),
+            ),
         );
 
         let state = SessionState::new(
@@ -3021,7 +3016,7 @@ mod tests {
                 AgentModel::ClaudeSonnet5,
             ))
             .folder(PathBuf::from("/tmp/session"))
-            .output(output)
+            .transcript(output)
             .prompt(prompt)
             .status(status)
             .title(title.map(ToString::to_string))
@@ -4334,7 +4329,10 @@ mod tests {
         for session in &sessions {
             handles.insert(
                 session.id.clone(),
-                SessionHandles::new(session.output.clone(), session.status),
+                SessionHandles::new_with_transcript(
+                    session.status,
+                    session.transcript.clone().unwrap_or_default(),
+                ),
             );
         }
         let row_count = i64::try_from(sessions.len()).unwrap_or(0);

@@ -62,6 +62,7 @@ pub(super) async fn start_runtime(
             attachments: &[],
             folder: request.folder.as_path(),
             main_checkout_root: request.main_checkout_root.as_deref(),
+            replay_transcript: None,
             model: &request.model,
             prompt: "",
             reasoning_level: request.reasoning_level,

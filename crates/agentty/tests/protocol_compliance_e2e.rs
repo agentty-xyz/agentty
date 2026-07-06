@@ -267,10 +267,11 @@ fn resolve_workspace_folder() -> Result<PathBuf, String> {
 fn build_turn_request(folder: PathBuf, model: AgentModel) -> TurnRequest {
     TurnRequest {
         folder,
-        live_session_output: None,
+        live_transcript: None,
         main_checkout_root: None,
         model: model.provider_model_str().to_string(),
         request_kind: AgentRequestKind::SessionStart,
+        replay_transcript: None,
         prompt: PROTOCOL_COMPLIANCE_PROMPT.to_string().into(),
         provider_conversation_id: None,
         persisted_instruction_conversation_id: None,

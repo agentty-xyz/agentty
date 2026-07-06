@@ -486,8 +486,6 @@ pub struct Session {
     /// Whether the session was created through the explicit draft workflow
     /// from the sessions list.
     pub is_draft: bool,
-    /// Captured output transcript.
-    pub output: String,
     /// Parent session this stacked session is based on while its parent branch
     /// remains active.
     pub parent_session_id: Option<SessionId>,
@@ -729,16 +727,16 @@ impl Session {
     }
 
     /// Returns the best persisted context section for a continuation prompt.
-    fn continuation_context(&self) -> Option<(&'static str, &str)> {
+    fn continuation_context(&self) -> Option<(&'static str, String)> {
         self.non_empty_summary()
-            .map(|summary| ("Previous session summary", summary))
+            .map(|summary| ("Previous session summary", summary.to_string()))
             .or_else(|| {
-                self.non_empty_output()
-                    .map(|output| ("Previous session transcript", output))
+                self.non_empty_transcript()
+                    .map(|transcript| ("Previous session transcript", transcript))
             })
             .or_else(|| {
                 self.non_empty_prompt()
-                    .map(|prompt| ("Previous session prompt", prompt))
+                    .map(|prompt| ("Previous session prompt", prompt.to_string()))
             })
     }
 
@@ -749,9 +747,11 @@ impl Session {
             .and_then(Self::trimmed_non_empty_text)
     }
 
-    /// Returns the trimmed persisted transcript output when it is non-empty.
-    fn non_empty_output(&self) -> Option<&str> {
-        Self::trimmed_non_empty_text(&self.output)
+    /// Returns the formatted transcript text when it is non-empty.
+    fn non_empty_transcript(&self) -> Option<String> {
+        self.transcript
+            .as_ref()
+            .and_then(SessionTranscript::replay_text)
     }
 
     /// Returns the trimmed persisted initial prompt when it is non-empty.
@@ -936,8 +936,6 @@ pub struct SessionHandles {
     pub cancel_token: Arc<Mutex<CancellationToken>>,
     /// Child process identifier for the running agent command, when present.
     pub child_pid: Arc<Mutex<Option<u32>>>,
-    /// Shared output buffer mirrored to persistence/UI.
-    pub output: Arc<Mutex<String>>,
     /// In-memory queue of prompts staged while the current turn is running.
     ///
     /// Pushed by the chat composer when the user submits while the session is
@@ -951,12 +949,11 @@ pub struct SessionHandles {
 }
 
 impl SessionHandles {
-    /// Creates handles initialized with the given values.
-    pub fn new(output: String, status: Status) -> Self {
+    /// Creates handles initialized with the given status.
+    pub fn new(status: Status) -> Self {
         Self {
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             child_pid: Arc::new(Mutex::new(None)),
-            output: Arc::new(Mutex::new(output)),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             status: Arc::new(Mutex::new(status)),
             transcript: Arc::new(Mutex::new(SessionTranscript::default())),
@@ -964,27 +961,13 @@ impl SessionHandles {
     }
 
     /// Creates handles initialized with a typed transcript snapshot.
-    pub fn new_with_transcript(
-        output: String,
-        status: Status,
-        transcript: SessionTranscript,
-    ) -> Self {
+    pub fn new_with_transcript(status: Status, transcript: SessionTranscript) -> Self {
         Self {
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             child_pid: Arc::new(Mutex::new(None)),
-            output: Arc::new(Mutex::new(output)),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             status: Arc::new(Mutex::new(status)),
             transcript: Arc::new(Mutex::new(transcript)),
-        }
-    }
-
-    /// Appends text to the output buffer.
-    pub fn append_output(&self, message: &str) {
-        // Sync critical section (string push, no `.await`); `std::sync::Mutex`
-        // is the correct choice per CLAUDE.md §"Mutex Selection".
-        if let Ok(mut buf) = self.output.lock() {
-            buf.push_str(message);
         }
     }
 
@@ -1662,7 +1645,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             .status(Status::Done)
             .project_name("project-alpha")
             .summary(Some("# Summary\n\nShip it.".to_string()))
-            .output("assistant transcript")
+            .transcript("assistant transcript")
             .title(Some("Terminal session".to_string()))
             .build();
 
@@ -1767,7 +1750,6 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
                 crate::domain::agent::AgentKind::Antigravity,
                 AgentModel::Gemini3FlashPreview,
             ),
-            output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),
             prompt: String::new(),
@@ -1811,7 +1793,6 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
                 crate::domain::agent::AgentKind::Antigravity,
                 AgentModel::Gemini3FlashPreview,
             ),
-            output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),
             prompt: String::new(),
@@ -1855,7 +1836,6 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
                 crate::domain::agent::AgentKind::Antigravity,
                 AgentModel::Gemini3FlashPreview,
             ),
-            output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),
             prompt: String::new(),
@@ -1899,7 +1879,6 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
                 crate::domain::agent::AgentKind::Antigravity,
                 AgentModel::Gemini3FlashPreview,
             ),
-            output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),
             prompt: String::new(),
@@ -1943,7 +1922,6 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
                 crate::domain::agent::AgentKind::Antigravity,
                 AgentModel::Gemini3FlashPreview,
             ),
-            output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),
             prompt: String::new(),
@@ -1987,7 +1965,6 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
                 crate::domain::agent::AgentKind::Antigravity,
                 AgentModel::Gemini3FlashPreview,
             ),
-            output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),
             prompt: String::new(),

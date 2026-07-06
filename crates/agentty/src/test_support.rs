@@ -33,6 +33,8 @@ use crate::domain::session::{
     PublishedBranchSyncStatus, ReviewRequest, Session, SessionHandles, SessionId, SessionSize,
     SessionStats, Status,
 };
+#[cfg(test)]
+use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use crate::domain::setting::SettingName;
 #[cfg(test)]
 use crate::ui::state::app_mode::AppMode;
@@ -106,6 +108,16 @@ pub(crate) struct SessionFixtureBuilder {
     session: Session,
 }
 
+/// Builds a typed transcript containing one assistant answer.
+#[cfg(test)]
+pub(crate) fn assistant_transcript(content: impl AsRef<str>) -> SessionTranscript {
+    SessionTranscript::new(vec![SessionMessage::conversation(
+        0,
+        SessionMessageKind::AssistantAnswer,
+        content.as_ref(),
+    )])
+}
+
 #[cfg(test)]
 impl SessionFixtureBuilder {
     /// Creates a builder seeded with minimal deterministic defaults that match
@@ -123,7 +135,6 @@ impl SessionFixtureBuilder {
                 in_progress_started_at: None,
                 in_progress_total_seconds: 0,
                 is_draft: false,
-                output: String::new(),
                 parent_session_id: None,
                 project_name: "project".to_string(),
                 prompt: String::new(),
@@ -180,9 +191,9 @@ impl SessionFixtureBuilder {
         self
     }
 
-    /// Overrides the captured output transcript.
-    pub(crate) fn output(mut self, output: impl Into<String>) -> Self {
-        self.session.output = output.into();
+    /// Overrides the captured transcript using already formatted text.
+    pub(crate) fn transcript(mut self, transcript: impl Into<String>) -> Self {
+        self.session.transcript = Some(assistant_transcript(transcript.into()));
 
         self
     }

@@ -11,8 +11,8 @@ pub mod factory;
 #[cfg(any(test, feature = "test-utils"))]
 pub use contract::MockAgentChannel;
 pub use contract::{
-    AgentChannel, AgentError, AgentFuture, AgentRequestKind, SessionRef, StartSessionRequest,
-    TurnEvent, TurnRequest, TurnResult,
+    AgentChannel, AgentError, AgentFuture, AgentRequestKind, LiveTranscript, SessionRef,
+    StartSessionRequest, TurnEvent, TurnRequest, TurnResult,
 };
 pub use factory::create_agent_channel;
 

@@ -851,11 +851,20 @@ mod tests {
     use crate::app::prompt_intent::build_apply_review_prompt;
     use crate::domain::agent::ReasoningLevel;
     use crate::domain::file_entry::FileEntry;
+    use crate::domain::session_message::SessionTranscript;
     use crate::infra::db::Database;
     use crate::ui::state::prompt::{
         PromptAtMentionState, PromptAttachmentState, PromptHistoryState, PromptSlashStage,
         PromptSlashState,
     };
+
+    fn session_replay_text(session: &crate::domain::session::Session) -> String {
+        session
+            .transcript
+            .as_ref()
+            .and_then(SessionTranscript::replay_text)
+            .unwrap_or_default()
+    }
 
     /// Replaces the app-level git client with a caller-provided mock by
     /// rebuilding `AppServices` through its public constructor, preserving
@@ -1259,8 +1268,7 @@ mod tests {
         // Assert
         app.sessions.sync_from_handles();
         assert!(
-            app.sessions.sessions()[0]
-                .output
+            session_replay_text(&app.sessions.sessions()[0])
                 .contains("[Paste Image Error] Clipboard does not contain an image.")
         );
         if let AppMode::Prompt {
@@ -1300,7 +1308,7 @@ mod tests {
 
         // Assert
         app.sessions.sync_from_handles();
-        assert!(app.sessions.sessions()[0].output.contains(
+        assert!(session_replay_text(&app.sessions.sessions()[0]).contains(
             "[Paste Image Error] Clipboard is unavailable. Try again after granting clipboard \
              access."
         ));
@@ -2578,8 +2586,7 @@ mod tests {
         assert!(prompt_context.session_mode != PromptSessionMode::NewDraft);
         assert!(matches!(app.mode, AppMode::View { .. }));
         assert!(
-            !app.sessions.sessions()[0]
-                .output
+            !session_replay_text(&app.sessions.sessions()[0])
                 .contains("Only `Draft` sessions can stage drafts")
         );
     }
@@ -2845,10 +2852,7 @@ mod tests {
         let session_id = app.sessions.sessions()[0].id.clone();
         app.sessions.session_handles_mut().insert(
             session_id.clone(),
-            crate::domain::session::SessionHandles::new(
-                String::new(),
-                crate::domain::session::Status::InProgress,
-            ),
+            crate::domain::session::SessionHandles::new(crate::domain::session::Status::InProgress),
         );
         app.sessions.sessions_mut()[0].status = crate::domain::session::Status::InProgress;
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");

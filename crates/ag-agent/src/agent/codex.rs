@@ -42,10 +42,8 @@ mod tests {
         AgentRequestKind::SessionStart
     }
 
-    fn session_resume_request_kind(session_output: Option<&str>) -> AgentRequestKind {
-        AgentRequestKind::SessionResume {
-            session_output: session_output.map(ToString::to_string),
-        }
+    fn session_resume_request_kind(_replay_transcript: Option<&str>) -> AgentRequestKind {
+        AgentRequestKind::SessionResume
     }
 
     /// Verifies Codex start requests build the persistent app-server command.
@@ -62,6 +60,7 @@ mod tests {
                 attachments: &[],
                 folder: temp_directory.path(),
                 main_checkout_root: None,
+                replay_transcript: None,
                 model: "gpt-5.5",
                 prompt: "Run checks",
                 reasoning_level: crate::model::agent::ReasoningLevel::High,
@@ -91,6 +90,7 @@ mod tests {
                 attachments: &[],
                 folder: temp_directory.path(),
                 main_checkout_root: None,
+                replay_transcript: None,
                 model: "gpt-5.5",
                 prompt: "Continue edits",
                 reasoning_level: crate::model::agent::ReasoningLevel::High,
@@ -124,6 +124,7 @@ mod tests {
                 attachments: &[],
                 folder: temp_directory.path(),
                 main_checkout_root: None,
+                replay_transcript: None,
                 model: crate::model::agent::AgentModel::Gpt54Mini.as_str(),
                 prompt: "Run a quick edit",
                 reasoning_level: crate::model::agent::ReasoningLevel::Medium,
@@ -163,6 +164,7 @@ mod tests {
                 attachments: &[],
                 folder: temp_directory.path(),
                 main_checkout_root: None,
+                replay_transcript: None,
                 model: "gpt-5.5",
                 prompt: "Generate title",
                 reasoning_level: crate::model::agent::ReasoningLevel::Low,

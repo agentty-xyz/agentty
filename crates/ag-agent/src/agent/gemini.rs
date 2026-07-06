@@ -65,6 +65,7 @@ mod tests {
                 attachments: &[],
                 folder: temp_directory.path(),
                 main_checkout_root: None,
+                replay_transcript: None,
                 model: "gemini-3.5-flash",
                 prompt: "Generate title",
                 reasoning_level: ReasoningLevel::default(),

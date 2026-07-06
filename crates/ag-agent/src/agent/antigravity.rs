@@ -52,6 +52,7 @@ impl AgentBackend for AntigravityBackend {
             model,
             prompt: _prompt,
             request_kind: _request_kind,
+            replay_transcript: _replay_transcript,
             reasoning_level: _reasoning_level,
         } = request;
         let mut command = Command::new("agy");
@@ -447,10 +448,8 @@ mod tests {
         }
     }
 
-    fn session_resume_request_kind(session_output: Option<&str>) -> AgentRequestKind {
-        AgentRequestKind::SessionResume {
-            session_output: session_output.map(ToString::to_string),
-        }
+    fn session_resume_request_kind(_replay_transcript: Option<&str>) -> AgentRequestKind {
+        AgentRequestKind::SessionResume
     }
 
     fn session_start_request_kind() -> AgentRequestKind {
@@ -508,6 +507,7 @@ mod tests {
                 attachments: &[],
                 folder: temp_directory.path(),
                 main_checkout_root: None,
+                replay_transcript: None,
                 model: requested_model,
                 prompt: "Write tests",
                 reasoning_level: ReasoningLevel::default(),
@@ -566,6 +566,7 @@ mod tests {
                 attachments: &[],
                 folder: &session_folder,
                 main_checkout_root: None,
+                replay_transcript: None,
                 model: requested_model,
                 prompt: "Write tests",
                 reasoning_level: ReasoningLevel::default(),
@@ -768,6 +769,7 @@ mod tests {
                 attachments: &[attachment],
                 folder: temp_directory.path(),
                 main_checkout_root: None,
+                replay_transcript: None,
                 model: requested_model,
                 prompt: "Review [Image #1]",
                 reasoning_level: ReasoningLevel::default(),
@@ -826,7 +828,7 @@ mod tests {
     #[test]
     /// Verifies Antigravity stdin prompts include protocol instructions and
     /// replayed transcript output for resume turns.
-    fn test_antigravity_stdin_payload_replays_session_output_on_resume() {
+    fn test_antigravity_stdin_payload_replays_transcript_on_resume() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
         let request_kind = session_resume_request_kind(Some("previous answer"));
@@ -837,6 +839,7 @@ mod tests {
                 attachments: &[],
                 folder: temp_directory.path(),
                 main_checkout_root: None,
+                replay_transcript: Some("previous answer"),
                 model: AgentModel::Gemini31ProPreview.provider_model_str(),
                 prompt: "continue work",
                 reasoning_level: ReasoningLevel::default(),

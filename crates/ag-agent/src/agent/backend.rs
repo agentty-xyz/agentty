@@ -61,6 +61,8 @@ pub struct BuildCommandRequest<'a> {
     pub reasoning_level: ReasoningLevel,
     /// Canonical request kind that drives execution and protocol semantics.
     pub request_kind: &'a AgentRequestKind,
+    /// Replayable transcript text captured when the turn was queued.
+    pub replay_transcript: Option<&'a str>,
 }
 
 /// Error type for backend setup and command construction failures.

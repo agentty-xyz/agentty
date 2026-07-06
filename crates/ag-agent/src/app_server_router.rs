@@ -119,11 +119,12 @@ mod tests {
         let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
         let request = AppServerTurnRequest {
             folder: std::env::temp_dir(),
-            live_session_output: None,
+            live_transcript: None,
             main_checkout_root: None,
             model: AgentModel::Gpt55.as_str().to_string(),
             prompt: "prompt".into(),
             request_kind: crate::channel::AgentRequestKind::SessionStart,
+            replay_transcript: None,
             provider_conversation_id: None,
             persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
@@ -165,11 +166,12 @@ mod tests {
         let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
         let request = AppServerTurnRequest {
             folder: std::env::temp_dir(),
-            live_session_output: None,
+            live_transcript: None,
             main_checkout_root: None,
             model: AgentModel::Gemini3FlashPreview.as_str().to_string(),
             prompt: "prompt".into(),
             request_kind: crate::channel::AgentRequestKind::SessionStart,
+            replay_transcript: None,
             provider_conversation_id: None,
             persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
@@ -200,11 +202,12 @@ mod tests {
         let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
         let request = AppServerTurnRequest {
             folder: std::env::temp_dir(),
-            live_session_output: None,
+            live_transcript: None,
             main_checkout_root: None,
             model: "unknown-model".to_string(),
             prompt: "prompt".into(),
             request_kind: crate::channel::AgentRequestKind::SessionStart,
+            replay_transcript: None,
             provider_conversation_id: None,
             persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),

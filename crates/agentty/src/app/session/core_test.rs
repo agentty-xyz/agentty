@@ -26,6 +26,7 @@ use crate::domain::agent::{
 use crate::domain::session::{
     DailyActivity, SESSION_DATA_DIR, Session, SessionHandles, SessionSize, SessionStats, Status,
 };
+use crate::domain::session_message::SessionTranscript;
 use crate::domain::setting::SettingName;
 use crate::infra::clock::RealClock;
 use crate::infra::db::AppRepositories;
@@ -625,10 +626,9 @@ fn add_manual_session_with_status(
     let folder = session_folder(base_path, id);
     let data_dir = folder.join(SESSION_DATA_DIR);
     std::fs::create_dir_all(&data_dir).expect("failed to create data dir");
-    app.sessions.session_handles_mut().insert(
-        id.to_string().into(),
-        SessionHandles::new(String::new(), status),
-    );
+    app.sessions
+        .session_handles_mut()
+        .insert(id.to_string().into(), SessionHandles::new(status));
     app.sessions.push_session(Session {
         base_branch: "main".to_string(),
         created_at: 0,
@@ -643,7 +643,6 @@ fn add_manual_session_with_status(
             crate::domain::agent::AgentKind::Antigravity,
             crate::domain::agent::AgentModel::Gemini3FlashPreview,
         ),
-        output: String::new(),
         parent_session_id: None,
         project_name: String::new(),
         prompt: prompt.to_string(),
@@ -685,7 +684,7 @@ fn test_session_manager_with_clock(
     let mut handles = HashMap::new();
     handles.insert(
         session_id.to_string().into(),
-        SessionHandles::new(String::new(), Status::Review),
+        SessionHandles::new(Status::Review),
     );
 
     let state = SessionState::new(
@@ -704,7 +703,6 @@ fn test_session_manager_with_clock(
                 crate::domain::agent::AgentKind::Codex,
                 AgentModel::Gpt55,
             ),
-            output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),
             prompt: String::new(),
@@ -959,6 +957,14 @@ async fn wait_for_status(app: &mut App, session_id: &str, expected: Status) {
     wait_for_status_with_retries(app, session_id, expected, 2000).await;
 }
 
+fn session_replay_text(session: &Session) -> String {
+    session
+        .transcript
+        .as_ref()
+        .and_then(SessionTranscript::replay_text)
+        .unwrap_or_default()
+}
+
 async fn wait_for_status_with_retries(
     app: &mut App,
     session_id: &str,
@@ -990,9 +996,10 @@ async fn wait_for_status_with_retries(
         .find(|session| session.id == session_id)
         .expect("missing session while waiting for status");
     assert_eq!(
-        session.status, expected,
-        "session output while waiting for status: {}",
-        session.output
+        session.status,
+        expected,
+        "session transcript while waiting for status: {}",
+        session_replay_text(session)
     );
 }
 
@@ -1025,7 +1032,7 @@ async fn wait_for_output_contains(
         else {
             break;
         };
-        if session.output.contains(expected_output) {
+        if session_replay_text(session).contains(expected_output) {
             return;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -1039,9 +1046,9 @@ async fn wait_for_output_contains(
         .find(|session| session.id == session_id)
         .expect("missing session while waiting for output");
     assert!(
-        session.output.contains(expected_output),
+        session_replay_text(session).contains(expected_output),
         "expected output to contain: {expected_output}, actual output: {}",
-        session.output
+        session_replay_text(session)
     );
 }
 
@@ -1064,7 +1071,7 @@ async fn wait_for_output_contains_after_events(
         else {
             break;
         };
-        if session.output.contains(expected_output) {
+        if session_replay_text(session).contains(expected_output) {
             return;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -1079,9 +1086,9 @@ async fn wait_for_output_contains_after_events(
         .find(|session| session.id == session_id)
         .expect("missing session while waiting for output");
     assert!(
-        session.output.contains(expected_output),
+        session_replay_text(session).contains(expected_output),
         "expected output to contain: {expected_output}, actual output: {}",
-        session.output
+        session_replay_text(session)
     );
 }
 
@@ -1729,7 +1736,7 @@ async fn test_start_session() {
     assert_eq!(app.sessions.sessions()[0].prompt, "Hello");
     assert_eq!(app.sessions.sessions()[0].title, Some("Hello".to_string()));
     app.sessions.sync_from_handles();
-    let output = app.sessions.sessions()[0].output.clone();
+    let output = session_replay_text(&app.sessions.sessions()[0]);
     assert!(output.contains("Hello"));
     let db_sessions = app
         .services
@@ -2235,7 +2242,7 @@ async fn test_reply() {
     // Assert
     app.sessions.sync_from_handles();
     let session = &app.sessions.sessions()[0];
-    let output = &session.output;
+    let output = session_replay_text(session);
     let activity_timestamps = app
         .services
         .db()
@@ -2279,7 +2286,7 @@ async fn test_reply_to_parent_allows_review_ready_stacked_child() {
         .iter()
         .find(|session| session.id == parent_session_id)
         .expect("expected parent session");
-    assert!(parent_session.output.contains("Parent follow-up"));
+    assert!(session_replay_text(parent_session).contains("Parent follow-up"));
 }
 
 #[tokio::test]
@@ -2335,7 +2342,7 @@ async fn test_parent_turn_completion_rebases_review_ready_stacked_child() {
         .find(|session| session.id == child_session_id)
         .expect("expected child session");
     assert_eq!(child_session.status, Status::Review);
-    assert!(child_session.output.contains("onto wt/"));
+    assert!(session_replay_text(child_session).contains("onto wt/"));
 }
 
 #[tokio::test]
@@ -2579,7 +2586,7 @@ async fn test_load_existing_sessions() {
     db.sessions()
         .append_session_message(
             "12345678",
-            crate::domain::session_message::SessionMessageKind::LegacyTranscript,
+            crate::domain::session_message::SessionMessageKind::AssistantAnswer,
             "Output",
         )
         .await
@@ -2602,8 +2609,8 @@ async fn test_load_existing_sessions() {
         AgentModel::ClaudeOpus48
     );
     assert_eq!(app.sessions.sessions()[0].prompt, "Existing");
-    let output = app.sessions.sessions()[0].output.clone();
-    assert_eq!(output, "Output");
+    let output = session_replay_text(&app.sessions.sessions()[0]);
+    assert_eq!(output, "Output\n\n");
     assert_eq!(app.sessions.selected_session_index(), Some(0));
 }
 
@@ -3317,7 +3324,7 @@ async fn test_spawn_integration() {
                 format!("--prompt {}\n", req.prompt)
             } else {
                 assert!(
-                    matches!(req.request_kind, AgentRequestKind::SessionResume { .. }),
+                    matches!(req.request_kind, AgentRequestKind::SessionResume),
                     "expected AgentRequestKind::SessionResume on second turn"
                 );
                 format!("--prompt {} --resume latest\n", req.prompt)
@@ -3358,7 +3365,7 @@ async fn test_spawn_integration() {
     {
         app.sessions.sync_from_handles();
         let session = &app.sessions.sessions()[0];
-        let output = session.output.clone();
+        let output = session_replay_text(session);
         assert!(output.contains("--prompt"));
         assert!(output.contains("SpawnInit"));
         assert!(!output.contains("--resume"));
@@ -3378,7 +3385,7 @@ async fn test_spawn_integration() {
     {
         app.sessions.sync_from_handles();
         let session = &app.sessions.sessions()[0];
-        let output = session.output.clone();
+        let output = session_replay_text(session);
         assert!(output.contains("SpawnReply"));
         assert!(output.contains("--resume"));
         assert!(output.contains("latest"));
@@ -3388,9 +3395,7 @@ async fn test_spawn_integration() {
 
 #[tokio::test]
 /// Verifies that the first reply after a model switch replays the full
-/// session transcript
-/// (`AgentRequestKind::SessionResume { session_output: Some(...) }`) and
-/// subsequent replies omit it (`session_output: None`).
+/// session transcript and subsequent replies omit the replay snapshot.
 ///
 /// A completion channel (`done_tx`/`done_rx`) is used to signal from
 /// inside the mock's async block so that `wait_for_status` always sees the
@@ -3414,13 +3419,13 @@ async fn test_reply_with_backend_replays_history_once_after_model_switch() {
         .iter_mut()
         .find(|session| session.id == session_id)
     {
-        session.output.clone_from(&initial_output);
+        session.transcript = Some(crate::test_support::assistant_transcript(&initial_output));
         session.prompt = "Initial prompt".to_string();
         session.status = Status::Review;
     }
     if let Some(handles) = app.sessions.session_handles().get(session_id.as_str()) {
-        if let Ok(mut output) = handles.output.lock() {
-            output.clone_from(&initial_output);
+        if let Ok(mut transcript) = handles.transcript.lock() {
+            *transcript = crate::test_support::assistant_transcript(&initial_output);
         }
         if let Ok(mut status) = handles.status.lock() {
             *status = Status::Review;
@@ -3446,8 +3451,8 @@ async fn test_reply_with_backend_replays_history_once_after_model_switch() {
     .await
     .expect("failed to switch model");
 
-    // Shared state to capture session_output from each turn's TurnRequest.
-    let captured_session_outputs: Arc<Mutex<Vec<Option<String>>>> =
+    // Shared state to capture replay transcript text from each turn request.
+    let captured_replay_transcripts: Arc<Mutex<Vec<Option<String>>>> =
         Arc::new(Mutex::new(Vec::new()));
 
     // The done channel signals from inside the mock future so the test
@@ -3456,14 +3461,17 @@ async fn test_reply_with_backend_replays_history_once_after_model_switch() {
     // session is already in `Review` before the worker processes the turn.
     let (done_tx, mut done_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
 
-    // Register a MockAgentChannel that collects session_output values from
-    // Resume turns so they can be asserted synchronously after the test.
+    // Register a MockAgentChannel that collects replay transcript values from
+    // resume turns so they can be asserted synchronously after the test.
     let mut mock_channel = MockAgentChannel::new();
-    let captured = Arc::clone(&captured_session_outputs);
+    let captured = Arc::clone(&captured_replay_transcripts);
     let done_capture = done_tx.clone();
     mock_channel.expect_run_turn().returning(move |_, req, _| {
-        if let AgentRequestKind::SessionResume { session_output } = req.request_kind {
-            captured.lock().expect("lock poisoned").push(session_output);
+        if matches!(req.request_kind, AgentRequestKind::SessionResume) {
+            captured
+                .lock()
+                .expect("lock poisoned")
+                .push(req.replay_transcript);
         }
         let done = done_capture.clone();
         Box::pin(async move {
@@ -3500,16 +3508,16 @@ async fn test_reply_with_backend_replays_history_once_after_model_switch() {
     wait_for_status(&mut app, &session_id, Status::Review).await;
 
     // Assert
-    let outputs = captured_session_outputs
+    let outputs = captured_replay_transcripts
         .lock()
         .expect("lock poisoned")
         .clone();
     assert_eq!(outputs.len(), 2, "expected exactly two Resume turns");
-    let first_session_output = outputs[0]
+    let first_replay_transcript = outputs[0]
         .as_deref()
-        .expect("first reply should include session_output");
+        .expect("first reply should include replay transcript");
     assert!(
-        first_session_output.contains("Initial prompt"),
+        first_replay_transcript.contains("Initial prompt"),
         "first reply should replay history containing 'Initial prompt'"
     );
     assert!(
@@ -3549,7 +3557,7 @@ async fn test_reply_with_backend_replays_history_after_app_restart_for_review_se
         .sessions()
         .iter()
         .find(|session| session.id == session_id)
-        .map(|session| session.output.clone())
+        .map(session_replay_text)
         .expect("missing persisted session");
     assert!(first_run_output.contains("Initial prompt"));
     assert!(first_run_output.contains("mock-start"));
@@ -3569,12 +3577,11 @@ async fn test_reply_with_backend_replays_history_after_app_restart_for_review_se
     resume_backend.expect_build_command().returning(|request| {
         assert!(request.request_kind.is_resume());
 
-        let session_output = request
-            .request_kind
-            .session_output()
-            .expect("expected replayed session output after restart");
-        assert!(session_output.contains("Initial prompt"));
-        assert!(session_output.contains("mock-start"));
+        let replay_transcript = request
+            .replay_transcript
+            .expect("expected replayed session transcript after restart");
+        assert!(replay_transcript.contains("Initial prompt"));
+        assert!(replay_transcript.contains("mock-start"));
 
         let mut cmd = Command::new("sh");
         cmd.arg("-c")
@@ -3703,7 +3710,7 @@ async fn test_spawn_session_task_auto_commits_changes() {
     // Assert — commit completion details are transient workflow notice
     // state, not persisted transcript output.
     let session = &app.sessions.sessions()[0];
-    let output = session.output.clone();
+    let output = session_replay_text(session);
     let workflow_notice = session.workflow_notice.as_deref();
     assert!(
         !output.contains("[Commit] committed with hash"),
@@ -3865,7 +3872,7 @@ async fn test_spawn_session_task_skips_commit_when_nothing_to_commit() {
 
     // Assert — no-op commit output is visible as transient workflow state.
     let session = &app.sessions.sessions()[0];
-    let output = session.output.clone();
+    let output = session_replay_text(session);
     let workflow_notice = session.workflow_notice.as_deref();
     assert!(
         !output.contains("[Commit] No changes to commit."),
@@ -4113,7 +4120,7 @@ async fn test_merge_session_removes_worktree_and_branch_after_success() {
         .iter()
         .find(|session| session.id == session_id)
         .expect("missing merged session");
-    assert!(!merged_session.output.contains("[Merge Error]"));
+    assert!(!session_replay_text(merged_session).contains("[Merge Error]"));
     assert!(!session_folder.exists(), "worktree should be removed");
 }
 
@@ -4185,7 +4192,7 @@ async fn test_merge_session_marks_done_when_changes_are_already_in_base() {
         .iter()
         .find(|session| session.id == session_id)
         .expect("missing session after merge");
-    assert!(!session.output.contains("[Merge Error]"));
+    assert!(!session_replay_text(session).contains("[Merge Error]"));
 }
 
 #[tokio::test]

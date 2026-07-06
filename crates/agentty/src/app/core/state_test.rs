@@ -20,6 +20,7 @@ use crate::domain::session::{
     ForgeKind, PublishedBranchSyncStatus, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
     SESSION_DATA_DIR, SessionFollowUpTask, SessionHandles, SessionSize, SessionStats, Status,
 };
+use crate::domain::session_message::SessionTranscript;
 use crate::domain::setting::SettingName;
 use crate::infra::db::AppRepositories;
 use crate::infra::project_discovery::{HOME_PROJECT_SCAN_MAX_RESULTS, RealProjectDiscoveryClient};
@@ -2392,7 +2393,7 @@ async fn apply_app_events_records_system_log_events() {
 
 #[tokio::test]
 /// Verifies workflow notices append to in-memory session state without
-/// changing persisted transcript output.
+/// changing persisted transcript messages.
 async fn apply_app_events_session_workflow_notice_updates_session_state() {
     // Arrange
     let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
@@ -2402,7 +2403,9 @@ async fn apply_app_events_session_workflow_notice_updates_session_state() {
     let mut session =
         crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/session-review"));
     session.id = "session-1".into();
-    session.output = "assistant output".to_string();
+    session.transcript = Some(crate::test_support::assistant_transcript(
+        "assistant output",
+    ));
     app.sessions.push_session(session);
     app.services
         .event_sender()
@@ -2433,7 +2436,14 @@ async fn apply_app_events_session_workflow_notice_updates_session_state() {
             "[Commit] No changes to commit.\n\n[Merge] Successfully merged wt/session-1 into main"
         )
     );
-    assert_eq!(session.output, "assistant output");
+    assert_eq!(
+        session
+            .transcript
+            .as_ref()
+            .and_then(SessionTranscript::replay_text)
+            .as_deref(),
+        Some("assistant output\n\n")
+    );
     assert!(app.needs_redraw());
 }
 
@@ -3334,7 +3344,7 @@ async fn apply_app_events_agent_response_starts_auto_review_from_synced_handle_s
     app.sessions.sessions_mut()[0].status = Status::InProgress;
     app.sessions.session_handles_mut().insert(
         session_id.to_string().into(),
-        SessionHandles::new(String::new(), Status::InProgress),
+        SessionHandles::new(Status::InProgress),
     );
     *app.sessions
         .session_handles()
@@ -3405,7 +3415,7 @@ async fn apply_app_events_agent_response_starts_auto_review_when_snapshot_alread
     app.sessions.sessions_mut()[0].status = Status::Review;
     app.sessions.session_handles_mut().insert(
         session_id.to_string().into(),
-        SessionHandles::new(String::new(), Status::Review),
+        SessionHandles::new(Status::Review),
     );
     app.mode = AppMode::View {
         session_id: session_id.into(),
@@ -3607,7 +3617,10 @@ async fn apply_app_events_session_updated_keeps_done_view_review_state() {
         ));
     app.sessions.session_handles_mut().insert(
         "session-1".into(),
-        SessionHandles::new("Merge finished".to_string(), Status::Done),
+        SessionHandles::new_with_transcript(
+            Status::Done,
+            crate::test_support::assistant_transcript("Merge finished"),
+        ),
     );
     app.mode = AppMode::View {
         session_id: "session-1".into(),
@@ -3671,7 +3684,10 @@ async fn apply_app_events_refresh_keeps_viewed_merging_session_without_worktree(
     app.sessions.push_session(viewed_session);
     app.sessions.session_handles_mut().insert(
         "session-1".into(),
-        SessionHandles::new("Merging".to_string(), Status::Merging),
+        SessionHandles::new_with_transcript(
+            Status::Merging,
+            crate::test_support::assistant_transcript("Merging"),
+        ),
     );
     app.mode = AppMode::View {
         session_id: "session-1".into(),
@@ -4449,7 +4465,7 @@ async fn apply_review_update_stores_success_in_cache() {
     app.sessions.push_session(session);
     app.sessions.session_handles_mut().insert(
         session_id.to_string().into(),
-        SessionHandles::new(String::new(), Status::AgentReview),
+        SessionHandles::new(Status::AgentReview),
     );
     app.review_cache.insert(
         session_id.to_string().into(),
@@ -4558,7 +4574,7 @@ async fn apply_review_update_keeps_non_agent_review_status_unchanged() {
     app.sessions.push_session(session);
     app.sessions.session_handles_mut().insert(
         session_id.to_string().into(),
-        SessionHandles::new(String::new(), Status::InProgress),
+        SessionHandles::new(Status::InProgress),
     );
     app.review_cache.insert(
         session_id.to_string().into(),

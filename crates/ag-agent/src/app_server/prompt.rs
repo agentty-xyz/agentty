@@ -10,27 +10,22 @@ use crate::app_server::{AppServerError, AppServerTurnRequest};
 use crate::channel::AgentRequestKind;
 use crate::model::turn_prompt::{TurnPrompt, TurnPromptTextSource};
 
-/// Reads the latest session output, preferring the live buffer over the
-/// stale snapshot.
+/// Reads the latest replay transcript, preferring the live source over the
+/// queued snapshot.
 ///
-/// The live buffer (`live_session_output`) accumulates all streamed content
-/// in real time, including output from a turn that failed mid-stream. When
-/// available, it provides a more complete transcript than the snapshot
-/// captured at turn-enqueue time.
-pub(crate) fn read_latest_session_output(request: &AppServerTurnRequest) -> Option<String> {
-    if let Some(live_output) = &request.live_session_output
-        && let Ok(guard) = live_output.lock()
+/// The live source accumulates all transcript messages in real time,
+/// including content from a turn that failed mid-stream. When available, it
+/// provides a more complete transcript than the snapshot captured at
+/// turn-enqueue time.
+pub(crate) fn read_latest_replay_transcript(request: &AppServerTurnRequest) -> Option<String> {
+    if let Some(live_transcript) = &request.live_transcript
+        && let Some(transcript_text) = live_transcript.replay_text()
+        && !transcript_text.trim().is_empty()
     {
-        let output = guard.clone();
-        if !output.trim().is_empty() {
-            return Some(output);
-        }
+        return Some(transcript_text);
     }
 
-    request
-        .request_kind
-        .session_output()
-        .map(ToString::to_string)
+    request.replay_transcript.clone()
 }
 
 /// Returns the turn prompt, applying protocol preamble and optional context
@@ -48,7 +43,7 @@ pub(crate) fn read_latest_session_output(request: &AppServerTurnRequest) -> Opti
 pub(crate) fn turn_prompt_for_runtime(
     prompt: impl Into<TurnPrompt>,
     request_kind: &AgentRequestKind,
-    replay_session_output: Option<&str>,
+    replay_transcript: Option<&str>,
     instruction_delivery_mode: InstructionDeliveryMode,
     schema_instruction_mode: ProtocolSchemaInstructionMode,
     workspace_root: &Path,
@@ -59,7 +54,7 @@ pub(crate) fn turn_prompt_for_runtime(
         instruction_delivery_mode,
         prompt: &agent_prompt,
         protocol_profile: request_kind.protocol_profile(),
-        replay_session_output,
+        replay_transcript,
         schema_instruction_mode,
         workspace_root,
     })
@@ -77,26 +72,44 @@ pub(crate) fn turn_prompt_for_runtime(
 pub(crate) fn instruction_delivery_mode_for_runtime(
     request: &AppServerTurnRequest,
     runtime_provider_conversation_id: Option<&str>,
-    should_replay_session_output: bool,
+    should_replay_transcript: bool,
 ) -> InstructionDeliveryMode {
     agent::plan_app_server_instruction_delivery(
         &request.request_kind,
         runtime_provider_conversation_id,
         request.persisted_instruction_conversation_id.as_deref(),
-        should_replay_session_output,
+        should_replay_transcript,
     )
 }
 
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
 
     use super::*;
+    use crate::channel::LiveTranscript;
     use crate::model::agent::ReasoningLevel;
 
     /// Workspace root used by app-server prompt shaping tests.
     const TEST_WORKSPACE_ROOT: &str = "/tmp/agentty-wt/session-1";
+
+    #[derive(Debug)]
+    struct TestLiveTranscript {
+        text: String,
+    }
+
+    impl LiveTranscript for TestLiveTranscript {
+        fn replay_text(&self) -> Option<String> {
+            Some(self.text.clone())
+        }
+    }
+
+    fn live_transcript(text: &str) -> Arc<dyn LiveTranscript> {
+        Arc::new(TestLiveTranscript {
+            text: text.to_string(),
+        })
+    }
 
     /// Returns one persisted bootstrap marker that matches the active
     /// app-server instruction contract for session turns.
@@ -107,12 +120,11 @@ mod tests {
     }
 
     #[test]
-    fn read_latest_session_output_prefers_live_buffer() {
+    fn read_latest_replay_transcript_prefers_live_source() {
         // Arrange
-        let live_output = Arc::new(Mutex::new("live content".to_string()));
         let request = AppServerTurnRequest {
             folder: PathBuf::from("/tmp/test"),
-            live_session_output: Some(live_output),
+            live_transcript: Some(live_transcript("live content")),
             main_checkout_root: None,
             model: "test-model".to_string(),
             prompt: TurnPrompt::from("hello"),
@@ -120,23 +132,23 @@ mod tests {
             persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             request_kind: AgentRequestKind::SessionStart,
+            replay_transcript: None,
             session_id: "test-session".to_string(),
         };
 
         // Act
-        let output = read_latest_session_output(&request);
+        let output = read_latest_replay_transcript(&request);
 
         // Assert
         assert_eq!(output, Some("live content".to_string()));
     }
 
     #[test]
-    fn read_latest_session_output_falls_back_when_live_buffer_is_empty() {
+    fn read_latest_replay_transcript_falls_back_when_live_source_is_empty() {
         // Arrange
-        let live_output = Arc::new(Mutex::new("  ".to_string()));
         let request = AppServerTurnRequest {
             folder: PathBuf::from("/tmp/test"),
-            live_session_output: Some(live_output),
+            live_transcript: Some(live_transcript("  ")),
             main_checkout_root: None,
             model: "test-model".to_string(),
             prompt: TurnPrompt::from("hello"),
@@ -144,22 +156,23 @@ mod tests {
             persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             request_kind: AgentRequestKind::SessionStart,
+            replay_transcript: Some("queued transcript".to_string()),
             session_id: "test-session".to_string(),
         };
 
         // Act
-        let output = read_latest_session_output(&request);
+        let output = read_latest_replay_transcript(&request);
 
         // Assert
-        assert!(output.is_none());
+        assert_eq!(output, Some("queued transcript".to_string()));
     }
 
     #[test]
-    fn read_latest_session_output_returns_none_when_no_live_buffer() {
+    fn read_latest_replay_transcript_returns_none_when_no_replay_text() {
         // Arrange
         let request = AppServerTurnRequest {
             folder: PathBuf::from("/tmp/test"),
-            live_session_output: None,
+            live_transcript: None,
             main_checkout_root: None,
             model: "test-model".to_string(),
             prompt: TurnPrompt::from("hello"),
@@ -167,11 +180,12 @@ mod tests {
             persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             request_kind: AgentRequestKind::SessionStart,
+            replay_transcript: None,
             session_id: "test-session".to_string(),
         };
 
         // Act
-        let output = read_latest_session_output(&request);
+        let output = read_latest_replay_transcript(&request);
 
         // Assert
         assert!(output.is_none());
@@ -232,9 +246,7 @@ mod tests {
     fn turn_prompt_for_runtime_uses_compact_refresh_reminder_for_delta_only() {
         // Arrange
         let prompt = TurnPrompt::from("continue the fix");
-        let request_kind = AgentRequestKind::SessionResume {
-            session_output: None,
-        };
+        let request_kind = AgentRequestKind::SessionResume;
 
         // Act
         let result = turn_prompt_for_runtime(
@@ -304,7 +316,7 @@ mod tests {
         // Arrange
         let request = AppServerTurnRequest {
             folder: PathBuf::from("/tmp/test"),
-            live_session_output: None,
+            live_transcript: None,
             main_checkout_root: None,
             model: "test-model".to_string(),
             prompt: TurnPrompt::from("hello"),
@@ -312,9 +324,8 @@ mod tests {
             persisted_instruction_conversation_id:
                 persisted_instruction_conversation_id_for_session_turn(Some("thread-123")),
             reasoning_level: ReasoningLevel::default(),
-            request_kind: AgentRequestKind::SessionResume {
-                session_output: None,
-            },
+            request_kind: AgentRequestKind::SessionResume,
+            replay_transcript: None,
             session_id: "test-session".to_string(),
         };
 

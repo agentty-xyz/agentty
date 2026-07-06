@@ -88,9 +88,9 @@ pub struct SessionRow {
 
 /// Lightweight row returned when loading session-list metadata.
 ///
-/// Omits transcript-scale fields (`output`, `prompt`, `questions`, and
-/// `summary`) so list refreshes scale with visible metadata instead of the
-/// cumulative size of every saved conversation.
+/// Omits transcript-scale fields (`prompt`, `questions`, and `summary`) so
+/// list refreshes scale with visible metadata instead of the cumulative size
+/// of every saved conversation.
 pub struct SessionListRow {
     /// Persisted added-line count from the latest diff stats refresh.
     pub added_lines: i64,
@@ -400,15 +400,6 @@ pub trait SessionRepository: Send + Sync {
         &self,
         session_id: &str,
         turn_metadata: &SessionTurnMetadata,
-    ) -> Result<(), DbError>;
-
-    #[cfg(test)]
-    /// Replaces the full message list for a session with one legacy
-    /// transcript row.
-    async fn replace_session_messages_with_legacy_transcript(
-        &self,
-        id: &str,
-        output: &str,
     ) -> Result<(), DbError>;
 
     /// Replaces the persisted follow-up task list for one session inside one
@@ -762,7 +753,6 @@ INSERT INTO session (
     status,
     project_id,
     prompt,
-    output,
     summary,
     title,
     reasoning_level,
@@ -793,7 +783,6 @@ SELECT ?,
        ?,
        project_id,
        prompt,
-       output,
        summary,
        title,
        reasoning_level,
@@ -1655,43 +1644,6 @@ ON CONFLICT(session_id, model) DO UPDATE SET
         Ok(())
     }
 
-    #[cfg(test)]
-    async fn replace_session_messages_with_legacy_transcript(
-        &self,
-        id: &str,
-        output: &str,
-    ) -> Result<(), DbError> {
-        let mut transaction = self.0.begin().await?;
-
-        sqlx::query(
-            r"
-DELETE FROM session_message
-WHERE session_id = ?
-",
-        )
-        .bind(id)
-        .execute(&mut *transaction)
-        .await?;
-
-        if !output.trim().is_empty() {
-            sqlx::query(
-                r"
-INSERT INTO session_message (session_id, position, kind, content, created_at)
-VALUES (?, 0, ?, ?, CAST(strftime('%s', 'now') AS INTEGER))
-",
-            )
-            .bind(id)
-            .bind(SessionMessageKind::LegacyTranscript.as_str())
-            .bind(output)
-            .execute(&mut *transaction)
-            .await?;
-        }
-
-        transaction.commit().await?;
-
-        Ok(())
-    }
-
     async fn replace_session_follow_up_tasks(
         &self,
         session_id: &str,
@@ -2213,10 +2165,9 @@ INSERT INTO session (
     is_draft,
     parent_session_id,
     project_id,
-    prompt,
-    output
+    prompt
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ",
     )
     .bind(id)
@@ -2227,7 +2178,6 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     .bind(is_draft)
     .bind(parent_session_id)
     .bind(project_id)
-    .bind("")
     .bind("")
     .execute(pool)
     .await?;

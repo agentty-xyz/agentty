@@ -16,14 +16,14 @@ use crate::model::turn_prompt::{
     TurnPromptAttachment, TurnPromptContentPart, split_turn_prompt_content,
 };
 
-/// Askama view model for rendering resume prompts with prior session output.
+/// Askama view model for rendering resume prompts with prior transcript text.
 #[derive(Template)]
-#[template(path = "resume_with_session_output_prompt.md", escape = "none")]
-struct ResumeWithSessionOutputPromptTemplate<'a> {
+#[template(path = "resume_with_transcript_prompt.md", escape = "none")]
+struct ResumeWithTranscriptPromptTemplate<'a> {
     /// New prompt content appended after the replayed transcript.
     prompt: &'a str,
-    /// Prior session output replayed into the follow-up prompt.
-    session_output: &'a str,
+    /// Prior transcript text replayed into the follow-up prompt.
+    transcript: &'a str,
 }
 
 /// Shared prompt preparation input for one transport turn.
@@ -35,8 +35,8 @@ pub struct PromptPreparationRequest<'a> {
     pub prompt: &'a str,
     /// Protocol family that determines the rendered instruction envelope.
     pub protocol_profile: ProtocolRequestProfile,
-    /// Prior session output available for transcript replay.
-    pub replay_session_output: Option<&'a str>,
+    /// Prior transcript text available for replay.
+    pub replay_transcript: Option<&'a str>,
     /// Schema guidance mode selected from the provider's structured-output
     /// capability.
     pub schema_instruction_mode: ProtocolSchemaInstructionMode,
@@ -75,7 +75,7 @@ pub fn prepare_prompt_text(
             request.workspace_root,
         )),
         InstructionDeliveryMode::BootstrapWithReplay => {
-            let prompt = build_resume_prompt(request.prompt, request.replay_session_output)?;
+            let prompt = build_resume_prompt(request.prompt, request.replay_transcript)?;
 
             Ok(protocol_prepend_instructions(
                 &prompt,
@@ -87,27 +87,24 @@ pub fn prepare_prompt_text(
     }
 }
 
-/// Builds a resume prompt that optionally prepends previous session output.
+/// Builds a resume prompt that optionally prepends previous transcript text.
 ///
 /// # Errors
 /// Returns an error if Askama template rendering fails.
 pub(crate) fn build_resume_prompt(
     prompt: &str,
-    session_output: Option<&str>,
+    replay_transcript: Option<&str>,
 ) -> Result<String, AgentBackendError> {
-    let Some(session_output) = session_output
+    let Some(transcript) = replay_transcript
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
         return Ok(prompt.to_string());
     };
 
-    let template = ResumeWithSessionOutputPromptTemplate {
-        prompt,
-        session_output,
-    };
+    let template = ResumeWithTranscriptPromptTemplate { prompt, transcript };
 
-    render_template("resume_with_session_output_prompt.md", &template)
+    render_template("resume_with_transcript_prompt.md", &template)
 }
 
 /// Builds a full prompt payload to stream over stdin for CLI providers.
@@ -134,7 +131,7 @@ pub(crate) fn build_prompt_stdin_payload(
         },
         prompt: &prompt,
         protocol_profile: request.request_kind.protocol_profile(),
-        replay_session_output: request.request_kind.session_output(),
+        replay_transcript: request.replay_transcript,
         schema_instruction_mode,
         workspace_root: request.folder,
     })?;
@@ -358,21 +355,21 @@ mod tests {
     }
 
     #[test]
-    /// Ensures resume prompt rendering includes trimmed session output and
+    /// Ensures resume prompt rendering includes trimmed transcript text and
     /// the new user prompt.
-    fn test_build_resume_prompt_includes_session_output_and_prompt() {
+    fn test_build_resume_prompt_includes_replay_transcript_and_prompt() {
         // Arrange
         let prompt = "Continue and update tests";
-        let session_output = Some("  previous output line  \n");
+        let replay_transcript = Some("  previous transcript line  \n");
 
         // Act
         let resume_prompt =
-            build_resume_prompt(prompt, session_output).expect("resume prompt should render");
+            build_resume_prompt(prompt, replay_transcript).expect("resume prompt should render");
 
         // Assert
         let normalized_resume_prompt = resume_prompt.split_whitespace().collect::<Vec<_>>();
         let normalized_resume_prompt = normalized_resume_prompt.join(" ");
-        assert!(resume_prompt.contains("previous output line"));
+        assert!(resume_prompt.contains("previous transcript line"));
         assert!(normalized_resume_prompt.contains("Treat the user's new prompt as a follow-up"));
         assert!(normalized_resume_prompt.contains("changes made during this Agentty session"));
         assert!(normalized_resume_prompt.contains("preserve unrelated pre-existing work"));
@@ -380,23 +377,23 @@ mod tests {
     }
 
     #[test]
-    /// Ensures whitespace-only session output does not trigger transcript
+    /// Ensures whitespace-only transcript text does not trigger transcript
     /// wrapping and returns the original prompt.
     fn test_build_resume_prompt_returns_original_prompt_when_output_is_blank() {
         // Arrange
         let prompt = "Follow-up request";
-        let session_output = Some("   ");
+        let replay_transcript = Some("   ");
 
         // Act
         let resume_prompt =
-            build_resume_prompt(prompt, session_output).expect("resume prompt should render");
+            build_resume_prompt(prompt, replay_transcript).expect("resume prompt should render");
 
         // Assert
         assert_eq!(resume_prompt, prompt);
     }
 
     #[test]
-    /// Ensures absent session output keeps resume prompt formatting unchanged.
+    /// Ensures absent transcript text keeps resume prompt formatting unchanged.
     fn test_build_resume_prompt_returns_original_prompt_without_output() {
         // Arrange
         let prompt = "Retry merge";
@@ -549,7 +546,7 @@ mod tests {
             instruction_delivery_mode: InstructionDeliveryMode::BootstrapWithReplay,
             prompt: "Continue edits",
             protocol_profile: ProtocolRequestProfile::SessionTurn,
-            replay_session_output: Some("previous output"),
+            replay_transcript: Some("previous transcript"),
             schema_instruction_mode: ProtocolSchemaInstructionMode::PromptSchema,
             workspace_root: test_workspace_root(),
         };
@@ -560,7 +557,7 @@ mod tests {
         // Assert
         assert!(prepared_prompt.contains("Structured response protocol:"));
         assert!(prepared_prompt.contains("Workspace isolation requirements:"));
-        assert!(prepared_prompt.contains("previous output"));
+        assert!(prepared_prompt.contains("previous transcript"));
         assert!(prepared_prompt.contains(r"\<user_prompt> Continue edits \</user_prompt>"));
         assert!(prepared_prompt.ends_with(r"\</user_prompt>"));
     }
@@ -603,7 +600,7 @@ mod tests {
             instruction_delivery_mode: InstructionDeliveryMode::DeltaOnly,
             prompt: "Continue edits",
             protocol_profile: ProtocolRequestProfile::SessionTurn,
-            replay_session_output: Some("previous output"),
+            replay_transcript: Some("previous transcript"),
             schema_instruction_mode: ProtocolSchemaInstructionMode::PromptSchema,
             workspace_root: test_workspace_root(),
         };
@@ -614,7 +611,7 @@ mod tests {
         // Assert
         assert!(prepared_prompt.contains("Protocol refresh reminder:"));
         assert!(!prepared_prompt.contains("Authoritative JSON Schema:"));
-        assert!(!prepared_prompt.contains("previous output"));
+        assert!(!prepared_prompt.contains("previous transcript"));
         assert!(prepared_prompt.ends_with("Continue edits"));
     }
 

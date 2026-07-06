@@ -1,9 +1,10 @@
 //! Shared channel trait and provider turn request/result contracts.
 
+use std::fmt;
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use ag_protocol::{AgentResponse, ProtocolRequestProfile};
 use tokio::sync::mpsc;
@@ -14,17 +15,19 @@ use crate::model::turn_prompt::TurnPrompt;
 /// Boxed async result used by [`AgentChannel`] trait methods.
 pub type AgentFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
+/// Live transcript projection used when a provider runtime needs replay text.
+pub trait LiveTranscript: fmt::Debug + Send + Sync {
+    /// Returns the latest replayable transcript text, when any content exists.
+    fn replay_text(&self) -> Option<String>;
+}
+
 /// Turn initiation mode for [`TurnRequest`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentRequestKind {
     /// Starts a fresh interactive session turn with no prior context.
     SessionStart,
-    /// Resumes an interactive session turn, optionally replaying transcript
-    /// output into the next prompt.
-    SessionResume {
-        /// Prior session output used for history replay when present.
-        session_output: Option<String>,
-    },
+    /// Resumes an interactive session turn.
+    SessionResume,
     /// Runs one utility prompt with utility protocol requirements.
     ///
     /// Callers may route this through an isolated one-shot channel or through
@@ -40,7 +43,7 @@ impl AgentRequestKind {
     #[must_use]
     pub fn protocol_profile(&self) -> ProtocolRequestProfile {
         match self {
-            Self::SessionStart | Self::SessionResume { .. } => ProtocolRequestProfile::SessionTurn,
+            Self::SessionStart | Self::SessionResume => ProtocolRequestProfile::SessionTurn,
             Self::UtilityPrompt | Self::AccountRead => ProtocolRequestProfile::UtilityPrompt,
         }
     }
@@ -48,16 +51,7 @@ impl AgentRequestKind {
     /// Returns whether this request resumes a prior interactive session turn.
     #[must_use]
     pub fn is_resume(&self) -> bool {
-        matches!(self, Self::SessionResume { .. })
-    }
-
-    /// Returns transcript output used for history replay, when present.
-    #[must_use]
-    pub fn session_output(&self) -> Option<&str> {
-        match self {
-            Self::SessionStart | Self::UtilityPrompt | Self::AccountRead => None,
-            Self::SessionResume { session_output } => session_output.as_deref(),
-        }
+        matches!(self, Self::SessionResume)
     }
 }
 
@@ -66,13 +60,13 @@ impl AgentRequestKind {
 pub struct TurnRequest {
     /// Session worktree folder where the agent runs.
     pub folder: PathBuf,
-    /// Live session output buffer for app-server context reconstruction.
+    /// Live transcript source for app-server context reconstruction.
     ///
-    /// App-server clients may read this buffer during a turn to access content
-    /// that was streamed before a prior crash, providing a more complete
+    /// App-server clients may read this source during a turn to access content
+    /// that was streamed before a prior crash, providing a more complete replay
     /// transcript than the snapshot captured at enqueue time. CLI channels
     /// ignore this field.
-    pub live_session_output: Option<Arc<Mutex<String>>>,
+    pub live_transcript: Option<Arc<dyn LiveTranscript>>,
     /// Main repository checkout that must remain read-only during the turn,
     /// when Agentty can resolve it.
     pub main_checkout_root: Option<PathBuf>,
@@ -81,6 +75,8 @@ pub struct TurnRequest {
     /// Canonical request kind that drives transport behavior and protocol
     /// semantics for this turn.
     pub request_kind: AgentRequestKind,
+    /// Replayable transcript text captured when the turn was queued.
+    pub replay_transcript: Option<String>,
     /// Structured prompt payload for the turn.
     pub prompt: TurnPrompt,
     /// Provider-native conversation identifier loaded from persistence.
@@ -235,9 +231,7 @@ mod tests {
     fn test_agent_request_kind_session_variants_use_session_protocol_profile() {
         // Arrange
         let start = AgentRequestKind::SessionStart;
-        let resume = AgentRequestKind::SessionResume {
-            session_output: Some("prior output".to_string()),
-        };
+        let resume = AgentRequestKind::SessionResume;
 
         // Act
         let start_profile = start.protocol_profile();
@@ -249,34 +243,28 @@ mod tests {
     }
 
     #[test]
-    /// Ensures utility prompts derive the utility protocol profile and never
-    /// expose replay output.
+    /// Ensures utility prompts derive the utility protocol profile.
     fn test_agent_request_kind_utility_prompt_uses_utility_protocol_profile() {
         // Arrange
         let request_kind = AgentRequestKind::UtilityPrompt;
 
         // Act
         let protocol_profile = request_kind.protocol_profile();
-        let session_output = request_kind.session_output();
 
         // Assert
         assert_eq!(protocol_profile, ProtocolRequestProfile::UtilityPrompt);
-        assert_eq!(session_output, None);
     }
 
     #[test]
-    /// Ensures account-read requests are non-session utility requests without
-    /// replay output.
+    /// Ensures account-read requests are non-session utility requests.
     fn test_agent_request_kind_account_read_uses_utility_protocol_profile() {
         // Arrange
         let request_kind = AgentRequestKind::AccountRead;
 
         // Act
         let protocol_profile = request_kind.protocol_profile();
-        let session_output = request_kind.session_output();
 
         // Assert
         assert_eq!(protocol_profile, ProtocolRequestProfile::UtilityPrompt);
-        assert_eq!(session_output, None);
     }
 }

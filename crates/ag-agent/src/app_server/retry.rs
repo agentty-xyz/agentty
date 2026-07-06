@@ -7,7 +7,7 @@ use super::contract::{
 };
 use super::error::AppServerError;
 use super::prompt::{
-    instruction_delivery_mode_for_runtime, read_latest_session_output, turn_prompt_for_runtime,
+    instruction_delivery_mode_for_runtime, read_latest_replay_transcript, turn_prompt_for_runtime,
 };
 use super::registry::{ActiveAppServerTurn, AppServerSessionRegistry};
 use crate::model::turn_prompt::TurnPrompt;
@@ -295,7 +295,7 @@ fn interrupted_by_user_error() -> AppServerError {
     AppServerError::InterruptedByUser("[Stopped] Session interrupted by user.".to_string())
 }
 
-/// Returns `true` when the attempt should replay prior session output as
+/// Returns `true` when the attempt should replay prior transcript as
 /// context for the runtime.
 fn needs_replay<Runtime>(
     had_existing_runtime: bool,
@@ -304,9 +304,9 @@ fn needs_replay<Runtime>(
     runtime: &Runtime,
 ) -> bool {
     !had_existing_runtime
-        && read_latest_session_output(request)
+        && read_latest_replay_transcript(request)
             .as_deref()
-            .is_some_and(|session_output| !session_output.trim().is_empty())
+            .is_some_and(|replay_transcript| !replay_transcript.trim().is_empty())
         && !(inspector.restored_context)(runtime)
 }
 
@@ -323,7 +323,7 @@ async fn build_attempt_prompt<Runtime, ShutdownRuntime>(
 where
     ShutdownRuntime: for<'scope> FnMut(&'scope mut Runtime) -> BorrowedAppServerFuture<'scope, ()>,
 {
-    let session_output = read_latest_session_output(request);
+    let replay_transcript = read_latest_replay_transcript(request);
     let instruction_delivery_mode = instruction_delivery_mode_for_runtime(
         request,
         current_provider_conversation_id,
@@ -333,7 +333,7 @@ where
     match turn_prompt_for_runtime(
         &request.prompt,
         &request.request_kind,
-        session_output.as_deref(),
+        replay_transcript.as_deref(),
         instruction_delivery_mode,
         schema_instruction_mode,
         &request.folder,
@@ -357,7 +357,7 @@ mod tests {
 
     use super::*;
     use crate::agent::InstructionDeliveryMode;
-    use crate::channel::AgentRequestKind;
+    use crate::channel::{AgentRequestKind, LiveTranscript};
     use crate::model::agent::ReasoningLevel;
     use crate::model::turn_prompt::TurnPrompt;
 
@@ -365,14 +365,29 @@ mod tests {
         model: String,
     }
 
+    #[derive(Debug)]
+    struct TestLiveTranscript {
+        text: String,
+    }
+
+    impl LiveTranscript for TestLiveTranscript {
+        fn replay_text(&self) -> Option<String> {
+            Some(self.text.clone())
+        }
+    }
+
+    fn live_transcript(text: &str) -> Arc<dyn LiveTranscript> {
+        Arc::new(TestLiveTranscript {
+            text: text.to_string(),
+        })
+    }
+
     fn session_start_request_kind() -> AgentRequestKind {
         AgentRequestKind::SessionStart
     }
 
-    fn session_resume_request_kind(session_output: Option<&str>) -> AgentRequestKind {
-        AgentRequestKind::SessionResume {
-            session_output: session_output.map(ToString::to_string),
-        }
+    fn session_resume_request_kind() -> AgentRequestKind {
+        AgentRequestKind::SessionResume
     }
 
     #[test]
@@ -430,7 +445,7 @@ mod tests {
         // Act
         let turn_prompt = turn_prompt_for_runtime(
             prompt,
-            &session_resume_request_kind(Some("assistant: proposed plan")),
+            &session_resume_request_kind(),
             Some("assistant: proposed plan"),
             InstructionDeliveryMode::BootstrapWithReplay,
             ProtocolSchemaInstructionMode::PromptSchema,
@@ -467,16 +482,16 @@ mod tests {
     }
 
     #[test]
-    fn read_latest_session_output_prefers_live_buffer_over_snapshot() {
+    fn read_latest_replay_transcript_prefers_live_buffer_over_snapshot() {
         // Arrange
-        let live_output = Arc::new(Mutex::new("live content from stream".to_string()));
         let request = AppServerTurnRequest {
             folder: PathBuf::from("/tmp"),
-            live_session_output: Some(live_output),
+            live_transcript: Some(live_transcript("live content from stream")),
             main_checkout_root: None,
             model: "model-a".to_string(),
             prompt: "Do work".into(),
-            request_kind: session_resume_request_kind(Some("stale snapshot")),
+            request_kind: session_resume_request_kind(),
+            replay_transcript: Some("queued snapshot".to_string()),
             provider_conversation_id: None,
             persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
@@ -484,23 +499,23 @@ mod tests {
         };
 
         // Act
-        let output = read_latest_session_output(&request);
+        let output = read_latest_replay_transcript(&request);
 
         // Assert
         assert_eq!(output, Some("live content from stream".to_string()));
     }
 
     #[test]
-    fn read_latest_session_output_falls_back_to_snapshot_when_live_buffer_is_empty() {
+    fn read_latest_replay_transcript_falls_back_to_snapshot_when_live_buffer_is_empty() {
         // Arrange
-        let live_output = Arc::new(Mutex::new(String::new()));
         let request = AppServerTurnRequest {
             folder: PathBuf::from("/tmp"),
-            live_session_output: Some(live_output),
+            live_transcript: Some(live_transcript("")),
             main_checkout_root: None,
             model: "model-a".to_string(),
             prompt: "Do work".into(),
-            request_kind: session_resume_request_kind(Some("stale snapshot")),
+            request_kind: session_resume_request_kind(),
+            replay_transcript: Some("queued snapshot".to_string()),
             provider_conversation_id: None,
             persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
@@ -508,22 +523,23 @@ mod tests {
         };
 
         // Act
-        let output = read_latest_session_output(&request);
+        let output = read_latest_replay_transcript(&request);
 
         // Assert
-        assert_eq!(output, Some("stale snapshot".to_string()));
+        assert_eq!(output, Some("queued snapshot".to_string()));
     }
 
     #[test]
-    fn read_latest_session_output_falls_back_to_snapshot_when_no_live_buffer() {
+    fn read_latest_replay_transcript_falls_back_to_snapshot_when_no_live_buffer() {
         // Arrange
         let request = AppServerTurnRequest {
             folder: PathBuf::from("/tmp"),
-            live_session_output: None,
+            live_transcript: None,
             main_checkout_root: None,
             model: "model-a".to_string(),
             prompt: "Do work".into(),
-            request_kind: session_resume_request_kind(Some("stale snapshot")),
+            request_kind: session_resume_request_kind(),
+            replay_transcript: Some("queued snapshot".to_string()),
             provider_conversation_id: None,
             persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
@@ -531,22 +547,23 @@ mod tests {
         };
 
         // Act
-        let output = read_latest_session_output(&request);
+        let output = read_latest_replay_transcript(&request);
 
         // Assert
-        assert_eq!(output, Some("stale snapshot".to_string()));
+        assert_eq!(output, Some("queued snapshot".to_string()));
     }
 
     #[test]
-    fn read_latest_session_output_returns_none_when_both_are_absent() {
+    fn read_latest_replay_transcript_returns_none_when_both_are_absent() {
         // Arrange
         let request = AppServerTurnRequest {
             folder: PathBuf::from("/tmp"),
-            live_session_output: None,
+            live_transcript: None,
             main_checkout_root: None,
             model: "model-a".to_string(),
             prompt: "Do work".into(),
             request_kind: session_start_request_kind(),
+            replay_transcript: None,
             provider_conversation_id: None,
             persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
@@ -554,7 +571,7 @@ mod tests {
         };
 
         // Act
-        let output = read_latest_session_output(&request);
+        let output = read_latest_replay_transcript(&request);
 
         // Assert
         assert_eq!(output, None);
@@ -564,14 +581,14 @@ mod tests {
     async fn run_turn_with_restart_retry_uses_live_output_on_retry() {
         // Arrange
         let sessions = AppServerSessionRegistry::new("Test");
-        let live_output = Arc::new(Mutex::new("streamed before crash".to_string()));
         let request = AppServerTurnRequest {
             folder: PathBuf::from("/tmp"),
-            live_session_output: Some(live_output),
+            live_transcript: Some(live_transcript("streamed before crash")),
             main_checkout_root: Some(PathBuf::from("/tmp/project")),
             model: "model-a".to_string(),
             prompt: "Do work".into(),
-            request_kind: session_resume_request_kind(Some("stale snapshot")),
+            request_kind: session_resume_request_kind(),
+            replay_transcript: Some("queued snapshot".to_string()),
             provider_conversation_id: None,
             persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
@@ -630,11 +647,11 @@ mod tests {
             .unwrap_or_default();
         assert!(
             retry_prompt.contains("streamed before crash"),
-            "retry prompt should contain live output, not stale snapshot"
+            "retry prompt should contain live transcript, not queued snapshot"
         );
         assert!(
-            !retry_prompt.contains("stale snapshot"),
-            "retry prompt should use live output instead of stale snapshot"
+            !retry_prompt.contains("queued snapshot"),
+            "retry prompt should use live transcript instead of queued snapshot"
         );
     }
 
@@ -644,11 +661,12 @@ mod tests {
         let sessions = AppServerSessionRegistry::new("Test");
         let request = AppServerTurnRequest {
             folder: PathBuf::from("/tmp"),
-            live_session_output: None,
+            live_transcript: None,
             main_checkout_root: None,
             model: "model-a".to_string(),
             prompt: "Do work".into(),
-            request_kind: session_resume_request_kind(Some("previous output")),
+            request_kind: session_resume_request_kind(),
+            replay_transcript: Some("previous transcript".to_string()),
             provider_conversation_id: None,
             persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
@@ -727,11 +745,12 @@ mod tests {
         let sessions = AppServerSessionRegistry::new("Test");
         let request = AppServerTurnRequest {
             folder: PathBuf::from("/tmp"),
-            live_session_output: None,
+            live_transcript: None,
             main_checkout_root: None,
             model: "model-a".to_string(),
             prompt: "Do work".into(),
-            request_kind: session_resume_request_kind(Some("previous output")),
+            request_kind: session_resume_request_kind(),
+            replay_transcript: Some("previous transcript".to_string()),
             provider_conversation_id: None,
             persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
@@ -799,11 +818,12 @@ mod tests {
         let sessions = AppServerSessionRegistry::new("Test");
         let request = AppServerTurnRequest {
             folder: PathBuf::from("/tmp"),
-            live_session_output: None,
+            live_transcript: None,
             main_checkout_root: None,
             model: "model-a".to_string(),
             prompt: "Do work".into(),
-            request_kind: session_resume_request_kind(Some("previous output")),
+            request_kind: session_resume_request_kind(),
+            replay_transcript: Some("previous transcript".to_string()),
             provider_conversation_id: Some("thread-123".to_string()),
             persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
@@ -861,6 +881,6 @@ mod tests {
             .unwrap_or_default();
         assert!(captured_prompt.contains("repository-root-relative POSIX paths"));
         assert!(captured_prompt.ends_with("Do work"));
-        assert!(!captured_prompt.contains("previous output"));
+        assert!(!captured_prompt.contains("previous transcript"));
     }
 }

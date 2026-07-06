@@ -522,7 +522,7 @@ mod tests {
         app.sessions.push_session(session);
         app.sessions.session_handles_mut().insert(
             session_id.clone().into(),
-            SessionHandles::new(String::new(), Status::InProgress),
+            SessionHandles::new(Status::InProgress),
         );
 
         app.mode = AppMode::View {
@@ -543,10 +543,6 @@ mod tests {
                 SessionMessageKind::AssistantAnswer,
                 "synced output",
             )]);
-            let transcript_output = transcript.to_legacy_output();
-            if let Ok(mut output) = handles.output.lock() {
-                output.clone_from(&transcript_output);
-            }
             if let Ok(mut handle_transcript) = handles.transcript.lock() {
                 *handle_transcript = transcript;
             }

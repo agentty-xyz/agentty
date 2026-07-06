@@ -434,7 +434,6 @@ mod tests {
                 crate::domain::agent::AgentKind::Antigravity,
                 crate::domain::agent::AgentKind::Antigravity.default_model(),
             ),
-            output: String::new(),
             parent_session_id: None,
             project_name: "project".to_string(),
             prompt: String::new(),
