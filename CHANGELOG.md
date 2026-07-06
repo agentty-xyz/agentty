@@ -7,6 +7,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.12.2] - 2026-07-05
+
+### Changed
+
+- ci: gate release checks on tags and rename the validation workflow.
+- release: include `ag-clipboard` in crates.io publishing.
+- Bump workspace crate metadata and lockfile package versions to `0.12.2`.
+
+### Contributors
+
+- @minev-dev
+
 ## [v0.12.1] - 2026-07-05
 
 ### Added
