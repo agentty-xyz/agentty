@@ -56,6 +56,11 @@ jobs:
           CRATES_IO_TOKEN: ${{ steps.auth.outputs.token }}
         run: cargo publish -p ag-agent --token "$CRATES_IO_TOKEN"
 
+      - name: Publish `ag-clipboard` to crates.io
+        env:
+          CRATES_IO_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish -p ag-clipboard --token "$CRATES_IO_TOKEN"
+
       - name: Publish `agentty` to crates.io
         env:
           CRATES_IO_TOKEN: ${{ steps.auth.outputs.token }}
