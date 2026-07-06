@@ -1382,8 +1382,8 @@ impl App {
     /// Starts review assist generation for one session using the
     /// current diff text and the configured default review model.
     ///
-    /// The review assist prompt enforces read-only review constraints
-    /// and allows only internet lookup and non-editing verification commands.
+    /// The review assist prompt enforces inspection-only review constraints
+    /// and recommends verification commands instead of running them.
     pub(crate) fn start_review_assist(
         &mut self,
         session_id: &str,

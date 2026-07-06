@@ -146,10 +146,6 @@ fn allow_detect_git_info(mock: &mut git::MockGitClient) {
     allow_detect_git_info_with_head_hash(mock, true);
 }
 
-fn allow_detect_git_info_without_head_hash(mock: &mut git::MockGitClient) {
-    allow_detect_git_info_with_head_hash(mock, false);
-}
-
 fn allow_detect_git_info_with_head_hash(mock: &mut git::MockGitClient, allow_head_hash: bool) {
     mock.expect_detect_git_info().times(0..).returning(|path| {
         let branch_name = path
@@ -204,7 +200,7 @@ fn create_mock_git_client_for_successful_noop_merges(
     repo_root: PathBuf,
 ) -> git::MockGitClient {
     let mut mock = git::MockGitClient::new();
-    allow_detect_git_info_without_head_hash(&mut mock);
+    allow_detect_git_info(&mut mock);
     mock.expect_find_git_repo_root()
         .times(expected_merge_count)
         .returning(move |_| {

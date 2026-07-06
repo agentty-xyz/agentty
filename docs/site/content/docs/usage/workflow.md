@@ -163,8 +163,10 @@ When a session enters **Review**, Agentty starts generating a focused review in 
 background and temporarily shows **AgentReview**. Press `f` to append the cached review
 into the session output, or to see a loading message while generation is still running.
 The appended review stays visible across diff mode and question mode, and is cleared
-when you submit the next prompt. A turn stopped with `Ctrl+c` does not start a focused
-review automatically; press `f` for a manual one.
+when you submit the next prompt. Focused review uses inspection-only context: it may
+read files, search, inspect git history, and browse when needed, but it recommends
+verification commands instead of running checks itself. A turn stopped with `Ctrl+c`
+does not start a focused review automatically; press `f` for a manual one.
 
 ### Session Output Markdown
 

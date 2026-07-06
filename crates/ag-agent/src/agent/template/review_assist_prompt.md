@@ -13,11 +13,14 @@ Execution constraints (mandatory):
 - Do not create, modify, rename, or delete files.
 - Do not run commands that modify the repository, workspace files, git history, or
   system state.
+- Do not run build, test, formatter, linter, package-manager, dev-server, static
+  analyzer, network, or long-running commands.
 - You may browse the internet when needed.
-- You may run non-editing CLI commands when needed for verification (for example: tests,
-  linters, static analyzers, `git status`, `git diff`, `git log`, `git show`).
-- If a potentially helpful command would edit files or state, skip it and continue with
-  a read-only alternative.
+- Use inspection only: file reads, file searches, and read-only git commands such as
+  `git status`, `git diff`, `git log`, `git show`, and `git blame`.
+- If verification would be useful, recommend the exact command instead of running it.
+- If a potentially helpful command is outside inspection-only review, skip it and
+  continue with the available context.
 
 Required structure:
 

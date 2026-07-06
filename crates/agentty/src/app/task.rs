@@ -881,8 +881,8 @@ mod tests {
     }
 
     #[test]
-    /// Ensures review prompt rendering includes read-only constraints
-    /// while keeping internet and non-editing verification options available.
+    /// Ensures review prompt rendering includes inspection-only review
+    /// constraints.
     fn test_review_assist_prompt_enforces_read_only_constraints() {
         // Arrange
         let review_diff = "diff --git a/src/lib.rs b/src/lib.rs";
@@ -900,8 +900,11 @@ mod tests {
         assert!(!prompt.contains("Return Markdown only."));
         assert!(prompt.contains("You are in read-only review mode."));
         assert!(prompt.contains("Do not create, modify, rename, or delete files."));
+        assert!(prompt.contains("Do not run build, test, formatter, linter"));
         assert!(prompt.contains("You may browse the internet when needed."));
-        assert!(prompt.contains("You may run non-editing CLI commands"));
+        assert!(prompt.contains("Use inspection only: file reads, file searches"));
+        assert!(prompt.contains("If verification would be useful"));
+        assert!(!prompt.contains("You may run non-editing CLI commands"));
         assert!(normalized_prompt.contains("Treat high severity as correctness"));
         assert!(normalized_prompt.contains("concrete practical impact"));
         let fenced_diff = format!("```diff\n{review_diff}\n```");

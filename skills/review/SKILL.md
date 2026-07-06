@@ -19,6 +19,10 @@ feature branch), existing code files, or the overall project.
      project structure.
    - Always verify the project's specific conventions and architectural guidelines
      (e.g., from `AGENTS.md`) to inform your review.
+   - Keep review mode inspection-only by default. Do not run build, test, formatter,
+     linter, package-manager, dev-server, static analyzer, network, or long-running
+     commands unless the user explicitly requests verification. If verification would be
+     useful, recommend the exact command instead of running it.
 
 1. **Analyze the Code**
 
