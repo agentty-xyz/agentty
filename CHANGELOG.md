@@ -7,6 +7,48 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.12.1] - 2026-07-05
+
+### Added
+
+- ag-agent: allow Claude session turns to use `WebSearch` and `WebFetch` without
+  interactive permission grants.
+- ci: add end-to-end release checks.
+
+### Changed
+
+- ag-agent: replace session-output resume context with transcript replay.
+- ag-agent: strengthen workspace isolation and review-mode prompting.
+- agentty: switch session orchestration to the shared `ag-agent` APIs.
+- agentty: move Agentty home resolution into the infra boundary.
+- agentty: preserve review provider selection across review tasks.
+- agentty: rename the Review tab to Inbox for requested-review lists.
+- agentty: reorder editable session footer actions.
+- agentty: render compact two-node `LR` feedback loops in session Mermaid diagrams.
+- ag-protocol: prompt session-turn agents to use supported Mermaid diagrams.
+- ci: replace `cargo-shear` with `cargo-machete` for unused dependency checks.
+- deps: trim unused dependencies and narrow default features for workspace crates.
+- docs: clarify workflow, runtime architecture, and release-check guidance.
+- cargo: tune debug profiles to keep default development builds lighter while preserving
+  a full-debug profile when needed.
+- Bump workspace crate metadata and lockfile package versions to `0.12.1`.
+
+### Fixed
+
+- deps: bump `cmov` from `0.5.3` to `0.5.4` for security updates.
+- agentty: fix inline markdown punctuation spacing.
+- agentty: fix session worktree seeding in E2E coverage.
+- agentty: use assistant answer messages for inline markdown E2E fixtures.
+
+### Removed
+
+- docs: remove the obsolete `testty` explicit API design spec.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
+
 ## [v0.12.0] - 2026-07-05
 
 ### Added
