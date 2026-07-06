@@ -368,7 +368,7 @@ Use slower hygiene hooks only in CI or when making broader changes. Consult
 `.pre-commit-config.yaml` for current hook IDs and invocations.
 
 - Run local broad checks when relevant: coverage summary, member source tests,
-  `zola-check`, `cargo-shear`, and `cargo-audit`.
+  `zola-check`, `cargo-machete`, and `cargo-audit`.
 - Do not run GitHub-only `coverage-lcov` or the full `test-agentty-e2e` suite locally;
   `.github/workflows/postsubmit.yml` owns those after merge to `main`.
 

@@ -13,4 +13,5 @@ jobs:
     uses: ./.github/workflows/rust-validation.yml
     with:
       cargo-audit: true
+      cargo-machete: true
       workspace-tests: true

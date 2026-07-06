@@ -23,7 +23,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
- "tracing",
  "uuid",
 ]
 
@@ -142,11 +141,9 @@ dependencies = [
  "ag-forge",
  "ag-git",
  "ag-protocol",
- "agent-client-protocol",
  "askama",
  "assert_cmd",
  "async-trait",
- "base64",
  "crossterm",
  "dirs",
  "ignore",
@@ -155,7 +152,6 @@ dependencies = [
  "nix 0.31.3",
  "ratatui",
  "rustc-hash",
- "schemars 1.2.1",
  "semver",
  "serde",
  "serde_json",
@@ -2616,7 +2612,6 @@ dependencies = [
  "instability",
  "ratatui-core",
  "ratatui-crossterm",
- "ratatui-macros",
  "ratatui-termina",
  "ratatui-termwiz",
  "ratatui-widgets",
@@ -2655,16 +2650,6 @@ dependencies = [
  "crossterm",
  "instability",
  "ratatui-core",
-]
-
-[[package]]
-name = "ratatui-macros"
-version = "0.7.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed7dc68daa7498a43e4d68e0eb078427e10c38fbcfbb1e42d955f1fa2140d814"
-dependencies = [
- "ratatui-core",
- "ratatui-widgets",
 ]
 
 [[package]]
@@ -3204,8 +3189,6 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "sqlx-core",
- "sqlx-mysql",
- "sqlx-postgres",
  "sqlx-sqlite",
  "syn 2.0.117",
  "thiserror 2.0.18",

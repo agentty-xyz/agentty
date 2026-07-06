@@ -176,10 +176,10 @@ repos:
         always_run: true
         pass_filenames: false
         stages: [manual]
-      - id: cargo-shear
-        name: cargo-shear
+      - id: cargo-machete
+        name: cargo machete
         description: Check workspace manifests for unused dependencies.
-        entry: cargo shear
+        entry: cargo-machete
         language: system
         types: [rust]
         pass_filenames: false

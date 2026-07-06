@@ -8,6 +8,11 @@ on:
         required: false
         type: boolean
         default: false
+      cargo-machete:
+        description: Run the unused dependency check hook.
+        required: false
+        type: boolean
+        default: false
       llvm-tools-preview:
         description: Install the Rust `llvm-tools-preview` component.
         required: false
@@ -39,6 +44,7 @@ jobs:
         uses: ./.github/actions/setup-rust-prek
         with:
           cargo-audit: ${{ inputs['cargo-audit'] && 'true' || 'false' }}
+          cargo-machete: ${{ inputs['cargo-machete'] && 'true' || 'false' }}
           llvm-tools-preview: ${{ inputs['llvm-tools-preview'] && 'true' || 'false' }}
 
       - name: Default validation hooks
@@ -47,6 +53,10 @@ jobs:
       - name: Dependency advisory audit
         if: ${{ inputs['cargo-audit'] }}
         run: prek run cargo-audit --all-files --hook-stage manual
+
+      - name: Unused dependency check
+        if: ${{ inputs['cargo-machete'] }}
+        run: prek run cargo-machete --all-files --hook-stage manual
 
       - name: Full test suite
         if: ${{ inputs['workspace-tests'] }}
