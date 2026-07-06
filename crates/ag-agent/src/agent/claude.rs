@@ -9,9 +9,10 @@ use super::prompt::{CliPromptAccessRootMode, append_cli_prompt_access_directorie
 /// Lists the Claude tools Agentty enables for unattended sessions.
 ///
 /// `Bash` remains available for Claude workflows that need shell commands,
-/// while Agentty keeps the process working directory scoped to the session
-/// worktree.
-const CLAUDE_ALLOWED_TOOLS: &str = "Bash,Edit,MultiEdit,Write,EnterPlanMode,ExitPlanMode";
+/// while `WebSearch` and `WebFetch` let Claude answer current-information
+/// prompts without an interactive permission grant.
+const CLAUDE_ALLOWED_TOOLS: &str =
+    "Bash,Edit,MultiEdit,Write,WebSearch,WebFetch,EnterPlanMode,ExitPlanMode";
 
 /// Backend implementation for the Claude CLI.
 ///
@@ -168,7 +169,7 @@ mod tests {
     }
 
     #[test]
-    /// Verifies Claude sessions allow Agentty's required write-capable tools.
+    /// Verifies Claude sessions allow Agentty's required edit and web tools.
     fn test_claude_auto_edit_mode_uses_write_capable_allowed_tools() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
@@ -202,6 +203,8 @@ mod tests {
         assert!(debug_command.contains("Bash"));
         assert!(debug_command.contains("MultiEdit"));
         assert!(debug_command.contains("Write"));
+        assert!(debug_command.contains("WebSearch"));
+        assert!(debug_command.contains("WebFetch"));
         assert!(debug_command.contains("--strict-mcp-config"));
         assert!(debug_command.contains("--settings"));
         assert!(debug_command.contains("--effort"));

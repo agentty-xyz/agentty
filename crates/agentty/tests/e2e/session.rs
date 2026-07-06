@@ -607,30 +607,12 @@ fn seed_question_resume_session(env: &BuilderEnv) -> Result<(), Box<dyn std::err
     Ok(())
 }
 
-/// Installs a Claude stub that emits one structured clarification question
-/// after a delay, giving the scenario time to cover the active view with help.
-fn install_delayed_question_claude_stub(
+/// Persists the project default model so session-creation tests route to a
+/// deterministic backend even when additional real CLIs exist on `PATH`.
+fn seed_project_default_model(
     env: &BuilderEnv,
+    model: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let claude_path = env.stub_bin.join("claude");
-    let script = format!(
-        r#"#!/bin/sh
-if [ "$1" = "update" ]; then exit 0; fi
-if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-cat > /dev/null 2>&1
-sleep 1
-printf '%s\n' '{{"type":"system","subtype":"init"}}'
-sleep 2
-printf '%s\n' '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"Need one clarification."}}]}}}}'
-sleep 1
-printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"Need one clarification.\",\"questions\":[{{\"text\":\"{RECONCILE_QUESTION_TEXT}\",\"options\":[\"Yes\",\"No\"]}}],\"summary\":null}}","usage":{{"input_tokens":5,"output_tokens":9}}}}'
-"#
-    );
-
-    std::fs::write(&claude_path, script)?;
-    #[cfg(unix)]
-    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
-
     let runtime = common::seed_runtime()?;
     runtime.block_on(async {
         let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
@@ -662,7 +644,7 @@ ON CONFLICT(project_id, name) DO UPDATE SET value = excluded.value
         )
         .bind(project_id)
         .bind("DefaultSmartModel")
-        .bind("claude-haiku-4-5-20251001");
+        .bind(model);
         connection.execute(query).await?;
         connection.close().await?;
 
@@ -670,6 +652,59 @@ ON CONFLICT(project_id, name) DO UPDATE SET value = excluded.value
     })?;
 
     Ok(())
+}
+
+/// Installs a Claude stub that emits one structured clarification question
+/// after a delay, giving the scenario time to cover the active view with help.
+fn install_delayed_question_claude_stub(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let claude_path = env.stub_bin.join("claude");
+    let script = format!(
+        r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+cat > /dev/null 2>&1
+sleep 1
+printf '%s\n' '{{"type":"system","subtype":"init"}}'
+sleep 2
+printf '%s\n' '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"Need one clarification."}}]}}}}'
+sleep 1
+printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"Need one clarification.\",\"questions\":[{{\"text\":\"{RECONCILE_QUESTION_TEXT}\",\"options\":[\"Yes\",\"No\"]}}],\"summary\":null}}","usage":{{"input_tokens":5,"output_tokens":9}}}}'
+"#
+    );
+
+    std::fs::write(&claude_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+
+    seed_project_default_model(env, "claude-haiku-4-5-20251001")
+}
+
+/// Installs a Claude stub that reports whether Agentty passed web-capable
+/// Claude Code tools to the non-interactive session launch.
+fn install_web_tool_reporting_claude_stub(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let claude_path = env.stub_bin.join("claude");
+    let script = r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+cat > /dev/null 2>&1
+case " $* " in
+  *WebSearch*WebFetch*|*WebFetch*WebSearch*) answer='Claude web tools enabled' ;;
+  *) answer='Claude web tools missing' ;;
+esac
+printf '%s\n' '{"type":"system","subtype":"init"}'
+printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"%s"}]}}\n' "$answer"
+printf '{"type":"result","subtype":"success","result":"{\"answer\":\"%s\",\"questions\":[],\"summary\":null}","usage":{"input_tokens":5,"output_tokens":9}}\n' "$answer"
+"#;
+
+    std::fs::write(&claude_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+
+    seed_project_default_model(env, "claude-haiku-4-5-20251001")
 }
 
 /// Seeds one review-ready session with a linked review request.
@@ -1382,6 +1417,39 @@ fn session_question_resume_after_leaving_to_list() -> E2eResult {
                 assertion::assert_not_visible(frame, FIRST_QUESTION_TEXT);
             },
         )?;
+
+    Ok(())
+}
+
+/// Verify that Claude sessions are launched with web-capable Claude Code
+/// tools so current-information prompts do not require an interactive grant.
+#[test]
+fn claude_session_launch_allows_web_tools() -> E2eResult {
+    // Arrange
+    let _test_guard = common::acquire_e2e_test_lock();
+    let temp = tempfile::TempDir::new()?;
+    let env = BuilderEnv::new(temp.path())?;
+    env.init_git()?;
+    install_web_tool_reporting_claude_stub(&env)?;
+
+    let scenario = Scenario::new("claude_session_web_tools")
+        .compose(&common::wait_for_agentty_startup())
+        .compose(&common::switch_to_tab("Sessions"))
+        .press_key("a")
+        .press_key("Enter")
+        .wait_for_stable_frame(300, 5000)
+        .write_text("Use the web for current package docs")
+        .wait_for_text("Use the web for current package docs", 3000)
+        .press_key("Enter")
+        .wait_for_text("Claude web tools enabled", 30000);
+
+    // Act
+    let frame = scenario.run(env.builder())?;
+
+    // Assert
+    let full = Region::full(frame.cols(), frame.rows());
+    assertion::assert_text_in_region(&frame, "Claude web tools enabled", &full);
+    assertion::assert_not_visible(&frame, "Claude web tools missing");
 
     Ok(())
 }

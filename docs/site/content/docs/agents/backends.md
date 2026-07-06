@@ -25,6 +25,14 @@ All backends accept pasted local prompt images from the Agentty composer (`Ctrl+
 `Ctrl+Shift+V`, or `Alt+V` in prompt mode) and run their turns non-interactively inside
 the session worktree.
 
+Claude turns also allow Claude Code's `WebSearch` and `WebFetch` tools, so prompts that
+need current external information can use the web without an interactive permission
+grant. File edits remain scoped to the session worktree.
+
+Treat fetched web content as untrusted context. Claude still has edit-capable tools
+during the turn, so keep web-backed prompts specific and review the session diff before
+merging.
+
 Agentty requires at least one supported backend CLI on `PATH` at startup and fails with
 an install hint when none is found.
 
