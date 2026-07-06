@@ -10,7 +10,8 @@ permissions:
 
 jobs:
   validate:
-    uses: ./.github/workflows/rust-validation.yml
+    name: Workspace checks
+    uses: ./.github/workflows/workspace-validation.yml
     with:
       cargo-audit: true
       cargo-machete: true
