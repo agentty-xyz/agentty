@@ -50,7 +50,8 @@ jobs:
         run: prek run ${{ matrix.hook }} --all-files --hook-stage manual
 
   validate:
-    uses: ./.github/workflows/rust-validation.yml
+    name: Workspace checks
+    uses: ./.github/workflows/workspace-validation.yml
     with:
       cargo-audit: true
       cargo-machete: true

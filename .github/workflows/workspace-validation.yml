@@ -1,4 +1,4 @@
-name: Rust Validation
+name: Workspace Validation
 
 on:
   workflow_call:
@@ -32,6 +32,7 @@ env:
 
 jobs:
   validate:
+    name: Workspace validation
     runs-on: ubuntu-latest
 
     steps:
