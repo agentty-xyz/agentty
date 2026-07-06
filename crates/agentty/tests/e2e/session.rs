@@ -142,7 +142,7 @@ fn seed_session_with_inline_markdown_punctuation(
             .sessions()
             .append_session_message(
                 "inline-md-0001",
-                SessionMessageKind::LegacyTranscript,
+                SessionMessageKind::AssistantAnswer,
                 "Use (`session_messages_from_rows`), then [`Image #1`].\n",
             )
             .await
