@@ -90,6 +90,16 @@ unused_async = "warn"
 unused_peekable = "warn"
 debug_assert_with_mut_call = "warn"
 
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.debugging]
+inherits = "dev"
+debug = true
+
 [profile.release]
 codegen-units = 1 # Allows compiler to perform better optimization.
 lto = true # Enables Link-time Optimization.
