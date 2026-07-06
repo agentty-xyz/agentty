@@ -111,7 +111,7 @@ fn seed_session_with_markdown_table(env: &BuilderEnv) -> Result<(), Box<dyn std:
                 "\
 | Message kind | Storage |
 | --- | --- |
-| User prompt | session_message |
+| User prompt | Session.output |
 | Assistant markdown | session_message |
 ",
             )
@@ -406,7 +406,7 @@ fn seed_pending_post_merge_restack_child(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let child_worktree = env.agentty_root.join("wt").join("stack-re");
-    let parent_tip = seed_child_worktree_for_onto_rebase(&child_worktree)?;
+    let parent_tip = seed_child_worktree_for_onto_rebase(&env.workdir, &child_worktree)?;
     common::seed_session(
         env,
         SessionSeed::regular("stack-restack-child-0001", "gpt-5.5", "main", "Review")
@@ -429,29 +429,40 @@ fn seed_pending_post_merge_restack_child(
 /// Creates a child branch with one parent commit and one child commit so the
 /// app can recover it using `git rebase --onto main <parent-tip>`.
 fn seed_child_worktree_for_onto_rebase(
+    main_worktree: &Path,
     child_worktree: &Path,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    std::fs::create_dir_all(child_worktree)?;
-    run_git(child_worktree, &["init", "-b", "main"])?;
-    run_git(child_worktree, &["config", "user.email", "test@test.com"])?;
-    run_git(child_worktree, &["config", "user.name", "Test"])?;
-    std::fs::write(child_worktree.join("base.txt"), "base\n")?;
-    run_git(child_worktree, &["add", "."])?;
-    run_git(child_worktree, &["commit", "-m", "base"])?;
-    run_git(child_worktree, &["checkout", "-b", "parent"])?;
-    std::fs::write(child_worktree.join("parent.txt"), "parent\n")?;
-    run_git(child_worktree, &["add", "."])?;
-    run_git(child_worktree, &["commit", "-m", "parent change"])?;
-    let parent_tip = run_git_stdout(child_worktree, &["rev-parse", "HEAD"])?;
-    run_git(child_worktree, &["checkout", "-b", "child"])?;
+    if let Some(parent) = child_worktree.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    std::fs::write(main_worktree.join("base.txt"), "base\n")?;
+    run_git(main_worktree, &["add", "."])?;
+    run_git(main_worktree, &["commit", "-m", "base"])?;
+    run_git(main_worktree, &["checkout", "-b", "parent"])?;
+    std::fs::write(main_worktree.join("parent.txt"), "parent\n")?;
+    run_git(main_worktree, &["add", "."])?;
+    run_git(main_worktree, &["commit", "-m", "parent change"])?;
+    let parent_tip = run_git_stdout(main_worktree, &["rev-parse", "HEAD"])?;
+    run_git(main_worktree, &["checkout", "main"])?;
+    std::fs::write(main_worktree.join("merged-parent.txt"), "merged parent\n")?;
+    run_git(main_worktree, &["add", "."])?;
+    run_git(main_worktree, &["commit", "-m", "merged parent"])?;
+    let child_worktree_path = child_worktree.to_string_lossy().into_owned();
+    run_git(
+        main_worktree,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "wt/stack-re",
+            child_worktree_path.as_str(),
+            "parent",
+        ],
+    )?;
     std::fs::write(child_worktree.join("child.txt"), "child\n")?;
     run_git(child_worktree, &["add", "."])?;
     run_git(child_worktree, &["commit", "-m", "child change"])?;
-    run_git(child_worktree, &["checkout", "main"])?;
-    std::fs::write(child_worktree.join("merged-parent.txt"), "merged parent\n")?;
-    run_git(child_worktree, &["add", "."])?;
-    run_git(child_worktree, &["commit", "-m", "merged parent"])?;
-    run_git(child_worktree, &["checkout", "child"])?;
 
     Ok(parent_tip)
 }
