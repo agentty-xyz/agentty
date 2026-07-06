@@ -2149,6 +2149,36 @@ mod tests {
     }
 
     #[test]
+    fn test_render_markdown_renders_feedback_mermaid_block_as_diagram() {
+        // Arrange
+        let input = concat!(
+            "```mermaid\n",
+            "flowchart LR\n",
+            "    A[\"App\"] -- \"commands:<br/>prompt · interrupt · permission answer\" --> \
+             H[\"ag-harness\"]\n",
+            "    H -- \"typed events:<br/>deltas · tool calls · diffs · usage\" --> A\n",
+            "```",
+        );
+
+        // Act
+        let lines = render_markdown(input, 80);
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(text.contains("App"));
+        assert!(text.contains("ag-harness"));
+        assert!(text.contains("commands:"));
+        assert!(text.contains("typed events:"));
+        assert!(text.contains("◀"));
+        assert!(!text.contains("flowchart LR"));
+        assert!(!text.contains("<br/>"));
+    }
+
+    #[test]
     fn test_render_markdown_keeps_code_fallback_for_unsupported_mermaid() {
         // Arrange
         let input = "```mermaid\nclassDiagram\n    A <|-- B\n```";

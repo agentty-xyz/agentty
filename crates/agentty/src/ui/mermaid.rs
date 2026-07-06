@@ -36,8 +36,8 @@ pub struct MermaidDiagram {
 /// node statements, and edge chains, `erDiagram` headers with crow's-foot
 /// relationship statements, and simple `sequenceDiagram` participant/message
 /// statements.
-/// Returns `None` for unsupported diagram types, cycles, or layouts so
-/// callers can keep the plain code-block presentation.
+/// Returns `None` for unsupported diagram types, unsupported cycles, or
+/// layouts so callers can keep the plain code-block presentation.
 pub fn render_mermaid(source: &str) -> Option<MermaidDiagram> {
     if !is_source_within_bounds(source) {
         return None;
@@ -47,7 +47,12 @@ pub fn render_mermaid(source: &str) -> Option<MermaidDiagram> {
         return Some(draw_sequence_diagram(&sequence_diagram));
     }
 
-    let graph = expand_long_edges(parse_graph(source)?)?;
+    let graph = parse_graph(source)?;
+    if let Some(diagram) = draw_left_right_feedback_graph(&graph) {
+        return Some(diagram);
+    }
+
+    let graph = expand_long_edges(graph)?;
     let layout = layout_layers(&graph)?;
 
     let diagram = match graph.direction {
@@ -348,14 +353,7 @@ fn parse_er_relationship(
     }
     let target_marker = er_cardinality_marker(operator.get(4..)?)?;
 
-    let label = label_text
-        .map(|text| text.trim().trim_matches('"').trim().to_string())
-        .filter(|text| !text.is_empty());
-    if let Some(label) = &label
-        && !is_renderable_label(label)
-    {
-        return None;
-    }
+    let label = label_text.and_then(renderable_edge_label);
 
     if edges.len() >= MAX_EDGE_COUNT {
         return None;
@@ -697,13 +695,10 @@ impl<'source> StatementCursor<'source> {
                 return Some((has_arrow, None));
             };
             let close_index = after_pipe.find('|')?;
-            let label = after_pipe[..close_index].trim().to_string();
+            let label = renderable_edge_label(&after_pipe[..close_index]);
             self.rest = &after_pipe[close_index + 1..];
-            if !label.is_empty() && !is_renderable_label(&label) {
-                return None;
-            }
 
-            return Some((has_arrow, (!label.is_empty()).then_some(label)));
+            return Some((has_arrow, label));
         }
 
         None
@@ -731,14 +726,7 @@ impl<'source> StatementCursor<'source> {
                 )
             };
         self.rest = after_operator;
-        let label = label_text.trim();
-        let label = (!label.is_empty()).then(|| label.to_string());
-
-        if let Some(label) = &label
-            && !is_renderable_label(label)
-        {
-            return None;
-        }
+        let label = renderable_edge_label(label_text);
 
         Some((has_arrow, label))
     }
@@ -747,6 +735,31 @@ impl<'source> StatementCursor<'source> {
     fn skip_whitespace(&mut self) {
         self.rest = self.rest.trim_start();
     }
+}
+
+/// Normalizes an optional edge label to the single-line subset that the
+/// terminal preview can paint.
+fn renderable_edge_label(label_text: &str) -> Option<String> {
+    let label = first_mermaid_label_line(label_text)
+        .trim()
+        .trim_matches('"')
+        .trim();
+    if !is_renderable_label(label) {
+        return None;
+    }
+
+    Some(label.to_string())
+}
+
+/// Returns the first line from Mermaid's common HTML line-break label syntax.
+fn first_mermaid_label_line(label_text: &str) -> &str {
+    for delimiter in ["<br/>", "<br />", "<br>"] {
+        if let Some((first_line, _)) = label_text.split_once(delimiter) {
+            return first_line;
+        }
+    }
+
+    label_text
 }
 
 /// Returns whether a label stays within bounds and uses single-cell glyphs.
@@ -773,6 +786,116 @@ fn is_renderable_identifier(identifier: &str) -> bool {
 struct GraphLayout {
     layer_members: Vec<Vec<usize>>,
     node_layers: Vec<usize>,
+}
+
+/// Draws a compact two-node left-right feedback graph.
+///
+/// The layered graph renderer intentionally rejects cycles. This preview keeps
+/// the common `A --> B` / `B --> A` shape useful in chat by placing both nodes
+/// once and rendering the reciprocal arrows underneath them.
+fn draw_left_right_feedback_graph(graph: &MermaidGraph) -> Option<MermaidDiagram> {
+    if !is_left_right_feedback_graph(graph) {
+        return None;
+    }
+
+    let node_widths = left_right_node_widths(graph);
+    let label_width = graph
+        .edges
+        .iter()
+        .filter_map(|edge| edge.label.as_deref())
+        .map(UnicodeWidthStr::width)
+        .max()
+        .unwrap_or(0);
+    let gap_width = label_width.max(LAYER_GAP_COLUMNS * 2 + 4);
+    let right_column = node_widths[0] + gap_width;
+    let canvas_width = right_column + node_widths[1];
+    let canvas_height = NODE_BOX_HEIGHT + graph.edges.len() * 2;
+    let left_center = node_widths[0] / 2;
+    let right_center = right_column + node_widths[1] / 2;
+    let mut canvas = Canvas::new(canvas_width, canvas_height);
+
+    draw_node_box(&mut canvas, &graph.nodes[0], 0, 0, node_widths[0]);
+    draw_node_box(
+        &mut canvas,
+        &graph.nodes[1],
+        right_column,
+        0,
+        node_widths[1],
+    );
+    for (edge_index, edge) in graph.edges.iter().enumerate() {
+        let label_row = NODE_BOX_HEIGHT + edge_index * 2;
+        let arrow_row = label_row + 1;
+        draw_feedback_edge_label(&mut canvas, edge, left_center, right_center, label_row);
+        draw_feedback_edge_arrow(&mut canvas, edge, left_center, right_center, arrow_row);
+    }
+
+    Some(canvas.into_diagram())
+}
+
+/// Returns whether a graph is the two-node reciprocal shape.
+fn is_left_right_feedback_graph(graph: &MermaidGraph) -> bool {
+    if !matches!(graph.direction, FlowDirection::LeftRight)
+        || graph.nodes.len() != 2
+        || graph.edges.len() != 2
+    {
+        return false;
+    }
+
+    graph.edges.iter().all(|edge| {
+        (edge.from_index == 0 && edge.to_index == 1) || (edge.from_index == 1 && edge.to_index == 0)
+    }) && graph
+        .edges
+        .iter()
+        .any(|edge| edge.from_index == 0 && edge.to_index == 1)
+        && graph
+            .edges
+            .iter()
+            .any(|edge| edge.from_index == 1 && edge.to_index == 0)
+}
+
+/// Writes one feedback edge label between the node centers when it fits.
+fn draw_feedback_edge_label(
+    canvas: &mut Canvas,
+    edge: &MermaidEdge,
+    left_center: usize,
+    right_center: usize,
+    row: usize,
+) {
+    let Some(label) = &edge.label else {
+        return;
+    };
+
+    let label_width = UnicodeWidthStr::width(label.as_str());
+    let run_width = right_center.saturating_sub(left_center + 1);
+    if label_width > run_width {
+        return;
+    }
+
+    let start_column = left_center + 1 + (run_width - label_width) / 2;
+    canvas.try_write_label(start_column, row, label);
+}
+
+/// Draws one horizontal feedback arrow between the node centers.
+fn draw_feedback_edge_arrow(
+    canvas: &mut Canvas,
+    edge: &MermaidEdge,
+    left_center: usize,
+    right_center: usize,
+    row: usize,
+) {
+    for column in left_center..=right_center {
+        canvas.merge_connector(column, row, CONNECT_LEFT | CONNECT_RIGHT);
+    }
+
+    if !edge.has_arrow {
+        return;
+    }
+
+    if edge.to_index == 1 {
+        canvas.put_arrow(right_center, row, '▶');
+    } else {
+        canvas.put_arrow(left_center, row, '◀');
+    }
 }
 
 /// Draws a simple sequence diagram with participant boxes and message arrows.
@@ -1773,6 +1896,31 @@ mod tests {
     }
 
     #[test]
+    fn test_render_mermaid_draws_left_right_feedback_cycle() {
+        // Arrange
+        let source = concat!(
+            "flowchart LR\n",
+            "    A[\"App\"] -- \"commands:<br/>prompt · interrupt · permission answer\" --> \
+             H[\"ag-harness\"]\n",
+            "    H -- \"typed events:<br/>deltas · tool calls · diffs · usage\" --> A\n",
+        );
+
+        // Act
+        let diagram = render_mermaid(source).expect("two-node feedback graph should render");
+        let text = diagram_text(&diagram);
+
+        // Assert
+        assert!(text.contains("App"));
+        assert!(text.contains("ag-harness"));
+        assert!(text.contains("commands:"));
+        assert!(text.contains("typed events:"));
+        assert!(text.contains('▶'));
+        assert!(text.contains('◀'));
+        assert!(!text.contains("flowchart LR"));
+        assert!(!text.contains("<br/>"));
+    }
+
+    #[test]
     fn test_render_mermaid_writes_edge_label_on_track() {
         // Arrange
         let source = "graph TD\n    A --> B\n    A -->|yes| C";
@@ -1941,12 +2089,14 @@ mod tests {
     }
 
     #[test]
-    fn test_render_mermaid_rejects_cycles() {
+    fn test_render_mermaid_rejects_unsupported_cycles() {
         // Arrange
         let cyclic = "graph TD\n    A --> B\n    B --> A";
+        let three_node_cycle = "graph LR\n    A --> B\n    B --> C\n    C --> A";
 
-        // Act
+        // Act & Assert
         assert!(render_mermaid(cyclic).is_none());
+        assert!(render_mermaid(three_node_cycle).is_none());
     }
 
     #[test]

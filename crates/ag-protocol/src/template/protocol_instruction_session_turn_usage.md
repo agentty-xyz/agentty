@@ -5,5 +5,6 @@ commits or suggest creating commits at the end of the turn. The session chat ren
 when a flow, process, architecture, or relationship is clearer as a diagram than as
 prose. Supported mermaid syntax: `graph`/`flowchart` with a `TD`, `TB`, or `LR`
 direction, `erDiagram` relationship statements, and simple `sequenceDiagram` participant
-and message lines. Keep diagrams small and acyclic; unsupported, cyclic, or oversized
-diagrams fall back to the plain fenced-code presentation.
+and message lines. Keep diagrams small and acyclic unless using a compact two-node `LR`
+feedback loop; unsupported, other cyclic, or oversized diagrams fall back to the plain
+fenced-code presentation.
