@@ -1,17 +1,18 @@
 //! Process-management utilities for agent subprocess lifecycle.
 
-use nix::sys::signal::{self, Signal};
-use nix::unistd::Pid;
+use rustix::process::{self, Pid, Signal};
 
 /// Sends `SIGTERM` to the process identified by `pid`.
 ///
 /// Best-effort: failures (no such process, permission denied) are silently
 /// ignored because the calling code treats process termination as advisory.
-/// Uses `nix::sys::signal::kill` for a direct syscall instead of shelling
-/// out to the `kill` binary.
+/// Uses `rustix::process::kill_process` for a direct syscall instead of
+/// shelling out to the `kill` binary.
 pub(crate) fn send_terminate_signal(pid: u32) {
-    if let Ok(raw_pid) = i32::try_from(pid) {
-        let _ = signal::kill(Pid::from_raw(raw_pid), Signal::SIGTERM);
+    if let Ok(raw_pid) = i32::try_from(pid)
+        && let Some(pid) = Pid::from_raw(raw_pid)
+    {
+        let _ = process::kill_process(pid, Signal::TERM);
     }
 }
 

@@ -1,5 +1,6 @@
 //! App startup and project-catalog helper workflows.
 
+use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -337,7 +338,7 @@ impl AppStartup {
         project_discovery_client: &dyn ProjectDiscoveryClient,
     ) {
         let session_worktree_root = super::core::agentty_home().join(AGENTTY_WT_DIR);
-        let home_directory = dirs::home_dir();
+        let home_directory = env::home_dir();
 
         Self::load_projects_from_home_directory(
             db,

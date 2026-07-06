@@ -29,7 +29,6 @@ askama = "0.16.0"
 base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
 crossterm = { version = "0.29.0", default-features = false, features = ["bracketed-paste", "events"] }
-dirs = "6.0"
 ignore = "0.4"
 image = { version = "0.25", default-features = false, features = ["png", "gif"] }
 mockall = "0.14"
@@ -40,7 +39,7 @@ percent-encoding = "2"
 portable-pty = "0.9"
 ratatui = { version = "0.30.1", default-features = false, features = ["crossterm", "layout-cache", "std", "underline-color"] }
 rustc-hash = "2"
-rustix = { version = "1.1", features = ["event"] }
+rustix = { version = "1.1", features = ["event", "process"] }
 schemars = { version = "1", features = ["derive"] }
 semver = "1"
 serde = { version = "1", features = ["derive"] }
@@ -51,7 +50,6 @@ tachyonfx = { version = "0.25.0", default-features = false, features = ["std"] }
 tempfile = "3.27"
 thiserror = "2"
 time = { version = "0.3", default-features = false, features = ["local-offset", "std"] }
-nix = { version = "0.31", default-features = false, features = ["signal"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
 tokio-util = { version = "0.7", default-features = false }
 tracing = "0.1"

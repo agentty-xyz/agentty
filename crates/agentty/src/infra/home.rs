@@ -10,7 +10,7 @@ use std::path::PathBuf;
 /// a relative `.agentty` directory when no home directory is available.
 pub fn agentty_home() -> PathBuf {
     let agentty_root = env::var_os("AGENTTY_ROOT").map(PathBuf::from);
-    let home_dir = dirs::home_dir();
+    let home_dir = env::home_dir();
 
     resolve_agentty_home(agentty_root, home_dir)
 }

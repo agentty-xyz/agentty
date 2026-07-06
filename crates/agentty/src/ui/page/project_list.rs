@@ -1,3 +1,4 @@
+use std::env;
 use std::path::Path;
 
 use ratatui::Frame;
@@ -122,7 +123,7 @@ impl Page for ProjectListPage<'_> {
             .height(1)
             .bottom_margin(1);
         let active_project_id = self.active_project_id;
-        let home_directory = dirs::home_dir();
+        let home_directory = env::home_dir();
         let rows = self.projects.iter().map(|project_item| {
             render_project_row(project_item, active_project_id, home_directory.as_deref())
         });

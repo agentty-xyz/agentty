@@ -1,3 +1,4 @@
+use std::env;
 use std::path::Path;
 
 use ratatui::Frame;
@@ -155,7 +156,7 @@ impl Component for FooterBar {
             return;
         }
 
-        let display_path = if let Some(home) = dirs::home_dir() {
+        let display_path = if let Some(home) = env::home_dir() {
             if let Ok(path) = Path::new(&self.working_dir).strip_prefix(home) {
                 format!("~/{}", path.display())
             } else {
@@ -282,7 +283,7 @@ mod tests {
         // Arrange
         let backend = ratatui::backend::TestBackend::new(80, 3);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-        let path = if let Some(home) = dirs::home_dir() {
+        let path = if let Some(home) = env::home_dir() {
             home.join("project").to_string_lossy().to_string()
         } else {
             "/tmp/project".to_string()
@@ -301,7 +302,7 @@ mod tests {
         let buffer = terminal.backend().buffer();
         let content = buffer.content();
         let text: String = content.iter().map(ratatui::buffer::Cell::symbol).collect();
-        if dirs::home_dir().is_some() {
+        if env::home_dir().is_some() {
             assert!(text.contains("~/project"));
         } else {
             assert!(text.contains("/tmp/project"));
