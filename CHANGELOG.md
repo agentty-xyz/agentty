@@ -11,12 +11,23 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- agentty: accept case-insensitive Mermaid diagram headers and normalize generated node
+  labels.
 - agentty: move agent prompt templates into the app-owned template directory.
 - agentty: normalize internal import paths.
+- ci: bump `taiki-e/install-action` from `2.82.5` to `2.82.6`.
+- deps: bump `mockall` from `0.14.0` to `0.15.0`.
 - Bump workspace crate metadata and lockfile package versions to `0.12.3`.
+
+### Fixed
+
+- agentty: guard review-assist prompts against import suggestions when only a diff is
+  available.
 
 ### Contributors
 
+- @andagaev
+- @dependabot
 - @minev-dev
 
 ## [v0.12.2] - 2026-07-05
