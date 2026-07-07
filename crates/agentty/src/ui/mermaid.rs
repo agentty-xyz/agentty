@@ -132,7 +132,7 @@ fn parse_sequence_diagram(source: &str) -> Option<SequenceDiagram> {
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with("%%"));
 
-    if lines.next()? != "sequenceDiagram" {
+    if !lines.next()?.eq_ignore_ascii_case("sequenceDiagram") {
         return None;
     }
 
@@ -277,7 +277,7 @@ fn parse_graph(source: &str) -> Option<MermaidGraph> {
         .filter(|line| !line.is_empty() && !line.starts_with("%%"))
         .peekable();
 
-    if *lines.peek()? == "erDiagram" {
+    if lines.peek()?.eq_ignore_ascii_case("erDiagram") {
         lines.next();
 
         return parse_er_graph(lines);
@@ -529,14 +529,19 @@ fn expand_long_edges(mut graph: MermaidGraph) -> Option<MermaidGraph> {
 fn parse_direction_header(line: &str) -> Option<FlowDirection> {
     let mut tokens = line.split_whitespace();
     let keyword = tokens.next()?;
-    if keyword != "graph" && keyword != "flowchart" {
+    if !keyword.eq_ignore_ascii_case("graph") && !keyword.eq_ignore_ascii_case("flowchart") {
         return None;
     }
 
-    let direction = match tokens.next()? {
-        "TD" | "TB" => FlowDirection::TopDown,
-        "LR" => FlowDirection::LeftRight,
-        _ => return None,
+    let direction_token = tokens.next()?;
+    let direction = if direction_token.eq_ignore_ascii_case("TD")
+        || direction_token.eq_ignore_ascii_case("TB")
+    {
+        FlowDirection::TopDown
+    } else if direction_token.eq_ignore_ascii_case("LR") {
+        FlowDirection::LeftRight
+    } else {
+        return None;
     };
     if tokens.next().is_some() {
         return None;
@@ -656,11 +661,7 @@ impl<'source> StatementCursor<'source> {
                 continue;
             };
             let close_index = after_open.find(close_delimiter)?;
-            let label = after_open[..close_index]
-                .trim()
-                .trim_matches('"')
-                .trim()
-                .to_string();
+            let label = normalized_mermaid_label(&after_open[..close_index]).to_string();
             self.rest = &after_open[close_index + close_delimiter.len()..];
 
             return Some(NodeShapeParse::Labeled(shape, label));
@@ -740,15 +741,21 @@ impl<'source> StatementCursor<'source> {
 /// Normalizes an optional edge label to the single-line subset that the
 /// terminal preview can paint.
 fn renderable_edge_label(label_text: &str) -> Option<String> {
-    let label = first_mermaid_label_line(label_text)
-        .trim()
-        .trim_matches('"')
-        .trim();
+    let label = normalized_mermaid_label(label_text);
     if !is_renderable_label(label) {
         return None;
     }
 
     Some(label.to_string())
+}
+
+/// Normalizes Mermaid label text to the single-line subset this renderer
+/// supports.
+fn normalized_mermaid_label(label_text: &str) -> &str {
+    first_mermaid_label_line(label_text)
+        .trim()
+        .trim_matches('"')
+        .trim()
 }
 
 /// Returns the first line from Mermaid's common HTML line-break label syntax.
@@ -1838,6 +1845,23 @@ mod tests {
     }
 
     #[test]
+    fn test_render_mermaid_accepts_case_insensitive_flow_headers() {
+        // Arrange
+        let top_down_source = "Graph td\n    A[Start] --> B[Finish]";
+        let left_right_source = "FLOWCHART lr\n    A[Start] --> B[Finish]";
+
+        // Act
+        let top_down_diagram = render_mermaid(top_down_source).expect("TD graph should render");
+        let left_right_diagram = render_mermaid(left_right_source).expect("LR graph should render");
+        let top_down_text = diagram_text(&top_down_diagram);
+        let left_right_text = diagram_text(&left_right_diagram);
+
+        // Assert
+        assert!(top_down_text.contains('▼'));
+        assert!(left_right_text.contains('▶'));
+    }
+
+    #[test]
     fn test_render_mermaid_draws_branching_diamond() {
         // Arrange
         let source = "graph TD\n    A --> B\n    A --> C\n    B --> D\n    C --> D";
@@ -2142,6 +2166,34 @@ mod tests {
         // Assert
         assert!(text.contains("Short"));
         assert!(!text.contains(&long_identifier));
+    }
+
+    #[test]
+    fn test_render_mermaid_uses_first_node_label_line() {
+        // Arrange
+        let source = concat!(
+            "flowchart TB\n",
+            "    APP[\"App - owns orchestration:<br/>spawning, coordination, aggregation\"]\n",
+            "    S1[\"session 1\"]\n",
+            "    S2[\"session 2\"]\n",
+            "    S3[\"session 3\"]\n",
+            "    APP --> S1\n",
+            "    APP --> S2\n",
+            "    APP --> S3\n",
+        );
+
+        // Act
+        let diagram = render_mermaid(source).expect("node label with line break should render");
+        let text = diagram_text(&diagram);
+
+        // Assert
+        assert!(text.contains("App - owns orchestration:"));
+        assert!(text.contains("session 1"));
+        assert!(text.contains("session 2"));
+        assert!(text.contains("session 3"));
+        assert!(text.contains('▼'));
+        assert!(!text.contains("<br/>"));
+        assert!(!text.contains("spawning, coordination, aggregation"));
     }
 
     #[test]

@@ -2149,6 +2149,62 @@ mod tests {
     }
 
     #[test]
+    fn test_render_markdown_renders_capitalized_graph_mermaid_block_as_diagram() {
+        // Arrange
+        let input = "```mermaid\nGraph TD\n    A[Start] --> B[Finish]\n```";
+
+        // Act
+        let lines = render_markdown(input, 80);
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(text.contains("Start"));
+        assert!(text.contains("Finish"));
+        assert!(text.contains("▼"));
+        assert!(!text.contains("Graph TD"));
+        assert!(!text.contains("```"));
+    }
+
+    #[test]
+    fn test_render_markdown_renders_mermaid_node_label_with_line_break() {
+        // Arrange
+        let input = concat!(
+            "```mermaid\n",
+            "flowchart TB\n",
+            "    APP[\"App - owns orchestration:<br/>spawning, coordination, aggregation\"]\n",
+            "    S1[\"session 1\"]\n",
+            "    S2[\"session 2\"]\n",
+            "    S3[\"session 3\"]\n",
+            "    APP --> S1\n",
+            "    APP --> S2\n",
+            "    APP --> S3\n",
+            "```",
+        );
+
+        // Act
+        let lines = render_markdown(input, 100);
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(text.contains("App - owns orchestration:"));
+        assert!(text.contains("session 1"));
+        assert!(text.contains("session 2"));
+        assert!(text.contains("session 3"));
+        assert!(text.contains("▼"));
+        assert!(!text.contains("flowchart TB"));
+        assert!(!text.contains("<br/>"));
+        assert!(!text.contains("```"));
+    }
+
+    #[test]
     fn test_render_markdown_renders_feedback_mermaid_block_as_diagram() {
         // Arrange
         let input = concat!(
