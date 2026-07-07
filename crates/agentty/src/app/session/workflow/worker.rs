@@ -849,6 +849,10 @@ impl SessionWorkerService {
 
     /// Runs the session rebase command inside this worker's serialized queue.
     ///
+    /// The rebase task applies the `Rebasing` status at execution time so
+    /// sync requested during an active turn can remain visibly queued until
+    /// the worker reaches this command.
+    ///
     /// # Errors
     /// Returns an error when the rebase workflow fails after appending the
     /// user-visible rebase outcome.

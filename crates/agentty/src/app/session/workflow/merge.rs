@@ -28,7 +28,7 @@ use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel
 use crate::domain::session::{PublishedBranchSyncStatus, SessionId, Status};
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::transcript_notice::TranscriptNotice;
-use crate::infra::db::AppRepositories;
+use crate::infra::db::{AppRepositories, SessionOperationRow};
 use crate::infra::fs::{self as fs, FsClient};
 
 const REBASE_ASSIST_POLICY: AssistPolicy = AssistPolicy {
@@ -781,7 +781,7 @@ impl SessionMergeService {
         )))
     }
 
-    /// Rebases a reviewed session branch onto its base branch.
+    /// Starts or queues a session branch rebase onto its base branch.
     ///
     /// # Errors
     /// Returns an error if the session is invalid for rebase, required git
@@ -792,33 +792,69 @@ impl SessionMergeService {
         services: &AppServices,
         session_id: &str,
     ) -> Result<(), SessionError> {
-        let (base_branch, persisted_session_id) =
+        let (base_branch, current_status, persisted_session_id) =
             Self::load_rebase_start_context(manager, services, session_id).await?;
-
-        let handles = manager
-            .session_handles_or_err(session_id)
-            .map_err(|_| SessionError::HandlesNotFound)?;
-        let status_transition =
-            StatusTransition::from_services(services, handles, persisted_session_id.clone());
-        status_transition
-            .apply_or_invalid_transition(Status::Rebasing)
-            .await?;
 
         let command = SessionCommand::Rebase {
             base_branch,
             operation_id: uuid::Uuid::new_v4().to_string(),
         };
-        Self::enqueue_with_status_rollback(
-            manager,
-            services,
-            &status_transition,
-            &persisted_session_id,
-            command,
-            Status::Review,
-        )
-        .await?;
+        if current_status == Status::InProgress {
+            let unfinished_operations = services
+                .db()
+                .operations()
+                .load_unfinished_session_operations()
+                .await?;
+            if Self::has_unfinished_rebase_operation(
+                &unfinished_operations,
+                persisted_session_id.as_str(),
+            ) {
+                return Ok(());
+            }
+
+            manager
+                .enqueue_session_command(services, &persisted_session_id, command)
+                .await?;
+            SessionTaskService::emit_session_workflow_notice(
+                &services.event_sender(),
+                persisted_session_id.as_str(),
+                TranscriptNotice::Rebase.format(
+                    "Queued sync; this session will rebase after the current turn finishes.",
+                ),
+            );
+        } else {
+            let handles = manager
+                .session_handles_or_err(session_id)
+                .map_err(|_| SessionError::HandlesNotFound)?;
+            let status_transition =
+                StatusTransition::from_services(services, handles, persisted_session_id.clone());
+
+            status_transition
+                .apply_or_invalid_transition(Status::Rebasing)
+                .await?;
+            Self::enqueue_with_status_rollback(
+                manager,
+                services,
+                &status_transition,
+                &persisted_session_id,
+                command,
+                current_status,
+            )
+            .await?;
+        }
 
         Ok(())
+    }
+
+    /// Returns whether a session already has a queued or running rebase
+    /// operation.
+    fn has_unfinished_rebase_operation(
+        operations: &[SessionOperationRow],
+        session_id: &str,
+    ) -> bool {
+        operations
+            .iter()
+            .any(|operation| operation.session_id == session_id && operation.kind == "rebase")
     }
 
     /// Starts automatic rebase commands for review-ready stacked children
@@ -1002,13 +1038,13 @@ impl SessionMergeService {
         manager: &SessionManager,
         services: &AppServices,
         session_id: &str,
-    ) -> Result<(String, SessionId), SessionError> {
+    ) -> Result<(String, Status, SessionId), SessionError> {
         let session = manager
             .session_or_err(session_id)
             .map_err(|_| SessionError::NotFound)?;
-        if !session.status.allows_review_actions() {
+        if !session.status.allows_review_actions() && session.status != Status::InProgress {
             return Err(SessionError::Workflow(
-                "Session must be in review status".to_string(),
+                "Session must be in review status or in progress".to_string(),
             ));
         }
         if !manager.can_rebase_session_branch_in_stack(session_id) {
@@ -1026,7 +1062,7 @@ impl SessionMergeService {
                 SessionError::Workflow("No git worktree for this session".to_string())
             })?;
 
-        Ok((base_branch, session.id.clone()))
+        Ok((base_branch, session.status, session.id.clone()))
     }
 }
 
@@ -1731,6 +1767,18 @@ impl SessionManager {
             transcript,
         } = input;
 
+        let status_transition = StatusTransition::from_parts(
+            app_event_tx.clone(),
+            Arc::clone(&clock),
+            db.clone(),
+            id.clone(),
+            Arc::clone(&session_update_versions),
+            Arc::clone(&status),
+        );
+        status_transition
+            .apply_or_invalid_transition(Status::Rebasing)
+            .await?;
+
         let rebase_result: Result<String, SessionError> = async {
             let rebase_plan = Self::resolve_session_rebase_plan(
                 &db,
@@ -1760,14 +1808,6 @@ impl SessionManager {
         .await;
         let command_error = rebase_result.as_ref().err().map(ToString::to_string);
 
-        let status_transition = StatusTransition::from_parts(
-            app_event_tx.clone(),
-            Arc::clone(&clock),
-            db.clone(),
-            id.clone(),
-            Arc::clone(&session_update_versions),
-            Arc::clone(&status),
-        );
         Self::finalize_rebase_task(FinalizeRebaseInput {
             app_event_tx: &app_event_tx,
             db: &db,
@@ -2922,6 +2962,54 @@ mod tests {
     /// Returns a fresh mocked filesystem client trait object for tests.
     fn test_fs_client() -> Arc<dyn FsClient> {
         Arc::new(create_passthrough_mock_fs_client())
+    }
+
+    #[test]
+    fn test_has_unfinished_rebase_operation_matches_session_rebase() {
+        // Arrange
+        let operations = vec![
+            session_operation_row("op-1", "session-a", "reply"),
+            session_operation_row("op-2", "session-b", "rebase"),
+            session_operation_row("op-3", "session-a", "rebase"),
+        ];
+
+        // Act
+        let has_rebase =
+            SessionMergeService::has_unfinished_rebase_operation(&operations, "session-a");
+
+        // Assert
+        assert!(has_rebase);
+    }
+
+    #[test]
+    fn test_has_unfinished_rebase_operation_ignores_other_sessions_and_kinds() {
+        // Arrange
+        let operations = vec![
+            session_operation_row("op-1", "session-a", "reply"),
+            session_operation_row("op-2", "session-b", "rebase"),
+        ];
+
+        // Act
+        let has_rebase =
+            SessionMergeService::has_unfinished_rebase_operation(&operations, "session-a");
+
+        // Assert
+        assert!(!has_rebase);
+    }
+
+    fn session_operation_row(id: &str, session_id: &str, kind: &str) -> SessionOperationRow {
+        SessionOperationRow {
+            cancel_requested: false,
+            finished_at: None,
+            heartbeat_at: None,
+            id: id.to_string(),
+            kind: kind.to_string(),
+            last_error: None,
+            queued_at: 0,
+            session_id: session_id.to_string(),
+            started_at: None,
+            status: "queued".to_string(),
+        }
     }
 
     fn empty_transcript() -> Arc<Mutex<SessionTranscript>> {

@@ -599,7 +599,7 @@ mod tests {
         assert!(help_text.contains("s: start"));
         assert!(!help_text.contains("o: open"));
         assert!(help_text.contains("m: add to merge queue"));
-        assert!(help_text.contains("r: sync"));
+        assert!(!help_text.contains("r: sync"));
         assert!(help_text.contains("/: commands menu"));
         assert!(!help_text.contains("d: diff"));
     }

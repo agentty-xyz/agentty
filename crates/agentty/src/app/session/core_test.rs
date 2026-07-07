@@ -4291,6 +4291,27 @@ async fn test_rebase_session_requires_review_status() {
 }
 
 #[tokio::test]
+async fn test_rebase_session_accepts_in_progress_status_before_worktree_validation() {
+    // Arrange
+    let dir = tempdir().expect("failed to create temp dir");
+    let mut app = new_test_app(dir.path().to_path_buf()).await;
+    add_manual_session(&mut app, dir.path(), "manual01", "Test");
+    crate::test_support::set_session_status_for_test(&mut app, "manual01", Status::InProgress);
+
+    // Act
+    let result = app.rebase_session("manual01").await;
+
+    // Assert
+    assert!(result.is_err());
+    assert!(
+        result
+            .expect_err("should be error")
+            .to_string()
+            .contains("No git worktree")
+    );
+}
+
+#[tokio::test]
 async fn test_rebase_session_invalid_id() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");

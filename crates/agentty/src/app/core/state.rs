@@ -1311,7 +1311,7 @@ impl App {
         self.start_next_merge_from_queue(true).await
     }
 
-    /// Rebases a reviewed session branch onto its base branch.
+    /// Starts or queues a session branch rebase onto its base branch.
     ///
     /// If the session is currently generating focused review output, starting
     /// sync cancels the pending review cache and persisted review entries so

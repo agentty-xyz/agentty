@@ -72,8 +72,8 @@ pub enum ViewSessionState {
     Done,
     /// Session was canceled locally; view mode stays read-only.
     Canceled,
-    /// Session is currently running; queued replies and stop remain available
-    /// while worktree-open and diff shortcuts are hidden.
+    /// Session is currently running; queued replies, queued sync, and stop
+    /// remain available while worktree-open and diff shortcuts are hidden.
     InProgress,
     /// Session is syncing through the rebase workflow; worktree-open, reply,
     /// and diff shortcuts are hidden until sync finishes.
@@ -94,8 +94,8 @@ pub enum ViewSessionState {
     /// Session is generating focused review output; reply, worktree-open,
     /// merge, sync, review, and diff stay available.
     AgentReview,
-    /// Session allows reply/merge/sync actions but is not in review mode, so
-    /// diff remains hidden.
+    /// Session allows reply and merge actions but is not in review mode, so
+    /// diff and sync remain hidden.
     Interactive,
 }
 
@@ -417,8 +417,8 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
 
 /// Returns compact session-view footer actions for the page-level hint line.
 ///
-/// Interactive and review-oriented sessions keep merge and sync controls
-/// discoverable in the footer.
+/// Review-oriented and running sessions keep sync controls discoverable in
+/// the footer.
 pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
     let action_set = ViewActionSet::from_state(state);
     let mut actions = vec![HelpAction::new("back", "q", "Back to list")];
@@ -535,8 +535,7 @@ fn can_open_view_command(
 /// Returns whether a session state can start sync in view mode under stack
 /// sync constraints.
 ///
-/// Regular drafts, interactive sessions, and review-ready sessions expose
-/// sync when the stack is idle. Stacked drafts hide sync until they launch.
+/// Running and review-ready sessions expose sync when the stack is idle.
 fn can_rebase_view_session(
     session_state: ViewSessionState,
     can_rebase_session_branch: ViewActionAvailability,
@@ -544,10 +543,7 @@ fn can_rebase_view_session(
     can_rebase_session_branch.is_enabled()
         && matches!(
             session_state,
-            ViewSessionState::NewSession
-                | ViewSessionState::Interactive
-                | ViewSessionState::Review
-                | ViewSessionState::AgentReview
+            ViewSessionState::InProgress | ViewSessionState::Review | ViewSessionState::AgentReview
         )
 }
 
@@ -827,7 +823,7 @@ mod tests {
     }
 
     #[test]
-    fn test_view_actions_in_progress_shows_stop_and_hides_open_and_edit_actions() {
+    fn test_view_actions_in_progress_shows_stop_and_sync_and_hides_open_and_edit_actions() {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
@@ -845,6 +841,7 @@ mod tests {
 
         // Assert
         assert!(actions.iter().any(|action| action.key == "Ctrl+c"));
+        assert!(actions.iter().any(|action| action.key == "r"));
         assert!(!actions.iter().any(|action| action.key == "Enter"));
         assert!(!actions.iter().any(|action| action.key == "o"));
         assert!(!actions.iter().any(|action| action.key == "d"));
@@ -1055,6 +1052,7 @@ mod tests {
         // Assert
         assert!(!actions.iter().any(|action| action.key == "d"));
         assert!(!actions.iter().any(|action| action.key == "f"));
+        assert!(!actions.iter().any(|action| action.key == "r"));
         assert!(actions.iter().any(|action| action.key == "Enter"));
         assert!(actions.iter().any(|action| action.key == "/"));
     }
@@ -1088,7 +1086,7 @@ mod tests {
         assert!(actions.iter().any(|action| action.key == "/"));
         assert!(actions.iter().any(|action| action.key == "s"));
         assert!(actions.iter().any(|action| action.key == "m"));
-        assert!(actions.iter().any(|action| action.key == "r"));
+        assert!(!actions.iter().any(|action| action.key == "r"));
     }
 
     #[test]
@@ -1327,15 +1325,14 @@ mod tests {
 
         // Assert
         assert_eq!(
-            &ordered_keys[..7],
+            &ordered_keys[..6],
             [
                 "q",
                 "Enter",
                 "s",
                 PROMPT_IMAGE_PASTE_SHORTCUT_LABEL,
                 "/",
-                "m",
-                "r"
+                "m"
             ]
         );
     }
@@ -1393,6 +1390,28 @@ mod tests {
         assert!(!actions.iter().any(|action| action.key == "Ctrl+c"));
         assert!(actions.iter().any(|action| action.key == "q"));
         assert!(actions.iter().any(|action| action.key == "j/k"));
+    }
+
+    #[test]
+    fn test_view_footer_actions_in_progress_shows_stop_and_sync() {
+        // Arrange
+        let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
+            can_mutate_session_branch: ViewActionAvailability::Enabled,
+            can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_open_worktree: ViewActionAvailability::Enabled,
+            reply_to_session: ViewActionAvailability::Enabled,
+            can_start_staged_session: ViewActionAvailability::Disabled,
+            publish_pull_request_action: None,
+            session_state: ViewSessionState::InProgress,
+        };
+
+        // Act
+        let actions = view_footer_actions(state);
+        let ordered_keys = actions.iter().map(|action| action.key).collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(&ordered_keys[..4], ["q", "r", "Ctrl+c", "j/k"]);
     }
 
     #[test]

@@ -147,7 +147,7 @@ render twice per frame.
 1. `start_session()` (first prompt) or `reply()` (follow-up) persists the command in
    `session_operation` and enqueues it on the per-session worker.
 1. The worker marks the operation `running`, checks cancel flags, verifies worktree
-   isolation, and delegates to `workflow/turn.rs`.
+   isolation, and delegates to `workflow/turn.rs` or the queued session-sync workflow.
 1. `workflow/turn.rs` builds a `TurnRequest` and calls `AgentChannel::run_turn()`, which
    streams `TurnEvent` values (loader updates) and returns a `TurnResult`.
 1. `workflow/post_turn.rs` appends the final assistant transcript output, then
@@ -195,6 +195,8 @@ restart-safe:
 - `Review -> Queued -> Merging -> Done` (merge queue path)
 - `Review/AgentReview -> Rebasing -> Review/Question` (session sync path; starting from
   `AgentReview` cancels pending focused-review output)
+- `InProgress -> Rebasing -> Review/Question` (session sync requested during a running
+  turn is queued on the session worker and starts after the active turn)
 - `Review/Question -> Canceled`
 - `InProgress -> Review` (user stops the current turn)
 - `InProgress -> Canceled` (list-mode cancel stops the running turn)

@@ -1341,6 +1341,58 @@ fn session_queue_chat_messages_during_in_progress_turn() -> E2eResult {
     Ok(())
 }
 
+/// Verify running sessions advertise `r` sync as a queued action alongside
+/// the stop shortcut.
+#[test]
+fn session_running_turn_shows_sync_shortcut() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_running_sync_shortcut")
+        .with_git()
+        .setup(seed_running_stop_session)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_text("Ctrl+c: stop", 5000)
+                    .wait_for_text("r: sync", 5000)
+                    .viewing_pause_ms(1000)
+                    .capture_labeled(
+                        "running_sync_shortcut",
+                        "Running session view with queued sync shortcut",
+                    )
+                    .press_key("r")
+                    .wait_for_text("will rebase after the current turn finishes", 5000)
+                    .viewing_pause_ms(1000)
+                    .capture_labeled(
+                        "running_sync_queued",
+                        "Running session view after queueing sync",
+                    )
+            },
+            |frame, report| {
+                let shortcut_frame = common::frame_from_capture(&report.captures[0]);
+                let shortcut_full = Region::full(shortcut_frame.cols(), shortcut_frame.rows());
+                assertion::assert_text_in_region(
+                    &shortcut_frame,
+                    "Running session stop",
+                    &shortcut_full,
+                );
+                assertion::assert_text_in_region(&shortcut_frame, "Ctrl+c: stop", &shortcut_full);
+                assertion::assert_text_in_region(&shortcut_frame, "r: sync", &shortcut_full);
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(
+                    frame,
+                    "will rebase after the current turn finishes",
+                    &full,
+                );
+            },
+        )?;
+
+    Ok(())
+}
+
 /// Verify that `Ctrl+c` in a running session stops only the current turn and
 /// returns the session to review-ready controls.
 #[test]

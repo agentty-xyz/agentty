@@ -681,6 +681,35 @@ mod tests {
         assert!(!text.contains("c: continue"));
     }
 
+    /// Verifies running sessions advertise sync as a queued action while
+    /// keeping the running-turn stop action visible.
+    #[test]
+    fn test_render_in_progress_session_shows_sync_and_stop_footer_actions() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::InProgress;
+        let mode = AppMode::View {
+            session_id: "session-id".into(),
+            scroll_offset: None,
+        };
+        let mut page = test_session_chat_page(&session, &mode);
+        let backend = ratatui::backend::TestBackend::new(80, 12);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                Page::render(&mut page, frame, area);
+            })
+            .expect("failed to draw in-progress session");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("r: sync"));
+        assert!(text.contains("Ctrl+c: stop"));
+    }
+
     #[test]
     fn test_status_bar_fyi_rotates_between_session_chat_messages() {
         // Arrange

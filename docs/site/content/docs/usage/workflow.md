@@ -61,14 +61,15 @@ New session worktrees start from the local active base branch. If local `main` i
 <a id="usage-session-lifecycle"></a> Session statuses:
 
 | Status | Meaning | |--------|---------| | **Draft** | Created but not started; draft
-sessions can stage prompts first. | | **InProgress** | Agent is actively working. | |
-**Review** | Agent finished; changes are ready for review. | | **AgentReview** | Focused
-review output is generating in the background; `r` sync cancels the pending focused
-review before rebasing. | | **Question** | Agent requested clarification before
-continuing. | | **Queued** | Waiting in the merge queue. | | **Rebasing** | Session
-branch is rebasing onto its base branch. | | **Merging** | Changes are being merged into
-the base branch. | | **Done** | Completed and merged; the worktree was removed. | |
-**Canceled** | Canceled by the user; the worktree was removed. |
+sessions can stage prompts first. | | **InProgress** | Agent is actively working; `r`
+queues session sync behind the running turn. | | **Review** | Agent finished; changes
+are ready for review. | | **AgentReview** | Focused review output is generating in the
+background; `r` sync cancels the pending focused review before rebasing. | |
+**Question** | Agent requested clarification before continuing. | | **Queued** | Waiting
+in the merge queue. | | **Rebasing** | Session branch is rebasing onto its base branch.
+| | **Merging** | Changes are being merged into the base branch. | | **Done** |
+Completed and merged; the worktree was removed. | | **Canceled** | Canceled by the user;
+the worktree was removed. |
 
 The shortcuts available in each state are listed in
 [Keybindings](@/docs/usage/keybindings.md).
@@ -123,6 +124,7 @@ flowchart TB
   in_progress -->|turn completes| review
   in_progress -->|needs clarification| question
   in_progress -->|stop current turn| review
+  in_progress -->|queue sync| rebasing
   in_progress -->|cancel from session list| canceled
   question -->|submit clarifications| in_progress
   question -->|Ctrl+C end turn| review
@@ -156,6 +158,12 @@ running turn finishes. Each `Ctrl+c` press retracts the most recently queued mes
 (LIFO) without interrupting the running turn; once the queue is empty, the next `Ctrl+c`
 stops the current turn and returns the session to **Review**. The queue is in-memory
 only and is discarded if `agentty` restarts.
+
+Pressing `r` during a running turn queues session sync on the same session worker. The
+session stays **InProgress** while the active turn runs, then moves to **Rebasing** when
+the queued sync command starts. Agentty shows a `[Sync]` notice in the session output
+while the rebase is queued, and repeated `r` presses keep the single queued rebase
+instead of adding duplicates.
 
 ### Focused Review
 
@@ -218,9 +226,10 @@ returns the session to **Review** if the preparatory rebase or squash-merge fail
 
 When a session syncs (`r`), Agentty rebases the session branch: published sessions fetch
 first and rebase onto the remote base ref, unpublished sessions rebase onto the stored
-local base branch. If the rebase stops on conflicts, Agentty asks the existing agent
-session to resolve only the conflicted files, then stages the edits and continues the
-rebase itself.
+local base branch. In **InProgress**, the sync request is queued behind the running turn
+before the session enters **Rebasing**. If the rebase stops on conflicts, Agentty asks
+the existing agent session to resolve only the conflicted files, then stages the edits
+and continues the rebase itself.
 
 During normal turns, the agent prompt names the session worktree as the only writable
 root. If Agentty detects that the main checkout's tracked status or `HEAD` changed

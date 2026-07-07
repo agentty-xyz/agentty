@@ -682,12 +682,14 @@ fn is_view_review_allowed(status: Status) -> bool {
     status.allows_review_actions()
 }
 
-/// Returns whether the `r` shortcut can start session sync from view mode.
+/// Returns whether the `r` shortcut can start or queue session sync from view
+/// mode.
 ///
 /// `AgentReview` is included so users can interrupt pending focused-review
-/// generation with an explicit sync request.
+/// generation with an explicit sync request. `InProgress` is included so sync
+/// can queue behind the running turn on the existing session worker.
 fn is_view_rebase_allowed(status: Status) -> bool {
-    is_view_action_allowed(status)
+    status.allows_review_actions() || matches!(status, Status::InProgress)
 }
 
 /// Handles `Ctrl+C` while a session is `InProgress` with a per-press policy.
@@ -1431,18 +1433,27 @@ mod tests {
     }
 
     #[test]
-    fn test_is_view_rebase_allowed_includes_agent_review() {
+    fn test_is_view_rebase_allowed_matches_backend_status_gate() {
         // Arrange
+        let draft_status = Status::Draft;
         let review_status = Status::Review;
         let agent_review_status = Status::AgentReview;
+        let question_status = Status::Question;
+        let in_progress_status = Status::InProgress;
 
         // Act
+        let draft_allowed = is_view_rebase_allowed(draft_status);
         let review_allowed = is_view_rebase_allowed(review_status);
         let agent_review_allowed = is_view_rebase_allowed(agent_review_status);
+        let question_allowed = is_view_rebase_allowed(question_status);
+        let in_progress_allowed = is_view_rebase_allowed(in_progress_status);
 
         // Assert
+        assert!(!draft_allowed);
         assert!(review_allowed);
         assert!(agent_review_allowed);
+        assert!(!question_allowed);
+        assert!(in_progress_allowed);
     }
 
     #[tokio::test]
@@ -1561,6 +1572,7 @@ mod tests {
         assert!(!snapshot.can_open_worktree());
         assert_eq!(snapshot.session_state, ViewSessionState::NewSession);
         assert!(snapshot.can_paste_image_into_draft_composer());
+        assert!(!snapshot.can_rebase_session());
     }
 
     #[tokio::test]
