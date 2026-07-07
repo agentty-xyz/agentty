@@ -434,7 +434,7 @@ mod tests {
     use ratatui::widgets::TableState;
 
     use super::*;
-    use crate::agent::{AgentModel, ReasoningLevel};
+    use crate::domain::agent::{AgentModel, ReasoningLevel};
     use crate::domain::theme::ColorTheme;
 
     /// Flattens a rendered test buffer into a plain string for assertions.

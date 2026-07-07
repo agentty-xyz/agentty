@@ -1522,7 +1522,7 @@ impl SessionManager {
     ) -> Result<SyncMainOutcome, SyncSessionStartError> {
         let fs_client: Arc<dyn FsClient> = Arc::new(fs::RealFsClient);
         let sync_assist_client: Arc<dyn SyncAssistClient> = Arc::new(RealSyncAssistClient);
-        let session_agent = crate::agent::resolve_agent_selection_for_model(
+        let session_agent = crate::domain::agent::resolve_agent_selection_for_model(
             session_model,
             AgentKind::Antigravity,
             AgentKind::ALL,

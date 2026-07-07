@@ -1,8 +1,10 @@
 use ratatui::widgets::TableState;
 use tracing::warn;
 
-use crate::agent::{AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ReasoningLevel};
 use crate::app::AppServices;
+use crate::domain::agent::{
+    self, AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ReasoningLevel,
+};
 use crate::domain::input::InputState;
 use crate::domain::setting::SettingName;
 use crate::domain::theme::ColorTheme;
@@ -1237,11 +1239,7 @@ fn resolve_available_model(
     available_agent_kinds: &[AgentKind],
     fallback_model: AgentModel,
 ) -> AgentModel {
-    crate::agent::resolve_model_for_available_agent_kinds(
-        model,
-        available_agent_kinds,
-        fallback_model,
-    )
+    agent::resolve_model_for_available_agent_kinds(model, available_agent_kinds, fallback_model)
 }
 
 /// Resolves one stored agent/model selection against the currently available
@@ -1262,11 +1260,8 @@ fn resolve_available_selection(
         .first()
         .copied()
         .unwrap_or(selection.kind());
-    let agent_kind = crate::agent::resolve_agent_kind_for_model(
-        model,
-        available_agent_kinds,
-        fallback_agent_kind,
-    );
+    let agent_kind =
+        agent::resolve_agent_kind_for_model(model, available_agent_kinds, fallback_agent_kind);
 
     AgentSelection::new(agent_kind, model)
 }
@@ -1346,11 +1341,8 @@ fn fallback_selection_for_available_model(
     available_agent_kinds: &[AgentKind],
 ) -> AgentSelection {
     let fallback_agent_kind = fallback_agent_kind_for_model(model, AgentKind::Antigravity);
-    let agent_kind = crate::agent::resolve_agent_kind_for_model(
-        model,
-        available_agent_kinds,
-        fallback_agent_kind,
-    );
+    let agent_kind =
+        agent::resolve_agent_kind_for_model(model, available_agent_kinds, fallback_agent_kind);
 
     AgentSelection::new(agent_kind, model)
 }

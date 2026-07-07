@@ -16,9 +16,10 @@ use rustc_hash::FxHasher;
 
 use crate::domain::session::{ReviewRequest, Session};
 use crate::infra::review_comment_cache::CachedReviewCommentSnapshot;
-use crate::ui::component::file_explorer::{FileExplorer, FileTreeItem};
+use crate::ui::component::file_explorer::FileExplorer;
 use crate::ui::diff_util::{
-    DiffLine, DiffLineKind, diff_header_new_path, diff_header_old_path, parse_diff_lines,
+    DiffLine, DiffLineKind, FileTreeItem, diff_header_new_path, diff_header_old_path,
+    parse_diff_lines,
 };
 use crate::ui::state::app_mode::DiffRightPanel;
 use crate::ui::state::help_action;
@@ -109,7 +110,7 @@ impl DiffContentSnapshot {
             return parsed_lines;
         };
 
-        FileExplorer::filter_diff_lines(&parsed_lines, selected_item)
+        diff_util::filter_diff_lines(&parsed_lines, selected_item)
     }
 
     /// Returns the complete parsed diff as borrowed lines.

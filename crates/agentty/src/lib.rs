@@ -10,6 +10,4 @@ pub mod runtime;
 pub mod test_support;
 
 // Public convenience re-exports.
-pub use domain::agent;
-pub use infra::{db, version};
-pub use ui::icon;
+pub use infra::db;

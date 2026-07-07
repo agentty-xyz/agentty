@@ -21,7 +21,7 @@ use crate::app::{AppEvent, UpdateStatus};
 use crate::domain::agent::{AgentCliInfo, AgentKind, AgentSelection, ReasoningLevel};
 use crate::domain::session::SessionId;
 use crate::domain::system_log::{SystemLogCategory, SystemLogEvent, SystemLogLevel};
-use crate::version;
+use crate::infra::version;
 
 /// Stateless helpers for app-scoped one-shot background tasks and app-server
 /// session execution.

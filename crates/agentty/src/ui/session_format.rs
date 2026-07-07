@@ -11,7 +11,7 @@ use crate::domain::review;
 use crate::domain::session::{
     COMMITTING_PROGRESS_LABEL, PublishedBranchSyncStatus, Session, Status,
 };
-use crate::icon::Icon;
+use crate::ui::icon::Icon;
 use crate::ui::state::help_action::{self, ViewHelpState};
 use crate::ui::{markdown, style, text_util};
 

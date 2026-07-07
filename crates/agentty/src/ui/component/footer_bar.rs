@@ -7,7 +7,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::icon::Icon;
+use crate::ui::icon::Icon;
 use crate::ui::{Component, style};
 
 /// Footer widget that renders the working directory and optional git status.

@@ -1,9 +1,10 @@
 use ag_protocol::AgentResponseSummary;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
-use crate::ui::component::file_explorer::{FileExplorer, FileTreeItem};
-
 const BORDER_HORIZONTAL_WIDTH: u16 = 2;
+const DIFF_GIT_FILE_HEADER_PREFIX: &str = "diff --git";
+const DIFF_GIT_PATH_PREFIX: &str = "diff --git a/";
+const DIFF_GIT_PATH_SEPARATOR: &str = " b/";
 const FOOTER_HEIGHT: u16 = 1;
 const GUTTER_EXTRA_WIDTH: usize = 2;
 const LINE_NUMBER_COLUMN_COUNT: usize = 2;
@@ -11,8 +12,6 @@ const LAYOUT_MARGIN: u16 = 1;
 const MIN_GUTTER_WIDTH: usize = 1;
 const SCROLLBAR_WIDTH: usize = 1;
 const SIGN_COLUMN_WIDTH: usize = 1;
-const DIFF_GIT_PATH_PREFIX: &str = "diff --git a/";
-const DIFF_GIT_PATH_SEPARATOR: &str = " b/";
 
 /// The kind of a line in a unified diff.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,6 +30,15 @@ pub struct DiffLine<'a> {
     pub old_line: Option<u32>,
     pub new_line: Option<u32>,
     pub content: &'a str,
+}
+
+/// Identifies what a tree line in the diff file explorer represents.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileTreeItem {
+    /// A folder prefix path (e.g. `"src/ui/"`).
+    Folder(String),
+    /// A full file path (e.g. `"src/ui/component/file_explorer.rs"`).
+    File(String),
 }
 
 /// Shared page areas used by the diff view after applying its layout splits.
@@ -333,6 +341,40 @@ pub fn diff_view_max_scroll_offset(parsed_lines: &[DiffLine<'_>], terminal_area:
     clamp_diff_scroll_offset(u16::MAX, rendered_line_count, layout.viewport_height)
 }
 
+/// Filters `parsed_lines` to only the lines belonging to the given
+/// [`FileTreeItem`].
+///
+/// For a [`FileTreeItem::File`] the result contains the diff section whose
+/// `diff --git` header references that file path. For a
+/// [`FileTreeItem::Folder`] the result contains all sections whose file paths
+/// start with the folder prefix.
+pub fn filter_diff_lines<'a>(
+    parsed_lines: &[DiffLine<'a>],
+    item: &FileTreeItem,
+) -> Vec<DiffLine<'a>> {
+    let mut result = Vec::new();
+    let mut include_section = false;
+
+    for diff_line in parsed_lines {
+        if diff_line.kind == DiffLineKind::FileHeader
+            && diff_line.content.starts_with(DIFF_GIT_FILE_HEADER_PREFIX)
+        {
+            include_section = diff_header_matches_item(diff_line.content, item);
+        }
+
+        if include_section {
+            result.push(DiffLine {
+                kind: diff_line.kind,
+                old_line: diff_line.old_line,
+                new_line: diff_line.new_line,
+                content: diff_line.content,
+            });
+        }
+    }
+
+    result
+}
+
 /// Returns diff lines for the selected file-tree item, or the full diff when
 /// the selection is out of bounds.
 pub fn selected_diff_lines<'a>(
@@ -344,7 +386,19 @@ pub fn selected_diff_lines<'a>(
         return parsed_lines.to_vec();
     };
 
-    FileExplorer::filter_diff_lines(parsed_lines, selected_item)
+    filter_diff_lines(parsed_lines, selected_item)
+}
+
+/// Checks whether a `diff --git` header line matches the given tree item.
+fn diff_header_matches_item(header_line: &str, item: &FileTreeItem) -> bool {
+    let Some(file_path) = diff_header_new_path(header_line) else {
+        return false;
+    };
+
+    match item {
+        FileTreeItem::File(path) => file_path == path.as_str(),
+        FileTreeItem::Folder(prefix) => file_path.starts_with(prefix.as_str()),
+    }
 }
 
 const DEFAULT_REVIEW_COMMENT: &str = "Agent summary unavailable; review the highlighted changes.";
@@ -872,6 +926,11 @@ fn parse_range(range: &str) -> Option<(u32, u32)> {
 mod tests {
     use super::*;
 
+    const DIFF_MAIN_HEADER: &str = "diff --git a/src/main.rs b/src/main.rs";
+    const DIFF_NESTED_HEADER: &str =
+        "diff --git a/src/ui/component/file_explorer.rs b/src/ui/component/file_explorer.rs";
+    const DIFF_README_HEADER: &str = "diff --git a/README.md b/README.md";
+
     #[test]
     fn test_parse_hunk_header_basic() {
         // Arrange
@@ -1039,6 +1098,44 @@ index abc..def 100644
 
         // Assert
         assert_eq!(totals, (0, 0));
+    }
+
+    #[test]
+    fn test_filter_diff_lines_by_file() {
+        // Arrange
+        let diff =
+            format!("{DIFF_MAIN_HEADER}\n+added in main\n{DIFF_README_HEADER}\n+added in readme");
+        let parsed_lines = parse_diff_lines(&diff);
+        let item = FileTreeItem::File("src/main.rs".to_string());
+
+        // Act
+        let filtered = filter_diff_lines(&parsed_lines, &item);
+
+        // Assert
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].content, DIFF_MAIN_HEADER);
+        assert_eq!(filtered[1].content, "added in main");
+    }
+
+    #[test]
+    fn test_filter_diff_lines_by_folder() {
+        // Arrange
+        let diff = format!(
+            "{DIFF_MAIN_HEADER}\n+added in main\n{DIFF_NESTED_HEADER}\n-deleted in \
+             explorer\n{DIFF_README_HEADER}\n+added in readme"
+        );
+        let parsed_lines = parse_diff_lines(&diff);
+        let item = FileTreeItem::Folder("src/".to_string());
+
+        // Act
+        let filtered = filter_diff_lines(&parsed_lines, &item);
+
+        // Assert
+        assert_eq!(filtered.len(), 4);
+        assert_eq!(filtered[0].content, DIFF_MAIN_HEADER);
+        assert_eq!(filtered[1].content, "added in main");
+        assert_eq!(filtered[2].content, DIFF_NESTED_HEADER);
+        assert_eq!(filtered[3].content, "deleted in explorer");
     }
 
     #[test]

@@ -7,7 +7,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 
-use crate::ui::diff_util::{DiffLine, DiffLineKind};
+use crate::ui::diff_util::{DiffLine, DiffLineKind, FileTreeItem};
 use crate::ui::{Component, style};
 
 const DIFF_GIT_FILE_HEADER_PREFIX: &str = "diff --git";
@@ -24,15 +24,6 @@ const TREE_PREFIX_CONTINUATION: &str = "│ ";
 const TREE_PREFIX_SPACER: &str = "  ";
 const RENAME_ORIGIN_PREFIX: &str = " <- ";
 const ROOT_TREE_PREFIX: &str = "";
-
-/// Identifies what a tree line in the file explorer represents.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FileTreeItem {
-    /// A folder prefix path (e.g. `"src/ui/"`).
-    Folder(String),
-    /// A full file path (e.g. `"src/ui/component/file_explorer.rs"`).
-    File(String),
-}
 
 /// Diff file explorer panel rendering the changed file list.
 pub struct FileExplorer {
@@ -178,40 +169,6 @@ impl FileExplorer {
         Self::build_tree(parsed_lines)
     }
 
-    /// Filters `parsed_lines` to only the lines belonging to the given
-    /// [`FileTreeItem`].
-    ///
-    /// For a [`FileTreeItem::File`] the result contains the diff section
-    /// whose `diff --git` header references that file path.  For a
-    /// [`FileTreeItem::Folder`] the result contains all sections whose
-    /// file paths start with the folder prefix.
-    pub fn filter_diff_lines<'a>(
-        parsed_lines: &[DiffLine<'a>],
-        item: &FileTreeItem,
-    ) -> Vec<DiffLine<'a>> {
-        let mut result = Vec::new();
-        let mut include_section = false;
-
-        for diff_line in parsed_lines {
-            if diff_line.kind == DiffLineKind::FileHeader
-                && diff_line.content.starts_with(DIFF_GIT_FILE_HEADER_PREFIX)
-            {
-                include_section = Self::header_matches_item(diff_line.content, item);
-            }
-
-            if include_section {
-                result.push(DiffLine {
-                    kind: diff_line.kind,
-                    old_line: diff_line.old_line,
-                    new_line: diff_line.new_line,
-                    content: diff_line.content,
-                });
-            }
-        }
-
-        result
-    }
-
     /// Builds the tree display lines and parallel [`FileTreeItem`] list from
     /// parsed diff headers.
     fn build_tree(parsed_lines: &[DiffLine<'_>]) -> (Vec<Line<'static>>, Vec<FileTreeItem>) {
@@ -253,26 +210,6 @@ impl FileExplorer {
     /// Clamps `current_index` to a valid list index for `item_count` items.
     fn normalize_selected_index(current_index: usize, item_count: usize) -> usize {
         current_index.min(item_count.saturating_sub(1))
-    }
-
-    /// Checks whether a `diff --git` header line matches the given tree item.
-    fn header_matches_item(header_line: &str, item: &FileTreeItem) -> bool {
-        let file_path = Self::extract_new_path(header_line);
-
-        match item {
-            FileTreeItem::File(path) => file_path.as_deref() == Some(path.as_str()),
-            FileTreeItem::Folder(prefix) => {
-                file_path.is_some_and(|path| path.starts_with(prefix.as_str()))
-            }
-        }
-    }
-
-    /// Extracts the new (b-side) file path from a `diff --git` header.
-    fn extract_new_path(header_line: &str) -> Option<String> {
-        let stripped = header_line.strip_prefix(DIFF_GIT_PATH_PREFIX)?;
-        let (_, new_path) = stripped.split_once(DIFF_GIT_PATH_SEPARATOR)?;
-
-        Some(new_path.to_string())
     }
 
     /// Parses a diff header into a normalized path representation for tree
@@ -689,99 +626,5 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert_eq!(items[0], FileTreeItem::Folder("src/".to_string()));
         assert_eq!(items[1], FileTreeItem::File("src/new.rs".to_string()));
-    }
-
-    #[test]
-    fn test_filter_diff_lines_by_file() {
-        // Arrange
-        let parsed_lines = vec![
-            DiffLine {
-                kind: DiffLineKind::FileHeader,
-                old_line: None,
-                new_line: None,
-                content: DIFF_SAME_PATH_HEADER,
-            },
-            DiffLine {
-                kind: DiffLineKind::Addition,
-                old_line: None,
-                new_line: Some(1),
-                content: "added in main",
-            },
-            DiffLine {
-                kind: DiffLineKind::FileHeader,
-                old_line: None,
-                new_line: None,
-                content: DIFF_README_HEADER,
-            },
-            DiffLine {
-                kind: DiffLineKind::Addition,
-                old_line: None,
-                new_line: Some(1),
-                content: "added in readme",
-            },
-        ];
-        let item = FileTreeItem::File("src/main.rs".to_string());
-
-        // Act
-        let filtered = FileExplorer::filter_diff_lines(&parsed_lines, &item);
-
-        // Assert
-        assert_eq!(filtered.len(), 2);
-        assert_eq!(filtered[0].content, DIFF_SAME_PATH_HEADER);
-        assert_eq!(filtered[1].content, "added in main");
-    }
-
-    #[test]
-    fn test_filter_diff_lines_by_folder() {
-        // Arrange
-        let parsed_lines = vec![
-            DiffLine {
-                kind: DiffLineKind::FileHeader,
-                old_line: None,
-                new_line: None,
-                content: DIFF_SAME_PATH_HEADER,
-            },
-            DiffLine {
-                kind: DiffLineKind::Addition,
-                old_line: None,
-                new_line: Some(1),
-                content: "added in main",
-            },
-            DiffLine {
-                kind: DiffLineKind::FileHeader,
-                old_line: None,
-                new_line: None,
-                content: DIFF_NESTED_HEADER,
-            },
-            DiffLine {
-                kind: DiffLineKind::Deletion,
-                old_line: Some(5),
-                new_line: None,
-                content: "deleted in explorer",
-            },
-            DiffLine {
-                kind: DiffLineKind::FileHeader,
-                old_line: None,
-                new_line: None,
-                content: DIFF_README_HEADER,
-            },
-            DiffLine {
-                kind: DiffLineKind::Addition,
-                old_line: None,
-                new_line: Some(1),
-                content: "added in readme",
-            },
-        ];
-        let item = FileTreeItem::Folder("src/".to_string());
-
-        // Act
-        let filtered = FileExplorer::filter_diff_lines(&parsed_lines, &item);
-
-        // Assert
-        assert_eq!(filtered.len(), 4);
-        assert_eq!(filtered[0].content, DIFF_SAME_PATH_HEADER);
-        assert_eq!(filtered[1].content, "added in main");
-        assert_eq!(filtered[2].content, DIFF_NESTED_HEADER);
-        assert_eq!(filtered[3].content, "deleted in explorer");
     }
 }

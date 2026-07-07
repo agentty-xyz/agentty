@@ -4,8 +4,7 @@ use std::process::Command;
 use tempfile::tempdir;
 
 use super::*;
-use crate::agent::AgentModel;
-use crate::domain::agent::ReasoningLevel;
+use crate::domain::agent::{AgentModel, ReasoningLevel};
 use crate::domain::session::{
     DailyActivity, ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionStats,
 };

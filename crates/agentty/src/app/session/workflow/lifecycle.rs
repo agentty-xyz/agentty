@@ -2416,7 +2416,7 @@ impl SessionManager {
             .first()
             .copied()
             .unwrap_or(AgentKind::Antigravity);
-        let fallback_selection = crate::agent::resolve_agent_selection_for_model(
+        let fallback_selection = crate::domain::agent::resolve_agent_selection_for_model(
             self.default_session_model,
             fallback_agent_kind,
             &available_agent_kinds,
