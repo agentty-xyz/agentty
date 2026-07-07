@@ -312,7 +312,7 @@ pub(crate) fn settings_actions() -> Vec<HelpAction> {
     actions.push(HelpAction::new(
         "open/edit",
         "Enter",
-        "Open selector or edit text setting",
+        "Open selector or command editor",
     ));
     actions.push(HelpAction::new("next tab", "Tab", "Switch tab"));
     actions.push(HelpAction::new("help", "?", "Help"));
@@ -325,7 +325,7 @@ pub(crate) fn settings_footer_actions() -> Vec<HelpAction> {
     vec![
         HelpAction::new("quit", "q", "Quit"),
         HelpAction::new("nav", "j/k", "Navigate settings"),
-        HelpAction::new("open/edit", "Enter", "Open selector or edit text setting"),
+        HelpAction::new("open/edit", "Enter", "Open selector or command editor"),
         HelpAction::new("help", "?", "Help"),
     ]
 }

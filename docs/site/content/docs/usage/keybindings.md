@@ -37,12 +37,16 @@ highlighted in the table with a `* ` prefix and accented row text.
 <tr><th>Key</th><th>Action</th></tr>
 </thead>
 <tbody>
-<tr><td><code>q</code></td><td>Quit; closes an open selector dropdown first</td></tr>
-<tr><td><code>j</code> / <code>k</code></td><td>Navigate settings; move inside an open selector dropdown</td></tr>
-<tr><td><code>Enter</code></td><td>Open selector dropdown, select highlighted option, or finish text edit</td></tr>
-<tr><td><code>Esc</code></td><td>Close selector dropdown or finish text edit</td></tr>
-<tr><td><code>Alt+Enter</code> or <code>Shift+Enter</code></td><td>Add newline while editing <code>Open Commands</code></td></tr>
-<tr><td><code>Up</code> / <code>Down</code> / <code>Left</code> / <code>Right</code></td><td>Move cursor while editing <code>Open Commands</code></td></tr>
+<tr><td><code>q</code></td><td>Quit; closes an open selector dropdown or <code>Open Commands</code> browser first</td></tr>
+<tr><td><code>j</code> / <code>k</code></td><td>Navigate settings; move inside an open selector dropdown or <code>Open Commands</code> browser</td></tr>
+<tr><td><code>Enter</code></td><td>Open selector dropdown or <code>Open Commands</code> browser; select highlighted option; edit or save an open command</td></tr>
+<tr><td><code>Esc</code></td><td>Close selector dropdown or <code>Open Commands</code> browser; cancel open-command add/edit input</td></tr>
+<tr><td><code>a</code></td><td>Add an entry in the <code>Open Commands</code> browser</td></tr>
+<tr><td><code>e</code></td><td>Edit the selected entry in the <code>Open Commands</code> browser</td></tr>
+<tr><td><code>d</code></td><td>Delete the selected entry in the <code>Open Commands</code> browser</td></tr>
+<tr><td><code>J</code> / <code>K</code></td><td>Move the selected <code>Open Commands</code> entry down or up</td></tr>
+<tr><td><code>Left</code> / <code>Right</code> / <code>Home</code> / <code>End</code></td><td>Move cursor while adding or editing one <code>Open Commands</code> entry</td></tr>
+<tr><td><code>Backspace</code> / <code>Delete</code></td><td>Delete characters while adding or editing one <code>Open Commands</code> entry</td></tr>
 <tr><td><code>Tab</code></td><td>Switch tab</td></tr>
 <tr><td><code>?</code></td><td>Help</td></tr>
 </tbody>
@@ -53,7 +57,8 @@ app-wide `Theme` row (`Agentty Default`, `Agentty Green`, or `Dark Horizon`) and
 `'<project>' settings` for the reasoning level, model defaults, commit coauthor toggle,
 and `Open Commands` rows described in [Workflow](@/docs/usage/workflow.md). Selector
 rows open dropdowns; use `j` / `k` to move through the dropdown and `Enter` to save the
-highlighted value.
+highlighted value. The `Open Commands` row opens a list browser where each command is
+added, edited, deleted, or reordered as its own entry.
 
 ## Logs
 

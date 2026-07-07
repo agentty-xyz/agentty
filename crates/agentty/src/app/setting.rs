@@ -147,11 +147,28 @@ pub struct SettingsSelectorDropdown {
     pub selected_index: usize,
 }
 
+/// Active interaction mode for the `Open Commands` list editor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OpenCommandListEditorMode {
+    Add,
+    Browse,
+    Edit,
+}
+
+/// Render-ready snapshot for the `Open Commands` list editor overlay.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OpenCommandListEditorSnapshot {
+    pub commands: Vec<String>,
+    pub input: Option<InputState>,
+    pub mode: OpenCommandListEditorMode,
+    pub selected_index: usize,
+}
+
 /// Declares how a settings row is edited.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingControl {
+    CommandList,
     Selector,
-    TextInput,
 }
 
 /// Backing table rows for the settings page.
@@ -219,20 +236,7 @@ impl SettingRow {
             | Self::DefaultReviewModel
             | Self::IncludeCoauthoredByAgentty
             | Self::Theme => SettingControl::Selector,
-            Self::OpenCommand => SettingControl::TextInput,
-        }
-    }
-
-    /// Returns the persisted setting name represented by this row.
-    fn setting_name(self) -> SettingName {
-        match self {
-            Self::ReasoningLevel => SettingName::ReasoningLevel,
-            Self::DefaultSmartModel => SettingName::DefaultSmartModel,
-            Self::DefaultFastModel => SettingName::DefaultFastModel,
-            Self::DefaultReviewModel => SettingName::DefaultReviewModel,
-            Self::IncludeCoauthoredByAgentty => SettingName::IncludeCoauthoredByAgentty,
-            Self::OpenCommand => SettingName::OpenCommand,
-            Self::Theme => SettingName::Theme,
+            Self::OpenCommand => SettingControl::CommandList,
         }
     }
 
@@ -250,6 +254,48 @@ impl SettingRow {
 struct SelectorDropdownState {
     row: SettingRow,
     selected_index: usize,
+}
+
+/// Tracks state for the `Open Commands` list editor overlay.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct OpenCommandListEditorState {
+    commands: Vec<String>,
+    input: InputState,
+    mode: OpenCommandListEditorMode,
+    selected_index: usize,
+}
+
+impl OpenCommandListEditorState {
+    /// Creates a list editor state from the persisted newline-delimited
+    /// command setting.
+    fn from_open_command(open_command: &str) -> Self {
+        Self {
+            commands: parse_open_commands(open_command),
+            input: InputState::default(),
+            mode: OpenCommandListEditorMode::Browse,
+            selected_index: 0,
+        }
+    }
+
+    /// Returns the selected index clamped to the currently available command
+    /// rows.
+    fn selected_index(&self) -> usize {
+        self.selected_index
+            .min(self.commands.len().saturating_sub(1))
+    }
+
+    /// Moves selection to a valid command row after a list mutation.
+    fn clamp_selected_index(&mut self) {
+        self.selected_index = self.selected_index();
+    }
+
+    /// Returns whether the editor is in single-line input mode.
+    fn is_input_mode(&self) -> bool {
+        matches!(
+            self.mode,
+            OpenCommandListEditorMode::Add | OpenCommandListEditorMode::Edit
+        )
+    }
 }
 
 /// Manages user-configurable application settings.
@@ -272,14 +318,13 @@ pub struct SettingsManager {
     /// Active terminal color theme for the whole application.
     pub theme: ColorTheme,
     available_agent_kinds: Vec<AgentKind>,
-    editing_text_row: Option<SettingRow>,
     /// Whether generated session commit messages append the Agentty coauthor
     /// trailer for the active project.
     ///
     /// New projects start with this disabled until the user explicitly enables
     /// it.
     include_coauthored_by_agentty: bool,
-    open_command_input: Option<InputState>,
+    open_command_list_editor: Option<OpenCommandListEditorState>,
     /// Active project identifier that owns these persisted settings.
     project_id: i64,
     selector_dropdown: Option<SelectorDropdownState>,
@@ -350,9 +395,8 @@ impl SettingsManager {
             table_state,
             theme,
             available_agent_kinds,
-            editing_text_row: None,
             include_coauthored_by_agentty,
-            open_command_input: None,
+            open_command_list_editor: None,
             project_id,
             selector_dropdown: None,
             use_last_used_model_as_default,
@@ -361,7 +405,7 @@ impl SettingsManager {
 
     /// Moves the settings selection to the next row.
     pub fn next(&mut self) {
-        if !self.is_editing_text_input() && !self.is_selector_dropdown_open() {
+        if !self.is_open_command_list_editor_open() && !self.is_selector_dropdown_open() {
             let next_index = (self.selected_row_index() + 1) % SettingRow::ROW_COUNT;
             self.table_state.select(Some(next_index));
         }
@@ -369,7 +413,7 @@ impl SettingsManager {
 
     /// Moves the settings selection to the previous row.
     pub fn previous(&mut self) {
-        if !self.is_editing_text_input() && !self.is_selector_dropdown_open() {
+        if !self.is_open_command_list_editor_open() && !self.is_selector_dropdown_open() {
             let current_index = self.selected_row_index();
             let previous_index = if current_index == 0 {
                 SettingRow::ROW_COUNT - 1
@@ -388,22 +432,46 @@ impl SettingsManager {
             SettingControl::Selector => {
                 self.open_selector_dropdown(selected_row);
             }
-            SettingControl::TextInput => {
-                self.toggle_text_input(selected_row);
+            SettingControl::CommandList => {
+                self.open_open_command_list_editor();
             }
         }
     }
 
-    /// Returns whether any settings text input editor is active.
+    /// Returns whether the `Open Commands` list editor is active.
     #[must_use]
-    pub fn is_editing_text_input(&self) -> bool {
-        self.editing_text_row.is_some()
+    pub fn is_open_command_list_editor_open(&self) -> bool {
+        self.open_command_list_editor.is_some()
+    }
+
+    /// Returns whether the `Open Commands` editor is currently accepting
+    /// single-line text input.
+    #[must_use]
+    pub fn is_open_command_list_editor_input_active(&self) -> bool {
+        self.open_command_list_editor
+            .as_ref()
+            .is_some_and(OpenCommandListEditorState::is_input_mode)
     }
 
     /// Returns whether a selector dropdown is currently open.
     #[must_use]
     pub fn is_selector_dropdown_open(&self) -> bool {
         self.selector_dropdown.is_some()
+    }
+
+    /// Returns the render-ready `Open Commands` editor snapshot, when it is
+    /// open.
+    #[must_use]
+    pub fn open_command_list_editor(&self) -> Option<OpenCommandListEditorSnapshot> {
+        let editor = self.open_command_list_editor.as_ref()?;
+        let input = editor.is_input_mode().then(|| editor.input.clone());
+
+        Some(OpenCommandListEditorSnapshot {
+            commands: editor.commands.clone(),
+            input,
+            mode: editor.mode,
+            selected_index: editor.selected_index(),
+        })
     }
 
     /// Returns the render-ready selector dropdown snapshot, when one is open.
@@ -470,60 +538,148 @@ impl SettingsManager {
         self.close_selector_dropdown();
     }
 
-    /// Returns whether the `Open Commands` multiline editor is currently
-    /// active.
-    #[must_use]
-    pub fn is_editing_open_commands(&self) -> bool {
-        self.is_editing_text_input_for(SettingRow::OpenCommand)
+    /// Closes the `Open Commands` list editor without saving any active
+    /// add/edit input.
+    pub fn close_open_command_list_editor(&mut self) {
+        self.open_command_list_editor = None;
     }
 
-    /// Exits settings text input editing mode and clears editor cursor state.
-    pub fn stop_text_input_editing(&mut self) {
-        self.finish_text_input_editing();
+    /// Moves the `Open Commands` editor selection to the next command.
+    pub fn next_open_command_list_editor_item(&mut self) {
+        self.move_open_command_list_editor_selection(OpenCommandListDirection::Next);
     }
 
-    /// Appends one character to the selected text setting value and persists
-    /// it.
-    pub async fn append_selected_text_character(
-        &mut self,
-        services: &AppServices,
-        character: char,
-    ) {
-        if let Some(editing_row) = self.editing_text_row
-            && self.append_text_character(editing_row, character)
-        {
-            self.persist_text_setting(services, editing_row).await;
+    /// Moves the `Open Commands` editor selection to the previous command.
+    pub fn previous_open_command_list_editor_item(&mut self) {
+        self.move_open_command_list_editor_selection(OpenCommandListDirection::Previous);
+    }
+
+    /// Starts adding a command in the open-command editor.
+    pub fn start_adding_open_command(&mut self) {
+        let Some(editor) = &mut self.open_command_list_editor else {
+            return;
+        };
+
+        editor.input = InputState::default();
+        editor.mode = OpenCommandListEditorMode::Add;
+    }
+
+    /// Starts editing the selected command. If no command exists yet, this
+    /// starts add mode.
+    pub fn start_editing_selected_open_command(&mut self) {
+        let Some(editor) = &mut self.open_command_list_editor else {
+            return;
+        };
+
+        if editor.commands.is_empty() {
+            editor.input = InputState::default();
+            editor.mode = OpenCommandListEditorMode::Add;
+
+            return;
+        }
+
+        let selected_index = editor.selected_index();
+        let selected_command = editor.commands[selected_index].clone();
+        editor.selected_index = selected_index;
+        editor.input = InputState::with_text(selected_command);
+        editor.mode = OpenCommandListEditorMode::Edit;
+    }
+
+    /// Cancels add/edit input and returns to command browsing.
+    pub fn cancel_open_command_input(&mut self) {
+        let Some(editor) = &mut self.open_command_list_editor else {
+            return;
+        };
+
+        editor.input = InputState::default();
+        editor.mode = OpenCommandListEditorMode::Browse;
+    }
+
+    /// Appends one character to the active open-command input field.
+    pub fn append_open_command_input_character(&mut self, character: char) {
+        let Some(editor) = &mut self.open_command_list_editor else {
+            return;
+        };
+
+        if editor.is_input_mode() {
+            editor.input.insert_char(character);
         }
     }
 
-    /// Removes the last character from the selected text setting and persists
-    /// it.
-    pub async fn remove_selected_text_character(&mut self, services: &AppServices) {
-        if let Some(editing_row) = self.editing_text_row
-            && self.remove_text_character(editing_row)
-        {
-            self.persist_text_setting(services, editing_row).await;
+    /// Removes the character before the cursor in the active open-command
+    /// input field.
+    pub fn remove_open_command_input_character(&mut self) {
+        let Some(editor) = &mut self.open_command_list_editor else {
+            return;
+        };
+
+        if editor.is_input_mode() {
+            editor.input.delete_backward();
         }
     }
 
-    /// Moves the active text editor cursor one character to the left.
-    pub fn move_selected_text_cursor_left(&mut self) {
-        self.move_selected_text_cursor(TextCursorDirection::Left);
+    /// Removes the character at the cursor in the active open-command input
+    /// field.
+    pub fn delete_open_command_input_character(&mut self) {
+        let Some(editor) = &mut self.open_command_list_editor else {
+            return;
+        };
+
+        if editor.is_input_mode() {
+            editor.input.delete_forward();
+        }
     }
 
-    /// Moves the active text editor cursor one character to the right.
-    pub fn move_selected_text_cursor_right(&mut self) {
-        self.move_selected_text_cursor(TextCursorDirection::Right);
+    /// Moves the open-command input cursor one character to the left.
+    pub fn move_open_command_input_cursor_left(&mut self) {
+        self.move_open_command_input_cursor(OpenCommandInputCursorDirection::Left);
     }
 
-    /// Moves the active text editor cursor to the previous line.
-    pub fn move_selected_text_cursor_up(&mut self) {
-        self.move_selected_text_cursor(TextCursorDirection::Up);
+    /// Moves the open-command input cursor one character to the right.
+    pub fn move_open_command_input_cursor_right(&mut self) {
+        self.move_open_command_input_cursor(OpenCommandInputCursorDirection::Right);
     }
 
-    /// Moves the active text editor cursor to the next line.
-    pub fn move_selected_text_cursor_down(&mut self) {
-        self.move_selected_text_cursor(TextCursorDirection::Down);
+    /// Moves the open-command input cursor to the start of the field.
+    pub fn move_open_command_input_cursor_home(&mut self) {
+        self.move_open_command_input_cursor(OpenCommandInputCursorDirection::Home);
+    }
+
+    /// Moves the open-command input cursor to the end of the field.
+    pub fn move_open_command_input_cursor_end(&mut self) {
+        self.move_open_command_input_cursor(OpenCommandInputCursorDirection::End);
+    }
+
+    /// Confirms the active add/edit input and persists the normalized command
+    /// list.
+    pub async fn confirm_open_command_input(&mut self, services: &AppServices) {
+        if self.apply_open_command_input() {
+            self.persist_open_command_setting(services).await;
+        }
+    }
+
+    /// Deletes the selected open command and persists the normalized command
+    /// list.
+    pub async fn delete_selected_open_command(&mut self, services: &AppServices) {
+        if self.delete_selected_open_command_from_editor() {
+            self.persist_open_command_setting(services).await;
+        }
+    }
+
+    /// Moves the selected open command down and persists the normalized
+    /// command list.
+    pub async fn move_selected_open_command_down(&mut self, services: &AppServices) {
+        if self.reorder_selected_open_command(OpenCommandReorderDirection::Down) {
+            self.persist_open_command_setting(services).await;
+        }
+    }
+
+    /// Moves the selected open command up and persists the normalized command
+    /// list.
+    pub async fn move_selected_open_command_up(&mut self, services: &AppServices) {
+        if self.reorder_selected_open_command(OpenCommandReorderDirection::Up) {
+            self.persist_open_command_setting(services).await;
+        }
     }
 
     /// Returns settings table rows as `(name, value)` pairs.
@@ -556,15 +712,18 @@ impl SettingsManager {
     /// Returns the footer hint text for the settings page.
     #[must_use]
     pub fn footer_hint(&self) -> &'static str {
-        if self.is_editing_text_input_for(SettingRow::OpenCommand) {
-            "Editing open commands: one command per line, Alt+Enter/Shift+Enter inserts newline, \
-             Enter/Esc finish"
+        if self
+            .open_command_list_editor
+            .as_ref()
+            .is_some_and(OpenCommandListEditorState::is_input_mode)
+        {
+            "Open Commands: type a command, Enter save, Esc cancel"
+        } else if self.is_open_command_list_editor_open() {
+            "Open Commands: j/k move, a add, e/Enter edit, d delete, J/K reorder, Esc/q close"
         } else if self.is_selector_dropdown_open() {
             "Selecting setting value: j/k move, Enter select, Esc/q close"
-        } else if self.is_editing_text_input() {
-            "Editing setting value: type text, Enter to finish, Esc to cancel"
         } else {
-            "Settings: Enter opens selectors or starts text editing"
+            "Settings: Enter opens selectors or command editor"
         }
     }
 
@@ -758,106 +917,159 @@ impl SettingsManager {
         }
     }
 
-    /// Returns whether a specific text-input row is currently being edited.
-    fn is_editing_text_input_for(&self, row: SettingRow) -> bool {
-        self.editing_text_row == Some(row)
+    /// Opens the command list editor from the persisted open-command setting.
+    fn open_open_command_list_editor(&mut self) {
+        self.open_command_list_editor = Some(OpenCommandListEditorState::from_open_command(
+            self.open_command.as_str(),
+        ));
     }
 
-    /// Toggles text editing mode for the requested row.
-    fn toggle_text_input(&mut self, row: SettingRow) {
-        if self.editing_text_row == Some(row) {
-            self.finish_text_input_editing();
+    /// Moves the open-command editor selection in the requested direction.
+    fn move_open_command_list_editor_selection(&mut self, direction: OpenCommandListDirection) {
+        let Some(editor) = &mut self.open_command_list_editor else {
+            return;
+        };
 
+        if editor.commands.is_empty() || editor.is_input_mode() {
             return;
         }
 
-        self.start_text_input_editing(row);
-    }
-
-    /// Starts text editing mode for the requested row.
-    fn start_text_input_editing(&mut self, row: SettingRow) {
-        self.editing_text_row = Some(row);
-        if row == SettingRow::OpenCommand {
-            self.open_command_input = Some(InputState::with_text(self.open_command.clone()));
-        }
-    }
-
-    /// Finalizes the active text editing session and synchronizes cached text.
-    fn finish_text_input_editing(&mut self) {
-        if self.is_editing_text_input_for(SettingRow::OpenCommand) {
-            self.sync_open_command_from_input();
-            self.open_command_input = None;
-        }
-
-        self.editing_text_row = None;
-    }
-
-    /// Appends text to the selected setting row.
-    fn append_text_character(&mut self, row: SettingRow, character: char) -> bool {
-        match row.control() {
-            SettingControl::Selector => false,
-            SettingControl::TextInput => {
-                let open_command_input = self.open_command_input_mut();
-                open_command_input.insert_char(character);
-                self.sync_open_command_from_input();
-
-                true
+        let command_count = editor.commands.len();
+        editor.selected_index = match direction {
+            OpenCommandListDirection::Next => (editor.selected_index + 1) % command_count,
+            OpenCommandListDirection::Previous => {
+                if editor.selected_index == 0 {
+                    command_count - 1
+                } else {
+                    editor.selected_index - 1
+                }
             }
+        };
+    }
+
+    /// Moves the open-command input cursor in the requested direction.
+    fn move_open_command_input_cursor(&mut self, direction: OpenCommandInputCursorDirection) {
+        let Some(editor) = &mut self.open_command_list_editor else {
+            return;
+        };
+
+        if !editor.is_input_mode() {
+            return;
+        }
+
+        match direction {
+            OpenCommandInputCursorDirection::End => editor.input.move_end(),
+            OpenCommandInputCursorDirection::Home => editor.input.move_home(),
+            OpenCommandInputCursorDirection::Left => editor.input.move_left(),
+            OpenCommandInputCursorDirection::Right => editor.input.move_right(),
         }
     }
 
-    /// Removes one character from the selected setting row.
-    fn remove_text_character(&mut self, row: SettingRow) -> bool {
-        match row.control() {
-            SettingControl::Selector => false,
-            SettingControl::TextInput => {
-                let open_command_input = self.open_command_input_mut();
-                let previous_text = open_command_input.text().to_string();
-                open_command_input.delete_backward();
+    /// Applies the active add/edit input to the command list.
+    fn apply_open_command_input(&mut self) -> bool {
+        let Some(editor) = &mut self.open_command_list_editor else {
+            return false;
+        };
 
-                let is_changed = open_command_input.text() != previous_text;
-                if is_changed {
-                    self.sync_open_command_from_input();
+        if !editor.is_input_mode() {
+            return false;
+        }
+
+        let command = editor.input.text().trim().to_string();
+        match editor.mode {
+            OpenCommandListEditorMode::Add => {
+                if !command.is_empty() {
+                    editor.commands.push(command);
+                    editor.selected_index = editor.commands.len().saturating_sub(1);
+                }
+            }
+            OpenCommandListEditorMode::Edit => {
+                if editor.commands.is_empty() {
+                    if !command.is_empty() {
+                        editor.commands.push(command);
+                        editor.selected_index = 0;
+                    }
+                } else {
+                    let selected_index = editor.selected_index();
+                    if command.is_empty() {
+                        editor.commands.remove(selected_index);
+                        editor.clamp_selected_index();
+                    } else {
+                        editor.commands[selected_index] = command;
+                        editor.selected_index = selected_index;
+                    }
+                }
+            }
+            OpenCommandListEditorMode::Browse => {}
+        }
+
+        editor.input = InputState::default();
+        editor.mode = OpenCommandListEditorMode::Browse;
+        self.sync_open_command_from_editor();
+
+        true
+    }
+
+    /// Deletes the selected command from the open-command editor.
+    fn delete_selected_open_command_from_editor(&mut self) -> bool {
+        let Some(editor) = &mut self.open_command_list_editor else {
+            return false;
+        };
+
+        if editor.commands.is_empty() || editor.is_input_mode() {
+            return false;
+        }
+
+        let selected_index = editor.selected_index();
+        editor.commands.remove(selected_index);
+        editor.clamp_selected_index();
+        self.sync_open_command_from_editor();
+
+        true
+    }
+
+    /// Reorders the selected command in the open-command editor.
+    fn reorder_selected_open_command(&mut self, direction: OpenCommandReorderDirection) -> bool {
+        let Some(editor) = &mut self.open_command_list_editor else {
+            return false;
+        };
+
+        if editor.commands.len() < 2 || editor.is_input_mode() {
+            return false;
+        }
+
+        let selected_index = editor.selected_index();
+        let next_index = match direction {
+            OpenCommandReorderDirection::Down => {
+                if selected_index + 1 >= editor.commands.len() {
+                    return false;
                 }
 
-                is_changed
+                selected_index + 1
             }
-        }
+            OpenCommandReorderDirection::Up => {
+                if selected_index == 0 {
+                    return false;
+                }
+
+                selected_index - 1
+            }
+        };
+
+        editor.commands.swap(selected_index, next_index);
+        editor.selected_index = next_index;
+        self.sync_open_command_from_editor();
+
+        true
     }
 
-    /// Moves the active text editor cursor for the selected row.
-    fn move_selected_text_cursor(&mut self, direction: TextCursorDirection) {
-        if let Some(editing_row) = self.editing_text_row {
-            self.move_text_cursor(editing_row, direction);
-        }
-    }
-
-    /// Moves the text editor cursor for the given row.
-    fn move_text_cursor(&mut self, row: SettingRow, direction: TextCursorDirection) {
-        if !matches!(row.control(), SettingControl::TextInput) {
-            return;
-        }
-
-        let open_command_input = self.open_command_input_mut();
-        match direction {
-            TextCursorDirection::Down => open_command_input.move_down(),
-            TextCursorDirection::Left => open_command_input.move_left(),
-            TextCursorDirection::Right => open_command_input.move_right(),
-            TextCursorDirection::Up => open_command_input.move_up(),
-        }
-    }
-
-    /// Returns mutable access to the `Open Commands` editor state.
-    fn open_command_input_mut(&mut self) -> &mut InputState {
-        let open_command_value = self.open_command.clone();
-        self.open_command_input
-            .get_or_insert_with(|| InputState::with_text(open_command_value))
-    }
-
-    /// Synchronizes the persisted `open_command` value from editor state.
-    fn sync_open_command_from_input(&mut self) {
-        if let Some(open_command_input) = &self.open_command_input {
-            self.open_command = open_command_input.text().to_string();
+    /// Synchronizes the persisted `open_command` string from the editor's
+    /// normalized command list.
+    fn sync_open_command_from_editor(&mut self) {
+        if let Some(editor) = &mut self.open_command_list_editor {
+            editor.commands = normalize_open_commands(&editor.commands);
+            editor.clamp_selected_index();
+            self.open_command = join_open_commands(&editor.commands);
         }
     }
 
@@ -881,58 +1093,23 @@ impl SettingsManager {
             SettingRow::IncludeCoauthoredByAgentty => {
                 bool_setting_display(self.include_coauthored_by_agentty)
             }
-            SettingRow::OpenCommand => {
-                if self.is_editing_text_input_for(row) {
-                    display_open_command_with_cursor(&self.open_command, self.open_command_cursor())
-                } else if self.open_command.is_empty() {
-                    "<empty>".to_string()
-                } else {
-                    self.open_command.clone()
-                }
-            }
+            SettingRow::OpenCommand => display_open_command_summary(&self.open_command),
             SettingRow::Theme => self.theme.label().to_string(),
         }
     }
 
-    /// Returns the active `Open Commands` editor cursor position.
-    fn open_command_cursor(&self) -> usize {
-        self.open_command_input
-            .as_ref()
-            .map_or_else(|| self.open_command.chars().count(), |input| input.cursor)
-    }
-
-    /// Persists the current value for a text-input row.
-    async fn persist_text_setting(&self, services: &AppServices, row: SettingRow) {
-        if !matches!(row.control(), SettingControl::TextInput) {
-            return;
-        }
-
-        match row.setting_name() {
-            SettingName::OpenCommand => {
-                // Best-effort: settings persistence failure is non-critical.
-                let _ = services
-                    .db()
-                    .settings()
-                    .upsert_project_setting(
-                        self.project_id,
-                        SettingName::OpenCommand,
-                        &self.open_command,
-                    )
-                    .await;
-            }
-            SettingName::ReasoningLevel
-            | SettingName::ActiveProjectId
-            | SettingName::ActiveTab
-            | SettingName::DefaultFastAgent
-            | SettingName::DefaultFastModel
-            | SettingName::DefaultReviewAgent
-            | SettingName::DefaultReviewModel
-            | SettingName::DefaultSmartAgent
-            | SettingName::DefaultSmartModel
-            | SettingName::IncludeCoauthoredByAgentty
-            | SettingName::LastUsedModelAsDefault
-            | SettingName::Theme => {}
-        }
+    /// Persists the current `OpenCommand` setting value.
+    async fn persist_open_command_setting(&self, services: &AppServices) {
+        // Best-effort: settings persistence failure is non-critical.
+        let _ = services
+            .db()
+            .settings()
+            .upsert_project_setting(
+                self.project_id,
+                SettingName::OpenCommand,
+                &self.open_command,
+            )
+            .await;
     }
 
     /// Returns all selectable model options whose provider is locally
@@ -1072,12 +1249,26 @@ impl SettingsManager {
     }
 }
 
-/// Cursor movement direction for text-input settings rows.
+/// Open-command editor list navigation direction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TextCursorDirection {
-    Down,
+enum OpenCommandListDirection {
+    Next,
+    Previous,
+}
+
+/// Open-command editor input cursor movement direction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OpenCommandInputCursorDirection {
+    End,
+    Home,
     Left,
     Right,
+}
+
+/// Open-command editor reorder direction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OpenCommandReorderDirection {
+    Down,
     Up,
 }
 
@@ -1149,7 +1340,7 @@ impl ModelSelectorOption {
     }
 }
 
-/// Parses the settings text field into executable open-command entries.
+/// Parses the persisted settings value into executable open-command entries.
 fn parse_open_commands(open_command_setting: &str) -> Vec<String> {
     open_command_setting
         .lines()
@@ -1157,6 +1348,21 @@ fn parse_open_commands(open_command_setting: &str) -> Vec<String> {
         .filter(|command| !command.is_empty())
         .map(std::string::ToString::to_string)
         .collect()
+}
+
+/// Trims command entries and drops empty commands.
+fn normalize_open_commands(commands: &[String]) -> Vec<String> {
+    commands
+        .iter()
+        .map(|command| command.trim())
+        .filter(|command| !command.is_empty())
+        .map(std::string::ToString::to_string)
+        .collect()
+}
+
+/// Joins normalized command entries into the persisted setting value.
+fn join_open_commands(commands: &[String]) -> String {
+    normalize_open_commands(commands).join("\n")
 }
 
 /// Loads one project-scoped boolean setting, falling back to
@@ -1196,25 +1402,18 @@ fn display_model_selector_value(selection: AgentSelection) -> String {
     format!("{}/{}", selection.kind(), selection.model().as_str())
 }
 
-/// Renders `text` with a `|` cursor marker at `cursor_char_index`.
-fn display_open_command_with_cursor(text: &str, cursor_char_index: usize) -> String {
-    let mut rendered_text = String::with_capacity(text.len() + 1);
-    let char_count = text.chars().count();
-    let clamped_cursor_index = cursor_char_index.min(char_count);
+/// Returns the compact table summary for configured open commands.
+fn display_open_command_summary(open_command_setting: &str) -> String {
+    let commands = parse_open_commands(open_command_setting);
+    let Some(first_command) = commands.first() else {
+        return "(none)".to_string();
+    };
 
-    for (char_index, character) in text.chars().enumerate() {
-        if char_index == clamped_cursor_index {
-            rendered_text.push('|');
-        }
-
-        rendered_text.push(character);
+    if commands.len() == 1 {
+        return first_command.clone();
     }
 
-    if clamped_cursor_index == char_count {
-        rendered_text.push('|');
-    }
-
-    rendered_text
+    format!("{} (+{} more)", first_command, commands.len() - 1)
 }
 
 /// Returns all selectable model options in settings display order for the
@@ -1452,9 +1651,8 @@ mod tests {
             table_state,
             theme: ColorTheme::Current,
             available_agent_kinds: AgentKind::ALL.to_vec(),
-            editing_text_row: None,
             include_coauthored_by_agentty: false,
-            open_command_input: None,
+            open_command_list_editor: None,
             project_id: 1,
             selector_dropdown: None,
             use_last_used_model_as_default: false,
@@ -1921,15 +2119,15 @@ mod tests {
     }
 
     #[test]
-    fn is_editing_text_input_returns_false_by_default() {
+    fn is_open_command_list_editor_open_returns_false_by_default() {
         // Arrange
         let manager = new_settings_manager();
 
         // Act
-        let is_editing = manager.is_editing_text_input();
+        let is_open = manager.is_open_command_list_editor_open();
 
         // Assert
-        assert!(!is_editing);
+        assert!(!is_open);
     }
 
     #[test]
@@ -1973,10 +2171,15 @@ mod tests {
     }
 
     #[test]
-    fn footer_hint_returns_editing_text_when_text_input_is_active() {
+    fn footer_hint_returns_open_command_input_hint_when_input_is_active() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.editing_text_row = Some(SettingRow::OpenCommand);
+        manager.open_command_list_editor = Some(OpenCommandListEditorState {
+            commands: Vec::new(),
+            input: InputState::default(),
+            mode: OpenCommandListEditorMode::Add,
+            selected_index: 0,
+        });
 
         // Act
         let footer_hint = manager.footer_hint();
@@ -1984,8 +2187,7 @@ mod tests {
         // Assert
         assert_eq!(
             footer_hint,
-            "Editing open commands: one command per line, Alt+Enter/Shift+Enter inserts newline, \
-             Enter/Esc finish"
+            "Open Commands: type a command, Enter save, Esc cancel"
         );
     }
 
@@ -2059,37 +2261,33 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[6].1, "<empty>");
+        assert_eq!(rows[6].1, "(none)");
     }
 
     #[test]
-    fn settings_rows_show_cursor_for_open_command_while_editing() {
+    fn settings_rows_show_single_open_command_summary() {
         // Arrange
         let mut manager = new_settings_manager();
         manager.open_command = "http://localhost:5173".to_string();
-        manager.editing_text_row = Some(SettingRow::OpenCommand);
 
         // Act
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[6].1, "http://localhost:5173|");
+        assert_eq!(rows[6].1, "http://localhost:5173");
     }
 
     #[test]
-    fn settings_rows_show_cursor_within_open_command_while_editing() {
+    fn settings_rows_show_multiple_open_command_summary() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.open_command = "abc".to_string();
-        manager.editing_text_row = Some(SettingRow::OpenCommand);
-        manager.open_command_input = Some(InputState::with_text(manager.open_command.clone()));
-        manager.move_selected_text_cursor_left();
+        manager.open_command = "cargo test\nnpm run dev\nlazygit".to_string();
 
         // Act
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[6].1, "ab|c");
+        assert_eq!(rows[6].1, "cargo test (+2 more)");
     }
 
     #[test]
@@ -2201,7 +2399,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_enter_toggles_open_command_editing_state() {
+    fn handle_enter_opens_open_command_list_editor() {
         // Arrange
         let mut manager = new_settings_manager();
         manager.open_command = "nvim .".to_string();
@@ -2211,19 +2409,15 @@ mod tests {
         manager.handle_enter();
 
         // Assert
-        assert!(manager.is_editing_open_commands());
-        assert!(manager.open_command_input.is_some());
-
-        // Act
-        manager.handle_enter();
-
-        // Assert
-        assert!(!manager.is_editing_open_commands());
-        assert!(manager.open_command_input.is_none());
+        let editor = manager
+            .open_command_list_editor()
+            .expect("expected open-command list editor");
+        assert_eq!(editor.commands, vec!["nvim .".to_string()]);
+        assert_eq!(editor.mode, OpenCommandListEditorMode::Browse);
     }
 
     #[test]
-    fn next_and_previous_do_not_move_selection_while_editing_open_commands() {
+    fn next_and_previous_do_not_move_selection_while_open_command_editor_is_open() {
         // Arrange
         let mut manager = new_settings_manager();
         select_row(&mut manager, 6);
@@ -2235,6 +2429,7 @@ mod tests {
 
         // Assert
         assert_eq!(manager.table_state.selected(), Some(6));
+        assert!(manager.is_open_command_list_editor_open());
     }
 
     #[test]
@@ -2253,38 +2448,48 @@ mod tests {
         assert!(manager.is_selector_dropdown_open());
     }
 
-    #[tokio::test]
-    async fn stop_text_input_editing_syncs_cached_open_command_text() {
+    #[test]
+    fn cancel_open_command_input_returns_to_browse_without_changing_value() {
         // Arrange
         let mut manager = new_settings_manager();
         manager.open_command = "old command".to_string();
-        manager.editing_text_row = Some(SettingRow::OpenCommand);
-        manager.open_command_input = Some(InputState::with_text("new command".to_string()));
+        select_row(&mut manager, 6);
+        manager.handle_enter();
+        manager.start_adding_open_command();
+        manager.append_open_command_input_character('n');
 
         // Act
-        manager.stop_text_input_editing();
+        manager.cancel_open_command_input();
 
         // Assert
-        assert_eq!(manager.open_command, "new command");
-        assert!(manager.editing_text_row.is_none());
-        assert!(manager.open_command_input.is_none());
+        let editor = manager
+            .open_command_list_editor()
+            .expect("expected open-command list editor");
+        assert_eq!(manager.open_command, "old command");
+        assert_eq!(editor.mode, OpenCommandListEditorMode::Browse);
+        assert!(editor.input.is_none());
     }
 
     #[tokio::test]
-    async fn append_and_remove_selected_text_character_persist_open_command() {
+    async fn confirm_open_command_input_adds_trimmed_command_and_persists_value() {
         // Arrange
         let (services, project_id) = test_services().await;
         let mut manager = SettingsManager::new(&services, project_id).await;
         select_row(&mut manager, 6);
         manager.handle_enter();
+        manager.start_adding_open_command();
 
         // Act
-        manager.append_selected_text_character(&services, 'n').await;
-        manager.append_selected_text_character(&services, 'v').await;
-        manager.remove_selected_text_character(&services).await;
+        manager.append_open_command_input_character(' ');
+        manager.append_open_command_input_character('n');
+        manager.append_open_command_input_character('v');
+        manager.append_open_command_input_character('i');
+        manager.append_open_command_input_character('m');
+        manager.append_open_command_input_character(' ');
+        manager.confirm_open_command_input(&services).await;
 
         // Assert
-        assert_eq!(manager.open_command, "n");
+        assert_eq!(manager.open_command, "nvim");
         assert_eq!(
             services
                 .db()
@@ -2292,7 +2497,126 @@ mod tests {
                 .get_project_setting(project_id, SettingName::OpenCommand)
                 .await
                 .expect("failed to load open command"),
-            Some("n".to_string())
+            Some("nvim".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn confirm_open_command_input_edits_selected_command_and_persists_value() {
+        // Arrange
+        let (services, project_id) = test_services().await;
+        let mut manager = SettingsManager::new(&services, project_id).await;
+        manager.open_command = "cargo test\nnpm run dev".to_string();
+        select_row(&mut manager, 6);
+        manager.handle_enter();
+        manager.next_open_command_list_editor_item();
+        manager.start_editing_selected_open_command();
+
+        for _ in 0.."npm run dev".chars().count() {
+            manager.remove_open_command_input_character();
+        }
+        for character in "lazygit".chars() {
+            manager.append_open_command_input_character(character);
+        }
+
+        // Act
+        manager.confirm_open_command_input(&services).await;
+
+        // Assert
+        assert_eq!(manager.open_command, "cargo test\nlazygit");
+        assert_eq!(
+            services
+                .db()
+                .settings()
+                .get_project_setting(project_id, SettingName::OpenCommand)
+                .await
+                .expect("failed to load open command"),
+            Some("cargo test\nlazygit".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn confirm_open_command_input_drops_empty_edited_command() {
+        // Arrange
+        let (services, project_id) = test_services().await;
+        let mut manager = SettingsManager::new(&services, project_id).await;
+        manager.open_command = "cargo test\nnpm run dev".to_string();
+        select_row(&mut manager, 6);
+        manager.handle_enter();
+        manager.start_editing_selected_open_command();
+
+        for _ in 0.."cargo test".chars().count() {
+            manager.remove_open_command_input_character();
+        }
+
+        // Act
+        manager.confirm_open_command_input(&services).await;
+
+        // Assert
+        assert_eq!(manager.open_command, "npm run dev");
+        assert_eq!(
+            services
+                .db()
+                .settings()
+                .get_project_setting(project_id, SettingName::OpenCommand)
+                .await
+                .expect("failed to load open command"),
+            Some("npm run dev".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_selected_open_command_persists_remaining_commands() {
+        // Arrange
+        let (services, project_id) = test_services().await;
+        let mut manager = SettingsManager::new(&services, project_id).await;
+        manager.open_command = "cargo test\nnpm run dev\nlazygit".to_string();
+        select_row(&mut manager, 6);
+        manager.handle_enter();
+        manager.next_open_command_list_editor_item();
+
+        // Act
+        manager.delete_selected_open_command(&services).await;
+
+        // Assert
+        assert_eq!(manager.open_command, "cargo test\nlazygit");
+        assert_eq!(
+            services
+                .db()
+                .settings()
+                .get_project_setting(project_id, SettingName::OpenCommand)
+                .await
+                .expect("failed to load open command"),
+            Some("cargo test\nlazygit".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn move_selected_open_command_down_persists_reordered_commands() {
+        // Arrange
+        let (services, project_id) = test_services().await;
+        let mut manager = SettingsManager::new(&services, project_id).await;
+        manager.open_command = "cargo test\nnpm run dev\nlazygit".to_string();
+        select_row(&mut manager, 6);
+        manager.handle_enter();
+
+        // Act
+        manager.move_selected_open_command_down(&services).await;
+
+        // Assert
+        let editor = manager
+            .open_command_list_editor()
+            .expect("expected open-command list editor");
+        assert_eq!(manager.open_command, "npm run dev\ncargo test\nlazygit");
+        assert_eq!(editor.selected_index, 1);
+        assert_eq!(
+            services
+                .db()
+                .settings()
+                .get_project_setting(project_id, SettingName::OpenCommand)
+                .await
+                .expect("failed to load open command"),
+            Some("npm run dev\ncargo test\nlazygit".to_string())
         );
     }
 
@@ -2357,18 +2681,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn text_editing_apis_are_noops_without_active_text_row() {
+    async fn open_command_editor_apis_are_noops_without_open_editor() {
         // Arrange
         let (services, project_id) = test_services().await;
         let mut manager = SettingsManager::new(&services, project_id).await;
 
         // Act
-        manager.append_selected_text_character(&services, 'n').await;
-        manager.remove_selected_text_character(&services).await;
-        manager.move_selected_text_cursor_left();
-        manager.move_selected_text_cursor_right();
-        manager.move_selected_text_cursor_up();
-        manager.move_selected_text_cursor_down();
+        manager.start_adding_open_command();
+        manager.start_editing_selected_open_command();
+        manager.append_open_command_input_character('n');
+        manager.remove_open_command_input_character();
+        manager.delete_open_command_input_character();
+        manager.move_open_command_input_cursor_left();
+        manager.move_open_command_input_cursor_right();
+        manager.move_open_command_input_cursor_home();
+        manager.move_open_command_input_cursor_end();
+        manager.confirm_open_command_input(&services).await;
+        manager.delete_selected_open_command(&services).await;
+        manager.move_selected_open_command_down(&services).await;
+        manager.move_selected_open_command_up(&services).await;
 
         // Assert
         assert!(manager.open_command.is_empty());

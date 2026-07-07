@@ -373,8 +373,14 @@ staged.
 open commands are stored per active project; the `Theme` setting is global. The Settings
 tab renders these scopes as `Global settings` and `'<project>' settings`. Rows with
 fixed choices open dropdowns; use `j` / `k` to move through options and `Enter` to save
-the highlighted value. When `Open Commands` contains multiple entries (one command per
-line), pressing `o` in a session opens a selector popup.
+the highlighted value.
+
+The `Open Commands` row opens a command-list editor instead of a multiline text field.
+Use `a` to add an entry, `e` or `Enter` to edit the selected entry, `d` to delete it,
+and `J` / `K` to reorder entries. Add/edit mode uses a single-line input; `Enter` saves
+the command, and `Esc` cancels the input. Agentty trims commands and drops empty entries
+when saving. When multiple `Open Commands` entries are configured, pressing `o` in a
+session opens a selector popup.
 
 ## Auto-Update
 
