@@ -902,24 +902,15 @@ mod tests {
         assert!(prompt.contains("Do not run build, test, formatter, linter"));
         assert!(prompt.contains("You may browse the internet when needed."));
         assert!(prompt.contains("Use inspection only: file reads, file searches"));
-        assert!(
-            prompt.contains("File reads, file searches, and read-only git inspection are expected")
-        );
-        assert!(prompt.contains("For build, test, formatter, linter, package-manager, dev-server"));
-        assert!(prompt.contains("Diff context limitations (mandatory):"));
-        assert!(prompt.contains("The unified diff omits unchanged lines by design."));
-        assert!(prompt.contains("Never treat absence from the diff as absence"));
-        assert!(prompt.contains(
-            "Before suggesting a missing import, `use` item, module declaration, dependency"
+        assert!(normalized_prompt.contains("never treat absence from the diff as absence"));
+        assert!(normalized_prompt.contains(
+            "Never suggest a missing import, declaration, dependency, or registration unless you \
+             verified it is absent in the current worktree"
         ));
-        assert!(
-            prompt
-                .contains("Never suggest adding an import or dependency based on the diff alone.")
-        );
-        assert!(
-            normalized_prompt
-                .contains("unless you verified they are absent in the current worktree")
-        );
+        assert!(normalized_prompt.contains(
+            "phrase it as a suggestion for the agent to run the exact command in a follow-up turn"
+        ));
+        assert!(normalized_prompt.contains("never tell the user to run commands themselves"));
         assert!(!prompt.contains("You may run non-editing CLI commands"));
         assert!(normalized_prompt.contains("Treat high severity as correctness"));
         assert!(normalized_prompt.contains("concrete practical impact"));
