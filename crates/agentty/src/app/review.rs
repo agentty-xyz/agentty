@@ -12,6 +12,7 @@ use super::task;
 use crate::app::session_state::SessionState;
 use crate::domain::agent::{AgentModel, AgentSelection};
 use crate::domain::session::{SessionId, Status};
+use crate::domain::session_message::SessionTranscript;
 use crate::infra::db::SessionFocusedReviewRow;
 
 /// Cached focused review state for a session.
@@ -279,7 +280,7 @@ pub(crate) async fn auto_start_reviews(
         let session_chat_history = session
             .transcript
             .as_ref()
-            .and_then(|transcript| transcript.conversation_replay_text());
+            .and_then(SessionTranscript::conversation_replay_text);
         let session_folder = session.folder.clone();
 
         let diff = git_client

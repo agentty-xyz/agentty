@@ -47,6 +47,7 @@ use crate::domain::agent::{AgentKind, ReasoningLevel};
 use crate::domain::input::InputState;
 use crate::domain::question::{QuestionItem, QuestionProgress};
 use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, Session, SessionId, Status};
+use crate::domain::session_message::SessionTranscript;
 use crate::domain::setting::SettingName;
 use crate::domain::system_log::{
     SystemLogBuffer, SystemLogCategory, SystemLogEvent, SystemLogLevel,
@@ -1400,13 +1401,14 @@ impl App {
                     .transcript
                     .lock()
                     .ok()
-                    .and_then(|transcript| transcript.conversation_replay_text())
+                    .as_deref()
+                    .and_then(SessionTranscript::conversation_replay_text)
             })
             .or_else(|| {
                 self.sessions
                     .session_for_id(session_id)
                     .and_then(|session| session.transcript.as_ref())
-                    .and_then(|transcript| transcript.conversation_replay_text())
+                    .and_then(SessionTranscript::conversation_replay_text)
             });
 
         mark_session_agent_review(self.sessions.state_mut(), session_id);
