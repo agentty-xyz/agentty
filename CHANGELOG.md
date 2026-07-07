@@ -7,6 +7,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.12.3] - 2026-07-06
+
+### Changed
+
+- agentty: move agent prompt templates into the app-owned template directory.
+- agentty: normalize internal import paths.
+- Bump workspace crate metadata and lockfile package versions to `0.12.3`.
+
+### Contributors
+
+- @minev-dev
+
 ## [v0.12.2] - 2026-07-05
 
 ### Changed

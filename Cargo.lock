@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "ag-agent"
-version = "0.12.2"
+version = "0.12.3"
 dependencies = [
  "ag-protocol",
  "agent-client-protocol",
@@ -28,7 +28,7 @@ dependencies = [
 
 [[package]]
 name = "ag-clipboard"
-version = "0.12.2"
+version = "0.12.3"
 dependencies = [
  "image",
  "mockall",
@@ -43,7 +43,7 @@ dependencies = [
 
 [[package]]
 name = "ag-forge"
-version = "0.12.2"
+version = "0.12.3"
 dependencies = [
  "mockall",
  "serde",
@@ -54,7 +54,7 @@ dependencies = [
 
 [[package]]
 name = "ag-git"
-version = "0.12.2"
+version = "0.12.3"
 dependencies = [
  "mockall",
  "tempfile",
@@ -64,7 +64,7 @@ dependencies = [
 
 [[package]]
 name = "ag-protocol"
-version = "0.12.2"
+version = "0.12.3"
 dependencies = [
  "askama",
  "schemars 1.2.1",
@@ -74,7 +74,7 @@ dependencies = [
 
 [[package]]
 name = "ag-xtask"
-version = "0.12.2"
+version = "0.12.3"
 dependencies = [
  "clap",
  "mockall",
@@ -134,7 +134,7 @@ dependencies = [
 
 [[package]]
 name = "agentty"
-version = "0.12.2"
+version = "0.12.3"
 dependencies = [
  "ag-agent",
  "ag-clipboard",
@@ -3404,7 +3404,7 @@ dependencies = [
 
 [[package]]
 name = "testty"
-version = "0.12.2"
+version = "0.12.3"
 dependencies = [
  "base64",
  "clap",
