@@ -192,13 +192,16 @@ entity-relationship diagrams render entities as boxes, relationships as lines la
 with the relationship name, and crow's-foot cardinalities as compact end markers — `1`
 (exactly one), `?` (zero or one), `*` (zero or more), and `+` (one or more). Entity
 attribute blocks are omitted from the diagram. Simple `sequenceDiagram` participant and
-message lines render as lifelines with arrowed message rows. Unsupported diagram types,
-incomplete blocks, and diagrams wider than the panel keep the plain fenced-code
-presentation. Session turn prompts tell agents about this supported diagram subset, so
-agents include a diagram when it explains a flow, process, or relationship better than
-prose. The prompts also instruct agents to place Mermaid only in the assistant `answer`
-as an unindented ```` ```mermaid ```` fenced block, because plain code fences or
-indented blocks stay in the fenced-code presentation.
+message lines render as lifelines with arrowed message rows; self-messages render as a
+compact loop on their lifeline, and participant or message labels longer than the
+32-character label limit are truncated with a trailing ellipsis instead of preventing
+the diagram preview. Unsupported diagram types, incomplete blocks, and diagrams wider
+than the panel keep the plain fenced-code presentation. Session turn prompts tell agents
+about this supported diagram subset, so agents include a diagram when it explains a
+flow, process, or relationship better than prose. The prompts also instruct agents to
+place Mermaid only in the assistant `answer` as an unindented ```` ```mermaid ````
+fenced block, because plain code fences or indented blocks stay in the fenced-code
+presentation.
 
 ### Forking a Review Session
 

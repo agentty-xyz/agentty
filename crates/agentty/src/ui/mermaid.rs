@@ -20,6 +20,7 @@ pub(crate) const MAX_SOURCE_BYTE_COUNT: usize = 16 * 1024;
 pub(crate) const MAX_SOURCE_LINE_COUNT: usize = 128;
 const NODE_BOX_HEIGHT: usize = 3;
 const SEQUENCE_GAP_COLUMNS: usize = MAX_LABEL_WIDTH + 2;
+const SEQUENCE_SELF_LOOP_COLUMNS: usize = 3;
 
 /// Rendered mermaid diagram rows plus the widest row width in cells.
 pub struct MermaidDiagram {
@@ -202,10 +203,7 @@ fn parse_sequence_message(
 
     let (link_text, label_text) = line.split_once(':')?;
     let (from_identifier, to_identifier) = split_sequence_link(link_text)?;
-    let label = label_text.trim().trim_matches('"').trim().to_string();
-    if !is_renderable_label(&label) {
-        return None;
-    }
+    let label = truncated_sequence_label(label_text)?;
 
     let from_index = sequence_participant_index(
         from_identifier,
@@ -242,6 +240,31 @@ fn split_sequence_link(link_text: &str) -> Option<(&str, &str)> {
     None
 }
 
+/// Normalizes one sequence label, truncating labels wider than
+/// `MAX_LABEL_WIDTH` to that width with a trailing ellipsis.
+///
+/// Returns `None` for empty labels and for labels containing zero-width or
+/// double-width glyphs, which would break lifeline column alignment.
+fn truncated_sequence_label(label_text: &str) -> Option<String> {
+    let label = normalized_mermaid_label(label_text);
+    if label.is_empty()
+        || !label
+            .chars()
+            .all(|character| UnicodeWidthChar::width(character) == Some(1))
+    {
+        return None;
+    }
+
+    if label.chars().count() <= MAX_LABEL_WIDTH {
+        return Some(label.to_string());
+    }
+
+    let mut truncated: String = label.chars().take(MAX_LABEL_WIDTH - 1).collect();
+    truncated.push('…');
+
+    Some(truncated)
+}
+
 /// Returns the dense participant index, inserting a participant on first use.
 fn sequence_participant_index(
     identifier: &str,
@@ -249,7 +272,7 @@ fn sequence_participant_index(
     participant_indexes: &mut HashMap<String, usize>,
     participants: &mut Vec<SequenceParticipant>,
 ) -> Option<usize> {
-    if !is_renderable_identifier(identifier) || !is_renderable_label(label) {
+    if !is_renderable_identifier(identifier) {
         return None;
     }
 
@@ -261,9 +284,9 @@ fn sequence_participant_index(
         return None;
     }
 
-    participants.push(SequenceParticipant {
-        label: label.to_string(),
-    });
+    let label = truncated_sequence_label(label)?;
+
+    participants.push(SequenceParticipant { label });
     participant_indexes.insert(identifier.to_string(), participants.len() - 1);
 
     Some(participants.len() - 1)
@@ -918,15 +941,16 @@ fn draw_sequence_diagram(diagram: &SequenceDiagram) -> MermaidDiagram {
         participant_columns.push(next_column);
         next_column += *participant_width + SEQUENCE_GAP_COLUMNS;
     }
-    let canvas_width = next_column.saturating_sub(SEQUENCE_GAP_COLUMNS).max(1);
-    let canvas_height = NODE_BOX_HEIGHT + 1 + diagram.messages.len() * 2;
-    let mut canvas = Canvas::new(canvas_width, canvas_height);
-
     let lifeline_columns: Vec<usize> = participant_columns
         .iter()
         .zip(&participant_widths)
         .map(|(left_column, width)| left_column + width / 2)
         .collect();
+    let participant_width = next_column.saturating_sub(SEQUENCE_GAP_COLUMNS);
+    let self_message_width = sequence_self_message_width(diagram, &lifeline_columns);
+    let canvas_width = participant_width.max(self_message_width).max(1);
+    let canvas_height = NODE_BOX_HEIGHT + 1 + diagram.messages.len() * 2;
+    let mut canvas = Canvas::new(canvas_width, canvas_height);
 
     for column in &lifeline_columns {
         for row in NODE_BOX_HEIGHT..canvas_height {
@@ -956,6 +980,23 @@ fn draw_sequence_diagram(diagram: &SequenceDiagram) -> MermaidDiagram {
     canvas.into_diagram()
 }
 
+/// Returns the canvas width needed by self-message loops and their labels.
+fn sequence_self_message_width(diagram: &SequenceDiagram, lifeline_columns: &[usize]) -> usize {
+    diagram
+        .messages
+        .iter()
+        .filter(|message| message.from_index == message.to_index)
+        .map(|message| {
+            let lifeline_column = lifeline_columns[message.from_index];
+            let label_width = UnicodeWidthStr::width(message.label.as_str());
+            let label_end = sequence_self_label_column(lifeline_column, label_width) + label_width;
+
+            label_end.max(lifeline_column + SEQUENCE_SELF_LOOP_COLUMNS + 1)
+        })
+        .max()
+        .unwrap_or(0)
+}
+
 /// Draws one sequence message as a horizontal arrow between lifelines.
 fn draw_sequence_message(
     canvas: &mut Canvas,
@@ -965,6 +1006,12 @@ fn draw_sequence_message(
 ) {
     let source_column = lifeline_columns[message.from_index];
     let target_column = lifeline_columns[message.to_index];
+    if source_column == target_column {
+        draw_sequence_self_message(canvas, source_column, &message.label, row);
+
+        return;
+    }
+
     let left_column = source_column.min(target_column);
     let right_column = source_column.max(target_column);
 
@@ -979,6 +1026,44 @@ fn draw_sequence_message(
     }
 
     draw_sequence_message_label(canvas, left_column, right_column, row, &message.label);
+}
+
+/// Draws one self-message as a rightward loop returning to its lifeline.
+///
+/// The loop occupies the message's label and arrow rows; the label sits left
+/// of the lifeline when it fits there and right of the loop otherwise.
+fn draw_sequence_self_message(
+    canvas: &mut Canvas,
+    lifeline_column: usize,
+    label: &str,
+    arrow_row: usize,
+) {
+    let loop_column = lifeline_column + SEQUENCE_SELF_LOOP_COLUMNS;
+    let label_row = arrow_row.saturating_sub(1);
+
+    canvas.merge_connector(lifeline_column, label_row, CONNECT_RIGHT);
+    for column in lifeline_column + 1..loop_column {
+        canvas.merge_connector(column, label_row, CONNECT_LEFT | CONNECT_RIGHT);
+        canvas.merge_connector(column, arrow_row, CONNECT_LEFT | CONNECT_RIGHT);
+    }
+    canvas.merge_connector(loop_column, label_row, CONNECT_DOWN | CONNECT_LEFT);
+    canvas.merge_connector(loop_column, arrow_row, CONNECT_UP | CONNECT_LEFT);
+    canvas.put_arrow(lifeline_column, arrow_row, '◀');
+
+    let start_column = sequence_self_label_column(lifeline_column, UnicodeWidthStr::width(label));
+    for (character_index, character) in label.chars().enumerate() {
+        canvas.put_label(start_column + character_index, label_row, character);
+    }
+}
+
+/// Returns the start column for one self-message label: left of the lifeline
+/// when the label fits there, otherwise right of the loop.
+fn sequence_self_label_column(lifeline_column: usize, label_width: usize) -> usize {
+    if label_width < lifeline_column {
+        return lifeline_column - 1 - label_width;
+    }
+
+    lifeline_column + SEQUENCE_SELF_LOOP_COLUMNS + 2
 }
 
 /// Writes a sequence message label above its arrow run when it fits.
@@ -2068,6 +2153,51 @@ mod tests {
         assert!(text.contains("Start new session"));
         assert!(text.contains('▶'));
         assert!(!text.contains("sequenceDiagram"));
+    }
+
+    #[test]
+    fn test_render_mermaid_truncates_long_sequence_labels() {
+        // Arrange
+        let source = concat!(
+            "sequenceDiagram\n",
+            "    participant A as agentty (client)\n",
+            "    participant S as ag-harness (service)\n",
+            "    A->>S: connect (WebSocket, JSON-RPC)\n",
+            "    S-->>A: events seq 1..40 (deltas, diffs, usage)\n",
+        );
+
+        // Act
+        let diagram = render_mermaid(source).expect("long labels should truncate, not reject");
+        let text = diagram_text(&diagram);
+
+        // Assert
+        assert!(text.contains("agentty (client)"));
+        assert!(text.contains("connect (WebSocket, JSON-RPC)"));
+        assert!(text.contains("events seq 1..40 (deltas, diffs…"));
+        assert!(!text.contains("diffs, usage)"));
+    }
+
+    #[test]
+    fn test_render_mermaid_draws_sequence_self_message() {
+        // Arrange
+        let source = concat!(
+            "sequenceDiagram\n",
+            "    participant A as agentty (client)\n",
+            "    participant S as ag-harness (service)\n",
+            "    A->>S: disconnect (app closes)\n",
+            "    S->>S: session keeps running, events journaled\n",
+            "    S-->>A: replay 41..n, then live events\n",
+        );
+
+        // Act
+        let diagram = render_mermaid(source).expect("self message should render");
+        let text = diagram_text(&diagram);
+
+        // Assert
+        assert!(text.contains("session keeps running, events j…"));
+        assert!(text.contains('┐'));
+        assert!(text.contains('┘'));
+        assert!(text.contains('◀'));
     }
 
     #[test]
