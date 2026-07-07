@@ -349,9 +349,11 @@ the full suite.
   embed or query those migrations.
 - **Hook catalog:** Run `validate-prek-config`.
 - **User-visible UI behavior:** Satisfy the MANDATORY feature-test gate, then run the
-  focused E2E workflow. Do not run the full E2E feature suite locally;
-  `.github/workflows/postsubmit.yml` runs `test-agentty-e2e` on GitHub after merge to
-  `main`.
+  focused E2E workflow. For routine validation, run E2E feature tests with
+  `TESTTY_GIF_MODE=check` so agents verify GIF freshness without launching VHS/Chrome.
+  Use `TESTTY_GIF_MODE=force` only when intentionally regenerating GIF assets. Do not
+  run the full E2E feature suite locally; `.github/workflows/postsubmit.yml` runs
+  `test-agentty-e2e` on GitHub after merge to `main`.
 
 ### Autofix Discipline
 

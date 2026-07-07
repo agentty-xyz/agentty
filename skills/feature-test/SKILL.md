@@ -145,15 +145,20 @@ The `features.html` template auto-discovers all pages in `content/features/` sor
 ### 4. Run and verify
 
 ```sh
-# Run the full E2E suite to check for regressions.
-prek run test-agentty-e2e --all-files --hook-stage manual
+# Run the focused E2E test for the feature.
+TESTTY_GIF_MODE=check cargo nextest run --locked --profile ci -p agentty --test e2e test_{name}
 
 # Validate the Zola site builds with the new feature page.
 prek run zola-check --all-files --hook-stage manual
 ```
 
-The GIF is generated only when VHS is installed. On machines without VHS the test still
-runs and asserts correctly — GIF generation is gracefully skipped.
+Routine agent validation must use `TESTTY_GIF_MODE=check` so the semantic PTY assertions
+still run while GIF freshness is checked without invoking VHS or launching Chrome. Use
+`TESTTY_GIF_MODE=force` only when intentionally regenerating GIF assets.
+
+In default `generate-if-stale` mode, machines without VHS still run and assert the test
+correctly, then gracefully skip GIF generation. In `force` mode, VHS must be installed
+because regeneration was explicitly requested.
 
 The `TESTTY_GIF_MODE` env var selects the freshness mode used by `FeatureTest`:
 
@@ -216,7 +221,7 @@ When using the legacy pattern, create the Zola page manually at
 - [ ] Test includes `// Arrange`, `// Act`, and `// Assert` comments (or combined
   `// Arrange, Act, Assert` for declarative builders).
 - [ ] Assertions verify visible UI text or state, not internal implementation details.
-- [ ] E2E feature suite passes with
-  `prek run test-agentty-e2e --all-files --hook-stage manual`.
+- [ ] Focused E2E workflow passes with
+  `TESTTY_GIF_MODE=check cargo nextest run --locked --profile ci -p agentty --test e2e test_{name}`.
 - [ ] Zola site validates with `prek run zola-check --all-files --hook-stage manual`
   (when `.zola(...)` is used).
