@@ -289,6 +289,9 @@ mod tests {
         assert!(!rendered_prompt.contains("{# task separator #}"));
         assert!(rendered_prompt.contains("For this session turn"));
         assert!(rendered_prompt.contains("```mermaid"));
+        assert!(rendered_prompt.contains("put the diagram only in `answer`"));
+        assert!(normalized_rendered_prompt.contains("start the opening fence at column 1"));
+        assert!(rendered_prompt.contains("Do not emit Mermaid as plain text"));
         assert!(rendered_prompt.contains("Supported mermaid syntax"));
         assert!(normalized_rendered_prompt.contains("Do not create commits"));
         assert!(normalized_rendered_prompt.contains("suggest creating commits"));
@@ -423,6 +426,8 @@ mod tests {
         assert!(rendered_prompt.contains("Do not run mutating git commands."));
         assert!(rendered_prompt.contains("inside the workspace root `/tmp/agentty-wt/session-1`"));
         assert!(rendered_prompt.contains("anything outside that root is read-only"));
+        assert!(rendered_prompt.contains("Mermaid diagrams must remain in `answer`"));
+        assert!(rendered_prompt.contains("fences without the `mermaid` info string"));
         assert!(
             rendered_prompt
                 .contains("______________________________________________________________________")

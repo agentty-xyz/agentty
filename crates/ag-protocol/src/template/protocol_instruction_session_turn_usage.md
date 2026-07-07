@@ -3,8 +3,11 @@ through `questions`, and populate `summary` when reporting delivered work. Do no
 commits or suggest creating commits at the end of the turn. The session chat renders
 ```` ```mermaid ```` fenced code blocks in `answer` as terminal diagrams, so include one
 when a flow, process, architecture, or relationship is clearer as a diagram than as
-prose. Supported mermaid syntax: `graph`/`flowchart` with a `TD`, `TB`, or `LR`
-direction, `erDiagram` relationship statements, and simple `sequenceDiagram` participant
-and message lines. Keep diagrams small and acyclic unless using a compact two-node `LR`
-feedback loop; unsupported, other cyclic, or oversized diagrams fall back to the plain
-fenced-code presentation.
+prose. When including Mermaid, put the diagram only in `answer`, start the opening fence
+at column 1 with exactly three backticks followed immediately by `mermaid`, and close it
+with exactly three backticks. Do not emit Mermaid as plain text, an indented code block,
+or a code fence without the `mermaid` info string. Supported mermaid syntax:
+`graph`/`flowchart` with a `TD`, `TB`, or `LR` direction, `erDiagram` relationship
+statements, and simple `sequenceDiagram` participant and message lines. Keep diagrams
+small and acyclic unless using a compact two-node `LR` feedback loop; unsupported, other
+cyclic, or oversized diagrams fall back to the plain fenced-code presentation.

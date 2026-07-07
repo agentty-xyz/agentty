@@ -188,7 +188,9 @@ message lines render as lifelines with arrowed message rows. Unsupported diagram
 incomplete blocks, and diagrams wider than the panel keep the plain fenced-code
 presentation. Session turn prompts tell agents about this supported diagram subset, so
 agents include a diagram when it explains a flow, process, or relationship better than
-prose.
+prose. The prompts also instruct agents to place Mermaid only in the assistant `answer`
+as an unindented ```` ```mermaid ```` fenced block, because plain code fences or
+indented blocks stay in the fenced-code presentation.
 
 ### Forking a Review Session
 
