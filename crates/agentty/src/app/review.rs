@@ -185,16 +185,16 @@ pub(crate) fn start_review_assist(
     session_folder: &Path,
     diff_hash: u64,
     review_diff: &str,
-    session_summary: Option<&str>,
+    session_chat_history: Option<&str>,
 ) {
     task::TaskService::spawn_review_assist_task(task::ReviewAssistTaskInput {
         app_event_tx,
         diff_hash,
         review_diff: review_diff.to_string(),
+        review_selection,
+        session_chat_history: session_chat_history.map(str::to_string),
         session_folder: session_folder.to_path_buf(),
         session_id: SessionId::from(session_id),
-        review_selection,
-        session_summary: session_summary.map(str::to_string),
     });
 }
 
@@ -249,21 +249,14 @@ pub(crate) async fn auto_start_reviews(
     review_selection: AgentSelection,
 ) {
     for session_id in session_ids {
-        let Some((current_status, session_folder, base_branch, session_summary)) = session_state
+        let Some(session) = session_state
             .sessions()
             .iter()
             .find(|session| session.id == *session_id)
-            .map(|session| {
-                (
-                    session.status,
-                    session.folder.clone(),
-                    session.base_branch.clone(),
-                    session.summary.clone(),
-                )
-            })
         else {
             continue;
         };
+        let current_status = session.status;
 
         if current_status == Status::InProgress {
             review_cache.remove(session_id);
@@ -281,6 +274,13 @@ pub(crate) async fn auto_start_reviews(
         ) {
             continue;
         }
+
+        let base_branch = session.base_branch.clone();
+        let session_chat_history = session
+            .transcript
+            .as_ref()
+            .and_then(|transcript| transcript.conversation_replay_text());
+        let session_folder = session.folder.clone();
 
         let diff = git_client
             .diff(session_folder.clone(), base_branch)
@@ -314,7 +314,7 @@ pub(crate) async fn auto_start_reviews(
             &session_folder,
             new_hash,
             &diff,
-            session_summary.as_deref(),
+            session_chat_history.as_deref(),
         );
     }
 }

@@ -1390,8 +1390,25 @@ impl App {
         session_folder: &Path,
         diff_hash: u64,
         review_diff: &str,
-        session_summary: Option<&str>,
     ) {
+        let session_chat_history = self
+            .sessions
+            .session_handles()
+            .get(session_id)
+            .and_then(|handles| {
+                handles
+                    .transcript
+                    .lock()
+                    .ok()
+                    .and_then(|transcript| transcript.conversation_replay_text())
+            })
+            .or_else(|| {
+                self.sessions
+                    .session_for_id(session_id)
+                    .and_then(|session| session.transcript.as_ref())
+                    .and_then(|transcript| transcript.conversation_replay_text())
+            });
+
         mark_session_agent_review(self.sessions.state_mut(), session_id);
 
         spawn_review_assist(
@@ -1401,7 +1418,7 @@ impl App {
             session_folder,
             diff_hash,
             review_diff,
-            session_summary,
+            session_chat_history.as_deref(),
         );
     }
 

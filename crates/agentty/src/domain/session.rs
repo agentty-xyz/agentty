@@ -518,8 +518,7 @@ pub struct Session {
     /// `summary` payload, applied immediately from reducer events during
     /// review/question states and, once the session reaches `Done`,
     /// formatted with `# Summary` and `# Commit` sections using the canonical
-    /// session commit message. This text is also reused as review-assist
-    /// context.
+    /// session commit message.
     pub summary: Option<String>,
     /// Optional explicit session title.
     pub title: Option<String>,

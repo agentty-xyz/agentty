@@ -164,6 +164,26 @@ impl SessionTranscript {
         Some(output)
     }
 
+    /// Returns formatted user and assistant transcript text when any
+    /// conversation messages exist.
+    pub fn conversation_replay_text(&self) -> Option<String> {
+        let mut output = String::new();
+
+        for message in self
+            .messages
+            .iter()
+            .filter(|message| message.kind.is_conversation_message())
+        {
+            message.append_display_text(&mut output);
+        }
+
+        if output.trim().is_empty() {
+            return None;
+        }
+
+        Some(output)
+    }
+
     /// Formats one ordered message slice for session output display.
     pub(crate) fn display_text_for_messages(messages: &[SessionMessage]) -> String {
         let mut output = String::new();
@@ -362,6 +382,45 @@ mod tests {
             transcript.replay_text().expect("expected replay text"),
             "answer\n\n\n › next prompt\n\n"
         );
+    }
+
+    #[test]
+    fn test_session_transcript_conversation_replay_text_excludes_workflow_notices() {
+        // Arrange
+        let transcript = SessionTranscript::new(vec![
+            SessionMessage::conversation(0, SessionMessageKind::UserPrompt, "review changes"),
+            SessionMessage::new(
+                1,
+                SessionMessageKind::WorkflowNotice,
+                "[Commit] No changes to commit.\n",
+            ),
+            SessionMessage::conversation(2, SessionMessageKind::AssistantAnswer, "done"),
+        ]);
+
+        // Act
+        let conversation_text = transcript
+            .conversation_replay_text()
+            .expect("conversation text should render");
+
+        // Assert
+        assert_eq!(conversation_text, " › review changes\n\ndone\n\n");
+        assert!(!conversation_text.contains("[Commit]"));
+    }
+
+    #[test]
+    fn test_session_transcript_conversation_replay_text_ignores_notice_only_transcript() {
+        // Arrange
+        let transcript = SessionTranscript::new(vec![SessionMessage::new(
+            0,
+            SessionMessageKind::WorkflowNotice,
+            "[Sync] Complete.\n",
+        )]);
+
+        // Act
+        let conversation_text = transcript.conversation_replay_text();
+
+        // Assert
+        assert_eq!(conversation_text, None);
     }
 
     #[test]

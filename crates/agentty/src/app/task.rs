@@ -50,9 +50,9 @@ pub(super) struct ReviewAssistTaskInput {
     pub(super) diff_hash: u64,
     pub(super) review_diff: String,
     pub(super) review_selection: AgentSelection,
+    pub(super) session_chat_history: Option<String>,
     pub(super) session_folder: PathBuf,
     pub(super) session_id: SessionId,
-    pub(super) session_summary: Option<String>,
 }
 
 /// Askama view model for rendering review assist prompts.
@@ -61,8 +61,8 @@ pub(super) struct ReviewAssistTaskInput {
 struct ReviewAssistPromptTemplate<'a> {
     /// Full diff payload wrapped in a Markdown fence sized for its content.
     fenced_diff: &'a str,
-    /// Prior session summary used to give the review model continuity.
-    session_summary: &'a str,
+    /// User and assistant transcript context for the reviewed session.
+    session_chat_history: &'a str,
 }
 
 impl TaskService {
@@ -292,9 +292,9 @@ impl TaskService {
             diff_hash,
             review_diff,
             review_selection,
+            session_chat_history,
             session_folder,
             session_id,
-            session_summary,
         } = input;
 
         tokio::spawn(async move {
@@ -302,7 +302,7 @@ impl TaskService {
                 &session_folder,
                 review_selection,
                 &review_diff,
-                session_summary.as_deref(),
+                session_chat_history.as_deref(),
             )
             .await;
 
@@ -319,13 +319,13 @@ impl TaskService {
         session_folder: &Path,
         review_selection: AgentSelection,
         review_diff: &str,
-        session_summary: Option<&str>,
+        session_chat_history: Option<&str>,
     ) -> Result<String, AppError> {
         Self::review_assist_text_with_submitter(
             session_folder,
             review_selection,
             review_diff,
-            session_summary,
+            session_chat_history,
             |review_folder, review_selection, review_prompt| {
                 Box::pin(async move {
                     agent::submit_one_shot(agent::OneShotRequest {
@@ -362,7 +362,7 @@ impl TaskService {
         session_folder: &Path,
         review_selection: AgentSelection,
         review_diff: &str,
-        session_summary: Option<&str>,
+        session_chat_history: Option<&str>,
         submitter: Submitter,
     ) -> Result<String, AppError>
     where
@@ -374,7 +374,7 @@ impl TaskService {
             Box<dyn Future<Output = Result<AgentResponse, String>> + Send + 'submit>,
         >,
     {
-        let review_prompt = Self::review_assist_prompt(review_diff, session_summary)?;
+        let review_prompt = Self::review_assist_prompt(review_diff, session_chat_history)?;
         let agent_response = submitter(session_folder, review_selection, &review_prompt)
             .await
             .map_err(AppError::Workflow)?;
@@ -425,14 +425,14 @@ impl TaskService {
     /// Returns an error when Askama template rendering fails.
     fn review_assist_prompt(
         review_diff: &str,
-        session_summary: Option<&str>,
+        session_chat_history: Option<&str>,
     ) -> Result<String, AppError> {
         let trimmed_diff = review_diff.trim();
         let fence = agent::diff_fence(trimmed_diff);
         let fenced_diff = format!("{fence}diff\n{trimmed_diff}\n{fence}");
         let template = ReviewAssistPromptTemplate {
             fenced_diff: &fenced_diff,
-            session_summary: session_summary.map_or("", str::trim),
+            session_chat_history: session_chat_history.map_or("", str::trim_end),
         };
 
         template.render().map_err(|error| {
@@ -886,10 +886,9 @@ mod tests {
     fn test_review_assist_prompt_enforces_read_only_constraints() {
         // Arrange
         let review_diff = "diff --git a/src/lib.rs b/src/lib.rs";
-        let session_summary = Some("Refactor parser error mapping.");
 
         // Act
-        let prompt = TaskService::review_assist_prompt(review_diff, session_summary)
+        let prompt = TaskService::review_assist_prompt(review_diff, None)
             .expect("review prompt should render");
         let normalized_prompt = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
 
@@ -933,6 +932,26 @@ mod tests {
     }
 
     #[test]
+    /// Ensures review prompt rendering includes prior user and assistant
+    /// messages without adding stale session-summary context.
+    fn test_review_assist_prompt_includes_session_chat_history() {
+        // Arrange
+        let review_diff = "diff --git a/src/lib.rs b/src/lib.rs\n+new behavior";
+        let session_chat_history = Some(" › Add focused review context\n\nDone.\n\n");
+
+        // Act
+        let prompt = TaskService::review_assist_prompt(review_diff, session_chat_history)
+            .expect("review prompt should render");
+
+        // Assert
+        assert!(
+            prompt.contains("Session chat history (user and agent messages only; may be empty):")
+        );
+        assert!(prompt.contains(" › Add focused review context\n\nDone."));
+        assert!(!prompt.contains("Existing session summary context"));
+    }
+
+    #[test]
     /// Ensures the review prompt widens the outer code fence when the diff
     /// contains a triple-backtick sequence of its own so the Markdown boundary
     /// cannot be terminated by the diff content itself.
@@ -944,10 +963,9 @@ mod tests {
             "+example fenced block\n",
             "+```\n",
         );
-        let session_summary: Option<&str> = None;
 
         // Act
-        let prompt = TaskService::review_assist_prompt(review_diff, session_summary)
+        let prompt = TaskService::review_assist_prompt(review_diff, None)
             .expect("review prompt should render");
 
         // Assert

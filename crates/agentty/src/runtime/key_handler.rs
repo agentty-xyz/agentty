@@ -617,7 +617,6 @@ async fn handle_regenerate_review_confirmation(
     };
 
     let session_folder = session.folder.clone();
-    let session_summary = session.summary.clone();
     let base_branch = session.base_branch.clone();
 
     let diff = app
@@ -659,13 +658,7 @@ async fn handle_regenerate_review_confirmation(
         .sessions()
         .update_session_focused_review(session_id.as_str(), None, None)
         .await;
-    app.start_review_assist(
-        session_id.as_str(),
-        &session_folder,
-        diff_hash,
-        &diff,
-        session_summary.as_deref(),
-    );
+    app.start_review_assist(session_id.as_str(), &session_folder, diff_hash, &diff);
 
     let view_mode = restore_view.unwrap_or(ConfirmationViewMode {
         scroll_offset: None,

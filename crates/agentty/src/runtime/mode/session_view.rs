@@ -1124,7 +1124,6 @@ async fn open_review_output_mode(app: &mut App, view_context: &ViewContext) {
         return;
     };
     let session_folder = session.folder.clone();
-    let session_summary = session.summary.clone();
     let diff = load_view_session_diff(app, view_context).await;
     if diff.trim().is_empty() {
         app.review_cache.insert(
@@ -1162,13 +1161,7 @@ async fn open_review_output_mode(app: &mut App, view_context: &ViewContext) {
         .sessions()
         .update_session_focused_review(&view_context.session_id, None, None)
         .await;
-    app.start_review_assist(
-        &view_context.session_id,
-        &session_folder,
-        diff_hash,
-        &diff,
-        session_summary.as_deref(),
-    );
+    app.start_review_assist(&view_context.session_id, &session_folder, diff_hash, &diff);
 }
 
 /// Opens diff mode only when the viewed session has actual worktree changes.

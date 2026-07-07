@@ -352,8 +352,8 @@ their triggers:
   source session branch, copies `session_message` rows in one transaction, clears
   provider/review-request/stack linkage, and marks the fork for one-time transcript
   replay before its first reply. Stacked child sessions do not expose this action.
-- **Focused review assist** (entering review): runs the review prompt and stores the
-  result or error.
+- **Focused review assist** (entering review): runs the review prompt with the diff and
+  saved user/agent chat history, then stores the result or error.
 - **Sync-main workflow** (list-mode `s`): pull/rebase/push of the project branch through
   the sync orchestrator, with assisted conflict resolution.
 - **Session merge task** (merge confirmation): rebase, squash merge with the session

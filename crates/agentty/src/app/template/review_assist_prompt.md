@@ -66,7 +66,9 @@ All review parts must be concise.
   the current worktree using inspection-only review.
 - If there are no suggestions, write `- None`.
 
-Existing session summary context (may be empty): {{ session_summary }}
+Session chat history (user and agent messages only; may be empty):
+
+{{ session_chat_history }}
 
 Unified diff:
 
