@@ -26,8 +26,8 @@ pub(crate) enum SettingName {
     /// Persists whether generated session commits append the Agentty coauthor
     /// trailer.
     IncludeCoauthoredByAgentty,
-    /// Persists the configured open-command override.
-    OpenCommand,
+    /// Persists the configured launch-configuration override.
+    LaunchConfiguration,
     /// Persists whether the last used model should become the default.
     LastUsedModelAsDefault,
     /// Persists the active terminal color theme.
@@ -48,7 +48,7 @@ impl SettingName {
             Self::DefaultSmartAgent => "DefaultSmartAgent",
             Self::DefaultSmartModel => "DefaultSmartModel",
             Self::IncludeCoauthoredByAgentty => "IncludeCoauthoredByAgentty",
-            Self::OpenCommand => "OpenCommand",
+            Self::LaunchConfiguration => "LaunchConfiguration",
             Self::LastUsedModelAsDefault => "LastUsedModelAsDefault",
             Self::Theme => "Theme",
         }
@@ -83,7 +83,7 @@ mod tests {
                 SettingName::IncludeCoauthoredByAgentty,
                 "IncludeCoauthoredByAgentty",
             ),
-            (SettingName::OpenCommand, "OpenCommand"),
+            (SettingName::LaunchConfiguration, "LaunchConfiguration"),
             (
                 SettingName::LastUsedModelAsDefault,
                 "LastUsedModelAsDefault",
@@ -112,7 +112,7 @@ mod tests {
             SettingName::DefaultSmartAgent,
             SettingName::DefaultSmartModel,
             SettingName::IncludeCoauthoredByAgentty,
-            SettingName::OpenCommand,
+            SettingName::LaunchConfiguration,
             SettingName::LastUsedModelAsDefault,
             SettingName::Theme,
         ];

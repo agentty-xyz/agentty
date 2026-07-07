@@ -115,9 +115,11 @@ impl Page for SettingsPage<'_> {
             );
         }
 
-        if let Some(open_command_editor) = self.manager.open_command_list_editor() {
-            component::open_command_list_editor::OpenCommandListEditor::new(&open_command_editor)
-                .render(f, areas.main_area);
+        if let Some(launch_configuration_editor) = self.manager.launch_configuration_list_editor() {
+            component::launch_configuration_list_editor::LaunchConfigurationListEditor::new(
+                &launch_configuration_editor,
+            )
+            .render(f, areas.main_area);
         }
     }
 }
@@ -364,7 +366,7 @@ fn settings_selector_dropdown_option_line(
 /// help-action rendering.
 fn settings_footer_line(manager: &SettingsManager) -> Line<'static> {
     settings_footer_line_for_mode(
-        manager.is_open_command_list_editor_open() || manager.is_selector_dropdown_open(),
+        manager.is_launch_configuration_list_editor_open() || manager.is_selector_dropdown_open(),
         manager.footer_hint(),
     )
 }
@@ -628,7 +630,7 @@ mod tests {
     #[test]
     fn test_settings_footer_line_uses_inline_hint_while_overlay_is_open() {
         // Arrange
-        let footer_hint = "Editing open commands";
+        let footer_hint = "Editing launch configurations";
 
         // Act
         let footer_line = settings_footer_line_for_mode(true, footer_hint);

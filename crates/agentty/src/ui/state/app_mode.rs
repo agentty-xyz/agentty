@@ -191,14 +191,14 @@ pub enum AppMode {
         /// Popup title describing the current review-request phase.
         title: String,
     },
-    /// Command selector overlay opened from session view when multiple open
-    /// commands are configured.
-    OpenCommandSelector {
-        /// Available open commands in display/selection order.
+    /// Launch-configuration selector overlay opened from session view when
+    /// multiple entries are configured.
+    LaunchConfigurationSelector {
+        /// Available launch configurations in display/selection order.
         commands: Vec<String>,
-        /// View state restored after command selection or cancel.
+        /// View state restored after launch-configuration selection or cancel.
         restore_view: ConfirmationViewMode,
-        /// Highlighted command index in `commands`.
+        /// Highlighted launch-configuration index in `commands`.
         selected_command_index: usize,
     },
     /// Session-view popup that collects an optional remote branch name before

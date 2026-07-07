@@ -233,7 +233,7 @@ fn render_footer_bar(f: &mut Frame, footer_bar_area: Rect, context: FooterBarRen
             restore_view: ConfirmationViewMode { session_id, .. },
             ..
         }
-        | AppMode::OpenCommandSelector {
+        | AppMode::LaunchConfigurationSelector {
             restore_view: ConfirmationViewMode { session_id, .. },
             ..
         }

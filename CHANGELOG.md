@@ -7,6 +7,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- agentty: rename Open Commands to Launch Configurations across settings, docs, and
+  persisted project settings.
+
 ## [v0.12.3] - 2026-07-06
 
 ### Changed

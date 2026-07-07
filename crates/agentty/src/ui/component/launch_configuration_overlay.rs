@@ -10,18 +10,19 @@ use crate::ui::{Component, overlay};
 
 const MIN_OVERLAY_HEIGHT: u16 = 9;
 const MIN_OVERLAY_WIDTH: u16 = 50;
-/// Popup dimensions for configured open-command selection.
+/// Popup dimensions for configured launch-configuration selection.
 const OVERLAY_DIMENSIONS: overlay::OverlayDimensions =
     overlay::OverlayDimensions::new(62, 38, MIN_OVERLAY_WIDTH, MIN_OVERLAY_HEIGHT);
 
-/// Centered popup that allows selecting one configured open command.
-pub struct OpenCommandOverlay<'a> {
+/// Centered popup that allows selecting one configured launch configuration.
+pub struct LaunchConfigurationOverlay<'a> {
     commands: &'a [String],
     selected_command_index: usize,
 }
 
-impl<'a> OpenCommandOverlay<'a> {
-    /// Creates an open-command selector popup from configured command values.
+impl<'a> LaunchConfigurationOverlay<'a> {
+    /// Creates a launch-configuration selector popup from configured command
+    /// values.
     pub fn new(commands: &'a [String]) -> Self {
         Self {
             commands,
@@ -46,7 +47,7 @@ impl<'a> OpenCommandOverlay<'a> {
 
         lines.push(
             Line::from(vec![Span::styled(
-                "Select open command",
+                "Select launch configuration",
                 Style::default()
                     .fg(palette::warning())
                     .add_modifier(Modifier::BOLD),
@@ -91,7 +92,7 @@ impl<'a> OpenCommandOverlay<'a> {
     }
 }
 
-impl Component for OpenCommandOverlay<'_> {
+impl Component for LaunchConfigurationOverlay<'_> {
     fn render(&self, f: &mut Frame, area: Rect) {
         let popup_area = OVERLAY_DIMENSIONS.centered_popup_area(area);
         let command_width = overlay::overlay_content_width(popup_area.width)
@@ -102,7 +103,10 @@ impl Component for OpenCommandOverlay<'_> {
         let paragraph = Paragraph::new(lines)
             .alignment(Alignment::Left)
             .wrap(Wrap { trim: true })
-            .block(overlay::overlay_block("Open Command", palette::accent()));
+            .block(overlay::overlay_block(
+                "Launch Configuration",
+                palette::accent(),
+            ));
 
         overlay::clear_popup_area(f, popup_area);
         f.render_widget(paragraph, popup_area);
@@ -115,12 +119,12 @@ mod tests {
     use crate::ui::style::palette;
 
     #[test]
-    fn test_open_command_overlay_new_stores_default_selection() {
+    fn test_launch_configuration_overlay_new_stores_default_selection() {
         // Arrange
         let commands = vec!["cargo test".to_string(), "npm run dev".to_string()];
 
         // Act
-        let overlay = OpenCommandOverlay::new(&commands);
+        let overlay = LaunchConfigurationOverlay::new(&commands);
 
         // Assert
         assert_eq!(overlay.commands, commands.as_slice());
@@ -128,7 +132,7 @@ mod tests {
     }
 
     #[test]
-    fn test_open_command_overlay_popup_area_is_centered() {
+    fn test_launch_configuration_overlay_popup_area_is_centered() {
         // Arrange
         let area = Rect::new(0, 0, 120, 40);
 
@@ -143,12 +147,12 @@ mod tests {
     }
 
     #[test]
-    fn test_open_command_overlay_render_contains_hint_text() {
+    fn test_launch_configuration_overlay_render_contains_hint_text() {
         // Arrange
         let backend = ratatui::backend::TestBackend::new(120, 40);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let commands = vec!["cargo test".to_string(), "npm run dev".to_string()];
-        let overlay = OpenCommandOverlay::new(&commands).selected_command_index(1);
+        let overlay = LaunchConfigurationOverlay::new(&commands).selected_command_index(1);
 
         // Act
         terminal
@@ -165,15 +169,15 @@ mod tests {
             .iter()
             .map(ratatui::buffer::Cell::symbol)
             .collect();
-        assert!(text.contains("Select open command"));
+        assert!(text.contains("Select launch configuration"));
         assert!(text.contains("j/k: move | Enter: open | Esc: cancel"));
     }
 
     #[test]
-    fn test_open_command_overlay_lines_selected_row_uses_background_without_marker() {
+    fn test_launch_configuration_overlay_lines_selected_row_uses_background_without_marker() {
         // Arrange
         let commands = vec!["cargo test".to_string(), "npm run dev".to_string()];
-        let overlay = OpenCommandOverlay::new(&commands).selected_command_index(1);
+        let overlay = LaunchConfigurationOverlay::new(&commands).selected_command_index(1);
 
         // Act
         let lines = overlay.lines(24);
@@ -195,10 +199,10 @@ mod tests {
     }
 
     #[test]
-    fn test_open_command_overlay_lines_center_bottom_help_text() {
+    fn test_launch_configuration_overlay_lines_center_bottom_help_text() {
         // Arrange
         let commands = vec!["cargo test".to_string()];
-        let overlay = OpenCommandOverlay::new(&commands);
+        let overlay = LaunchConfigurationOverlay::new(&commands);
 
         // Act
         let lines = overlay.lines(24);
@@ -211,10 +215,10 @@ mod tests {
     }
 
     #[test]
-    fn test_open_command_overlay_lines_center_header_text() {
+    fn test_launch_configuration_overlay_lines_center_header_text() {
         // Arrange
         let commands = vec!["cargo test".to_string()];
-        let overlay = OpenCommandOverlay::new(&commands);
+        let overlay = LaunchConfigurationOverlay::new(&commands);
 
         // Act
         let lines = overlay.lines(24);

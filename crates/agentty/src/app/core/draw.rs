@@ -79,7 +79,7 @@ impl App {
             AppMode::View { session_id, .. }
             | AppMode::Prompt { session_id, .. }
             | AppMode::Question { session_id, .. }
-            | AppMode::OpenCommandSelector {
+            | AppMode::LaunchConfigurationSelector {
                 restore_view: ConfirmationViewMode { session_id, .. },
                 ..
             }
@@ -229,7 +229,7 @@ fn visible_session_review_snapshot<'a>(
             restore_view: Some(restore_view),
             ..
         }
-        | AppMode::OpenCommandSelector { restore_view, .. }
+        | AppMode::LaunchConfigurationSelector { restore_view, .. }
         | AppMode::PublishBranchInput { restore_view, .. }
         | AppMode::ViewInfoPopup { restore_view, .. } => &restore_view.session_id,
         AppMode::List

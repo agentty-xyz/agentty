@@ -37,16 +37,16 @@ highlighted in the table with a `* ` prefix and accented row text.
 <tr><th>Key</th><th>Action</th></tr>
 </thead>
 <tbody>
-<tr><td><code>q</code></td><td>Quit; closes an open selector dropdown or <code>Open Commands</code> browser first</td></tr>
-<tr><td><code>j</code> / <code>k</code></td><td>Navigate settings; move inside an open selector dropdown or <code>Open Commands</code> browser</td></tr>
-<tr><td><code>Enter</code></td><td>Open selector dropdown or <code>Open Commands</code> browser; select highlighted option; edit or save an open command</td></tr>
-<tr><td><code>Esc</code></td><td>Close selector dropdown or <code>Open Commands</code> browser; cancel open-command add/edit input</td></tr>
-<tr><td><code>a</code></td><td>Add an entry in the <code>Open Commands</code> browser</td></tr>
-<tr><td><code>e</code></td><td>Edit the selected entry in the <code>Open Commands</code> browser</td></tr>
-<tr><td><code>d</code></td><td>Delete the selected entry in the <code>Open Commands</code> browser</td></tr>
-<tr><td><code>J</code> / <code>K</code></td><td>Move the selected <code>Open Commands</code> entry down or up</td></tr>
-<tr><td><code>Left</code> / <code>Right</code> / <code>Home</code> / <code>End</code></td><td>Move cursor while adding or editing one <code>Open Commands</code> entry</td></tr>
-<tr><td><code>Backspace</code> / <code>Delete</code></td><td>Delete characters while adding or editing one <code>Open Commands</code> entry</td></tr>
+<tr><td><code>q</code></td><td>Quit; closes an open selector dropdown or <code>Launch Configurations</code> browser first</td></tr>
+<tr><td><code>j</code> / <code>k</code></td><td>Navigate settings; move inside an open selector dropdown or <code>Launch Configurations</code> browser</td></tr>
+<tr><td><code>Enter</code></td><td>Open selector dropdown or <code>Launch Configurations</code> browser; select highlighted option; edit or save a launch configuration</td></tr>
+<tr><td><code>Esc</code></td><td>Close selector dropdown or <code>Launch Configurations</code> browser; cancel launch-configuration add/edit input</td></tr>
+<tr><td><code>a</code></td><td>Add an entry in the <code>Launch Configurations</code> browser</td></tr>
+<tr><td><code>e</code></td><td>Edit the selected entry in the <code>Launch Configurations</code> browser</td></tr>
+<tr><td><code>d</code></td><td>Delete the selected entry in the <code>Launch Configurations</code> browser</td></tr>
+<tr><td><code>J</code> / <code>K</code></td><td>Move the selected <code>Launch Configurations</code> entry down or up</td></tr>
+<tr><td><code>Left</code> / <code>Right</code> / <code>Home</code> / <code>End</code></td><td>Move cursor while adding or editing one <code>Launch Configurations</code> entry</td></tr>
+<tr><td><code>Backspace</code> / <code>Delete</code></td><td>Delete characters while adding or editing one <code>Launch Configurations</code> entry</td></tr>
 <tr><td><code>Tab</code></td><td>Switch tab</td></tr>
 <tr><td><code>?</code></td><td>Help</td></tr>
 </tbody>
@@ -55,10 +55,10 @@ highlighted in the table with a `* ` prefix and accented row text.
 <a id="usage-settings-options"></a> The page is split into `Global settings` for the
 app-wide `Theme` row (`Agentty Default`, `Agentty Green`, or `Dark Horizon`) and
 `'<project>' settings` for the reasoning level, model defaults, commit coauthor toggle,
-and `Open Commands` rows described in [Workflow](@/docs/usage/workflow.md). Selector
-rows open dropdowns; use `j` / `k` to move through the dropdown and `Enter` to save the
-highlighted value. The `Open Commands` row opens a list browser where each command is
-added, edited, deleted, or reordered as its own entry.
+and `Launch Configurations` rows described in [Workflow](@/docs/usage/workflow.md).
+Selector rows open dropdowns; use `j` / `k` to move through the dropdown and `Enter` to
+save the highlighted value. The `Launch Configurations` row opens a list browser where
+each command is added, edited, deleted, or reordered as its own entry.
 
 ## Logs
 
@@ -108,10 +108,11 @@ State-specific differences:
 - **Canceled**, **Queued**, **Rebasing**, and **Merging** sessions are read-only (`q`,
   scroll, help).
 
-`o` runs the configured `Open Commands` entry, or opens a selector popup when several
-are configured. Run Agentty inside `tmux` when you rely on `Open Commands`, because
-those commands are dispatched into tmux windows. Publish (`p`), sync (`r`), and stacked
-behavior are described in [Workflow](@/docs/usage/workflow.md).
+`o` runs the configured `Launch Configurations` entry, or opens a selector popup when
+several are configured. Run Agentty inside `tmux` when you rely on
+`Launch Configurations`, because those commands are dispatched into tmux windows.
+Publish (`p`), sync (`r`), and stacked behavior are described in
+[Workflow](@/docs/usage/workflow.md).
 
 ## Publish Popup
 
@@ -121,7 +122,7 @@ the default target when blank | | `Esc` / `q` | Cancel and return to session vie
 wrapped lines | | `Backspace` / `Delete` | Delete character | | text keys | Edit remote
 branch name |
 
-## Open Command Selector
+## Launch Configuration Selector
 
 | Key | Action | |-----|--------| | `j` / `k` | Move selection | | `Enter` | Open
 worktree and run selected command | | `Esc` / `q` | Cancel and return to session view |
