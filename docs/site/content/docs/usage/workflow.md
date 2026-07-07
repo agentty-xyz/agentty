@@ -185,9 +185,10 @@ review automatically; press `f` for a manual one.
 
 ### Session Output Markdown
 
-Session output renders common Markdown blocks, including headings, lists, block quotes,
-code fences, and pipe tables. Tables are aligned to the output panel width so compact
-comparison data stays readable in the terminal transcript.
+Session output renders common Markdown blocks in agent answers and persisted user
+messages, including headings, lists, block quotes, code fences, and pipe tables. Tables
+are aligned to the output panel width so compact comparison data stays readable in the
+terminal transcript.
 
 <a id="usage-session-mermaid"></a> Complete ```` ```mermaid ```` fenced blocks in
 session output render as Unicode diagrams. Simple `graph`/`flowchart` diagrams with

@@ -7,6 +7,7 @@ use std::sync::Arc;
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Paragraph};
 use rustc_hash::FxHasher;
@@ -236,8 +237,8 @@ struct SessionOutputAssembly<'a> {
     active_progress: Option<&'a str>,
     active_prompt_output: Option<&'a str>,
     active_turn_has_visible_text: bool,
-    active_turn_text: Option<String>,
-    completed_turn_text: String,
+    active_turn_section: SessionOutputTranscriptSection<'a>,
+    completed_turn_section: SessionOutputTranscriptSection<'a>,
     inner_width: usize,
     lines: Vec<Line<'static>>,
     markdown_render_cache: Option<&'a markdown::MarkdownRenderCache>,
@@ -247,15 +248,35 @@ struct SessionOutputAssembly<'a> {
     review_text: Option<&'a str>,
     session: &'a Session,
     status: Status,
-    trailing_notice_text: Option<String>,
+    trailing_notice_section: SessionOutputTranscriptSection<'a>,
 }
 
 /// Transcript text split into the visual sections understood by the output
 /// assembly.
-struct SessionOutputTextSections {
-    active_turn: Option<String>,
-    completed_turn: String,
-    trailing_notice: Option<String>,
+struct SessionOutputTextSections<'a> {
+    active_turn: SessionOutputTranscriptSection<'a>,
+    completed_turn: SessionOutputTranscriptSection<'a>,
+    trailing_notice: SessionOutputTranscriptSection<'a>,
+}
+
+/// One renderable transcript section split from persisted session output.
+enum SessionOutputTranscriptSection<'a> {
+    Empty,
+    Markdown(String),
+    Messages(&'a [SessionMessage]),
+}
+
+impl SessionOutputTranscriptSection<'_> {
+    /// Returns whether this transcript section contains no visible content.
+    fn is_empty(&self) -> bool {
+        match self {
+            Self::Empty => true,
+            Self::Markdown(text) => text.trim().is_empty(),
+            Self::Messages(messages) => messages
+                .iter()
+                .all(|message| message.content.trim().is_empty()),
+        }
+    }
 }
 
 impl SessionOutputAssembly<'_> {
@@ -290,9 +311,9 @@ impl SessionOutputAssembly<'_> {
     }
 
     fn append_completed_transcript(&mut self) {
-        SessionOutput::append_markdown_lines(
+        SessionOutput::append_transcript_section_lines(
             &mut self.lines,
-            &self.completed_turn_text,
+            &self.completed_turn_section,
             self.inner_width,
             self.markdown_render_cache,
         );
@@ -309,9 +330,9 @@ impl SessionOutputAssembly<'_> {
             return;
         }
 
-        SessionOutput::append_trailing_transcript_notice_lines(
+        SessionOutput::append_transcript_section_lines(
             &mut self.lines,
-            self.trailing_notice_text.as_deref(),
+            &self.trailing_notice_section,
             self.inner_width,
             self.markdown_render_cache,
         );
@@ -321,7 +342,7 @@ impl SessionOutputAssembly<'_> {
         if !SessionOutput::shows_summary_block(
             self.status,
             self.active_prompt_output,
-            self.active_turn_text.as_deref(),
+            &self.active_turn_section,
         ) {
             return;
         }
@@ -335,9 +356,9 @@ impl SessionOutputAssembly<'_> {
     }
 
     fn append_active_turn(&mut self) {
-        SessionOutput::append_active_turn_lines(
+        SessionOutput::append_transcript_section_lines(
             &mut self.lines,
-            self.active_turn_text.as_deref(),
+            &self.active_turn_section,
             self.inner_width,
             self.markdown_render_cache,
         );
@@ -782,17 +803,14 @@ impl<'a> SessionOutput<'a> {
         let transcript_sections = Self::output_text_sections(session, status);
         let inner_width =
             panel_inner_width(output_area, session_format::session_output_panel_borders());
-        let active_turn_has_visible_text = transcript_sections
-            .active_turn
-            .as_deref()
-            .is_some_and(|text| !text.trim().is_empty());
+        let active_turn_has_visible_text = !transcript_sections.active_turn.is_empty();
         SessionOutputAssembly {
             active_loader_line_index: None,
             active_progress,
             active_prompt_output,
             active_turn_has_visible_text,
-            active_turn_text: transcript_sections.active_turn,
-            completed_turn_text: transcript_sections.completed_turn,
+            active_turn_section: transcript_sections.active_turn,
+            completed_turn_section: transcript_sections.completed_turn,
             inner_width,
             lines: Vec::new(),
             markdown_render_cache,
@@ -802,7 +820,7 @@ impl<'a> SessionOutput<'a> {
             review_text,
             session,
             status,
-            trailing_notice_text: transcript_sections.trailing_notice,
+            trailing_notice_section: transcript_sections.trailing_notice,
         }
         .into_output_lines()
     }
@@ -896,13 +914,15 @@ impl<'a> SessionOutput<'a> {
 
     /// Returns transcript sections from draft-preview text or typed message
     /// rows.
-    fn output_text_sections(session: &Session, status: Status) -> SessionOutputTextSections {
+    fn output_text_sections(session: &Session, status: Status) -> SessionOutputTextSections<'_> {
         let is_draft_preview = session.status == Status::Draft && session.is_draft_session();
         if is_draft_preview {
             return SessionOutputTextSections {
-                active_turn: None,
-                completed_turn: Self::render_draft_session_preview(session),
-                trailing_notice: None,
+                active_turn: SessionOutputTranscriptSection::Empty,
+                completed_turn: SessionOutputTranscriptSection::Markdown(
+                    Self::render_draft_session_preview(session),
+                ),
+                trailing_notice: SessionOutputTranscriptSection::Empty,
             };
         }
 
@@ -915,9 +935,9 @@ impl<'a> SessionOutput<'a> {
         }
 
         SessionOutputTextSections {
-            active_turn: None,
-            completed_turn: String::new(),
-            trailing_notice: None,
+            active_turn: SessionOutputTranscriptSection::Empty,
+            completed_turn: SessionOutputTranscriptSection::Empty,
+            trailing_notice: SessionOutputTranscriptSection::Empty,
         }
     }
 
@@ -926,7 +946,7 @@ impl<'a> SessionOutput<'a> {
     fn typed_transcript_sections(
         status: Status,
         transcript: &SessionTranscript,
-    ) -> SessionOutputTextSections {
+    ) -> SessionOutputTextSections<'_> {
         let messages = transcript.messages();
         let active_prompt_index =
             Self::active_prompt_message_index(status, messages).unwrap_or(messages.len());
@@ -937,12 +957,19 @@ impl<'a> SessionOutput<'a> {
             completed_messages.split_at(trailing_notice_start);
 
         SessionOutputTextSections {
-            active_turn: (!active_messages.is_empty())
-                .then(|| Self::messages_to_display_text(active_messages)),
-            completed_turn: Self::messages_to_display_text(completed_messages),
-            trailing_notice: (!trailing_notice_messages.is_empty())
-                .then(|| Self::messages_to_display_text(trailing_notice_messages)),
+            active_turn: Self::messages_section(active_messages),
+            completed_turn: Self::messages_section(completed_messages),
+            trailing_notice: Self::messages_section(trailing_notice_messages),
         }
+    }
+
+    /// Returns a renderable section for a typed message slice.
+    fn messages_section(messages: &[SessionMessage]) -> SessionOutputTranscriptSection<'_> {
+        if messages.is_empty() {
+            return SessionOutputTranscriptSection::Empty;
+        }
+
+        SessionOutputTranscriptSection::Messages(messages)
     }
 
     /// Returns the start index for the latest active user prompt message.
@@ -974,12 +1001,6 @@ impl<'a> SessionOutput<'a> {
         let notice_start = first_non_notice_from_end.saturating_add(1);
 
         (notice_start < messages.len()).then_some(notice_start)
-    }
-
-    /// Formats a message slice without losing the boundaries used for
-    /// splitting.
-    fn messages_to_display_text(messages: &[SessionMessage]) -> String {
-        SessionTranscript::display_text_for_messages(messages)
     }
 
     /// Renders the staged-draft guidance shown while a draft session remains
@@ -1047,13 +1068,13 @@ impl<'a> SessionOutput<'a> {
     fn shows_summary_block(
         status: Status,
         active_prompt_output: Option<&str>,
-        active_turn_text: Option<&str>,
+        active_turn_section: &SessionOutputTranscriptSection<'_>,
     ) -> bool {
         if status == Status::Canceled {
             return false;
         }
 
-        active_prompt_output.is_none() && active_turn_text.is_none()
+        active_prompt_output.is_none() && active_turn_section.is_empty()
     }
 
     /// Returns whether focused-review output belongs in a non-terminal session
@@ -1162,28 +1183,56 @@ impl<'a> SessionOutput<'a> {
         );
     }
 
-    /// Appends trailing transcript notices when known workflow-status blocks
-    /// are present.
-    ///
-    /// Callers choose placement based on status: active turns keep these
-    /// notices with the completed transcript, while completed/review output
-    /// places them after summary or review content.
-    fn append_trailing_transcript_notice_lines(
+    /// Appends one split transcript section while preserving typed message
+    /// boundaries for user prompts.
+    fn append_transcript_section_lines(
         lines: &mut Vec<Line<'static>>,
-        trailing_notice_text: Option<&str>,
+        section: &SessionOutputTranscriptSection<'_>,
         inner_width: usize,
         markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
     ) {
-        let Some(trailing_notice_text) = trailing_notice_text else {
-            return;
-        };
+        match section {
+            SessionOutputTranscriptSection::Empty => {}
+            SessionOutputTranscriptSection::Markdown(markdown) => {
+                Self::append_markdown_lines(lines, markdown, inner_width, markdown_render_cache);
+            }
+            SessionOutputTranscriptSection::Messages(messages) => {
+                Self::append_transcript_message_lines(
+                    lines,
+                    messages,
+                    inner_width,
+                    markdown_render_cache,
+                );
+            }
+        }
+    }
 
-        Self::append_markdown_lines(
-            lines,
-            trailing_notice_text,
-            inner_width,
-            markdown_render_cache,
-        );
+    /// Appends typed transcript messages with user prompts rendered from raw
+    /// markdown content and assistant/workflow rows rendered normally.
+    fn append_transcript_message_lines(
+        lines: &mut Vec<Line<'static>>,
+        messages: &[SessionMessage],
+        inner_width: usize,
+        markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
+    ) {
+        for message in messages {
+            match message.kind {
+                SessionMessageKind::UserPrompt => Self::append_user_prompt_markdown_lines(
+                    lines,
+                    &message.content,
+                    inner_width,
+                    markdown_render_cache,
+                ),
+                SessionMessageKind::AssistantAnswer | SessionMessageKind::WorkflowNotice => {
+                    Self::append_markdown_lines(
+                        lines,
+                        &message.content,
+                        inner_width,
+                        markdown_render_cache,
+                    );
+                }
+            }
+        }
     }
 
     /// Appends one transcript row per chat message currently queued for
@@ -1224,22 +1273,132 @@ impl<'a> SessionOutput<'a> {
         lines.push(Line::from(""));
     }
 
-    /// Appends the currently active prompt-led transcript block after earlier
-    /// transcript content so the rendered transcript remains chronological.
-    fn append_active_turn_lines(
+    /// Appends one typed user prompt block with its content rendered as
+    /// markdown while retaining the visible prompt marker and shaded prompt
+    /// rows.
+    fn append_user_prompt_markdown_lines(
         lines: &mut Vec<Line<'static>>,
-        active_turn_text: Option<&str>,
+        prompt_text: &str,
         inner_width: usize,
         markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
     ) {
-        let Some(active_turn_text) = active_turn_text else {
-            return;
-        };
-        if active_turn_text.trim().is_empty() {
+        let prompt_text = prompt_text.trim();
+        if prompt_text.is_empty() {
             return;
         }
 
-        Self::append_markdown_lines(lines, active_turn_text, inner_width, markdown_render_cache);
+        let prompt_prefix_width = USER_PROMPT_PREFIX.chars().count();
+        let prompt_content_width = inner_width.saturating_sub(prompt_prefix_width).max(1);
+        let rendered_lines =
+            Self::rendered_markdown_lines(prompt_text, prompt_content_width, markdown_render_cache);
+        if rendered_lines.is_empty() {
+            return;
+        }
+
+        Self::append_block_separator(lines, SessionOutputSeparator::AfterPreviousContent);
+        lines.push(Self::user_prompt_padding_line(inner_width));
+
+        let mut has_rendered_content_line = false;
+        for rendered_line in rendered_lines.iter() {
+            if rendered_line.width() == 0 {
+                lines.push(Self::user_prompt_padding_line(inner_width));
+
+                continue;
+            }
+
+            let prefix = if has_rendered_content_line {
+                USER_PROMPT_CONTINUATION_PREFIX
+            } else {
+                USER_PROMPT_PREFIX
+            };
+            let prefix_style = if has_rendered_content_line {
+                Self::user_prompt_content_style()
+            } else {
+                Self::user_prompt_prefix_style()
+            };
+            lines.push(Self::user_prompt_markdown_line(
+                rendered_line,
+                prefix,
+                prefix_style,
+                inner_width,
+            ));
+            has_rendered_content_line = true;
+        }
+
+        lines.push(Self::user_prompt_padding_line(inner_width));
+    }
+
+    /// Returns one full-width blank row using the user-prompt background.
+    fn user_prompt_padding_line(width: usize) -> Line<'static> {
+        Line::styled(" ".repeat(width), Self::user_prompt_content_style())
+    }
+
+    /// Adds the transcript prompt marker to one rendered markdown line.
+    fn user_prompt_markdown_line(
+        rendered_line: &Line<'static>,
+        prefix: &str,
+        prefix_style: Style,
+        width: usize,
+    ) -> Line<'static> {
+        let content_style = Self::user_prompt_content_style();
+        let mut spans = vec![ratatui::text::Span::styled(
+            prefix.to_string(),
+            prefix_style,
+        )];
+        spans.extend(
+            rendered_line
+                .spans
+                .iter()
+                .cloned()
+                .map(Self::user_prompt_content_span),
+        );
+        let mut line = Line::from(spans);
+        let line_width = line.width();
+        if line_width > width {
+            line.spans =
+                text_util::truncate_spans_with_ellipsis(std::mem::take(&mut line.spans), width)
+                    .into_iter()
+                    .map(Self::user_prompt_content_span)
+                    .collect();
+        } else if line_width < width {
+            line.spans.push(ratatui::text::Span::styled(
+                " ".repeat(width - line_width),
+                content_style,
+            ));
+        }
+
+        line
+    }
+
+    /// Preserves markdown foreground/modifier styling while applying the
+    /// prompt-row background to rendered user prompt content.
+    fn user_prompt_content_span(
+        mut span: ratatui::text::Span<'static>,
+    ) -> ratatui::text::Span<'static> {
+        let content_style = Self::user_prompt_content_style();
+        if span.style.fg.is_none() {
+            span.style.fg = content_style.fg;
+        }
+        if span.style.bg.is_none() {
+            span.style.bg = content_style.bg;
+        }
+
+        span
+    }
+
+    /// Returns the style for the visible user prompt marker.
+    fn user_prompt_prefix_style() -> Style {
+        Style::default()
+            .fg(style::palette::accent())
+            .bg(style::palette::surface())
+            .add_modifier(Modifier::BOLD)
+    }
+
+    /// Returns the base style for user prompt content rows.
+    fn user_prompt_content_style() -> Style {
+        Style::default()
+            .fg(style::palette::text())
+            .bg(style::palette::surface())
     }
 
     /// Appends rendered markdown with one blank separator while trimming any
@@ -2321,25 +2480,29 @@ mod tests {
 
         // Act
         let sections = SessionOutput::typed_transcript_sections(Status::InProgress, &transcript);
+        let completed_turn = match sections.completed_turn {
+            SessionOutputTranscriptSection::Messages(messages) => {
+                SessionTranscript::display_text_for_messages(messages)
+            }
+            _ => String::new(),
+        };
+        let trailing_notice = match sections.trailing_notice {
+            SessionOutputTranscriptSection::Messages(messages) => {
+                SessionTranscript::display_text_for_messages(messages)
+            }
+            _ => String::new(),
+        };
+        let active_turn = match sections.active_turn {
+            SessionOutputTranscriptSection::Messages(messages) => {
+                SessionTranscript::display_text_for_messages(messages)
+            }
+            _ => String::new(),
+        };
 
         // Assert
-        assert!(
-            sections
-                .completed_turn
-                .contains(" › quoted assistant marker")
-        );
-        assert!(
-            sections
-                .trailing_notice
-                .as_deref()
-                .is_some_and(|text| text.contains("[Commit] No changes to commit."))
-        );
-        assert!(
-            sections
-                .active_turn
-                .as_deref()
-                .is_some_and(|text| text.starts_with(" › actual prompt"))
-        );
+        assert!(completed_turn.contains(" › quoted assistant marker"));
+        assert!(trailing_notice.contains("[Commit] No changes to commit."));
+        assert!(active_turn.starts_with(" › actual prompt"));
     }
 
     /// Verifies merge failures render after focused review content, so the
@@ -2878,6 +3041,217 @@ mod tests {
         assert!(!text.contains("No changes"));
         assert!(!text.contains("Current Turn"));
         assert!(!text.contains("Session Changes"));
+    }
+
+    #[test]
+    fn test_output_lines_render_user_prompt_markdown() {
+        // Arrange
+        let mut session = session_fixture();
+        set_conversation_transcript(
+            &mut session,
+            vec![
+                (
+                    SessionMessageKind::UserPrompt,
+                    concat!(
+                        "Use **bold** and `code`.\n\n",
+                        "| Input | Meaning |\n",
+                        "| --- | --- |\n",
+                        "| User prompt | Markdown |",
+                    ),
+                ),
+                (SessionMessageKind::AssistantAnswer, "assistant response"),
+            ],
+        );
+        session.status = Status::Review;
+
+        // Act
+        let lines = output_lines(
+            &session,
+            Rect::new(0, 0, 80, 12),
+            line_context(None, None, None),
+            None,
+        );
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let inline_line = lines
+            .iter()
+            .find(|line| line.to_string().contains("Use bold and code."))
+            .expect("inline markdown line should render");
+        let table_header_line = lines
+            .iter()
+            .find(|line| line.to_string().contains("Input"))
+            .expect("table header line should render");
+
+        // Assert
+        assert!(text.contains(" › Use bold and code."));
+        assert!(text.contains("┌"));
+        assert!(text.contains("User prompt"));
+        assert!(!text.contains("**bold**"));
+        assert!(!text.contains("`code`"));
+        assert!(!text.contains("| --- | --- |"));
+        assert!(inline_line.spans.iter().any(|span| {
+            span.content.as_ref() == "bold"
+                && span
+                    .style
+                    .add_modifier
+                    .contains(ratatui::style::Modifier::BOLD)
+        }));
+        assert!(table_header_line.spans.iter().any(|span| {
+            span.content.as_ref().contains("Input")
+                && span.style.bg == Some(style::palette::surface_elevated())
+        }));
+    }
+
+    #[test]
+    fn test_output_lines_render_user_prompt_markdown_with_minimum_content_width() {
+        // Arrange
+        let mut session = session_fixture();
+        set_conversation_transcript(
+            &mut session,
+            vec![(SessionMessageKind::UserPrompt, "alpha beta")],
+        );
+        session.status = Status::Review;
+
+        // Act
+        let lines = output_lines(
+            &session,
+            Rect::new(0, 0, 3, 8),
+            line_context(None, None, None),
+            None,
+        );
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(text.contains("..."));
+        assert!(lines.iter().all(|line| line.width() <= 3));
+    }
+
+    #[test]
+    fn test_output_lines_render_user_prompt_mermaid_with_uniform_background() {
+        // Arrange
+        let mut session = session_fixture();
+        set_conversation_transcript(
+            &mut session,
+            vec![(
+                SessionMessageKind::UserPrompt,
+                concat!(
+                    "```mermaid {theme=default}\n",
+                    "flowchart TD\n",
+                    "    A[Start] --> B[Finish]\n",
+                    "```",
+                ),
+            )],
+        );
+        session.status = Status::Review;
+
+        // Act
+        let lines = output_lines(
+            &session,
+            Rect::new(0, 0, 80, 12),
+            line_context(None, None, None),
+            None,
+        );
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let start_line = lines
+            .iter()
+            .find(|line| line.to_string().contains("Start"))
+            .expect("Mermaid diagram label should render");
+        let border_line = lines
+            .iter()
+            .find(|line| line.to_string().contains('┌'))
+            .expect("Mermaid diagram border should render");
+
+        // Assert
+        assert!(text.contains("Start"));
+        assert!(text.contains("Finish"));
+        assert!(text.contains("▼"));
+        assert!(!text.contains("flowchart TD"));
+        assert!(!text.contains("```"));
+        assert_eq!(start_line.width(), 80);
+        assert_eq!(
+            start_line.spans[0].style.bg,
+            Some(style::palette::surface())
+        );
+        assert!(start_line.spans.iter().any(|span| {
+            span.content.as_ref().trim().is_empty()
+                && span.style.bg == Some(style::palette::surface())
+        }));
+        assert!(
+            start_line
+                .spans
+                .iter()
+                .all(|span| span.style.bg == Some(style::palette::surface()))
+        );
+        assert!(border_line.spans.iter().any(|span| {
+            span.content.as_ref().contains('┌')
+                && span.style.fg == Some(style::palette::text())
+                && span.style.bg == Some(style::palette::surface())
+        }));
+        assert!(
+            border_line
+                .spans
+                .iter()
+                .all(|span| span.style.bg == Some(style::palette::surface()))
+        );
+    }
+
+    #[test]
+    fn test_output_lines_keep_prompt_shading_for_mermaid_prefix_language() {
+        // Arrange
+        let mut session = session_fixture();
+        set_conversation_transcript(
+            &mut session,
+            vec![(
+                SessionMessageKind::UserPrompt,
+                concat!(
+                    "```mermaids\n",
+                    "flowchart TD\n",
+                    "    A[Start] --> B[Finish]\n",
+                    "```",
+                ),
+            )],
+        );
+        session.status = Status::Review;
+
+        // Act
+        let lines = output_lines(
+            &session,
+            Rect::new(0, 0, 80, 12),
+            line_context(None, None, None),
+            None,
+        );
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let source_line = lines
+            .iter()
+            .find(|line| line.to_string().contains("flowchart TD"))
+            .expect("non-Mermaid source should remain visible");
+
+        // Assert
+        assert!(text.contains("flowchart TD"));
+        assert!(text.contains("A[Start] --> B[Finish]"));
+        assert!(!text.contains("▼"));
+        assert_eq!(source_line.width(), 80);
+        assert!(
+            source_line
+                .spans
+                .iter()
+                .any(|span| span.style.bg == Some(style::palette::surface()))
+        );
     }
 
     #[test]

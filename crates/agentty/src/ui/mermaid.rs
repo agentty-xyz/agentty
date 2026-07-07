@@ -1889,7 +1889,7 @@ fn connector_character(mask: u8) -> char {
 
 /// Returns the style for diagram borders, connectors, and arrow heads.
 fn structure_style() -> Style {
-    Style::default().fg(style::palette::text_subtle())
+    Style::default().fg(style::palette::text())
 }
 
 /// Returns the style for node and edge label text.
@@ -1927,6 +1927,24 @@ mod tests {
         assert!(text.contains('┌'));
         assert!(text.contains('▼'));
         assert!(diagram.width > 0);
+    }
+
+    #[test]
+    fn test_render_mermaid_uses_text_color_for_structure_glyphs() {
+        // Arrange
+        let source = "graph TD\n    A[Start] --> B[Finish]";
+
+        // Act
+        let diagram = render_mermaid(source).expect("chain should render");
+        let structure_span = diagram
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .find(|span| span.content.as_ref().contains('┌'))
+            .expect("node border should render");
+
+        // Assert
+        assert_eq!(structure_span.style.fg, Some(style::palette::text()));
     }
 
     #[test]

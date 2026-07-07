@@ -15,6 +15,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- agentty: render Markdown in persisted user messages in session output.
 - agentty: keep sequence-diagram previews rendering when participant or message labels
   exceed the 32-character label limit by truncating them with a trailing ellipsis, and
   draw `sequenceDiagram` self-messages as a compact lifeline loop with a visible label.

@@ -215,7 +215,7 @@ pub struct ThemePalette {
 const CURRENT_PALETTE: ThemePalette = ThemePalette {
     accent: Color::Cyan,
     accent_soft: Color::LightCyan,
-    border: Color::DarkGray,
+    border: Color::Gray,
     danger: Color::Red,
     danger_soft: Color::LightRed,
     info: Color::LightBlue,
@@ -223,7 +223,7 @@ const CURRENT_PALETTE: ThemePalette = ThemePalette {
     surface: Color::DarkGray,
     surface_clarification: Color::Rgb(28, 38, 48),
     surface_danger: Color::Rgb(48, 24, 24),
-    surface_elevated: Color::Gray,
+    surface_elevated: Color::Black,
     surface_selection: Color::DarkGray,
     surface_success: Color::Rgb(18, 44, 26),
     surface_overlay: Color::Black,
@@ -503,6 +503,21 @@ mod tests {
 
         // Assert
         assert_eq!(color, HACKER_PALETTE.accent);
+    }
+
+    #[test]
+    fn active_palette_returns_current_table_contrast_tones() {
+        // Arrange
+        let _theme_scope = scoped_active_theme(ColorTheme::Current);
+
+        // Act
+        let palette = palette::active();
+
+        // Assert
+        assert_eq!(palette.surface, Color::DarkGray);
+        assert_eq!(palette.surface_elevated, Color::Black);
+        assert_eq!(palette.border, Color::Gray);
+        assert_eq!(palette.text, Color::White);
     }
 
     #[test]

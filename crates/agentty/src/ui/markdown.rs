@@ -800,7 +800,14 @@ fn render_stats_line(raw_line: &str, width: usize) -> Vec<Line<'static>> {
 
 /// Returns whether the line opens a ```` ```mermaid ```` fenced block.
 fn is_mermaid_fence(raw_line: &str) -> bool {
-    raw_line.trim() == "```mermaid"
+    let Some(suffix) = raw_line.trim().strip_prefix("```mermaid") else {
+        return false;
+    };
+
+    suffix
+        .chars()
+        .next()
+        .is_none_or(|character| character.is_ascii_whitespace() || character == '{')
 }
 
 /// Renders one complete ```` ```mermaid ```` fenced block as diagram lines.
@@ -1588,9 +1595,7 @@ fn table_cell_style() -> Style {
 }
 
 fn table_border_style() -> Style {
-    Style::default()
-        .fg(style::palette::text_subtle())
-        .add_modifier(Modifier::DIM)
+    Style::default().fg(style::palette::border())
 }
 
 fn code_block_style() -> Style {
@@ -2129,7 +2134,7 @@ mod tests {
     #[test]
     fn test_render_markdown_renders_mermaid_block_as_diagram() {
         // Arrange
-        let input = "```mermaid\ngraph TD\n    A[Start] --> B[Finish]\n```";
+        let input = "```mermaid {theme=default}\ngraph TD\n    A[Start] --> B[Finish]\n```";
 
         // Act
         let lines = render_markdown(input, 80);
@@ -2201,6 +2206,47 @@ mod tests {
         assert!(text.contains("▼"));
         assert!(!text.contains("flowchart TB"));
         assert!(!text.contains("<br/>"));
+        assert!(!text.contains("```"));
+    }
+
+    #[test]
+    fn test_render_markdown_keeps_code_fallback_for_mermaid_prefix_language() {
+        // Arrange
+        let input = "```mermaid-diagram\ngraph TD\n    A[Start] --> B[Finish]\n```";
+
+        // Act
+        let lines = render_markdown(input, 80);
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(text.contains("graph TD"));
+        assert!(text.contains("A[Start] --> B[Finish]"));
+        assert!(!text.contains("▼"));
+        assert_eq!(lines[0].spans[0].style, code_block_style());
+    }
+
+    #[test]
+    fn test_render_markdown_accepts_mermaid_fence_with_tab_separator() {
+        // Arrange
+        let input = "```mermaid\t{theme=default}\ngraph TD\n    A[Start] --> B[Finish]\n```";
+
+        // Act
+        let lines = render_markdown(input, 80);
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(text.contains("Start"));
+        assert!(text.contains("Finish"));
+        assert!(text.contains("▼"));
+        assert!(!text.contains("graph TD"));
         assert!(!text.contains("```"));
     }
 
@@ -2454,6 +2500,14 @@ mod tests {
         assert!(lines[1].spans.iter().any(|span| {
             span.content.as_ref().contains("Name") && span.style == table_header_style()
         }));
+        assert!(
+            lines
+                .first()
+                .expect("table should render top border")
+                .spans
+                .iter()
+                .all(|span| span.style == table_border_style())
+        );
     }
 
     #[test]
