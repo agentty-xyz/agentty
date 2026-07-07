@@ -1,0 +1,17 @@
+[package]
+name = "ag-tui-text"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ratatui.workspace = true
+rustc-hash.workspace = true
+unicode-width.workspace = true

@@ -21,6 +21,7 @@ ag-clipboard.workspace = true
 ag-forge.workspace = true
 ag-git.workspace = true
 ag-protocol.workspace = true
+ag-tui-text.workspace = true
 async-trait.workspace = true
 askama.workspace = true
 crossterm.workspace = true

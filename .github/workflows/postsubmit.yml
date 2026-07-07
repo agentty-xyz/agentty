@@ -30,6 +30,8 @@ jobs:
             hook: test-ag-git-src
           - member: ag-protocol
             hook: test-ag-protocol-src
+          - member: ag-tui-text
+            hook: test-ag-tui-text-src
           - member: agentty
             hook: test-agentty-src
           - member: ag-xtask

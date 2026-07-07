@@ -3,6 +3,7 @@
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
+use ag_tui_text::{TextPalette, TextRenderSettings};
 use ratatui::style::{Color, Style};
 
 use super::icon::Icon;
@@ -333,6 +334,30 @@ pub fn border_style() -> Style {
 #[must_use]
 pub(crate) fn active_theme_cache_version() -> u64 {
     u64::from(ACTIVE_THEME.load(Ordering::Relaxed))
+}
+
+/// Returns the active theme settings for shared text-rendering crates.
+#[must_use]
+pub(crate) fn text_render_settings() -> TextRenderSettings {
+    let palette = active_palette();
+
+    TextRenderSettings {
+        cache_version: active_theme_cache_version(),
+        palette: TextPalette {
+            accent: palette.accent,
+            info: palette.info,
+            surface: palette.surface,
+            surface_clarification: palette.surface_clarification,
+            surface_elevated: palette.surface_elevated,
+            surface_overlay: palette.surface_overlay,
+            success: palette.success,
+            text: palette.text,
+            text_muted: palette.text_muted,
+            text_subtle: palette.text_subtle,
+            warning: palette.warning,
+            warning_soft: palette.warning_soft,
+        },
+    }
 }
 
 /// Returns the terminal color used for one session status label.
