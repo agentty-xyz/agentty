@@ -97,13 +97,16 @@ State-specific differences:
 - **AgentReview** keeps the review shortcuts, including `r`. Pressing `r` starts session
   sync immediately and cancels the pending focused review so stale review output cannot
   appear after the rebase begins.
+- **InProgress** sessions keep `r` available; pressing it queues session sync behind the
+  running turn on the session worker.
 - Root **Review** and **AgentReview** sessions offer `F` to fork the current branch and
   copied transcript history into a new independent session; stacked children hide `F`.
-- **Draft** sessions hide `o` until the worktree exists and let `Ctrl+V`,
-  `Ctrl+Shift+V`, or `Alt+V` open the composer with an image paste; stacked drafts hide
-  `m` and `r` and show `s` only when the parent is review-ready and the stack is idle.
-- Stacked parents with a materialized child keep `Enter` and `r` while the stack is
-  idle, but hide `/` and `m` until the child is terminal or no longer linked.
+- **Draft** sessions hide `o` and `r` until they launch, and let `Ctrl+V`,
+  `Ctrl+Shift+V`, or `Alt+V` open the composer with an image paste; stacked drafts also
+  hide `m` and show `s` only when the parent is review-ready and the stack is idle.
+- **Question** sessions hide `r` until they return to review-ready state.
+- Review-ready stacked parents with a materialized child keep `Enter` and `r` while the
+  stack is idle, but hide `/` and `m` until the child is terminal or no longer linked.
 - **Done** sessions offer `c` to start a continuation draft (confirmation popup).
 - **Canceled**, **Queued**, **Rebasing**, and **Merging** sessions are read-only (`q`,
   scroll, help).

@@ -424,7 +424,7 @@ mod tests {
     }
 
     #[test]
-    fn test_help_context_view_keybindings_for_in_progress_hide_edit_actions() {
+    fn test_help_context_view_keybindings_for_in_progress_show_sync_and_hide_edit_actions() {
         // Arrange
         let context = HelpContext::View {
             can_fork_session: true,
@@ -447,10 +447,10 @@ mod tests {
         assert!(bindings.iter().any(|binding| binding.key == "j/k"));
         assert!(bindings.iter().any(|binding| binding.key == "?"));
         assert!(bindings.iter().any(|binding| binding.key == "Ctrl+c"));
+        assert!(bindings.iter().any(|binding| binding.key == "r"));
         assert!(!bindings.iter().any(|binding| binding.key == "Enter"));
         assert!(!bindings.iter().any(|binding| binding.key == "d"));
         assert!(!bindings.iter().any(|binding| binding.key == "m"));
-        assert!(!bindings.iter().any(|binding| binding.key == "r"));
         assert!(!bindings.iter().any(|binding| binding.key == "S-Tab"));
     }
 

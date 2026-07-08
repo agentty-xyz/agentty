@@ -11,6 +11,29 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - agentty: rename Open Commands to Launch Configurations across settings, docs, and
   persisted project settings.
+- ag-protocol: document the 32-character Mermaid label limit in session turn prompts.
+
+### Fixed
+
+- agentty: keep sequence-diagram previews rendering when participant or message labels
+  exceed the 32-character label limit by truncating them with a trailing ellipsis, and
+  draw `sequenceDiagram` self-messages as a compact lifeline loop with a visible label.
+
+## [v0.12.4] - 2026-07-06
+
+### Changed
+
+- ag-protocol: clarify supported Mermaid output rules for session turn prompts.
+- agentty: allow session sync requests to queue while session turns are running.
+- agentty: include session chat history in review-assist context.
+- agentty: use the shared transcript helper in review flow state.
+- docs: document `TESTTY_GIF_MODE=check` for routine E2E feature validation.
+- Bump workspace crate metadata and lockfile package versions to `0.12.4`.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
 
 ## [v0.12.3] - 2026-07-06
 

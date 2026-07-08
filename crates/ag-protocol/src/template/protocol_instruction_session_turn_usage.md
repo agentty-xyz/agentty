@@ -8,6 +8,9 @@ at column 1 with exactly three backticks followed immediately by `mermaid`, and 
 with exactly three backticks. Do not emit Mermaid as plain text, an indented code block,
 or a code fence without the `mermaid` info string. Supported mermaid syntax:
 `graph`/`flowchart` with a `TD`, `TB`, or `LR` direction, `erDiagram` relationship
-statements, and simple `sequenceDiagram` participant and message lines. Keep diagrams
-small and acyclic unless using a compact two-node `LR` feedback loop; unsupported, other
-cyclic, or oversized diagrams fall back to the plain fenced-code presentation.
+statements, and simple `sequenceDiagram` participant and message lines. Keep every node,
+participant, and message label within 32 plain-ASCII characters; longer sequence labels
+are truncated with an ellipsis, and over-long flowchart labels drop the diagram preview.
+Keep diagrams small and acyclic unless using a compact two-node `LR` feedback loop;
+unsupported, other cyclic, or oversized diagrams fall back to the plain fenced-code
+presentation.
