@@ -65,6 +65,7 @@ struct SessionOutputLayoutCacheKey {
     session_update_version: u64,
     session_updated_at: i64,
     status: Status,
+    theme_cache_version: u64,
     transcript: TranscriptFingerprint,
     workflow_notice: TextFingerprint,
 }
@@ -423,10 +424,11 @@ struct SessionOutputLayoutCacheEntry {
 /// This sits above [`markdown::MarkdownRenderCache`] so the scroll-metric path
 /// and render path share one derivation for the same session/update version,
 /// width, active prompt, review text/status, and progress text. Entries are
-/// invalidated by key changes; the markdown render-cache version is part of the
-/// key so style-bearing lines are not reused after markdown cache invalidation.
-/// Per-session Tachyonfx state is bounded by the same layout LRU and is
-/// removed once no cached layout remains for that session.
+/// invalidated by key changes; the markdown render-cache version and active
+/// theme are part of the key so style-bearing lines are not reused after
+/// markdown cache invalidation or theme switches. Per-session Tachyonfx state
+/// is bounded by the same layout LRU and is removed once no cached layout
+/// remains for that session.
 pub struct SessionOutputLayoutCache {
     entries: RefCell<VecDeque<SessionOutputLayoutCacheEntry>>,
     tachyon_loader_effects: RefCell<HashMap<SessionId, TachyonLoaderEffect>>,
@@ -750,6 +752,7 @@ impl<'a> SessionOutput<'a> {
             session_update_version: context.session_update_version,
             session_updated_at: session.updated_at,
             status: session.status,
+            theme_cache_version: style::active_theme_cache_version(),
             transcript: TranscriptFingerprint::from_session(session),
             workflow_notice: TextFingerprint::from_text(session.workflow_notice.as_deref()),
         }
@@ -1574,12 +1577,13 @@ mod tests {
 
     use ag_protocol::AgentResponseSummary;
     use ratatui::layout::Alignment;
-    use ratatui::style::Style;
+    use ratatui::style::{Color, Style};
     use ratatui::text::Span;
     use serde_json;
 
     use super::*;
     use crate::domain::session::PublishedBranchSyncStatus;
+    use crate::domain::theme::ColorTheme;
 
     /// Builds one output-line context with defaults suitable for tests.
     fn line_context<'a>(
@@ -1626,6 +1630,15 @@ mod tests {
             markdown_render_cache,
         )
         .lines
+    }
+
+    fn table_header_background(layout: &SessionOutputLayout) -> Option<Color> {
+        layout
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .find(|span| span.content.as_ref().contains("Input"))
+            .and_then(|span| span.style.bg)
     }
 
     fn set_assistant_transcript(session: &mut Session, output: &str) {
@@ -1718,6 +1731,58 @@ mod tests {
         // Assert
         assert_eq!(first_layout.line_count, second_layout.line_count);
         assert!(Arc::ptr_eq(&first_layout.lines, &second_layout.lines));
+    }
+
+    #[test]
+    fn test_output_layout_cache_keys_active_theme() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::Review;
+        set_conversation_transcript(
+            &mut session,
+            vec![(
+                SessionMessageKind::UserPrompt,
+                concat!(
+                    "Use **bold** and `code`.\n\n",
+                    "| Input | Meaning |\n",
+                    "| --- | --- |\n",
+                    "| User prompt | Markdown |",
+                ),
+            )],
+        );
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let output_layout_cache = SessionOutputLayoutCache::default();
+        let context = line_context(None, None, None);
+
+        // Act
+        let current_layout = {
+            let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
+            output_layout_cache.layout(
+                &session,
+                Rect::new(0, 0, 80, 8),
+                context,
+                Some(&markdown_render_cache),
+            )
+        };
+        let dark_horizon_layout = {
+            let _theme_scope = style::scoped_active_theme(ColorTheme::DarkHorizon);
+            output_layout_cache.layout(
+                &session,
+                Rect::new(0, 0, 80, 8),
+                context,
+                Some(&markdown_render_cache),
+            )
+        };
+
+        // Assert
+        assert!(!Arc::ptr_eq(
+            &current_layout.lines,
+            &dark_horizon_layout.lines
+        ));
+        assert_eq!(
+            table_header_background(&dark_horizon_layout),
+            Some(Color::Rgb(33, 36, 48))
+        );
     }
 
     #[test]
