@@ -300,6 +300,7 @@ pub enum HelpContext {
     List { keybindings: Vec<HelpAction> },
     View {
         can_fork_session: bool,
+        can_merge_session_branch: bool,
         can_mutate_session_branch: bool,
         can_open_worktree: bool,
         can_rebase_session_branch: bool,
@@ -330,6 +331,7 @@ impl HelpContext {
         match self {
             HelpContext::View {
                 can_fork_session,
+                can_merge_session_branch,
                 can_mutate_session_branch,
                 can_open_worktree,
                 can_rebase_session_branch,
@@ -340,6 +342,9 @@ impl HelpContext {
                 ..
             } => help_action::view_actions(ViewHelpState {
                 can_fork_session: ViewActionAvailability::from_bool(*can_fork_session),
+                can_merge_session_branch: ViewActionAvailability::from_bool(
+                    *can_merge_session_branch,
+                ),
                 can_mutate_session_branch: ViewActionAvailability::from_bool(
                     *can_mutate_session_branch,
                 ),
@@ -428,6 +433,7 @@ mod tests {
         // Arrange
         let context = HelpContext::View {
             can_fork_session: true,
+            can_merge_session_branch: true,
             can_mutate_session_branch: true,
             can_open_worktree: true,
             can_rebase_session_branch: true,
@@ -459,6 +465,7 @@ mod tests {
         // Arrange
         let context = HelpContext::View {
             can_fork_session: true,
+            can_merge_session_branch: true,
             can_mutate_session_branch: true,
             can_open_worktree: true,
             can_rebase_session_branch: true,
@@ -489,6 +496,7 @@ mod tests {
         // Arrange
         let context = HelpContext::View {
             can_fork_session: true,
+            can_merge_session_branch: true,
             can_mutate_session_branch: true,
             can_open_worktree: true,
             can_rebase_session_branch: true,

@@ -1755,9 +1755,9 @@ impl App {
     /// Validates whether a session is currently eligible for merge queueing.
     ///
     /// Sessions are eligible while actively under review or already marked as
-    /// `Queued` (for example, after app restart). Stacked parent branches
-    /// cannot enter merge queueing while materialized children still depend on
-    /// them, and only one branch-mutating action may run in a one-level stack.
+    /// `Queued` (for example, after app restart). A parent with idle
+    /// materialized children can enter merge queueing because merge completion
+    /// retargets those children; active stack work still blocks the request.
     ///
     /// # Errors
     /// Returns an error when the session does not exist or has an ineligible
@@ -1769,11 +1769,9 @@ impl App {
                 "Session must be in review or queued status".to_string(),
             ));
         }
-        if !self.sessions.can_mutate_session_branch_in_stack(session_id) {
+        if !self.sessions.can_merge_session_branch_in_stack(session_id) {
             return Err(AppError::Workflow(
-                "Stacked branch work can only run when no other stack session is active and \
-                 parent branch edits are not blocked by materialized children"
-                    .to_string(),
+                "Merge can only run when no other stack session is active".to_string(),
             ));
         }
 

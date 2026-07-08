@@ -6,8 +6,9 @@ use ratatui::widgets::Paragraph;
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
-    Session, can_mutate_session_branch_in_stack, can_rebase_session_branch_in_stack,
-    can_reply_to_session_in_stack, can_start_staged_session_in_stack,
+    Session, can_merge_session_branch_in_stack, can_mutate_session_branch_in_stack,
+    can_rebase_session_branch_in_stack, can_reply_to_session_in_stack,
+    can_start_staged_session_in_stack,
 };
 use crate::domain::{input, review};
 use crate::ui::component::chat_input::{ChatInput, SuggestionList};
@@ -377,12 +378,15 @@ impl<'a> SessionChatPage<'a> {
             can_start_staged_session_in_stack(self.sessions, session.id.as_str());
         let can_reply_to_session =
             can_reply_to_session_in_stack(self.sessions, session.id.as_str());
+        let can_merge_session_branch =
+            can_merge_session_branch_in_stack(self.sessions, session.id.as_str());
         let can_mutate_session_branch =
             can_mutate_session_branch_in_stack(self.sessions, session.id.as_str());
         let can_rebase_session_branch =
             can_rebase_session_branch_in_stack(self.sessions, session.id.as_str());
         let view_help_state = ViewHelpState {
             can_fork_session: ViewActionAvailability::from_bool(session.allows_fork_action()),
+            can_merge_session_branch: ViewActionAvailability::from_bool(can_merge_session_branch),
             can_mutate_session_branch: ViewActionAvailability::from_bool(can_mutate_session_branch),
             can_open_worktree: ViewActionAvailability::from_bool(self.can_open_worktree),
             can_rebase_session_branch: ViewActionAvailability::from_bool(can_rebase_session_branch),

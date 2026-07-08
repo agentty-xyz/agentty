@@ -1720,13 +1720,13 @@ fn stacked_session_creation() -> E2eResult {
     Ok(())
 }
 
-/// Verify that a review-ready parent can still open the reply composer and
-/// sync the stack after its stacked child has also reached review, while merge
-/// remains hidden until the child is terminal or unlinked.
+/// Verify that a review-ready parent can still open the reply composer, sync
+/// the stack, and queue merge after its stacked child has also reached review,
+/// while slash commands remain hidden until the child is terminal or unlinked.
 #[test]
-fn stacked_parent_reply_remains_available_with_review_child() -> E2eResult {
+fn stacked_parent_merge_remains_available_with_review_child() -> E2eResult {
     // Arrange, Act, Assert
-    FeatureTest::new("stacked_parent_reply_remains_available_with_review_child")
+    FeatureTest::new("stacked_parent_merge_remains_available_with_review_child")
         .with_git()
         .setup(seed_review_ready_parent_with_review_child)
         .run(
@@ -1747,7 +1747,8 @@ fn stacked_parent_reply_remains_available_with_review_child() -> E2eResult {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Parent stack review", &full);
                 assertion::assert_text_in_region(frame, "Enter: reply", &full);
-                assertion::assert_not_visible(frame, "m: add to merge queue");
+                assertion::assert_not_visible(frame, "/: commands menu");
+                assertion::assert_text_in_region(frame, "m: add to merge queue", &full);
                 assertion::assert_text_in_region(frame, "r: sync", &full);
             },
         )?;

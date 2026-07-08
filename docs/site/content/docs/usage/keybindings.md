@@ -105,8 +105,8 @@ State-specific differences:
   `Ctrl+Shift+V`, or `Alt+V` open the composer with an image paste; stacked drafts also
   hide `m` and show `s` only when the parent is review-ready and the stack is idle.
 - **Question** sessions hide `r` until they return to review-ready state.
-- Review-ready stacked parents with a materialized child keep `Enter` and `r` while the
-  stack is idle, but hide `/` and `m` until the child is terminal or no longer linked.
+- Review-ready stacked parents with a materialized child keep `Enter`, `m`, and `r`
+  while the stack is idle, but hide `/` until the child is terminal or no longer linked.
 - **Done** sessions offer `c` to start a continuation draft (confirmation popup).
 - **Canceled**, **Queued**, **Rebasing**, and **Merging** sessions are read-only (`q`,
   scroll, help).

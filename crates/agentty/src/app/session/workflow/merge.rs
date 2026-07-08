@@ -598,11 +598,9 @@ impl SessionMergeService {
                 "Session must be in review or queued status".to_string(),
             ));
         }
-        if !manager.can_mutate_session_branch_in_stack(session_id) {
+        if !manager.can_merge_session_branch_in_stack(session_id) {
             return Err(SessionError::Workflow(
-                "Stacked branch work can only run when no other stack session is active and \
-                 parent branch edits are not blocked by materialized children"
-                    .to_string(),
+                "Merge can only run when no other stack session is active".to_string(),
             ));
         }
 

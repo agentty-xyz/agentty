@@ -790,8 +790,9 @@ pub(crate) fn can_start_staged_session_in_stack(sessions: &[Session], session_id
     !stack.has_branch_mutating_member_except(session_id)
 }
 
-/// Returns whether the session identified by `session_id` can start branch
-/// mutation while preserving one active branch worker per one-level stack.
+/// Returns whether the session identified by `session_id` can start slash
+/// command branch mutation while preserving one active branch worker per
+/// one-level stack.
 ///
 /// This blocks parent branch edits once a child branch has materialized, and
 /// blocks any stack member from starting branch work while a different member
@@ -812,13 +813,28 @@ pub(crate) fn can_mutate_session_branch_in_stack(sessions: &[Session], session_i
     true
 }
 
+/// Returns whether a session can enter the merge queue while preserving stack
+/// consistency.
+///
+/// Merging a parent with idle materialized children is allowed because the
+/// successful parent merge retargets and syncs the children afterward. Active
+/// stack members still block the request so the stack does not run competing
+/// branch work.
+pub(crate) fn can_merge_session_branch_in_stack(sessions: &[Session], session_id: &str) -> bool {
+    let Some(stack) = SessionStack::for_session(sessions, session_id) else {
+        return false;
+    };
+
+    !stack.has_branch_mutating_member_except(session_id)
+}
+
 /// Returns whether a session can start session sync while preserving stack
 /// consistency.
 ///
-/// Unlike merge and slash-command branch edits, syncing a parent with idle
-/// materialized children is allowed because the successful parent sync fans out
-/// child syncs afterward. Active stack members still block the request so the
-/// stack does not run competing branch work.
+/// Like merge, syncing a parent with idle materialized children is allowed
+/// because the successful parent sync fans out child syncs afterward. Active
+/// stack members still block the request so the stack does not run competing
+/// branch work.
 pub(crate) fn can_rebase_session_branch_in_stack(sessions: &[Session], session_id: &str) -> bool {
     let Some(stack) = SessionStack::for_session(sessions, session_id) else {
         return false;
@@ -1218,6 +1234,58 @@ pub(crate) mod tests {
 
         // Assert
         assert!(!can_mutate_parent);
+    }
+
+    #[test]
+    fn test_can_merge_session_branch_in_stack_allows_parent_with_materialized_child() {
+        // Arrange
+        let parent_session = SessionFixtureBuilder::new()
+            .id("parent-session")
+            .draft(false)
+            .status(Status::Review)
+            .build();
+        let child_session = SessionFixtureBuilder::new()
+            .id("child-session")
+            .draft(true)
+            .status(Status::Review)
+            .parent_session_id(Some(SessionId::from("parent-session")))
+            .build();
+        let sessions = vec![parent_session, child_session];
+
+        // Act
+        let can_merge_parent = can_merge_session_branch_in_stack(&sessions, "parent-session");
+
+        // Assert
+        assert!(can_merge_parent);
+    }
+
+    #[test]
+    fn test_can_merge_session_branch_in_stack_blocks_concurrent_stack_member() {
+        // Arrange
+        let parent_session = SessionFixtureBuilder::new()
+            .id("parent-session")
+            .draft(false)
+            .status(Status::Review)
+            .build();
+        let running_child_session = SessionFixtureBuilder::new()
+            .id("running-child")
+            .draft(true)
+            .status(Status::InProgress)
+            .parent_session_id(Some(SessionId::from("parent-session")))
+            .build();
+        let review_child_session = SessionFixtureBuilder::new()
+            .id("review-child")
+            .draft(true)
+            .status(Status::Review)
+            .parent_session_id(Some(SessionId::from("parent-session")))
+            .build();
+        let sessions = vec![parent_session, running_child_session, review_child_session];
+
+        // Act
+        let can_merge_review_child = can_merge_session_branch_in_stack(&sessions, "review-child");
+
+        // Assert
+        assert!(!can_merge_review_child);
     }
 
     #[test]

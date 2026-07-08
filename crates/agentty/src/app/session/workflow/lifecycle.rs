@@ -26,6 +26,7 @@ use crate::app::{
 use crate::domain::agent::{AgentKind, AgentSelection, AgentSelectionMetadata, ReasoningLevel};
 use crate::domain::session::{
     ReviewRequest, SESSION_DATA_DIR, Session, SessionHandles, SessionId, Status,
+    can_merge_session_branch_in_stack as stack_can_merge_session_branch,
     can_mutate_session_branch_in_stack as stack_can_mutate_session_branch,
     can_rebase_session_branch_in_stack as stack_can_rebase_session_branch,
     can_reply_to_session_in_stack as stack_can_reply_to_session,
@@ -945,6 +946,12 @@ impl SessionManager {
     /// competing with another member of its one-level stack.
     pub(crate) fn can_mutate_session_branch_in_stack(&self, session_id: &str) -> bool {
         stack_can_mutate_session_branch(&self.state.sessions, session_id)
+    }
+
+    /// Returns whether a session can enter the merge queue without competing
+    /// with another member of its one-level stack.
+    pub(crate) fn can_merge_session_branch_in_stack(&self, session_id: &str) -> bool {
+        stack_can_merge_session_branch(&self.state.sessions, session_id)
     }
 
     /// Returns whether a session can start sync work without competing with

@@ -68,6 +68,7 @@ mod tests {
         app.mode = AppMode::Help {
             context: HelpContext::View {
                 can_fork_session: true,
+                can_merge_session_branch: true,
                 can_mutate_session_branch: true,
                 can_open_worktree: true,
                 can_rebase_session_branch: true,

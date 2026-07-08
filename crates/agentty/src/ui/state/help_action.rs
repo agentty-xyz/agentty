@@ -128,6 +128,9 @@ impl ViewActionAvailability {
 pub(crate) struct ViewHelpState {
     /// Whether this session can fork into a new independent session.
     pub(crate) can_fork_session: ViewActionAvailability,
+    /// Whether this session can enter the merge queue under the current
+    /// one-level stack consistency rules.
+    pub(crate) can_merge_session_branch: ViewActionAvailability,
     /// Whether this session can start branch-mutating work under the current
     /// one-level stack consistency rules.
     pub(crate) can_mutate_session_branch: ViewActionAvailability,
@@ -155,6 +158,7 @@ struct ViewActionSet {
     continue_terminal_session: ViewActionAvailability,
     fork_session: ViewActionAvailability,
     launch_configuration: ViewActionAvailability,
+    merge_session: ViewActionAvailability,
     open_prompt: ViewActionAvailability,
     open_worktree: ViewActionAvailability,
     rebase_session: ViewActionAvailability,
@@ -178,6 +182,8 @@ impl ViewActionSet {
         let can_open_prompt = can_open_view_prompt(state.session_state, state.reply_to_session);
         let can_launch_configuration =
             can_open_view_command(state.session_state, state.can_mutate_session_branch);
+        let can_merge_session =
+            can_merge_view_session(state.session_state, state.can_merge_session_branch);
         let can_rebase_session =
             can_rebase_view_session(state.session_state, state.can_rebase_session_branch);
         let can_show_review = matches!(
@@ -194,6 +200,7 @@ impl ViewActionSet {
                 state.can_fork_session.is_enabled() && can_show_review,
             ),
             launch_configuration: ViewActionAvailability::from_bool(can_launch_configuration),
+            merge_session: ViewActionAvailability::from_bool(can_merge_session),
             open_prompt: ViewActionAvailability::from_bool(can_open_prompt),
             open_worktree: ViewActionAvailability::from_bool(can_open_worktree),
             rebase_session: ViewActionAvailability::from_bool(can_rebase_session),
@@ -395,9 +402,7 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
 
     append_view_review_actions(&mut actions, state, action_set);
 
-    if action_set.launch_configuration.is_enabled()
-        && state.session_state != ViewSessionState::StackedDraft
-    {
+    if action_set.merge_session.is_enabled() {
         actions.push(HelpAction::new(
             "add to merge queue",
             "m",
@@ -430,6 +435,7 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
         state.can_start_staged_session,
         action_set.open_prompt,
         action_set.launch_configuration,
+        action_set.merge_session,
         action_set.rebase_session,
     );
     append_view_stop_action(&mut actions, action_set);
@@ -548,6 +554,22 @@ fn can_rebase_view_session(
         )
 }
 
+/// Returns whether a session state can enter the merge queue in view mode
+/// under stack merge constraints.
+fn can_merge_view_session(
+    session_state: ViewSessionState,
+    can_merge_session_branch: ViewActionAvailability,
+) -> bool {
+    can_merge_session_branch.is_enabled()
+        && matches!(
+            session_state,
+            ViewSessionState::NewSession
+                | ViewSessionState::Interactive
+                | ViewSessionState::Review
+                | ViewSessionState::AgentReview
+        )
+}
+
 /// Appends footer actions that operate on an editable session in their
 /// canonical order.
 ///
@@ -561,10 +583,12 @@ fn append_view_footer_edit_actions(
     can_start_staged_session: ViewActionAvailability,
     can_open_prompt: ViewActionAvailability,
     can_launch_configuration: ViewActionAvailability,
+    can_merge_session: ViewActionAvailability,
     can_rebase_session: ViewActionAvailability,
 ) {
     if !can_open_prompt.is_enabled()
         && !can_launch_configuration.is_enabled()
+        && !can_merge_session.is_enabled()
         && !can_rebase_session.is_enabled()
         && !can_start_staged_session.is_enabled()
     {
@@ -587,7 +611,7 @@ fn append_view_footer_edit_actions(
         actions.push(COMMANDS_MENU_ACTION);
     }
 
-    if can_launch_configuration.is_enabled() && session_state != ViewSessionState::StackedDraft {
+    if can_merge_session.is_enabled() {
         actions.push(HelpAction::new(
             "add to merge queue",
             "m",
@@ -828,6 +852,7 @@ mod tests {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -853,6 +878,7 @@ mod tests {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Disabled,
@@ -874,6 +900,7 @@ mod tests {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -898,6 +925,7 @@ mod tests {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -922,6 +950,7 @@ mod tests {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -964,6 +993,7 @@ mod tests {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Disabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -981,10 +1011,11 @@ mod tests {
     }
 
     #[test]
-    fn test_view_actions_review_keeps_reply_and_sync_when_stack_blocks_branch_mutation() {
+    fn test_view_actions_review_keeps_reply_merge_and_sync_when_stack_blocks_commands() {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Disabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1004,8 +1035,32 @@ mod tests {
         assert!(actions.iter().any(|action| action.key == "o"));
         assert!(actions.iter().any(|action| action.key == "Enter"));
         assert!(!actions.iter().any(|action| action.key == "/"));
-        assert!(!actions.iter().any(|action| action.key == "m"));
+        assert!(actions.iter().any(|action| action.key == "m"));
         assert!(actions.iter().any(|action| action.key == "r"));
+    }
+
+    #[test]
+    fn test_view_actions_review_uses_merge_gate_separately_from_sync() {
+        // Arrange
+        let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
+            can_mutate_session_branch: ViewActionAvailability::Disabled,
+            can_rebase_session_branch: ViewActionAvailability::Disabled,
+            can_open_worktree: ViewActionAvailability::Enabled,
+            reply_to_session: ViewActionAvailability::Enabled,
+            can_start_staged_session: ViewActionAvailability::Disabled,
+            publish_pull_request_action: None,
+            session_state: ViewSessionState::Review,
+        };
+
+        // Act
+        let actions = view_actions(state);
+
+        // Assert
+        assert!(actions.iter().any(|action| action.key == "m"));
+        assert!(!actions.iter().any(|action| action.key == "r"));
+        assert!(!actions.iter().any(|action| action.key == "/"));
     }
 
     #[test]
@@ -1013,6 +1068,7 @@ mod tests {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1038,6 +1094,7 @@ mod tests {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1063,6 +1120,7 @@ mod tests {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1095,6 +1153,7 @@ mod tests {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1127,6 +1186,7 @@ mod tests {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1155,6 +1215,7 @@ mod tests {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1182,6 +1243,7 @@ mod tests {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1211,6 +1273,7 @@ mod tests {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Disabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1228,10 +1291,11 @@ mod tests {
     }
 
     #[test]
-    fn test_view_footer_actions_review_keeps_reply_and_sync_when_stack_blocks_branch_mutation() {
+    fn test_view_footer_actions_review_keeps_reply_merge_and_sync_when_stack_blocks_commands() {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Disabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1250,8 +1314,32 @@ mod tests {
         assert!(actions.iter().any(|action| action.key == "p"));
         assert!(actions.iter().any(|action| action.key == "Enter"));
         assert!(!actions.iter().any(|action| action.key == "/"));
-        assert!(!actions.iter().any(|action| action.key == "m"));
+        assert!(actions.iter().any(|action| action.key == "m"));
         assert!(actions.iter().any(|action| action.key == "r"));
+    }
+
+    #[test]
+    fn test_view_footer_actions_review_uses_merge_gate_separately_from_sync() {
+        // Arrange
+        let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
+            can_mutate_session_branch: ViewActionAvailability::Disabled,
+            can_rebase_session_branch: ViewActionAvailability::Disabled,
+            can_open_worktree: ViewActionAvailability::Enabled,
+            reply_to_session: ViewActionAvailability::Enabled,
+            can_start_staged_session: ViewActionAvailability::Disabled,
+            publish_pull_request_action: None,
+            session_state: ViewSessionState::Review,
+        };
+
+        // Act
+        let actions = view_footer_actions(state);
+
+        // Assert
+        assert!(actions.iter().any(|action| action.key == "m"));
+        assert!(!actions.iter().any(|action| action.key == "r"));
+        assert!(!actions.iter().any(|action| action.key == "/"));
     }
 
     #[test]
@@ -1259,6 +1347,7 @@ mod tests {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1287,6 +1376,7 @@ mod tests {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1311,6 +1401,7 @@ mod tests {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1343,6 +1434,7 @@ mod tests {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1373,6 +1465,7 @@ mod tests {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1398,6 +1491,7 @@ mod tests {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1420,6 +1514,7 @@ mod tests {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1445,6 +1540,7 @@ mod tests {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1467,6 +1563,7 @@ mod tests {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1528,6 +1625,7 @@ mod tests {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1552,6 +1650,7 @@ mod tests {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
@@ -1573,6 +1672,7 @@ mod tests {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,

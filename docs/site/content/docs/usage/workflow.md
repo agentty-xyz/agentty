@@ -263,12 +263,12 @@ read-only.
 
 Stacked drafts show `s` start only when the parent is in **Review** or **AgentReview**
 and no stack member is running, queued, syncing, merging, or waiting on a question.
-While a materialized child is linked, the parent keeps `Enter` replies and `r` sync but
-hides slash commands and merge actions. Syncing the parent (or completing a parent turn)
-rebases review-ready children onto the refreshed parent branch automatically. When the
-parent merges, children are retargeted onto the parent's base branch and review-ready
-children are synced with `git rebase --onto` so they keep only their own commits. When
-the parent is canceled, its stacked child is canceled too.
+While a materialized child is linked, the parent keeps `Enter` replies, `m` merge
+queueing, and `r` sync but hides slash commands. Syncing the parent (or completing a
+parent turn) rebases review-ready children onto the refreshed parent branch
+automatically. When the parent merges, children are retargeted onto the parent's base
+branch and review-ready children are synced with `git rebase --onto` so they keep only
+their own commits. When the parent is canceled, its stacked child is canceled too.
 
 ## Branch Publish Flow
 

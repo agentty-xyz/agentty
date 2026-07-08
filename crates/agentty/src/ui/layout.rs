@@ -348,6 +348,7 @@ mod tests {
     fn view_footer_text(session: &Session, can_open_worktree: bool) -> String {
         session_view_footer_line(ViewHelpState {
             can_fork_session: ViewActionAvailability::from_bool(session.allows_fork_action()),
+            can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::from_bool(can_open_worktree),
             can_rebase_session_branch: ViewActionAvailability::Enabled,
