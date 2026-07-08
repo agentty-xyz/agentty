@@ -2457,6 +2457,7 @@ fn review_comments_preview_opens_from_diff_page() -> E2eResult {
                 let view_text = frame.text_in_region(&full);
 
                 assertion::assert_text_in_region(frame, "Please simplify this line.", &full);
+                assertion::assert_text_in_region(frame, "src/ +1 -0", &full);
                 assertion::assert_text_in_region(frame, "alice", &full);
                 assert!(
                     !view_text.contains("Resolved comment should stay hidden."),
