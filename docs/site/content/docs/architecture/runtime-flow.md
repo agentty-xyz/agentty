@@ -265,9 +265,11 @@ compact reminder.
 - Before every worker-dispatched turn, `workflow/isolation.rs` verifies the session
   folder exists, is checked out on the expected `wt/<hash>` branch, and resolves to a
   linked worktree with a distinct main checkout.
-- The worker snapshots the main checkout's tracked-file git status and `HEAD` hash
-  before and after each turn and appends a `[Main Checkout Warning]` transcript notice
-  when either changed.
+- The worker snapshots the main checkout's tracked-file git status before each turn and
+  inspects that status again after the turn. It appends a `[Main Checkout Warning]`
+  transcript notice only when the status changed and remains dirty, so clean `HEAD`
+  movement from parallel session merges and unchanged pre-existing dirt do not add
+  transcript noise.
 - Merge and `sync main` workflows require a clean target checkout before changing
   base-branch state.
 - Provider permission policies are scoped per transport: Codex turns run with a

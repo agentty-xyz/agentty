@@ -237,8 +237,10 @@ the existing agent session to resolve only the conflicted files, then stages the
 and continues the rebase itself.
 
 During normal turns, the agent prompt names the session worktree as the only writable
-root. If Agentty detects that the main checkout's tracked status or `HEAD` changed
-during a turn, it appends a `[Main Checkout Warning]` notice to the transcript.
+root. After a turn, if Agentty detects that the main checkout's tracked-file status
+changed and remains dirty, it appends a `[Main Checkout Warning]` notice to the
+transcript. Clean `HEAD` movement, such as another session landing on the base branch,
+and unchanged pre-existing tracked changes do not emit this warning.
 
 ### Continuing a Done Session
 
