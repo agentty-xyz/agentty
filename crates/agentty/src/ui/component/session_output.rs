@@ -7,7 +7,6 @@ use std::sync::Arc;
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Paragraph};
 use rustc_hash::FxHasher;
@@ -20,6 +19,7 @@ use crate::ui::component::tachyon_loader::TachyonLoaderEffect;
 use crate::ui::icon::{Icon, TACHYON_LOADER_WIDTH};
 use crate::ui::input_layout::{bottom_pinned_scroll_offset, panel_inner_width};
 use crate::ui::markdown::{self, render_markdown};
+use crate::ui::prompt_block::{self, USER_PROMPT_PREFIX, USER_PROMPT_RIGHT_GUTTER_WIDTH};
 use crate::ui::{Component, session_format, style, text_util};
 
 const DRAFT_PREVIEW_HEADER: &str = "## Draft Session";
@@ -34,8 +34,6 @@ const DRAFT_PREVIEW_STAGED_NOTE: &str =
 const DRAFT_PREVIEW_STACKED_STAGED_NOTE: &str =
     "Draft messages stay local until the parent is review-ready and you press `s` in session view \
      to start the stacked bundle from its parent branch.";
-const USER_PROMPT_PREFIX: &str = " › ";
-const USER_PROMPT_CONTINUATION_PREFIX: &str = "   ";
 const SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT: usize = 16;
 
 /// Cache key for one fully assembled session-output layout.
@@ -1046,12 +1044,13 @@ impl<'a> SessionOutput<'a> {
     fn staged_draft_transcript_block(prompt_text: &str) -> String {
         let prompt_lines = prompt_text.split('\n').collect::<Vec<_>>();
         let mut formatted_lines = Vec::with_capacity(prompt_lines.len());
+        let continuation_prefix = prompt_block::user_prompt_continuation_prefix();
 
         for (index, prompt_line) in prompt_lines.into_iter().enumerate() {
             let prefix = if index == 0 {
                 USER_PROMPT_PREFIX
             } else {
-                USER_PROMPT_CONTINUATION_PREFIX
+                continuation_prefix.as_str()
             };
 
             formatted_lines.push(format!("{prefix}{prompt_line}"));
@@ -1291,7 +1290,10 @@ impl<'a> SessionOutput<'a> {
         }
 
         let prompt_prefix_width = USER_PROMPT_PREFIX.chars().count();
-        let prompt_content_width = inner_width.saturating_sub(prompt_prefix_width).max(1);
+        let prompt_content_width = inner_width
+            .saturating_sub(prompt_prefix_width)
+            .saturating_sub(USER_PROMPT_RIGHT_GUTTER_WIDTH)
+            .max(1);
         let rendered_lines =
             Self::rendered_markdown_lines(prompt_text, prompt_content_width, markdown_render_cache);
         if rendered_lines.is_empty() {
@@ -1299,28 +1301,29 @@ impl<'a> SessionOutput<'a> {
         }
 
         Self::append_block_separator(lines, SessionOutputSeparator::AfterPreviousContent);
-        lines.push(Self::user_prompt_padding_line(inner_width));
+        lines.push(prompt_block::user_prompt_padding_line(inner_width));
 
         let mut has_rendered_content_line = false;
+        let continuation_prefix = prompt_block::user_prompt_continuation_prefix();
         for rendered_line in rendered_lines.iter() {
             if rendered_line.width() == 0 {
-                lines.push(Self::user_prompt_padding_line(inner_width));
+                lines.push(prompt_block::user_prompt_padding_line(inner_width));
 
                 continue;
             }
 
             let prefix = if has_rendered_content_line {
-                USER_PROMPT_CONTINUATION_PREFIX
+                continuation_prefix.as_str()
             } else {
                 USER_PROMPT_PREFIX
             };
             let prefix_style = if has_rendered_content_line {
-                Self::user_prompt_content_style()
+                prompt_block::user_prompt_content_style()
             } else {
-                Self::user_prompt_prefix_style()
+                prompt_block::user_prompt_prefix_style()
             };
-            lines.push(Self::user_prompt_markdown_line(
-                rendered_line,
+            lines.push(prompt_block::user_prompt_markdown_line(
+                rendered_line.spans.iter().cloned(),
                 prefix,
                 prefix_style,
                 inner_width,
@@ -1328,80 +1331,7 @@ impl<'a> SessionOutput<'a> {
             has_rendered_content_line = true;
         }
 
-        lines.push(Self::user_prompt_padding_line(inner_width));
-    }
-
-    /// Returns one full-width blank row using the user-prompt background.
-    fn user_prompt_padding_line(width: usize) -> Line<'static> {
-        Line::styled(" ".repeat(width), Self::user_prompt_content_style())
-    }
-
-    /// Adds the transcript prompt marker to one rendered markdown line.
-    fn user_prompt_markdown_line(
-        rendered_line: &Line<'static>,
-        prefix: &str,
-        prefix_style: Style,
-        width: usize,
-    ) -> Line<'static> {
-        let content_style = Self::user_prompt_content_style();
-        let mut spans = vec![ratatui::text::Span::styled(
-            prefix.to_string(),
-            prefix_style,
-        )];
-        spans.extend(
-            rendered_line
-                .spans
-                .iter()
-                .cloned()
-                .map(Self::user_prompt_content_span),
-        );
-        let mut line = Line::from(spans);
-        let line_width = line.width();
-        if line_width > width {
-            line.spans =
-                text_util::truncate_spans_with_ellipsis(std::mem::take(&mut line.spans), width)
-                    .into_iter()
-                    .map(Self::user_prompt_content_span)
-                    .collect();
-        } else if line_width < width {
-            line.spans.push(ratatui::text::Span::styled(
-                " ".repeat(width - line_width),
-                content_style,
-            ));
-        }
-
-        line
-    }
-
-    /// Preserves markdown foreground/modifier styling while applying the
-    /// prompt-row background to rendered user prompt content.
-    fn user_prompt_content_span(
-        mut span: ratatui::text::Span<'static>,
-    ) -> ratatui::text::Span<'static> {
-        let content_style = Self::user_prompt_content_style();
-        if span.style.fg.is_none() {
-            span.style.fg = content_style.fg;
-        }
-        if span.style.bg.is_none() {
-            span.style.bg = content_style.bg;
-        }
-
-        span
-    }
-
-    /// Returns the style for the visible user prompt marker.
-    fn user_prompt_prefix_style() -> Style {
-        Style::default()
-            .fg(style::palette::accent())
-            .bg(style::palette::surface())
-            .add_modifier(Modifier::BOLD)
-    }
-
-    /// Returns the base style for user prompt content rows.
-    fn user_prompt_content_style() -> Style {
-        Style::default()
-            .fg(style::palette::text())
-            .bg(style::palette::surface())
+        lines.push(prompt_block::user_prompt_padding_line(inner_width));
     }
 
     /// Appends rendered markdown with one blank separator while trimming any
@@ -3168,6 +3098,48 @@ mod tests {
             span.content.as_ref().contains("Input")
                 && span.style.bg == Some(style::palette::surface_elevated())
         }));
+    }
+
+    #[test]
+    fn test_append_user_prompt_markdown_lines_keeps_right_gutter() {
+        // Arrange
+        let mut lines = Vec::new();
+
+        // Act
+        SessionOutput::append_user_prompt_markdown_lines(&mut lines, "one two", 10, None);
+        let rendered_lines = lines.iter().map(ToString::to_string).collect::<Vec<_>>();
+        let continuation_prefix = prompt_block::user_prompt_continuation_prefix();
+        let prompt_lines = lines
+            .iter()
+            .filter(|line| {
+                let text = line.to_string();
+
+                !text.trim().is_empty()
+                    && (text.starts_with(USER_PROMPT_PREFIX)
+                        || text.starts_with(continuation_prefix.as_str()))
+            })
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert!(
+            !rendered_lines
+                .iter()
+                .any(|line| line.trim_end() == " › one two")
+        );
+        assert_eq!(prompt_lines.len(), 2);
+        for line in prompt_lines {
+            let rendered_text = line.to_string();
+            let trimmed_width = rendered_text.trim_end().chars().count();
+
+            assert_eq!(line.width(), 10);
+            assert!(trimmed_width < line.width());
+            assert!(
+                line.spans
+                    .last()
+                    .is_some_and(|span| span.content.chars().all(char::is_whitespace)
+                        && span.style.bg == Some(style::palette::surface()))
+            );
+        }
     }
 
     #[test]

@@ -1,0 +1,79 @@
+//! Shared transcript prompt-block layout constants.
+
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+
+use crate::ui::{style, text_util};
+
+/// Visible prefix for the first row of a user prompt in transcript output.
+pub(crate) const USER_PROMPT_PREFIX: &str = " › ";
+
+/// Reserved trailing cells between prompt text and the right edge.
+pub(crate) const USER_PROMPT_RIGHT_GUTTER_WIDTH: usize = 1;
+
+/// Returns visible padding for continuation rows of a user prompt in
+/// transcript output.
+pub(crate) fn user_prompt_continuation_prefix() -> String {
+    " ".repeat(USER_PROMPT_PREFIX.chars().count())
+}
+
+/// Returns one full-width blank row using the user-prompt background.
+pub(crate) fn user_prompt_padding_line(width: usize) -> Line<'static> {
+    Line::styled(" ".repeat(width), user_prompt_content_style())
+}
+
+/// Adds the transcript prompt marker to one rendered markdown line.
+pub(crate) fn user_prompt_markdown_line(
+    rendered_spans: impl IntoIterator<Item = Span<'static>>,
+    prefix: &str,
+    prefix_style: Style,
+    width: usize,
+) -> Line<'static> {
+    let content_style = user_prompt_content_style();
+    let mut spans = vec![Span::styled(prefix.to_string(), prefix_style)];
+    spans.extend(rendered_spans.into_iter().map(user_prompt_content_span));
+
+    let mut line = Line::from(spans);
+    let line_width = line.width();
+    if line_width > width {
+        line.spans =
+            text_util::truncate_spans_with_ellipsis(std::mem::take(&mut line.spans), width)
+                .into_iter()
+                .map(user_prompt_content_span)
+                .collect();
+    } else if line_width < width {
+        line.spans
+            .push(Span::styled(" ".repeat(width - line_width), content_style));
+    }
+
+    line
+}
+
+/// Preserves markdown foreground/modifier styling while applying the
+/// prompt-row background to rendered user prompt content.
+pub(crate) fn user_prompt_content_span(mut span: Span<'static>) -> Span<'static> {
+    let content_style = user_prompt_content_style();
+    if span.style.fg.is_none() {
+        span.style.fg = content_style.fg;
+    }
+    if span.style.bg.is_none() {
+        span.style.bg = content_style.bg;
+    }
+
+    span
+}
+
+/// Returns the style for the visible user prompt marker.
+pub(crate) fn user_prompt_prefix_style() -> Style {
+    Style::default()
+        .fg(style::palette::accent())
+        .bg(style::palette::surface())
+        .add_modifier(Modifier::BOLD)
+}
+
+/// Returns the base style for user prompt content rows.
+pub(crate) fn user_prompt_content_style() -> Style {
+    Style::default()
+        .fg(style::palette::text())
+        .bg(style::palette::surface())
+}
