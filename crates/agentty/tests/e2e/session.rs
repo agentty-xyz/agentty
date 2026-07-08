@@ -1243,6 +1243,53 @@ fn session_view_user_prompt_markdown_output() -> E2eResult {
     Ok(())
 }
 
+/// Verify that reopening a cached session after a theme switch repaints
+/// transcript messages with the newly active theme.
+#[test]
+fn session_view_theme_switch_repaints_cached_messages() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_theme_switch_repaints_cached_messages")
+        .setup(seed_session_with_user_markdown)
+        .with_terminal_size(80, 32)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_text("Use bold and code.", 5000)
+                    .press_key("q")
+                    .wait_for_text("User markdown prompt", 5000)
+                    .compose(&common::switch_to_tab("Inbox"))
+                    .compose(&common::switch_to_tab("Settings"))
+                    .press_key("Enter")
+                    .wait_for_stable_frame(200, 3000)
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
+                    .press_key("Enter")
+                    .wait_for_text("Agentty Green", 5000)
+                    .press_key("Enter")
+                    .wait_for_stable_frame(200, 3000)
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
+                    .press_key("Enter")
+                    .wait_for_text("Dark Horizon", 5000)
+                    .compose(&common::switch_to_tab("Logs"))
+                    .compose(&common::switch_to_tab("Projects"))
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .wait_for_text("User markdown prompt", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Use bold and code.", 5000)
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Use bold and code.", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
 /// Verify that inline markdown styling adjacent to punctuation does not add
 /// spaces inside brackets or parentheses.
 #[test]
