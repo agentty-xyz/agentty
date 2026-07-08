@@ -635,6 +635,7 @@ impl SyncOrchestrator {
         let result = session::SessionManager::sync_main_for_project(
             default_branch,
             working_dir,
+            Some(app_event_tx.clone()),
             git_client,
             session_model,
         )

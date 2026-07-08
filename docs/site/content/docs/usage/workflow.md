@@ -56,6 +56,10 @@ New session worktrees start from the local active base branch. If local `main` i
 `origin/main`, the session branch still starts from local `main`; run list-mode sync
 (`s`) first when you want a new session to include remote-only commits.
 
+If list-mode sync stops on rebase conflicts, the sync popup stays in its loading state
+and changes to a conflict-resolution message listing the conflicted files being handed
+to the assist agent.
+
 ## Session Lifecycle
 
 <a id="usage-session-lifecycle"></a> Session statuses:

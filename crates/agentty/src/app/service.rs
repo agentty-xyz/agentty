@@ -266,6 +266,7 @@ fn app_event_label(event: &AppEvent) -> &'static str {
         }
         AppEvent::SessionProgressUpdated { .. } => "SessionProgressUpdated",
         AppEvent::SyncMainCompleted { .. } => "SyncMainCompleted",
+        AppEvent::SyncMainConflictResolutionStarted { .. } => "SyncMainConflictResolutionStarted",
         AppEvent::SessionSizeUpdated { .. } => "SessionSizeUpdated",
         AppEvent::SessionTitleGenerationFinished { .. } => "SessionTitleGenerationFinished",
         AppEvent::BranchPublishActionCompleted { .. } => "BranchPublishActionCompleted",

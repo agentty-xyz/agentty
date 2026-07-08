@@ -4633,6 +4633,7 @@ async fn test_sync_main_uses_active_project_branch_from_context() {
     let result = SessionManager::sync_main_for_project(
         app.projects.git_branch().map(str::to_string),
         app.projects.working_dir().to_path_buf(),
+        None,
         Arc::new(mock_git_client),
         AgentModel::Gemini3FlashPreview,
     )
@@ -4670,6 +4671,7 @@ async fn test_sync_main_requires_clean_selected_project_branch() {
     let result = SessionManager::sync_main_for_project(
         app.projects.git_branch().map(str::to_string),
         app.projects.working_dir().to_path_buf(),
+        None,
         Arc::new(mock_git_client),
         AgentModel::Gemini3FlashPreview,
     )
@@ -4694,6 +4696,7 @@ async fn test_sync_main_returns_error_without_upstream_remote() {
     let result = SessionManager::sync_main_for_project(
         app.projects.git_branch().map(str::to_string),
         app.projects.working_dir().to_path_buf(),
+        None,
         app.services.git_client(),
         AgentModel::Gemini3FlashPreview,
     )
@@ -4756,6 +4759,7 @@ async fn test_sync_main_pushes_local_commits_to_remote() {
     let result = SessionManager::sync_main_for_project(
         Some("main".to_string()),
         dir.path().to_path_buf(),
+        None,
         Arc::new(mock_git_client),
         AgentModel::Gemini3FlashPreview,
     )

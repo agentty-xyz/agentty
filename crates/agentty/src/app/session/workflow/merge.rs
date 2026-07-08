@@ -282,6 +282,7 @@ struct FinalizeMergeInput<'a> {
 
 /// Input context for assisted conflict resolution during `sync main`.
 struct SyncRebaseAssistInput {
+    app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
     base_branch: String,
     folder: PathBuf,
     fs_client: Arc<dyn FsClient>,
@@ -403,6 +404,7 @@ impl RebaseAssistLoopInput {
                 SessionManager::run_rebase_assist_agent(input, conflicted_files).await
             }
             Self::Project(input) => {
+                SessionManager::emit_sync_rebase_conflict_status(input, conflicted_files);
                 SessionManager::run_sync_rebase_assist_agent(input, conflicted_files).await
             }
         }
@@ -1551,6 +1553,7 @@ impl SessionManager {
     pub(crate) async fn sync_main_for_project(
         default_branch: Option<String>,
         working_dir: PathBuf,
+        app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
         git_client: Arc<dyn GitClient>,
         session_model: AgentModel,
     ) -> Result<SyncMainOutcome, SyncSessionStartError> {
@@ -1565,6 +1568,7 @@ impl SessionManager {
         Self::sync_main_for_project_with_assist_client(
             default_branch,
             working_dir,
+            app_event_tx,
             fs_client,
             git_client,
             session_agent,
@@ -1583,6 +1587,7 @@ impl SessionManager {
     async fn sync_main_for_project_with_assist_client(
         default_branch: Option<String>,
         working_dir: PathBuf,
+        app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
         fs_client: Arc<dyn FsClient>,
         git_client: Arc<dyn GitClient>,
         session_agent: AgentSelection,
@@ -1622,6 +1627,7 @@ impl SessionManager {
         let mut resolved_conflict_files = Vec::new();
         if let git::PullRebaseResult::Conflict { detail } = pull_result {
             let sync_rebase_input = SyncRebaseAssistInput {
+                app_event_tx,
                 base_branch: default_branch.clone(),
                 folder: working_dir.clone(),
                 fs_client: Arc::clone(&fs_client),
@@ -1681,6 +1687,21 @@ impl SessionManager {
         )
         .await
         .map(|outcome| outcome.resolved_conflict_files)
+    }
+
+    /// Emits a foreground sync popup update listing the files currently being
+    /// resolved by the assisted project sync rebase.
+    fn emit_sync_rebase_conflict_status(
+        input: &SyncRebaseAssistInput,
+        conflicted_files: &[String],
+    ) {
+        let Some(app_event_tx) = &input.app_event_tx else {
+            return;
+        };
+
+        let _ = app_event_tx.send(AppEvent::SyncMainConflictResolutionStarted {
+            conflicted_files: conflicted_files.to_vec(),
+        });
     }
 
     /// Returns pull/push counts inferred around one completed sync run.
@@ -3090,6 +3111,7 @@ mod tests {
         sync_assist_client: Arc<dyn SyncAssistClient>,
     ) -> SyncRebaseAssistInput {
         SyncRebaseAssistInput {
+            app_event_tx: None,
             base_branch: "main".to_string(),
             folder,
             fs_client: test_fs_client(),
@@ -3099,6 +3121,96 @@ mod tests {
                 AgentModel::Gemini3FlashPreview,
             ),
             sync_assist_client,
+        }
+    }
+
+    /// Builds a git client mock for a successful project sync that stops on
+    /// one conflict, receives assistance, and then pushes.
+    fn successful_sync_conflict_git_client() -> git::MockGitClient {
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_find_git_repo_root()
+            .times(1)
+            .returning(|folder| Box::pin(async move { Some(folder) }));
+        mock_git_client
+            .expect_is_worktree_clean()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(true) }));
+        mock_git_client
+            .expect_get_ahead_behind()
+            .times(1)
+            .return_once(|_| Box::pin(async { Ok((1, 2)) }));
+        mock_git_client
+            .expect_list_upstream_commit_titles()
+            .times(1)
+            .returning(|_| {
+                Box::pin(async {
+                    Ok(vec![
+                        "Update changelog format".to_string(),
+                        "Fix sync popup copy".to_string(),
+                    ])
+                })
+            });
+        mock_git_client
+            .expect_get_ahead_behind()
+            .times(1)
+            .return_once(|_| Box::pin(async { Ok((1, 0)) }));
+        mock_git_client
+            .expect_list_local_commit_titles()
+            .times(1)
+            .returning(|_| {
+                Box::pin(async { Ok(vec!["Refine sync conflict messaging".to_string()]) })
+            });
+        mock_git_client
+            .expect_pull_rebase()
+            .times(1)
+            .returning(|_| {
+                Box::pin(async {
+                    Ok(git::PullRebaseResult::Conflict {
+                        detail: "CONFLICT (content): Merge conflict in src/lib.rs".to_string(),
+                    })
+                })
+            });
+        mock_git_client
+            .expect_list_conflicted_files()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(vec!["src/lib.rs".to_string()]) }));
+        mock_git_client
+            .expect_list_staged_conflict_marker_files()
+            .times(2)
+            .returning(|_, _| Box::pin(async { Ok(vec![]) }));
+        mock_git_client
+            .expect_stage_all()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        mock_git_client
+            .expect_has_unmerged_paths()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(false) }));
+        mock_git_client
+            .expect_rebase_continue()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
+        mock_git_client
+            .expect_push_current_branch()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok("origin/main".to_string()) }));
+        mock_git_client.expect_abort_rebase().times(0);
+
+        mock_git_client
+    }
+
+    /// Returns the expected result for the successful assisted sync fixture.
+    fn successful_sync_conflict_outcome() -> SyncMainOutcome {
+        SyncMainOutcome {
+            pulled_commit_titles: vec![
+                "Update changelog format".to_string(),
+                "Fix sync popup copy".to_string(),
+            ],
+            pulled_commits: Some(2),
+            pushed_commit_titles: vec!["Refine sync conflict messaging".to_string()],
+            pushed_commits: Some(1),
+            resolved_conflict_files: vec!["src/lib.rs".to_string()],
         }
     }
 
@@ -4303,86 +4415,20 @@ mod tests {
         // Arrange
         let temp_dir = tempdir().expect("failed to create temporary test directory");
         let working_dir = temp_dir.path().to_path_buf();
-        let mut mock_git_client = git::MockGitClient::new();
-        mock_git_client
-            .expect_find_git_repo_root()
-            .times(1)
-            .returning(|folder| Box::pin(async move { Some(folder) }));
-        mock_git_client
-            .expect_is_worktree_clean()
-            .times(1)
-            .returning(|_| Box::pin(async { Ok(true) }));
-        mock_git_client
-            .expect_get_ahead_behind()
-            .times(1)
-            .return_once(|_| Box::pin(async { Ok((1, 2)) }));
-        mock_git_client
-            .expect_list_upstream_commit_titles()
-            .times(1)
-            .returning(|_| {
-                Box::pin(async {
-                    Ok(vec![
-                        "Update changelog format".to_string(),
-                        "Fix sync popup copy".to_string(),
-                    ])
-                })
-            });
-        mock_git_client
-            .expect_get_ahead_behind()
-            .times(1)
-            .return_once(|_| Box::pin(async { Ok((1, 0)) }));
-        mock_git_client
-            .expect_list_local_commit_titles()
-            .times(1)
-            .returning(|_| {
-                Box::pin(async { Ok(vec!["Refine sync conflict messaging".to_string()]) })
-            });
-        mock_git_client
-            .expect_pull_rebase()
-            .times(1)
-            .returning(|_| {
-                Box::pin(async {
-                    Ok(git::PullRebaseResult::Conflict {
-                        detail: "CONFLICT (content): Merge conflict in src/lib.rs".to_string(),
-                    })
-                })
-            });
-        mock_git_client
-            .expect_list_conflicted_files()
-            .times(1)
-            .returning(|_| Box::pin(async { Ok(vec!["src/lib.rs".to_string()]) }));
-        mock_git_client
-            .expect_list_staged_conflict_marker_files()
-            .times(2)
-            .returning(|_, _| Box::pin(async { Ok(vec![]) }));
-        mock_git_client
-            .expect_stage_all()
-            .times(1)
-            .returning(|_| Box::pin(async { Ok(()) }));
-        mock_git_client
-            .expect_has_unmerged_paths()
-            .times(1)
-            .returning(|_| Box::pin(async { Ok(false) }));
-        mock_git_client
-            .expect_rebase_continue()
-            .times(1)
-            .returning(|_| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
-        mock_git_client
-            .expect_push_current_branch()
-            .times(1)
-            .returning(|_| Box::pin(async { Ok("origin/main".to_string()) }));
-        mock_git_client.expect_abort_rebase().times(0);
-
+        let mock_git_client = successful_sync_conflict_git_client();
         let mut mock_sync_assist_client = MockSyncAssistClient::new();
         mock_sync_assist_client
             .expect_resolve_rebase_conflicts()
             .times(1)
             .returning(|_, _, _| Box::pin(async { Ok(()) }));
 
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+
         // Act
         let result = SessionManager::sync_main_for_project_with_assist_client(
             Some("main".to_string()),
             working_dir,
+            Some(app_event_tx),
             test_fs_client(),
             Arc::new(mock_git_client),
             AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini3FlashPreview),
@@ -4391,18 +4437,19 @@ mod tests {
         .await;
 
         // Assert
+        let status_event = app_event_rx
+            .try_recv()
+            .expect("sync conflict status event should be emitted");
+        assert!(matches!(
+            status_event,
+            AppEvent::SyncMainConflictResolutionStarted {
+                conflicted_files
+            } if conflicted_files == vec!["src/lib.rs".to_string()]
+        ));
+        assert!(app_event_rx.try_recv().is_err());
         assert_eq!(
             result,
-            Ok(SyncMainOutcome {
-                pulled_commit_titles: vec![
-                    "Update changelog format".to_string(),
-                    "Fix sync popup copy".to_string(),
-                ],
-                pulled_commits: Some(2),
-                pushed_commit_titles: vec!["Refine sync conflict messaging".to_string()],
-                pushed_commits: Some(1),
-                resolved_conflict_files: vec!["src/lib.rs".to_string()],
-            }),
+            Ok(successful_sync_conflict_outcome()),
             "sync should succeed after assistance with summary details"
         );
     }
@@ -4472,6 +4519,7 @@ mod tests {
         let result = SessionManager::sync_main_for_project_with_assist_client(
             Some("main".to_string()),
             working_dir,
+            None,
             test_fs_client(),
             Arc::new(mock_git_client),
             AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini3FlashPreview),
