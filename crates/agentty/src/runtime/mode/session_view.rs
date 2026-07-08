@@ -160,7 +160,7 @@ impl ViewSessionSnapshot {
     }
 
     /// Returns whether `/` may open the slash-command composer from view mode.
-    fn can_open_command_composer(&self) -> bool {
+    fn can_launch_configuration_composer(&self) -> bool {
         if !is_view_action_allowed(self.session_status) {
             return false;
         }
@@ -342,7 +342,8 @@ async fn handle_primary_view_key(
             );
         }
         KeyCode::Char('/')
-            if view_session_snapshot.can_open_command_composer() && is_insertable_char_key(key) =>
+            if view_session_snapshot.can_launch_configuration_composer()
+                && is_insertable_char_key(key) =>
         {
             switch_view_to_prompt(
                 app,
@@ -514,12 +515,12 @@ fn open_continue_confirmation(app: &mut App, view_context: &ViewContext) {
 }
 
 /// Opens the viewed session worktree directly or shows a command selector when
-/// multiple open commands are configured.
+/// multiple launch configurations are configured.
 async fn open_worktree_for_view_session(app: &mut App, view_context: &ViewContext) {
-    let open_commands = app.configured_open_commands();
-    if open_commands.len() > 1 {
-        app.mode = AppMode::OpenCommandSelector {
-            commands: open_commands,
+    let launch_configurations = app.configured_launch_configurations();
+    if launch_configurations.len() > 1 {
+        app.mode = AppMode::LaunchConfigurationSelector {
+            commands: launch_configurations,
             restore_view: confirmation_view_mode(view_context),
             selected_command_index: 0,
         };
@@ -527,9 +528,9 @@ async fn open_worktree_for_view_session(app: &mut App, view_context: &ViewContex
         return;
     }
 
-    let selected_open_command = open_commands.first().map(String::as_str);
+    let selected_launch_configuration = launch_configurations.first().map(String::as_str);
 
-    app.open_session_worktree_in_tmux_with_command(selected_open_command)
+    app.open_session_worktree_in_tmux_with_command(selected_launch_configuration)
         .await;
 }
 
@@ -2298,7 +2299,7 @@ mod tests {
     async fn test_open_worktree_for_view_session_opens_command_selector_for_multiple_commands() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-        app.settings.open_command = "cargo test\nnpm run dev".to_string();
+        app.settings.launch_configuration = "cargo test\nnpm run dev".to_string();
         app.mode = AppMode::View {
             session_id: session_id.clone().into(),
             scroll_offset: Some(4),
@@ -2311,7 +2312,7 @@ mod tests {
         // Assert
         assert!(matches!(
             app.mode,
-            AppMode::OpenCommandSelector {
+            AppMode::LaunchConfigurationSelector {
                 ref commands,
                 restore_view:
                     ConfirmationViewMode {
@@ -2339,7 +2340,7 @@ mod tests {
             .returning(|_, _| Box::pin(async {}));
         let (mut app, _base_dir, session_id) =
             new_test_app_with_session_and_tmux_client(Arc::new(mock_tmux_client)).await;
-        app.settings.open_command = "cargo test".to_string();
+        app.settings.launch_configuration = "cargo test".to_string();
         app.mode = AppMode::View {
             session_id: session_id.clone().into(),
             scroll_offset: Some(2),

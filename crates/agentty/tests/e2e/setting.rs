@@ -74,8 +74,8 @@ SET value = excluded.value
 ///
 /// Navigates to the Settings tab and asserts that the settings table
 /// appears with expected row labels including "Reasoning Level" and
-/// "Open Commands". It also verifies the Agentty coauthor trailer starts
-/// disabled for new projects.
+/// "Launch Configurations". It also verifies the Agentty coauthor trailer
+/// starts disabled for new projects.
 #[test]
 fn settings_tab_shows_content() {
     // Arrange, Act, Assert
@@ -106,7 +106,7 @@ fn settings_tab_shows_content() {
                 assertion::assert_text_in_region(frame, "Default Smart Model", &full);
                 assertion::assert_text_in_region(frame, "gemini/gemini-3.1-pro-preview", &full);
                 assertion::assert_text_in_region(frame, "Disabled", &full);
-                assertion::assert_text_in_region(frame, "Open Commands", &full);
+                assertion::assert_text_in_region(frame, "Launch Configurations", &full);
                 assertion::assert_text_in_region(frame, "Theme", &full);
                 assertion::assert_text_in_region(frame, "Agentty Default", &full);
             },
@@ -210,7 +210,7 @@ fn settings_dropdown_selects_value() {
     FeatureTest::new("settings_edit")
         .zola(
             "Settings editing",
-            "Open dropdowns to select setting values or edit text fields.",
+            "Open dropdowns to select setting values.",
             154,
         )
         .run(
@@ -261,6 +261,117 @@ fn settings_dropdown_selects_value() {
                 let after_frame = common::frame_from_capture(&report.captures[2]);
                 let after_full = Region::full(after_frame.cols(), after_frame.rows());
                 assertion::assert_text_in_region(&after_frame, "xhigh", &after_full);
+            },
+        )
+        .expect("feature test failed");
+}
+
+/// Verify that `Launch Configurations` are edited as discrete list entries.
+///
+/// Opens the command-list editor, adds one command, edits it, adds another
+/// command, reorders the entries, deletes the selected command, and confirms
+/// the settings row summarizes the remaining command.
+#[test]
+fn settings_launch_configurations_list_editor() {
+    // Arrange, Act, Assert
+    FeatureTest::new("settings_launch_configurations")
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::switch_to_tab("Inbox"))
+                    .compose(&common::switch_to_tab("Settings"))
+                    .viewing_pause_ms(1500)
+                    .press_key("j")
+                    .press_key("j")
+                    .press_key("j")
+                    .press_key("j")
+                    .press_key("j")
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
+                    .press_key("Enter")
+                    .wait_for_stable_frame(200, 3000)
+                    .capture_labeled(
+                        "empty_editor",
+                        "Launch Configurations list editor with no commands",
+                    )
+                    .press_key("a")
+                    .wait_for_stable_frame(200, 3000)
+                    .write_text("nvim .")
+                    .wait_for_stable_frame(200, 3000)
+                    .capture_labeled("add_input", "Adding a launch configuration")
+                    .press_key("Enter")
+                    .wait_for_stable_frame(200, 3000)
+                    .press_key("Enter")
+                    .wait_for_stable_frame(200, 3000)
+                    .press_key("Backspace")
+                    .press_key("Backspace")
+                    .press_key("Backspace")
+                    .press_key("Backspace")
+                    .press_key("Backspace")
+                    .press_key("Backspace")
+                    .write_text("lazygit")
+                    .wait_for_stable_frame(200, 3000)
+                    .capture_labeled("edit_input", "Editing a launch configuration")
+                    .press_key("Enter")
+                    .wait_for_stable_frame(200, 3000)
+                    .press_key("a")
+                    .wait_for_stable_frame(200, 3000)
+                    .write_text("npm run dev")
+                    .press_key("Enter")
+                    .wait_for_stable_frame(200, 3000)
+                    .capture_labeled("two_commands", "Two configured launch configurations")
+                    .write_text("K")
+                    .wait_for_stable_frame(200, 3000)
+                    .capture_labeled("reordered", "Selected command moved up")
+                    .press_key("d")
+                    .wait_for_stable_frame(200, 3000)
+                    .capture_labeled("deleted", "Selected command deleted")
+                    .press_key("Escape")
+                    .wait_for_stable_frame(200, 3000)
+                    .capture_labeled("summary", "Launch Configurations row summary after editing")
+            },
+            |frame, report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Launch Configurations", &full);
+                assertion::assert_text_in_region(frame, "lazygit", &full);
+
+                assert_eq!(
+                    report.captures.len(),
+                    7,
+                    "Expected 7 captures for the launch-configuration list editor workflow"
+                );
+
+                let empty_frame = common::frame_from_capture(&report.captures[0]);
+                let empty_full = Region::full(empty_frame.cols(), empty_frame.rows());
+                assertion::assert_text_in_region(
+                    &empty_frame,
+                    "(no commands configured)",
+                    &empty_full,
+                );
+
+                let add_frame = common::frame_from_capture(&report.captures[1]);
+                let add_full = Region::full(add_frame.cols(), add_frame.rows());
+                assertion::assert_text_in_region(&add_frame, "Add command", &add_full);
+                assertion::assert_text_in_region(&add_frame, "nvim .|", &add_full);
+
+                let edit_frame = common::frame_from_capture(&report.captures[2]);
+                let edit_full = Region::full(edit_frame.cols(), edit_frame.rows());
+                assertion::assert_text_in_region(&edit_frame, "Edit command", &edit_full);
+                assertion::assert_text_in_region(&edit_frame, "lazygit|", &edit_full);
+
+                let two_command_frame = common::frame_from_capture(&report.captures[3]);
+                let two_command_full =
+                    Region::full(two_command_frame.cols(), two_command_frame.rows());
+                assertion::assert_text_in_region(
+                    &two_command_frame,
+                    "npm run dev",
+                    &two_command_full,
+                );
+
+                let deleted_frame = common::frame_from_capture(&report.captures[5]);
+                assertion::assert_match_count(&deleted_frame, "npm run dev", 0);
             },
         )
         .expect("feature test failed");

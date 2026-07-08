@@ -147,11 +147,28 @@ pub struct SettingsSelectorDropdown {
     pub selected_index: usize,
 }
 
+/// Active interaction mode for the `Launch Configurations` list editor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LaunchConfigurationListEditorMode {
+    Add,
+    Browse,
+    Edit,
+}
+
+/// Render-ready snapshot for the `Launch Configurations` list editor overlay.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LaunchConfigurationListEditorSnapshot {
+    pub commands: Vec<String>,
+    pub input: Option<InputState>,
+    pub mode: LaunchConfigurationListEditorMode,
+    pub selected_index: usize,
+}
+
 /// Declares how a settings row is edited.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingControl {
+    CommandList,
     Selector,
-    TextInput,
 }
 
 /// Backing table rows for the settings page.
@@ -162,7 +179,7 @@ enum SettingRow {
     DefaultFastModel,
     DefaultReviewModel,
     IncludeCoauthoredByAgentty,
-    OpenCommand,
+    LaunchConfiguration,
     Theme,
 }
 
@@ -174,7 +191,7 @@ impl SettingRow {
         Self::DefaultFastModel,
         Self::DefaultReviewModel,
         Self::IncludeCoauthoredByAgentty,
-        Self::OpenCommand,
+        Self::LaunchConfiguration,
     ];
     /// Rows persisted once for the whole application.
     const GLOBAL: [Self; 1] = [Self::Theme];
@@ -185,7 +202,7 @@ impl SettingRow {
         Self::DefaultFastModel,
         Self::DefaultReviewModel,
         Self::IncludeCoauthoredByAgentty,
-        Self::OpenCommand,
+        Self::LaunchConfiguration,
     ];
     const ROW_COUNT: usize = Self::ALL.len();
 
@@ -205,7 +222,7 @@ impl SettingRow {
             Self::DefaultFastModel => "Default Fast Model",
             Self::DefaultReviewModel => "Default Review Model",
             Self::IncludeCoauthoredByAgentty => "Coauthored by Agentty",
-            Self::OpenCommand => "Open Commands",
+            Self::LaunchConfiguration => "Launch Configurations",
             Self::Theme => "Theme",
         }
     }
@@ -219,20 +236,7 @@ impl SettingRow {
             | Self::DefaultReviewModel
             | Self::IncludeCoauthoredByAgentty
             | Self::Theme => SettingControl::Selector,
-            Self::OpenCommand => SettingControl::TextInput,
-        }
-    }
-
-    /// Returns the persisted setting name represented by this row.
-    fn setting_name(self) -> SettingName {
-        match self {
-            Self::ReasoningLevel => SettingName::ReasoningLevel,
-            Self::DefaultSmartModel => SettingName::DefaultSmartModel,
-            Self::DefaultFastModel => SettingName::DefaultFastModel,
-            Self::DefaultReviewModel => SettingName::DefaultReviewModel,
-            Self::IncludeCoauthoredByAgentty => SettingName::IncludeCoauthoredByAgentty,
-            Self::OpenCommand => SettingName::OpenCommand,
-            Self::Theme => SettingName::Theme,
+            Self::LaunchConfiguration => SettingControl::CommandList,
         }
     }
 
@@ -252,6 +256,48 @@ struct SelectorDropdownState {
     selected_index: usize,
 }
 
+/// Tracks state for the `Launch Configurations` list editor overlay.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LaunchConfigurationListEditorState {
+    commands: Vec<String>,
+    input: InputState,
+    mode: LaunchConfigurationListEditorMode,
+    selected_index: usize,
+}
+
+impl LaunchConfigurationListEditorState {
+    /// Creates a list editor state from the persisted newline-delimited
+    /// command setting.
+    fn from_launch_configuration(launch_configuration: &str) -> Self {
+        Self {
+            commands: parse_launch_configurations(launch_configuration),
+            input: InputState::default(),
+            mode: LaunchConfigurationListEditorMode::Browse,
+            selected_index: 0,
+        }
+    }
+
+    /// Returns the selected index clamped to the currently available command
+    /// rows.
+    fn selected_index(&self) -> usize {
+        self.selected_index
+            .min(self.commands.len().saturating_sub(1))
+    }
+
+    /// Moves selection to a valid command row after a list mutation.
+    fn clamp_selected_index(&mut self) {
+        self.selected_index = self.selected_index();
+    }
+
+    /// Returns whether the editor is in single-line input mode.
+    fn is_input_mode(&self) -> bool {
+        matches!(
+            self.mode,
+            LaunchConfigurationListEditorMode::Add | LaunchConfigurationListEditorMode::Edit
+        )
+    }
+}
+
 /// Manages user-configurable application settings.
 pub struct SettingsManager {
     /// Default agent/model selection used by fast-path workflows.
@@ -261,7 +307,7 @@ pub struct SettingsManager {
     /// Default agent/model selection used when creating new sessions.
     pub default_smart_selection: AgentSelection,
     /// Optional command run in tmux when opening a session worktree.
-    pub open_command: String,
+    pub launch_configuration: String,
     /// Default reasoning effort preference for models that support this
     /// setting.
     ///
@@ -272,14 +318,13 @@ pub struct SettingsManager {
     /// Active terminal color theme for the whole application.
     pub theme: ColorTheme,
     available_agent_kinds: Vec<AgentKind>,
-    editing_text_row: Option<SettingRow>,
     /// Whether generated session commit messages append the Agentty coauthor
     /// trailer for the active project.
     ///
     /// New projects start with this disabled until the user explicitly enables
     /// it.
     include_coauthored_by_agentty: bool,
-    open_command_input: Option<InputState>,
+    launch_configuration_list_editor: Option<LaunchConfigurationListEditorState>,
     /// Active project identifier that owns these persisted settings.
     project_id: i64,
     selector_dropdown: Option<SelectorDropdownState>,
@@ -314,10 +359,10 @@ impl SettingsManager {
         });
         let reasoning_level = load_reasoning_level_setting(services, Some(project_id)).await;
 
-        let open_command = services
+        let launch_configuration = services
             .db()
             .settings()
-            .get_project_setting(project_id, SettingName::OpenCommand)
+            .get_project_setting(project_id, SettingName::LaunchConfiguration)
             .await
             .unwrap_or(None)
             .unwrap_or_default();
@@ -345,14 +390,13 @@ impl SettingsManager {
             default_fast_selection: default_fast_agent,
             default_review_selection: default_review_agent,
             default_smart_selection: default_smart_agent,
-            open_command,
+            launch_configuration,
             reasoning_level,
             table_state,
             theme,
             available_agent_kinds,
-            editing_text_row: None,
             include_coauthored_by_agentty,
-            open_command_input: None,
+            launch_configuration_list_editor: None,
             project_id,
             selector_dropdown: None,
             use_last_used_model_as_default,
@@ -361,7 +405,7 @@ impl SettingsManager {
 
     /// Moves the settings selection to the next row.
     pub fn next(&mut self) {
-        if !self.is_editing_text_input() && !self.is_selector_dropdown_open() {
+        if !self.is_launch_configuration_list_editor_open() && !self.is_selector_dropdown_open() {
             let next_index = (self.selected_row_index() + 1) % SettingRow::ROW_COUNT;
             self.table_state.select(Some(next_index));
         }
@@ -369,7 +413,7 @@ impl SettingsManager {
 
     /// Moves the settings selection to the previous row.
     pub fn previous(&mut self) {
-        if !self.is_editing_text_input() && !self.is_selector_dropdown_open() {
+        if !self.is_launch_configuration_list_editor_open() && !self.is_selector_dropdown_open() {
             let current_index = self.selected_row_index();
             let previous_index = if current_index == 0 {
                 SettingRow::ROW_COUNT - 1
@@ -388,22 +432,48 @@ impl SettingsManager {
             SettingControl::Selector => {
                 self.open_selector_dropdown(selected_row);
             }
-            SettingControl::TextInput => {
-                self.toggle_text_input(selected_row);
+            SettingControl::CommandList => {
+                self.open_launch_configuration_list_editor();
             }
         }
     }
 
-    /// Returns whether any settings text input editor is active.
+    /// Returns whether the `Launch Configurations` list editor is active.
     #[must_use]
-    pub fn is_editing_text_input(&self) -> bool {
-        self.editing_text_row.is_some()
+    pub fn is_launch_configuration_list_editor_open(&self) -> bool {
+        self.launch_configuration_list_editor.is_some()
+    }
+
+    /// Returns whether the `Launch Configurations` editor is currently
+    /// accepting single-line text input.
+    #[must_use]
+    pub fn is_launch_configuration_list_editor_input_active(&self) -> bool {
+        self.launch_configuration_list_editor
+            .as_ref()
+            .is_some_and(LaunchConfigurationListEditorState::is_input_mode)
     }
 
     /// Returns whether a selector dropdown is currently open.
     #[must_use]
     pub fn is_selector_dropdown_open(&self) -> bool {
         self.selector_dropdown.is_some()
+    }
+
+    /// Returns the render-ready `Launch Configurations` editor snapshot, when
+    /// it is open.
+    #[must_use]
+    pub fn launch_configuration_list_editor(
+        &self,
+    ) -> Option<LaunchConfigurationListEditorSnapshot> {
+        let editor = self.launch_configuration_list_editor.as_ref()?;
+        let input = editor.is_input_mode().then(|| editor.input.clone());
+
+        Some(LaunchConfigurationListEditorSnapshot {
+            commands: editor.commands.clone(),
+            input,
+            mode: editor.mode,
+            selected_index: editor.selected_index(),
+        })
     }
 
     /// Returns the render-ready selector dropdown snapshot, when one is open.
@@ -470,60 +540,153 @@ impl SettingsManager {
         self.close_selector_dropdown();
     }
 
-    /// Returns whether the `Open Commands` multiline editor is currently
-    /// active.
-    #[must_use]
-    pub fn is_editing_open_commands(&self) -> bool {
-        self.is_editing_text_input_for(SettingRow::OpenCommand)
+    /// Closes the `Launch Configurations` list editor without saving any active
+    /// add/edit input.
+    pub fn close_launch_configuration_list_editor(&mut self) {
+        self.launch_configuration_list_editor = None;
     }
 
-    /// Exits settings text input editing mode and clears editor cursor state.
-    pub fn stop_text_input_editing(&mut self) {
-        self.finish_text_input_editing();
+    /// Moves the `Launch Configurations` editor selection to the next command.
+    pub fn next_launch_configuration_list_editor_item(&mut self) {
+        self.move_launch_configuration_list_editor_selection(
+            LaunchConfigurationListDirection::Next,
+        );
     }
 
-    /// Appends one character to the selected text setting value and persists
-    /// it.
-    pub async fn append_selected_text_character(
-        &mut self,
-        services: &AppServices,
-        character: char,
-    ) {
-        if let Some(editing_row) = self.editing_text_row
-            && self.append_text_character(editing_row, character)
-        {
-            self.persist_text_setting(services, editing_row).await;
+    /// Moves the `Launch Configurations` editor selection to the previous
+    /// command.
+    pub fn previous_launch_configuration_list_editor_item(&mut self) {
+        self.move_launch_configuration_list_editor_selection(
+            LaunchConfigurationListDirection::Previous,
+        );
+    }
+
+    /// Starts adding a command in the launch-configuration editor.
+    pub fn start_adding_launch_configuration(&mut self) {
+        let Some(editor) = &mut self.launch_configuration_list_editor else {
+            return;
+        };
+
+        editor.input = InputState::default();
+        editor.mode = LaunchConfigurationListEditorMode::Add;
+    }
+
+    /// Starts editing the selected command. If no command exists yet, this
+    /// starts add mode.
+    pub fn start_editing_selected_launch_configuration(&mut self) {
+        let Some(editor) = &mut self.launch_configuration_list_editor else {
+            return;
+        };
+
+        if editor.commands.is_empty() {
+            editor.input = InputState::default();
+            editor.mode = LaunchConfigurationListEditorMode::Add;
+
+            return;
+        }
+
+        let selected_index = editor.selected_index();
+        let selected_command = editor.commands[selected_index].clone();
+        editor.selected_index = selected_index;
+        editor.input = InputState::with_text(selected_command);
+        editor.mode = LaunchConfigurationListEditorMode::Edit;
+    }
+
+    /// Cancels add/edit input and returns to command browsing.
+    pub fn cancel_launch_configuration_input(&mut self) {
+        let Some(editor) = &mut self.launch_configuration_list_editor else {
+            return;
+        };
+
+        editor.input = InputState::default();
+        editor.mode = LaunchConfigurationListEditorMode::Browse;
+    }
+
+    /// Appends one character to the active launch-configuration input field.
+    pub fn append_launch_configuration_input_character(&mut self, character: char) {
+        let Some(editor) = &mut self.launch_configuration_list_editor else {
+            return;
+        };
+
+        if editor.is_input_mode() {
+            editor.input.insert_char(character);
         }
     }
 
-    /// Removes the last character from the selected text setting and persists
-    /// it.
-    pub async fn remove_selected_text_character(&mut self, services: &AppServices) {
-        if let Some(editing_row) = self.editing_text_row
-            && self.remove_text_character(editing_row)
-        {
-            self.persist_text_setting(services, editing_row).await;
+    /// Removes the character before the cursor in the active
+    /// launch-configuration input field.
+    pub fn remove_launch_configuration_input_character(&mut self) {
+        let Some(editor) = &mut self.launch_configuration_list_editor else {
+            return;
+        };
+
+        if editor.is_input_mode() {
+            editor.input.delete_backward();
         }
     }
 
-    /// Moves the active text editor cursor one character to the left.
-    pub fn move_selected_text_cursor_left(&mut self) {
-        self.move_selected_text_cursor(TextCursorDirection::Left);
+    /// Removes the character at the cursor in the active launch-configuration
+    /// input field.
+    pub fn delete_launch_configuration_input_character(&mut self) {
+        let Some(editor) = &mut self.launch_configuration_list_editor else {
+            return;
+        };
+
+        if editor.is_input_mode() {
+            editor.input.delete_forward();
+        }
     }
 
-    /// Moves the active text editor cursor one character to the right.
-    pub fn move_selected_text_cursor_right(&mut self) {
-        self.move_selected_text_cursor(TextCursorDirection::Right);
+    /// Moves the launch-configuration input cursor one character to the left.
+    pub fn move_launch_configuration_input_cursor_left(&mut self) {
+        self.move_launch_configuration_input_cursor(LaunchConfigurationInputCursorDirection::Left);
     }
 
-    /// Moves the active text editor cursor to the previous line.
-    pub fn move_selected_text_cursor_up(&mut self) {
-        self.move_selected_text_cursor(TextCursorDirection::Up);
+    /// Moves the launch-configuration input cursor one character to the right.
+    pub fn move_launch_configuration_input_cursor_right(&mut self) {
+        self.move_launch_configuration_input_cursor(LaunchConfigurationInputCursorDirection::Right);
     }
 
-    /// Moves the active text editor cursor to the next line.
-    pub fn move_selected_text_cursor_down(&mut self) {
-        self.move_selected_text_cursor(TextCursorDirection::Down);
+    /// Moves the launch-configuration input cursor to the start of the field.
+    pub fn move_launch_configuration_input_cursor_home(&mut self) {
+        self.move_launch_configuration_input_cursor(LaunchConfigurationInputCursorDirection::Home);
+    }
+
+    /// Moves the launch-configuration input cursor to the end of the field.
+    pub fn move_launch_configuration_input_cursor_end(&mut self) {
+        self.move_launch_configuration_input_cursor(LaunchConfigurationInputCursorDirection::End);
+    }
+
+    /// Confirms the active add/edit input and persists the normalized command
+    /// list.
+    pub async fn confirm_launch_configuration_input(&mut self, services: &AppServices) {
+        if self.apply_launch_configuration_input() {
+            self.persist_launch_configuration_setting(services).await;
+        }
+    }
+
+    /// Deletes the selected launch configuration and persists the normalized
+    /// command list.
+    pub async fn delete_selected_launch_configuration(&mut self, services: &AppServices) {
+        if self.delete_selected_launch_configuration_from_editor() {
+            self.persist_launch_configuration_setting(services).await;
+        }
+    }
+
+    /// Moves the selected launch configuration down and persists the normalized
+    /// command list.
+    pub async fn move_selected_launch_configuration_down(&mut self, services: &AppServices) {
+        if self.reorder_selected_launch_configuration(LaunchConfigurationReorderDirection::Down) {
+            self.persist_launch_configuration_setting(services).await;
+        }
+    }
+
+    /// Moves the selected launch configuration up and persists the normalized
+    /// command list.
+    pub async fn move_selected_launch_configuration_up(&mut self, services: &AppServices) {
+        if self.reorder_selected_launch_configuration(LaunchConfigurationReorderDirection::Up) {
+            self.persist_launch_configuration_setting(services).await;
+        }
     }
 
     /// Returns settings table rows as `(name, value)` pairs.
@@ -556,24 +719,28 @@ impl SettingsManager {
     /// Returns the footer hint text for the settings page.
     #[must_use]
     pub fn footer_hint(&self) -> &'static str {
-        if self.is_editing_text_input_for(SettingRow::OpenCommand) {
-            "Editing open commands: one command per line, Alt+Enter/Shift+Enter inserts newline, \
-             Enter/Esc finish"
+        if self
+            .launch_configuration_list_editor
+            .as_ref()
+            .is_some_and(LaunchConfigurationListEditorState::is_input_mode)
+        {
+            "Launch Configurations: type a command, Enter save, Esc cancel"
+        } else if self.is_launch_configuration_list_editor_open() {
+            "Launch Configurations: j/k move, a add, e/Enter edit, d delete, J/K reorder, Esc/q \
+             close"
         } else if self.is_selector_dropdown_open() {
             "Selecting setting value: j/k move, Enter select, Esc/q close"
-        } else if self.is_editing_text_input() {
-            "Editing setting value: type text, Enter to finish, Esc to cancel"
         } else {
-            "Settings: Enter opens selectors or starts text editing"
+            "Settings: Enter opens selectors or command editor"
         }
     }
 
-    /// Returns configured open commands in persisted order.
+    /// Returns configured launch configurations in persisted order.
     ///
     /// Commands are split by newlines and trimmed.
     #[must_use]
-    pub fn open_commands(&self) -> Vec<String> {
-        parse_open_commands(self.open_command.as_str())
+    pub fn launch_configurations(&self) -> Vec<String> {
+        parse_launch_configurations(self.launch_configuration.as_str())
     }
 
     /// Returns the currently selected row index.
@@ -665,7 +832,7 @@ impl SettingsManager {
                     value: SettingSelectorValue::Bool(true),
                 },
             ],
-            SettingRow::OpenCommand => Vec::new(),
+            SettingRow::LaunchConfiguration => Vec::new(),
             SettingRow::Theme => ColorTheme::ALL
                 .iter()
                 .copied()
@@ -758,106 +925,172 @@ impl SettingsManager {
         }
     }
 
-    /// Returns whether a specific text-input row is currently being edited.
-    fn is_editing_text_input_for(&self, row: SettingRow) -> bool {
-        self.editing_text_row == Some(row)
+    /// Opens the command list editor from the persisted launch-configuration
+    /// setting.
+    fn open_launch_configuration_list_editor(&mut self) {
+        self.launch_configuration_list_editor = Some(
+            LaunchConfigurationListEditorState::from_launch_configuration(
+                self.launch_configuration.as_str(),
+            ),
+        );
     }
 
-    /// Toggles text editing mode for the requested row.
-    fn toggle_text_input(&mut self, row: SettingRow) {
-        if self.editing_text_row == Some(row) {
-            self.finish_text_input_editing();
+    /// Moves the launch-configuration editor selection in the requested
+    /// direction.
+    fn move_launch_configuration_list_editor_selection(
+        &mut self,
+        direction: LaunchConfigurationListDirection,
+    ) {
+        let Some(editor) = &mut self.launch_configuration_list_editor else {
+            return;
+        };
 
+        if editor.commands.is_empty() || editor.is_input_mode() {
             return;
         }
 
-        self.start_text_input_editing(row);
-    }
-
-    /// Starts text editing mode for the requested row.
-    fn start_text_input_editing(&mut self, row: SettingRow) {
-        self.editing_text_row = Some(row);
-        if row == SettingRow::OpenCommand {
-            self.open_command_input = Some(InputState::with_text(self.open_command.clone()));
-        }
-    }
-
-    /// Finalizes the active text editing session and synchronizes cached text.
-    fn finish_text_input_editing(&mut self) {
-        if self.is_editing_text_input_for(SettingRow::OpenCommand) {
-            self.sync_open_command_from_input();
-            self.open_command_input = None;
-        }
-
-        self.editing_text_row = None;
-    }
-
-    /// Appends text to the selected setting row.
-    fn append_text_character(&mut self, row: SettingRow, character: char) -> bool {
-        match row.control() {
-            SettingControl::Selector => false,
-            SettingControl::TextInput => {
-                let open_command_input = self.open_command_input_mut();
-                open_command_input.insert_char(character);
-                self.sync_open_command_from_input();
-
-                true
+        let command_count = editor.commands.len();
+        editor.selected_index = match direction {
+            LaunchConfigurationListDirection::Next => (editor.selected_index + 1) % command_count,
+            LaunchConfigurationListDirection::Previous => {
+                if editor.selected_index == 0 {
+                    command_count - 1
+                } else {
+                    editor.selected_index - 1
+                }
             }
+        };
+    }
+
+    /// Moves the launch-configuration input cursor in the requested direction.
+    fn move_launch_configuration_input_cursor(
+        &mut self,
+        direction: LaunchConfigurationInputCursorDirection,
+    ) {
+        let Some(editor) = &mut self.launch_configuration_list_editor else {
+            return;
+        };
+
+        if !editor.is_input_mode() {
+            return;
+        }
+
+        match direction {
+            LaunchConfigurationInputCursorDirection::End => editor.input.move_end(),
+            LaunchConfigurationInputCursorDirection::Home => editor.input.move_home(),
+            LaunchConfigurationInputCursorDirection::Left => editor.input.move_left(),
+            LaunchConfigurationInputCursorDirection::Right => editor.input.move_right(),
         }
     }
 
-    /// Removes one character from the selected setting row.
-    fn remove_text_character(&mut self, row: SettingRow) -> bool {
-        match row.control() {
-            SettingControl::Selector => false,
-            SettingControl::TextInput => {
-                let open_command_input = self.open_command_input_mut();
-                let previous_text = open_command_input.text().to_string();
-                open_command_input.delete_backward();
+    /// Applies the active add/edit input to the command list.
+    fn apply_launch_configuration_input(&mut self) -> bool {
+        let Some(editor) = &mut self.launch_configuration_list_editor else {
+            return false;
+        };
 
-                let is_changed = open_command_input.text() != previous_text;
-                if is_changed {
-                    self.sync_open_command_from_input();
+        if !editor.is_input_mode() {
+            return false;
+        }
+
+        let command = editor.input.text().trim().to_string();
+        match editor.mode {
+            LaunchConfigurationListEditorMode::Add => {
+                if !command.is_empty() {
+                    editor.commands.push(command);
+                    editor.selected_index = editor.commands.len().saturating_sub(1);
+                }
+            }
+            LaunchConfigurationListEditorMode::Edit => {
+                if editor.commands.is_empty() {
+                    if !command.is_empty() {
+                        editor.commands.push(command);
+                        editor.selected_index = 0;
+                    }
+                } else {
+                    let selected_index = editor.selected_index();
+                    if command.is_empty() {
+                        editor.commands.remove(selected_index);
+                        editor.clamp_selected_index();
+                    } else {
+                        editor.commands[selected_index] = command;
+                        editor.selected_index = selected_index;
+                    }
+                }
+            }
+            LaunchConfigurationListEditorMode::Browse => {}
+        }
+
+        editor.input = InputState::default();
+        editor.mode = LaunchConfigurationListEditorMode::Browse;
+        self.sync_launch_configuration_from_editor();
+
+        true
+    }
+
+    /// Deletes the selected command from the launch-configuration editor.
+    fn delete_selected_launch_configuration_from_editor(&mut self) -> bool {
+        let Some(editor) = &mut self.launch_configuration_list_editor else {
+            return false;
+        };
+
+        if editor.commands.is_empty() || editor.is_input_mode() {
+            return false;
+        }
+
+        let selected_index = editor.selected_index();
+        editor.commands.remove(selected_index);
+        editor.clamp_selected_index();
+        self.sync_launch_configuration_from_editor();
+
+        true
+    }
+
+    /// Reorders the selected command in the launch-configuration editor.
+    fn reorder_selected_launch_configuration(
+        &mut self,
+        direction: LaunchConfigurationReorderDirection,
+    ) -> bool {
+        let Some(editor) = &mut self.launch_configuration_list_editor else {
+            return false;
+        };
+
+        if editor.commands.len() < 2 || editor.is_input_mode() {
+            return false;
+        }
+
+        let selected_index = editor.selected_index();
+        let next_index = match direction {
+            LaunchConfigurationReorderDirection::Down => {
+                if selected_index + 1 >= editor.commands.len() {
+                    return false;
                 }
 
-                is_changed
+                selected_index + 1
             }
-        }
+            LaunchConfigurationReorderDirection::Up => {
+                if selected_index == 0 {
+                    return false;
+                }
+
+                selected_index - 1
+            }
+        };
+
+        editor.commands.swap(selected_index, next_index);
+        editor.selected_index = next_index;
+        self.sync_launch_configuration_from_editor();
+
+        true
     }
 
-    /// Moves the active text editor cursor for the selected row.
-    fn move_selected_text_cursor(&mut self, direction: TextCursorDirection) {
-        if let Some(editing_row) = self.editing_text_row {
-            self.move_text_cursor(editing_row, direction);
-        }
-    }
-
-    /// Moves the text editor cursor for the given row.
-    fn move_text_cursor(&mut self, row: SettingRow, direction: TextCursorDirection) {
-        if !matches!(row.control(), SettingControl::TextInput) {
-            return;
-        }
-
-        let open_command_input = self.open_command_input_mut();
-        match direction {
-            TextCursorDirection::Down => open_command_input.move_down(),
-            TextCursorDirection::Left => open_command_input.move_left(),
-            TextCursorDirection::Right => open_command_input.move_right(),
-            TextCursorDirection::Up => open_command_input.move_up(),
-        }
-    }
-
-    /// Returns mutable access to the `Open Commands` editor state.
-    fn open_command_input_mut(&mut self) -> &mut InputState {
-        let open_command_value = self.open_command.clone();
-        self.open_command_input
-            .get_or_insert_with(|| InputState::with_text(open_command_value))
-    }
-
-    /// Synchronizes the persisted `open_command` value from editor state.
-    fn sync_open_command_from_input(&mut self) {
-        if let Some(open_command_input) = &self.open_command_input {
-            self.open_command = open_command_input.text().to_string();
+    /// Synchronizes the persisted `launch_configuration` string from the
+    /// editor's normalized command list.
+    fn sync_launch_configuration_from_editor(&mut self) {
+        if let Some(editor) = &mut self.launch_configuration_list_editor {
+            editor.commands = normalize_launch_configurations(&editor.commands);
+            editor.clamp_selected_index();
+            self.launch_configuration = join_launch_configurations(&editor.commands);
         }
     }
 
@@ -881,58 +1114,25 @@ impl SettingsManager {
             SettingRow::IncludeCoauthoredByAgentty => {
                 bool_setting_display(self.include_coauthored_by_agentty)
             }
-            SettingRow::OpenCommand => {
-                if self.is_editing_text_input_for(row) {
-                    display_open_command_with_cursor(&self.open_command, self.open_command_cursor())
-                } else if self.open_command.is_empty() {
-                    "<empty>".to_string()
-                } else {
-                    self.open_command.clone()
-                }
+            SettingRow::LaunchConfiguration => {
+                display_launch_configuration_summary(&self.launch_configuration)
             }
             SettingRow::Theme => self.theme.label().to_string(),
         }
     }
 
-    /// Returns the active `Open Commands` editor cursor position.
-    fn open_command_cursor(&self) -> usize {
-        self.open_command_input
-            .as_ref()
-            .map_or_else(|| self.open_command.chars().count(), |input| input.cursor)
-    }
-
-    /// Persists the current value for a text-input row.
-    async fn persist_text_setting(&self, services: &AppServices, row: SettingRow) {
-        if !matches!(row.control(), SettingControl::TextInput) {
-            return;
-        }
-
-        match row.setting_name() {
-            SettingName::OpenCommand => {
-                // Best-effort: settings persistence failure is non-critical.
-                let _ = services
-                    .db()
-                    .settings()
-                    .upsert_project_setting(
-                        self.project_id,
-                        SettingName::OpenCommand,
-                        &self.open_command,
-                    )
-                    .await;
-            }
-            SettingName::ReasoningLevel
-            | SettingName::ActiveProjectId
-            | SettingName::ActiveTab
-            | SettingName::DefaultFastAgent
-            | SettingName::DefaultFastModel
-            | SettingName::DefaultReviewAgent
-            | SettingName::DefaultReviewModel
-            | SettingName::DefaultSmartAgent
-            | SettingName::DefaultSmartModel
-            | SettingName::IncludeCoauthoredByAgentty
-            | SettingName::LastUsedModelAsDefault
-            | SettingName::Theme => {}
-        }
+    /// Persists the current `LaunchConfiguration` setting value.
+    async fn persist_launch_configuration_setting(&self, services: &AppServices) {
+        // Best-effort: settings persistence failure is non-critical.
+        let _ = services
+            .db()
+            .settings()
+            .upsert_project_setting(
+                self.project_id,
+                SettingName::LaunchConfiguration,
+                &self.launch_configuration,
+            )
+            .await;
     }
 
     /// Returns all selectable model options whose provider is locally
@@ -1072,12 +1272,26 @@ impl SettingsManager {
     }
 }
 
-/// Cursor movement direction for text-input settings rows.
+/// Launch-configuration editor list navigation direction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TextCursorDirection {
-    Down,
+enum LaunchConfigurationListDirection {
+    Next,
+    Previous,
+}
+
+/// Launch-configuration editor input cursor movement direction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LaunchConfigurationInputCursorDirection {
+    End,
+    Home,
     Left,
     Right,
+}
+
+/// Launch-configuration editor reorder direction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LaunchConfigurationReorderDirection {
+    Down,
     Up,
 }
 
@@ -1149,14 +1363,30 @@ impl ModelSelectorOption {
     }
 }
 
-/// Parses the settings text field into executable open-command entries.
-fn parse_open_commands(open_command_setting: &str) -> Vec<String> {
-    open_command_setting
+/// Parses the persisted settings value into executable launch-configuration
+/// entries.
+fn parse_launch_configurations(launch_configuration_setting: &str) -> Vec<String> {
+    launch_configuration_setting
         .lines()
         .map(str::trim)
         .filter(|command| !command.is_empty())
         .map(std::string::ToString::to_string)
         .collect()
+}
+
+/// Trims command entries and drops empty commands.
+fn normalize_launch_configurations(commands: &[String]) -> Vec<String> {
+    commands
+        .iter()
+        .map(|command| command.trim())
+        .filter(|command| !command.is_empty())
+        .map(std::string::ToString::to_string)
+        .collect()
+}
+
+/// Joins normalized command entries into the persisted setting value.
+fn join_launch_configurations(commands: &[String]) -> String {
+    normalize_launch_configurations(commands).join("\n")
 }
 
 /// Loads one project-scoped boolean setting, falling back to
@@ -1196,25 +1426,18 @@ fn display_model_selector_value(selection: AgentSelection) -> String {
     format!("{}/{}", selection.kind(), selection.model().as_str())
 }
 
-/// Renders `text` with a `|` cursor marker at `cursor_char_index`.
-fn display_open_command_with_cursor(text: &str, cursor_char_index: usize) -> String {
-    let mut rendered_text = String::with_capacity(text.len() + 1);
-    let char_count = text.chars().count();
-    let clamped_cursor_index = cursor_char_index.min(char_count);
+/// Returns the compact table summary for configured launch configurations.
+fn display_launch_configuration_summary(launch_configuration_setting: &str) -> String {
+    let commands = parse_launch_configurations(launch_configuration_setting);
+    let Some(first_command) = commands.first() else {
+        return "(none)".to_string();
+    };
 
-    for (char_index, character) in text.chars().enumerate() {
-        if char_index == clamped_cursor_index {
-            rendered_text.push('|');
-        }
-
-        rendered_text.push(character);
+    if commands.len() == 1 {
+        return first_command.clone();
     }
 
-    if clamped_cursor_index == char_count {
-        rendered_text.push('|');
-    }
-
-    rendered_text
+    format!("{} (+{} more)", first_command, commands.len() - 1)
 }
 
 /// Returns all selectable model options in settings display order for the
@@ -1447,14 +1670,13 @@ mod tests {
                 AgentKind::Antigravity,
                 AgentKind::Antigravity.default_model(),
             ),
-            open_command: String::new(),
+            launch_configuration: String::new(),
             reasoning_level: ReasoningLevel::High,
             table_state,
             theme: ColorTheme::Current,
             available_agent_kinds: AgentKind::ALL.to_vec(),
-            editing_text_row: None,
             include_coauthored_by_agentty: false,
-            open_command_input: None,
+            launch_configuration_list_editor: None,
             project_id: 1,
             selector_dropdown: None,
             use_last_used_model_as_default: false,
@@ -1550,14 +1772,14 @@ mod tests {
     }
 
     #[test]
-    fn setting_name_as_str_returns_open_command() {
+    fn setting_name_as_str_returns_launch_configuration() {
         // Arrange
 
         // Act
-        let setting_name = SettingName::OpenCommand.as_str();
+        let setting_name = SettingName::LaunchConfiguration.as_str();
 
         // Assert
-        assert_eq!(setting_name, "OpenCommand");
+        assert_eq!(setting_name, "LaunchConfiguration");
     }
 
     #[test]
@@ -1771,9 +1993,9 @@ mod tests {
         services
             .db()
             .settings()
-            .upsert_project_setting(project_id, SettingName::OpenCommand, "nvim .")
+            .upsert_project_setting(project_id, SettingName::LaunchConfiguration, "nvim .")
             .await
-            .expect("failed to persist open command");
+            .expect("failed to persist launch configuration");
         services
             .db()
             .settings()
@@ -1809,7 +2031,7 @@ mod tests {
             manager.default_review_selection,
             AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus48)
         );
-        assert_eq!(manager.open_command, "nvim .");
+        assert_eq!(manager.launch_configuration, "nvim .");
         assert_eq!(manager.reasoning_level, ReasoningLevel::Low);
         assert_eq!(manager.theme, ColorTheme::Hacker);
         assert!(!manager.include_coauthored_by_agentty);
@@ -1909,7 +2131,7 @@ mod tests {
     }
 
     #[test]
-    fn previous_wraps_to_open_commands_row_from_theme_row() {
+    fn previous_wraps_to_launch_configurations_row_from_theme_row() {
         // Arrange
         let mut manager = new_settings_manager();
 
@@ -1921,19 +2143,19 @@ mod tests {
     }
 
     #[test]
-    fn is_editing_text_input_returns_false_by_default() {
+    fn is_launch_configuration_list_editor_open_returns_false_by_default() {
         // Arrange
         let manager = new_settings_manager();
 
         // Act
-        let is_editing = manager.is_editing_text_input();
+        let is_open = manager.is_launch_configuration_list_editor_open();
 
         // Assert
-        assert!(!is_editing);
+        assert!(!is_open);
     }
 
     #[test]
-    fn settings_rows_include_reasoning_model_coauthor_and_open_command_options() {
+    fn settings_rows_include_reasoning_model_coauthor_and_launch_configuration_options() {
         // Arrange
         let manager = new_settings_manager();
 
@@ -1948,7 +2170,7 @@ mod tests {
         assert_eq!(rows[3].0, "Default Fast Model");
         assert_eq!(rows[4].0, "Default Review Model");
         assert_eq!(rows[5].0, "Coauthored by Agentty");
-        assert_eq!(rows[6].0, "Open Commands");
+        assert_eq!(rows[6].0, "Launch Configurations");
     }
 
     #[test]
@@ -1969,14 +2191,19 @@ mod tests {
         assert_eq!(project_rows[2].0, "Default Fast Model");
         assert_eq!(project_rows[3].0, "Default Review Model");
         assert_eq!(project_rows[4].0, "Coauthored by Agentty");
-        assert_eq!(project_rows[5].0, "Open Commands");
+        assert_eq!(project_rows[5].0, "Launch Configurations");
     }
 
     #[test]
-    fn footer_hint_returns_editing_text_when_text_input_is_active() {
+    fn footer_hint_returns_launch_configuration_input_hint_when_input_is_active() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.editing_text_row = Some(SettingRow::OpenCommand);
+        manager.launch_configuration_list_editor = Some(LaunchConfigurationListEditorState {
+            commands: Vec::new(),
+            input: InputState::default(),
+            mode: LaunchConfigurationListEditorMode::Add,
+            selected_index: 0,
+        });
 
         // Act
         let footer_hint = manager.footer_hint();
@@ -1984,8 +2211,7 @@ mod tests {
         // Assert
         assert_eq!(
             footer_hint,
-            "Editing open commands: one command per line, Alt+Enter/Shift+Enter inserts newline, \
-             Enter/Esc finish"
+            "Launch Configurations: type a command, Enter save, Esc cancel"
         );
     }
 
@@ -2009,49 +2235,52 @@ mod tests {
     }
 
     #[test]
-    fn open_commands_returns_single_trimmed_command() {
+    fn launch_configurations_returns_single_trimmed_command() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.open_command = "  cargo test  ".to_string();
+        manager.launch_configuration = "  cargo test  ".to_string();
 
         // Act
-        let open_commands = manager.open_commands();
+        let launch_configurations = manager.launch_configurations();
 
         // Assert
-        assert_eq!(open_commands, vec!["cargo test".to_string()]);
+        assert_eq!(launch_configurations, vec!["cargo test".to_string()]);
     }
 
     #[test]
-    fn open_commands_splits_newline_entries() {
+    fn launch_configurations_splits_newline_entries() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.open_command = " cargo test \n npm run dev \n".to_string();
+        manager.launch_configuration = " cargo test \n npm run dev \n".to_string();
 
         // Act
-        let open_commands = manager.open_commands();
+        let launch_configurations = manager.launch_configurations();
 
         // Assert
         assert_eq!(
-            open_commands,
+            launch_configurations,
             vec!["cargo test".to_string(), "npm run dev".to_string()]
         );
     }
 
     #[test]
-    fn open_commands_does_not_split_double_pipe_entries() {
+    fn launch_configurations_does_not_split_double_pipe_entries() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.open_command = "cargo test || npm run dev".to_string();
+        manager.launch_configuration = "cargo test || npm run dev".to_string();
 
         // Act
-        let open_commands = manager.open_commands();
+        let launch_configurations = manager.launch_configurations();
 
         // Assert
-        assert_eq!(open_commands, vec!["cargo test || npm run dev".to_string()]);
+        assert_eq!(
+            launch_configurations,
+            vec!["cargo test || npm run dev".to_string()]
+        );
     }
 
     #[test]
-    fn settings_rows_show_empty_placeholder_for_open_command() {
+    fn settings_rows_show_empty_placeholder_for_launch_configuration() {
         // Arrange
         let manager = new_settings_manager();
 
@@ -2059,37 +2288,33 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[6].1, "<empty>");
+        assert_eq!(rows[6].1, "(none)");
     }
 
     #[test]
-    fn settings_rows_show_cursor_for_open_command_while_editing() {
+    fn settings_rows_show_single_launch_configuration_summary() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.open_command = "http://localhost:5173".to_string();
-        manager.editing_text_row = Some(SettingRow::OpenCommand);
+        manager.launch_configuration = "http://localhost:5173".to_string();
 
         // Act
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[6].1, "http://localhost:5173|");
+        assert_eq!(rows[6].1, "http://localhost:5173");
     }
 
     #[test]
-    fn settings_rows_show_cursor_within_open_command_while_editing() {
+    fn settings_rows_show_multiple_launch_configuration_summary() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.open_command = "abc".to_string();
-        manager.editing_text_row = Some(SettingRow::OpenCommand);
-        manager.open_command_input = Some(InputState::with_text(manager.open_command.clone()));
-        manager.move_selected_text_cursor_left();
+        manager.launch_configuration = "cargo test\nnpm run dev\nlazygit".to_string();
 
         // Act
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[6].1, "ab|c");
+        assert_eq!(rows[6].1, "cargo test (+2 more)");
     }
 
     #[test]
@@ -2201,29 +2426,25 @@ mod tests {
     }
 
     #[test]
-    fn handle_enter_toggles_open_command_editing_state() {
+    fn handle_enter_opens_launch_configuration_list_editor() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.open_command = "nvim .".to_string();
+        manager.launch_configuration = "nvim .".to_string();
         select_row(&mut manager, 6);
 
         // Act
         manager.handle_enter();
 
         // Assert
-        assert!(manager.is_editing_open_commands());
-        assert!(manager.open_command_input.is_some());
-
-        // Act
-        manager.handle_enter();
-
-        // Assert
-        assert!(!manager.is_editing_open_commands());
-        assert!(manager.open_command_input.is_none());
+        let editor = manager
+            .launch_configuration_list_editor()
+            .expect("expected launch-configuration list editor");
+        assert_eq!(editor.commands, vec!["nvim .".to_string()]);
+        assert_eq!(editor.mode, LaunchConfigurationListEditorMode::Browse);
     }
 
     #[test]
-    fn next_and_previous_do_not_move_selection_while_editing_open_commands() {
+    fn next_and_previous_do_not_move_selection_while_launch_configuration_editor_is_open() {
         // Arrange
         let mut manager = new_settings_manager();
         select_row(&mut manager, 6);
@@ -2235,6 +2456,7 @@ mod tests {
 
         // Assert
         assert_eq!(manager.table_state.selected(), Some(6));
+        assert!(manager.is_launch_configuration_list_editor_open());
     }
 
     #[test]
@@ -2253,46 +2475,182 @@ mod tests {
         assert!(manager.is_selector_dropdown_open());
     }
 
-    #[tokio::test]
-    async fn stop_text_input_editing_syncs_cached_open_command_text() {
+    #[test]
+    fn cancel_launch_configuration_input_returns_to_browse_without_changing_value() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.open_command = "old command".to_string();
-        manager.editing_text_row = Some(SettingRow::OpenCommand);
-        manager.open_command_input = Some(InputState::with_text("new command".to_string()));
+        manager.launch_configuration = "old command".to_string();
+        select_row(&mut manager, 6);
+        manager.handle_enter();
+        manager.start_adding_launch_configuration();
+        manager.append_launch_configuration_input_character('n');
 
         // Act
-        manager.stop_text_input_editing();
+        manager.cancel_launch_configuration_input();
 
         // Assert
-        assert_eq!(manager.open_command, "new command");
-        assert!(manager.editing_text_row.is_none());
-        assert!(manager.open_command_input.is_none());
+        let editor = manager
+            .launch_configuration_list_editor()
+            .expect("expected launch-configuration list editor");
+        assert_eq!(manager.launch_configuration, "old command");
+        assert_eq!(editor.mode, LaunchConfigurationListEditorMode::Browse);
+        assert!(editor.input.is_none());
     }
 
     #[tokio::test]
-    async fn append_and_remove_selected_text_character_persist_open_command() {
+    async fn confirm_launch_configuration_input_adds_trimmed_command_and_persists_value() {
         // Arrange
         let (services, project_id) = test_services().await;
         let mut manager = SettingsManager::new(&services, project_id).await;
         select_row(&mut manager, 6);
         manager.handle_enter();
+        manager.start_adding_launch_configuration();
 
         // Act
-        manager.append_selected_text_character(&services, 'n').await;
-        manager.append_selected_text_character(&services, 'v').await;
-        manager.remove_selected_text_character(&services).await;
+        manager.append_launch_configuration_input_character(' ');
+        manager.append_launch_configuration_input_character('n');
+        manager.append_launch_configuration_input_character('v');
+        manager.append_launch_configuration_input_character('i');
+        manager.append_launch_configuration_input_character('m');
+        manager.append_launch_configuration_input_character(' ');
+        manager.confirm_launch_configuration_input(&services).await;
 
         // Assert
-        assert_eq!(manager.open_command, "n");
+        assert_eq!(manager.launch_configuration, "nvim");
         assert_eq!(
             services
                 .db()
                 .settings()
-                .get_project_setting(project_id, SettingName::OpenCommand)
+                .get_project_setting(project_id, SettingName::LaunchConfiguration)
                 .await
-                .expect("failed to load open command"),
-            Some("n".to_string())
+                .expect("failed to load launch configuration"),
+            Some("nvim".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn confirm_launch_configuration_input_edits_selected_command_and_persists_value() {
+        // Arrange
+        let (services, project_id) = test_services().await;
+        let mut manager = SettingsManager::new(&services, project_id).await;
+        manager.launch_configuration = "cargo test\nnpm run dev".to_string();
+        select_row(&mut manager, 6);
+        manager.handle_enter();
+        manager.next_launch_configuration_list_editor_item();
+        manager.start_editing_selected_launch_configuration();
+
+        for _ in 0.."npm run dev".chars().count() {
+            manager.remove_launch_configuration_input_character();
+        }
+        for character in "lazygit".chars() {
+            manager.append_launch_configuration_input_character(character);
+        }
+
+        // Act
+        manager.confirm_launch_configuration_input(&services).await;
+
+        // Assert
+        assert_eq!(manager.launch_configuration, "cargo test\nlazygit");
+        assert_eq!(
+            services
+                .db()
+                .settings()
+                .get_project_setting(project_id, SettingName::LaunchConfiguration)
+                .await
+                .expect("failed to load launch configuration"),
+            Some("cargo test\nlazygit".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn confirm_launch_configuration_input_drops_empty_edited_command() {
+        // Arrange
+        let (services, project_id) = test_services().await;
+        let mut manager = SettingsManager::new(&services, project_id).await;
+        manager.launch_configuration = "cargo test\nnpm run dev".to_string();
+        select_row(&mut manager, 6);
+        manager.handle_enter();
+        manager.start_editing_selected_launch_configuration();
+
+        for _ in 0.."cargo test".chars().count() {
+            manager.remove_launch_configuration_input_character();
+        }
+
+        // Act
+        manager.confirm_launch_configuration_input(&services).await;
+
+        // Assert
+        assert_eq!(manager.launch_configuration, "npm run dev");
+        assert_eq!(
+            services
+                .db()
+                .settings()
+                .get_project_setting(project_id, SettingName::LaunchConfiguration)
+                .await
+                .expect("failed to load launch configuration"),
+            Some("npm run dev".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_selected_launch_configuration_persists_remaining_commands() {
+        // Arrange
+        let (services, project_id) = test_services().await;
+        let mut manager = SettingsManager::new(&services, project_id).await;
+        manager.launch_configuration = "cargo test\nnpm run dev\nlazygit".to_string();
+        select_row(&mut manager, 6);
+        manager.handle_enter();
+        manager.next_launch_configuration_list_editor_item();
+
+        // Act
+        manager
+            .delete_selected_launch_configuration(&services)
+            .await;
+
+        // Assert
+        assert_eq!(manager.launch_configuration, "cargo test\nlazygit");
+        assert_eq!(
+            services
+                .db()
+                .settings()
+                .get_project_setting(project_id, SettingName::LaunchConfiguration)
+                .await
+                .expect("failed to load launch configuration"),
+            Some("cargo test\nlazygit".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn move_selected_launch_configuration_down_persists_reordered_commands() {
+        // Arrange
+        let (services, project_id) = test_services().await;
+        let mut manager = SettingsManager::new(&services, project_id).await;
+        manager.launch_configuration = "cargo test\nnpm run dev\nlazygit".to_string();
+        select_row(&mut manager, 6);
+        manager.handle_enter();
+
+        // Act
+        manager
+            .move_selected_launch_configuration_down(&services)
+            .await;
+
+        // Assert
+        let editor = manager
+            .launch_configuration_list_editor()
+            .expect("expected launch-configuration list editor");
+        assert_eq!(
+            manager.launch_configuration,
+            "npm run dev\ncargo test\nlazygit"
+        );
+        assert_eq!(editor.selected_index, 1);
+        assert_eq!(
+            services
+                .db()
+                .settings()
+                .get_project_setting(project_id, SettingName::LaunchConfiguration)
+                .await
+                .expect("failed to load launch configuration"),
+            Some("npm run dev\ncargo test\nlazygit".to_string())
         );
     }
 
@@ -2357,28 +2715,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn text_editing_apis_are_noops_without_active_text_row() {
+    async fn launch_configuration_editor_apis_are_noops_without_open_editor() {
         // Arrange
         let (services, project_id) = test_services().await;
         let mut manager = SettingsManager::new(&services, project_id).await;
 
         // Act
-        manager.append_selected_text_character(&services, 'n').await;
-        manager.remove_selected_text_character(&services).await;
-        manager.move_selected_text_cursor_left();
-        manager.move_selected_text_cursor_right();
-        manager.move_selected_text_cursor_up();
-        manager.move_selected_text_cursor_down();
+        manager.start_adding_launch_configuration();
+        manager.start_editing_selected_launch_configuration();
+        manager.append_launch_configuration_input_character('n');
+        manager.remove_launch_configuration_input_character();
+        manager.delete_launch_configuration_input_character();
+        manager.move_launch_configuration_input_cursor_left();
+        manager.move_launch_configuration_input_cursor_right();
+        manager.move_launch_configuration_input_cursor_home();
+        manager.move_launch_configuration_input_cursor_end();
+        manager.confirm_launch_configuration_input(&services).await;
+        manager
+            .delete_selected_launch_configuration(&services)
+            .await;
+        manager
+            .move_selected_launch_configuration_down(&services)
+            .await;
+        manager
+            .move_selected_launch_configuration_up(&services)
+            .await;
 
         // Assert
-        assert!(manager.open_command.is_empty());
+        assert!(manager.launch_configuration.is_empty());
         assert_eq!(
             services
                 .db()
                 .settings()
-                .get_project_setting(project_id, SettingName::OpenCommand)
+                .get_project_setting(project_id, SettingName::LaunchConfiguration)
                 .await
-                .expect("failed to load open command"),
+                .expect("failed to load launch configuration"),
             None
         );
     }

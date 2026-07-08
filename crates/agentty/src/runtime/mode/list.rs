@@ -23,12 +23,14 @@ use crate::ui::text_util::inline_text;
 /// sessions, and unstarted draft sessions, and `Tab` cycles tabs forward while
 /// `Shift+Tab` cycles backward.
 pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResult> {
-    if app.tabs.current() == Tab::Settings && app.settings.is_selector_dropdown_open() {
-        return handle_settings_selector_dropdown(app, key).await;
+    if app.tabs.current() == Tab::Settings
+        && app.settings.is_launch_configuration_list_editor_open()
+    {
+        return handle_settings_launch_configuration_list_editor(app, key).await;
     }
 
-    if app.tabs.current() == Tab::Settings && app.settings.is_editing_text_input() {
-        return handle_settings_text_input(app, key).await;
+    if app.tabs.current() == Tab::Settings && app.settings.is_selector_dropdown_open() {
+        return handle_settings_selector_dropdown(app, key).await;
     }
 
     match key.code {
@@ -186,46 +188,51 @@ async fn handle_settings_selector_dropdown(
     Ok(EventResult::Continue)
 }
 
-/// Handles text input while a settings editor is active.
-///
-/// The `Open Commands` editor is multiline: `Alt+Enter`/`Shift+Enter` insert
-/// a newline. Terminals that emit `\r`/`\n` as character keys are also
-/// treated as newline insertion to match prompt input behavior. Plain
-/// `Enter` finishes editing.
-/// Arrow keys move the cursor.
-async fn handle_settings_text_input(app: &mut App, key: KeyEvent) -> io::Result<EventResult> {
+/// Handles key input while the `Launch Configurations` list editor is open.
+async fn handle_settings_launch_configuration_list_editor(
+    app: &mut App,
+    key: KeyEvent,
+) -> io::Result<EventResult> {
+    if app
+        .settings
+        .is_launch_configuration_list_editor_input_active()
+    {
+        return handle_settings_launch_configuration_input(app, key).await;
+    }
+
     match key.code {
-        _ if should_insert_settings_newline(app, key) => {
-            app.settings
-                .append_selected_text_character(&app.services, '\n')
-                .await;
-        }
-        code if is_settings_enter_key(code) => {
-            app.settings.stop_text_input_editing();
-        }
         KeyCode::Esc => {
-            app.settings.stop_text_input_editing();
+            app.settings.close_launch_configuration_list_editor();
         }
-        KeyCode::Left => {
-            app.settings.move_selected_text_cursor_left();
+        KeyCode::Char(character) if character.eq_ignore_ascii_case(&'q') => {
+            app.settings.close_launch_configuration_list_editor();
         }
-        KeyCode::Right => {
-            app.settings.move_selected_text_cursor_right();
+        KeyCode::Char('j') | KeyCode::Down => {
+            app.settings.next_launch_configuration_list_editor_item();
         }
-        KeyCode::Up => {
-            app.settings.move_selected_text_cursor_up();
-        }
-        KeyCode::Down => {
-            app.settings.move_selected_text_cursor_down();
-        }
-        KeyCode::Backspace => {
+        KeyCode::Char('k') | KeyCode::Up => {
             app.settings
-                .remove_selected_text_character(&app.services)
+                .previous_launch_configuration_list_editor_item();
+        }
+        KeyCode::Char('J') => {
+            app.settings
+                .move_selected_launch_configuration_down(&app.services)
                 .await;
         }
-        KeyCode::Char(character) if is_settings_text_key(key) => {
+        KeyCode::Char('K') => {
             app.settings
-                .append_selected_text_character(&app.services, character)
+                .move_selected_launch_configuration_up(&app.services)
+                .await;
+        }
+        KeyCode::Char('a') => {
+            app.settings.start_adding_launch_configuration();
+        }
+        KeyCode::Char('e') | KeyCode::Enter => {
+            app.settings.start_editing_selected_launch_configuration();
+        }
+        KeyCode::Char('d') => {
+            app.settings
+                .delete_selected_launch_configuration(&app.services)
                 .await;
         }
         _ => {}
@@ -234,37 +241,46 @@ async fn handle_settings_text_input(app: &mut App, key: KeyEvent) -> io::Result<
     Ok(EventResult::Continue)
 }
 
-/// Returns whether settings text editing should insert a newline.
-fn should_insert_settings_newline(app: &App, key: KeyEvent) -> bool {
-    app.settings.is_editing_open_commands()
-        && (is_settings_newline_character_key(key.code)
-            || is_settings_modified_enter_key(key)
-            || is_settings_control_newline_key(key))
-}
+/// Handles key input while adding or editing one launch configuration.
+async fn handle_settings_launch_configuration_input(
+    app: &mut App,
+    key: KeyEvent,
+) -> io::Result<EventResult> {
+    match key.code {
+        KeyCode::Enter => {
+            app.settings
+                .confirm_launch_configuration_input(&app.services)
+                .await;
+        }
+        KeyCode::Esc => {
+            app.settings.cancel_launch_configuration_input();
+        }
+        KeyCode::Left => {
+            app.settings.move_launch_configuration_input_cursor_left();
+        }
+        KeyCode::Right => {
+            app.settings.move_launch_configuration_input_cursor_right();
+        }
+        KeyCode::Home => {
+            app.settings.move_launch_configuration_input_cursor_home();
+        }
+        KeyCode::End => {
+            app.settings.move_launch_configuration_input_cursor_end();
+        }
+        KeyCode::Backspace => {
+            app.settings.remove_launch_configuration_input_character();
+        }
+        KeyCode::Delete => {
+            app.settings.delete_launch_configuration_input_character();
+        }
+        KeyCode::Char(character) if is_settings_text_key(key) => {
+            app.settings
+                .append_launch_configuration_input_character(character);
+        }
+        _ => {}
+    }
 
-/// Returns whether the key code is a newline character emitted as a typed key.
-fn is_settings_newline_character_key(key_code: KeyCode) -> bool {
-    matches!(key_code, KeyCode::Char('\r' | '\n'))
-}
-
-/// Returns whether the key event is a modified Enter key that should insert a
-/// newline in settings text input.
-fn is_settings_modified_enter_key(key: KeyEvent) -> bool {
-    is_settings_enter_key(key.code)
-        && key
-            .modifiers
-            .intersects(KeyModifiers::ALT | KeyModifiers::SHIFT)
-}
-
-/// Returns whether the key event is a control-key newline variant.
-fn is_settings_control_newline_key(key: KeyEvent) -> bool {
-    key.modifiers == KeyModifiers::CONTROL
-        && matches!(key.code, KeyCode::Char('j' | 'm' | '\n' | '\r'))
-}
-
-/// Returns whether a key code is the Enter key.
-fn is_settings_enter_key(key_code: KeyCode) -> bool {
-    matches!(key_code, KeyCode::Enter)
+    Ok(EventResult::Continue)
 }
 
 /// Returns whether a key event should insert text into a settings string value.
@@ -347,7 +363,7 @@ mod tests {
     use crate::domain::question::QuestionItem;
     use crate::domain::theme::ColorTheme;
 
-    /// Builds a settings-focused test app with the `Open Commands` row
+    /// Builds a settings-focused test app with the `Launch Configurations` row
     /// selected.
     async fn new_test_app_for_settings() -> (App, tempfile::TempDir) {
         let (mut app, base_dir) = crate::test_support::new_git_test_app().await;
@@ -355,15 +371,15 @@ mod tests {
             .await
             .expect("failed to create session for settings tests");
         app.tabs.set(Tab::Settings);
-        let open_command_row_index = app
+        let launch_configuration_row_index = app
             .settings
             .settings_rows()
             .iter()
-            .position(|(setting_name, _)| *setting_name == "Open Commands")
-            .expect("missing Open Commands setting row");
+            .position(|(setting_name, _)| *setting_name == "Launch Configurations")
+            .expect("missing Launch Configurations setting row");
         app.settings
             .table_state
-            .select(Some(open_command_row_index));
+            .select(Some(launch_configuration_row_index));
 
         (app, base_dir)
     }
@@ -891,18 +907,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_enter_key_starts_open_command_editing_in_settings_tab() {
+    async fn test_handle_enter_key_opens_launch_configuration_list_editor_in_settings_tab() {
         // Arrange
         let (mut app, _base_dir) = new_test_app_for_settings().await;
+        app.settings.launch_configuration = "cargo test\nnpm run dev".to_string();
 
         // Act
         let event_result = handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
             .await
             .expect("failed to handle key");
+        let editor = app
+            .settings
+            .launch_configuration_list_editor()
+            .expect("expected launch-configuration list editor");
 
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
-        assert!(app.settings.is_editing_text_input());
+        assert_eq!(
+            editor.commands,
+            vec!["cargo test".to_string(), "npm run dev".to_string()]
+        );
     }
 
     #[tokio::test]
@@ -980,35 +1004,61 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_char_key_appends_open_command_value_while_editing() {
+    async fn test_launch_configuration_list_editor_adds_command_on_confirm() {
         // Arrange
         let (mut app, _base_dir) = new_test_app_for_settings().await;
         handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
             .await
-            .expect("failed to start settings editing");
-
-        // Act
-        let event_result = handle(
+            .expect("failed to open settings command editor");
+        handle(
             &mut app,
             KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
         )
         .await
-        .expect("failed to handle key");
+        .expect("failed to start adding launch configuration");
+
+        // Act
+        for character in "nvim".chars() {
+            handle(
+                &mut app,
+                KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE),
+            )
+            .await
+            .expect("failed to type launch configuration");
+        }
+        assert_eq!(app.settings.launch_configuration, "");
+
+        let event_result = handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("failed to confirm launch configuration");
 
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
-        assert_eq!(app.settings.open_command, "a");
+        assert_eq!(app.settings.launch_configuration, "nvim");
         assert_eq!(app.sessions.sessions().len(), 1);
     }
 
     #[tokio::test]
-    async fn test_handle_backspace_key_removes_open_command_character_while_editing() {
+    async fn test_launch_configuration_list_editor_backspace_updates_pending_input_only() {
         // Arrange
         let (mut app, _base_dir) = new_test_app_for_settings().await;
-        app.settings.open_command = "abc".to_string();
         handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
             .await
-            .expect("failed to start settings editing");
+            .expect("failed to open settings command editor");
+        handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to start adding launch configuration");
+        for character in "abc".chars() {
+            handle(
+                &mut app,
+                KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE),
+            )
+            .await
+            .expect("failed to type launch configuration");
+        }
 
         // Act
         let event_result = handle(
@@ -1017,146 +1067,122 @@ mod tests {
         )
         .await
         .expect("failed to handle key");
+        let editor = app
+            .settings
+            .launch_configuration_list_editor()
+            .expect("expected launch-configuration list editor");
+        let input = editor.input.expect("expected active input");
 
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
-        assert_eq!(app.settings.open_command, "ab");
+        assert_eq!(input.text(), "ab");
+        assert_eq!(app.settings.launch_configuration, "");
     }
 
     #[tokio::test]
-    async fn test_handle_shift_enter_key_inserts_open_command_newline_while_editing() {
+    async fn test_launch_configuration_list_editor_edits_selected_command() {
         // Arrange
         let (mut app, _base_dir) = new_test_app_for_settings().await;
-        app.settings.open_command = "cargo test".to_string();
+        app.settings.launch_configuration = "cargo test\nnpm run dev".to_string();
         handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
             .await
-            .expect("failed to start settings editing");
-
-        // Act
-        let event_result = handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT))
-            .await
-            .expect("failed to handle Shift+Enter key");
-
-        // Assert
-        assert!(matches!(event_result, EventResult::Continue));
-        assert!(app.settings.is_editing_text_input());
-        assert_eq!(app.settings.open_command, "cargo test\n");
-    }
-
-    #[tokio::test]
-    async fn test_handle_alt_enter_key_inserts_open_command_newline_while_editing() {
-        // Arrange
-        let (mut app, _base_dir) = new_test_app_for_settings().await;
-        app.settings.open_command = "cargo test".to_string();
-        handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-            .await
-            .expect("failed to start settings editing");
-
-        // Act
-        let event_result = handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT))
-            .await
-            .expect("failed to handle Alt+Enter key");
-
-        // Assert
-        assert!(matches!(event_result, EventResult::Continue));
-        assert!(app.settings.is_editing_text_input());
-        assert_eq!(app.settings.open_command, "cargo test\n");
-    }
-
-    #[tokio::test]
-    async fn test_handle_shift_carriage_return_key_inserts_open_command_newline_while_editing() {
-        // Arrange
-        let (mut app, _base_dir) = new_test_app_for_settings().await;
-        app.settings.open_command = "cargo test".to_string();
-        handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-            .await
-            .expect("failed to start settings editing");
-
-        // Act
-        let event_result = handle(
+            .expect("failed to open settings command editor");
+        handle(
             &mut app,
-            KeyEvent::new(KeyCode::Char('\r'), KeyModifiers::SHIFT),
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
         )
         .await
-        .expect("failed to handle Shift+carriage-return key");
-
-        // Assert
-        assert!(matches!(event_result, EventResult::Continue));
-        assert!(app.settings.is_editing_text_input());
-        assert_eq!(app.settings.open_command, "cargo test\n");
-    }
-
-    #[tokio::test]
-    async fn test_handle_control_j_key_inserts_open_command_newline_while_editing() {
-        // Arrange
-        let (mut app, _base_dir) = new_test_app_for_settings().await;
-        app.settings.open_command = "cargo test".to_string();
-        handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-            .await
-            .expect("failed to start settings editing");
-
-        // Act
-        let event_result = handle(
+        .expect("failed to select second command");
+        handle(
             &mut app,
-            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE),
         )
         .await
-        .expect("failed to handle Control+j key");
-
-        // Assert
-        assert!(matches!(event_result, EventResult::Continue));
-        assert!(app.settings.is_editing_text_input());
-        assert_eq!(app.settings.open_command, "cargo test\n");
-    }
-
-    #[tokio::test]
-    async fn test_handle_line_feed_key_inserts_open_command_newline_while_editing() {
-        // Arrange
-        let (mut app, _base_dir) = new_test_app_for_settings().await;
-        app.settings.open_command = "cargo test".to_string();
-        handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .expect("failed to start editing launch configuration");
+        for _ in 0.."npm run dev".chars().count() {
+            handle(
+                &mut app,
+                KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+            )
             .await
-            .expect("failed to start settings editing");
+            .expect("failed to clear command");
+        }
 
         // Act
-        let event_result = handle(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('\n'), KeyModifiers::NONE),
-        )
-        .await
-        .expect("failed to handle line-feed key");
-
-        // Assert
-        assert!(matches!(event_result, EventResult::Continue));
-        assert!(app.settings.is_editing_text_input());
-        assert_eq!(app.settings.open_command, "cargo test\n");
-    }
-
-    #[tokio::test]
-    async fn test_handle_enter_key_stops_open_command_editing_when_already_editing() {
-        // Arrange
-        let (mut app, _base_dir) = new_test_app_for_settings().await;
-        handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        for character in "lazygit".chars() {
+            handle(
+                &mut app,
+                KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE),
+            )
             .await
-            .expect("failed to start settings editing");
-
-        // Act
+            .expect("failed to type replacement command");
+        }
         let event_result = handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
             .await
-            .expect("failed to handle key");
+            .expect("failed to confirm edited launch configuration");
 
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
-        assert!(!app.settings.is_editing_text_input());
+        assert_eq!(app.settings.launch_configuration, "cargo test\nlazygit");
     }
 
     #[tokio::test]
-    async fn test_handle_esc_key_stops_open_command_editing_when_already_editing() {
+    async fn test_launch_configuration_list_editor_delete_removes_selected_command() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_for_settings().await;
+        app.settings.launch_configuration = "cargo test\nnpm run dev".to_string();
+        handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("failed to open settings command editor");
+        handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to select second command");
+
+        // Act
+        let event_result = handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to handle key");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert_eq!(app.settings.launch_configuration, "cargo test");
+    }
+
+    #[tokio::test]
+    async fn test_launch_configuration_list_editor_reorders_selected_command() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_for_settings().await;
+        app.settings.launch_configuration = "cargo test\nnpm run dev".to_string();
+        handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("failed to open settings command editor");
+
+        // Act
+        let event_result = handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('J'), KeyModifiers::SHIFT),
+        )
+        .await
+        .expect("failed to reorder launch configuration");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert_eq!(app.settings.launch_configuration, "npm run dev\ncargo test");
+    }
+
+    #[tokio::test]
+    async fn test_launch_configuration_list_editor_esc_closes_from_browse() {
         // Arrange
         let (mut app, _base_dir) = new_test_app_for_settings().await;
         handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
             .await
-            .expect("failed to start settings editing");
+            .expect("failed to open settings command editor");
 
         // Act
         let event_result = handle(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
@@ -1165,57 +1191,43 @@ mod tests {
 
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
-        assert!(!app.settings.is_editing_text_input());
+        assert!(!app.settings.is_launch_configuration_list_editor_open());
     }
 
     #[tokio::test]
-    async fn test_handle_left_key_moves_open_command_cursor_while_editing() {
+    async fn test_launch_configuration_list_editor_esc_cancels_input_without_closing() {
         // Arrange
         let (mut app, _base_dir) = new_test_app_for_settings().await;
-        app.settings.open_command = "ac".to_string();
         handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
             .await
-            .expect("failed to start settings editing");
-
-        // Act
-        handle(&mut app, KeyEvent::new(KeyCode::Left, KeyModifiers::NONE))
-            .await
-            .expect("failed to handle left key");
-        let event_result = handle(
+            .expect("failed to open settings command editor");
+        handle(
             &mut app,
-            KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
         )
         .await
-        .expect("failed to insert character after cursor move");
+        .expect("failed to start adding launch configuration");
+        handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to type launch configuration");
+
+        // Act
+        let event_result = handle(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .await
+            .expect("failed to handle Esc key");
+        let editor = app
+            .settings
+            .launch_configuration_list_editor()
+            .expect("expected launch-configuration list editor");
 
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
-        assert_eq!(app.settings.open_command, "abc");
-    }
-
-    #[tokio::test]
-    async fn test_handle_up_key_moves_open_command_cursor_to_previous_line() {
-        // Arrange
-        let (mut app, _base_dir) = new_test_app_for_settings().await;
-        app.settings.open_command = "ab\nxy".to_string();
-        handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-            .await
-            .expect("failed to start settings editing");
-
-        // Act
-        handle(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE))
-            .await
-            .expect("failed to handle up key");
-        let event_result = handle(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('Z'), KeyModifiers::SHIFT),
-        )
-        .await
-        .expect("failed to insert character after up move");
-
-        // Assert
-        assert!(matches!(event_result, EventResult::Continue));
-        assert_eq!(app.settings.open_command, "abZ\nxy");
+        assert!(app.settings.is_launch_configuration_list_editor_open());
+        assert!(editor.input.is_none());
+        assert_eq!(app.settings.launch_configuration, "");
     }
 
     #[tokio::test]

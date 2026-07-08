@@ -10,7 +10,7 @@ const SESSION_LIST_FYI_MESSAGES: [&str; 5] = [
     "Sessions are grouped as merge queue, active work, then archive.",
     "Session timers count active agent work and freeze between turns.",
     "Forge badges show whether review requests are open, merged, or closed.",
-    "Session open commands run through tmux and use the configured Settings entries.",
+    "Session launch configurations run through tmux and use the configured Settings entries.",
 ];
 
 /// Rotating workflow FYI messages shown in the top status bar while session
@@ -48,7 +48,7 @@ pub(crate) fn current_page_messages(
         | AppMode::Prompt { .. }
         | AppMode::Question { .. }
         | AppMode::ViewInfoPopup { .. }
-        | AppMode::OpenCommandSelector { .. }
+        | AppMode::LaunchConfigurationSelector { .. }
         | AppMode::PublishBranchInput { .. }
         | AppMode::Confirmation {
             restore_view: Some(_),

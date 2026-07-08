@@ -7,7 +7,7 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, 
 use crate::app::setting::{SettingsManager, SettingsSelectorDropdown};
 use crate::ui::state::help_action;
 use crate::ui::text_util::truncate_with_ellipsis;
-use crate::ui::{Page, layout, overlay, style};
+use crate::ui::{Component, Page, component, layout, overlay, style};
 
 /// Uses row-background highlighting without a textual cursor glyph.
 const ROW_HIGHLIGHT_SYMBOL: &str = "";
@@ -113,6 +113,13 @@ impl Page for SettingsPage<'_> {
                 global_row_count,
                 &selector_dropdown,
             );
+        }
+
+        if let Some(launch_configuration_editor) = self.manager.launch_configuration_list_editor() {
+            component::launch_configuration_list_editor::LaunchConfigurationListEditor::new(
+                &launch_configuration_editor,
+            )
+            .render(f, areas.main_area);
         }
     }
 }
@@ -354,16 +361,17 @@ fn settings_selector_dropdown_option_line(
 
 /// Returns the footer help content for settings mode.
 ///
-/// Inline text editing and selector dropdowns keep using the manager-provided
-/// hint string, while list mode uses the shared styled help-action rendering.
+/// Selector dropdowns and command-list editing keep using the
+/// manager-provided hint string, while list mode uses the shared styled
+/// help-action rendering.
 fn settings_footer_line(manager: &SettingsManager) -> Line<'static> {
     settings_footer_line_for_mode(
-        manager.is_editing_text_input() || manager.is_selector_dropdown_open(),
+        manager.is_launch_configuration_list_editor_open() || manager.is_selector_dropdown_open(),
         manager.footer_hint(),
     )
 }
 
-/// Returns the footer help content for either list mode or inline-edit mode.
+/// Returns the footer help content for either list mode or overlay mode.
 fn settings_footer_line_for_mode(uses_inline_hint: bool, footer_hint: &str) -> Line<'static> {
     if uses_inline_hint {
         return Line::from(footer_hint.to_string());
@@ -374,26 +382,15 @@ fn settings_footer_line_for_mode(uses_inline_hint: bool, footer_hint: &str) -> L
     help_action::footer_line(&actions)
 }
 
-/// Builds settings table rows with multiline-aware heights.
+/// Builds single-line settings table rows.
 fn settings_table_rows(settings_rows: Vec<(&'static str, String)>) -> Vec<Row<'static>> {
     settings_rows
         .into_iter()
         .map(|(setting_name, setting_value)| {
-            Row::new(vec![
-                Cell::from(setting_name),
-                Cell::from(setting_value.clone()),
-            ])
-            .style(Style::default().fg(style::palette::text()))
-            .height(settings_row_height(&setting_value))
+            Row::new(vec![Cell::from(setting_name), Cell::from(setting_value)])
+                .style(Style::default().fg(style::palette::text()))
         })
         .collect()
-}
-
-/// Returns the row height needed to render a settings value.
-fn settings_row_height(setting_value: &str) -> u16 {
-    let row_line_count = setting_value.lines().count().max(1);
-
-    u16::try_from(row_line_count).unwrap_or(u16::MAX)
 }
 
 #[cfg(test)]
@@ -631,9 +628,9 @@ mod tests {
     }
 
     #[test]
-    fn test_settings_footer_line_uses_inline_hint_while_editing() {
+    fn test_settings_footer_line_uses_inline_hint_while_overlay_is_open() {
         // Arrange
-        let footer_hint = "Editing open commands";
+        let footer_hint = "Editing launch configurations";
 
         // Act
         let footer_line = settings_footer_line_for_mode(true, footer_hint);
@@ -653,41 +650,5 @@ mod tests {
 
         // Assert
         assert_eq!(footer_line, expected_line);
-    }
-
-    #[test]
-    fn test_settings_row_height_expands_for_multiline_values() {
-        // Arrange
-        let setting_value = "line one\nline two\nline three";
-
-        // Act
-        let row_height = settings_row_height(setting_value);
-
-        // Assert
-        assert_eq!(row_height, 3);
-    }
-
-    #[test]
-    fn test_settings_row_height_keeps_empty_values_visible() {
-        // Arrange
-        let setting_value = "";
-
-        // Act
-        let row_height = settings_row_height(setting_value);
-
-        // Assert
-        assert_eq!(row_height, 1);
-    }
-
-    #[test]
-    fn test_settings_row_height_saturates_at_u16_max() {
-        // Arrange
-        let setting_value = &"\n".repeat(usize::from(u16::MAX) + 1);
-
-        // Act
-        let row_height = settings_row_height(setting_value);
-
-        // Assert
-        assert_eq!(row_height, u16::MAX);
     }
 }

@@ -7,15 +7,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- agentty: rename Open Commands to Launch Configurations across settings, docs, and
+  persisted project settings.
+- ag-protocol: document the 32-character Mermaid label limit in session turn prompts.
+
 ### Fixed
 
 - agentty: keep sequence-diagram previews rendering when participant or message labels
   exceed the 32-character label limit by truncating them with a trailing ellipsis, and
   draw `sequenceDiagram` self-messages as a compact lifeline loop with a visible label.
-
-### Changed
-
-- ag-protocol: document the 32-character Mermaid label limit in session turn prompts.
 
 ## [v0.12.4] - 2026-07-06
 

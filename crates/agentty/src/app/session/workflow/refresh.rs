@@ -243,7 +243,7 @@ impl SessionManager {
             | AppMode::Question { session_id, .. }
             | AppMode::View { session_id, .. }
             | AppMode::Diff { session_id, .. }
-            | AppMode::OpenCommandSelector {
+            | AppMode::LaunchConfigurationSelector {
                 restore_view: ConfirmationViewMode { session_id, .. },
                 ..
             }

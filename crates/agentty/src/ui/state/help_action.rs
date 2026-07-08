@@ -154,7 +154,7 @@ pub(crate) struct ViewHelpState {
 struct ViewActionSet {
     continue_terminal_session: ViewActionAvailability,
     fork_session: ViewActionAvailability,
-    open_command: ViewActionAvailability,
+    launch_configuration: ViewActionAvailability,
     open_prompt: ViewActionAvailability,
     open_worktree: ViewActionAvailability,
     rebase_session: ViewActionAvailability,
@@ -176,7 +176,7 @@ impl ViewActionSet {
                     | ViewSessionState::AgentReview
             );
         let can_open_prompt = can_open_view_prompt(state.session_state, state.reply_to_session);
-        let can_open_command =
+        let can_launch_configuration =
             can_open_view_command(state.session_state, state.can_mutate_session_branch);
         let can_rebase_session =
             can_rebase_view_session(state.session_state, state.can_rebase_session_branch);
@@ -193,7 +193,7 @@ impl ViewActionSet {
             fork_session: ViewActionAvailability::from_bool(
                 state.can_fork_session.is_enabled() && can_show_review,
             ),
-            open_command: ViewActionAvailability::from_bool(can_open_command),
+            launch_configuration: ViewActionAvailability::from_bool(can_launch_configuration),
             open_prompt: ViewActionAvailability::from_bool(can_open_prompt),
             open_worktree: ViewActionAvailability::from_bool(can_open_worktree),
             rebase_session: ViewActionAvailability::from_bool(can_rebase_session),
@@ -312,7 +312,7 @@ pub(crate) fn settings_actions() -> Vec<HelpAction> {
     actions.push(HelpAction::new(
         "open/edit",
         "Enter",
-        "Open selector or edit text setting",
+        "Open selector or command editor",
     ));
     actions.push(HelpAction::new("next tab", "Tab", "Switch tab"));
     actions.push(HelpAction::new("help", "?", "Help"));
@@ -325,7 +325,7 @@ pub(crate) fn settings_footer_actions() -> Vec<HelpAction> {
     vec![
         HelpAction::new("quit", "q", "Quit"),
         HelpAction::new("nav", "j/k", "Navigate settings"),
-        HelpAction::new("open/edit", "Enter", "Open selector or edit text setting"),
+        HelpAction::new("open/edit", "Enter", "Open selector or command editor"),
         HelpAction::new("help", "?", "Help"),
     ]
 }
@@ -378,7 +378,7 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
         &mut actions,
         state.session_state,
         action_set.open_prompt.is_enabled(),
-        action_set.open_command.is_enabled(),
+        action_set.launch_configuration.is_enabled(),
     );
 
     append_view_stop_action(&mut actions, action_set);
@@ -395,7 +395,8 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
 
     append_view_review_actions(&mut actions, state, action_set);
 
-    if action_set.open_command.is_enabled() && state.session_state != ViewSessionState::StackedDraft
+    if action_set.launch_configuration.is_enabled()
+        && state.session_state != ViewSessionState::StackedDraft
     {
         actions.push(HelpAction::new(
             "add to merge queue",
@@ -428,7 +429,7 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
         state.session_state,
         state.can_start_staged_session,
         action_set.open_prompt,
-        action_set.open_command,
+        action_set.launch_configuration,
         action_set.rebase_session,
     );
     append_view_stop_action(&mut actions, action_set);
@@ -559,11 +560,11 @@ fn append_view_footer_edit_actions(
     session_state: ViewSessionState,
     can_start_staged_session: ViewActionAvailability,
     can_open_prompt: ViewActionAvailability,
-    can_open_command: ViewActionAvailability,
+    can_launch_configuration: ViewActionAvailability,
     can_rebase_session: ViewActionAvailability,
 ) {
     if !can_open_prompt.is_enabled()
-        && !can_open_command.is_enabled()
+        && !can_launch_configuration.is_enabled()
         && !can_rebase_session.is_enabled()
         && !can_start_staged_session.is_enabled()
     {
@@ -582,11 +583,11 @@ fn append_view_footer_edit_actions(
         append_prompt_image_paste_action(actions, session_state);
     }
 
-    if can_open_command.is_enabled() {
+    if can_launch_configuration.is_enabled() {
         actions.push(COMMANDS_MENU_ACTION);
     }
 
-    if can_open_command.is_enabled() && session_state != ViewSessionState::StackedDraft {
+    if can_launch_configuration.is_enabled() && session_state != ViewSessionState::StackedDraft {
         actions.push(HelpAction::new(
             "add to merge queue",
             "m",
@@ -607,13 +608,13 @@ fn append_view_prompt_actions(
     actions: &mut Vec<HelpAction>,
     session_state: ViewSessionState,
     can_open_prompt: bool,
-    can_open_command: bool,
+    can_launch_configuration: bool,
 ) {
     if can_open_prompt {
         actions.push(prompt_action_help_action(session_state));
         append_prompt_image_paste_action(actions, session_state);
     }
-    if can_open_command {
+    if can_launch_configuration {
         actions.push(COMMANDS_MENU_ACTION);
     }
 }

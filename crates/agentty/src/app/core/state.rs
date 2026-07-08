@@ -1162,21 +1162,22 @@ impl App {
     }
 
     /// Opens the selected session worktree in tmux and optionally runs the
-    /// first configured open command.
+    /// first configured launch configuration.
     pub async fn open_session_worktree_in_tmux(&self) {
-        let selected_open_command = self.configured_open_commands().into_iter().next();
+        let selected_launch_configuration =
+            self.configured_launch_configurations().into_iter().next();
 
-        self.open_session_worktree_in_tmux_with_command(selected_open_command.as_deref())
+        self.open_session_worktree_in_tmux_with_command(selected_launch_configuration.as_deref())
             .await;
     }
 
     /// Opens the selected session worktree in tmux and optionally runs one
-    /// provided open command.
+    /// provided launch configuration.
     ///
     /// Sessions without a materialized worktree are treated as a no-op.
     pub(crate) async fn open_session_worktree_in_tmux_with_command(
         &self,
-        open_command: Option<&str>,
+        launch_configuration: Option<&str>,
     ) {
         let Some(session) = self.selected_session() else {
             return;
@@ -1193,7 +1194,7 @@ impl App {
             return;
         };
 
-        let Some(open_command) = open_command
+        let Some(launch_configuration) = launch_configuration
             .map(str::trim)
             .filter(|command| !command.is_empty())
         else {
@@ -1201,7 +1202,7 @@ impl App {
         };
 
         self.tmux_client
-            .run_command_in_window(window_id, open_command.to_string())
+            .run_command_in_window(window_id, launch_configuration.to_string())
             .await;
     }
 
@@ -1267,10 +1268,10 @@ impl App {
         });
     }
 
-    /// Returns all configured open commands in user-defined order.
+    /// Returns all configured launch configurations in user-defined order.
     #[must_use]
-    pub(crate) fn configured_open_commands(&self) -> Vec<String> {
-        self.settings.open_commands()
+    pub(crate) fn configured_launch_configurations(&self) -> Vec<String> {
+        self.settings.launch_configurations()
     }
 
     /// Appends output text to a session stream and persists it.

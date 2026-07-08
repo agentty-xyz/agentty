@@ -1476,7 +1476,7 @@ impl App {
                 session_id: view_id,
                 ..
             }
-            | AppMode::OpenCommandSelector {
+            | AppMode::LaunchConfigurationSelector {
                 restore_view:
                     ConfirmationViewMode {
                         session_id: view_id,
