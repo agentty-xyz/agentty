@@ -119,6 +119,8 @@ pub(crate) enum AppEvent {
     SyncMainCompleted {
         result: Result<SyncMainOutcome, SyncSessionStartError>,
     },
+    /// Indicates list-mode sync is resolving rebase conflicts.
+    SyncMainConflictResolutionStarted { conflicted_files: Vec<String> },
     /// Indicates recomputed diff-derived size and line-count totals for one
     /// session.
     SessionSizeUpdated {
@@ -238,6 +240,7 @@ pub(super) struct AppEventBatch {
     pub(super) requested_reviews:
         Option<(u64, i64, Result<Vec<ag_forge::RequestedReview>, String>)>,
     pub(super) requested_review_comment_snapshots: Vec<RequestedReviewCommentSnapshotUpdate>,
+    pub(super) sync_main_conflicted_files: Option<Vec<String>>,
     pub(super) sync_main_result: Option<Result<SyncMainOutcome, SyncSessionStartError>>,
     pub(super) update_status: Option<UpdateStatus>,
 }
@@ -349,6 +352,9 @@ impl AppEventBatch {
                 session_id,
             } => self.collect_session_progress_updated(session_id, progress_message),
             AppEvent::SyncMainCompleted { result } => self.collect_sync_main_completed(result),
+            AppEvent::SyncMainConflictResolutionStarted { conflicted_files } => {
+                self.collect_sync_main_conflict_resolution_started(conflicted_files);
+            }
             AppEvent::SessionSizeUpdated {
                 added_lines,
                 deleted_lines,
@@ -572,6 +578,11 @@ impl AppEventBatch {
         }
 
         self.sync_main_result = Some(result);
+    }
+
+    /// Stores the latest conflicted-file list for an in-progress sync batch.
+    fn collect_sync_main_conflict_resolution_started(&mut self, conflicted_files: Vec<String>) {
+        self.sync_main_conflicted_files = Some(conflicted_files);
     }
 
     /// Stores the latest branch-publish action result for this reducer batch.
@@ -816,6 +827,10 @@ impl App {
         }
         for (session_id, sync_update) in event_batch.published_branch_sync_updates {
             self.apply_published_branch_sync_update(&session_id, sync_update);
+        }
+
+        if let Some(conflicted_files) = event_batch.sync_main_conflicted_files.as_deref() {
+            self.apply_sync_main_conflict_resolution_started(conflicted_files);
         }
 
         self.sync_touched_sessions(&event_batch.session_ids);
@@ -1231,6 +1246,7 @@ impl App {
             || !event_batch.stacked_parent_merge_child_rebases.is_empty()
             || !event_batch.stacked_parent_syncs_completed.is_empty()
             || !event_batch.stacked_parent_turns_completed.is_empty()
+            || event_batch.sync_main_conflicted_files.is_some()
             || event_batch.sync_main_result.is_some()
             || !event_batch.system_log_events.is_empty()
     }
@@ -1291,6 +1307,24 @@ impl App {
                 sync_error.detail_message()
             )),
         }
+    }
+
+    /// Updates the loading sync popup with the current conflict-resolution
+    /// status when the user is still viewing that in-progress sync.
+    fn apply_sync_main_conflict_resolution_started(&mut self, conflicted_files: &[String]) {
+        if !matches!(
+            self.mode,
+            AppMode::SyncBlockedPopup {
+                is_loading: true,
+                ..
+            }
+        ) {
+            return;
+        }
+
+        let sync_popup_context = self.sync_popup_context();
+        self.mode =
+            Self::sync_main_conflict_resolution_popup_mode(conflicted_files, &sync_popup_context);
     }
 
     /// Builds system log events for sessions whose rendered status changed
@@ -1953,6 +1987,32 @@ impl App {
                 title: "Sync failed".to_string(),
             },
         }
+    }
+
+    /// Builds the in-progress sync popup shown while conflicts are being
+    /// resolved.
+    pub(super) fn sync_main_conflict_resolution_popup_mode(
+        conflicted_files: &[String],
+        sync_popup_context: &SyncPopupContext,
+    ) -> AppMode {
+        AppMode::SyncBlockedPopup {
+            project_name: Some(sync_popup_context.project_name.clone()),
+            default_branch: Some(sync_popup_context.default_branch.clone()),
+            is_loading: true,
+            message: Self::sync_conflict_resolution_message(conflicted_files),
+            title: "Resolving conflicts".to_string(),
+        }
+    }
+
+    /// Returns loading-state copy for assisted sync conflict resolution.
+    fn sync_conflict_resolution_message(conflicted_files: &[String]) -> String {
+        let file_list = conflicted_files
+            .iter()
+            .map(|file| format!("- {file}"))
+            .collect::<Vec<String>>()
+            .join("\n");
+
+        format!("Resolving conflicts during sync.\n\nConflicted files:\n{file_list}")
     }
 
     /// Builds success copy for sync completion with pull/push/conflict metrics

@@ -1819,6 +1819,55 @@ fn sync_main_popup_mode_success_message_tracks_project_and_branch() {
     }
 }
 
+#[tokio::test]
+async fn apply_app_events_sync_conflicts_updates_loading_popup() {
+    // Arrange
+    let (mut app, base_dir) = crate::test_support::new_test_app().await;
+    let expected_project_name = base_dir
+        .path()
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("expected temp dir file name")
+        .to_string();
+    app.projects.update_active_project_context(
+        app.active_project_id(),
+        expected_project_name.clone(),
+        Some("develop".to_string()),
+        None,
+        base_dir.path().to_path_buf(),
+    );
+    app.mode = AppMode::SyncBlockedPopup {
+        default_branch: Some("develop".to_string()),
+        is_loading: true,
+        message: App::sync_loading_message(),
+        project_name: Some(expected_project_name.clone()),
+        title: "Sync in progress".to_string(),
+    };
+
+    // Act
+    app.apply_app_events(AppEvent::SyncMainConflictResolutionStarted {
+        conflicted_files: vec!["src/lib.rs".to_string(), "README.md".to_string()],
+    })
+    .await;
+
+    // Assert
+    assert!(matches!(
+        app.mode,
+        AppMode::SyncBlockedPopup {
+            ref default_branch,
+            is_loading: true,
+            ref message,
+            ref project_name,
+            ref title,
+        } if title == "Resolving conflicts"
+            && default_branch.as_deref() == Some("develop")
+            && project_name.as_deref() == Some(expected_project_name.as_str())
+            && message.contains("Resolving conflicts during sync.")
+            && message.contains("- README.md")
+            && message.contains("- src/lib.rs")
+    ));
+}
+
 #[test]
 fn sync_main_popup_mode_blocked_message_tracks_project_and_branch() {
     // Arrange
