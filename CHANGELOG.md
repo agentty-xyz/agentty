@@ -7,18 +7,41 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.12.5] - 2026-07-07
+
+### Added
+
+- agentty: add a launch configuration list editor.
+- agentty: show sync conflict resolution status.
+- agentty: show diff selection change counts.
+- agentty: allow merging review sessions.
+
 ### Changed
 
 - agentty: rename Open Commands to Launch Configurations across settings, docs, and
   persisted project settings.
+- agentty: allow merge queueing for stacked parents.
+- agentty: format review-assist output as bullets.
 - ag-protocol: document the 32-character Mermaid label limit in session turn prompts.
+- ci: bump `taiki-e/install-action` from `2.82.6` to `2.82.7`.
+- deps: bump `agent-client-protocol` from `1.0.0` to `1.0.1`.
+- Bump workspace crate metadata and lockfile package versions to `0.12.5`.
 
 ### Fixed
 
 - agentty: render Markdown in persisted user messages in session output.
+- agentty: repaint cached session output when switching themes.
+- agentty: warn only on dirty `main` checkout changes.
 - agentty: keep sequence-diagram previews rendering when participant or message labels
   exceed the 32-character label limit by truncating them with a trailing ellipsis, and
   draw `sequenceDiagram` self-messages as a compact lifeline loop with a visible label.
+- agentty: simplify review-assist prompt verification guidance.
+
+### Contributors
+
+- @andagaev
+- @dependabot
+- @minev-dev
 
 ## [v0.12.4] - 2026-07-06
 
