@@ -1152,10 +1152,6 @@ mod tests {
             .once()
             .returning(|_| Box::pin(async { Ok(String::new()) }));
         mock_git_client
-            .expect_head_hash()
-            .once()
-            .returning(|_| Box::pin(async { Ok("main-before".to_string()) }));
-        mock_git_client
             .expect_diff()
             .returning(|_, _| Box::pin(async { Ok(String::new()) }));
     }
@@ -1565,10 +1561,6 @@ mod tests {
             .times(2)
             .returning(|_| Box::pin(async { Ok(String::new()) }));
         mock_git_client
-            .expect_head_hash()
-            .times(2)
-            .returning(|_| Box::pin(async { Ok("main-before".to_string()) }));
-        mock_git_client
             .expect_diff()
             .returning(|_, _| Box::pin(async { Ok(String::new()) }));
         mock_git_client
@@ -1669,10 +1661,6 @@ mod tests {
                 })
             });
         mock_git_client
-            .expect_head_hash()
-            .times(2)
-            .returning(|_| Box::pin(async { Ok("main-before".to_string()) }));
-        mock_git_client
             .expect_diff()
             .returning(|_, _| Box::pin(async { Ok(String::new()) }));
         mock_git_client
@@ -1716,13 +1704,14 @@ mod tests {
         assert!(result.is_ok(), "main checkout changes should warn only");
         let output_text = transcript_text(&transcript);
         assert!(output_text.contains("[Main Checkout Warning]"));
+        assert!(output_text.contains("tracked-file status changed"));
         assert!(output_text.contains("done"));
     }
 
     #[tokio::test]
-    /// Verifies a turn that moves the main checkout `HEAD` records a warning
-    /// even when tracked-file status stays clean.
-    async fn test_run_channel_turn_warns_when_main_checkout_head_changes() {
+    /// Verifies a clean post-turn tracked status completes without warning,
+    /// even when pre-turn status was dirty.
+    async fn test_run_channel_turn_skips_warning_when_main_checkout_is_clean_after_turn() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
         let db = AppRepositories::in_memory().await;
@@ -1748,30 +1737,27 @@ mod tests {
                 })
             });
 
-        let head_call_count = Arc::new(Mutex::new(0));
+        let status_call_count = Arc::new(Mutex::new(0));
         let mut mock_git_client = mock_git_client_detecting_main_repo(base_dir.path().join("main"));
         mock_git_client
             .expect_tracked_worktree_status()
             .times(2)
-            .returning(|_| Box::pin(async { Ok(String::new()) }));
-        mock_git_client
-            .expect_head_hash()
-            .times(2)
             .returning(move |_| {
-                let head_call_count = Arc::clone(&head_call_count);
+                let status_call_count = Arc::clone(&status_call_count);
 
                 Box::pin(async move {
-                    let mut call_count = head_call_count
+                    let mut call_count = status_call_count
                         .lock()
-                        .expect("head call count lock poisoned");
+                        .expect("status call count lock poisoned");
                     *call_count += 1;
                     if *call_count == 1 {
-                        Ok("main-before".to_string())
+                        Ok(" M README.md\n".to_string())
                     } else {
-                        Ok("main-after".to_string())
+                        Ok(String::new())
                     }
                 })
             });
+        mock_git_client.expect_head_hash().times(0);
         mock_git_client
             .expect_diff()
             .returning(|_, _| Box::pin(async { Ok(String::new()) }));
@@ -1815,10 +1801,95 @@ mod tests {
         // Assert
         assert!(
             result.is_ok(),
-            "main checkout `HEAD` changes should warn only"
+            "clean post-turn tracked status should complete"
         );
         let output_text = transcript_text(&transcript);
-        assert!(output_text.contains("[Main Checkout Warning]"));
+        assert!(!output_text.contains("[Main Checkout Warning]"));
+        assert!(output_text.contains("done"));
+    }
+
+    #[tokio::test]
+    /// Verifies an unchanged pre-existing dirty tracked status completes
+    /// without warning.
+    async fn test_run_channel_turn_skips_warning_when_main_checkout_stays_dirty() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let db = AppRepositories::in_memory().await;
+        insert_in_progress_test_session(&db).await;
+
+        let mut mock_channel = MockAgentChannel::new();
+        mock_channel
+            .expect_run_turn()
+            .once()
+            .returning(|_session_id, _req, _events| {
+                Box::pin(async {
+                    Ok(TurnResult {
+                        assistant_message: AgentResponse {
+                            answer: "done".to_string(),
+                            questions: Vec::new(),
+                            summary: None,
+                        },
+                        context_reset: false,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        provider_conversation_id: None,
+                    })
+                })
+            });
+
+        let mut mock_git_client = mock_git_client_detecting_main_repo(base_dir.path().join("main"));
+        mock_git_client
+            .expect_tracked_worktree_status()
+            .times(2)
+            .returning(|_| Box::pin(async { Ok(" M README.md\n".to_string()) }));
+        mock_git_client.expect_head_hash().times(0);
+        mock_git_client
+            .expect_diff()
+            .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+        mock_git_client
+            .expect_is_worktree_clean()
+            .returning(|_| Box::pin(async { Ok(true) }));
+
+        let transcript = empty_transcript();
+        let context = SessionWorkerContext {
+            app_event_tx: mpsc::unbounded_channel().0,
+            cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+            channel: Arc::new(mock_channel),
+            child_pid: Arc::new(Mutex::new(None)),
+            clock: Arc::new(crate::infra::clock::RealClock),
+            db: db.clone(),
+            folder: base_dir.path().to_path_buf(),
+            fs_client: Arc::new(mock_fs_client_with_existing_directories()),
+            git_client: Arc::new(mock_git_client),
+            transcript: Arc::clone(&transcript),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
+            session_update_versions: Arc::default(),
+            session_id: "sess1".into(),
+            session_agent: AgentSelection::new(
+                crate::domain::agent::AgentKind::Antigravity,
+                AgentModel::Gemini3FlashPreview,
+            ),
+            status: Arc::new(Mutex::new(Status::InProgress)),
+        };
+
+        // Act
+        let result = run_channel_turn(
+            &context,
+            default_turn_metadata(),
+            AgentRequestKind::SessionStart,
+            None,
+            "test prompt".into(),
+        )
+        .await;
+
+        // Assert
+        assert!(
+            result.is_ok(),
+            "unchanged dirty tracked status should complete"
+        );
+        let output_text = transcript_text(&transcript);
+        assert!(!output_text.contains("[Main Checkout Warning]"));
         assert!(output_text.contains("done"));
     }
 
@@ -3860,10 +3931,6 @@ mod tests {
             .times(0..)
             .returning(|_| Box::pin(async { Ok(String::new()) }));
         mock_git_client
-            .expect_head_hash()
-            .times(0..)
-            .returning(|_| Box::pin(async { Ok("main-before".to_string()) }));
-        mock_git_client
             .expect_diff()
             .returning(|_, _| Box::pin(async { Ok(String::new()) }));
         mock_git_client
@@ -4048,10 +4115,6 @@ mod tests {
             .expect_tracked_worktree_status()
             .times(2)
             .returning(|_| Box::pin(async { Ok(String::new()) }));
-        mock_git_client
-            .expect_head_hash()
-            .times(2)
-            .returning(|_| Box::pin(async { Ok("main-before".to_string()) }));
         mock_git_client
             .expect_is_worktree_clean()
             .times(1)

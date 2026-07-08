@@ -55,7 +55,6 @@ pub(super) fn live_transcript_source(
 
 /// Main-checkout tracked-file status captured before one provider turn.
 struct MainCheckoutSnapshot {
-    head_hash: String,
     main_repo_root: PathBuf,
     tracked_status_output: String,
 }
@@ -79,25 +78,20 @@ impl MainCheckoutSnapshot {
             .tracked_worktree_status(validation.main_repo_root.clone())
             .await
             .map_err(|error| Self::status_error(&error))?;
-        let head_hash = context
-            .git_client
-            .head_hash(validation.main_repo_root.clone())
-            .await
-            .map_err(|error| Self::head_hash_error(&error))?;
 
         Ok(Self {
-            head_hash,
             main_repo_root: validation.main_repo_root,
             tracked_status_output,
         })
     }
 
-    /// Builds a warning when a provider turn changed the main checkout.
+    /// Builds a warning when the main checkout tracked-file status changed and
+    /// remains dirty after a provider turn.
     ///
     /// # Errors
     /// Returns a workflow error when main-checkout status cannot be read after
     /// the provider turn.
-    async fn changed_warning(
+    async fn dirty_warning(
         &self,
         context: &SessionWorkerContext,
     ) -> Result<Option<String>, SessionError> {
@@ -106,15 +100,10 @@ impl MainCheckoutSnapshot {
             .tracked_worktree_status(self.main_repo_root.clone())
             .await
             .map_err(|error| Self::status_error(&error))?;
-        let current_head_hash = context
-            .git_client
-            .head_hash(self.main_repo_root.clone())
-            .await
-            .map_err(|error| Self::head_hash_error(&error))?;
-        if current_status != self.tracked_status_output || current_head_hash != self.head_hash {
+        if current_status != self.tracked_status_output && !current_status.trim().is_empty() {
             return Ok(Some(TranscriptNotice::MainCheckoutWarning.format(
-                "The main checkout changed during this turn. Continuing this session; merge and \
-                 sync actions still require a clean main checkout.",
+                "The main checkout's tracked-file status changed during this turn. Continuing \
+                 this session; merge and sync actions still require a clean main checkout.",
             )));
         }
 
@@ -125,13 +114,6 @@ impl MainCheckoutSnapshot {
     fn status_error(error: &ag_git::GitError) -> SessionError {
         SessionError::Workflow(format!(
             "Session isolation violation: failed to inspect main checkout tracked status: {error}"
-        ))
-    }
-
-    /// Converts main-checkout `HEAD` hash failures into workflow errors.
-    fn head_hash_error(error: &ag_git::GitError) -> SessionError {
-        SessionError::Workflow(format!(
-            "Session isolation violation: failed to inspect main checkout `HEAD`: {error}"
         ))
     }
 }
@@ -505,15 +487,15 @@ fn set_child_pid(child_pid: &Mutex<Option<u32>>, pid: Option<u32>) {
     }
 }
 
-/// Converts post-turn main-checkout changes into transcript warnings while
-/// preserving the successful provider result.
+/// Converts post-turn main-checkout tracked-file changes into transcript
+/// warnings while preserving the successful provider result.
 async fn add_main_checkout_warning(
     context: &SessionWorkerContext,
     main_checkout_snapshot: &MainCheckoutSnapshot,
     turn_result: Result<TurnResult, AgentError>,
 ) -> Result<TurnResult, AgentError> {
     let result = turn_result?;
-    match main_checkout_snapshot.changed_warning(context).await {
+    match main_checkout_snapshot.dirty_warning(context).await {
         Ok(Some(warning)) => {
             append_main_checkout_warning(context, warning).await;
 
