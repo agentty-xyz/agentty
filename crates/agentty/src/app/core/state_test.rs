@@ -256,9 +256,13 @@ async fn test_switch_project_reloads_project_scoped_settings() {
         .expect("failed to persist first project smart model");
     database
         .settings()
-        .upsert_project_setting(first_project_id, SettingName::OpenCommand, "npm run dev")
+        .upsert_project_setting(
+            first_project_id,
+            SettingName::LaunchConfiguration,
+            "npm run dev",
+        )
         .await
-        .expect("failed to persist first project open command");
+        .expect("failed to persist first project launch configuration");
     database
         .settings()
         .upsert_project_setting(
@@ -270,9 +274,13 @@ async fn test_switch_project_reloads_project_scoped_settings() {
         .expect("failed to persist second project smart model");
     database
         .settings()
-        .upsert_project_setting(second_project_id, SettingName::OpenCommand, "cargo test")
+        .upsert_project_setting(
+            second_project_id,
+            SettingName::LaunchConfiguration,
+            "cargo test",
+        )
         .await
-        .expect("failed to persist second project open command");
+        .expect("failed to persist second project launch configuration");
     database
         .settings()
         .set_active_project_id(first_project_id)
@@ -298,7 +306,7 @@ async fn test_switch_project_reloads_project_scoped_settings() {
         app.settings.default_smart_selection.model(),
         AgentModel::Gpt55
     );
-    assert_eq!(app.settings.open_command, "cargo test");
+    assert_eq!(app.settings.launch_configuration, "cargo test");
 }
 
 #[tokio::test]
@@ -988,11 +996,11 @@ async fn test_persist_current_tab_stores_active_tab() {
     assert_eq!(persisted_tab.as_deref(), Some(Tab::Settings.as_str()));
 }
 
-/// Builds a test app with one selected session, configurable open command,
-/// and injected tmux boundary.
+/// Builds a test app with one selected session, configurable launch
+/// configuration, and injected tmux boundary.
 async fn new_test_app_with_selected_session(
     session_folder: PathBuf,
-    open_command: &str,
+    launch_configuration: &str,
     tmux_client: Arc<dyn TmuxClient>,
 ) -> App {
     // Arrange
@@ -1004,7 +1012,7 @@ async fn new_test_app_with_selected_session(
     }
 
     // Act
-    app.settings.open_command = open_command.to_string();
+    app.settings.launch_configuration = launch_configuration.to_string();
     app.sessions
         .push_session(crate::test_support::session_fixture_with_folder(
             session_folder,
@@ -1633,28 +1641,28 @@ async fn apply_branch_publish_action_update_sets_gitlab_merge_request_success_po
 }
 
 #[tokio::test]
-async fn configured_open_commands_returns_trimmed_non_empty_entries() {
+async fn configured_launch_configurations_returns_trimmed_non_empty_entries() {
     // Arrange
     let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
         Arc::new(MockTmuxClient::new()),
     )
     .await;
-    app.settings.open_command = "  cargo test \n npm run dev \n".to_string();
+    app.settings.launch_configuration = "  cargo test \n npm run dev \n".to_string();
 
     // Act
-    let open_commands = app.configured_open_commands();
+    let launch_configurations = app.configured_launch_configurations();
 
     // Assert
     assert_eq!(
-        open_commands,
+        launch_configurations,
         vec!["cargo test".to_string(), "npm run dev".to_string()]
     );
 }
 
 #[tokio::test]
-async fn open_session_worktree_in_tmux_runs_configured_open_command_when_window_opens() {
+async fn open_session_worktree_in_tmux_runs_configured_launch_configuration_when_window_opens() {
     // Arrange
-    let session_folder = PathBuf::from("/tmp/session-open-command");
+    let session_folder = PathBuf::from("/tmp/session-launch-configuration");
     let mut mock_tmux_client = MockTmuxClient::new();
     mock_tmux_client
         .expect_open_window_for_folder()
@@ -1667,7 +1675,7 @@ async fn open_session_worktree_in_tmux_runs_configured_open_command_when_window_
         .times(1)
         .returning(|_, _| Box::pin(async {}));
     let app = new_test_app_with_selected_session(
-        PathBuf::from("/tmp/session-open-command"),
+        PathBuf::from("/tmp/session-launch-configuration"),
         "  npm run dev  ",
         Arc::new(mock_tmux_client),
     )
@@ -1681,9 +1689,9 @@ async fn open_session_worktree_in_tmux_runs_configured_open_command_when_window_
 }
 
 #[tokio::test]
-async fn open_session_worktree_in_tmux_skips_open_command_when_setting_is_blank() {
+async fn open_session_worktree_in_tmux_skips_launch_configuration_when_setting_is_blank() {
     // Arrange
-    let session_folder = PathBuf::from("/tmp/session-empty-open-command");
+    let session_folder = PathBuf::from("/tmp/session-empty-launch-configuration");
     let mut mock_tmux_client = MockTmuxClient::new();
     mock_tmux_client
         .expect_open_window_for_folder()
@@ -1692,7 +1700,7 @@ async fn open_session_worktree_in_tmux_skips_open_command_when_setting_is_blank(
         .returning(|_| Box::pin(async { Some("@42".to_string()) }));
     mock_tmux_client.expect_run_command_in_window().times(0);
     let app = new_test_app_with_selected_session(
-        PathBuf::from("/tmp/session-empty-open-command"),
+        PathBuf::from("/tmp/session-empty-launch-configuration"),
         "   ",
         Arc::new(mock_tmux_client),
     )
@@ -1717,7 +1725,7 @@ async fn open_session_worktree_in_tmux_skips_missing_worktree_folder() {
         Arc::new(mock_tmux_client),
     )
     .await;
-    app.settings.open_command = "npm run dev".to_string();
+    app.settings.launch_configuration = "npm run dev".to_string();
     app.sessions
         .push_session(crate::test_support::session_fixture_with_folder(
             missing_session_folder,
@@ -1734,7 +1742,7 @@ async fn open_session_worktree_in_tmux_skips_missing_worktree_folder() {
 #[tokio::test]
 async fn open_session_worktree_in_tmux_uses_first_configured_command() {
     // Arrange
-    let session_folder = PathBuf::from("/tmp/session-multiple-open-commands");
+    let session_folder = PathBuf::from("/tmp/session-multiple-launch-configurations");
     let mut mock_tmux_client = MockTmuxClient::new();
     mock_tmux_client
         .expect_open_window_for_folder()
@@ -1747,7 +1755,7 @@ async fn open_session_worktree_in_tmux_uses_first_configured_command() {
         .times(1)
         .returning(|_, _| Box::pin(async {}));
     let app = new_test_app_with_selected_session(
-        PathBuf::from("/tmp/session-multiple-open-commands"),
+        PathBuf::from("/tmp/session-multiple-launch-configurations"),
         " cargo test \n npm run dev ",
         Arc::new(mock_tmux_client),
     )

@@ -147,20 +147,20 @@ pub struct SettingsSelectorDropdown {
     pub selected_index: usize,
 }
 
-/// Active interaction mode for the `Open Commands` list editor.
+/// Active interaction mode for the `Launch Configurations` list editor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OpenCommandListEditorMode {
+pub enum LaunchConfigurationListEditorMode {
     Add,
     Browse,
     Edit,
 }
 
-/// Render-ready snapshot for the `Open Commands` list editor overlay.
+/// Render-ready snapshot for the `Launch Configurations` list editor overlay.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct OpenCommandListEditorSnapshot {
+pub struct LaunchConfigurationListEditorSnapshot {
     pub commands: Vec<String>,
     pub input: Option<InputState>,
-    pub mode: OpenCommandListEditorMode,
+    pub mode: LaunchConfigurationListEditorMode,
     pub selected_index: usize,
 }
 
@@ -179,7 +179,7 @@ enum SettingRow {
     DefaultFastModel,
     DefaultReviewModel,
     IncludeCoauthoredByAgentty,
-    OpenCommand,
+    LaunchConfiguration,
     Theme,
 }
 
@@ -191,7 +191,7 @@ impl SettingRow {
         Self::DefaultFastModel,
         Self::DefaultReviewModel,
         Self::IncludeCoauthoredByAgentty,
-        Self::OpenCommand,
+        Self::LaunchConfiguration,
     ];
     /// Rows persisted once for the whole application.
     const GLOBAL: [Self; 1] = [Self::Theme];
@@ -202,7 +202,7 @@ impl SettingRow {
         Self::DefaultFastModel,
         Self::DefaultReviewModel,
         Self::IncludeCoauthoredByAgentty,
-        Self::OpenCommand,
+        Self::LaunchConfiguration,
     ];
     const ROW_COUNT: usize = Self::ALL.len();
 
@@ -222,7 +222,7 @@ impl SettingRow {
             Self::DefaultFastModel => "Default Fast Model",
             Self::DefaultReviewModel => "Default Review Model",
             Self::IncludeCoauthoredByAgentty => "Coauthored by Agentty",
-            Self::OpenCommand => "Open Commands",
+            Self::LaunchConfiguration => "Launch Configurations",
             Self::Theme => "Theme",
         }
     }
@@ -236,7 +236,7 @@ impl SettingRow {
             | Self::DefaultReviewModel
             | Self::IncludeCoauthoredByAgentty
             | Self::Theme => SettingControl::Selector,
-            Self::OpenCommand => SettingControl::CommandList,
+            Self::LaunchConfiguration => SettingControl::CommandList,
         }
     }
 
@@ -256,23 +256,23 @@ struct SelectorDropdownState {
     selected_index: usize,
 }
 
-/// Tracks state for the `Open Commands` list editor overlay.
+/// Tracks state for the `Launch Configurations` list editor overlay.
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct OpenCommandListEditorState {
+struct LaunchConfigurationListEditorState {
     commands: Vec<String>,
     input: InputState,
-    mode: OpenCommandListEditorMode,
+    mode: LaunchConfigurationListEditorMode,
     selected_index: usize,
 }
 
-impl OpenCommandListEditorState {
+impl LaunchConfigurationListEditorState {
     /// Creates a list editor state from the persisted newline-delimited
     /// command setting.
-    fn from_open_command(open_command: &str) -> Self {
+    fn from_launch_configuration(launch_configuration: &str) -> Self {
         Self {
-            commands: parse_open_commands(open_command),
+            commands: parse_launch_configurations(launch_configuration),
             input: InputState::default(),
-            mode: OpenCommandListEditorMode::Browse,
+            mode: LaunchConfigurationListEditorMode::Browse,
             selected_index: 0,
         }
     }
@@ -293,7 +293,7 @@ impl OpenCommandListEditorState {
     fn is_input_mode(&self) -> bool {
         matches!(
             self.mode,
-            OpenCommandListEditorMode::Add | OpenCommandListEditorMode::Edit
+            LaunchConfigurationListEditorMode::Add | LaunchConfigurationListEditorMode::Edit
         )
     }
 }
@@ -307,7 +307,7 @@ pub struct SettingsManager {
     /// Default agent/model selection used when creating new sessions.
     pub default_smart_selection: AgentSelection,
     /// Optional command run in tmux when opening a session worktree.
-    pub open_command: String,
+    pub launch_configuration: String,
     /// Default reasoning effort preference for models that support this
     /// setting.
     ///
@@ -324,7 +324,7 @@ pub struct SettingsManager {
     /// New projects start with this disabled until the user explicitly enables
     /// it.
     include_coauthored_by_agentty: bool,
-    open_command_list_editor: Option<OpenCommandListEditorState>,
+    launch_configuration_list_editor: Option<LaunchConfigurationListEditorState>,
     /// Active project identifier that owns these persisted settings.
     project_id: i64,
     selector_dropdown: Option<SelectorDropdownState>,
@@ -359,10 +359,10 @@ impl SettingsManager {
         });
         let reasoning_level = load_reasoning_level_setting(services, Some(project_id)).await;
 
-        let open_command = services
+        let launch_configuration = services
             .db()
             .settings()
-            .get_project_setting(project_id, SettingName::OpenCommand)
+            .get_project_setting(project_id, SettingName::LaunchConfiguration)
             .await
             .unwrap_or(None)
             .unwrap_or_default();
@@ -390,13 +390,13 @@ impl SettingsManager {
             default_fast_selection: default_fast_agent,
             default_review_selection: default_review_agent,
             default_smart_selection: default_smart_agent,
-            open_command,
+            launch_configuration,
             reasoning_level,
             table_state,
             theme,
             available_agent_kinds,
             include_coauthored_by_agentty,
-            open_command_list_editor: None,
+            launch_configuration_list_editor: None,
             project_id,
             selector_dropdown: None,
             use_last_used_model_as_default,
@@ -405,7 +405,7 @@ impl SettingsManager {
 
     /// Moves the settings selection to the next row.
     pub fn next(&mut self) {
-        if !self.is_open_command_list_editor_open() && !self.is_selector_dropdown_open() {
+        if !self.is_launch_configuration_list_editor_open() && !self.is_selector_dropdown_open() {
             let next_index = (self.selected_row_index() + 1) % SettingRow::ROW_COUNT;
             self.table_state.select(Some(next_index));
         }
@@ -413,7 +413,7 @@ impl SettingsManager {
 
     /// Moves the settings selection to the previous row.
     pub fn previous(&mut self) {
-        if !self.is_open_command_list_editor_open() && !self.is_selector_dropdown_open() {
+        if !self.is_launch_configuration_list_editor_open() && !self.is_selector_dropdown_open() {
             let current_index = self.selected_row_index();
             let previous_index = if current_index == 0 {
                 SettingRow::ROW_COUNT - 1
@@ -433,24 +433,24 @@ impl SettingsManager {
                 self.open_selector_dropdown(selected_row);
             }
             SettingControl::CommandList => {
-                self.open_open_command_list_editor();
+                self.open_launch_configuration_list_editor();
             }
         }
     }
 
-    /// Returns whether the `Open Commands` list editor is active.
+    /// Returns whether the `Launch Configurations` list editor is active.
     #[must_use]
-    pub fn is_open_command_list_editor_open(&self) -> bool {
-        self.open_command_list_editor.is_some()
+    pub fn is_launch_configuration_list_editor_open(&self) -> bool {
+        self.launch_configuration_list_editor.is_some()
     }
 
-    /// Returns whether the `Open Commands` editor is currently accepting
-    /// single-line text input.
+    /// Returns whether the `Launch Configurations` editor is currently
+    /// accepting single-line text input.
     #[must_use]
-    pub fn is_open_command_list_editor_input_active(&self) -> bool {
-        self.open_command_list_editor
+    pub fn is_launch_configuration_list_editor_input_active(&self) -> bool {
+        self.launch_configuration_list_editor
             .as_ref()
-            .is_some_and(OpenCommandListEditorState::is_input_mode)
+            .is_some_and(LaunchConfigurationListEditorState::is_input_mode)
     }
 
     /// Returns whether a selector dropdown is currently open.
@@ -459,14 +459,16 @@ impl SettingsManager {
         self.selector_dropdown.is_some()
     }
 
-    /// Returns the render-ready `Open Commands` editor snapshot, when it is
-    /// open.
+    /// Returns the render-ready `Launch Configurations` editor snapshot, when
+    /// it is open.
     #[must_use]
-    pub fn open_command_list_editor(&self) -> Option<OpenCommandListEditorSnapshot> {
-        let editor = self.open_command_list_editor.as_ref()?;
+    pub fn launch_configuration_list_editor(
+        &self,
+    ) -> Option<LaunchConfigurationListEditorSnapshot> {
+        let editor = self.launch_configuration_list_editor.as_ref()?;
         let input = editor.is_input_mode().then(|| editor.input.clone());
 
-        Some(OpenCommandListEditorSnapshot {
+        Some(LaunchConfigurationListEditorSnapshot {
             commands: editor.commands.clone(),
             input,
             mode: editor.mode,
@@ -538,42 +540,47 @@ impl SettingsManager {
         self.close_selector_dropdown();
     }
 
-    /// Closes the `Open Commands` list editor without saving any active
+    /// Closes the `Launch Configurations` list editor without saving any active
     /// add/edit input.
-    pub fn close_open_command_list_editor(&mut self) {
-        self.open_command_list_editor = None;
+    pub fn close_launch_configuration_list_editor(&mut self) {
+        self.launch_configuration_list_editor = None;
     }
 
-    /// Moves the `Open Commands` editor selection to the next command.
-    pub fn next_open_command_list_editor_item(&mut self) {
-        self.move_open_command_list_editor_selection(OpenCommandListDirection::Next);
+    /// Moves the `Launch Configurations` editor selection to the next command.
+    pub fn next_launch_configuration_list_editor_item(&mut self) {
+        self.move_launch_configuration_list_editor_selection(
+            LaunchConfigurationListDirection::Next,
+        );
     }
 
-    /// Moves the `Open Commands` editor selection to the previous command.
-    pub fn previous_open_command_list_editor_item(&mut self) {
-        self.move_open_command_list_editor_selection(OpenCommandListDirection::Previous);
+    /// Moves the `Launch Configurations` editor selection to the previous
+    /// command.
+    pub fn previous_launch_configuration_list_editor_item(&mut self) {
+        self.move_launch_configuration_list_editor_selection(
+            LaunchConfigurationListDirection::Previous,
+        );
     }
 
-    /// Starts adding a command in the open-command editor.
-    pub fn start_adding_open_command(&mut self) {
-        let Some(editor) = &mut self.open_command_list_editor else {
+    /// Starts adding a command in the launch-configuration editor.
+    pub fn start_adding_launch_configuration(&mut self) {
+        let Some(editor) = &mut self.launch_configuration_list_editor else {
             return;
         };
 
         editor.input = InputState::default();
-        editor.mode = OpenCommandListEditorMode::Add;
+        editor.mode = LaunchConfigurationListEditorMode::Add;
     }
 
     /// Starts editing the selected command. If no command exists yet, this
     /// starts add mode.
-    pub fn start_editing_selected_open_command(&mut self) {
-        let Some(editor) = &mut self.open_command_list_editor else {
+    pub fn start_editing_selected_launch_configuration(&mut self) {
+        let Some(editor) = &mut self.launch_configuration_list_editor else {
             return;
         };
 
         if editor.commands.is_empty() {
             editor.input = InputState::default();
-            editor.mode = OpenCommandListEditorMode::Add;
+            editor.mode = LaunchConfigurationListEditorMode::Add;
 
             return;
         }
@@ -582,22 +589,22 @@ impl SettingsManager {
         let selected_command = editor.commands[selected_index].clone();
         editor.selected_index = selected_index;
         editor.input = InputState::with_text(selected_command);
-        editor.mode = OpenCommandListEditorMode::Edit;
+        editor.mode = LaunchConfigurationListEditorMode::Edit;
     }
 
     /// Cancels add/edit input and returns to command browsing.
-    pub fn cancel_open_command_input(&mut self) {
-        let Some(editor) = &mut self.open_command_list_editor else {
+    pub fn cancel_launch_configuration_input(&mut self) {
+        let Some(editor) = &mut self.launch_configuration_list_editor else {
             return;
         };
 
         editor.input = InputState::default();
-        editor.mode = OpenCommandListEditorMode::Browse;
+        editor.mode = LaunchConfigurationListEditorMode::Browse;
     }
 
-    /// Appends one character to the active open-command input field.
-    pub fn append_open_command_input_character(&mut self, character: char) {
-        let Some(editor) = &mut self.open_command_list_editor else {
+    /// Appends one character to the active launch-configuration input field.
+    pub fn append_launch_configuration_input_character(&mut self, character: char) {
+        let Some(editor) = &mut self.launch_configuration_list_editor else {
             return;
         };
 
@@ -606,10 +613,10 @@ impl SettingsManager {
         }
     }
 
-    /// Removes the character before the cursor in the active open-command
-    /// input field.
-    pub fn remove_open_command_input_character(&mut self) {
-        let Some(editor) = &mut self.open_command_list_editor else {
+    /// Removes the character before the cursor in the active
+    /// launch-configuration input field.
+    pub fn remove_launch_configuration_input_character(&mut self) {
+        let Some(editor) = &mut self.launch_configuration_list_editor else {
             return;
         };
 
@@ -618,10 +625,10 @@ impl SettingsManager {
         }
     }
 
-    /// Removes the character at the cursor in the active open-command input
-    /// field.
-    pub fn delete_open_command_input_character(&mut self) {
-        let Some(editor) = &mut self.open_command_list_editor else {
+    /// Removes the character at the cursor in the active launch-configuration
+    /// input field.
+    pub fn delete_launch_configuration_input_character(&mut self) {
+        let Some(editor) = &mut self.launch_configuration_list_editor else {
             return;
         };
 
@@ -630,55 +637,55 @@ impl SettingsManager {
         }
     }
 
-    /// Moves the open-command input cursor one character to the left.
-    pub fn move_open_command_input_cursor_left(&mut self) {
-        self.move_open_command_input_cursor(OpenCommandInputCursorDirection::Left);
+    /// Moves the launch-configuration input cursor one character to the left.
+    pub fn move_launch_configuration_input_cursor_left(&mut self) {
+        self.move_launch_configuration_input_cursor(LaunchConfigurationInputCursorDirection::Left);
     }
 
-    /// Moves the open-command input cursor one character to the right.
-    pub fn move_open_command_input_cursor_right(&mut self) {
-        self.move_open_command_input_cursor(OpenCommandInputCursorDirection::Right);
+    /// Moves the launch-configuration input cursor one character to the right.
+    pub fn move_launch_configuration_input_cursor_right(&mut self) {
+        self.move_launch_configuration_input_cursor(LaunchConfigurationInputCursorDirection::Right);
     }
 
-    /// Moves the open-command input cursor to the start of the field.
-    pub fn move_open_command_input_cursor_home(&mut self) {
-        self.move_open_command_input_cursor(OpenCommandInputCursorDirection::Home);
+    /// Moves the launch-configuration input cursor to the start of the field.
+    pub fn move_launch_configuration_input_cursor_home(&mut self) {
+        self.move_launch_configuration_input_cursor(LaunchConfigurationInputCursorDirection::Home);
     }
 
-    /// Moves the open-command input cursor to the end of the field.
-    pub fn move_open_command_input_cursor_end(&mut self) {
-        self.move_open_command_input_cursor(OpenCommandInputCursorDirection::End);
+    /// Moves the launch-configuration input cursor to the end of the field.
+    pub fn move_launch_configuration_input_cursor_end(&mut self) {
+        self.move_launch_configuration_input_cursor(LaunchConfigurationInputCursorDirection::End);
     }
 
     /// Confirms the active add/edit input and persists the normalized command
     /// list.
-    pub async fn confirm_open_command_input(&mut self, services: &AppServices) {
-        if self.apply_open_command_input() {
-            self.persist_open_command_setting(services).await;
+    pub async fn confirm_launch_configuration_input(&mut self, services: &AppServices) {
+        if self.apply_launch_configuration_input() {
+            self.persist_launch_configuration_setting(services).await;
         }
     }
 
-    /// Deletes the selected open command and persists the normalized command
-    /// list.
-    pub async fn delete_selected_open_command(&mut self, services: &AppServices) {
-        if self.delete_selected_open_command_from_editor() {
-            self.persist_open_command_setting(services).await;
-        }
-    }
-
-    /// Moves the selected open command down and persists the normalized
+    /// Deletes the selected launch configuration and persists the normalized
     /// command list.
-    pub async fn move_selected_open_command_down(&mut self, services: &AppServices) {
-        if self.reorder_selected_open_command(OpenCommandReorderDirection::Down) {
-            self.persist_open_command_setting(services).await;
+    pub async fn delete_selected_launch_configuration(&mut self, services: &AppServices) {
+        if self.delete_selected_launch_configuration_from_editor() {
+            self.persist_launch_configuration_setting(services).await;
         }
     }
 
-    /// Moves the selected open command up and persists the normalized command
-    /// list.
-    pub async fn move_selected_open_command_up(&mut self, services: &AppServices) {
-        if self.reorder_selected_open_command(OpenCommandReorderDirection::Up) {
-            self.persist_open_command_setting(services).await;
+    /// Moves the selected launch configuration down and persists the normalized
+    /// command list.
+    pub async fn move_selected_launch_configuration_down(&mut self, services: &AppServices) {
+        if self.reorder_selected_launch_configuration(LaunchConfigurationReorderDirection::Down) {
+            self.persist_launch_configuration_setting(services).await;
+        }
+    }
+
+    /// Moves the selected launch configuration up and persists the normalized
+    /// command list.
+    pub async fn move_selected_launch_configuration_up(&mut self, services: &AppServices) {
+        if self.reorder_selected_launch_configuration(LaunchConfigurationReorderDirection::Up) {
+            self.persist_launch_configuration_setting(services).await;
         }
     }
 
@@ -713,13 +720,14 @@ impl SettingsManager {
     #[must_use]
     pub fn footer_hint(&self) -> &'static str {
         if self
-            .open_command_list_editor
+            .launch_configuration_list_editor
             .as_ref()
-            .is_some_and(OpenCommandListEditorState::is_input_mode)
+            .is_some_and(LaunchConfigurationListEditorState::is_input_mode)
         {
-            "Open Commands: type a command, Enter save, Esc cancel"
-        } else if self.is_open_command_list_editor_open() {
-            "Open Commands: j/k move, a add, e/Enter edit, d delete, J/K reorder, Esc/q close"
+            "Launch Configurations: type a command, Enter save, Esc cancel"
+        } else if self.is_launch_configuration_list_editor_open() {
+            "Launch Configurations: j/k move, a add, e/Enter edit, d delete, J/K reorder, Esc/q \
+             close"
         } else if self.is_selector_dropdown_open() {
             "Selecting setting value: j/k move, Enter select, Esc/q close"
         } else {
@@ -727,12 +735,12 @@ impl SettingsManager {
         }
     }
 
-    /// Returns configured open commands in persisted order.
+    /// Returns configured launch configurations in persisted order.
     ///
     /// Commands are split by newlines and trimmed.
     #[must_use]
-    pub fn open_commands(&self) -> Vec<String> {
-        parse_open_commands(self.open_command.as_str())
+    pub fn launch_configurations(&self) -> Vec<String> {
+        parse_launch_configurations(self.launch_configuration.as_str())
     }
 
     /// Returns the currently selected row index.
@@ -824,7 +832,7 @@ impl SettingsManager {
                     value: SettingSelectorValue::Bool(true),
                 },
             ],
-            SettingRow::OpenCommand => Vec::new(),
+            SettingRow::LaunchConfiguration => Vec::new(),
             SettingRow::Theme => ColorTheme::ALL
                 .iter()
                 .copied()
@@ -917,16 +925,23 @@ impl SettingsManager {
         }
     }
 
-    /// Opens the command list editor from the persisted open-command setting.
-    fn open_open_command_list_editor(&mut self) {
-        self.open_command_list_editor = Some(OpenCommandListEditorState::from_open_command(
-            self.open_command.as_str(),
-        ));
+    /// Opens the command list editor from the persisted launch-configuration
+    /// setting.
+    fn open_launch_configuration_list_editor(&mut self) {
+        self.launch_configuration_list_editor = Some(
+            LaunchConfigurationListEditorState::from_launch_configuration(
+                self.launch_configuration.as_str(),
+            ),
+        );
     }
 
-    /// Moves the open-command editor selection in the requested direction.
-    fn move_open_command_list_editor_selection(&mut self, direction: OpenCommandListDirection) {
-        let Some(editor) = &mut self.open_command_list_editor else {
+    /// Moves the launch-configuration editor selection in the requested
+    /// direction.
+    fn move_launch_configuration_list_editor_selection(
+        &mut self,
+        direction: LaunchConfigurationListDirection,
+    ) {
+        let Some(editor) = &mut self.launch_configuration_list_editor else {
             return;
         };
 
@@ -936,8 +951,8 @@ impl SettingsManager {
 
         let command_count = editor.commands.len();
         editor.selected_index = match direction {
-            OpenCommandListDirection::Next => (editor.selected_index + 1) % command_count,
-            OpenCommandListDirection::Previous => {
+            LaunchConfigurationListDirection::Next => (editor.selected_index + 1) % command_count,
+            LaunchConfigurationListDirection::Previous => {
                 if editor.selected_index == 0 {
                     command_count - 1
                 } else {
@@ -947,9 +962,12 @@ impl SettingsManager {
         };
     }
 
-    /// Moves the open-command input cursor in the requested direction.
-    fn move_open_command_input_cursor(&mut self, direction: OpenCommandInputCursorDirection) {
-        let Some(editor) = &mut self.open_command_list_editor else {
+    /// Moves the launch-configuration input cursor in the requested direction.
+    fn move_launch_configuration_input_cursor(
+        &mut self,
+        direction: LaunchConfigurationInputCursorDirection,
+    ) {
+        let Some(editor) = &mut self.launch_configuration_list_editor else {
             return;
         };
 
@@ -958,16 +976,16 @@ impl SettingsManager {
         }
 
         match direction {
-            OpenCommandInputCursorDirection::End => editor.input.move_end(),
-            OpenCommandInputCursorDirection::Home => editor.input.move_home(),
-            OpenCommandInputCursorDirection::Left => editor.input.move_left(),
-            OpenCommandInputCursorDirection::Right => editor.input.move_right(),
+            LaunchConfigurationInputCursorDirection::End => editor.input.move_end(),
+            LaunchConfigurationInputCursorDirection::Home => editor.input.move_home(),
+            LaunchConfigurationInputCursorDirection::Left => editor.input.move_left(),
+            LaunchConfigurationInputCursorDirection::Right => editor.input.move_right(),
         }
     }
 
     /// Applies the active add/edit input to the command list.
-    fn apply_open_command_input(&mut self) -> bool {
-        let Some(editor) = &mut self.open_command_list_editor else {
+    fn apply_launch_configuration_input(&mut self) -> bool {
+        let Some(editor) = &mut self.launch_configuration_list_editor else {
             return false;
         };
 
@@ -977,13 +995,13 @@ impl SettingsManager {
 
         let command = editor.input.text().trim().to_string();
         match editor.mode {
-            OpenCommandListEditorMode::Add => {
+            LaunchConfigurationListEditorMode::Add => {
                 if !command.is_empty() {
                     editor.commands.push(command);
                     editor.selected_index = editor.commands.len().saturating_sub(1);
                 }
             }
-            OpenCommandListEditorMode::Edit => {
+            LaunchConfigurationListEditorMode::Edit => {
                 if editor.commands.is_empty() {
                     if !command.is_empty() {
                         editor.commands.push(command);
@@ -1000,19 +1018,19 @@ impl SettingsManager {
                     }
                 }
             }
-            OpenCommandListEditorMode::Browse => {}
+            LaunchConfigurationListEditorMode::Browse => {}
         }
 
         editor.input = InputState::default();
-        editor.mode = OpenCommandListEditorMode::Browse;
-        self.sync_open_command_from_editor();
+        editor.mode = LaunchConfigurationListEditorMode::Browse;
+        self.sync_launch_configuration_from_editor();
 
         true
     }
 
-    /// Deletes the selected command from the open-command editor.
-    fn delete_selected_open_command_from_editor(&mut self) -> bool {
-        let Some(editor) = &mut self.open_command_list_editor else {
+    /// Deletes the selected command from the launch-configuration editor.
+    fn delete_selected_launch_configuration_from_editor(&mut self) -> bool {
+        let Some(editor) = &mut self.launch_configuration_list_editor else {
             return false;
         };
 
@@ -1023,14 +1041,17 @@ impl SettingsManager {
         let selected_index = editor.selected_index();
         editor.commands.remove(selected_index);
         editor.clamp_selected_index();
-        self.sync_open_command_from_editor();
+        self.sync_launch_configuration_from_editor();
 
         true
     }
 
-    /// Reorders the selected command in the open-command editor.
-    fn reorder_selected_open_command(&mut self, direction: OpenCommandReorderDirection) -> bool {
-        let Some(editor) = &mut self.open_command_list_editor else {
+    /// Reorders the selected command in the launch-configuration editor.
+    fn reorder_selected_launch_configuration(
+        &mut self,
+        direction: LaunchConfigurationReorderDirection,
+    ) -> bool {
+        let Some(editor) = &mut self.launch_configuration_list_editor else {
             return false;
         };
 
@@ -1040,14 +1061,14 @@ impl SettingsManager {
 
         let selected_index = editor.selected_index();
         let next_index = match direction {
-            OpenCommandReorderDirection::Down => {
+            LaunchConfigurationReorderDirection::Down => {
                 if selected_index + 1 >= editor.commands.len() {
                     return false;
                 }
 
                 selected_index + 1
             }
-            OpenCommandReorderDirection::Up => {
+            LaunchConfigurationReorderDirection::Up => {
                 if selected_index == 0 {
                     return false;
                 }
@@ -1058,18 +1079,18 @@ impl SettingsManager {
 
         editor.commands.swap(selected_index, next_index);
         editor.selected_index = next_index;
-        self.sync_open_command_from_editor();
+        self.sync_launch_configuration_from_editor();
 
         true
     }
 
-    /// Synchronizes the persisted `open_command` string from the editor's
-    /// normalized command list.
-    fn sync_open_command_from_editor(&mut self) {
-        if let Some(editor) = &mut self.open_command_list_editor {
-            editor.commands = normalize_open_commands(&editor.commands);
+    /// Synchronizes the persisted `launch_configuration` string from the
+    /// editor's normalized command list.
+    fn sync_launch_configuration_from_editor(&mut self) {
+        if let Some(editor) = &mut self.launch_configuration_list_editor {
+            editor.commands = normalize_launch_configurations(&editor.commands);
             editor.clamp_selected_index();
-            self.open_command = join_open_commands(&editor.commands);
+            self.launch_configuration = join_launch_configurations(&editor.commands);
         }
     }
 
@@ -1093,21 +1114,23 @@ impl SettingsManager {
             SettingRow::IncludeCoauthoredByAgentty => {
                 bool_setting_display(self.include_coauthored_by_agentty)
             }
-            SettingRow::OpenCommand => display_open_command_summary(&self.open_command),
+            SettingRow::LaunchConfiguration => {
+                display_launch_configuration_summary(&self.launch_configuration)
+            }
             SettingRow::Theme => self.theme.label().to_string(),
         }
     }
 
-    /// Persists the current `OpenCommand` setting value.
-    async fn persist_open_command_setting(&self, services: &AppServices) {
+    /// Persists the current `LaunchConfiguration` setting value.
+    async fn persist_launch_configuration_setting(&self, services: &AppServices) {
         // Best-effort: settings persistence failure is non-critical.
         let _ = services
             .db()
             .settings()
             .upsert_project_setting(
                 self.project_id,
-                SettingName::OpenCommand,
-                &self.open_command,
+                SettingName::LaunchConfiguration,
+                &self.launch_configuration,
             )
             .await;
     }
@@ -1249,25 +1272,25 @@ impl SettingsManager {
     }
 }
 
-/// Open-command editor list navigation direction.
+/// Launch-configuration editor list navigation direction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum OpenCommandListDirection {
+enum LaunchConfigurationListDirection {
     Next,
     Previous,
 }
 
-/// Open-command editor input cursor movement direction.
+/// Launch-configuration editor input cursor movement direction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum OpenCommandInputCursorDirection {
+enum LaunchConfigurationInputCursorDirection {
     End,
     Home,
     Left,
     Right,
 }
 
-/// Open-command editor reorder direction.
+/// Launch-configuration editor reorder direction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum OpenCommandReorderDirection {
+enum LaunchConfigurationReorderDirection {
     Down,
     Up,
 }
@@ -1340,9 +1363,10 @@ impl ModelSelectorOption {
     }
 }
 
-/// Parses the persisted settings value into executable open-command entries.
-fn parse_open_commands(open_command_setting: &str) -> Vec<String> {
-    open_command_setting
+/// Parses the persisted settings value into executable launch-configuration
+/// entries.
+fn parse_launch_configurations(launch_configuration_setting: &str) -> Vec<String> {
+    launch_configuration_setting
         .lines()
         .map(str::trim)
         .filter(|command| !command.is_empty())
@@ -1351,7 +1375,7 @@ fn parse_open_commands(open_command_setting: &str) -> Vec<String> {
 }
 
 /// Trims command entries and drops empty commands.
-fn normalize_open_commands(commands: &[String]) -> Vec<String> {
+fn normalize_launch_configurations(commands: &[String]) -> Vec<String> {
     commands
         .iter()
         .map(|command| command.trim())
@@ -1361,8 +1385,8 @@ fn normalize_open_commands(commands: &[String]) -> Vec<String> {
 }
 
 /// Joins normalized command entries into the persisted setting value.
-fn join_open_commands(commands: &[String]) -> String {
-    normalize_open_commands(commands).join("\n")
+fn join_launch_configurations(commands: &[String]) -> String {
+    normalize_launch_configurations(commands).join("\n")
 }
 
 /// Loads one project-scoped boolean setting, falling back to
@@ -1402,9 +1426,9 @@ fn display_model_selector_value(selection: AgentSelection) -> String {
     format!("{}/{}", selection.kind(), selection.model().as_str())
 }
 
-/// Returns the compact table summary for configured open commands.
-fn display_open_command_summary(open_command_setting: &str) -> String {
-    let commands = parse_open_commands(open_command_setting);
+/// Returns the compact table summary for configured launch configurations.
+fn display_launch_configuration_summary(launch_configuration_setting: &str) -> String {
+    let commands = parse_launch_configurations(launch_configuration_setting);
     let Some(first_command) = commands.first() else {
         return "(none)".to_string();
     };
@@ -1646,13 +1670,13 @@ mod tests {
                 AgentKind::Antigravity,
                 AgentKind::Antigravity.default_model(),
             ),
-            open_command: String::new(),
+            launch_configuration: String::new(),
             reasoning_level: ReasoningLevel::High,
             table_state,
             theme: ColorTheme::Current,
             available_agent_kinds: AgentKind::ALL.to_vec(),
             include_coauthored_by_agentty: false,
-            open_command_list_editor: None,
+            launch_configuration_list_editor: None,
             project_id: 1,
             selector_dropdown: None,
             use_last_used_model_as_default: false,
@@ -1748,14 +1772,14 @@ mod tests {
     }
 
     #[test]
-    fn setting_name_as_str_returns_open_command() {
+    fn setting_name_as_str_returns_launch_configuration() {
         // Arrange
 
         // Act
-        let setting_name = SettingName::OpenCommand.as_str();
+        let setting_name = SettingName::LaunchConfiguration.as_str();
 
         // Assert
-        assert_eq!(setting_name, "OpenCommand");
+        assert_eq!(setting_name, "LaunchConfiguration");
     }
 
     #[test]
@@ -1969,9 +1993,9 @@ mod tests {
         services
             .db()
             .settings()
-            .upsert_project_setting(project_id, SettingName::OpenCommand, "nvim .")
+            .upsert_project_setting(project_id, SettingName::LaunchConfiguration, "nvim .")
             .await
-            .expect("failed to persist open command");
+            .expect("failed to persist launch configuration");
         services
             .db()
             .settings()
@@ -2007,7 +2031,7 @@ mod tests {
             manager.default_review_selection,
             AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus48)
         );
-        assert_eq!(manager.open_command, "nvim .");
+        assert_eq!(manager.launch_configuration, "nvim .");
         assert_eq!(manager.reasoning_level, ReasoningLevel::Low);
         assert_eq!(manager.theme, ColorTheme::Hacker);
         assert!(!manager.include_coauthored_by_agentty);
@@ -2107,7 +2131,7 @@ mod tests {
     }
 
     #[test]
-    fn previous_wraps_to_open_commands_row_from_theme_row() {
+    fn previous_wraps_to_launch_configurations_row_from_theme_row() {
         // Arrange
         let mut manager = new_settings_manager();
 
@@ -2119,19 +2143,19 @@ mod tests {
     }
 
     #[test]
-    fn is_open_command_list_editor_open_returns_false_by_default() {
+    fn is_launch_configuration_list_editor_open_returns_false_by_default() {
         // Arrange
         let manager = new_settings_manager();
 
         // Act
-        let is_open = manager.is_open_command_list_editor_open();
+        let is_open = manager.is_launch_configuration_list_editor_open();
 
         // Assert
         assert!(!is_open);
     }
 
     #[test]
-    fn settings_rows_include_reasoning_model_coauthor_and_open_command_options() {
+    fn settings_rows_include_reasoning_model_coauthor_and_launch_configuration_options() {
         // Arrange
         let manager = new_settings_manager();
 
@@ -2146,7 +2170,7 @@ mod tests {
         assert_eq!(rows[3].0, "Default Fast Model");
         assert_eq!(rows[4].0, "Default Review Model");
         assert_eq!(rows[5].0, "Coauthored by Agentty");
-        assert_eq!(rows[6].0, "Open Commands");
+        assert_eq!(rows[6].0, "Launch Configurations");
     }
 
     #[test]
@@ -2167,17 +2191,17 @@ mod tests {
         assert_eq!(project_rows[2].0, "Default Fast Model");
         assert_eq!(project_rows[3].0, "Default Review Model");
         assert_eq!(project_rows[4].0, "Coauthored by Agentty");
-        assert_eq!(project_rows[5].0, "Open Commands");
+        assert_eq!(project_rows[5].0, "Launch Configurations");
     }
 
     #[test]
-    fn footer_hint_returns_open_command_input_hint_when_input_is_active() {
+    fn footer_hint_returns_launch_configuration_input_hint_when_input_is_active() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.open_command_list_editor = Some(OpenCommandListEditorState {
+        manager.launch_configuration_list_editor = Some(LaunchConfigurationListEditorState {
             commands: Vec::new(),
             input: InputState::default(),
-            mode: OpenCommandListEditorMode::Add,
+            mode: LaunchConfigurationListEditorMode::Add,
             selected_index: 0,
         });
 
@@ -2187,7 +2211,7 @@ mod tests {
         // Assert
         assert_eq!(
             footer_hint,
-            "Open Commands: type a command, Enter save, Esc cancel"
+            "Launch Configurations: type a command, Enter save, Esc cancel"
         );
     }
 
@@ -2211,49 +2235,52 @@ mod tests {
     }
 
     #[test]
-    fn open_commands_returns_single_trimmed_command() {
+    fn launch_configurations_returns_single_trimmed_command() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.open_command = "  cargo test  ".to_string();
+        manager.launch_configuration = "  cargo test  ".to_string();
 
         // Act
-        let open_commands = manager.open_commands();
+        let launch_configurations = manager.launch_configurations();
 
         // Assert
-        assert_eq!(open_commands, vec!["cargo test".to_string()]);
+        assert_eq!(launch_configurations, vec!["cargo test".to_string()]);
     }
 
     #[test]
-    fn open_commands_splits_newline_entries() {
+    fn launch_configurations_splits_newline_entries() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.open_command = " cargo test \n npm run dev \n".to_string();
+        manager.launch_configuration = " cargo test \n npm run dev \n".to_string();
 
         // Act
-        let open_commands = manager.open_commands();
+        let launch_configurations = manager.launch_configurations();
 
         // Assert
         assert_eq!(
-            open_commands,
+            launch_configurations,
             vec!["cargo test".to_string(), "npm run dev".to_string()]
         );
     }
 
     #[test]
-    fn open_commands_does_not_split_double_pipe_entries() {
+    fn launch_configurations_does_not_split_double_pipe_entries() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.open_command = "cargo test || npm run dev".to_string();
+        manager.launch_configuration = "cargo test || npm run dev".to_string();
 
         // Act
-        let open_commands = manager.open_commands();
+        let launch_configurations = manager.launch_configurations();
 
         // Assert
-        assert_eq!(open_commands, vec!["cargo test || npm run dev".to_string()]);
+        assert_eq!(
+            launch_configurations,
+            vec!["cargo test || npm run dev".to_string()]
+        );
     }
 
     #[test]
-    fn settings_rows_show_empty_placeholder_for_open_command() {
+    fn settings_rows_show_empty_placeholder_for_launch_configuration() {
         // Arrange
         let manager = new_settings_manager();
 
@@ -2265,10 +2292,10 @@ mod tests {
     }
 
     #[test]
-    fn settings_rows_show_single_open_command_summary() {
+    fn settings_rows_show_single_launch_configuration_summary() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.open_command = "http://localhost:5173".to_string();
+        manager.launch_configuration = "http://localhost:5173".to_string();
 
         // Act
         let rows = manager.settings_rows();
@@ -2278,10 +2305,10 @@ mod tests {
     }
 
     #[test]
-    fn settings_rows_show_multiple_open_command_summary() {
+    fn settings_rows_show_multiple_launch_configuration_summary() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.open_command = "cargo test\nnpm run dev\nlazygit".to_string();
+        manager.launch_configuration = "cargo test\nnpm run dev\nlazygit".to_string();
 
         // Act
         let rows = manager.settings_rows();
@@ -2399,10 +2426,10 @@ mod tests {
     }
 
     #[test]
-    fn handle_enter_opens_open_command_list_editor() {
+    fn handle_enter_opens_launch_configuration_list_editor() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.open_command = "nvim .".to_string();
+        manager.launch_configuration = "nvim .".to_string();
         select_row(&mut manager, 6);
 
         // Act
@@ -2410,14 +2437,14 @@ mod tests {
 
         // Assert
         let editor = manager
-            .open_command_list_editor()
-            .expect("expected open-command list editor");
+            .launch_configuration_list_editor()
+            .expect("expected launch-configuration list editor");
         assert_eq!(editor.commands, vec!["nvim .".to_string()]);
-        assert_eq!(editor.mode, OpenCommandListEditorMode::Browse);
+        assert_eq!(editor.mode, LaunchConfigurationListEditorMode::Browse);
     }
 
     #[test]
-    fn next_and_previous_do_not_move_selection_while_open_command_editor_is_open() {
+    fn next_and_previous_do_not_move_selection_while_launch_configuration_editor_is_open() {
         // Arrange
         let mut manager = new_settings_manager();
         select_row(&mut manager, 6);
@@ -2429,7 +2456,7 @@ mod tests {
 
         // Assert
         assert_eq!(manager.table_state.selected(), Some(6));
-        assert!(manager.is_open_command_list_editor_open());
+        assert!(manager.is_launch_configuration_list_editor_open());
     }
 
     #[test]
@@ -2449,173 +2476,180 @@ mod tests {
     }
 
     #[test]
-    fn cancel_open_command_input_returns_to_browse_without_changing_value() {
+    fn cancel_launch_configuration_input_returns_to_browse_without_changing_value() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.open_command = "old command".to_string();
+        manager.launch_configuration = "old command".to_string();
         select_row(&mut manager, 6);
         manager.handle_enter();
-        manager.start_adding_open_command();
-        manager.append_open_command_input_character('n');
+        manager.start_adding_launch_configuration();
+        manager.append_launch_configuration_input_character('n');
 
         // Act
-        manager.cancel_open_command_input();
+        manager.cancel_launch_configuration_input();
 
         // Assert
         let editor = manager
-            .open_command_list_editor()
-            .expect("expected open-command list editor");
-        assert_eq!(manager.open_command, "old command");
-        assert_eq!(editor.mode, OpenCommandListEditorMode::Browse);
+            .launch_configuration_list_editor()
+            .expect("expected launch-configuration list editor");
+        assert_eq!(manager.launch_configuration, "old command");
+        assert_eq!(editor.mode, LaunchConfigurationListEditorMode::Browse);
         assert!(editor.input.is_none());
     }
 
     #[tokio::test]
-    async fn confirm_open_command_input_adds_trimmed_command_and_persists_value() {
+    async fn confirm_launch_configuration_input_adds_trimmed_command_and_persists_value() {
         // Arrange
         let (services, project_id) = test_services().await;
         let mut manager = SettingsManager::new(&services, project_id).await;
         select_row(&mut manager, 6);
         manager.handle_enter();
-        manager.start_adding_open_command();
+        manager.start_adding_launch_configuration();
 
         // Act
-        manager.append_open_command_input_character(' ');
-        manager.append_open_command_input_character('n');
-        manager.append_open_command_input_character('v');
-        manager.append_open_command_input_character('i');
-        manager.append_open_command_input_character('m');
-        manager.append_open_command_input_character(' ');
-        manager.confirm_open_command_input(&services).await;
+        manager.append_launch_configuration_input_character(' ');
+        manager.append_launch_configuration_input_character('n');
+        manager.append_launch_configuration_input_character('v');
+        manager.append_launch_configuration_input_character('i');
+        manager.append_launch_configuration_input_character('m');
+        manager.append_launch_configuration_input_character(' ');
+        manager.confirm_launch_configuration_input(&services).await;
 
         // Assert
-        assert_eq!(manager.open_command, "nvim");
+        assert_eq!(manager.launch_configuration, "nvim");
         assert_eq!(
             services
                 .db()
                 .settings()
-                .get_project_setting(project_id, SettingName::OpenCommand)
+                .get_project_setting(project_id, SettingName::LaunchConfiguration)
                 .await
-                .expect("failed to load open command"),
+                .expect("failed to load launch configuration"),
             Some("nvim".to_string())
         );
     }
 
     #[tokio::test]
-    async fn confirm_open_command_input_edits_selected_command_and_persists_value() {
+    async fn confirm_launch_configuration_input_edits_selected_command_and_persists_value() {
         // Arrange
         let (services, project_id) = test_services().await;
         let mut manager = SettingsManager::new(&services, project_id).await;
-        manager.open_command = "cargo test\nnpm run dev".to_string();
+        manager.launch_configuration = "cargo test\nnpm run dev".to_string();
         select_row(&mut manager, 6);
         manager.handle_enter();
-        manager.next_open_command_list_editor_item();
-        manager.start_editing_selected_open_command();
+        manager.next_launch_configuration_list_editor_item();
+        manager.start_editing_selected_launch_configuration();
 
         for _ in 0.."npm run dev".chars().count() {
-            manager.remove_open_command_input_character();
+            manager.remove_launch_configuration_input_character();
         }
         for character in "lazygit".chars() {
-            manager.append_open_command_input_character(character);
+            manager.append_launch_configuration_input_character(character);
         }
 
         // Act
-        manager.confirm_open_command_input(&services).await;
+        manager.confirm_launch_configuration_input(&services).await;
 
         // Assert
-        assert_eq!(manager.open_command, "cargo test\nlazygit");
+        assert_eq!(manager.launch_configuration, "cargo test\nlazygit");
         assert_eq!(
             services
                 .db()
                 .settings()
-                .get_project_setting(project_id, SettingName::OpenCommand)
+                .get_project_setting(project_id, SettingName::LaunchConfiguration)
                 .await
-                .expect("failed to load open command"),
+                .expect("failed to load launch configuration"),
             Some("cargo test\nlazygit".to_string())
         );
     }
 
     #[tokio::test]
-    async fn confirm_open_command_input_drops_empty_edited_command() {
+    async fn confirm_launch_configuration_input_drops_empty_edited_command() {
         // Arrange
         let (services, project_id) = test_services().await;
         let mut manager = SettingsManager::new(&services, project_id).await;
-        manager.open_command = "cargo test\nnpm run dev".to_string();
+        manager.launch_configuration = "cargo test\nnpm run dev".to_string();
         select_row(&mut manager, 6);
         manager.handle_enter();
-        manager.start_editing_selected_open_command();
+        manager.start_editing_selected_launch_configuration();
 
         for _ in 0.."cargo test".chars().count() {
-            manager.remove_open_command_input_character();
+            manager.remove_launch_configuration_input_character();
         }
 
         // Act
-        manager.confirm_open_command_input(&services).await;
+        manager.confirm_launch_configuration_input(&services).await;
 
         // Assert
-        assert_eq!(manager.open_command, "npm run dev");
+        assert_eq!(manager.launch_configuration, "npm run dev");
         assert_eq!(
             services
                 .db()
                 .settings()
-                .get_project_setting(project_id, SettingName::OpenCommand)
+                .get_project_setting(project_id, SettingName::LaunchConfiguration)
                 .await
-                .expect("failed to load open command"),
+                .expect("failed to load launch configuration"),
             Some("npm run dev".to_string())
         );
     }
 
     #[tokio::test]
-    async fn delete_selected_open_command_persists_remaining_commands() {
+    async fn delete_selected_launch_configuration_persists_remaining_commands() {
         // Arrange
         let (services, project_id) = test_services().await;
         let mut manager = SettingsManager::new(&services, project_id).await;
-        manager.open_command = "cargo test\nnpm run dev\nlazygit".to_string();
+        manager.launch_configuration = "cargo test\nnpm run dev\nlazygit".to_string();
         select_row(&mut manager, 6);
         manager.handle_enter();
-        manager.next_open_command_list_editor_item();
+        manager.next_launch_configuration_list_editor_item();
 
         // Act
-        manager.delete_selected_open_command(&services).await;
+        manager
+            .delete_selected_launch_configuration(&services)
+            .await;
 
         // Assert
-        assert_eq!(manager.open_command, "cargo test\nlazygit");
+        assert_eq!(manager.launch_configuration, "cargo test\nlazygit");
         assert_eq!(
             services
                 .db()
                 .settings()
-                .get_project_setting(project_id, SettingName::OpenCommand)
+                .get_project_setting(project_id, SettingName::LaunchConfiguration)
                 .await
-                .expect("failed to load open command"),
+                .expect("failed to load launch configuration"),
             Some("cargo test\nlazygit".to_string())
         );
     }
 
     #[tokio::test]
-    async fn move_selected_open_command_down_persists_reordered_commands() {
+    async fn move_selected_launch_configuration_down_persists_reordered_commands() {
         // Arrange
         let (services, project_id) = test_services().await;
         let mut manager = SettingsManager::new(&services, project_id).await;
-        manager.open_command = "cargo test\nnpm run dev\nlazygit".to_string();
+        manager.launch_configuration = "cargo test\nnpm run dev\nlazygit".to_string();
         select_row(&mut manager, 6);
         manager.handle_enter();
 
         // Act
-        manager.move_selected_open_command_down(&services).await;
+        manager
+            .move_selected_launch_configuration_down(&services)
+            .await;
 
         // Assert
         let editor = manager
-            .open_command_list_editor()
-            .expect("expected open-command list editor");
-        assert_eq!(manager.open_command, "npm run dev\ncargo test\nlazygit");
+            .launch_configuration_list_editor()
+            .expect("expected launch-configuration list editor");
+        assert_eq!(
+            manager.launch_configuration,
+            "npm run dev\ncargo test\nlazygit"
+        );
         assert_eq!(editor.selected_index, 1);
         assert_eq!(
             services
                 .db()
                 .settings()
-                .get_project_setting(project_id, SettingName::OpenCommand)
+                .get_project_setting(project_id, SettingName::LaunchConfiguration)
                 .await
-                .expect("failed to load open command"),
+                .expect("failed to load launch configuration"),
             Some("npm run dev\ncargo test\nlazygit".to_string())
         );
     }
@@ -2681,35 +2715,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn open_command_editor_apis_are_noops_without_open_editor() {
+    async fn launch_configuration_editor_apis_are_noops_without_open_editor() {
         // Arrange
         let (services, project_id) = test_services().await;
         let mut manager = SettingsManager::new(&services, project_id).await;
 
         // Act
-        manager.start_adding_open_command();
-        manager.start_editing_selected_open_command();
-        manager.append_open_command_input_character('n');
-        manager.remove_open_command_input_character();
-        manager.delete_open_command_input_character();
-        manager.move_open_command_input_cursor_left();
-        manager.move_open_command_input_cursor_right();
-        manager.move_open_command_input_cursor_home();
-        manager.move_open_command_input_cursor_end();
-        manager.confirm_open_command_input(&services).await;
-        manager.delete_selected_open_command(&services).await;
-        manager.move_selected_open_command_down(&services).await;
-        manager.move_selected_open_command_up(&services).await;
+        manager.start_adding_launch_configuration();
+        manager.start_editing_selected_launch_configuration();
+        manager.append_launch_configuration_input_character('n');
+        manager.remove_launch_configuration_input_character();
+        manager.delete_launch_configuration_input_character();
+        manager.move_launch_configuration_input_cursor_left();
+        manager.move_launch_configuration_input_cursor_right();
+        manager.move_launch_configuration_input_cursor_home();
+        manager.move_launch_configuration_input_cursor_end();
+        manager.confirm_launch_configuration_input(&services).await;
+        manager
+            .delete_selected_launch_configuration(&services)
+            .await;
+        manager
+            .move_selected_launch_configuration_down(&services)
+            .await;
+        manager
+            .move_selected_launch_configuration_up(&services)
+            .await;
 
         // Assert
-        assert!(manager.open_command.is_empty());
+        assert!(manager.launch_configuration.is_empty());
         assert_eq!(
             services
                 .db()
                 .settings()
-                .get_project_setting(project_id, SettingName::OpenCommand)
+                .get_project_setting(project_id, SettingName::LaunchConfiguration)
                 .await
-                .expect("failed to load open command"),
+                .expect("failed to load launch configuration"),
             None
         );
     }

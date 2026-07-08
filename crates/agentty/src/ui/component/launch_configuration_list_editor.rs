@@ -4,7 +4,9 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
-use crate::app::setting::{OpenCommandListEditorMode, OpenCommandListEditorSnapshot};
+use crate::app::setting::{
+    LaunchConfigurationListEditorMode, LaunchConfigurationListEditorSnapshot,
+};
 use crate::domain::input::InputState;
 use crate::ui::style::palette;
 use crate::ui::text_util::truncate_with_ellipsis;
@@ -13,27 +15,30 @@ use crate::ui::{Component, overlay};
 const FOOTER_LINE_COUNT: usize = 3;
 const MIN_OVERLAY_HEIGHT: u16 = 11;
 const MIN_OVERLAY_WIDTH: u16 = 58;
-/// Popup dimensions for editing the configured open-command list.
+/// Popup dimensions for editing the configured launch-configuration list.
 const OVERLAY_DIMENSIONS: overlay::OverlayDimensions =
     overlay::OverlayDimensions::new(70, 42, MIN_OVERLAY_WIDTH, MIN_OVERLAY_HEIGHT);
 
-/// Centered popup that edits the project-scoped `Open Commands` setting as a
-/// discrete command list.
-pub struct OpenCommandListEditor<'a> {
-    editor: &'a OpenCommandListEditorSnapshot,
+/// Centered popup that edits the project-scoped `Launch Configurations` setting
+/// as a discrete command list.
+pub struct LaunchConfigurationListEditor<'a> {
+    editor: &'a LaunchConfigurationListEditorSnapshot,
 }
 
-impl<'a> OpenCommandListEditor<'a> {
-    /// Creates an open-command list editor popup from render-ready state.
-    pub fn new(editor: &'a OpenCommandListEditorSnapshot) -> Self {
+impl<'a> LaunchConfigurationListEditor<'a> {
+    /// Creates a launch-configuration list editor popup from render-ready
+    /// state.
+    pub fn new(editor: &'a LaunchConfigurationListEditorSnapshot) -> Self {
         Self { editor }
     }
 
     /// Returns all render lines for this popup.
     fn lines(&self, command_width: usize, popup_height: u16) -> Vec<Line<'static>> {
         match self.editor.mode {
-            OpenCommandListEditorMode::Browse => self.browse_lines(command_width, popup_height),
-            OpenCommandListEditorMode::Add | OpenCommandListEditorMode::Edit => {
+            LaunchConfigurationListEditorMode::Browse => {
+                self.browse_lines(command_width, popup_height)
+            }
+            LaunchConfigurationListEditorMode::Add | LaunchConfigurationListEditorMode::Edit => {
                 self.input_lines(command_width)
             }
         }
@@ -99,9 +104,9 @@ impl<'a> OpenCommandListEditor<'a> {
     /// Returns add/edit render lines with a single-line input field.
     fn input_lines(&self, command_width: usize) -> Vec<Line<'static>> {
         let input_title = match self.editor.mode {
-            OpenCommandListEditorMode::Add => "Add command",
-            OpenCommandListEditorMode::Edit => "Edit command",
-            OpenCommandListEditorMode::Browse => "Command",
+            LaunchConfigurationListEditorMode::Add => "Add command",
+            LaunchConfigurationListEditorMode::Edit => "Edit command",
+            LaunchConfigurationListEditorMode::Browse => "Command",
         };
         let input = self.editor.input.clone().unwrap_or_default();
         let input_text =
@@ -133,7 +138,7 @@ impl<'a> OpenCommandListEditor<'a> {
     }
 }
 
-impl Component for OpenCommandListEditor<'_> {
+impl Component for LaunchConfigurationListEditor<'_> {
     fn render(&self, f: &mut Frame, area: Rect) {
         let popup_area = OVERLAY_DIMENSIONS.centered_popup_area(area);
         let command_width = overlay::overlay_content_width(popup_area.width)
@@ -144,7 +149,10 @@ impl Component for OpenCommandListEditor<'_> {
         let paragraph = Paragraph::new(lines)
             .alignment(Alignment::Left)
             .wrap(Wrap { trim: true })
-            .block(overlay::overlay_block("Open Commands", palette::accent()));
+            .block(overlay::overlay_block(
+                "Launch Configurations",
+                palette::accent(),
+            ));
 
         overlay::clear_popup_area(f, popup_area);
         f.render_widget(paragraph, popup_area);
@@ -223,17 +231,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_open_command_list_editor_renders_browse_help() {
+    fn test_launch_configuration_list_editor_renders_browse_help() {
         // Arrange
         let backend = ratatui::backend::TestBackend::new(100, 30);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-        let editor = OpenCommandListEditorSnapshot {
+        let editor = LaunchConfigurationListEditorSnapshot {
             commands: vec!["cargo test".to_string(), "npm run dev".to_string()],
             input: None,
-            mode: OpenCommandListEditorMode::Browse,
+            mode: LaunchConfigurationListEditorMode::Browse,
             selected_index: 1,
         };
-        let component = OpenCommandListEditor::new(&editor);
+        let component = LaunchConfigurationListEditor::new(&editor);
 
         // Act
         terminal
@@ -249,7 +257,7 @@ mod tests {
             .iter()
             .map(ratatui::buffer::Cell::symbol)
             .collect();
-        assert!(text.contains("Open Commands"));
+        assert!(text.contains("Launch Configurations"));
         assert!(text.contains("cargo test"));
         assert!(text.contains("npm run dev"));
         assert!(text.contains("a: add"));
@@ -257,15 +265,15 @@ mod tests {
     }
 
     #[test]
-    fn test_open_command_list_editor_selected_row_uses_background_without_marker() {
+    fn test_launch_configuration_list_editor_selected_row_uses_background_without_marker() {
         // Arrange
-        let editor = OpenCommandListEditorSnapshot {
+        let editor = LaunchConfigurationListEditorSnapshot {
             commands: vec!["cargo test".to_string(), "npm run dev".to_string()],
             input: None,
-            mode: OpenCommandListEditorMode::Browse,
+            mode: LaunchConfigurationListEditorMode::Browse,
             selected_index: 1,
         };
-        let component = OpenCommandListEditor::new(&editor);
+        let component = LaunchConfigurationListEditor::new(&editor);
 
         // Act
         let lines = component.lines(24, 12);
@@ -287,16 +295,16 @@ mod tests {
     }
 
     #[test]
-    fn test_open_command_list_editor_input_lines_show_cursor() {
+    fn test_launch_configuration_list_editor_input_lines_show_cursor() {
         // Arrange
         let input = InputState::with_text("cargo test".to_string());
-        let editor = OpenCommandListEditorSnapshot {
+        let editor = LaunchConfigurationListEditorSnapshot {
             commands: Vec::new(),
             input: Some(input),
-            mode: OpenCommandListEditorMode::Add,
+            mode: LaunchConfigurationListEditorMode::Add,
             selected_index: 0,
         };
-        let component = OpenCommandListEditor::new(&editor);
+        let component = LaunchConfigurationListEditor::new(&editor);
 
         // Act
         let lines = component.lines(24, 12);

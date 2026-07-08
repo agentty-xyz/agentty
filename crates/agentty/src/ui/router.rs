@@ -371,7 +371,7 @@ fn render_list_or_overlay_mode(
         | AppMode::Prompt { .. }
         | AppMode::Question { .. }
         | AppMode::PublishBranchInput { .. }
-        | AppMode::OpenCommandSelector { .. }
+        | AppMode::LaunchConfigurationSelector { .. }
         | AppMode::Diff { .. } => {
             return false;
         }
@@ -619,11 +619,11 @@ fn render_session_or_diff_mode(
             area,
             aux.session_chat(sessions, mode, session_id, *scroll_offset),
         ),
-        AppMode::OpenCommandSelector {
+        AppMode::LaunchConfigurationSelector {
             commands,
             restore_view,
             selected_command_index,
-        } => render_open_command_selector_overlay(
+        } => render_launch_configuration_selector_overlay(
             f,
             area,
             aux.session_overlay(sessions, restore_view),
@@ -703,8 +703,9 @@ struct PublishBranchModeContext<'a> {
     restore_view: &'a ConfirmationViewMode,
 }
 
-/// Renders open-command selection overlay above the originating session chat.
-fn render_open_command_selector_overlay(
+/// Renders launch-configuration selection overlay above the originating session
+/// chat.
+fn render_launch_configuration_selector_overlay(
     f: &mut Frame,
     area: Rect,
     overlay_context: SessionOverlayRenderContext<'_>,
@@ -713,7 +714,7 @@ fn render_open_command_selector_overlay(
 ) {
     render_session_overlay_background(f, area, overlay_context);
 
-    component::open_command_overlay::OpenCommandOverlay::new(commands)
+    component::launch_configuration_overlay::LaunchConfigurationOverlay::new(commands)
         .selected_command_index(selected_command_index)
         .render(f, area);
 }

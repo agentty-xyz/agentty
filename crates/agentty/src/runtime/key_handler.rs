@@ -36,8 +36,8 @@ where
         handle_confirmation_decision(app, decision).await
     } else if matches!(app.mode, AppMode::SessionCreation { .. }) {
         handle_session_creation_key(app, key).await
-    } else if matches!(app.mode, AppMode::OpenCommandSelector { .. }) {
-        handle_open_command_selector_key(app, key).await
+    } else if matches!(app.mode, AppMode::LaunchConfigurationSelector { .. }) {
+        handle_launch_configuration_selector_key(app, key).await
     } else if matches!(app.mode, AppMode::PublishBranchInput { .. }) {
         Ok(handle_publish_branch_input_key(app, key))
     } else {
@@ -74,8 +74,10 @@ where
                 Ok(mode::diff::handle(app, content_area, key))
             }
             AppMode::Help { .. } => Ok(mode::help::handle(app, key)),
-            AppMode::OpenCommandSelector { .. } => {
-                unreachable!("open-command selector mode is handled before dispatch matching")
+            AppMode::LaunchConfigurationSelector { .. } => {
+                unreachable!(
+                    "launch-configuration selector mode is handled before dispatch matching"
+                )
             }
             AppMode::PublishBranchInput { .. } => {
                 unreachable!("publish-branch input mode is handled before dispatch matching")
@@ -356,16 +358,20 @@ impl PublishBranchInputModeState {
     }
 }
 
-/// Handles key input while the app is in open-command selector overlay mode.
-async fn handle_open_command_selector_key(app: &mut App, key: KeyEvent) -> io::Result<EventResult> {
+/// Handles key input while the app is in launch-configuration selector overlay
+/// mode.
+async fn handle_launch_configuration_selector_key(
+    app: &mut App,
+    key: KeyEvent,
+) -> io::Result<EventResult> {
     let mode = std::mem::replace(&mut app.mode, AppMode::List);
-    let AppMode::OpenCommandSelector {
+    let AppMode::LaunchConfigurationSelector {
         commands,
         restore_view,
         selected_command_index,
     } = mode
     else {
-        unreachable!("mode must be open-command selector in this handler");
+        unreachable!("mode must be launch-configuration selector in this handler");
     };
 
     match key.code {
@@ -373,15 +379,18 @@ async fn handle_open_command_selector_key(app: &mut App, key: KeyEvent) -> io::R
             app.mode = restore_view.into_view_mode();
         }
         KeyCode::Char('j') | KeyCode::Down => {
-            app.mode = AppMode::OpenCommandSelector {
-                selected_command_index: next_open_command_index(selected_command_index, &commands),
+            app.mode = AppMode::LaunchConfigurationSelector {
+                selected_command_index: next_launch_configuration_index(
+                    selected_command_index,
+                    &commands,
+                ),
                 commands,
                 restore_view,
             };
         }
         KeyCode::Char('k') | KeyCode::Up => {
-            app.mode = AppMode::OpenCommandSelector {
-                selected_command_index: previous_open_command_index(
+            app.mode = AppMode::LaunchConfigurationSelector {
+                selected_command_index: previous_launch_configuration_index(
                     selected_command_index,
                     &commands,
                 ),
@@ -390,15 +399,15 @@ async fn handle_open_command_selector_key(app: &mut App, key: KeyEvent) -> io::R
             };
         }
         KeyCode::Enter => {
-            let selected_open_command = commands
+            let selected_launch_configuration = commands
                 .get(selected_command_index)
                 .map(std::string::String::as_str);
             app.mode = restore_view.into_view_mode();
-            app.open_session_worktree_in_tmux_with_command(selected_open_command)
+            app.open_session_worktree_in_tmux_with_command(selected_launch_configuration)
                 .await;
         }
         _ => {
-            app.mode = AppMode::OpenCommandSelector {
+            app.mode = AppMode::LaunchConfigurationSelector {
                 commands,
                 restore_view,
                 selected_command_index,
@@ -410,7 +419,7 @@ async fn handle_open_command_selector_key(app: &mut App, key: KeyEvent) -> io::R
 }
 
 /// Returns the next command index with wrap-around.
-fn next_open_command_index(current_index: usize, commands: &[String]) -> usize {
+fn next_launch_configuration_index(current_index: usize, commands: &[String]) -> usize {
     if commands.is_empty() {
         return 0;
     }
@@ -419,7 +428,7 @@ fn next_open_command_index(current_index: usize, commands: &[String]) -> usize {
 }
 
 /// Returns the previous command index with wrap-around.
-fn previous_open_command_index(current_index: usize, commands: &[String]) -> usize {
+fn previous_launch_configuration_index(current_index: usize, commands: &[String]) -> usize {
     if commands.is_empty() {
         return 0;
     }
@@ -1355,34 +1364,34 @@ mod tests {
     }
 
     #[test]
-    fn test_next_open_command_index_wraps_to_start() {
+    fn test_next_launch_configuration_index_wraps_to_start() {
         // Arrange
         let commands = vec!["cargo test".to_string(), "npm run dev".to_string()];
 
         // Act
-        let index = next_open_command_index(1, &commands);
+        let index = next_launch_configuration_index(1, &commands);
 
         // Assert
         assert_eq!(index, 0);
     }
 
     #[test]
-    fn test_previous_open_command_index_wraps_to_end() {
+    fn test_previous_launch_configuration_index_wraps_to_end() {
         // Arrange
         let commands = vec!["cargo test".to_string(), "npm run dev".to_string()];
 
         // Act
-        let index = previous_open_command_index(0, &commands);
+        let index = previous_launch_configuration_index(0, &commands);
 
         // Assert
         assert_eq!(index, 1);
     }
 
     #[tokio::test]
-    async fn test_handle_open_command_selector_key_escape_restores_view_mode() {
+    async fn test_handle_launch_configuration_selector_key_escape_restores_view_mode() {
         // Arrange
         let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
-        app.mode = AppMode::OpenCommandSelector {
+        app.mode = AppMode::LaunchConfigurationSelector {
             commands: vec!["cargo test".to_string(), "npm run dev".to_string()],
             restore_view: ConfirmationViewMode {
                 scroll_offset: Some(3),
@@ -1392,7 +1401,7 @@ mod tests {
         };
 
         // Act
-        let event_result = handle_open_command_selector_key(
+        let event_result = handle_launch_configuration_selector_key(
             &mut app,
             KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
         )
@@ -1410,10 +1419,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_open_command_selector_key_j_updates_selected_index() {
+    async fn test_handle_launch_configuration_selector_key_j_updates_selected_index() {
         // Arrange
         let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
-        app.mode = AppMode::OpenCommandSelector {
+        app.mode = AppMode::LaunchConfigurationSelector {
             commands: vec!["cargo test".to_string(), "npm run dev".to_string()],
             restore_view: ConfirmationViewMode {
                 scroll_offset: None,
@@ -1423,7 +1432,7 @@ mod tests {
         };
 
         // Act
-        let event_result = handle_open_command_selector_key(
+        let event_result = handle_launch_configuration_selector_key(
             &mut app,
             KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
         )
@@ -1433,7 +1442,7 @@ mod tests {
         assert!(matches!(event_result, Ok(EventResult::Continue)));
         assert!(matches!(
             app.mode,
-            AppMode::OpenCommandSelector {
+            AppMode::LaunchConfigurationSelector {
                 selected_command_index: 1,
                 ..
             }
@@ -1441,10 +1450,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_open_command_selector_key_with_empty_commands_keeps_index_zero() {
+    async fn test_handle_launch_configuration_selector_key_with_empty_commands_keeps_index_zero() {
         // Arrange
         let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
-        app.mode = AppMode::OpenCommandSelector {
+        app.mode = AppMode::LaunchConfigurationSelector {
             commands: Vec::new(),
             restore_view: ConfirmationViewMode {
                 scroll_offset: None,
@@ -1454,7 +1463,7 @@ mod tests {
         };
 
         // Act
-        let event_result = handle_open_command_selector_key(
+        let event_result = handle_launch_configuration_selector_key(
             &mut app,
             KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
         )
@@ -1464,7 +1473,7 @@ mod tests {
         assert!(matches!(event_result, Ok(EventResult::Continue)));
         assert!(matches!(
             app.mode,
-            AppMode::OpenCommandSelector {
+            AppMode::LaunchConfigurationSelector {
                 selected_command_index: 0,
                 ..
             }
@@ -1472,10 +1481,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_open_command_selector_key_enter_restores_view_without_session() {
+    async fn test_handle_launch_configuration_selector_key_enter_restores_view_without_session() {
         // Arrange
         let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
-        app.mode = AppMode::OpenCommandSelector {
+        app.mode = AppMode::LaunchConfigurationSelector {
             commands: vec!["cargo test".to_string()],
             restore_view: ConfirmationViewMode {
                 scroll_offset: Some(4),
@@ -1485,7 +1494,7 @@ mod tests {
         };
 
         // Act
-        let event_result = handle_open_command_selector_key(
+        let event_result = handle_launch_configuration_selector_key(
             &mut app,
             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
         )
@@ -1503,7 +1512,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_open_command_selector_key_enter_runs_selected_command_in_tmux() {
+    async fn test_handle_launch_configuration_selector_key_enter_runs_selected_command_in_tmux() {
         // Arrange
         let mut mock_tmux_client = MockTmuxClient::new();
         mock_tmux_client
@@ -1522,7 +1531,7 @@ mod tests {
             .create_session()
             .await
             .expect("failed to create session");
-        app.mode = AppMode::OpenCommandSelector {
+        app.mode = AppMode::LaunchConfigurationSelector {
             commands: vec!["cargo test".to_string(), "npm run dev".to_string()],
             restore_view: ConfirmationViewMode {
                 scroll_offset: Some(2),
@@ -1532,7 +1541,7 @@ mod tests {
         };
 
         // Act
-        let event_result = handle_open_command_selector_key(
+        let event_result = handle_launch_configuration_selector_key(
             &mut app,
             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
         )
@@ -1550,10 +1559,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_open_command_selector_key_unknown_key_preserves_state() {
+    async fn test_handle_launch_configuration_selector_key_unknown_key_preserves_state() {
         // Arrange
         let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
-        app.mode = AppMode::OpenCommandSelector {
+        app.mode = AppMode::LaunchConfigurationSelector {
             commands: vec!["cargo test".to_string(), "npm run dev".to_string()],
             restore_view: ConfirmationViewMode {
                 scroll_offset: Some(1),
@@ -1563,7 +1572,7 @@ mod tests {
         };
 
         // Act
-        let event_result = handle_open_command_selector_key(
+        let event_result = handle_launch_configuration_selector_key(
             &mut app,
             KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
         )
@@ -1573,7 +1582,7 @@ mod tests {
         assert!(matches!(event_result, Ok(EventResult::Continue)));
         assert!(matches!(
             app.mode,
-            AppMode::OpenCommandSelector {
+            AppMode::LaunchConfigurationSelector {
                 selected_command_index: 1,
                 ref commands,
                 restore_view:

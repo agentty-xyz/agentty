@@ -1520,24 +1520,32 @@ async fn test_project_setting_round_trip_is_isolated_per_project() {
 
     database
         .settings()
-        .upsert_project_setting(first_project_id, SettingName::OpenCommand, "npm run dev")
+        .upsert_project_setting(
+            first_project_id,
+            SettingName::LaunchConfiguration,
+            "npm run dev",
+        )
         .await
         .expect("failed to persist first project setting");
     database
         .settings()
-        .upsert_project_setting(second_project_id, SettingName::OpenCommand, "cargo test")
+        .upsert_project_setting(
+            second_project_id,
+            SettingName::LaunchConfiguration,
+            "cargo test",
+        )
         .await
         .expect("failed to persist second project setting");
 
     // Act
     let first_project_setting = database
         .settings()
-        .get_project_setting(first_project_id, SettingName::OpenCommand)
+        .get_project_setting(first_project_id, SettingName::LaunchConfiguration)
         .await
         .expect("failed to load first project setting");
     let second_project_setting = database
         .settings()
-        .get_project_setting(second_project_id, SettingName::OpenCommand)
+        .get_project_setting(second_project_id, SettingName::LaunchConfiguration)
         .await
         .expect("failed to load second project setting");
 

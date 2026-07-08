@@ -74,8 +74,8 @@ SET value = excluded.value
 ///
 /// Navigates to the Settings tab and asserts that the settings table
 /// appears with expected row labels including "Reasoning Level" and
-/// "Open Commands". It also verifies the Agentty coauthor trailer starts
-/// disabled for new projects.
+/// "Launch Configurations". It also verifies the Agentty coauthor trailer
+/// starts disabled for new projects.
 #[test]
 fn settings_tab_shows_content() {
     // Arrange, Act, Assert
@@ -106,7 +106,7 @@ fn settings_tab_shows_content() {
                 assertion::assert_text_in_region(frame, "Default Smart Model", &full);
                 assertion::assert_text_in_region(frame, "gemini/gemini-3.1-pro-preview", &full);
                 assertion::assert_text_in_region(frame, "Disabled", &full);
-                assertion::assert_text_in_region(frame, "Open Commands", &full);
+                assertion::assert_text_in_region(frame, "Launch Configurations", &full);
                 assertion::assert_text_in_region(frame, "Theme", &full);
                 assertion::assert_text_in_region(frame, "Agentty Default", &full);
             },
@@ -266,15 +266,15 @@ fn settings_dropdown_selects_value() {
         .expect("feature test failed");
 }
 
-/// Verify that `Open Commands` are edited as discrete list entries.
+/// Verify that `Launch Configurations` are edited as discrete list entries.
 ///
 /// Opens the command-list editor, adds one command, edits it, adds another
 /// command, reorders the entries, deletes the selected command, and confirms
 /// the settings row summarizes the remaining command.
 #[test]
-fn settings_open_commands_list_editor() {
+fn settings_launch_configurations_list_editor() {
     // Arrange, Act, Assert
-    FeatureTest::new("settings_open_commands")
+    FeatureTest::new("settings_launch_configurations")
         .run(
             |scenario| {
                 scenario
@@ -292,12 +292,15 @@ fn settings_open_commands_list_editor() {
                     .wait_for_stable_frame(200, 3000)
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
-                    .capture_labeled("empty_editor", "Open Commands list editor with no commands")
+                    .capture_labeled(
+                        "empty_editor",
+                        "Launch Configurations list editor with no commands",
+                    )
                     .press_key("a")
                     .wait_for_stable_frame(200, 3000)
                     .write_text("nvim .")
                     .wait_for_stable_frame(200, 3000)
-                    .capture_labeled("add_input", "Adding an open command")
+                    .capture_labeled("add_input", "Adding a launch configuration")
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
                     .press_key("Enter")
@@ -310,7 +313,7 @@ fn settings_open_commands_list_editor() {
                     .press_key("Backspace")
                     .write_text("lazygit")
                     .wait_for_stable_frame(200, 3000)
-                    .capture_labeled("edit_input", "Editing an open command")
+                    .capture_labeled("edit_input", "Editing a launch configuration")
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
                     .press_key("a")
@@ -318,7 +321,7 @@ fn settings_open_commands_list_editor() {
                     .write_text("npm run dev")
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
-                    .capture_labeled("two_commands", "Two configured open commands")
+                    .capture_labeled("two_commands", "Two configured launch configurations")
                     .write_text("K")
                     .wait_for_stable_frame(200, 3000)
                     .capture_labeled("reordered", "Selected command moved up")
@@ -327,17 +330,17 @@ fn settings_open_commands_list_editor() {
                     .capture_labeled("deleted", "Selected command deleted")
                     .press_key("Escape")
                     .wait_for_stable_frame(200, 3000)
-                    .capture_labeled("summary", "Open Commands row summary after editing")
+                    .capture_labeled("summary", "Launch Configurations row summary after editing")
             },
             |frame, report| {
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Open Commands", &full);
+                assertion::assert_text_in_region(frame, "Launch Configurations", &full);
                 assertion::assert_text_in_region(frame, "lazygit", &full);
 
                 assert_eq!(
                     report.captures.len(),
                     7,
-                    "Expected 7 captures for the open-command list editor workflow"
+                    "Expected 7 captures for the launch-configuration list editor workflow"
                 );
 
                 let empty_frame = common::frame_from_capture(&report.captures[0]);

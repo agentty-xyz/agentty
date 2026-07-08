@@ -534,7 +534,10 @@ mod tests {
         );
         assert_eq!(
             fifth_message,
-            Some("Session open commands run through tmux and use the configured Settings entries.")
+            Some(
+                "Session launch configurations run through tmux and use the configured Settings \
+                 entries."
+            )
         );
         assert_eq!(
             wrapped_message,
