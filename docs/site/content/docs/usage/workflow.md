@@ -174,8 +174,10 @@ The appended review stays visible across diff mode and question mode, and is cle
 when you submit the next prompt. Focused review includes the saved user and agent chat
 history for context. It uses inspection-only context: it may read files, search, inspect
 git history, and browse when needed, but it recommends verification commands instead of
-running checks itself. A turn stopped with `Ctrl+c` does not start a focused review
-automatically; press `f` for a manual one.
+running checks itself. `Project Impact` renders as concise bullets, and `Suggestions`
+renders as bullets formatted `[Severity]: Issue details`, using `[High]` or `[Medium]`
+when follow-up work is needed. A turn stopped with `Ctrl+c` does not start a focused
+review automatically; press `f` for a manual one.
 
 ### Session Output Markdown
 

@@ -34,6 +34,7 @@ All review parts must be concise.
 
 ### Project Impact
 
+- Format this section as a Markdown bullet list.
 - Explain how the changes affect the project overall.
 - Cover practical effects such as behavior, reliability, maintainability, performance,
   security, or developer workflow.
@@ -42,6 +43,8 @@ All review parts must be concise.
 
 ### Suggestions
 
+- Format this section as a Markdown bullet list.
+- Format each suggestion as `- [Severity]: Issue details`, using `[High]` or `[Medium]`.
 - Provide only high- and medium-severity follow-up suggestions based on the diff.
 - Treat high severity as correctness, security, data-loss, or build-breaking risk.
 - Treat medium severity as reliability, maintainability, performance, or workflow risk

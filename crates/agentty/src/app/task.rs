@@ -912,6 +912,10 @@ mod tests {
         ));
         assert!(normalized_prompt.contains("never tell the user to run commands themselves"));
         assert!(!prompt.contains("You may run non-editing CLI commands"));
+        assert!(prompt.contains("Format this section as a Markdown bullet list."));
+        assert!(normalized_prompt.contains(
+            "Format each suggestion as `- [Severity]: Issue details`, using `[High]` or `[Medium]`"
+        ));
         assert!(normalized_prompt.contains("Treat high severity as correctness"));
         assert!(normalized_prompt.contains("concrete practical impact"));
         let fenced_diff = format!("```diff\n{review_diff}\n```");
