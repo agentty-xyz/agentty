@@ -402,6 +402,13 @@ mod tests {
     ];
     const UNCHANGED_DIFF_LINE: &str = " unchanged";
 
+    fn line_text(line: &Line<'static>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.to_string())
+            .collect()
+    }
+
     #[test]
     fn test_file_list_lines_with_same_path() {
         // Arrange
@@ -513,15 +520,7 @@ mod tests {
         let lines = FileExplorer::build_tree(&parsed_lines).0;
 
         // Assert
-        let line_text: Vec<String> = lines
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.to_string())
-                    .collect::<String>()
-            })
-            .collect();
+        let line_text: Vec<String> = lines.iter().map(line_text).collect();
         assert_eq!(
             line_text,
             EXPECTED_NESTED_TREE_LINES

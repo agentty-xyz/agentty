@@ -141,9 +141,9 @@ file | | `Up` / `Down` | Scroll selected panel | | `c` | Toggle right panel betw
 and comments | | `?` | Help |
 
 <a id="usage-diff-totals"></a> The diff panel title includes aggregate `+added` and
-`-removed` line totals, and cached review-request line comments render inline below
-matching diff lines. See [Workflow](@/docs/usage/workflow.md) for the comments panel
-behavior.
+`-removed` line totals plus the selected file or folder's added/removed counts, and
+cached review-request line comments render inline below matching diff lines. See
+[Workflow](@/docs/usage/workflow.md) for the comments panel behavior.
 
 ## Prompt Input
 

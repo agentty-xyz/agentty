@@ -86,10 +86,50 @@ impl OwnedDiffLine {
 /// Parsed diff data reused by file-tree rendering and diff layout assembly.
 #[derive(Clone)]
 pub(crate) struct DiffContentSnapshot {
+    all_files_summary: DiffSelectionChangeSummary,
     file_list_lines: Arc<[Line<'static>]>,
     key: DiffContentCacheKey,
     parsed_lines: Arc<[OwnedDiffLine]>,
+    selection_summaries: Arc<[DiffSelectionChangeSummary]>,
     tree_items: Arc<[FileTreeItem]>,
+}
+
+/// Change totals for the currently selected diff tree item.
+#[derive(Clone)]
+struct DiffSelectionChangeSummary {
+    added_lines: usize,
+    label: String,
+    removed_lines: usize,
+}
+
+/// Added/removed line totals accumulated while building cached summaries.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct DiffChangeTotals {
+    added_lines: usize,
+    removed_lines: usize,
+}
+
+impl DiffChangeTotals {
+    /// Returns the change represented by one parsed diff line.
+    fn from_line_kind(kind: DiffLineKind) -> Option<Self> {
+        match kind {
+            DiffLineKind::Addition => Some(Self {
+                added_lines: 1,
+                removed_lines: 0,
+            }),
+            DiffLineKind::Deletion => Some(Self {
+                added_lines: 0,
+                removed_lines: 1,
+            }),
+            DiffLineKind::Context | DiffLineKind::FileHeader | DiffLineKind::HunkHeader => None,
+        }
+    }
+
+    /// Adds another set of totals to this accumulator.
+    fn add(&mut self, totals: Self) {
+        self.added_lines = self.added_lines.saturating_add(totals.added_lines);
+        self.removed_lines = self.removed_lines.saturating_add(totals.removed_lines);
+    }
 }
 
 impl DiffContentSnapshot {
@@ -101,6 +141,16 @@ impl DiffContentSnapshot {
     /// Returns the number of selectable file-tree entries in this diff.
     pub(crate) fn item_count(&self) -> usize {
         self.tree_items.len()
+    }
+
+    /// Returns the label and added/removed line totals for the active
+    /// file-tree selection, or the whole diff when the selection is stale.
+    fn selected_change_summary(&self, selected_index: usize) -> &DiffSelectionChangeSummary {
+        if let Some(summary) = self.selection_summaries.get(selected_index) {
+            return summary;
+        }
+
+        &self.all_files_summary
     }
 
     /// Returns parsed lines for the active file-tree selection.
@@ -119,6 +169,97 @@ impl DiffContentSnapshot {
             .iter()
             .map(OwnedDiffLine::borrowed)
             .collect()
+    }
+
+    /// Builds cached added/removed summaries for the full diff and each
+    /// selectable tree item in one pass over parsed lines.
+    fn change_summaries(
+        parsed_lines: &[DiffLine<'_>],
+        tree_items: &[FileTreeItem],
+    ) -> (DiffSelectionChangeSummary, Vec<DiffSelectionChangeSummary>) {
+        let mut all_files_totals = DiffChangeTotals::default();
+        let mut current_path = None;
+        let mut file_totals: HashMap<&str, DiffChangeTotals> = HashMap::new();
+
+        for diff_line in parsed_lines {
+            if diff_line.kind == DiffLineKind::FileHeader
+                && diff_line.content.starts_with("diff --git")
+            {
+                current_path = diff_header_new_path(diff_line.content);
+
+                continue;
+            }
+
+            let Some(line_totals) = DiffChangeTotals::from_line_kind(diff_line.kind) else {
+                continue;
+            };
+            all_files_totals.add(line_totals);
+
+            if let Some(path) = current_path {
+                file_totals.entry(path).or_default().add(line_totals);
+            }
+        }
+
+        let folder_totals = Self::folder_totals(&file_totals);
+        let all_files_summary = DiffSelectionChangeSummary {
+            added_lines: all_files_totals.added_lines,
+            label: "all files".to_string(),
+            removed_lines: all_files_totals.removed_lines,
+        };
+        let selection_summaries = tree_items
+            .iter()
+            .map(|item| {
+                let totals = Self::tree_item_change_totals(item, &file_totals, &folder_totals);
+
+                DiffSelectionChangeSummary {
+                    added_lines: totals.added_lines,
+                    label: tree_item_label(item),
+                    removed_lines: totals.removed_lines,
+                }
+            })
+            .collect();
+
+        (all_files_summary, selection_summaries)
+    }
+
+    /// Aggregates file-level change totals into folder-prefix totals.
+    fn folder_totals(
+        file_totals: &HashMap<&str, DiffChangeTotals>,
+    ) -> HashMap<String, DiffChangeTotals> {
+        let mut folder_totals: HashMap<String, DiffChangeTotals> = HashMap::new();
+
+        for (path, totals) in file_totals {
+            for folder_prefix in Self::folder_prefixes(path) {
+                folder_totals.entry(folder_prefix).or_default().add(*totals);
+            }
+        }
+
+        folder_totals
+    }
+
+    /// Returns every folder prefix for a repository-relative path.
+    fn folder_prefixes(path: &str) -> Vec<String> {
+        path.char_indices()
+            .filter_map(|(char_index, character)| {
+                if character == '/' {
+                    return Some(path[..=char_index].to_string());
+                }
+
+                None
+            })
+            .collect()
+    }
+
+    /// Looks up cached change totals for one file-tree item.
+    fn tree_item_change_totals(
+        item: &FileTreeItem,
+        file_totals: &HashMap<&str, DiffChangeTotals>,
+        folder_totals: &HashMap<String, DiffChangeTotals>,
+    ) -> DiffChangeTotals {
+        match item {
+            FileTreeItem::File(path) => file_totals.get(path.as_str()).copied().unwrap_or_default(),
+            FileTreeItem::Folder(path) => folder_totals.get(path).copied().unwrap_or_default(),
+        }
     }
 }
 
@@ -195,7 +336,10 @@ impl DiffLayoutCache {
 
         let parsed_lines = parse_diff_lines(diff);
         let (file_list_lines, tree_items) = FileExplorer::file_tree(&parsed_lines);
+        let (all_files_summary, selection_summaries) =
+            DiffContentSnapshot::change_summaries(&parsed_lines, &tree_items);
         let snapshot = DiffContentSnapshot {
+            all_files_summary,
             file_list_lines: Arc::from(file_list_lines),
             key,
             parsed_lines: Arc::from(
@@ -204,6 +348,7 @@ impl DiffLayoutCache {
                     .map(OwnedDiffLine::from_diff_line)
                     .collect::<Vec<_>>(),
             ),
+            selection_summaries: Arc::from(selection_summaries),
             tree_items: Arc::from(tree_items),
         };
         self.store_content(DiffContentCacheEntry {
@@ -460,6 +605,7 @@ impl<'a> DiffPage<'a> {
         total_added_lines: u64,
         total_removed_lines: u64,
     ) {
+        let selection_summary = content.selected_change_summary(self.file_explorer_selected_index);
         let title = Line::from(vec![
             Span::styled(" (", Style::default().fg(style::palette::warning())),
             Span::styled(
@@ -475,6 +621,21 @@ impl<'a> DiffPage<'a> {
                 format!(") Diff — {} ", inline_text(self.session.display_title())),
                 Style::default().fg(style::palette::warning()),
             ),
+            Span::styled("· ", Style::default().fg(style::palette::warning())),
+            Span::styled(
+                format!("{} ", inline_text(&selection_summary.label)),
+                Style::default().fg(style::palette::text_muted()),
+            ),
+            Span::styled(
+                format!("+{}", selection_summary.added_lines),
+                Style::default().fg(style::palette::success()),
+            ),
+            Span::styled(" ", Style::default().fg(style::palette::warning())),
+            Span::styled(
+                format!("-{}", selection_summary.removed_lines),
+                Style::default().fg(style::palette::danger()),
+            ),
+            Span::styled(" ", Style::default().fg(style::palette::warning())),
         ]);
 
         let layout = self.diff_layout_cache.resolved_layout(
@@ -924,6 +1085,13 @@ impl Page for DiffPage<'_> {
             &help_action::diff_footer_actions(self.right_panel),
         ));
         f.render_widget(help_message, areas.footer_area);
+    }
+}
+
+/// Returns a compact display label for one file-tree selection.
+fn tree_item_label(item: &FileTreeItem) -> String {
+    match item {
+        FileTreeItem::Folder(path) | FileTreeItem::File(path) => path.clone(),
     }
 }
 
@@ -1497,6 +1665,49 @@ mod tests {
             &first_content.file_list_lines,
             &second_content.file_list_lines
         ));
+        assert!(Arc::ptr_eq(
+            &first_content.selection_summaries,
+            &second_content.selection_summaries
+        ));
+    }
+
+    #[test]
+    fn test_diff_content_snapshot_caches_selection_change_summaries() {
+        // Arrange
+        let cache = DiffLayoutCache::default();
+        let content = cache.content(concat!(
+            "diff --git a/src/main.rs b/src/main.rs\n",
+            "@@ -1,2 +1,3 @@\n",
+            " unchanged\n",
+            "+added main\n",
+            "-removed main\n",
+            "diff --git a/src/ui/diff.rs b/src/ui/diff.rs\n",
+            "@@ -1 +1,2 @@\n",
+            "+added nested\n",
+            "diff --git a/README.md b/README.md\n",
+            "@@ -1 +1,2 @@\n",
+            "+added readme\n",
+        ));
+
+        // Act
+        let folder_summary = content.selected_change_summary(0);
+        let nested_folder_summary = content.selected_change_summary(1);
+        let file_summary = content.selected_change_summary(3);
+        let stale_summary = content.selected_change_summary(usize::MAX);
+
+        // Assert
+        assert_eq!(folder_summary.label, "src/");
+        assert_eq!(folder_summary.added_lines, 2);
+        assert_eq!(folder_summary.removed_lines, 1);
+        assert_eq!(nested_folder_summary.label, "src/ui/");
+        assert_eq!(nested_folder_summary.added_lines, 1);
+        assert_eq!(nested_folder_summary.removed_lines, 0);
+        assert_eq!(file_summary.label, "src/main.rs");
+        assert_eq!(file_summary.added_lines, 1);
+        assert_eq!(file_summary.removed_lines, 1);
+        assert_eq!(stale_summary.label, "all files");
+        assert_eq!(stale_summary.added_lines, 3);
+        assert_eq!(stale_summary.removed_lines, 1);
     }
 
     #[test]
@@ -1598,6 +1809,7 @@ mod tests {
         let buffer = terminal.backend().buffer();
         let text = buffer_text(buffer);
         assert!(text.contains("(+1 -0) Diff — Diff Session"));
+        assert!(text.contains("src/ +1 -0"));
         assert!(text.contains("j/k: select file"));
         assert!(text.contains("c: Show comments"));
         assert!(foreground_symbol_cell_count(buffer, "┌") >= 2);
@@ -1626,6 +1838,7 @@ mod tests {
         // Assert
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("(+9 -4) Diff — Diff Session"));
+        assert!(text.contains("src/ +1 -0"));
         assert!(!text.contains("(+1 -0) Diff — Diff Session"));
     }
 
