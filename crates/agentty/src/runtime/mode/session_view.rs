@@ -1751,7 +1751,7 @@ mod tests {
         // Assert
         assert_eq!(snapshot.session_state, ViewSessionState::Review);
         assert!(snapshot.can_open_prompt_composer());
-        assert!(!snapshot.can_merge_session());
+        assert!(snapshot.can_merge_session());
         assert!(snapshot.can_rebase_session());
     }
 
