@@ -1,5 +1,4 @@
 mod check_migration;
-mod workspace_map;
 
 use std::process::ExitCode;
 
@@ -18,8 +17,6 @@ struct Cli {
 enum Command {
     /// Validates SQL migration numbering across workspace crates.
     CheckMigrations,
-    /// Writes the generated workspace map used by tooling and agents.
-    WorkspaceMap,
 }
 
 /// Runs the selected maintenance command and returns the process exit code.
@@ -29,7 +26,6 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
         None | Some(Command::CheckMigrations) => check_migration::run(),
-        Some(Command::WorkspaceMap) => workspace_map::run(),
     };
 
     if let Err(err) = result {

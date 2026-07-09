@@ -8,9 +8,7 @@ weight = 3
 and the `agentty` application layers to their responsibilities so contributors can
 quickly choose the correct module when implementing changes.
 
-For file-level detail, run `cargo run -p ag-xtask -- workspace-map`, which writes a
-machine-readable workspace summary to `target/agentty/workspace-map.json`, or read the
-module docstrings directly.
+For file-level detail, read the module docstrings directly.
 
 <!-- more -->
 
@@ -37,8 +35,8 @@ module docstrings directly.
 - `crates/testty/`: Rust-native TUI end-to-end testing framework with PTY-driven
   semantic assertions and VHS visual capture. Also ships the language-agnostic `testty`
   command-line binary for non-Rust projects.
-- `crates/ag-xtask/`: Workspace maintenance commands and automation helpers, including
-  the generated workspace-map output.
+- `crates/ag-xtask/`: Workspace maintenance commands, including the SQL migration
+  numbering check.
 
 ## Application Layers (`crates/agentty/src/`)
 

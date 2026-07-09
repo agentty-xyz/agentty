@@ -17,8 +17,7 @@ Scope: `docs/site/content/docs/` and its child documentation pages.
   in multiple places.
 - Keep architecture pages at the layer, boundary, ownership, and runtime-flow level. Do
   not maintain path-by-path inventories, file lists, or runtime mode lists in narrative
-  docs; point readers to module docstrings or generated workspace-map output for
-  file-level detail.
+  docs; point readers to module docstrings for file-level detail.
 - Keep user-facing pages focused on the currently supported behavior. Remove obsolete
   setup pages, retired feature notes, and historical compatibility details once they are
   no longer needed to use the current product.
