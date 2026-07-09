@@ -77,8 +77,6 @@ name = "ag-xtask"
 version = "0.12.6"
 dependencies = [
  "clap",
- "mockall",
- "serde_json",
  "tempfile",
  "tracing",
  "tracing-subscriber",

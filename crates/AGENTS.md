@@ -16,8 +16,7 @@ Contains the workspace member crates.
 - `crates/ag-protocol/` holds structured agent response contracts, protocol parsing,
   schema generation, and transport-neutral turn prompt payloads shared across frontends
   and agent adapters.
-- `crates/ag-xtask/` holds workspace maintenance utilities, including migration checks
-  and generated workspace-map output.
+- `crates/ag-xtask/` holds workspace maintenance utilities, including migration checks.
 - `crates/agentty/` is the main TUI application crate with `app`, `domain`, `infra`,
   `runtime`, and `ui` layers.
 - `crates/testty/` provides the Rust-native TUI end-to-end testing framework and ships
