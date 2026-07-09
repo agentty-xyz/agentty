@@ -405,12 +405,14 @@ impl App {
     #[cfg(test)]
     pub(super) async fn load_projects_from_home_directory(
         db: &AppRepositories,
+        git_client: &dyn GitClient,
         project_discovery_client: &dyn ProjectDiscoveryClient,
         session_worktree_root: &Path,
         home_directory: Option<&Path>,
     ) {
         AppStartup::load_projects_from_home_directory(
             db,
+            git_client,
             project_discovery_client,
             session_worktree_root,
             home_directory,

@@ -48,7 +48,7 @@ pub enum PullRebaseResult {
 ///
 /// # Errors
 /// Returns a [`GitError`] if staging or committing changes fails.
-pub async fn commit_all(
+pub(crate) async fn commit_all(
     repo_path: PathBuf,
     commit_message: String,
     no_verify: bool,
@@ -84,7 +84,7 @@ pub async fn commit_all(
 /// # Errors
 /// Returns a [`GitError`] if staging, commit lookup, or committing changes
 /// fails.
-pub async fn commit_all_preserving_single_commit(
+pub(crate) async fn commit_all_preserving_single_commit(
     repo_path: PathBuf,
     base_branch: String,
     commit_message: String,
@@ -113,7 +113,7 @@ pub async fn commit_all_preserving_single_commit(
 ///
 /// # Errors
 /// Returns a [`GitError`] if `git add -A` fails.
-pub async fn stage_all(repo_path: PathBuf) -> Result<(), GitError> {
+pub(crate) async fn stage_all(repo_path: PathBuf) -> Result<(), GitError> {
     spawn_blocking(move || stage_all_sync(&repo_path)).await?
 }
 
@@ -127,7 +127,7 @@ pub async fn stage_all(repo_path: PathBuf) -> Result<(), GitError> {
 ///
 /// # Errors
 /// Returns a [`GitError`] if resolving `HEAD` fails.
-pub async fn head_short_hash(repo_path: PathBuf) -> Result<String, GitError> {
+pub(crate) async fn head_short_hash(repo_path: PathBuf) -> Result<String, GitError> {
     let hash = run_git_command(
         repo_path,
         vec![
@@ -158,7 +158,7 @@ pub async fn head_short_hash(repo_path: PathBuf) -> Result<String, GitError> {
 ///
 /// # Errors
 /// Returns a [`GitError`] if resolving `HEAD` fails.
-pub async fn head_hash(repo_path: PathBuf) -> Result<String, GitError> {
+pub(crate) async fn head_hash(repo_path: PathBuf) -> Result<String, GitError> {
     let hash = run_git_command(
         repo_path,
         vec!["rev-parse".to_string(), "HEAD".to_string()],
@@ -186,7 +186,7 @@ pub async fn head_hash(repo_path: PathBuf) -> Result<String, GitError> {
 ///
 /// # Errors
 /// Returns a [`GitError`] if the reference cannot be resolved to a commit.
-pub async fn ref_hash(repo_path: PathBuf, reference: String) -> Result<String, GitError> {
+pub(crate) async fn ref_hash(repo_path: PathBuf, reference: String) -> Result<String, GitError> {
     let hash = run_git_command(
         repo_path,
         vec![
@@ -211,7 +211,7 @@ pub async fn ref_hash(repo_path: PathBuf, reference: String) -> Result<String, G
 ///
 /// # Errors
 /// Returns a [`GitError`] if `HEAD` cannot be inspected.
-pub async fn head_commit_message(repo_path: PathBuf) -> Result<Option<String>, GitError> {
+pub(crate) async fn head_commit_message(repo_path: PathBuf) -> Result<Option<String>, GitError> {
     spawn_blocking(move || head_commit_message_sync(&repo_path)).await?
 }
 
@@ -228,7 +228,7 @@ pub async fn head_commit_message(repo_path: PathBuf) -> Result<Option<String>, G
 ///
 /// # Errors
 /// Returns a [`GitError`] if the branch delete command fails.
-pub async fn delete_branch(repo_path: PathBuf, branch_name: String) -> Result<(), GitError> {
+pub(crate) async fn delete_branch(repo_path: PathBuf, branch_name: String) -> Result<(), GitError> {
     run_git_command(
         repo_path,
         vec!["branch".to_string(), "-D".to_string(), branch_name],
@@ -259,7 +259,7 @@ pub async fn delete_branch(repo_path: PathBuf, branch_name: String) -> Result<()
 /// # Errors
 /// Returns a [`GitError`] if preparing the index, generating the diff, or
 /// restoring index state fails.
-pub async fn diff(repo_path: PathBuf, base_branch: String) -> Result<String, GitError> {
+pub(crate) async fn diff(repo_path: PathBuf, base_branch: String) -> Result<String, GitError> {
     spawn_blocking(move || -> Result<String, GitError> {
         run_git_command_sync(
             &repo_path,
@@ -316,7 +316,7 @@ pub async fn diff(repo_path: PathBuf, base_branch: String) -> Result<String, Git
 ///
 /// # Errors
 /// Returns a [`GitError`] if `git status --porcelain` cannot be executed.
-pub async fn is_worktree_clean(repo_path: PathBuf) -> Result<bool, GitError> {
+pub(crate) async fn is_worktree_clean(repo_path: PathBuf) -> Result<bool, GitError> {
     let status_output = worktree_status(repo_path).await?;
 
     Ok(status_output.trim().is_empty())
@@ -335,7 +335,7 @@ pub async fn is_worktree_clean(repo_path: PathBuf) -> Result<bool, GitError> {
 ///
 /// # Errors
 /// Returns a [`GitError`] if the status command cannot be executed.
-pub async fn worktree_status(repo_path: PathBuf) -> Result<String, GitError> {
+pub(crate) async fn worktree_status(repo_path: PathBuf) -> Result<String, GitError> {
     run_git_command(
         repo_path,
         vec![
@@ -362,7 +362,7 @@ pub async fn worktree_status(repo_path: PathBuf) -> Result<String, GitError> {
 ///
 /// # Errors
 /// Returns a [`GitError`] if the status command cannot be executed.
-pub async fn tracked_worktree_status(repo_path: PathBuf) -> Result<String, GitError> {
+pub(crate) async fn tracked_worktree_status(repo_path: PathBuf) -> Result<String, GitError> {
     run_git_command(
         repo_path,
         vec![
@@ -390,7 +390,7 @@ pub async fn tracked_worktree_status(repo_path: PathBuf) -> Result<String, GitEr
 ///
 /// # Errors
 /// Returns a [`GitError`] for non-conflict pull/rebase failures.
-pub async fn pull_rebase(repo_path: PathBuf) -> Result<PullRebaseResult, GitError> {
+pub(crate) async fn pull_rebase(repo_path: PathBuf) -> Result<PullRebaseResult, GitError> {
     spawn_blocking(move || {
         let pull_arguments = pull_rebase_arguments(&repo_path)
             .unwrap_or_else(|_| vec!["pull".to_string(), "--rebase".to_string()]);
@@ -542,7 +542,7 @@ fn current_branch_name(repo_path: &Path) -> Result<String, GitError> {
 /// # Errors
 /// Returns a [`GitError`] if `git push` fails or upstream tracking cannot be
 /// resolved afterwards.
-pub async fn push_current_branch(repo_path: PathBuf) -> Result<String, GitError> {
+pub(crate) async fn push_current_branch(repo_path: PathBuf) -> Result<String, GitError> {
     spawn_blocking(move || -> Result<String, GitError> {
         let push_output = run_git_command_output_sync(&repo_path, &["push", "--force-with-lease"])?;
 
@@ -587,7 +587,7 @@ pub async fn push_current_branch(repo_path: PathBuf) -> Result<String, GitError>
 ///
 /// # Errors
 /// Returns a [`GitError`] if the `git ls-remote` command fails.
-pub async fn remote_branch_exists(
+pub(crate) async fn remote_branch_exists(
     repo_path: PathBuf,
     remote_branch_name: String,
 ) -> Result<bool, GitError> {
@@ -631,7 +631,7 @@ pub async fn remote_branch_exists(
 ///
 /// # Errors
 /// Returns a [`GitError`] if `git push` fails.
-pub async fn push_current_branch_to_remote_branch(
+pub(crate) async fn push_current_branch_to_remote_branch(
     repo_path: PathBuf,
     remote_branch_name: String,
 ) -> Result<String, GitError> {
@@ -668,7 +668,7 @@ pub async fn push_current_branch_to_remote_branch(
 /// # Errors
 /// Returns a [`GitError`] when upstream tracking information cannot be
 /// resolved.
-pub async fn current_upstream_reference(repo_path: PathBuf) -> Result<String, GitError> {
+pub(crate) async fn current_upstream_reference(repo_path: PathBuf) -> Result<String, GitError> {
     spawn_blocking(move || primary_upstream_reference(&repo_path)).await?
 }
 
@@ -682,7 +682,7 @@ pub async fn current_upstream_reference(repo_path: PathBuf) -> Result<String, Gi
 ///
 /// # Errors
 /// Returns a [`GitError`] if `git fetch` cannot be executed successfully.
-pub async fn fetch_remote(repo_path: PathBuf) -> Result<(), GitError> {
+pub(crate) async fn fetch_remote(repo_path: PathBuf) -> Result<(), GitError> {
     run_git_command(
         repo_path,
         vec!["fetch".to_string()],
@@ -704,7 +704,7 @@ pub async fn fetch_remote(repo_path: PathBuf) -> Result<(), GitError> {
 /// # Errors
 /// Returns a [`GitError`] if `git rev-list` fails or returns unexpected
 /// output.
-pub async fn get_ahead_behind(repo_path: PathBuf) -> Result<(u32, u32), GitError> {
+pub(crate) async fn get_ahead_behind(repo_path: PathBuf) -> Result<(u32, u32), GitError> {
     get_ref_ahead_behind(repo_path, "HEAD".to_string(), "@{u}".to_string()).await
 }
 
@@ -717,7 +717,7 @@ pub async fn get_ahead_behind(repo_path: PathBuf) -> Result<(u32, u32), GitError
 /// # Errors
 /// Returns a [`GitError`] if `git rev-list` fails or returns unexpected
 /// output.
-pub async fn get_ref_ahead_behind(
+pub(crate) async fn get_ref_ahead_behind(
     repo_path: PathBuf,
     left_ref: String,
     right_ref: String,
@@ -761,7 +761,9 @@ fn parse_ahead_behind_counts(rev_list_output: &str) -> Result<(u32, u32), GitErr
 ///
 /// # Errors
 /// Returns a [`GitError`] if `git for-each-ref` fails.
-pub async fn branch_tracking_statuses(repo_path: PathBuf) -> Result<BranchTrackingMap, GitError> {
+pub(crate) async fn branch_tracking_statuses(
+    repo_path: PathBuf,
+) -> Result<BranchTrackingMap, GitError> {
     let git_output = run_git_command(
         repo_path,
         vec![
@@ -786,7 +788,9 @@ pub async fn branch_tracking_statuses(repo_path: PathBuf) -> Result<BranchTracki
 /// # Errors
 /// Returns a [`GitError`] when `git log` fails or upstream tracking refs are
 /// unavailable.
-pub async fn list_upstream_commit_titles(repo_path: PathBuf) -> Result<Vec<String>, GitError> {
+pub(crate) async fn list_upstream_commit_titles(
+    repo_path: PathBuf,
+) -> Result<Vec<String>, GitError> {
     let git_output = run_git_command(
         repo_path,
         vec![
@@ -812,7 +816,7 @@ pub async fn list_upstream_commit_titles(repo_path: PathBuf) -> Result<Vec<Strin
 /// # Errors
 /// Returns a [`GitError`] when `git log` fails or upstream tracking refs are
 /// unavailable.
-pub async fn list_local_commit_titles(repo_path: PathBuf) -> Result<Vec<String>, GitError> {
+pub(crate) async fn list_local_commit_titles(repo_path: PathBuf) -> Result<Vec<String>, GitError> {
     let git_output = run_git_command(
         repo_path,
         vec![
@@ -833,7 +837,10 @@ pub async fn list_local_commit_titles(repo_path: PathBuf) -> Result<Vec<String>,
 ///
 /// # Errors
 /// Returns a [`GitError`] if commit ancestry cannot be queried.
-pub async fn has_commits_since(repo_path: PathBuf, base_branch: String) -> Result<bool, GitError> {
+pub(crate) async fn has_commits_since(
+    repo_path: PathBuf,
+    base_branch: String,
+) -> Result<bool, GitError> {
     spawn_blocking(move || -> Result<bool, GitError> {
         let rev_list_output = run_git_command_sync(
             &repo_path,
