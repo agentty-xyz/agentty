@@ -16,7 +16,7 @@ use super::error::GitError;
 ///
 /// # Errors
 /// Returns an error if the remote URL cannot be read via `git remote get-url`.
-pub async fn repo_url(repo_path: PathBuf) -> Result<String, GitError> {
+pub(crate) async fn repo_url(repo_path: PathBuf) -> Result<String, GitError> {
     let remote = run_git_command(
         repo_path,
         vec![
@@ -46,7 +46,7 @@ pub async fn repo_url(repo_path: PathBuf) -> Result<String, GitError> {
 ///
 /// # Errors
 /// Returns an error if git metadata cannot be queried from `repo_path`.
-pub async fn main_repo_root(repo_path: PathBuf) -> Result<PathBuf, GitError> {
+pub(crate) async fn main_repo_root(repo_path: PathBuf) -> Result<PathBuf, GitError> {
     spawn_blocking(move || main_repo_root_sync(&repo_path)).await?
 }
 

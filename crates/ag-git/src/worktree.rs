@@ -8,7 +8,7 @@ use super::repo::{main_repo_root_sync, resolve_git_dir, run_git_command_sync};
 
 /// Detects git repository information for the given directory.
 /// Returns the current branch name if in a git repository, None otherwise.
-pub async fn detect_git_info(dir: PathBuf) -> Option<String> {
+pub(crate) async fn detect_git_info(dir: PathBuf) -> Option<String> {
     spawn_blocking(move || detect_git_info_sync(&dir))
         .await
         .ok()
@@ -18,7 +18,7 @@ pub async fn detect_git_info(dir: PathBuf) -> Option<String> {
 /// Walks up the directory tree to find a .git directory.
 /// Returns the directory containing .git (the repository root) if found, None
 /// otherwise.
-pub async fn find_git_repo_root(dir: PathBuf) -> Option<PathBuf> {
+pub(crate) async fn find_git_repo_root(dir: PathBuf) -> Option<PathBuf> {
     spawn_blocking(move || find_git_repo_root_sync(&dir))
         .await
         .ok()
@@ -39,7 +39,7 @@ pub async fn find_git_repo_root(dir: PathBuf) -> Option<PathBuf> {
 /// # Errors
 /// Returns [`GitError::CommandFailed`] if spawning fails or the worktree
 /// command exits with a non-zero status.
-pub async fn create_worktree(
+pub(crate) async fn create_worktree(
     repo_path: PathBuf,
     worktree_path: PathBuf,
     branch_name: String,
@@ -79,7 +79,7 @@ pub async fn create_worktree(
 /// # Errors
 /// Returns [`GitError::CommandFailed`] if spawning fails or the worktree
 /// remove command exits with a non-zero status.
-pub async fn remove_worktree(worktree_path: PathBuf) -> Result<(), GitError> {
+pub(crate) async fn remove_worktree(worktree_path: PathBuf) -> Result<(), GitError> {
     spawn_blocking(move || {
         let repo_root = main_repo_root_sync(&worktree_path)?;
         let worktree_path = worktree_path.to_string_lossy().to_string();

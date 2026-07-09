@@ -107,7 +107,7 @@ impl InProgressGitOperation {
 /// # Errors
 /// Returns a [`GitError`] if rebase fails, or aborting a conflicted rebase
 /// also fails.
-pub async fn rebase(repo_path: PathBuf, target_branch: String) -> Result<(), GitError> {
+pub(crate) async fn rebase(repo_path: PathBuf, target_branch: String) -> Result<(), GitError> {
     match rebase_start(repo_path.clone(), target_branch.clone()).await? {
         RebaseStepResult::Completed => Ok(()),
         RebaseStepResult::Conflict { detail } => {
@@ -138,7 +138,7 @@ pub async fn rebase(repo_path: PathBuf, target_branch: String) -> Result<(), Git
 ///
 /// # Errors
 /// Returns a [`GitError`] for non-conflict git failures.
-pub async fn rebase_start(
+pub(crate) async fn rebase_start(
     repo_path: PathBuf,
     target_branch: String,
 ) -> Result<RebaseStepResult, GitError> {
@@ -167,7 +167,7 @@ pub async fn rebase_start(
 ///
 /// # Errors
 /// Returns a [`GitError`] for non-conflict git failures.
-pub async fn rebase_onto_start(
+pub(crate) async fn rebase_onto_start(
     repo_path: PathBuf,
     new_base: String,
     old_base: String,
@@ -192,7 +192,7 @@ pub async fn rebase_onto_start(
 ///
 /// # Errors
 /// Returns a [`GitError`] for non-conflict git failures.
-pub async fn rebase_continue(repo_path: PathBuf) -> Result<RebaseStepResult, GitError> {
+pub(crate) async fn rebase_continue(repo_path: PathBuf) -> Result<RebaseStepResult, GitError> {
     spawn_blocking(move || {
         let output = run_git_command_with_index_lock_retry(
             &repo_path,
@@ -231,7 +231,7 @@ pub async fn rebase_continue(repo_path: PathBuf) -> Result<RebaseStepResult, Git
 ///
 /// # Errors
 /// Returns a [`GitError`] when `git rebase --abort` cannot be executed.
-pub async fn abort_rebase(repo_path: PathBuf) -> Result<(), GitError> {
+pub(crate) async fn abort_rebase(repo_path: PathBuf) -> Result<(), GitError> {
     spawn_blocking(move || {
         let output =
             run_git_command_with_index_lock_retry(&repo_path, &["rebase", "--abort"], &[])?;
@@ -273,7 +273,7 @@ pub async fn abort_rebase(repo_path: PathBuf) -> Result<(), GitError> {
 ///
 /// # Errors
 /// Returns a [`GitError`] when the git directory cannot be resolved.
-pub async fn is_rebase_in_progress(repo_path: PathBuf) -> Result<bool, GitError> {
+pub(crate) async fn is_rebase_in_progress(repo_path: PathBuf) -> Result<bool, GitError> {
     spawn_blocking(move || -> Result<bool, GitError> {
         let git_dir = resolve_git_dir(&repo_path)
             .ok_or_else(|| GitError::OutputParse("Failed to resolve git directory".to_string()))?;
@@ -293,7 +293,7 @@ pub async fn is_rebase_in_progress(repo_path: PathBuf) -> Result<bool, GitError>
 ///
 /// # Errors
 /// Returns a [`GitError`] when the git directory cannot be resolved.
-pub async fn in_progress_operation(
+pub(crate) async fn in_progress_operation(
     repo_path: PathBuf,
 ) -> Result<Option<InProgressGitOperation>, GitError> {
     spawn_blocking(move || in_progress_operation_sync(&repo_path)).await?
@@ -337,7 +337,7 @@ fn has_rebase_metadata(git_dir: &Path) -> bool {
 ///
 /// # Errors
 /// Returns a [`GitError`] when conflicted files cannot be queried.
-pub async fn has_unmerged_paths(repo_path: PathBuf) -> Result<bool, GitError> {
+pub(crate) async fn has_unmerged_paths(repo_path: PathBuf) -> Result<bool, GitError> {
     let conflicted_files = list_conflicted_files(repo_path).await?;
 
     Ok(!conflicted_files.is_empty())
@@ -366,7 +366,7 @@ pub async fn has_unmerged_paths(repo_path: PathBuf) -> Result<bool, GitError> {
 /// Returns a [`GitError`] if `git grep` cannot be executed or exits with an
 /// unexpected error code. An exit code of `1` (no matches) is treated as
 /// success with an empty result.
-pub async fn list_staged_conflict_marker_files(
+pub(crate) async fn list_staged_conflict_marker_files(
     repo_path: PathBuf,
     paths: Vec<String>,
 ) -> Result<Vec<String>, GitError> {
@@ -414,7 +414,7 @@ pub async fn list_staged_conflict_marker_files(
 /// # Errors
 /// Returns a [`GitError`] if invoking `git diff --name-only --diff-filter=U`
 /// fails.
-pub async fn list_conflicted_files(repo_path: PathBuf) -> Result<Vec<String>, GitError> {
+pub(crate) async fn list_conflicted_files(repo_path: PathBuf) -> Result<Vec<String>, GitError> {
     spawn_blocking(move || -> Result<Vec<String>, GitError> {
         let output = run_git_command_sync(
             &repo_path,

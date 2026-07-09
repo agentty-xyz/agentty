@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ag_agent::agent::AgentAvailabilityProbe;
-use ag_git::{GitClient, detect_git_info};
+use ag_git::GitClient;
 use ratatui::widgets::TableState;
 use tokio::sync::mpsc;
 
@@ -175,7 +175,8 @@ impl AppStartup {
                     startup_working_dir.display()
                 ))
             })?;
-        Self::refresh_project_catalog_on_startup(db, project_discovery_client).await;
+        Self::refresh_project_catalog_on_startup(db, git_client.as_ref(), project_discovery_client)
+            .await;
 
         let project_items = Self::load_project_items(db, fs_client).await;
         let active_project_name =
@@ -335,6 +336,7 @@ impl AppStartup {
     /// through the injected project-discovery boundary.
     pub(crate) async fn refresh_project_catalog_on_startup(
         db: &AppRepositories,
+        git_client: &dyn GitClient,
         project_discovery_client: &dyn ProjectDiscoveryClient,
     ) {
         let session_worktree_root = super::core::agentty_home().join(AGENTTY_WT_DIR);
@@ -342,6 +344,7 @@ impl AppStartup {
 
         Self::load_projects_from_home_directory(
             db,
+            git_client,
             project_discovery_client,
             session_worktree_root.as_path(),
             home_directory.as_deref(),
@@ -353,6 +356,7 @@ impl AppStartup {
     /// injected project-discovery boundary and persists them.
     pub(crate) async fn load_projects_from_home_directory(
         db: &AppRepositories,
+        git_client: &dyn GitClient,
         project_discovery_client: &dyn ProjectDiscoveryClient,
         session_worktree_root: &Path,
         home_directory: Option<&Path>,
@@ -369,7 +373,7 @@ impl AppStartup {
         };
 
         for project_path in discovered_project_paths {
-            let git_branch = detect_git_info(project_path.clone()).await;
+            let git_branch = git_client.detect_git_info(project_path.clone()).await;
             let project_path = project_path.to_string_lossy().to_string();
             // Best-effort: project metadata persistence is non-critical.
             let _ = db

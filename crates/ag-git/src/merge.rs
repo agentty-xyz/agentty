@@ -31,7 +31,7 @@ pub enum SquashMergeOutcome {
 /// # Errors
 /// Returns an error if invoking `git` fails or `git diff` exits with a
 /// non-zero status.
-pub async fn squash_merge_diff(
+pub(crate) async fn squash_merge_diff(
     repo_path: PathBuf,
     source_branch: String,
     target_branch: String,
@@ -71,7 +71,7 @@ pub async fn squash_merge_diff(
 /// # Errors
 /// Returns an error if the repository is on the wrong branch, the merge
 /// fails, or the commit fails.
-pub async fn squash_merge(
+pub(crate) async fn squash_merge(
     repo_path: PathBuf,
     source_branch: String,
     target_branch: String,

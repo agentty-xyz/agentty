@@ -4112,11 +4112,17 @@ async fn refresh_project_catalog_on_startup_discovers_home_directory_repositorie
     let discovered_repo = home_directory.path().join("agentty");
     create_git_repo_marker(discovered_repo.as_path());
     let fs_client = RealFsClient;
+    let mut mock_git_client = ag_git::MockGitClient::new();
     let session_worktree_root = home_directory.path().join(".agentty").join(AGENTTY_WT_DIR);
+    mock_git_client
+        .expect_detect_git_info()
+        .times(1)
+        .returning(|_| Box::pin(async { Some("main".to_string()) }));
 
     // Act
     App::load_projects_from_home_directory(
         &database,
+        &mock_git_client,
         &RealProjectDiscoveryClient,
         session_worktree_root.as_path(),
         Some(home_directory.path()),
@@ -4133,6 +4139,7 @@ async fn refresh_project_catalog_on_startup_discovers_home_directory_repositorie
     // Assert
     assert_eq!(project_items.len(), 1);
     assert_eq!(project_items[0].project.path, discovered_repo);
+    assert_eq!(project_items[0].project.git_branch.as_deref(), Some("main"));
 }
 
 /// Creates one directory with a `.git` marker for repository discovery
