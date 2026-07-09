@@ -1,15 +1,15 @@
 //! Shared app-server module router.
 //!
-//! This parent module intentionally exposes child modules and re-exports the
-//! public API for provider-neutral app-server contracts, prompt shaping,
-//! runtime registries, and restart/retry orchestration.
+//! This parent module keeps transport internals private while re-exporting the
+//! provider-neutral app-server contract types consumed from the crate root.
 
-pub mod contract;
-pub mod error;
-pub mod prompt;
-pub mod registry;
-pub mod retry;
+mod contract;
+mod error;
+pub(crate) mod prompt;
+mod registry;
+mod retry;
 
+pub(crate) use contract::BorrowedAppServerFuture;
 #[cfg(any(test, feature = "test-utils"))]
 pub use contract::MockAppServerClient;
 pub use contract::{
@@ -17,5 +17,5 @@ pub use contract::{
     AppServerTurnResponse,
 };
 pub use error::AppServerError;
-pub use registry::AppServerSessionRegistry;
-pub use retry::{RuntimeInspector, run_turn_with_restart_retry};
+pub(crate) use registry::AppServerSessionRegistry;
+pub(crate) use retry::{RuntimeInspector, run_turn_with_restart_retry};

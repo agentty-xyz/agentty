@@ -6,15 +6,15 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-use ag_agent::agent::tests::MockAgentBackend;
-use ag_agent::app_server;
-use ag_agent::app_server::{AppServerTurnResponse, MockAppServerClient};
-use ag_agent::channel::{
-    AgentRequestKind, MockAgentChannel, TurnPrompt, TurnPromptAttachment, TurnPromptTextSource,
-    TurnResult,
+use ag_agent::{
+    AgentRequestKind, AppServerClient, AppServerTurnResponse, MockAgentBackend, MockAgentChannel,
+    MockAppServerClient, TurnResult,
 };
 use ag_git as git;
-use ag_protocol::{AgentResponse, parse_agent_response_strict};
+use ag_protocol::{
+    AgentResponse, TurnPrompt, TurnPromptAttachment, TurnPromptTextSource,
+    parse_agent_response_strict,
+};
 use tempfile::tempdir;
 use tokio::sync::Barrier;
 
@@ -549,7 +549,7 @@ async fn new_test_app_with_db_and_app_server(
     working_dir: PathBuf,
     git_branch: Option<String>,
     db: AppRepositories,
-    app_server_client: Arc<dyn app_server::AppServerClient>,
+    app_server_client: Arc<dyn AppServerClient>,
 ) -> App {
     let clients =
         crate::test_support::test_app_clients().with_app_server_client_override(app_server_client);
@@ -5042,7 +5042,7 @@ async fn test_cancel_session_triggers_app_server_shutdown() {
                 let _ = shutdown_tx.send(session_id);
             })
         });
-    let app_server_client: Arc<dyn app_server::AppServerClient> = Arc::new(mock_app_server);
+    let app_server_client: Arc<dyn AppServerClient> = Arc::new(mock_app_server);
     let mut app = new_test_app_with_db_and_app_server(
         dir.path().to_path_buf(),
         dir.path().to_path_buf(),
@@ -5116,7 +5116,7 @@ async fn test_done_status_triggers_app_server_shutdown() {
                 let _ = shutdown_tx.send(session_id);
             })
         });
-    let app_server_client: Arc<dyn app_server::AppServerClient> = Arc::new(mock_app_server);
+    let app_server_client: Arc<dyn AppServerClient> = Arc::new(mock_app_server);
     let mut app = new_test_app_with_db_and_app_server(
         dir.path().to_path_buf(),
         dir.path().to_path_buf(),

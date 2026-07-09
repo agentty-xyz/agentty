@@ -256,7 +256,7 @@ fn append_git_exclude_pattern(exclude_path: &Path, pattern: &str) -> Result<(), 
 
 #[cfg(test)]
 mod tests {
-    use ag_protocol::ProtocolSchemaInstructionMode;
+    use ag_protocol::{ProtocolSchemaInstructionMode, TurnPromptAttachment};
     use tempfile::{TempDir, tempdir};
 
     use super::shared_prompt::{
@@ -265,7 +265,6 @@ mod tests {
     use super::*;
     use crate::channel::AgentRequestKind;
     use crate::model::agent::{AgentModel, ReasoningLevel};
-    use crate::model::turn_prompt::TurnPromptAttachment;
 
     fn session_resume_request_kind(_replay_transcript: Option<&str>) -> AgentRequestKind {
         AgentRequestKind::SessionResume

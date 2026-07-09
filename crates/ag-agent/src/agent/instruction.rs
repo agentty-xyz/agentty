@@ -15,7 +15,7 @@ pub fn normalize_instruction_conversation_id(
 
 /// Prompt-shaping mode used for one app-server turn attempt.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum InstructionDeliveryMode {
+pub(crate) enum InstructionDeliveryMode {
     /// Send the full instruction contract without transcript replay.
     BootstrapFull,
     /// Reuse the existing provider-managed bootstrap and send only a compact
@@ -28,7 +28,7 @@ pub enum InstructionDeliveryMode {
 
 /// Plans how one app-server turn should deliver Agentty's instruction
 /// contract.
-pub fn plan_app_server_instruction_delivery(
+pub(crate) fn plan_app_server_instruction_delivery(
     request_kind: &AgentRequestKind,
     current_provider_conversation_id: Option<&str>,
     persisted_instruction_conversation_id: Option<&str>,

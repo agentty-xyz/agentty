@@ -1,3 +1,5 @@
+use std::error::Error;
+
 use crate::app_server_transport::AppServerTransportError;
 
 /// Typed error returned by app-server infrastructure operations.
@@ -42,7 +44,13 @@ pub enum AppServerError {
 
     /// An stdio transport or process communication failure.
     #[error(transparent)]
-    Transport(#[from] AppServerTransportError),
+    Transport(Box<dyn Error + Send + Sync>),
+}
+
+impl From<AppServerTransportError> for AppServerError {
+    fn from(error: AppServerTransportError) -> Self {
+        Self::Transport(Box::new(error))
+    }
 }
 
 #[cfg(test)]
@@ -111,7 +119,7 @@ mod tests {
     #[test]
     fn transport_display_delegates_to_inner_error() {
         // Arrange
-        let error = AppServerError::Transport(AppServerTransportError::ProcessTerminated);
+        let error = AppServerError::from(AppServerTransportError::ProcessTerminated);
 
         // Act / Assert
         assert_eq!(

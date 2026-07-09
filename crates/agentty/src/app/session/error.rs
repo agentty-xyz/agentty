@@ -28,7 +28,7 @@ pub enum SessionError {
 
     /// An app-server operation failed.
     #[error("{0}")]
-    AppServer(#[from] ag_agent::app_server::AppServerError),
+    AppServer(#[from] ag_agent::AppServerError),
 
     /// A workflow-specific failure with a contextual message.
     ///

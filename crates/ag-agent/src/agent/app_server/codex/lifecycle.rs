@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use ag_protocol::agent_response_output_schema;
+use ag_protocol::{TurnPrompt, TurnPromptContentPart, agent_response_output_schema};
 use serde_json::Value;
 use tokio::sync::mpsc;
 
@@ -13,7 +13,6 @@ use crate::agent;
 use crate::app_server::{AppServerError, AppServerStreamEvent, AppServerTurnRequest};
 use crate::app_server_transport::{self, extract_json_error_message, response_id_matches};
 use crate::model::agent::{AgentKind, ReasoningLevel};
-use crate::model::turn_prompt::{TurnPrompt, TurnPromptContentPart};
 
 /// Mutable runtime state required while a Codex app-server process is active.
 pub(super) struct CodexRuntimeState {
@@ -895,12 +894,12 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
+    use ag_protocol::{TurnPromptAttachment, TurnPromptTextSource};
     use mockall::Sequence;
 
     use super::*;
     use crate::agent::app_server::codex::MockCodexRuntimeTransport;
     use crate::model::agent::{AgentModel, ReasoningLevel};
-    use crate::model::turn_prompt::{TurnPromptAttachment, TurnPromptTextSource};
 
     /// Captures the dynamic JSON-RPC `id` from a written payload through the
     /// supplied mutex so the response side of a mock can echo it back.

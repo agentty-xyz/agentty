@@ -7,7 +7,8 @@ use std::os::unix::process::ExitStatusExt as _;
 use std::sync::{Arc, Mutex};
 
 use ag_protocol::{
-    AgentResponse, AgentResponseSummary, ProtocolRequestProfile, build_protocol_repair_prompt,
+    AgentResponse, AgentResponseSummary, ProtocolRequestProfile, TurnPrompt,
+    build_protocol_repair_prompt,
 };
 use tokio::io::AsyncBufReadExt as _;
 use tokio::sync::mpsc;
@@ -15,8 +16,8 @@ use tokio::sync::mpsc;
 use crate::agent::cli::{error, stdin};
 use crate::agent::{self as agent, AgentBackend, BuildCommandRequest};
 use crate::channel::{
-    AgentChannel, AgentError, AgentFuture, SessionRef, StartSessionRequest, TurnEvent, TurnPrompt,
-    TurnRequest, TurnResult,
+    AgentChannel, AgentError, AgentFuture, SessionRef, StartSessionRequest, TurnEvent, TurnRequest,
+    TurnResult,
 };
 use crate::model::agent::AgentKind;
 
@@ -27,7 +28,7 @@ use crate::model::agent::AgentKind;
 /// forwarded as [`TurnEvent::ThoughtDelta`]. A kill signal transitions the
 /// turn to a failed state with a `[Stopped]` banner. A spawn failure is
 /// surfaced through [`AgentError`].
-pub struct CliAgentChannel {
+pub(crate) struct CliAgentChannel {
     /// Provider-specific command builder.
     backend: Arc<dyn AgentBackend>,
     /// Provider family used for stream and response parsing.
@@ -35,20 +36,13 @@ pub struct CliAgentChannel {
 }
 
 impl CliAgentChannel {
-    /// Creates a new CLI channel for the given agent provider.
-    pub fn new(kind: AgentKind) -> Self {
-        let backend = Arc::from(agent::create_backend(kind));
-
-        Self { backend, kind }
-    }
-
     /// Creates a CLI channel backed by the given pre-built backend.
     ///
     /// Channel factories use this helper so transport selection can be done
     /// once before constructing the concrete channel. Tests also use it to
     /// inject a [`MockAgentBackend`] that controls command construction and
     /// process spawning without relying on a real provider binary.
-    pub fn with_backend(backend: Arc<dyn agent::AgentBackend>, kind: AgentKind) -> Self {
+    pub(crate) fn with_backend(backend: Arc<dyn agent::AgentBackend>, kind: AgentKind) -> Self {
         Self { backend, kind }
     }
 }
@@ -483,14 +477,13 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use ag_protocol::{TurnPromptAttachment, TurnPromptTextSource};
     use tempfile::tempdir;
     use tokio::sync::mpsc;
 
     use super::*;
-    use crate::agent::tests::MockAgentBackend;
-    use crate::channel::{
-        AgentRequestKind, TurnPrompt, TurnPromptAttachment, TurnPromptTextSource,
-    };
+    use crate::MockAgentBackend;
+    use crate::channel::AgentRequestKind;
     use crate::model::agent::{AgentKind, AgentModel, ReasoningLevel};
 
     fn make_turn_request(folder: PathBuf) -> TurnRequest {

@@ -1,6 +1,6 @@
 //! Shared app-server restart and retry orchestration.
 
-use ag_protocol::ProtocolSchemaInstructionMode;
+use ag_protocol::{ProtocolSchemaInstructionMode, TurnPrompt};
 
 use super::contract::{
     AppServerFuture, AppServerTurnRequest, AppServerTurnResponse, BorrowedAppServerFuture,
@@ -10,22 +10,21 @@ use super::prompt::{
     instruction_delivery_mode_for_runtime, read_latest_replay_transcript, turn_prompt_for_runtime,
 };
 use super::registry::{ActiveAppServerTurn, AppServerSessionRegistry};
-use crate::model::turn_prompt::TurnPrompt;
 
 /// Callbacks for inspecting runtime state during turn execution.
 ///
 /// Bundles the query functions that [`run_turn_with_restart_retry`] uses to
 /// check whether the runtime matches the current request, whether it restored
 /// provider-native context, and to extract identifiers.
-pub struct RuntimeInspector<Runtime> {
+pub(crate) struct RuntimeInspector<Runtime> {
     /// Returns `true` when the existing runtime is compatible with the request.
-    pub matches_request: fn(&Runtime, &AppServerTurnRequest) -> bool,
+    pub(crate) matches_request: fn(&Runtime, &AppServerTurnRequest) -> bool,
     /// Returns the OS process id of the runtime, when available.
-    pub pid: fn(&Runtime) -> Option<u32>,
+    pub(crate) pid: fn(&Runtime) -> Option<u32>,
     /// Returns the provider-native conversation id, when available.
-    pub provider_conversation_id: fn(&Runtime) -> Option<String>,
+    pub(crate) provider_conversation_id: fn(&Runtime) -> Option<String>,
     /// Returns `true` when the runtime bootstrapped by restoring prior context.
-    pub restored_context: fn(&Runtime) -> bool,
+    pub(crate) restored_context: fn(&Runtime) -> bool,
 }
 
 /// Runs one app-server turn with restart-and-retry semantics.
@@ -45,7 +44,7 @@ pub struct RuntimeInspector<Runtime> {
 /// # Errors
 /// Returns an error when runtime startup/execution fails, retry fails, or the
 /// session registry lock is unavailable.
-pub async fn run_turn_with_restart_retry<Runtime, StartRuntime, RunTurn, ShutdownRuntime>(
+pub(crate) async fn run_turn_with_restart_retry<Runtime, StartRuntime, RunTurn, ShutdownRuntime>(
     sessions: &AppServerSessionRegistry<Runtime>,
     request: AppServerTurnRequest,
     inspector: RuntimeInspector<Runtime>,
@@ -353,14 +352,14 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
-    use ag_protocol::ProtocolSchemaInstructionMode;
+    use ag_protocol::{ProtocolSchemaInstructionMode, TurnPrompt};
 
     use super::*;
     use crate::agent::InstructionDeliveryMode;
     use crate::channel::{AgentRequestKind, LiveTranscript};
     use crate::model::agent::ReasoningLevel;
-    use crate::model::turn_prompt::TurnPrompt;
 
+    #[derive(Debug)]
     struct TestRuntime {
         model: String,
     }
@@ -395,7 +394,7 @@ mod tests {
         // Arrange
         let sessions = AppServerSessionRegistry::new("Test");
         sessions
-            .store_session(
+            .store_session_or_recover(
                 "session-1".to_string(),
                 TestRuntime {
                     model: "model-a".to_string(),

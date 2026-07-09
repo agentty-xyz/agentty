@@ -16,7 +16,7 @@ use super::backend::{
 use super::prompt;
 use super::response_parser::ParsedResponse;
 use crate::app_server::AppServerClient;
-use crate::model::agent::{AgentKind, AgentModel};
+use crate::model::agent::AgentKind;
 
 /// Factory hook used to build or override provider-specific app-server
 /// clients.
@@ -37,7 +37,7 @@ pub fn create_app_server_client(
 }
 
 /// Parses provider output and returns final response content and usage stats.
-pub fn parse_response(kind: AgentKind, stdout: &str, stderr: &str) -> ParsedResponse {
+pub(crate) fn parse_response(kind: AgentKind, stdout: &str, stderr: &str) -> ParsedResponse {
     (provider_descriptor(kind).parse_response)(stdout, stderr)
 }
 
@@ -45,7 +45,10 @@ pub fn parse_response(kind: AgentKind, stdout: &str, stderr: &str) -> ParsedResp
 ///
 /// Returns `(text, is_response_content)` where `is_response_content` is `true`
 /// for model-authored content and `false` for progress updates.
-pub fn parse_stream_output_line(kind: AgentKind, stdout_line: &str) -> Option<(String, bool)> {
+pub(crate) fn parse_stream_output_line(
+    kind: AgentKind,
+    stdout_line: &str,
+) -> Option<(String, bool)> {
     (provider_descriptor(kind).parse_stream_output_line)(stdout_line)
 }
 
@@ -65,7 +68,7 @@ pub(crate) fn prompt_transport(kind: AgentKind) -> AgentPromptTransport {
 /// Providers that enforce Agentty's response shape natively still receive
 /// policy and field-routing instructions, but skip the large prompt-side JSON
 /// Schema to avoid redundant tokens.
-pub fn protocol_schema_instruction_mode(kind: AgentKind) -> ProtocolSchemaInstructionMode {
+pub(crate) fn protocol_schema_instruction_mode(kind: AgentKind) -> ProtocolSchemaInstructionMode {
     provider_descriptor(kind).protocol_schema_instruction_mode
 }
 
@@ -76,7 +79,7 @@ pub fn protocol_schema_instruction_mode(kind: AgentKind) -> ProtocolSchemaInstru
 /// Returns a descriptive error when provider output does not match the
 /// required protocol JSON, including parse diagnostics that help explain why
 /// the payload was rejected.
-pub fn parse_turn_response(
+pub(crate) fn parse_turn_response(
     kind: AgentKind,
     response_text: &str,
     protocol_profile: ProtocolRequestProfile,
@@ -95,7 +98,11 @@ pub fn parse_turn_response(
 
 /// Returns whether one app-server assistant chunk should be treated as
 /// thought text instead of transcript output.
-pub fn is_app_server_thought_chunk(kind: AgentKind, is_delta: bool, phase: Option<&str>) -> bool {
+pub(crate) fn is_app_server_thought_chunk(
+    kind: AgentKind,
+    is_delta: bool,
+    phase: Option<&str>,
+) -> bool {
     if !is_delta {
         return false;
     }
@@ -111,7 +118,7 @@ pub fn is_app_server_thought_chunk(kind: AgentKind, is_delta: bool, phase: Optio
 ///
 /// # Errors
 /// Returns an error when provider-specific prompt rendering fails.
-pub fn build_command_stdin_payload(
+pub(crate) fn build_command_stdin_payload(
     kind: AgentKind,
     request: BuildCommandRequest<'_>,
 ) -> Result<Option<Vec<u8>>, AgentBackendError> {
@@ -135,29 +142,6 @@ pub fn build_command_stdin_payload(
             AgentKind::Codex | AgentKind::Gemini => Ok(None),
         },
     }
-}
-
-/// Parses one app-server model string into its routing provider kind.
-///
-/// # Errors
-/// Returns an error when `model` is not a known app-server-backed
-/// [`AgentModel`].
-pub fn provider_kind_for_model(model: &str) -> Result<AgentKind, String> {
-    let model = model
-        .parse::<AgentModel>()
-        .map_err(|error| format!("unknown model `{model}`: {error}"))?;
-    if AgentKind::Codex.supports_model(model) {
-        return Ok(AgentKind::Codex);
-    }
-
-    if AgentKind::Gemini.supports_model(model) {
-        return Ok(AgentKind::Gemini);
-    }
-
-    Err(format!(
-        "model `{}` does not use app-server routing",
-        model.as_str()
-    ))
 }
 
 /// One backend/provider descriptor containing construction and parsing hooks.
@@ -378,19 +362,5 @@ mod tests {
             true,
             Some("thinking"),
         ));
-    }
-
-    #[test]
-    /// Ensures model strings resolve through the shared provider registry.
-    fn test_provider_kind_for_model_reports_owner() {
-        // Arrange / Act / Assert
-        assert_eq!(
-            provider_kind_for_model(AgentModel::Gemini31ProPreview.as_str()).expect("known model"),
-            AgentKind::Gemini
-        );
-        assert_eq!(
-            provider_kind_for_model(AgentModel::Gpt55.as_str()).expect("known model"),
-            AgentKind::Codex
-        );
     }
 }

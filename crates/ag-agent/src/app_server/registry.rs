@@ -12,7 +12,7 @@ use crate::app_server::AppServerError;
 /// Each session id maps to one idle runtime process. Workers temporarily remove
 /// a runtime while executing a turn and register a cancellation token so
 /// `shutdown_session()` can still interrupt in-flight runtimes.
-pub struct AppServerSessionRegistry<Runtime> {
+pub(crate) struct AppServerSessionRegistry<Runtime> {
     active_turn_cancellations: Arc<Mutex<HashMap<String, CancellationToken>>>,
     provider_name: &'static str,
     sessions: Arc<Mutex<HashMap<String, Runtime>>>,
@@ -20,7 +20,7 @@ pub struct AppServerSessionRegistry<Runtime> {
 
 impl<Runtime> AppServerSessionRegistry<Runtime> {
     /// Creates an empty session runtime registry for one provider.
-    pub fn new(provider_name: &'static str) -> Self {
+    pub(crate) fn new(provider_name: &'static str) -> Self {
         Self {
             active_turn_cancellations: Arc::new(Mutex::new(HashMap::new())),
             provider_name,
@@ -32,7 +32,7 @@ impl<Runtime> AppServerSessionRegistry<Runtime> {
     ///
     /// # Errors
     /// Returns an error when the session map lock is poisoned.
-    pub fn take_session(&self, session_id: &str) -> Result<Option<Runtime>, AppServerError> {
+    pub(crate) fn take_session(&self, session_id: &str) -> Result<Option<Runtime>, AppServerError> {
         let mut sessions = self
             .sessions
             .lock()
@@ -43,26 +43,6 @@ impl<Runtime> AppServerSessionRegistry<Runtime> {
         Ok(sessions.remove(session_id))
     }
 
-    /// Stores or replaces the runtime for `session_id`.
-    ///
-    /// # Errors
-    /// Returns an error when the session map lock is poisoned.
-    pub fn store_session(
-        &self,
-        session_id: String,
-        session: Runtime,
-    ) -> Result<(), AppServerError> {
-        let mut sessions = self
-            .sessions
-            .lock()
-            .map_err(|_| AppServerError::LockPoisoned {
-                provider: self.provider_name,
-            })?;
-        sessions.insert(session_id, session);
-
-        Ok(())
-    }
-
     /// Stores or replaces the runtime for `session_id`, returning ownership
     /// back to the caller when lock acquisition fails.
     ///
@@ -71,7 +51,7 @@ impl<Runtime> AppServerSessionRegistry<Runtime> {
     ///
     /// # Errors
     /// Returns `(error, session)` when the session map lock is poisoned.
-    pub fn store_session_or_recover(
+    pub(crate) fn store_session_or_recover(
         &self,
         session_id: String,
         session: Runtime,
@@ -90,7 +70,7 @@ impl<Runtime> AppServerSessionRegistry<Runtime> {
     }
 
     /// Returns the provider label used in user-facing retry errors.
-    pub fn provider_name(&self) -> &'static str {
+    pub(crate) fn provider_name(&self) -> &'static str {
         self.provider_name
     }
 
@@ -104,7 +84,7 @@ impl<Runtime> AppServerSessionRegistry<Runtime> {
     ///
     /// # Errors
     /// Returns an error when the active-turn map lock is poisoned.
-    pub fn register_active_turn(
+    pub(crate) fn register_active_turn(
         &self,
         session_id: &str,
     ) -> Result<ActiveAppServerTurn, AppServerError> {
@@ -129,7 +109,7 @@ impl<Runtime> AppServerSessionRegistry<Runtime> {
     ///
     /// # Errors
     /// Returns an error when the active-turn map lock is poisoned.
-    pub fn cancel_active_turn(&self, session_id: &str) -> Result<bool, AppServerError> {
+    pub(crate) fn cancel_active_turn(&self, session_id: &str) -> Result<bool, AppServerError> {
         let active_turn_cancellations =
             self.active_turn_cancellations
                 .lock()
@@ -159,7 +139,7 @@ impl<Runtime> Clone for AppServerSessionRegistry<Runtime> {
 }
 
 /// RAII guard for one app-server turn cancellation registration.
-pub struct ActiveAppServerTurn {
+pub(crate) struct ActiveAppServerTurn {
     active_turn_cancellations: Arc<Mutex<HashMap<String, CancellationToken>>>,
     session_id: String,
     token: CancellationToken,
@@ -167,7 +147,7 @@ pub struct ActiveAppServerTurn {
 
 impl ActiveAppServerTurn {
     /// Returns the cancellation token observed by the running turn.
-    pub fn token(&self) -> CancellationToken {
+    pub(crate) fn token(&self) -> CancellationToken {
         self.token.clone()
     }
 }
@@ -198,7 +178,7 @@ mod tests {
         // Arrange
         let registry = AppServerSessionRegistry::<String>::new("test");
         registry
-            .store_session("session-1".to_string(), "runtime-a".to_string())
+            .store_session_or_recover("session-1".to_string(), "runtime-a".to_string())
             .expect("store should succeed");
 
         // Act
@@ -229,7 +209,7 @@ mod tests {
         // Arrange
         let registry = AppServerSessionRegistry::<String>::new("test");
         registry
-            .store_session("session-1".to_string(), "runtime-a".to_string())
+            .store_session_or_recover("session-1".to_string(), "runtime-a".to_string())
             .expect("store should succeed");
         let _ = registry.take_session("session-1");
 
@@ -265,7 +245,7 @@ mod tests {
         let registry = AppServerSessionRegistry::<String>::new("test");
         let cloned = registry.clone();
         registry
-            .store_session("session-1".to_string(), "runtime-a".to_string())
+            .store_session_or_recover("session-1".to_string(), "runtime-a".to_string())
             .expect("store should succeed");
 
         // Act

@@ -19,8 +19,8 @@ For file-level detail, read the module docstrings directly.
   own macOS pasteboard access, X11 selection reads, Wayland `wl-paste` reads, and
   unsupported-backend reporting.
 - `crates/ag-agent/`: Shared agent backend library crate with provider model metadata,
-  prompt templates, CLI and app-server transports, provider-neutral channel contracts,
-  app-server routing, provider registries, and provider availability probes.
+  prompt templates, provider-neutral channel contracts, one-shot submission helpers,
+  provider availability probes, and crate-private CLI/app-server transport wiring.
 - `crates/ag-forge/`: Shared forge review-request library crate with normalized
   review-request types, GitHub/GitLab remote detection, and the `gh`/`glab` adapters
   behind the `ReviewRequestClient` and `ForgeCommandRunner` boundaries.
@@ -54,15 +54,15 @@ For file-level detail, read the module docstrings directly.
   traits.
 - `domain/`: Pure business entities and logic — sessions and statuses, projects,
   settings keys, themes, structured questions, typed transcript messages,
-  prompt-composer logic, and compatibility re-exports for `ag-agent` provider models
-  plus shared protocol question and turn prompt payloads. No I/O.
+  prompt-composer logic, and thin re-export modules for `ag-agent` provider models plus
+  shared protocol question and turn prompt payloads. No I/O.
 - `infra/`: External integrations behind traits — Agentty data-root resolution, SQLite
   persistence (`infra/db/` repositories), git (`GitClient`, backed by `ag-git`),
   filesystem (`FsClient`), tmux, clipboard images, version checks, project discovery,
   and file indexing. Clipboard image capture delegates host clipboard reads to
-  `ag-clipboard`, then owns temp-file persistence and attachment metadata. Agent
-  backend, channel, app-server, and provider registry APIs are owned by
-  `crates/ag-agent/` and imported directly by Agentty callers.
+  `ag-clipboard`, then owns temp-file persistence and attachment metadata. Agentty
+  imports the curated `ag-agent` crate-root API; provider registry, router, parser, and
+  transport internals stay private to `crates/ag-agent/`.
 - `runtime/`: Terminal lifecycle and the event loop — terminal setup, the event-reader
   thread, key dispatch, one handler per `AppMode` under `runtime/mode/`, and shared mode
   helpers for session-output metrics.

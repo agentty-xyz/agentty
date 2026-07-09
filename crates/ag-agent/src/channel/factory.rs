@@ -32,6 +32,15 @@ pub fn create_agent_channel(
     }
 }
 
+/// Creates a CLI channel backed by an injected backend for tests.
+#[cfg(any(test, feature = "test-utils"))]
+pub fn create_cli_agent_channel_with_backend(
+    backend: Arc<dyn agent::AgentBackend>,
+    kind: AgentKind,
+) -> Arc<dyn AgentChannel> {
+    Arc::new(CliAgentChannel::with_backend(backend, kind))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

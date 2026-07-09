@@ -13,8 +13,8 @@ trait boundaries so orchestration logic can be tested deterministically.
 
 <a id="architecture-testability-boundaries"></a> External-boundary traits are mocked
 with `mockall`, usually via `#[cfg_attr(test, mockall::automock)]`; shared workspace
-crates such as `ag-agent`, `ag-forge`, and `ag-git` expose test mocks through crate
-features or test-only exports. The major boundaries:
+crates such as `ag-agent`, `ag-forge`, and `ag-git` expose test mocks through crate-root
+exports gated by test features or test-only exports. The major boundaries:
 
 | Trait                  | Module                                       | Boundary                                                                                                                                                                           |
 | ---------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -36,14 +36,18 @@ provider transport traits) keep subprocess sequencing and retry behavior determi
 in unit tests. The runtime also accepts `Terminal<B: Backend>` via `run_with_backend`,
 enabling in-process TUI tests with `TestBackend`.
 
+The `ag-agent` crate keeps provider routers, parsers, and concrete transport adapters
+private. Tests that need backend-level injection use the feature-gated crate-root mocks
+and helper factories rather than deep channel module paths.
+
 ## Typed Errors Across Layers
 
 <a id="architecture-typed-error-enums"></a> Each infra boundary exposes a typed error
 enum (`DbError`, `GitError`, `AppServerError`, `AgentError`, `ClipboardError`, and so
-on) instead of opaque `String` errors. The conversion chain `AppServerTransportError` →
-`AppServerError::Transport` → `AgentError::AppServer` allows `?`-propagation through the
-transport, provider, and channel layers without collapsing causal context into formatted
-strings.
+on) instead of opaque `String` errors. The private app-server transport error is wrapped
+by `AppServerError::Transport`, then by `AgentError::AppServer`, allowing
+`?`-propagation through the transport, provider, and channel layers without collapsing
+causal context into formatted strings.
 
 <a id="architecture-app-layer-typed-errors"></a> The app layer propagates infra errors
 through `SessionError` (`app/session/error.rs`) and `AppError` (`app/error.rs`), both of

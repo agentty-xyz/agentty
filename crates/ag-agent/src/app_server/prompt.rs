@@ -2,13 +2,12 @@
 
 use std::path::Path;
 
-use ag_protocol::ProtocolSchemaInstructionMode;
+use ag_protocol::{ProtocolSchemaInstructionMode, TurnPrompt, TurnPromptTextSource};
 
 use crate::agent;
 use crate::agent::InstructionDeliveryMode;
 use crate::app_server::{AppServerError, AppServerTurnRequest};
 use crate::channel::AgentRequestKind;
-use crate::model::turn_prompt::{TurnPrompt, TurnPromptTextSource};
 
 /// Reads the latest replay transcript, preferring the live source over the
 /// queued snapshot.

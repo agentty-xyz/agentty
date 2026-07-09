@@ -5,12 +5,12 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use ag_protocol::TurnPrompt;
 use tokio::sync::mpsc;
 
 use crate::app_server::AppServerError;
 use crate::channel::{AgentRequestKind, LiveTranscript};
 use crate::model::agent::ReasoningLevel;
-use crate::model::turn_prompt::TurnPrompt;
 
 /// Boxed async result used by [`AppServerClient`] trait methods.
 pub type AppServerFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;

@@ -1,6 +1,6 @@
 //! Session-scoped persistence adapters and query helpers.
 
-use ag_agent::agent;
+use ag_agent as agent;
 use async_trait::async_trait;
 use sqlx::SqlitePool;
 

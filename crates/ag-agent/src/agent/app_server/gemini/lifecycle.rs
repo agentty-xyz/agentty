@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
+use ag_protocol::{TurnPrompt, TurnPromptAttachment, TurnPromptContentPart};
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     AGENT_METHOD_NAMES, ContentBlock, ImageContent, InitializeRequest, InitializeResponse,
@@ -19,7 +20,6 @@ use crate::agent;
 use crate::app_server::{AppServerError, AppServerStreamEvent, AppServerTurnRequest};
 use crate::app_server_transport::{self, extract_json_error_message, response_id_matches};
 use crate::model::agent::AgentKind;
-use crate::model::turn_prompt::{TurnPrompt, TurnPromptAttachment, TurnPromptContentPart};
 
 /// Mutable runtime state required while a Gemini ACP process is active.
 pub(super) struct GeminiRuntimeState {

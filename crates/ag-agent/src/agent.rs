@@ -1,8 +1,9 @@
 //! Agent backend wiring split into provider-specific submodules.
 //!
-//! This module keeps the public API stable while delegating command building
-//! and response parsing to focused files under `infra/agent/` using the
-//! standard `agent.rs` + `agent/` module layout.
+//! This module feeds the curated crate-root API while keeping provider
+//! command builders, parsers, and transport policy descriptors private.
+
+use std::path::Path;
 
 mod antigravity;
 pub(crate) mod app_server;
@@ -22,27 +23,33 @@ pub use availability::{
     AgentAvailabilityProbe, RealAgentAvailabilityProbe, StaticAgentAvailabilityProbe,
     executable_name,
 };
+#[cfg(any(test, feature = "test-utils"))]
+pub use backend::MockAgentBackend;
 pub use backend::{AgentBackend, AgentBackendError, AgentTransport, BuildCommandRequest};
-pub use instruction::{
-    InstructionDeliveryMode, normalize_instruction_conversation_id,
-    plan_app_server_instruction_delivery,
+pub use instruction::normalize_instruction_conversation_id;
+pub(crate) use instruction::{InstructionDeliveryMode, plan_app_server_instruction_delivery};
+pub use prompt::diff_fence;
+pub(crate) use prompt::{PromptPreparationRequest, prepare_prompt_text};
+pub(crate) use provider::{
+    build_command_stdin_payload, is_app_server_thought_chunk, parse_response,
+    parse_stream_output_line, parse_turn_response, protocol_schema_instruction_mode,
 };
-pub use prompt::{PromptPreparationRequest, diff_fence, prepare_prompt_text};
-pub use provider::{
-    build_command_stdin_payload, create_app_server_client, create_backend,
-    is_app_server_thought_chunk, parse_response, parse_stream_output_line, parse_turn_response,
-    protocol_schema_instruction_mode, provider_kind_for_model, transport_mode,
-};
-pub use response_parser::{
+pub use provider::{create_app_server_client, create_backend, transport_mode};
+pub(crate) use response_parser::{
     ParsedResponse, compact_codex_progress_message, is_codex_completion_status_message,
 };
 pub use submission::{
     OneShotRequest, OneShotSubmission, submit_one_shot, submit_one_shot_with_app_server_client,
     submit_one_shot_with_backend,
 };
-#[cfg(any(test, feature = "test-utils"))]
-pub mod tests {
-    //! Test-only exports for agent backend mocks.
 
-    pub use super::backend::MockAgentBackend;
+/// Removes provider-owned worktree artifacts derived from one session folder.
+///
+/// Current providers keep setup state inside the session worktree or git
+/// metadata, so there is no external provider artifact to remove.
+///
+/// # Errors
+/// This function currently never returns an error.
+pub fn cleanup_session_worktree_artifacts(_folder: &Path) -> Result<(), AgentBackendError> {
+    Ok(())
 }

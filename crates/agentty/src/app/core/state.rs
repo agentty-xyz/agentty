@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
-use ag_agent::{agent, app_server};
+use ag_agent::{AgentAvailabilityProbe, AppServerClient, RealAgentAvailabilityProbe};
 #[cfg(test)]
 use ag_forge as forge;
 use ag_forge::{
@@ -121,10 +121,10 @@ pub(crate) struct SyncReviewRequestTaskResult {
 
 /// External clients used to compose [`App`] startup dependencies.
 pub(crate) struct AppClients {
-    pub(super) agent_availability_probe: Arc<dyn agent::AgentAvailabilityProbe>,
+    pub(super) agent_availability_probe: Arc<dyn AgentAvailabilityProbe>,
     /// Whether startup should spawn background CLI version detection.
     pub(super) agent_cli_version_task_enabled: bool,
-    pub(super) app_server_client_override: Option<Arc<dyn app_server::AppServerClient>>,
+    pub(super) app_server_client_override: Option<Arc<dyn AppServerClient>>,
     pub(super) fs_client: Arc<dyn FsClient>,
     pub(super) git_client: Arc<dyn GitClient>,
     pub(super) project_discovery_client: Arc<dyn ProjectDiscoveryClient>,
@@ -138,7 +138,7 @@ impl AppClients {
     /// boundary.
     pub(crate) fn new() -> Self {
         Self {
-            agent_availability_probe: Arc::new(agent::RealAgentAvailabilityProbe),
+            agent_availability_probe: Arc::new(RealAgentAvailabilityProbe),
             agent_cli_version_task_enabled: !cfg!(test),
             app_server_client_override: None,
             fs_client: Arc::new(RealFsClient),
@@ -156,7 +156,7 @@ impl AppClients {
     #[must_use]
     pub(crate) fn with_agent_availability_probe(
         mut self,
-        agent_availability_probe: Arc<dyn agent::AgentAvailabilityProbe>,
+        agent_availability_probe: Arc<dyn AgentAvailabilityProbe>,
     ) -> Self {
         self.agent_availability_probe = agent_availability_probe;
 
@@ -169,7 +169,7 @@ impl AppClients {
     #[must_use]
     pub(crate) fn with_app_server_client_override(
         mut self,
-        app_server_client_override: Arc<dyn app_server::AppServerClient>,
+        app_server_client_override: Arc<dyn AppServerClient>,
     ) -> Self {
         self.app_server_client_override = Some(app_server_client_override);
 

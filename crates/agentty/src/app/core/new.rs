@@ -244,7 +244,7 @@ impl App {
     /// CLI version task.
     fn startup_agent_cli_version_probe(
         clients: &AppClients,
-    ) -> Option<Arc<dyn ag_agent::agent::AgentAvailabilityProbe>> {
+    ) -> Option<Arc<dyn ag_agent::AgentAvailabilityProbe>> {
         clients
             .agent_cli_version_task_enabled
             .then(|| Arc::clone(&clients.agent_availability_probe))

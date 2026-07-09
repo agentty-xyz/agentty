@@ -4,8 +4,8 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use ag_agent::agent;
-use ag_agent::channel::{AgentError, TurnPrompt, TurnResult};
+use ag_agent as agent;
+use ag_agent::{AgentError, TurnResult};
 use ag_forge as forge;
 use ag_git::GitClient;
 use ag_protocol::AgentResponse;
@@ -22,6 +22,7 @@ use crate::app::session::{Clock, SessionError, TurnAppliedState};
 use crate::domain::session::{SessionFollowUpTask, SessionId, SessionStats, Status};
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::transcript_notice::TranscriptNotice;
+use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::{AppRepositories, SessionTurnMetadata};
 use crate::infra::fs::FsClient;
 

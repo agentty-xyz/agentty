@@ -2,8 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ag_agent::app_server_router::RoutingAppServerClient;
-use ag_agent::channel::{
+use ag_agent::{
     AgentChannel, AgentRequestKind, StartSessionRequest, TurnRequest, create_agent_channel,
 };
 use agentty::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
@@ -178,8 +177,7 @@ async fn assert_provider_protocol_compliance(
 ) -> Result<(), String> {
     let folder = resolve_workspace_folder()?;
     let session_id = format!("protocol-e2e-{}", model.provider_model_str());
-    let app_server_client = Arc::new(RoutingAppServerClient::new());
-    let channel = create_agent_channel(kind, Some(app_server_client));
+    let channel = create_agent_channel(kind, None);
     let start_request = StartSessionRequest {
         folder: folder.clone(),
         session_id: session_id.clone(),

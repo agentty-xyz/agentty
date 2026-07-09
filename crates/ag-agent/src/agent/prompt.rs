@@ -4,17 +4,15 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use ag_protocol::{
-    ProtocolRequestProfile, ProtocolSchemaInstructionMode,
-    prepend_protocol_instructions as protocol_prepend_instructions,
+    ProtocolRequestProfile, ProtocolSchemaInstructionMode, TurnPromptAttachment,
+    TurnPromptContentPart, prepend_protocol_instructions as protocol_prepend_instructions,
     prepend_protocol_refresh_reminder as protocol_prepend_refresh_reminder,
+    split_turn_prompt_content,
 };
 use askama::Template;
 
 use super::backend::{AgentBackendError, BuildCommandRequest};
 use super::instruction::InstructionDeliveryMode;
-use crate::model::turn_prompt::{
-    TurnPromptAttachment, TurnPromptContentPart, split_turn_prompt_content,
-};
 
 /// Askama view model for rendering resume prompts with prior transcript text.
 #[derive(Template)]
@@ -28,7 +26,7 @@ struct ResumeWithTranscriptPromptTemplate<'a> {
 
 /// Shared prompt preparation input for one transport turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PromptPreparationRequest<'a> {
+pub(crate) struct PromptPreparationRequest<'a> {
     /// Delivery mode selected for the current provider attempt.
     pub instruction_delivery_mode: InstructionDeliveryMode,
     /// Base user prompt before replay wrapping and protocol instructions.
@@ -59,7 +57,7 @@ pub(crate) enum CliPromptAccessRootMode {
 ///
 /// # Errors
 /// Returns an error when replay or instruction templates fail to render.
-pub fn prepare_prompt_text(
+pub(crate) fn prepare_prompt_text(
     request: PromptPreparationRequest<'_>,
 ) -> Result<String, AgentBackendError> {
     match request.instruction_delivery_mode {
