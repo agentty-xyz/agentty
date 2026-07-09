@@ -487,17 +487,49 @@ pub(crate) fn frame_from_capture(capture: &ProofCapture) -> TerminalFrame {
 // Zola feature page generation
 // ---------------------------------------------------------------------------
 
-/// Return the Zola feature content directory, creating it if needed.
+/// Return the Zola feature content directory path.
 ///
 /// Derives the path from `CARGO_MANIFEST_DIR` →
 /// `../../docs/site/content/features/`.
-fn feature_content_dir() -> PathBuf {
+fn feature_content_dir_path() -> PathBuf {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let content_dir = Path::new(manifest_dir).join("../../docs/site/content/features");
+
+    Path::new(manifest_dir).join("../../docs/site/content/features")
+}
+
+/// Return the Zola feature content directory, creating it if needed.
+fn feature_content_dir() -> PathBuf {
+    let content_dir = feature_content_dir_path();
 
     let _ = std::fs::create_dir_all(&content_dir);
 
     content_dir
+}
+
+/// Return whether a Zola feature page is already published in the docs tree.
+fn feature_page_exists(name: &str) -> bool {
+    feature_content_dir_path()
+        .join(format!("{name}.md"))
+        .is_file()
+}
+
+/// Return whether a stale GIF freshness verdict should fail this feature run.
+///
+/// Check-only mode temporarily accepts an existing legacy GIF without a hash
+/// sidecar until that feature is regenerated. A published page with no GIF is
+/// always an error. Unpublished feature tests have no documentation artifact
+/// contract, so their stale status is intentionally ignored.
+fn stale_gif_status_is_error(
+    gif_mode: GifMode,
+    published_feature_page_exists: bool,
+    gif_exists: bool,
+    committed_hash: Option<u64>,
+) -> bool {
+    if !matches!(gif_mode, GifMode::CheckOnly) {
+        return true;
+    }
+
+    published_feature_page_exists && (!gif_exists || committed_hash.is_some())
 }
 
 /// Metadata for generating a Zola feature content page.
@@ -731,68 +763,82 @@ impl FeatureTest {
             .collect();
 
         let gif_mode = resolve_gif_mode();
+        let published_feature_page_exists = feature_page_exists(&self.name);
         let result = FeatureDemo::new(&self.name)
             .gif_output_dir(feature_output_dir())
             .gif_mode(gif_mode)
             .run(&scenario, builder, &cargo_bin("agentty"), &env_pairs)
             .map_err(|error| std::io::Error::other(format!("feature demo failed: {error}")))?;
 
-        // Surface GIF generation diagnostics — explicitly whitelist
-        // benign variants and fail on every error-like variant, including
-        // future ones added behind `#[non_exhaustive]`. The wildcard arm
-        // is intentionally a hard failure so a new error variant cannot
-        // be silently ignored by the harness.
-        match &result.gif_status {
+        self.validate_gif_status(&result.gif_status, gif_mode, published_feature_page_exists)?;
+
+        assert(&result.frame, &result.report);
+
+        if !matches!(gif_mode, GifMode::CheckOnly)
+            && let Some(zola_page) = self.zola_page
+        {
+            zola_page.ensure(&self.name);
+        }
+
+        Ok(())
+    }
+
+    /// Validates the GIF generation or freshness result for this feature.
+    fn validate_gif_status(
+        &self,
+        gif_status: &GifStatus,
+        gif_mode: GifMode,
+        published_feature_page_exists: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Explicitly whitelist benign variants and fail on every error-like
+        // variant. The wildcard is intentionally an error so a new variant
+        // behind `#[non_exhaustive]` cannot be silently ignored.
+        match gif_status {
             GifStatus::Generated(_)
             | GifStatus::CacheHit(_)
             | GifStatus::Fresh { .. }
             | GifStatus::VhsNotInstalled
-            | GifStatus::NoOutputDir => {}
-            GifStatus::DirCreateFailed(err) => {
-                return Err(std::io::Error::other(format!(
-                    "Feature GIF dir creation failed for {}: {err}",
-                    self.name
-                ))
-                .into());
-            }
-            GifStatus::TapeExecutionFailed(err) => {
-                return Err(std::io::Error::other(format!(
-                    "VHS tape execution failed for {}: {err}",
-                    self.name
-                ))
-                .into());
-            }
+            | GifStatus::NoOutputDir => Ok(()),
+            GifStatus::DirCreateFailed(err) => Err(std::io::Error::other(format!(
+                "Feature GIF dir creation failed for {}: {err}",
+                self.name
+            ))
+            .into()),
+            GifStatus::TapeExecutionFailed(err) => Err(std::io::Error::other(format!(
+                "VHS tape execution failed for {}: {err}",
+                self.name
+            ))
+            .into()),
             GifStatus::Stale {
                 gif_path,
                 current,
                 committed,
             } => {
-                return Err(std::io::Error::other(format!(
-                    "Feature GIF is stale for {} (gif: {}, current hash: {current}, committed \
-                     hash: {committed:?}). Re-run with `{TESTTY_GIF_MODE_ENV_VAR}=force` (or \
-                     unset to default) to regenerate.",
-                    self.name,
-                    gif_path.display(),
-                ))
-                .into());
+                if stale_gif_status_is_error(
+                    gif_mode,
+                    published_feature_page_exists,
+                    gif_path.is_file(),
+                    *committed,
+                ) {
+                    Err(std::io::Error::other(format!(
+                        "Feature GIF is stale for {} (gif: {}, current hash: {current}, committed \
+                         hash: {committed:?}). Re-run with `{TESTTY_GIF_MODE_ENV_VAR}=force` (or \
+                         unset to default) to regenerate.",
+                        self.name,
+                        gif_path.display(),
+                    ))
+                    .into())
+                } else {
+                    Ok(())
+                }
             }
-            other => {
-                return Err(std::io::Error::other(format!(
-                    "Feature GIF generation returned an unrecognized status for {}: {other:?}. \
-                     Update the FeatureTest harness to handle the new GifStatus variant.",
-                    self.name,
-                ))
-                .into());
-            }
+            other => Err(std::io::Error::other(format!(
+                "Feature GIF generation returned an unrecognized status for {}: {other:?}. Update \
+                 the FeatureTest harness to handle the new GifStatus variant.",
+                self.name,
+            ))
+            .into()),
         }
-
-        assert(&result.frame, &result.report);
-
-        if let Some(zola_page) = self.zola_page {
-            zola_page.ensure(&self.name);
-        }
-
-        Ok(())
     }
 }
 
@@ -948,6 +994,32 @@ fn eventually_footer_text_visible(marker: &'static str) -> Step {
     )
 }
 
+/// Wait until the currently selected session has opened into chat view.
+pub(crate) fn wait_for_session_view_footer() -> Step {
+    eventually_footer_text_visible(SESSION_VIEW_FOOTER_MARKER)
+}
+
+/// Wait until the app has returned to the Sessions list view.
+pub(crate) fn wait_for_session_list_footer() -> Step {
+    eventually_footer_text_visible(SESSION_LIST_FOOTER_MARKER)
+}
+
+/// Press `Enter` and wait for the selected session view to render.
+pub(crate) fn open_selected_session_view() -> Journey {
+    Journey::new("open_selected_session_view")
+        .with_description("Press Enter and wait for the session view footer")
+        .step(Step::press_key("Enter"))
+        .step(wait_for_session_view_footer())
+}
+
+/// Press `q` and wait for the Sessions list to render.
+pub(crate) fn return_to_session_list() -> Journey {
+    Journey::new("return_to_session_list")
+        .with_description("Press q and wait for the session list footer")
+        .step(Step::press_key("q"))
+        .step(wait_for_session_list_footer())
+}
+
 /// Create a session with a prompt, submit it, and return to the Sessions
 /// list.
 ///
@@ -984,9 +1056,9 @@ pub(crate) fn create_session_with_prompt_and_return_to_list(prompt: &str) -> Jou
         .step(Step::write_text(prompt))
         .step(Step::wait_for_text(prompt, 3000))
         .step(Step::press_key("Enter"))
-        .step(eventually_footer_text_visible(SESSION_VIEW_FOOTER_MARKER))
+        .step(wait_for_session_view_footer())
         .step(Step::press_key("q"))
-        .step(eventually_footer_text_visible(SESSION_LIST_FOOTER_MARKER))
+        .step(wait_for_session_list_footer())
 }
 
 #[cfg(test)]
@@ -1032,5 +1104,60 @@ mod tests {
         // Arrange / Act / Assert
         assert_eq!(parse_gif_mode("nonsense"), GifMode::GenerateIfStale);
         assert_eq!(parse_gif_mode("checkk"), GifMode::GenerateIfStale);
+    }
+
+    #[test]
+    fn stale_gif_status_is_error_for_hash_backed_published_feature() {
+        // Arrange / Act / Assert
+        assert!(stale_gif_status_is_error(
+            GifMode::CheckOnly,
+            true,
+            true,
+            Some(42),
+        ));
+    }
+
+    #[test]
+    fn stale_gif_status_is_skipped_for_existing_legacy_feature_without_hash() {
+        // Arrange / Act / Assert
+        assert!(!stale_gif_status_is_error(
+            GifMode::CheckOnly,
+            true,
+            true,
+            None,
+        ));
+    }
+
+    #[test]
+    fn stale_gif_status_is_error_for_missing_published_feature_gif() {
+        // Arrange / Act / Assert
+        assert!(stale_gif_status_is_error(
+            GifMode::CheckOnly,
+            true,
+            false,
+            None,
+        ));
+    }
+
+    #[test]
+    fn stale_gif_status_is_skipped_for_unpublished_feature_in_check_mode() {
+        // Arrange / Act / Assert
+        assert!(!stale_gif_status_is_error(
+            GifMode::CheckOnly,
+            false,
+            false,
+            Some(42),
+        ));
+    }
+
+    #[test]
+    fn stale_gif_status_is_error_outside_check_mode() {
+        // Arrange / Act / Assert
+        assert!(stale_gif_status_is_error(
+            GifMode::GenerateIfStale,
+            false,
+            false,
+            None,
+        ));
     }
 }

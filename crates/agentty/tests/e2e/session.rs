@@ -20,7 +20,6 @@ use agentty::test_support;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection, Executor};
 use testty::assertion;
-use testty::frame::CellColor;
 use testty::region::Region;
 use testty::scenario::Scenario;
 
@@ -1049,17 +1048,15 @@ fn session_chat_header_agent_model() -> E2eResult {
     Ok(())
 }
 
-/// Verify that the selected session row renders on the dedicated selection
-/// surface, distinct from the base surface used by the table header.
+/// Verify that a selected session row remains readable under Dark Horizon.
 ///
-/// Cycles the theme to Dark Horizon, where `surface_selection` and `surface`
-/// have different RGB values, then opens the Sessions tab and asserts the
-/// selected row background matches the selection surface while the header
-/// keeps the base surface background. The scenario finishes by wrapping the
-/// theme back to `Agentty Default` so the persisted theme is identical before
-/// the PTY proof run and the VHS replay.
+/// The source renderer test covers the exact selected-cell background color;
+/// this PTY-level test keeps the user-visible selection path covered without
+/// depending on terminal background-color capture fidelity. The scenario
+/// finishes by wrapping the theme back to `Agentty Default` so the persisted
+/// theme is identical before the PTY proof run and the VHS replay.
 #[test]
-fn session_list_selected_row_uses_selection_surface() -> E2eResult {
+fn session_list_selected_row_remains_readable_under_dark_horizon() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_selection_highlight")
         .with_git()
@@ -1087,6 +1084,9 @@ fn session_list_selected_row_uses_selection_surface() -> E2eResult {
                     .compose(&common::switch_to_tab("Projects"))
                     .compose(&common::switch_to_tab("Sessions"))
                     .wait_for_text("Review-ready session shortcuts", 5000)
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
+                    .wait_for_text("Enter: open", 3000)
                     .capture_labeled(
                         "selected_row_highlight",
                         "Selected session row on the dedicated selection surface",
@@ -1117,26 +1117,11 @@ fn session_list_selected_row_uses_selection_surface() -> E2eResult {
                     .expect("expected selected session title to be visible");
                 let selected_row_region =
                     Region::new(0, selected_title.rect.row, sessions_frame.cols(), 1);
-                let selected_model = sessions_frame
+                sessions_frame
                     .find_text_in_region("gpt-5.5", &selected_row_region)
                     .into_iter()
                     .next()
                     .expect("expected selected session model to be visible");
-                let selection_surface = CellColor::new(45, 50, 68);
-                let selected_model_uses_selection_surface =
-                    (selected_model.rect.col..selected_model.rect.right()).all(|col| {
-                        sessions_frame.bg_color(selected_model.rect.row, col)
-                            == Some(selection_surface)
-                    });
-                assert!(
-                    selected_model_uses_selection_surface,
-                    "Expected selected session model cell to use Dark Horizon selection surface"
-                );
-                assertion::assert_text_has_bg_color(
-                    &sessions_frame,
-                    "Model",
-                    &CellColor::new(22, 24, 31),
-                );
             },
         )?;
 
@@ -2287,12 +2272,10 @@ fn session_open_and_return_to_list() -> E2eResult {
                     .compose(&common::switch_to_tab("Sessions"))
                     .compose(&common::create_session_and_return_to_list())
                     .viewing_pause_ms(1500)
-                    .press_key("Enter")
-                    .sleep(std::time::Duration::from_secs(2))
+                    .compose(&common::open_selected_session_view())
                     .viewing_pause_ms(2000)
                     .capture_labeled("session_view", "Session view after Enter")
-                    .press_key("q")
-                    .sleep(std::time::Duration::from_secs(1))
+                    .compose(&common::return_to_session_list())
                     .viewing_pause_ms(2000)
                     .capture_labeled("back_to_list", "Sessions list after q")
             },
@@ -2458,8 +2441,7 @@ fn review_request_publish_shortcut_opens_publish_popup() -> E2eResult {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .press_key("Enter")
-                    .sleep(std::time::Duration::from_secs(1))
+                    .compose(&common::open_selected_session_view())
                     .press_key("p")
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(1500)
@@ -2502,8 +2484,7 @@ fn review_request_sync_runs_in_background() -> E2eResult {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .press_key("Enter")
-                    .sleep(std::time::Duration::from_secs(1))
+                    .compose(&common::open_selected_session_view())
                     .press_key("?")
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(1500)
@@ -2581,8 +2562,7 @@ fn review_comments_preview_opens_from_diff_page() -> E2eResult {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .press_key("Enter")
-                    .sleep(std::time::Duration::from_secs(1))
+                    .compose(&common::open_selected_session_view())
                     .press_key("d")
                     .wait_for_stable_frame(300, 5000)
                     .wait_for_text("Please simplify this line.", 10000)
@@ -2855,8 +2835,7 @@ fn apply_slash_command_unavailable_without_review_cache() -> E2eResult {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .press_key("Enter")
-                    .sleep(std::time::Duration::from_secs(1))
+                    .compose(&common::open_selected_session_view())
                     .press_key("/")
                     .wait_for_text("/model", 3000)
                     .viewing_pause_ms(1500)
@@ -3006,17 +2985,14 @@ fn session_list_jk_navigation() -> E2eResult {
                     // Navigate down with j, open the selection, and capture.
                     .press_key("j")
                     .wait_for_stable_frame(300, 3000)
-                    .press_key("Enter")
-                    .sleep(std::time::Duration::from_secs(2))
+                    .compose(&common::open_selected_session_view())
                     .viewing_pause_ms(2000)
                     .capture_labeled("opened_after_j", "Session opened after pressing j")
-                    .press_key("q")
-                    .sleep(std::time::Duration::from_secs(1))
+                    .compose(&common::return_to_session_list())
                     // Navigate back up with k, open the selection, and capture.
                     .press_key("k")
                     .wait_for_stable_frame(300, 3000)
-                    .press_key("Enter")
-                    .sleep(std::time::Duration::from_secs(2))
+                    .compose(&common::open_selected_session_view())
                     .viewing_pause_ms(2000)
                     .capture_labeled("opened_after_k", "Session opened after pressing k")
             },

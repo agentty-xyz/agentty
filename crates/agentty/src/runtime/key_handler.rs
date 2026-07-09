@@ -1260,10 +1260,9 @@ mod tests {
     async fn test_handle_publish_branch_input_key_shortcut_chars_are_inserted() {
         // Arrange
         let typed_shortcut_characters = ['q', 'p', 'd', 'f', 'm', 'r', 'j', 'k', 'g', 'G', '?'];
+        let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
 
         for character in typed_shortcut_characters {
-            let (mut app, _base_dir) =
-                crate::test_support::new_test_app_with_mock_tmux_client().await;
             app.mode = AppMode::PublishBranchInput {
                 default_branch_name: "wt/session".to_string(),
                 input: crate::domain::input::InputState::default(),

@@ -722,6 +722,37 @@ mod tests {
     }
 
     #[test]
+    fn test_render_selected_session_model_uses_selection_surface() {
+        // Arrange
+        let _theme_scope = style::scoped_active_theme(ColorTheme::DarkHorizon);
+        let backend = ratatui::backend::TestBackend::new(100, 12);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let mut table_state = TableState::default();
+        table_state.select(Some(0));
+        let mut session = crate::test_support::titled_session_fixture("session-1", Status::Review);
+        session.agent = crate::domain::agent::AgentSelection::new(
+            crate::domain::agent::AgentKind::Codex,
+            AgentModel::Gpt55,
+        );
+        let sessions = vec![session];
+
+        // Act
+        terminal
+            .draw(|frame| {
+                SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::Medium, 0)
+                    .render(frame, frame.area());
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let buffer = terminal.backend().buffer();
+        let fallback_cell = &buffer.content()[0];
+        let model_cell = find_text_start_cell(buffer, "gpt-5.5").unwrap_or(fallback_cell);
+
+        assert_eq!(model_cell.bg, style::palette::surface_selection());
+    }
+
+    #[test]
     fn test_render_session_row_shows_model_with_default_reasoning_level() {
         // Arrange
         let backend = ratatui::backend::TestBackend::new(100, 12);
