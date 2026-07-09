@@ -147,6 +147,10 @@ Use **bold** and `code`.
 | --- | --- |
 | User prompt | Markdown |
 
+```text
+formatted blocks in user messages without words breaking
+```
+
 ```mermaid {theme=default}
 flowchart TD
     A[Start] --> B[Finish]
@@ -1230,6 +1234,7 @@ fn session_view_user_prompt_markdown_output() -> E2eResult {
                 assertion::assert_text_in_region(frame, "Use bold and code.", &full);
                 assertion::assert_text_in_region(frame, "User prompt", &full);
                 assertion::assert_text_in_region(frame, "Markdown", &full);
+                assertion::assert_text_in_region(frame, "without words breaking", &full);
                 assertion::assert_text_in_region(frame, "Start", &full);
                 assertion::assert_text_in_region(frame, "Finish", &full);
                 assertion::assert_text_in_region(frame, "▼", &full);
