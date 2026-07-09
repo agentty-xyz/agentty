@@ -2524,6 +2524,19 @@ mod tests {
         }
     }
 
+    /// Expects the branch-publish safety preflight used by published-branch
+    /// auto-push.
+    fn expect_safe_auto_push_state(mock_git_client: &mut MockGitClient) {
+        mock_git_client
+            .expect_in_progress_operation()
+            .once()
+            .returning(|_| Box::pin(async { Ok(None) }));
+        mock_git_client
+            .expect_detect_git_info()
+            .once()
+            .returning(|_| Box::pin(async { Some("wt/sess1".to_string()) }));
+    }
+
     /// Returns one git client mock that produces a successful auto-commit
     /// outcome.
     fn auto_commit_git_client(commit_message: &str, sequence: &mut Sequence) -> MockGitClient {
@@ -2556,6 +2569,7 @@ mod tests {
             .expect_head_short_hash()
             .once()
             .returning(|_| Box::pin(async { Ok("abc1234".to_string()) }));
+        expect_safe_auto_push_state(&mut mock_git_client);
         mock_git_client
             .expect_push_current_branch_to_remote_branch()
             .once()
@@ -2607,6 +2621,7 @@ mod tests {
             .expect_head_short_hash()
             .once()
             .returning(|_| Box::pin(async { Ok("abc1234".to_string()) }));
+        expect_safe_auto_push_state(&mut mock_git_client);
         mock_git_client
             .expect_push_current_branch_to_remote_branch()
             .once()
@@ -2724,6 +2739,7 @@ mod tests {
             .expect_is_worktree_clean()
             .times(1)
             .returning(|_| Box::pin(async { Ok(true) }));
+        expect_safe_auto_push_state(&mut mock_git_client);
         mock_git_client
             .expect_push_current_branch_to_remote_branch()
             .once()
@@ -2923,6 +2939,7 @@ mod tests {
             .expect_is_worktree_clean()
             .times(1)
             .returning(|_| Box::pin(async { Ok(true) }));
+        expect_safe_auto_push_state(&mut mock_git_client);
         mock_git_client
             .expect_push_current_branch_to_remote_branch()
             .once()
@@ -4101,7 +4118,7 @@ mod tests {
         let main_repo_root = base_dir.path().join("main");
         mock_git_client
             .expect_detect_git_info()
-            .times(1)
+            .times(2)
             .returning(|_| Box::pin(async { Some("wt/sess1".to_string()) }));
         mock_git_client.expect_main_repo_root().times(1).returning({
             let main_repo_root = main_repo_root.clone();
@@ -4119,6 +4136,10 @@ mod tests {
             .expect_is_worktree_clean()
             .times(1)
             .returning(|_| Box::pin(async { Ok(true) }));
+        mock_git_client
+            .expect_in_progress_operation()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(None) }));
         mock_git_client
             .expect_diff()
             .returning(|_, _| Box::pin(async { Ok(String::new()) }));

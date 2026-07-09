@@ -56,6 +56,42 @@ pub enum RebaseStepResult {
     Conflict { detail: String },
 }
 
+/// Git operation metadata that marks a worktree as unsafe for branch pushes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InProgressGitOperation {
+    /// A cherry-pick is in progress.
+    CherryPick,
+    /// A merge is in progress.
+    Merge,
+    /// A rebase is in progress.
+    Rebase,
+    /// A revert is in progress.
+    Revert,
+}
+
+impl InProgressGitOperation {
+    /// Returns an indefinite article plus the operation name for user-facing
+    /// status text.
+    pub fn article_name(self) -> &'static str {
+        match self {
+            Self::CherryPick => "a cherry-pick",
+            Self::Merge => "a merge",
+            Self::Rebase => "a rebase",
+            Self::Revert => "a revert",
+        }
+    }
+
+    /// Returns the operation name for user-facing status text.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::CherryPick => "cherry-pick",
+            Self::Merge => "merge",
+            Self::Rebase => "rebase",
+            Self::Revert => "revert",
+        }
+    }
+}
+
 /// Rebases the current branch onto `target_branch`.
 ///
 /// If the rebase fails due to conflict, this function aborts it immediately so
@@ -241,12 +277,54 @@ pub async fn is_rebase_in_progress(repo_path: PathBuf) -> Result<bool, GitError>
     spawn_blocking(move || -> Result<bool, GitError> {
         let git_dir = resolve_git_dir(&repo_path)
             .ok_or_else(|| GitError::OutputParse("Failed to resolve git directory".to_string()))?;
-        let rebase_merge = git_dir.join("rebase-merge");
-        let rebase_apply = git_dir.join("rebase-apply");
 
-        Ok(rebase_merge.exists() || rebase_apply.exists())
+        Ok(has_rebase_metadata(&git_dir))
     })
     .await?
+}
+
+/// Returns the first detected in-progress git operation in `repo_path`.
+///
+/// # Arguments
+/// * `repo_path` - Path to the git repository or worktree
+///
+/// # Returns
+/// An operation when rebase, merge, cherry-pick, or revert metadata exists.
+///
+/// # Errors
+/// Returns a [`GitError`] when the git directory cannot be resolved.
+pub async fn in_progress_operation(
+    repo_path: PathBuf,
+) -> Result<Option<InProgressGitOperation>, GitError> {
+    spawn_blocking(move || in_progress_operation_sync(&repo_path)).await?
+}
+
+fn in_progress_operation_sync(
+    repo_path: &Path,
+) -> Result<Option<InProgressGitOperation>, GitError> {
+    let git_dir = resolve_git_dir(repo_path)
+        .ok_or_else(|| GitError::OutputParse("Failed to resolve git directory".to_string()))?;
+    if has_rebase_metadata(&git_dir) {
+        return Ok(Some(InProgressGitOperation::Rebase));
+    }
+    if git_dir.join("MERGE_HEAD").exists() {
+        return Ok(Some(InProgressGitOperation::Merge));
+    }
+    if git_dir.join("CHERRY_PICK_HEAD").exists() {
+        return Ok(Some(InProgressGitOperation::CherryPick));
+    }
+    if git_dir.join("REVERT_HEAD").exists() {
+        return Ok(Some(InProgressGitOperation::Revert));
+    }
+
+    Ok(None)
+}
+
+fn has_rebase_metadata(git_dir: &Path) -> bool {
+    let rebase_merge = git_dir.join("rebase-merge");
+    let rebase_apply = git_dir.join("rebase-apply");
+
+    rebase_merge.exists() || rebase_apply.exists()
 }
 
 /// Returns whether unresolved paths still exist in the index.
@@ -719,6 +797,86 @@ mod tests {
 
         // Assert
         assert!(is_stale_metadata_error);
+    }
+
+    #[test]
+    fn test_in_progress_operation_detects_rebase_metadata() {
+        // Arrange
+        let temp_dir = tempdir().expect("tempdir should be created");
+        let git_dir = temp_dir.path().join(".git");
+        fs::create_dir(&git_dir).expect("git dir should be created");
+        fs::create_dir(git_dir.join("rebase-merge")).expect("rebase metadata should be created");
+
+        // Act
+        let operation =
+            in_progress_operation_sync(temp_dir.path()).expect("operation should be detected");
+
+        // Assert
+        assert_eq!(operation, Some(InProgressGitOperation::Rebase));
+    }
+
+    #[test]
+    fn test_in_progress_operation_detects_merge_metadata() {
+        // Arrange
+        let temp_dir = tempdir().expect("tempdir should be created");
+        let git_dir = temp_dir.path().join(".git");
+        fs::create_dir(&git_dir).expect("git dir should be created");
+        fs::write(git_dir.join("MERGE_HEAD"), "merge").expect("merge metadata should be created");
+
+        // Act
+        let operation =
+            in_progress_operation_sync(temp_dir.path()).expect("operation should be detected");
+
+        // Assert
+        assert_eq!(operation, Some(InProgressGitOperation::Merge));
+    }
+
+    #[test]
+    fn test_in_progress_operation_detects_cherry_pick_metadata() {
+        // Arrange
+        let temp_dir = tempdir().expect("tempdir should be created");
+        let git_dir = temp_dir.path().join(".git");
+        fs::create_dir(&git_dir).expect("git dir should be created");
+        fs::write(git_dir.join("CHERRY_PICK_HEAD"), "cherry-pick")
+            .expect("cherry-pick metadata should be created");
+
+        // Act
+        let operation =
+            in_progress_operation_sync(temp_dir.path()).expect("operation should be detected");
+
+        // Assert
+        assert_eq!(operation, Some(InProgressGitOperation::CherryPick));
+    }
+
+    #[test]
+    fn test_in_progress_operation_detects_revert_metadata() {
+        // Arrange
+        let temp_dir = tempdir().expect("tempdir should be created");
+        let git_dir = temp_dir.path().join(".git");
+        fs::create_dir(&git_dir).expect("git dir should be created");
+        fs::write(git_dir.join("REVERT_HEAD"), "revert")
+            .expect("revert metadata should be created");
+
+        // Act
+        let operation =
+            in_progress_operation_sync(temp_dir.path()).expect("operation should be detected");
+
+        // Assert
+        assert_eq!(operation, Some(InProgressGitOperation::Revert));
+    }
+
+    #[test]
+    fn test_in_progress_operation_returns_none_for_clean_git_dir() {
+        // Arrange
+        let temp_dir = tempdir().expect("tempdir should be created");
+        fs::create_dir(temp_dir.path().join(".git")).expect("git dir should be created");
+
+        // Act
+        let operation =
+            in_progress_operation_sync(temp_dir.path()).expect("operation should be detected");
+
+        // Assert
+        assert_eq!(operation, None);
     }
 
     #[test]

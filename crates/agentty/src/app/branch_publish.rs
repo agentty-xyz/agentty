@@ -489,6 +489,14 @@ pub(crate) async fn push_session_branch_to_remote(
     let target_branch =
         remote_branch_name.map_or_else(|| session::session_branch(session_id), str::to_string);
 
+    ensure_session_branch_push_safe(
+        git_client.as_ref(),
+        folder.clone(),
+        publish_branch_action,
+        session_id,
+    )
+    .await?;
+
     if let Some(target_branch) = remote_branch_name
         && published_upstream_ref.is_none()
     {
@@ -563,6 +571,61 @@ pub(crate) async fn push_session_branch_to_remote(
         })?;
 
     Ok(upstream_reference)
+}
+
+/// Blocks session-branch force-pushes while the worktree is in an unsafe git
+/// state.
+async fn ensure_session_branch_push_safe(
+    git_client: &dyn GitClient,
+    folder: PathBuf,
+    publish_branch_action: PublishBranchAction,
+    session_id: &str,
+) -> Result<(), BranchPublishTaskFailure> {
+    let retry_text = retry_action_text(publish_branch_action);
+    let folder_display = folder.display().to_string();
+    let in_progress_operation = git_client
+        .in_progress_operation(folder.clone())
+        .await
+        .map_err(|error| {
+            BranchPublishTaskFailure::failed(
+                publish_branch_action,
+                format!(
+                    "Failed to inspect session branch git state in `{folder_display}`: {error}"
+                ),
+            )
+        })?;
+    if let Some(in_progress_operation) = in_progress_operation {
+        return Err(BranchPublishTaskFailure::blocked(
+            publish_branch_action,
+            format!(
+                "Session branch push is paused because {} is in progress in `{folder_display}`. \
+                 Finish or abort the {}, then {retry_text}.",
+                in_progress_operation.article_name(),
+                in_progress_operation.name()
+            ),
+        ));
+    }
+
+    let expected_branch = session::session_branch(session_id);
+    let Some(current_branch) = git_client.detect_git_info(folder).await else {
+        return Err(BranchPublishTaskFailure::failed(
+            publish_branch_action,
+            format!(
+                "Failed to detect the current session branch in `{folder_display}` before pushing."
+            ),
+        ));
+    };
+    if current_branch != expected_branch {
+        return Err(BranchPublishTaskFailure::blocked(
+            publish_branch_action,
+            format!(
+                "Refusing to push session branch because the worktree is on `{current_branch}` \
+                 instead of `{expected_branch}`. Return to the session branch, then {retry_text}."
+            ),
+        ));
+    }
+
+    Ok(())
 }
 
 /// Resolves one forge remote for review-request publishing.
@@ -858,6 +921,49 @@ mod tests {
     use super::*;
     use crate::infra::db::AppRepositories;
 
+    fn expect_safe_session_branch_push(mock_git_client: &mut git::MockGitClient, session_id: &str) {
+        let expected_branch = session::session_branch(session_id);
+        mock_git_client
+            .expect_in_progress_operation()
+            .once()
+            .returning(|_| Box::pin(async { Ok(None) }));
+        mock_git_client
+            .expect_detect_git_info()
+            .once()
+            .returning(move |_| {
+                let expected_branch = expected_branch.clone();
+
+                Box::pin(async move { Some(expected_branch) })
+            });
+    }
+
+    async fn push_session_branch_to_remote_with_mock(
+        mock_git_client: git::MockGitClient,
+    ) -> Result<String, BranchPublishTaskFailure> {
+        let database = AppRepositories::in_memory().await;
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to insert project");
+        database
+            .sessions()
+            .insert_session("session-id", "gpt-5.5", "main", "Review", project_id)
+            .await
+            .expect("failed to insert session");
+
+        push_session_branch_to_remote(
+            &database,
+            PathBuf::from("/tmp/session-worktree"),
+            Arc::new(mock_git_client),
+            PublishBranchAction::Push,
+            "session-id",
+            None,
+            Some("origin/wt/session-id"),
+        )
+        .await
+    }
+
     #[tokio::test]
     async fn review_request_remote_attaches_session_worktree_to_detected_remote() {
         // Arrange
@@ -933,6 +1039,7 @@ mod tests {
             .expect_remote_branch_exists()
             .once()
             .returning(|_, _| Box::pin(async { Ok(false) }));
+        expect_safe_session_branch_push(&mut mock_git_client, "session-id");
         mock_git_client
             .expect_push_current_branch_to_remote_branch()
             .once()
@@ -1130,6 +1237,7 @@ mod tests {
             .expect("failed to insert session");
         let session_folder = PathBuf::from("/tmp/session-worktree");
         let mut mock_git_client = git::MockGitClient::new();
+        expect_safe_session_branch_push(&mut mock_git_client, "session-id");
         mock_git_client
             .expect_remote_branch_exists()
             .once()
@@ -1170,6 +1278,7 @@ mod tests {
         let session_folder = PathBuf::from("/tmp/session-worktree");
         let expected_folder = session_folder.clone();
         let mut mock_git_client = git::MockGitClient::new();
+        expect_safe_session_branch_push(&mut mock_git_client, "session-id");
         mock_git_client
             .expect_push_current_branch_to_remote_branch()
             .once()
@@ -1213,6 +1322,7 @@ mod tests {
         let expected_upstream = format!("origin/{expected_branch}");
         let expected_upstream_assertion = expected_upstream.clone();
         let mut mock_git_client = git::MockGitClient::new();
+        expect_safe_session_branch_push(&mut mock_git_client, "session-id");
         mock_git_client
             .expect_push_current_branch_to_remote_branch()
             .once()
@@ -1241,6 +1351,192 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn push_blocks_while_session_branch_rebase_is_in_progress() {
+        // Arrange
+        let database = AppRepositories::in_memory().await;
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to insert project");
+        database
+            .sessions()
+            .insert_session("session-id", "gpt-5.5", "main", "Review", project_id)
+            .await
+            .expect("failed to insert session");
+        let session_folder = PathBuf::from("/tmp/session-worktree");
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_in_progress_operation()
+            .once()
+            .returning(|_| Box::pin(async { Ok(Some(git::InProgressGitOperation::Rebase)) }));
+        mock_git_client.expect_detect_git_info().times(0);
+        mock_git_client.expect_remote_branch_exists().times(0);
+        mock_git_client
+            .expect_push_current_branch_to_remote_branch()
+            .times(0);
+
+        // Act
+        let result = push_session_branch_to_remote(
+            &database,
+            session_folder,
+            Arc::new(mock_git_client),
+            PublishBranchAction::Push,
+            "session-id",
+            Some("feature/new-branch"),
+            None,
+        )
+        .await;
+
+        // Assert
+        let failure = result.expect_err("push should be blocked");
+        assert_eq!(failure.title, "Branch push blocked");
+        assert!(failure.message.contains("rebase is in progress"));
+    }
+
+    #[tokio::test]
+    async fn push_blocks_while_session_branch_merge_is_in_progress() {
+        // Arrange
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_in_progress_operation()
+            .once()
+            .returning(|_| Box::pin(async { Ok(Some(git::InProgressGitOperation::Merge)) }));
+        mock_git_client.expect_detect_git_info().times(0);
+        mock_git_client
+            .expect_push_current_branch_to_remote_branch()
+            .times(0);
+
+        // Act
+        let result = push_session_branch_to_remote_with_mock(mock_git_client).await;
+
+        // Assert
+        let failure = result.expect_err("push should be blocked");
+        assert_eq!(failure.title, "Branch push blocked");
+        assert!(failure.message.contains("merge is in progress"));
+    }
+
+    #[tokio::test]
+    async fn push_blocks_while_session_branch_cherry_pick_is_in_progress() {
+        // Arrange
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_in_progress_operation()
+            .once()
+            .returning(|_| Box::pin(async { Ok(Some(git::InProgressGitOperation::CherryPick)) }));
+        mock_git_client.expect_detect_git_info().times(0);
+        mock_git_client
+            .expect_push_current_branch_to_remote_branch()
+            .times(0);
+
+        // Act
+        let result = push_session_branch_to_remote_with_mock(mock_git_client).await;
+
+        // Assert
+        let failure = result.expect_err("push should be blocked");
+        assert_eq!(failure.title, "Branch push blocked");
+        assert!(failure.message.contains("cherry-pick is in progress"));
+    }
+
+    #[tokio::test]
+    async fn push_blocks_while_session_branch_revert_is_in_progress() {
+        // Arrange
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_in_progress_operation()
+            .once()
+            .returning(|_| Box::pin(async { Ok(Some(git::InProgressGitOperation::Revert)) }));
+        mock_git_client.expect_detect_git_info().times(0);
+        mock_git_client
+            .expect_push_current_branch_to_remote_branch()
+            .times(0);
+
+        // Act
+        let result = push_session_branch_to_remote_with_mock(mock_git_client).await;
+
+        // Assert
+        let failure = result.expect_err("push should be blocked");
+        assert_eq!(failure.title, "Branch push blocked");
+        assert!(failure.message.contains("revert is in progress"));
+    }
+
+    #[tokio::test]
+    async fn push_blocks_when_worktree_is_not_on_session_branch() {
+        // Arrange
+        let database = AppRepositories::in_memory().await;
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to insert project");
+        database
+            .sessions()
+            .insert_session("session-id", "gpt-5.5", "main", "Review", project_id)
+            .await
+            .expect("failed to insert session");
+        let session_folder = PathBuf::from("/tmp/session-worktree");
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_in_progress_operation()
+            .once()
+            .returning(|_| Box::pin(async { Ok(None) }));
+        mock_git_client
+            .expect_detect_git_info()
+            .once()
+            .returning(|_| Box::pin(async { Some("main".to_string()) }));
+        mock_git_client
+            .expect_push_current_branch_to_remote_branch()
+            .times(0);
+
+        // Act
+        let result = push_session_branch_to_remote(
+            &database,
+            session_folder,
+            Arc::new(mock_git_client),
+            PublishBranchAction::Push,
+            "session-id",
+            None,
+            Some("origin/wt/session-id"),
+        )
+        .await;
+
+        // Assert
+        let failure = result.expect_err("push should be blocked");
+        assert_eq!(failure.title, "Branch push blocked");
+        assert!(failure.message.contains("worktree is on `main`"));
+        assert!(failure.message.contains("instead of `wt/session-`"));
+    }
+
+    #[tokio::test]
+    async fn push_reports_folder_when_session_branch_cannot_be_detected() {
+        // Arrange
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_in_progress_operation()
+            .once()
+            .returning(|_| Box::pin(async { Ok(None) }));
+        mock_git_client
+            .expect_detect_git_info()
+            .once()
+            .returning(|_| Box::pin(async { None }));
+        mock_git_client
+            .expect_push_current_branch_to_remote_branch()
+            .times(0);
+
+        // Act
+        let result = push_session_branch_to_remote_with_mock(mock_git_client).await;
+
+        // Assert
+        let failure = result.expect_err("push should fail");
+        assert_eq!(failure.title, "Branch push failed");
+        assert!(
+            failure
+                .message
+                .contains("`/tmp/session-worktree` before pushing")
+        );
+    }
+
+    #[tokio::test]
     async fn push_shows_auth_guidance_when_ls_remote_returns_auth_error() {
         // Arrange
         let database = AppRepositories::in_memory().await;
@@ -1256,6 +1552,7 @@ mod tests {
             .expect("failed to insert session");
         let session_folder = PathBuf::from("/tmp/session-worktree");
         let mut mock_git_client = git::MockGitClient::new();
+        expect_safe_session_branch_push(&mut mock_git_client, "session-id");
         mock_git_client
             .expect_remote_branch_exists()
             .once()
@@ -1309,6 +1606,7 @@ mod tests {
         let expected_branch = session::session_branch("session-id");
         let expected_push_command = format!("git push origin HEAD:{expected_branch}");
         let mut mock_git_client = git::MockGitClient::new();
+        expect_safe_session_branch_push(&mut mock_git_client, "session-id");
         mock_git_client
             .expect_push_current_branch_to_remote_branch()
             .once()

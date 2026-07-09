@@ -26,9 +26,9 @@ pub use error::GitError;
 pub use merge::{SquashMergeOutcome, squash_merge, squash_merge_diff};
 /// Re-exported rebase/conflict APIs.
 pub use rebase::{
-    RebaseStepResult, abort_rebase, has_unmerged_paths, is_rebase_in_progress,
-    list_conflicted_files, list_staged_conflict_marker_files, rebase, rebase_continue,
-    rebase_onto_start, rebase_start,
+    InProgressGitOperation, RebaseStepResult, abort_rebase, has_unmerged_paths,
+    in_progress_operation, is_rebase_in_progress, list_conflicted_files,
+    list_staged_conflict_marker_files, rebase, rebase_continue, rebase_onto_start, rebase_start,
 };
 /// Re-exported repository metadata APIs.
 pub use repo::{main_repo_root, repo_url};

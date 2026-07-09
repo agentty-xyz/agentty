@@ -1142,6 +1142,14 @@ async fn push_session_branch_auth_failure_shows_git_guidance() {
     );
     let mut mock_git_client = ag_git::MockGitClient::new();
     mock_git_client
+        .expect_in_progress_operation()
+        .once()
+        .returning(|_| Box::pin(async { Ok(None) }));
+    mock_git_client
+        .expect_detect_git_info()
+        .once()
+        .returning(|_| Box::pin(async { Some(session::session_branch("session-1")) }));
+    mock_git_client
         .expect_push_current_branch_to_remote_branch()
         .once()
         .with(
@@ -1191,6 +1199,14 @@ async fn push_session_branch_preserves_blocked_when_remote_branch_exists() {
     );
     let mut mock_git_client = ag_git::MockGitClient::new();
     mock_git_client
+        .expect_in_progress_operation()
+        .once()
+        .returning(|_| Box::pin(async { Ok(None) }));
+    mock_git_client
+        .expect_detect_git_info()
+        .once()
+        .returning(|_| Box::pin(async { Some(session::session_branch("session-1")) }));
+    mock_git_client
         .expect_remote_branch_exists()
         .once()
         .returning(|_, _| Box::pin(async { Ok(true) }));
@@ -1220,6 +1236,14 @@ async fn push_session_branch_shows_auth_guidance_when_ls_remote_fails_with_auth_
         &crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/review-session")),
     );
     let mut mock_git_client = ag_git::MockGitClient::new();
+    mock_git_client
+        .expect_in_progress_operation()
+        .once()
+        .returning(|_| Box::pin(async { Ok(None) }));
+    mock_git_client
+        .expect_detect_git_info()
+        .once()
+        .returning(|_| Box::pin(async { Some(session::session_branch("session-1")) }));
     mock_git_client
         .expect_remote_branch_exists()
         .once()
@@ -1382,6 +1406,14 @@ async fn push_session_branch_uses_custom_remote_branch_name_when_provided() {
         .once()
         .returning(|_, _| Box::pin(async { Ok(false) }));
     mock_git_client
+        .expect_in_progress_operation()
+        .once()
+        .returning(|_| Box::pin(async { Ok(None) }));
+    mock_git_client
+        .expect_detect_git_info()
+        .once()
+        .returning(|_| Box::pin(async { Some(session::session_branch("session-1")) }));
+    mock_git_client
         .expect_push_current_branch_to_remote_branch()
         .with(
             mockall::predicate::eq(PathBuf::from("/tmp/review-session")),
@@ -1433,6 +1465,14 @@ async fn push_session_branch_succeeds_without_review_request_link_for_unsupporte
         &crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/review-session")),
     );
     let mut mock_git_client = ag_git::MockGitClient::new();
+    mock_git_client
+        .expect_in_progress_operation()
+        .once()
+        .returning(|_| Box::pin(async { Ok(None) }));
+    mock_git_client
+        .expect_detect_git_info()
+        .once()
+        .returning(|_| Box::pin(async { Some(session::session_branch("session-1")) }));
     mock_git_client
         .expect_push_current_branch_to_remote_branch()
         .with(
