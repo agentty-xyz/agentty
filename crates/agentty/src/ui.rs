@@ -8,6 +8,7 @@ pub mod markdown;
 pub mod mermaid;
 pub mod overlay;
 pub mod page;
+pub mod prompt_block;
 pub mod prompt_format;
 pub mod question_format;
 mod render;
