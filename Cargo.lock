@@ -73,6 +73,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ag-tui-text"
+version = "0.12.6"
+dependencies = [
+ "ratatui",
+ "rustc-hash",
+ "unicode-width",
+]
+
+[[package]]
 name = "ag-xtask"
 version = "0.12.6"
 dependencies = [
@@ -139,6 +148,7 @@ dependencies = [
  "ag-forge",
  "ag-git",
  "ag-protocol",
+ "ag-tui-text",
  "askama",
  "assert_cmd",
  "async-trait",

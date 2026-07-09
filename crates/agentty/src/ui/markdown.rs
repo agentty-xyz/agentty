@@ -1,195 +1,104 @@
-use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
-use std::hash::Hasher;
 use std::sync::Arc;
 
-use ratatui::style::{Color, Modifier, Style};
+pub use ag_tui_text::markdown::parse_inline_spans;
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use rustc_hash::FxHasher;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::ui::prompt_block::{self, USER_PROMPT_PREFIX, USER_PROMPT_RIGHT_GUTTER_WIDTH};
-use crate::ui::text_util::wrap_styled_line;
-use crate::ui::{mermaid, style};
+use crate::ui::style;
 
 const CLARIFICATION_HEADER: &str = "Clarifications:";
-const CLARIFICATION_PROMPT_PREFIX: &str = USER_PROMPT_PREFIX;
-const STATS_LABEL_WIDTH: usize = 22;
-/// Maximum number of distinct markdown blocks cached at once.
-const MARKDOWN_RENDER_CACHE_ENTRY_LIMIT: usize = 64;
 
-/// Cache key for one rendered markdown block.
-///
-/// The `version` field invalidates every cached render after a theme change so
-/// style-bearing `Line` values are never reused across incompatible palettes.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct MarkdownRenderCacheKey {
-    content_hash: u64,
-    content_len: usize,
-    version: u64,
-    width: u16,
-}
-
-/// Cached result of a single `render_markdown` invocation.
-struct MarkdownRenderCacheEntry {
-    key: MarkdownRenderCacheKey,
-    lines: Arc<[Line<'static>]>,
-}
-
-/// Bounded LRU cache for `render_markdown` output.
-///
-/// Stores the most recent rendered markdown slices keyed by a content
-/// fingerprint and target width. Keeping several entries avoids cache thrash
-/// when one frame renders transcript text alongside summary, review, or footer
-/// markdown blocks. Interior mutability via `RefCell` allows cache updates
-/// through shared references so the cache can be threaded through immutable
-/// render contexts without requiring `&mut` at every call site.
-///
-/// Cached values are stored as `Arc<[Line<'static>]>` so cache hits can reuse
-/// the rendered slice without cloning every line. Callers only clone `Line`
-/// values when they need to append the cached content into a larger output
-/// buffer.
-pub struct MarkdownRenderCache {
-    entries: RefCell<VecDeque<MarkdownRenderCacheEntry>>,
-    version: Cell<u64>,
-}
-
-impl Default for MarkdownRenderCache {
-    fn default() -> Self {
-        Self {
-            entries: RefCell::new(VecDeque::with_capacity(MARKDOWN_RENDER_CACHE_ENTRY_LIMIT)),
-            version: Cell::new(0),
-        }
-    }
-}
-
-impl MarkdownRenderCache {
-    /// Returns cached rendered lines when the text hash, width, and cache
-    /// version match; otherwise renders fresh and updates the cache.
-    pub fn render(&self, text: &str, width: usize) -> Arc<[Line<'static>]> {
-        let key = self.cache_key(text, width);
-        if let Some(lines) = self.cached_lines(key) {
-            return lines;
-        }
-
-        let lines = Arc::<[Line<'static>]>::from(render_markdown(text, width));
-
-        self.store_entry(MarkdownRenderCacheEntry {
-            key,
-            lines: Arc::clone(&lines),
-        });
-
-        lines
-    }
-
-    /// Bumps the cache version and drops all rendered entries.
-    ///
-    /// Callers use this when non-content render settings change; the active
-    /// theme is already part of each cache key.
-    pub fn bump_version(&self) {
-        self.version.set(self.version.get().wrapping_add(1));
-        self.entries.borrow_mut().clear();
-    }
-
-    /// Returns the current style-cache version used by higher-level layout
-    /// caches to avoid reusing styled lines after markdown entries are
-    /// invalidated.
-    pub(crate) fn version(&self) -> u64 {
-        self.version.get()
-    }
-
-    /// Builds the cache key for one render call.
-    fn cache_key(&self, text: &str, width: usize) -> MarkdownRenderCacheKey {
-        MarkdownRenderCacheKey {
-            content_hash: Self::hash_text(text),
-            content_len: text.len(),
-            version: self
-                .version
-                .get()
-                .wrapping_add(style::active_theme_cache_version()),
-            width: u16::try_from(width).unwrap_or(u16::MAX),
-        }
-    }
-
-    /// Returns cached lines for a matching entry and promotes it to the
-    /// front of the LRU queue.
-    fn cached_lines(&self, key: MarkdownRenderCacheKey) -> Option<Arc<[Line<'static>]>> {
-        let mut entries = self.entries.borrow_mut();
-        let entry_index = entries.iter().position(|entry| entry.key == key)?;
-        let entry = entries.remove(entry_index)?;
-        let lines = Arc::clone(&entry.lines);
-        entries.push_front(entry);
-
-        Some(lines)
-    }
-
-    /// Stores one freshly rendered entry and evicts the oldest item when the
-    /// cache reaches capacity.
-    fn store_entry(&self, entry: MarkdownRenderCacheEntry) {
-        let mut entries = self.entries.borrow_mut();
-        entries.push_front(entry);
-
-        while entries.len() > MARKDOWN_RENDER_CACHE_ENTRY_LIMIT {
-            entries.pop_back();
-        }
-    }
-
-    /// Computes a fast non-cryptographic content hash for cache-key
-    /// comparison.
-    fn hash_text(text: &str) -> u64 {
-        let mut hasher = FxHasher::default();
-        hasher.write(text.as_bytes());
-
-        hasher.finish()
-    }
-}
-
-#[derive(Clone, Copy)]
-enum BlockState {
-    Paragraph,
-    FencedCode,
-    FencedStats,
-}
-
-/// Distinguishes prompt-block payloads that share `USER_PROMPT_PREFIX`.
 #[derive(Clone, Copy)]
 enum PromptBlockKind {
     Clarification,
     UserPrompt,
 }
 
-/// Parsed markdown table with normalized header, alignment, and body cells.
-struct MarkdownTable {
-    alignments: Vec<TableAlignment>,
-    headers: Vec<String>,
-    rows: Vec<Vec<String>>,
+struct PromptBlock {
+    content_lines: Vec<String>,
+    raw_lines: Vec<String>,
+    consumed_closing_line: bool,
+    next_line_index: usize,
 }
 
-/// Horizontal alignment requested by one markdown table separator cell.
-#[derive(Clone, Copy)]
-enum TableAlignment {
-    Center,
-    Left,
-    Right,
+/// Theme-aware cache for rendered markdown transcript lines.
+#[derive(Default)]
+pub struct MarkdownRenderCache {
+    inner: ag_tui_text::markdown::MarkdownRenderCache,
 }
 
-/// Converts markdown text into styled, word-wrapped lines for terminal display.
+impl MarkdownRenderCache {
+    /// Returns cached rendered lines when the text hash, width, and active
+    /// theme version match; otherwise renders fresh and updates the cache.
+    pub fn render(&self, text: &str, width: usize) -> Arc<[Line<'static>]> {
+        let settings = style::text_render_settings();
+        if has_prompt_blocks(text) {
+            return self.inner.render_with_settings_and_renderer(
+                text,
+                width,
+                settings,
+                render_markdown_with_prompt_blocks,
+            );
+        }
+
+        self.inner.render_with_settings(text, width, settings)
+    }
+
+    /// Bumps the cache version and drops all rendered entries.
+    pub fn bump_version(&self) {
+        self.inner.bump_version();
+    }
+
+    /// Returns the current style-cache version used by higher-level layout
+    /// caches to avoid reusing styled lines after markdown entries are
+    /// invalidated.
+    pub(crate) fn version(&self) -> u64 {
+        self.inner.version()
+    }
+}
+
+/// Converts markdown text into styled, word-wrapped lines using Agentty's
+/// active UI theme.
 pub fn render_markdown(text: &str, width: usize) -> Vec<Line<'static>> {
-    let mut rendered_lines = Vec::new();
-    let mut block_state = BlockState::Paragraph;
+    if !has_prompt_blocks(text) {
+        return render_shared_markdown(text, width);
+    }
+
+    render_markdown_with_prompt_blocks(text, width)
+}
+
+fn has_prompt_blocks(text: &str) -> bool {
+    text.split('\n')
+        .any(|line| line.starts_with(USER_PROMPT_PREFIX))
+}
+
+fn render_shared_markdown(text: &str, width: usize) -> Vec<Line<'static>> {
+    ag_tui_text::markdown::render_markdown_with_settings(text, width, style::text_render_settings())
+}
+
+fn render_markdown_with_prompt_blocks(text: &str, width: usize) -> Vec<Line<'static>> {
     let raw_lines = text.split('\n').collect::<Vec<_>>();
+    let mut rendered_lines = Vec::new();
+    let mut normal_lines = Vec::new();
     let mut line_index = 0;
 
     while line_index < raw_lines.len() {
-        line_index = render_markdown_input_line(
-            &raw_lines,
-            line_index,
-            width,
-            &mut block_state,
-            &mut rendered_lines,
-        );
+        let raw_line = raw_lines[line_index];
+        if !raw_line.starts_with(USER_PROMPT_PREFIX) {
+            normal_lines.push(raw_line);
+            line_index += 1;
+
+            continue;
+        }
+
+        append_shared_markdown_lines(&mut rendered_lines, &mut normal_lines, width);
+        let prompt_block = collect_prompt_block_lines(&raw_lines, line_index);
+        append_prompt_block_lines(&mut rendered_lines, &prompt_block, width);
+        line_index = prompt_block.next_line_index;
     }
 
+    append_shared_markdown_lines(&mut rendered_lines, &mut normal_lines, width);
     if rendered_lines.is_empty() {
         rendered_lines.push(Line::from(""));
     }
@@ -197,141 +106,51 @@ pub fn render_markdown(text: &str, width: usize) -> Vec<Line<'static>> {
     rendered_lines
 }
 
-/// Renders or consumes one markdown input line and returns the next line index.
-fn render_markdown_input_line(
-    raw_lines: &[&str],
-    line_index: usize,
-    width: usize,
-    block_state: &mut BlockState,
+fn append_shared_markdown_lines(
     rendered_lines: &mut Vec<Line<'static>>,
-) -> usize {
-    let raw_line = raw_lines[line_index];
-
-    if let Some(next_line_index) =
-        render_prompt_block(raw_lines, line_index, width, block_state, rendered_lines)
-    {
-        return next_line_index;
-    }
-
-    if let Some(next_line_index) =
-        render_mermaid_block_line(raw_lines, line_index, width, *block_state, rendered_lines)
-    {
-        return next_line_index;
-    }
-
-    if update_fence_state(raw_line, block_state) {
-        return line_index + 1;
-    }
-
-    if let Some(next_line_index) =
-        render_markdown_table_line(raw_lines, line_index, width, *block_state, rendered_lines)
-    {
-        return next_line_index;
-    }
-
-    render_markdown_block_line(raw_line, width, *block_state, rendered_lines);
-
-    line_index + 1
-}
-
-/// Renders a mermaid block when the current paragraph line opens one.
-fn render_mermaid_block_line(
-    raw_lines: &[&str],
-    line_index: usize,
+    normal_lines: &mut Vec<&str>,
     width: usize,
-    block_state: BlockState,
-    rendered_lines: &mut Vec<Line<'static>>,
-) -> Option<usize> {
-    let raw_line = raw_lines[line_index];
-    if !matches!(block_state, BlockState::Paragraph) || !is_mermaid_fence(raw_line) {
-        return None;
-    }
-
-    let (diagram_lines, next_line_index) = render_mermaid_block(raw_lines, line_index, width)?;
-    rendered_lines.extend(diagram_lines);
-
-    Some(next_line_index)
-}
-
-/// Toggles fenced block state and returns whether the line was consumed.
-fn update_fence_state(raw_line: &str, block_state: &mut BlockState) -> bool {
-    if !is_fence_delimiter(raw_line) {
-        return false;
-    }
-
-    *block_state = match block_state {
-        BlockState::Paragraph => opening_fence_block_state(raw_line),
-        BlockState::FencedCode | BlockState::FencedStats => BlockState::Paragraph,
-    };
-
-    true
-}
-
-/// Renders a pipe table when the current paragraph line starts one.
-fn render_markdown_table_line(
-    raw_lines: &[&str],
-    line_index: usize,
-    width: usize,
-    block_state: BlockState,
-    rendered_lines: &mut Vec<Line<'static>>,
-) -> Option<usize> {
-    if !matches!(block_state, BlockState::Paragraph) {
-        return None;
-    }
-
-    let (table, next_line_index) = parse_markdown_table(raw_lines, line_index)?;
-    rendered_lines.extend(render_markdown_table(&table, width));
-
-    Some(next_line_index)
-}
-
-/// Renders one non-structural markdown line for the active block state.
-fn render_markdown_block_line(
-    raw_line: &str,
-    width: usize,
-    block_state: BlockState,
-    rendered_lines: &mut Vec<Line<'static>>,
 ) {
-    match block_state {
-        BlockState::Paragraph => rendered_lines.extend(render_markdown_line(raw_line, width)),
-        BlockState::FencedCode => rendered_lines.extend(render_code_line(raw_line, width)),
-        BlockState::FencedStats => rendered_lines.extend(render_stats_line(raw_line, width)),
+    if normal_lines.is_empty() {
+        return;
     }
+
+    let markdown = normal_lines.join("\n");
+    rendered_lines.extend(render_shared_markdown(&markdown, width));
+    normal_lines.clear();
 }
 
-/// Renders one complete prompt block and returns the next line index.
-fn render_prompt_block(
-    raw_lines: &[&str],
-    line_index: usize,
-    width: usize,
-    block_state: &mut BlockState,
+fn append_prompt_block_lines(
     rendered_lines: &mut Vec<Line<'static>>,
-) -> Option<usize> {
-    let raw_line = raw_lines[line_index];
-    if !raw_line.starts_with(USER_PROMPT_PREFIX) {
-        return None;
-    }
-
-    *block_state = BlockState::Paragraph;
-    let prompt_block_kind = prompt_block_kind(raw_line);
-    let (prompt_lines, next_line_index, consumed_closing_line) =
-        collect_prompt_block_lines(raw_lines, line_index);
-    match prompt_block_kind {
+    prompt_block: &PromptBlock,
+    width: usize,
+) {
+    match prompt_block_kind(
+        prompt_block
+            .raw_lines
+            .first()
+            .map(String::as_str)
+            .unwrap_or_default(),
+    ) {
         PromptBlockKind::Clarification => {
-            rendered_lines.extend(render_clarification_prompt_block(&prompt_lines, width));
+            rendered_lines.extend(render_shared_markdown(
+                &prompt_block.raw_lines.join("\n"),
+                width,
+            ));
         }
         PromptBlockKind::UserPrompt => {
-            rendered_lines.extend(render_user_prompt_markdown_block(&prompt_lines, width));
+            rendered_lines.extend(render_user_prompt_markdown_block(
+                &prompt_block.content_lines,
+                width,
+            ));
         }
     }
-    if consumed_closing_line {
+
+    if prompt_block.consumed_closing_line {
         rendered_lines.push(Line::from(""));
     }
-
-    Some(next_line_index)
 }
 
-/// Resolves one prompt block style from the first prefixed line.
 fn prompt_block_kind(raw_line: &str) -> PromptBlockKind {
     let is_clarification_header = raw_line
         .strip_prefix(USER_PROMPT_PREFIX)
@@ -343,26 +162,34 @@ fn prompt_block_kind(raw_line: &str) -> PromptBlockKind {
     PromptBlockKind::UserPrompt
 }
 
-/// Collects one prompt block with transcript prompt prefixes removed.
-fn collect_prompt_block_lines(
-    raw_lines: &[&str],
-    start_index: usize,
-) -> (Vec<String>, usize, bool) {
-    let mut prompt_lines = Vec::new();
+fn collect_prompt_block_lines(raw_lines: &[&str], start_index: usize) -> PromptBlock {
+    let mut content_lines = Vec::new();
+    let mut raw_prompt_lines = Vec::new();
     let mut line_index = start_index;
     let continuation_padding = prompt_block::user_prompt_continuation_prefix();
 
     while let Some(raw_line) = raw_lines.get(line_index) {
         if line_index > start_index {
             if raw_line.is_empty() {
-                return (prompt_lines, line_index + 1, true);
+                return PromptBlock {
+                    content_lines,
+                    raw_lines: raw_prompt_lines,
+                    consumed_closing_line: true,
+                    next_line_index: line_index + 1,
+                };
             }
 
             if raw_line.starts_with(USER_PROMPT_PREFIX) {
-                return (prompt_lines, line_index, false);
+                return PromptBlock {
+                    content_lines,
+                    raw_lines: raw_prompt_lines,
+                    consumed_closing_line: false,
+                    next_line_index: line_index,
+                };
             }
         }
 
+        raw_prompt_lines.push((*raw_line).to_string());
         let content = if line_index == start_index {
             raw_line
                 .strip_prefix(USER_PROMPT_PREFIX)
@@ -372,22 +199,22 @@ fn collect_prompt_block_lines(
                 .strip_prefix(continuation_padding.as_str())
                 .unwrap_or(raw_line)
         };
-        prompt_lines.push(content.to_string());
+        content_lines.push(content.to_string());
         line_index += 1;
     }
 
-    (prompt_lines, line_index, false)
+    PromptBlock {
+        content_lines,
+        raw_lines: raw_prompt_lines,
+        consumed_closing_line: false,
+        next_line_index: line_index,
+    }
 }
 
-/// Renders a user prompt block as markdown while retaining the transcript
-/// prompt marker and shaded prompt rows.
 fn render_user_prompt_markdown_block(prompt_lines: &[String], width: usize) -> Vec<Line<'static>> {
     let prompt_text = prompt_lines.join("\n");
     if prompt_text.trim().is_empty() {
-        return vec![prompt_block_padding_line(
-            width,
-            PromptBlockKind::UserPrompt,
-        )];
+        return vec![prompt_block::user_prompt_padding_line(width)];
     }
 
     let prefix_width = USER_PROMPT_PREFIX.chars().count();
@@ -395,31 +222,23 @@ fn render_user_prompt_markdown_block(prompt_lines: &[String], width: usize) -> V
         .saturating_sub(prefix_width)
         .saturating_sub(USER_PROMPT_RIGHT_GUTTER_WIDTH)
         .max(1);
-    let rendered_prompt_lines = render_markdown(&prompt_text, content_width)
-        .into_iter()
-        .flat_map(|line| wrap_user_prompt_markdown_line(line, content_width))
-        .collect::<Vec<_>>();
+    let rendered_prompt_lines = render_shared_markdown(&prompt_text, content_width);
     let mut lines = Vec::with_capacity(rendered_prompt_lines.len().saturating_add(2));
     let mut has_rendered_content_line = false;
+    let continuation_prefix = prompt_block::user_prompt_continuation_prefix();
 
-    lines.push(prompt_block_padding_line(
-        width,
-        PromptBlockKind::UserPrompt,
-    ));
+    lines.push(prompt_block::user_prompt_padding_line(width));
     for rendered_line in rendered_prompt_lines {
         if rendered_line.width() == 0 {
-            lines.push(prompt_block_padding_line(
-                width,
-                PromptBlockKind::UserPrompt,
-            ));
+            lines.push(prompt_block::user_prompt_padding_line(width));
 
             continue;
         }
 
         let prefix = if has_rendered_content_line {
-            prompt_block::user_prompt_continuation_prefix()
+            continuation_prefix.as_str()
         } else {
-            USER_PROMPT_PREFIX.to_string()
+            USER_PROMPT_PREFIX
         };
         let prefix_style = if has_rendered_content_line {
             prompt_block::user_prompt_content_style()
@@ -428,48 +247,17 @@ fn render_user_prompt_markdown_block(prompt_lines: &[String], width: usize) -> V
         };
         lines.push(prompt_block::user_prompt_markdown_line(
             user_prompt_content_line_spans(rendered_line.spans),
-            &prefix,
+            prefix,
             prefix_style,
             width,
         ));
         has_rendered_content_line = true;
     }
-    lines.push(prompt_block_padding_line(
-        width,
-        PromptBlockKind::UserPrompt,
-    ));
+    lines.push(prompt_block::user_prompt_padding_line(width));
 
     lines
 }
 
-/// Applies prompt right-gutter wrapping to ordinary markdown rows while
-/// preserving rows whose alignment is already structural, such as tables and
-/// fenced code.
-fn wrap_user_prompt_markdown_line(line: Line<'static>, content_width: usize) -> Vec<Line<'static>> {
-    if is_structured_prompt_markdown_line(&line) {
-        return vec![line];
-    }
-
-    wrap_verbatim_spans_with_word_boundaries(line.spans, content_width)
-}
-
-/// Returns whether a rendered prompt markdown row should keep its existing
-/// layout instead of receiving prompt-specific word-boundary wrapping.
-fn is_structured_prompt_markdown_line(line: &Line<'static>) -> bool {
-    line.spans.iter().any(|span| {
-        span.style.bg == Some(style::palette::surface_overlay())
-            || span.content.chars().any(is_box_drawing_character)
-    })
-}
-
-/// Returns whether a character is one of the box-drawing cells used by table
-/// and diagram renderers.
-fn is_box_drawing_character(character: char) -> bool {
-    ('\u{2500}'..='\u{257f}').contains(&character)
-}
-
-/// Preserves markdown styling while splitting plain prompt text so `@` lookup
-/// tokens keep their prompt-specific highlight.
 fn user_prompt_content_line_spans(
     rendered_spans: impl IntoIterator<Item = Span<'static>>,
 ) -> Vec<Span<'static>> {
@@ -494,7 +282,7 @@ fn user_prompt_content_line_spans(
                 style.fg = lookup_foreground;
             }
 
-            push_verbatim_span_character(&mut spans, style, character);
+            push_span_character(&mut spans, style, character);
             previous_character = Some(character);
         }
     }
@@ -502,908 +290,14 @@ fn user_prompt_content_line_spans(
     spans
 }
 
-/// Renders one clarification prompt block with distinct prompt visuals and
-/// question/answer marker highlighting.
-fn render_clarification_prompt_block(prompt_lines: &[String], width: usize) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
+fn user_prompt_lookup_style() -> Style {
+    let mut lookup_style = prompt_block::user_prompt_content_style();
+    lookup_style.fg = Some(style::palette::info());
 
-    lines.push(prompt_block_padding_line(
-        width,
-        PromptBlockKind::Clarification,
-    ));
-    for (line_index, prompt_line) in prompt_lines.iter().enumerate() {
-        lines.extend(render_clarification_prompt_line(
-            prompt_line,
-            line_index == 0,
-            width,
-        ));
-    }
-    lines.push(prompt_block_padding_line(
-        width,
-        PromptBlockKind::Clarification,
-    ));
-
-    lines
+    lookup_style
 }
 
-/// Renders one clarification line with distinct prompt visuals and
-/// question/answer marker highlighting.
-fn render_clarification_prompt_line(
-    content: &str,
-    is_first_prompt_line: bool,
-    width: usize,
-) -> Vec<Line<'static>> {
-    if content.is_empty() {
-        return vec![prompt_block_padding_line(
-            width,
-            PromptBlockKind::Clarification,
-        )];
-    }
-
-    let continuation_padding = prompt_block::user_prompt_continuation_prefix();
-    let content_style = clarification_content_style();
-
-    let prompt_lines = if is_first_prompt_line {
-        render_prefixed_verbatim_line(
-            CLARIFICATION_PROMPT_PREFIX,
-            &continuation_padding,
-            content,
-            clarification_prompt_prefix_style(),
-            content_style,
-            width,
-            clarification_prompt_spans,
-        )
-    } else {
-        render_prefixed_verbatim_line(
-            &continuation_padding,
-            &continuation_padding,
-            content,
-            content_style,
-            content_style,
-            width,
-            clarification_prompt_spans,
-        )
-    };
-
-    prompt_lines
-        .into_iter()
-        .map(|line| pad_line_to_width(line, width, content_style))
-        .collect()
-}
-
-/// Returns one full-width line used as top or bottom padding inside prompt
-/// blocks.
-fn prompt_block_padding_line(width: usize, prompt_block_kind: PromptBlockKind) -> Line<'static> {
-    pad_line_to_width(
-        Line::from(""),
-        width,
-        prompt_block_content_style(prompt_block_kind),
-    )
-}
-
-/// Returns the base style used across a full prompt-block row.
-fn prompt_block_content_style(prompt_block_kind: PromptBlockKind) -> Style {
-    match prompt_block_kind {
-        PromptBlockKind::Clarification => clarification_content_style(),
-        PromptBlockKind::UserPrompt => prompt_block::user_prompt_content_style(),
-    }
-}
-
-/// Pads one rendered line to the target width using one style for trailing
-/// cells.
-fn pad_line_to_width(mut line: Line<'static>, width: usize, style: Style) -> Line<'static> {
-    if width == 0 {
-        return line;
-    }
-
-    let line_width = line.width();
-    if line_width >= width {
-        return line;
-    }
-
-    line.spans
-        .push(Span::styled(" ".repeat(width - line_width), style));
-
-    line
-}
-
-fn render_markdown_line(raw_line: &str, width: usize) -> Vec<Line<'static>> {
-    if raw_line.is_empty() {
-        return vec![Line::from("")];
-    }
-
-    if let Some((level, content)) = parse_heading(raw_line) {
-        return render_inline_line(content, heading_style(level), width);
-    }
-
-    if is_horizontal_rule(raw_line) {
-        return vec![horizontal_rule_line(width)];
-    }
-
-    if let Some(content) = raw_line.strip_prefix("> ") {
-        return render_prefixed_inline_line(
-            "│ ",
-            "│ ",
-            content,
-            blockquote_prefix_style(),
-            Style::default().fg(style::palette::text_muted()),
-            width,
-        );
-    }
-
-    if let Some(content) = parse_bullet_content(raw_line) {
-        return render_prefixed_inline_line(
-            "- ",
-            "  ",
-            content,
-            list_prefix_style(),
-            Style::default(),
-            width,
-        );
-    }
-
-    if let Some((prefix, content)) = parse_numbered_content(raw_line) {
-        let continuation_prefix = " ".repeat(prefix.chars().count());
-
-        return render_prefixed_inline_line(
-            &prefix,
-            &continuation_prefix,
-            content,
-            list_prefix_style(),
-            Style::default(),
-            width,
-        );
-    }
-
-    render_inline_line(raw_line, Style::default(), width)
-}
-
-fn render_prefixed_inline_line(
-    prefix: &str,
-    continuation_prefix: &str,
-    content: &str,
-    prefix_style: Style,
-    content_style: Style,
-    width: usize,
-) -> Vec<Line<'static>> {
-    let prefix_width = prefix.chars().count();
-    if width <= prefix_width {
-        let mut spans = vec![Span::styled(prefix.to_string(), prefix_style)];
-        spans.extend(parse_inline_spans(content, content_style));
-
-        return wrap_styled_line(spans, width);
-    }
-
-    let wrapped_content = render_inline_line(content, content_style, width - prefix_width);
-    let mut lines = Vec::with_capacity(wrapped_content.len());
-
-    for (index, line) in wrapped_content.into_iter().enumerate() {
-        let marker = if index == 0 {
-            prefix
-        } else {
-            continuation_prefix
-        };
-        let mut spans = vec![Span::styled(marker.to_string(), prefix_style)];
-        spans.extend(line.spans);
-        lines.push(Line::from(spans));
-    }
-
-    lines
-}
-
-/// Wraps one verbatim line while preserving a fixed prefix for wrapped
-/// continuations.
-///
-/// Prompt content wraps on word boundaries when possible to mirror chat-input
-/// wrapping, and falls back to character wrapping for words wider than the
-/// available width.
-fn render_prefixed_verbatim_line(
-    prefix: &str,
-    continuation_prefix: &str,
-    content: &str,
-    prefix_style: Style,
-    content_style: Style,
-    width: usize,
-    content_span_builder: fn(&str, Style) -> Vec<Span<'static>>,
-) -> Vec<Line<'static>> {
-    let prefix_width = prefix.chars().count();
-    if width <= prefix_width {
-        let mut spans = vec![Span::styled(prefix.to_string(), prefix_style)];
-        spans.extend(content_span_builder(content, content_style));
-
-        return wrap_styled_line(spans, width);
-    }
-
-    let wrapped_content = wrap_verbatim_spans_with_word_boundaries(
-        content_span_builder(content, content_style),
-        width - prefix_width,
-    );
-    let mut lines = Vec::with_capacity(wrapped_content.len());
-
-    for (index, line) in wrapped_content.into_iter().enumerate() {
-        let marker = if index == 0 {
-            prefix
-        } else {
-            continuation_prefix
-        };
-        let marker_style = if index == 0 {
-            prefix_style
-        } else {
-            content_style
-        };
-        let mut spans = vec![Span::styled(marker.to_string(), marker_style)];
-        spans.extend(line.spans);
-        lines.push(Line::from(spans));
-    }
-
-    lines
-}
-
-/// Splits one clarification prompt content line into styled spans for
-/// clarification headings and `Q:` / `A:` labels.
-fn clarification_prompt_spans(content: &str, content_style: Style) -> Vec<Span<'static>> {
-    if content.trim().is_empty() {
-        return vec![Span::styled(content.to_string(), content_style)];
-    }
-
-    let leading_padding_width = content
-        .chars()
-        .take_while(|character| character.is_whitespace())
-        .count();
-    let (leading_padding, trimmed_content) = content.split_at(leading_padding_width);
-    let mut spans = Vec::new();
-    if !leading_padding.is_empty() {
-        spans.push(Span::styled(leading_padding.to_string(), content_style));
-    }
-
-    if trimmed_content == CLARIFICATION_HEADER {
-        spans.push(Span::styled(
-            trimmed_content.to_string(),
-            clarification_header_style(),
-        ));
-
-        return spans;
-    }
-
-    if let Some((question_index, question_text)) =
-        parse_clarification_question_line(trimmed_content)
-    {
-        spans.push(Span::styled(
-            question_index,
-            clarification_question_index_style(),
-        ));
-        spans.push(Span::styled(
-            "Q: ".to_string(),
-            clarification_question_label_style(),
-        ));
-        spans.push(Span::styled(question_text.to_string(), content_style));
-
-        return spans;
-    }
-
-    if let Some(answer_text) = trimmed_content.strip_prefix("A: ") {
-        spans.push(Span::styled(
-            "A: ".to_string(),
-            clarification_answer_label_style(),
-        ));
-        spans.push(Span::styled(answer_text.to_string(), content_style));
-
-        return spans;
-    }
-
-    spans.push(Span::styled(trimmed_content.to_string(), content_style));
-
-    spans
-}
-
-fn render_inline_line(content: &str, base_style: Style, width: usize) -> Vec<Line<'static>> {
-    let inline_spans = parse_inline_spans(content, base_style);
-
-    wrap_styled_line(inline_spans, width)
-}
-
-fn render_code_line(raw_line: &str, width: usize) -> Vec<Line<'static>> {
-    wrap_verbatim_line(raw_line, code_block_style(), width)
-}
-
-fn render_stats_line(raw_line: &str, width: usize) -> Vec<Line<'static>> {
-    if raw_line.is_empty() {
-        return vec![Line::from("")];
-    }
-
-    if let Some((metric, value)) = parse_stats_metric_line(raw_line) {
-        let metric_cell = format!("{metric:<STATS_LABEL_WIDTH$}");
-        let spans = vec![
-            Span::styled(metric_cell, stats_metric_style()),
-            Span::styled(value.to_string(), stats_value_style()),
-        ];
-
-        return wrap_verbatim_spans(spans, width);
-    }
-
-    if raw_line == "Tokens Usage" {
-        return wrap_verbatim_line(raw_line, stats_section_style(), width);
-    }
-
-    wrap_verbatim_line(raw_line, Style::default(), width)
-}
-
-/// Returns whether the line opens a ```` ```mermaid ```` fenced block.
-fn is_mermaid_fence(raw_line: &str) -> bool {
-    let Some(suffix) = raw_line.trim().strip_prefix("```mermaid") else {
-        return false;
-    };
-
-    suffix
-        .chars()
-        .next()
-        .is_none_or(|character| character.is_ascii_whitespace() || character == '{')
-}
-
-/// Renders one complete ```` ```mermaid ```` fenced block as diagram lines.
-///
-/// Returns the rendered diagram plus the index just past the closing fence
-/// when the block is complete, the diagram type is supported, and the diagram
-/// fits `width`. Any other case returns `None` so the block keeps the plain
-/// fenced-code presentation.
-fn render_mermaid_block(
-    raw_lines: &[&str],
-    start_index: usize,
-    width: usize,
-) -> Option<(Vec<Line<'static>>, usize)> {
-    let mut source = String::new();
-    let mut next_line_index = start_index + 1;
-    let mut source_byte_count = 0_usize;
-    let mut source_line_count = 0_usize;
-
-    loop {
-        let raw_line = raw_lines.get(next_line_index)?;
-        next_line_index += 1;
-        if is_fence_delimiter(raw_line) {
-            break;
-        }
-
-        source_line_count += 1;
-        if source_line_count > mermaid::MAX_SOURCE_LINE_COUNT {
-            return None;
-        }
-
-        let newline_byte_count = usize::from(source_line_count > 1);
-        source_byte_count = source_byte_count
-            .checked_add(newline_byte_count)?
-            .checked_add(raw_line.len())?;
-        if source_byte_count > mermaid::MAX_SOURCE_BYTE_COUNT {
-            return None;
-        }
-
-        if source_line_count > 1 {
-            source.push('\n');
-        }
-        source.push_str(raw_line);
-    }
-
-    let diagram = mermaid::render_mermaid(&source)?;
-    if diagram.width > width {
-        return None;
-    }
-
-    Some((diagram.lines, next_line_index))
-}
-
-/// Parses a GitHub-style markdown table starting at `start_index`.
-fn parse_markdown_table(raw_lines: &[&str], start_index: usize) -> Option<(MarkdownTable, usize)> {
-    let header_cells = parse_table_row(raw_lines.get(start_index)?)?;
-    let alignments = parse_table_separator(raw_lines.get(start_index + 1)?, header_cells.len())?;
-    let mut next_line_index = start_index + 2;
-    let mut rows = Vec::new();
-
-    while let Some(raw_line) = raw_lines.get(next_line_index) {
-        if raw_line.trim().is_empty() {
-            break;
-        }
-
-        let Some(row) = parse_table_row(raw_line) else {
-            break;
-        };
-        if parse_table_separator(raw_line, header_cells.len()).is_some() {
-            break;
-        }
-
-        rows.push(normalize_table_row(row, header_cells.len()));
-        next_line_index += 1;
-    }
-
-    Some((
-        MarkdownTable {
-            alignments,
-            headers: header_cells,
-            rows,
-        },
-        next_line_index,
-    ))
-}
-
-/// Renders a parsed markdown table with aligned cells and no markdown
-/// separator row.
-fn render_markdown_table(table: &MarkdownTable, width: usize) -> Vec<Line<'static>> {
-    let column_widths = table_column_widths(table, width);
-    let mut lines = Vec::new();
-
-    lines.push(table_border_line('┌', '┬', '┐', &column_widths));
-    lines.extend(render_table_row(
-        &table.headers,
-        &table.alignments,
-        &column_widths,
-        table_header_style(),
-    ));
-    lines.push(table_border_line('├', '┼', '┤', &column_widths));
-
-    for row in &table.rows {
-        lines.extend(render_table_row(
-            row,
-            &table.alignments,
-            &column_widths,
-            table_cell_style(),
-        ));
-    }
-
-    lines.push(table_border_line('└', '┴', '┘', &column_widths));
-
-    lines
-}
-
-/// Parses one pipe-delimited table row, accepting optional outer pipes.
-fn parse_table_row(raw_line: &str) -> Option<Vec<String>> {
-    let trimmed = raw_line.trim();
-    if !trimmed.contains('|') {
-        return None;
-    }
-
-    let mut cells = trimmed.split('|').collect::<Vec<_>>();
-    if trimmed.starts_with('|') {
-        cells.remove(0);
-    }
-    if trimmed.ends_with('|') {
-        cells.pop();
-    }
-    if cells.len() < 2 {
-        return None;
-    }
-
-    Some(
-        cells
-            .into_iter()
-            .map(|cell| cell.trim().to_string())
-            .collect(),
-    )
-}
-
-/// Parses the markdown table separator row and returns requested alignments.
-fn parse_table_separator(
-    raw_line: &str,
-    expected_cell_count: usize,
-) -> Option<Vec<TableAlignment>> {
-    let separator_cells = parse_table_row(raw_line)?;
-    if separator_cells.len() != expected_cell_count {
-        return None;
-    }
-
-    separator_cells
-        .iter()
-        .map(|cell| parse_table_alignment(cell))
-        .collect()
-}
-
-/// Parses a single table separator cell like `---`, `:---`, `---:`, or
-/// `:---:`.
-fn parse_table_alignment(cell: &str) -> Option<TableAlignment> {
-    let trimmed = cell.trim();
-    let dash_count = trimmed
-        .chars()
-        .filter(|character| *character == '-')
-        .count();
-    if dash_count < 3
-        || !trimmed
-            .chars()
-            .all(|character| character == '-' || character == ':')
-    {
-        return None;
-    }
-
-    match (trimmed.starts_with(':'), trimmed.ends_with(':')) {
-        (true, true) => Some(TableAlignment::Center),
-        (false, true) => Some(TableAlignment::Right),
-        _ => Some(TableAlignment::Left),
-    }
-}
-
-/// Pads or truncates body rows to the header column count.
-fn normalize_table_row(mut row: Vec<String>, column_count: usize) -> Vec<String> {
-    row.truncate(column_count);
-    while row.len() < column_count {
-        row.push(String::new());
-    }
-
-    row
-}
-
-/// Calculates display widths for each table column and shrinks wide columns
-/// to fit the target render width when practical.
-fn table_column_widths(table: &MarkdownTable, width: usize) -> Vec<usize> {
-    let mut column_widths = table
-        .headers
-        .iter()
-        .enumerate()
-        .map(|(column_index, header)| {
-            let body_width = table
-                .rows
-                .iter()
-                .filter_map(|row| row.get(column_index))
-                .map(|cell| UnicodeWidthStr::width(cell.as_str()))
-                .max()
-                .unwrap_or(0);
-
-            UnicodeWidthStr::width(header.as_str())
-                .max(body_width)
-                .max(3)
-        })
-        .collect::<Vec<_>>();
-
-    shrink_table_columns_to_width(&mut column_widths, width);
-
-    column_widths
-}
-
-/// Shrinks the widest table columns one cell at a time until the table fits
-/// within `width`, or until every column has reached its minimum width.
-fn shrink_table_columns_to_width(column_widths: &mut [usize], width: usize) {
-    if width == 0 {
-        return;
-    }
-
-    while table_rendered_width(column_widths) > width {
-        let Some((largest_index, largest_width)) = column_widths
-            .iter()
-            .copied()
-            .enumerate()
-            .filter(|(_, column_width)| *column_width > 3)
-            .max_by_key(|(_, column_width)| *column_width)
-        else {
-            break;
-        };
-
-        column_widths[largest_index] = largest_width.saturating_sub(1);
-    }
-}
-
-/// Returns the full terminal cell width of a bordered table row.
-fn table_rendered_width(column_widths: &[usize]) -> usize {
-    1 + column_widths
-        .iter()
-        .map(|column_width| column_width + 3)
-        .sum::<usize>()
-}
-
-/// Renders one horizontal table border.
-fn table_border_line(
-    left_corner: char,
-    join: char,
-    right_corner: char,
-    column_widths: &[usize],
-) -> Line<'static> {
-    let mut border = String::new();
-    border.push(left_corner);
-
-    for (column_index, column_width) in column_widths.iter().enumerate() {
-        border.push_str(&"─".repeat(column_width + 2));
-        if column_index + 1 == column_widths.len() {
-            border.push(right_corner);
-        } else {
-            border.push(join);
-        }
-    }
-
-    Line::from(vec![Span::styled(border, table_border_style())])
-}
-
-/// Renders a logical table row, expanding to multiple terminal rows when a
-/// cell wraps inside its column.
-fn render_table_row(
-    cells: &[String],
-    alignments: &[TableAlignment],
-    column_widths: &[usize],
-    cell_style: Style,
-) -> Vec<Line<'static>> {
-    let wrapped_cells = cells
-        .iter()
-        .zip(column_widths)
-        .map(|(cell, column_width)| wrap_table_cell(cell, *column_width, cell_style))
-        .collect::<Vec<_>>();
-    let row_height = wrapped_cells.iter().map(Vec::len).max().unwrap_or(1).max(1);
-    let mut lines = Vec::with_capacity(row_height);
-
-    for row_index in 0..row_height {
-        let mut spans = vec![Span::styled("│".to_string(), table_border_style())];
-
-        for (column_index, column_width) in column_widths.iter().enumerate() {
-            let cell_line = wrapped_cells
-                .get(column_index)
-                .and_then(|cell_lines| cell_lines.get(row_index));
-            let alignment = alignments
-                .get(column_index)
-                .copied()
-                .unwrap_or(TableAlignment::Left);
-            append_table_cell_spans(&mut spans, cell_line, *column_width, alignment, cell_style);
-            spans.push(Span::styled("│".to_string(), table_border_style()));
-        }
-
-        lines.push(Line::from(spans));
-    }
-
-    lines
-}
-
-/// Wraps one table cell, preserving inline markdown styles.
-fn wrap_table_cell(cell: &str, width: usize, base_style: Style) -> Vec<Line<'static>> {
-    if cell.is_empty() {
-        return vec![Line::from("")];
-    }
-
-    wrap_styled_line(parse_inline_spans(cell, base_style), width)
-}
-
-/// Appends one padded and aligned cell to an in-progress table row.
-fn append_table_cell_spans(
-    spans: &mut Vec<Span<'static>>,
-    cell_line: Option<&Line<'static>>,
-    column_width: usize,
-    alignment: TableAlignment,
-    cell_style: Style,
-) {
-    let cell_width = cell_line.map_or(0, Line::width);
-    let available_padding = column_width.saturating_sub(cell_width);
-    let (left_padding, right_padding) = table_cell_padding(available_padding, alignment);
-
-    spans.push(Span::styled(" ".repeat(left_padding + 1), cell_style));
-    if let Some(cell_line) = cell_line {
-        spans.extend(cell_line.spans.iter().cloned());
-    }
-    spans.push(Span::styled(" ".repeat(right_padding + 1), cell_style));
-}
-
-/// Returns the left and right padding needed for one aligned table cell.
-fn table_cell_padding(available_padding: usize, alignment: TableAlignment) -> (usize, usize) {
-    match alignment {
-        TableAlignment::Center => {
-            let left_padding = available_padding / 2;
-
-            (left_padding, available_padding - left_padding)
-        }
-        TableAlignment::Left => (0, available_padding),
-        TableAlignment::Right => (available_padding, 0),
-    }
-}
-
-fn wrap_verbatim_line(content: &str, style: Style, width: usize) -> Vec<Line<'static>> {
-    if width == 0 {
-        return vec![Line::from(vec![Span::styled(content.to_string(), style)])];
-    }
-
-    if content.is_empty() {
-        return vec![Line::from("")];
-    }
-
-    let mut wrapped_lines = Vec::new();
-    let mut current_segment = String::new();
-    let mut current_width = 0;
-
-    for character in content.chars() {
-        let character_width = character_display_width(character);
-        if current_width > 0 && character_width > 0 && current_width + character_width > width {
-            wrapped_lines.push(Line::from(vec![Span::styled(
-                std::mem::take(&mut current_segment),
-                style,
-            )]));
-            current_width = 0;
-        }
-
-        current_segment.push(character);
-        current_width += character_width;
-    }
-
-    if !current_segment.is_empty() {
-        wrapped_lines.push(Line::from(vec![Span::styled(current_segment, style)]));
-    }
-
-    if wrapped_lines.is_empty() {
-        wrapped_lines.push(Line::from(""));
-    }
-
-    wrapped_lines
-}
-
-fn wrap_verbatim_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Line<'static>> {
-    if width == 0 {
-        return vec![Line::from(spans)];
-    }
-
-    let mut wrapped_lines = Vec::new();
-    let mut current_spans = Vec::new();
-    let mut current_width = 0;
-
-    for span in spans {
-        let style = span.style;
-        let content = span.content.into_owned();
-
-        for character in content.chars() {
-            let character_width = character_display_width(character);
-            if current_width > 0 && character_width > 0 && current_width + character_width > width {
-                wrapped_lines.push(Line::from(std::mem::take(&mut current_spans)));
-                current_width = 0;
-            }
-
-            push_verbatim_span_character(&mut current_spans, style, character);
-            current_width += character_width;
-        }
-    }
-
-    if !current_spans.is_empty() {
-        wrapped_lines.push(Line::from(current_spans));
-    }
-
-    if wrapped_lines.is_empty() {
-        wrapped_lines.push(Line::from(""));
-    }
-
-    wrapped_lines
-}
-
-/// Wraps verbatim spans while preferring word boundaries.
-///
-/// The wrapper keeps original whitespace and style spans intact, unlike
-/// markdown inline wrapping which normalizes whitespace.
-///
-/// Implementation detail: this is a single-pass algorithm with a buffered
-/// pending word, so long lines with sparse whitespace stay linear-time without
-/// repeated lookahead scans.
-fn wrap_verbatim_spans_with_word_boundaries(
-    spans: Vec<Span<'static>>,
-    width: usize,
-) -> Vec<Line<'static>> {
-    if width == 0 {
-        return vec![Line::from(spans)];
-    }
-
-    let mut wrapped_lines = Vec::new();
-    let mut current_spans = Vec::new();
-    let mut current_width = 0;
-    let mut pending_word_spans = Vec::new();
-    let mut pending_word_width = 0;
-    let mut has_characters = false;
-
-    for span in spans {
-        let style = span.style;
-        let content = span.content.into_owned();
-
-        for character in content.chars() {
-            has_characters = true;
-
-            if character.is_whitespace() {
-                flush_pending_word_with_wrap(
-                    &mut wrapped_lines,
-                    &mut current_spans,
-                    &mut current_width,
-                    &mut pending_word_spans,
-                    &mut pending_word_width,
-                    width,
-                );
-                push_character_with_hard_wrap(
-                    &mut wrapped_lines,
-                    &mut current_spans,
-                    &mut current_width,
-                    style,
-                    character,
-                    width,
-                );
-
-                continue;
-            }
-
-            push_verbatim_span_character(&mut pending_word_spans, style, character);
-            pending_word_width += character_display_width(character);
-        }
-    }
-
-    flush_pending_word_with_wrap(
-        &mut wrapped_lines,
-        &mut current_spans,
-        &mut current_width,
-        &mut pending_word_spans,
-        &mut pending_word_width,
-        width,
-    );
-
-    if !has_characters {
-        return vec![Line::from("")];
-    }
-
-    if !current_spans.is_empty() {
-        wrapped_lines.push(Line::from(current_spans));
-    }
-
-    if wrapped_lines.is_empty() {
-        wrapped_lines.push(Line::from(""));
-    }
-
-    wrapped_lines
-}
-
-/// Flushes one buffered word into the current wrapped output.
-///
-/// A buffered word moves to the next line when appending it would reach or
-/// exceed the available width on a non-empty line, keeping one-cell breathing
-/// room against the right edge in prompt blocks.
-fn flush_pending_word_with_wrap(
-    wrapped_lines: &mut Vec<Line<'static>>,
-    current_spans: &mut Vec<Span<'static>>,
-    current_width: &mut usize,
-    pending_word_spans: &mut Vec<Span<'static>>,
-    pending_word_width: &mut usize,
-    width: usize,
-) {
-    if pending_word_spans.is_empty() {
-        return;
-    }
-
-    if *current_width > 0 && *current_width + *pending_word_width >= width {
-        wrapped_lines.push(Line::from(std::mem::take(current_spans)));
-        *current_width = 0;
-    }
-
-    let word_spans = std::mem::take(pending_word_spans);
-    for span in word_spans {
-        let style = span.style;
-        let content = span.content.into_owned();
-
-        for character in content.chars() {
-            push_character_with_hard_wrap(
-                wrapped_lines,
-                current_spans,
-                current_width,
-                style,
-                character,
-                width,
-            );
-        }
-    }
-
-    // The pending word buffer is always fully consumed above, including the
-    // hard-wrap fallback for overlong words, so width can be reset
-    // unconditionally.
-    *pending_word_width = 0;
-}
-
-/// Appends one character to the current line, wrapping immediately when the
-/// line is already full.
-fn push_character_with_hard_wrap(
-    wrapped_lines: &mut Vec<Line<'static>>,
-    current_spans: &mut Vec<Span<'static>>,
-    current_width: &mut usize,
-    style: Style,
-    character: char,
-    width: usize,
-) {
-    let character_width = character_display_width(character);
-    if *current_width > 0 && character_width > 0 && *current_width + character_width > width {
-        wrapped_lines.push(Line::from(std::mem::take(current_spans)));
-        *current_width = 0;
-    }
-
-    push_verbatim_span_character(current_spans, style, character);
-    *current_width += character_width;
-}
-
-fn push_verbatim_span_character(spans: &mut Vec<Span<'static>>, style: Style, character: char) {
+fn push_span_character(spans: &mut Vec<Span<'static>>, style: Style, character: char) {
     if let Some(last_span) = spans.last_mut()
         && last_span.style == style
     {
@@ -1415,424 +309,56 @@ fn push_verbatim_span_character(spans: &mut Vec<Span<'static>>, style: Style, ch
     spans.push(Span::styled(character.to_string(), style));
 }
 
-/// Returns terminal display width for one Unicode scalar value.
-fn character_display_width(character: char) -> usize {
-    UnicodeWidthChar::width(character).unwrap_or(0)
-}
-
-/// Parses inline markdown markers (`**bold**`, `*italic*`, `` `code` ``) into
-/// styled spans.
-///
-/// Text outside markers inherits `base_style`. Bold adds `Modifier::BOLD`,
-/// italic adds `Modifier::ITALIC`, and backtick-delimited code uses the
-/// dedicated inline-code style.
-pub fn parse_inline_spans(content: &str, base_style: Style) -> Vec<Span<'static>> {
-    let characters: Vec<char> = content.chars().collect();
-    let mut spans = Vec::new();
-    let mut literal = String::new();
-    let mut index = 0;
-
-    while index < characters.len() {
-        if characters[index] == '`'
-            && let Some(end_index) = find_matching_backtick(&characters, index + 1)
-            && end_index > index + 1
-        {
-            flush_literal_span(&mut spans, &mut literal, base_style);
-            let inline_code: String = characters[index + 1..end_index].iter().collect();
-            spans.push(Span::styled(inline_code, inline_code_style()));
-            index = end_index + 1;
-
-            continue;
-        }
-
-        if characters[index] == '*'
-            && index + 1 < characters.len()
-            && characters[index + 1] == '*'
-            && let Some(end_index) = find_matching_double_asterisk(&characters, index + 2)
-            && end_index > index + 2
-        {
-            flush_literal_span(&mut spans, &mut literal, base_style);
-            let bold_content: String = characters[index + 2..end_index].iter().collect();
-            spans.push(Span::styled(
-                bold_content,
-                base_style.add_modifier(Modifier::BOLD),
-            ));
-            index = end_index + 2;
-
-            continue;
-        }
-
-        if characters[index] == '*'
-            && let Some(end_index) = find_matching_single_asterisk(&characters, index + 1)
-            && end_index > index + 1
-        {
-            flush_literal_span(&mut spans, &mut literal, base_style);
-            let italic_content: String = characters[index + 1..end_index].iter().collect();
-            spans.push(Span::styled(
-                italic_content,
-                base_style.add_modifier(Modifier::ITALIC),
-            ));
-            index = end_index + 1;
-
-            continue;
-        }
-
-        literal.push(characters[index]);
-        index += 1;
-    }
-
-    flush_literal_span(&mut spans, &mut literal, base_style);
-
-    spans
-}
-
-fn flush_literal_span(spans: &mut Vec<Span<'static>>, literal: &mut String, style: Style) {
-    if literal.is_empty() {
-        return;
-    }
-
-    spans.push(Span::styled(std::mem::take(literal), style));
-}
-
-fn parse_heading(raw_line: &str) -> Option<(usize, &str)> {
-    if let Some(content) = raw_line.strip_prefix("#### ") {
-        return Some((4, content));
-    }
-
-    if let Some(content) = raw_line.strip_prefix("### ") {
-        return Some((3, content));
-    }
-
-    if let Some(content) = raw_line.strip_prefix("## ") {
-        return Some((2, content));
-    }
-
-    raw_line.strip_prefix("# ").map(|content| (1, content))
-}
-
-fn parse_bullet_content(raw_line: &str) -> Option<&str> {
-    if let Some(content) = raw_line.strip_prefix("- ") {
-        return Some(content);
-    }
-
-    raw_line.strip_prefix("* ")
-}
-
-fn parse_numbered_content(raw_line: &str) -> Option<(String, &str)> {
-    let digit_count = raw_line.chars().take_while(char::is_ascii_digit).count();
-    if digit_count == 0 {
-        return None;
-    }
-
-    let (digits, suffix) = raw_line.split_at(digit_count);
-    let content = suffix.strip_prefix(". ")?;
-
-    Some((format!("{digits}. "), content))
-}
-
-/// Parses one clarification question line like `1. Q: Need tests?`.
-fn parse_clarification_question_line(raw_line: &str) -> Option<(String, &str)> {
-    let digit_count = raw_line.chars().take_while(char::is_ascii_digit).count();
-    if digit_count == 0 {
-        return None;
-    }
-
-    let (digits, suffix) = raw_line.split_at(digit_count);
-    let content = suffix.strip_prefix(". Q: ")?;
-
-    Some((format!("{digits}. "), content))
-}
-
-fn opening_fence_block_state(raw_line: &str) -> BlockState {
-    if is_stats_fence(raw_line) {
-        return BlockState::FencedStats;
-    }
-
-    BlockState::FencedCode
-}
-
-fn is_fence_delimiter(raw_line: &str) -> bool {
-    raw_line.trim().starts_with("```")
-}
-
-fn is_stats_fence(raw_line: &str) -> bool {
-    raw_line.trim().starts_with("```stats")
-}
-
-fn parse_stats_metric_line(raw_line: &str) -> Option<(&str, &str)> {
-    let (metric, value) = raw_line.split_once('\t')?;
-
-    Some((metric, value))
-}
-
-fn is_horizontal_rule(raw_line: &str) -> bool {
-    let trimmed = raw_line.trim();
-    if trimmed.len() < 3 {
-        return false;
-    }
-
-    trimmed.chars().all(|character| character == '-')
-        || trimmed.chars().all(|character| character == '*')
-}
-
-fn horizontal_rule_line(width: usize) -> Line<'static> {
-    if width == 0 {
-        return Line::from("");
-    }
-
-    Line::from(vec![Span::styled(
-        "-".repeat(width),
-        horizontal_rule_style(),
-    )])
-}
-
-fn heading_style(level: usize) -> Style {
-    let color = match level {
-        1 => style::palette::accent(),
-        2 => style::palette::info(),
-        3 => style::palette::success(),
-        _ => style::palette::warning(),
-    };
-
-    Style::default().fg(color).add_modifier(Modifier::BOLD)
-}
-
-fn list_prefix_style() -> Style {
-    Style::default().fg(style::palette::text_subtle())
-}
-
-fn blockquote_prefix_style() -> Style {
-    Style::default()
-        .fg(style::palette::text_subtle())
-        .add_modifier(Modifier::DIM)
-}
-
-fn horizontal_rule_style() -> Style {
-    Style::default()
-        .fg(style::palette::text_subtle())
-        .add_modifier(Modifier::DIM)
-}
-
-fn table_header_style() -> Style {
-    Style::default()
-        .fg(style::palette::text())
-        .bg(style::palette::surface_elevated())
-        .add_modifier(Modifier::BOLD)
-}
-
-fn table_cell_style() -> Style {
-    Style::default().fg(style::palette::text())
-}
-
-fn table_border_style() -> Style {
-    Style::default().fg(style::palette::border())
-}
-
-fn code_block_style() -> Style {
-    Style::default()
-        .fg(style::palette::text_muted())
-        .bg(style::palette::surface_overlay())
-}
-
-fn stats_metric_style() -> Style {
-    Style::default()
-        .fg(style::palette::accent())
-        .add_modifier(Modifier::BOLD)
-}
-
-fn stats_section_style() -> Style {
-    Style::default()
-        .fg(style::palette::success())
-        .add_modifier(Modifier::BOLD)
-}
-
-fn stats_value_style() -> Style {
-    inline_code_style()
-}
-
-/// Returns the background color used for clarification prompt blocks.
-///
-/// Resolves to a recessed dark blue-gray surface so the inset reads as a
-/// quiet quote block rather than the bright `surface_elevated` tone used for
-/// table headers.
-fn clarification_background_color() -> Color {
-    style::palette::surface_clarification()
-}
-
-/// Returns the style for the visible `CLARIFICATION_PROMPT_PREFIX` marker.
-fn clarification_prompt_prefix_style() -> Style {
-    Style::default()
-        .fg(style::palette::warning())
-        .bg(clarification_background_color())
-        .add_modifier(Modifier::BOLD)
-}
-
-/// Returns the style for clarification heading text.
-fn clarification_header_style() -> Style {
-    Style::default()
-        .fg(style::palette::warning_soft())
-        .bg(clarification_background_color())
-        .add_modifier(Modifier::BOLD)
-}
-
-/// Returns the style for numbered clarification question indexes.
-fn clarification_question_index_style() -> Style {
-    Style::default()
-        .fg(style::palette::text())
-        .bg(clarification_background_color())
-        .add_modifier(Modifier::BOLD)
-}
-
-/// Returns the style for `Q:` labels in clarification blocks.
-fn clarification_question_label_style() -> Style {
-    Style::default()
-        .fg(style::palette::accent())
-        .bg(clarification_background_color())
-        .add_modifier(Modifier::BOLD)
-}
-
-/// Returns the style for `A:` labels in clarification blocks.
-fn clarification_answer_label_style() -> Style {
-    Style::default()
-        .fg(style::palette::success())
-        .bg(clarification_background_color())
-        .add_modifier(Modifier::BOLD)
-}
-
-/// Returns the style for clarification text content.
-fn clarification_content_style() -> Style {
-    Style::default()
-        .fg(style::palette::text_muted())
-        .bg(clarification_background_color())
-}
-
-/// Returns the style for one `@` lookup token within user prompt content.
-fn user_prompt_lookup_style() -> Style {
-    let mut lookup_style = prompt_block::user_prompt_content_style();
-    lookup_style.fg = Some(style::palette::info());
-
-    lookup_style
-}
-
-fn inline_code_style() -> Style {
-    Style::default().fg(style::palette::warning())
-}
-
-fn find_matching_backtick(characters: &[char], start_index: usize) -> Option<usize> {
-    characters[start_index..]
-        .iter()
-        .position(|character| *character == '`')
-        .map(|index| index + start_index)
-}
-
-fn find_matching_double_asterisk(characters: &[char], start_index: usize) -> Option<usize> {
-    let mut index = start_index;
-
-    while index + 1 < characters.len() {
-        if characters[index] == '*' && characters[index + 1] == '*' {
-            return Some(index);
-        }
-
-        index += 1;
-    }
-
-    None
-}
-
-fn find_matching_single_asterisk(characters: &[char], start_index: usize) -> Option<usize> {
-    characters[start_index..]
-        .iter()
-        .position(|character| *character == '*')
-        .map(|index| index + start_index)
-}
-
 #[cfg(test)]
 mod tests {
-    use std::fmt::Write;
-    use std::sync::Arc;
-
     use super::*;
 
     #[test]
-    fn test_render_markdown_styles_heading() {
+    fn test_render_markdown_parses_prompt_continuation_line_markdown() {
         // Arrange
-        let input = "# Heading";
+        let input = " › first line\n**bold**\n\nassistant";
 
         // Act
         let lines = render_markdown(input, 80);
 
         // Assert
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].to_string(), "Heading");
-        assert_eq!(lines[0].spans[0].style, heading_style(1));
-    }
-
-    #[test]
-    fn test_render_markdown_styles_user_prompt() {
-        // Arrange
-        let input = " › /model antigravity";
-
-        // Act
-        let lines = render_markdown(input, 80);
-
-        // Assert
-        assert_eq!(lines.len(), 3);
-        assert_eq!(lines[0].to_string().trim_end(), "");
-        assert_eq!(lines[0].width(), 80);
-        assert_eq!(lines[1].to_string().trim_end(), input);
-        assert_eq!(lines[1].width(), 80);
-        assert_eq!(
-            lines[1].spans[0].style,
-            prompt_block::user_prompt_prefix_style()
-        );
-        assert_eq!(
-            lines[1].spans[1].style,
-            prompt_block::user_prompt_content_style()
-        );
-        assert_eq!(lines[1].spans[1].style.fg, Some(style::palette::text()));
-        assert_eq!(
-            lines[1].spans.last().expect("padding span").style,
-            prompt_block::user_prompt_content_style()
-        );
-        assert_eq!(lines[2].to_string().trim_end(), "");
-        assert_eq!(lines[2].width(), 80);
+        assert_eq!(lines[2].to_string().trim_end(), "   bold");
         assert_eq!(
             lines[2].spans[0].style,
             prompt_block::user_prompt_content_style()
         );
-    }
-
-    #[test]
-    fn test_render_markdown_styles_multiline_user_prompt() {
-        // Arrange
-        let input = " › first line\nsecond line\n\nassistant line";
-
-        // Act
-        let lines = render_markdown(input, 80);
-
-        // Assert
-        assert_eq!(lines.len(), 6);
-        assert_eq!(lines[0].to_string().trim_end(), "");
-        assert_eq!(lines[1].to_string().trim_end(), " › first line");
-        assert_eq!(lines[2].to_string().trim_end(), "   second line");
-        assert_eq!(lines[1].width(), 80);
-        assert_eq!(lines[2].width(), 80);
+        assert!(lines[2].spans.iter().any(|span| {
+            span.content.as_ref() == "bold"
+                && span
+                    .style
+                    .add_modifier
+                    .contains(ratatui::style::Modifier::BOLD)
+        }));
         assert_eq!(lines[4].to_string(), "");
-        assert_eq!(lines[5].to_string(), "assistant line");
-        assert_eq!(
-            lines[1].spans[0].style,
-            prompt_block::user_prompt_prefix_style()
-        );
-        assert_eq!(lines[2].spans[0].content, "   ");
-        assert_eq!(
-            lines[2].spans[0].style,
-            prompt_block::user_prompt_content_style()
-        );
-        assert_eq!(
-            lines[2].spans[1].style,
-            prompt_block::user_prompt_content_style()
-        );
-        assert_eq!(lines[5].spans[0].style, Style::default());
+        assert_eq!(lines[5].to_string(), "assistant");
+    }
+
+    #[test]
+    fn test_markdown_render_cache_reuses_prompt_block_lines() {
+        // Arrange
+        let cache = MarkdownRenderCache::default();
+        let input = " › **bold** prompt";
+
+        // Act
+        let first_lines = cache.render(input, 80);
+        let cached_lines = cache.render(input, 80);
+
+        // Assert
+        assert!(Arc::ptr_eq(&first_lines, &cached_lines));
+        assert!(first_lines.iter().any(|line| {
+            line.spans.iter().any(|span| {
+                span.content.as_ref() == "bold"
+                    && span
+                        .style
+                        .add_modifier
+                        .contains(ratatui::style::Modifier::BOLD)
+            })
+        }));
     }
 
     #[test]
@@ -1867,891 +393,5 @@ mod tests {
                 .iter()
                 .any(|line| line == "   › second prompt")
         );
-    }
-
-    #[test]
-    fn test_render_markdown_styles_clarification_block_differently_from_user_prompt() {
-        // Arrange
-        let input = " › Clarifications:\n   1. Q: Need tests?\n      A: Yes";
-
-        // Act
-        let lines = render_markdown(input, 80);
-
-        // Assert
-        assert_eq!(lines[1].to_string().trim_end(), " › Clarifications:");
-        assert_eq!(lines[1].spans[0].style, clarification_prompt_prefix_style());
-        assert_eq!(lines[1].spans[1].style, clarification_header_style());
-        assert_ne!(
-            lines[1].spans[1].style.bg,
-            prompt_block::user_prompt_content_style().bg
-        );
-        assert!(lines[2].spans.iter().any(|span| {
-            span.content.as_ref() == "1. " && span.style == clarification_question_index_style()
-        }));
-        assert!(lines[2].spans.iter().any(|span| {
-            span.content.as_ref() == "Q: " && span.style == clarification_question_label_style()
-        }));
-        assert!(lines[3].spans.iter().any(|span| {
-            span.content.as_ref() == "A: " && span.style == clarification_answer_label_style()
-        }));
-    }
-
-    #[test]
-    fn test_render_markdown_parses_prompt_continuation_line_markdown() {
-        // Arrange
-        let input = " › first line\n**bold**\n\nassistant";
-
-        // Act
-        let lines = render_markdown(input, 80);
-
-        // Assert
-        assert_eq!(lines[2].to_string().trim_end(), "   bold");
-        assert_eq!(
-            lines[2].spans[0].style,
-            prompt_block::user_prompt_content_style()
-        );
-        assert!(lines[2].spans.iter().any(|span| {
-            span.content.as_ref() == "bold"
-                && span
-                    .style
-                    .add_modifier
-                    .contains(ratatui::style::Modifier::BOLD)
-        }));
-        assert_eq!(lines[4].to_string(), "");
-        assert_eq!(lines[5].to_string(), "assistant");
-    }
-
-    #[test]
-    fn test_render_markdown_wraps_user_prompt_content_with_continuation_padding() {
-        // Arrange
-        let input = " › one two three";
-
-        // Act
-        let lines = render_markdown(input, 8);
-
-        // Assert
-        assert!(lines.len() >= 4);
-        assert_eq!(lines[0].to_string().trim_end(), "");
-        assert!(lines[1].to_string().starts_with(" › "));
-        assert!(lines[2].to_string().starts_with("   "));
-        assert_eq!(
-            lines[0].spans[0].style,
-            prompt_block::user_prompt_content_style()
-        );
-        assert_eq!(
-            lines[2].spans[0].style,
-            prompt_block::user_prompt_content_style()
-        );
-        assert_eq!(
-            lines.last().expect("bottom padding").spans[0].style,
-            prompt_block::user_prompt_content_style()
-        );
-    }
-
-    #[test]
-    fn test_render_markdown_wraps_user_prompt_on_word_boundaries() {
-        // Arrange
-        let input = " › one two four";
-
-        // Act
-        let lines = render_markdown(input, 8);
-        let rendered_lines = lines
-            .iter()
-            .map(|line| line.to_string().trim_end().to_string())
-            .collect::<Vec<_>>();
-
-        // Assert
-        assert!(rendered_lines.contains(&" › one".to_string()));
-        assert!(rendered_lines.contains(&"   two".to_string()));
-        assert!(rendered_lines.contains(&"   four".to_string()));
-        assert!(
-            lines
-                .iter()
-                .filter(|line| !line.to_string().trim().is_empty())
-                .all(|line| line.to_string().trim_end().chars().count() < line.width())
-        );
-    }
-
-    #[test]
-    fn test_render_markdown_wraps_prompt_markdown_bullets() {
-        // Arrange
-        let input = " › Focused-review suggestions:\n   \n   - [High]: Cargo.lock declares the \
-                     old tui-text package version, which can break locked builds.";
-
-        // Act
-        let lines = render_markdown(input, 44);
-        let rendered_lines = lines
-            .iter()
-            .map(|line| line.to_string().trim_end().to_string())
-            .collect::<Vec<_>>();
-
-        // Assert
-        assert!(rendered_lines.contains(&" › Focused-review suggestions:".to_string()));
-        assert!(
-            rendered_lines
-                .iter()
-                .any(|line| line.starts_with("   - [High]: Cargo.lock"))
-        );
-        assert!(
-            rendered_lines
-                .iter()
-                .any(|line| line.trim_start().contains("tui-text package"))
-        );
-        assert!(lines.iter().all(|line| line.width() <= 44));
-    }
-
-    #[test]
-    fn test_render_markdown_keeps_prompt_table_rows_structured() {
-        // Arrange
-        let input = concat!(
-            " › | Input | Meaning |\n",
-            "   | --- | --- |\n",
-            "   | User prompt | Markdown table alignment |",
-        );
-
-        // Act
-        let lines = render_markdown(input, 24);
-        let rendered_lines = lines
-            .iter()
-            .map(|line| line.to_string().trim_end().to_string())
-            .collect::<Vec<_>>();
-
-        // Assert
-        assert!(rendered_lines.iter().any(|line| line.contains("┌")));
-        assert!(rendered_lines.iter().any(|line| line.contains("└")));
-        assert!(!rendered_lines.iter().any(|line| {
-            let trimmed = line.trim_start();
-
-            !trimmed.is_empty()
-                && !trimmed.starts_with('›')
-                && !trimmed.starts_with('│')
-                && (trimmed.contains("Markdown") || trimmed.contains("alignment"))
-        }));
-    }
-
-    #[test]
-    fn test_render_markdown_wraps_clarification_answer_on_word_boundaries() {
-        // Arrange
-        let input =
-            " › Clarifications:\n   1. Q: Need tests?\n      A: very long answer text for review";
-
-        // Act
-        let lines = render_markdown(input, 18);
-        let rendered_lines = lines
-            .iter()
-            .map(|line| line.to_string().trim_end().to_string())
-            .collect::<Vec<_>>();
-
-        // Assert
-        assert!(rendered_lines.contains(&"      A: very".to_string()));
-        assert!(
-            rendered_lines
-                .iter()
-                .any(|line| line.trim_start().starts_with("long answer"))
-        );
-        assert!(
-            rendered_lines
-                .iter()
-                .any(|line| line.trim_start().starts_with("text for"))
-        );
-        assert!(
-            rendered_lines
-                .iter()
-                .any(|line| line.trim_start().starts_with("review"))
-        );
-    }
-
-    #[test]
-    fn test_render_markdown_wraps_long_prompt_word_with_hard_fallback() {
-        // Arrange
-        let input = " › supercalifragilisticexpialidocious";
-
-        // Act
-        let lines = render_markdown(input, 8);
-        let rendered_lines = lines
-            .iter()
-            .map(|line| line.to_string().trim_end().to_string())
-            .collect::<Vec<_>>();
-
-        // Assert
-        assert!(rendered_lines.contains(&" › supe".to_string()));
-        assert!(rendered_lines.contains(&"   rcal".to_string()));
-        assert!(rendered_lines.contains(&"   ifra".to_string()));
-        assert!(
-            lines
-                .iter()
-                .filter(|line| !line.to_string().trim().is_empty())
-                .all(|line| line.to_string().trim_end().chars().count() < line.width())
-        );
-    }
-
-    #[test]
-    fn test_wrap_verbatim_spans_with_word_boundaries_handles_wide_characters() {
-        // Arrange
-        let spans = vec![Span::raw("你好 你好".to_string())];
-
-        // Act
-        let lines = wrap_verbatim_spans_with_word_boundaries(spans, 5);
-
-        // Assert
-        assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0].to_string(), "你好 ");
-        assert_eq!(lines[0].width(), 5);
-        assert_eq!(lines[1].to_string(), "你好");
-        assert_eq!(lines[1].width(), 4);
-    }
-
-    #[test]
-    fn test_wrap_verbatim_spans_with_word_boundaries_wraps_when_word_reaches_edge() {
-        // Arrange
-        let spans = vec![Span::raw("foo bar".to_string())];
-
-        // Act
-        let lines = wrap_verbatim_spans_with_word_boundaries(spans, 7);
-
-        // Assert
-        assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0].to_string(), "foo ");
-        assert_eq!(lines[1].to_string(), "bar");
-    }
-
-    #[test]
-    fn test_wrap_verbatim_spans_handles_wide_characters() {
-        // Arrange
-        let spans = vec![Span::raw("你好你好".to_string())];
-
-        // Act
-        let lines = wrap_verbatim_spans(spans, 5);
-
-        // Assert
-        assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0].to_string(), "你好");
-        assert_eq!(lines[0].width(), 4);
-        assert_eq!(lines[1].to_string(), "你好");
-        assert_eq!(lines[1].width(), 4);
-    }
-
-    #[test]
-    fn test_render_markdown_highlights_file_lookups_in_user_prompt_block() {
-        // Arrange
-        let input = " › check @crates/agentty/src/ui/markdown.rs";
-
-        // Act
-        let lines = render_markdown(input, 80);
-
-        // Assert
-        assert!(lines[1].spans.iter().any(|span| {
-            span.content.as_ref() == "@crates/agentty/src/ui/markdown.rs"
-                && span.style == user_prompt_lookup_style()
-        }));
-    }
-
-    #[test]
-    fn test_user_prompt_content_line_spans_preserves_lookup_across_span_boundaries() {
-        // Arrange
-        let spans = vec![
-            Span::raw("@crates/agentty"),
-            Span::raw("/src/ui/markdown.rs then stop"),
-        ];
-
-        // Act
-        let highlighted_spans = user_prompt_content_line_spans(spans);
-
-        // Assert
-        assert!(highlighted_spans.iter().any(|span| {
-            span.content.as_ref() == "@crates/agentty/src/ui/markdown.rs"
-                && span.style == user_prompt_lookup_style()
-        }));
-        assert!(highlighted_spans.iter().any(|span| {
-            span.content.as_ref().contains(" then stop")
-                && span.style == prompt_block::user_prompt_content_style()
-        }));
-    }
-
-    #[test]
-    fn test_render_markdown_does_not_highlight_non_lookup_at_symbol_in_user_prompt_block() {
-        // Arrange
-        let input = " › reach me at email@example.com";
-
-        // Act
-        let lines = render_markdown(input, 80);
-
-        // Assert
-        assert!(
-            !lines[1]
-                .spans
-                .iter()
-                .any(|span| span.style == user_prompt_lookup_style())
-        );
-    }
-
-    #[test]
-    fn test_render_markdown_keeps_text_after_multiple_blank_lines_in_user_prompt_block() {
-        // Arrange
-        let input = " › first line\n   \n   \n   after gap\n\nassistant";
-
-        // Act
-        let lines = render_markdown(input, 80);
-
-        // Assert
-        assert!(lines.iter().any(|line| {
-            line.to_string().trim_end() == "   after gap"
-                && line
-                    .spans
-                    .iter()
-                    .all(|span| span.style == prompt_block::user_prompt_content_style())
-        }));
-        assert_eq!(
-            lines.last().expect("assistant line").to_string(),
-            "assistant"
-        );
-    }
-
-    #[test]
-    fn test_render_markdown_parses_inline_styles() {
-        // Arrange
-        let input = "before **bold** *italic* `code`";
-
-        // Act
-        let lines = render_markdown(input, 80);
-        let line = &lines[0];
-
-        // Assert
-        assert_eq!(lines.len(), 1);
-        assert_eq!(line.to_string(), "before bold italic code");
-        assert!(line.spans.iter().any(|span| {
-            span.content.as_ref() == "bold" && span.style.add_modifier.contains(Modifier::BOLD)
-        }));
-        assert!(line.spans.iter().any(|span| {
-            span.content.as_ref() == "italic" && span.style.add_modifier.contains(Modifier::ITALIC)
-        }));
-        assert!(
-            line.spans
-                .iter()
-                .any(|span| span.content.as_ref() == "code" && span.style == inline_code_style())
-        );
-    }
-
-    #[test]
-    fn test_render_markdown_keeps_inline_style_punctuation_adjacent() {
-        // Arrange
-        let input = "Use (`session_messages_from_rows`), then [`Image #1`].";
-
-        // Act
-        let lines = render_markdown(input, 80);
-
-        // Assert
-        assert_eq!(lines.len(), 1);
-        assert_eq!(
-            lines[0].to_string(),
-            "Use (session_messages_from_rows), then [Image #1]."
-        );
-    }
-
-    #[test]
-    fn test_render_markdown_leaves_unmatched_inline_delimiters_literal() {
-        // Arrange
-        let input = "text **bold";
-
-        // Act
-        let lines = render_markdown(input, 80);
-
-        // Assert
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].to_string(), input);
-        assert!(
-            !lines[0]
-                .spans
-                .iter()
-                .any(|span| span.style.add_modifier.contains(Modifier::BOLD))
-        );
-    }
-
-    #[test]
-    fn test_render_markdown_renders_fenced_code_without_inline_parsing() {
-        // Arrange
-        let input = "```rust\nlet value = **raw**;\n```";
-
-        // Act
-        let lines = render_markdown(input, 80);
-
-        // Assert
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].to_string(), "let value = **raw**;");
-        assert_eq!(lines[0].spans[0].style, code_block_style());
-    }
-
-    #[test]
-    fn test_render_markdown_treats_unclosed_fence_as_code() {
-        // Arrange
-        let input = "```\n**raw**";
-
-        // Act
-        let lines = render_markdown(input, 80);
-
-        // Assert
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].to_string(), "**raw**");
-        assert_eq!(lines[0].spans[0].style, code_block_style());
-    }
-
-    #[test]
-    fn test_render_markdown_renders_mermaid_block_as_diagram() {
-        // Arrange
-        let input = "```mermaid {theme=default}\ngraph TD\n    A[Start] --> B[Finish]\n```";
-
-        // Act
-        let lines = render_markdown(input, 80);
-        let text = lines
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Assert
-        assert!(text.contains("Start"));
-        assert!(text.contains("Finish"));
-        assert!(text.contains("┌"));
-        assert!(text.contains("▼"));
-        assert!(!text.contains("graph TD"));
-        assert!(!text.contains("```"));
-    }
-
-    #[test]
-    fn test_render_markdown_renders_capitalized_graph_mermaid_block_as_diagram() {
-        // Arrange
-        let input = "```mermaid\nGraph TD\n    A[Start] --> B[Finish]\n```";
-
-        // Act
-        let lines = render_markdown(input, 80);
-        let text = lines
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Assert
-        assert!(text.contains("Start"));
-        assert!(text.contains("Finish"));
-        assert!(text.contains("▼"));
-        assert!(!text.contains("Graph TD"));
-        assert!(!text.contains("```"));
-    }
-
-    #[test]
-    fn test_render_markdown_renders_mermaid_node_label_with_line_break() {
-        // Arrange
-        let input = concat!(
-            "```mermaid\n",
-            "flowchart TB\n",
-            "    APP[\"App - owns orchestration:<br/>spawning, coordination, aggregation\"]\n",
-            "    S1[\"session 1\"]\n",
-            "    S2[\"session 2\"]\n",
-            "    S3[\"session 3\"]\n",
-            "    APP --> S1\n",
-            "    APP --> S2\n",
-            "    APP --> S3\n",
-            "```",
-        );
-
-        // Act
-        let lines = render_markdown(input, 100);
-        let text = lines
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Assert
-        assert!(text.contains("App - owns orchestration:"));
-        assert!(text.contains("session 1"));
-        assert!(text.contains("session 2"));
-        assert!(text.contains("session 3"));
-        assert!(text.contains("▼"));
-        assert!(!text.contains("flowchart TB"));
-        assert!(!text.contains("<br/>"));
-        assert!(!text.contains("```"));
-    }
-
-    #[test]
-    fn test_render_markdown_keeps_code_fallback_for_mermaid_prefix_language() {
-        // Arrange
-        let input = "```mermaid-diagram\ngraph TD\n    A[Start] --> B[Finish]\n```";
-
-        // Act
-        let lines = render_markdown(input, 80);
-        let text = lines
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Assert
-        assert!(text.contains("graph TD"));
-        assert!(text.contains("A[Start] --> B[Finish]"));
-        assert!(!text.contains("▼"));
-        assert_eq!(lines[0].spans[0].style, code_block_style());
-    }
-
-    #[test]
-    fn test_render_markdown_accepts_mermaid_fence_with_tab_separator() {
-        // Arrange
-        let input = "```mermaid\t{theme=default}\ngraph TD\n    A[Start] --> B[Finish]\n```";
-
-        // Act
-        let lines = render_markdown(input, 80);
-        let text = lines
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Assert
-        assert!(text.contains("Start"));
-        assert!(text.contains("Finish"));
-        assert!(text.contains("▼"));
-        assert!(!text.contains("graph TD"));
-        assert!(!text.contains("```"));
-    }
-
-    #[test]
-    fn test_render_markdown_renders_feedback_mermaid_block_as_diagram() {
-        // Arrange
-        let input = concat!(
-            "```mermaid\n",
-            "flowchart LR\n",
-            "    A[\"App\"] -- \"commands:<br/>prompt · interrupt · permission answer\" --> \
-             H[\"ag-harness\"]\n",
-            "    H -- \"typed events:<br/>deltas · tool calls · diffs · usage\" --> A\n",
-            "```",
-        );
-
-        // Act
-        let lines = render_markdown(input, 80);
-        let text = lines
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Assert
-        assert!(text.contains("App"));
-        assert!(text.contains("ag-harness"));
-        assert!(text.contains("commands:"));
-        assert!(text.contains("typed events:"));
-        assert!(text.contains("◀"));
-        assert!(!text.contains("flowchart LR"));
-        assert!(!text.contains("<br/>"));
-    }
-
-    #[test]
-    fn test_render_markdown_keeps_code_fallback_for_unsupported_mermaid() {
-        // Arrange
-        let input = "```mermaid\nclassDiagram\n    A <|-- B\n```";
-
-        // Act
-        let lines = render_markdown(input, 80);
-
-        // Assert
-        assert_eq!(lines[0].to_string(), "classDiagram");
-        assert_eq!(lines[0].spans[0].style, code_block_style());
-    }
-
-    #[test]
-    fn test_render_markdown_renders_sequence_mermaid_block_as_diagram() {
-        // Arrange
-        let input = concat!(
-            "```mermaid\n",
-            "sequenceDiagram\n",
-            "    participant User\n",
-            "    participant Agentty\n",
-            "    User->>Agentty: Start session\n",
-            "```\n",
-        );
-
-        // Act
-        let lines = render_markdown(input, 120);
-        let text = lines
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Assert
-        assert!(text.contains("User"));
-        assert!(text.contains("Agentty"));
-        assert!(text.contains("Start session"));
-        assert!(!text.contains("sequenceDiagram"));
-    }
-
-    #[test]
-    fn test_render_markdown_keeps_code_fallback_for_unclosed_mermaid_fence() {
-        // Arrange
-        let input = "```mermaid\ngraph TD\n    A[Start] --> B[Finish]";
-
-        // Act
-        let lines = render_markdown(input, 80);
-
-        // Assert
-        assert_eq!(lines[0].to_string(), "graph TD");
-        assert_eq!(lines[0].spans[0].style, code_block_style());
-    }
-
-    #[test]
-    fn test_render_markdown_keeps_code_fallback_for_diagram_wider_than_width() {
-        // Arrange
-        let input = "```mermaid\ngraph LR\n    A[Start] --> B[Finish]\n```";
-
-        // Act
-        let lines = render_markdown(input, 10);
-        let text = lines
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Assert
-        assert!(text.contains("graph LR"));
-        assert!(!text.contains("┌"));
-    }
-
-    #[test]
-    fn test_render_markdown_keeps_code_fallback_for_line_limited_mermaid_source() {
-        // Arrange
-        let mut input = String::from("```mermaid\ngraph TD");
-        for node_index in 0..mermaid::MAX_SOURCE_LINE_COUNT {
-            write!(&mut input, "\n    N{node_index}").expect("writing to String should succeed");
-        }
-        input.push_str("\n```");
-
-        // Act
-        let lines = render_markdown(&input, 80);
-        let text = lines
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Assert
-        assert!(text.contains("graph TD"));
-        assert!(!text.contains("┌"));
-    }
-
-    #[test]
-    fn test_render_markdown_keeps_code_fallback_for_byte_limited_mermaid_source() {
-        // Arrange
-        let label = "x".repeat(mermaid::MAX_SOURCE_BYTE_COUNT);
-        let input = format!("```mermaid\ngraph TD\n    A[{label}]\n```");
-
-        // Act
-        let lines = render_markdown(&input, 80);
-
-        // Assert
-        assert_eq!(lines[0].to_string(), "graph TD");
-        assert_eq!(lines[0].spans[0].style, code_block_style());
-    }
-
-    #[test]
-    fn test_render_markdown_renders_stats_metric_with_fixed_alignment() {
-        // Arrange
-        let input = "```stats\nSession ID\tsession-id\n```";
-
-        // Act
-        let lines = render_markdown(input, 80);
-
-        // Assert
-        assert_eq!(lines.len(), 1);
-        assert_eq!(
-            lines[0].to_string().find("session-id"),
-            Some(STATS_LABEL_WIDTH)
-        );
-        assert!(lines[0].spans.iter().any(|span| {
-            span.content.as_ref().contains("Session ID") && span.style == stats_metric_style()
-        }));
-        assert!(lines[0].spans.iter().any(|span| {
-            span.content.as_ref().contains("session-id") && span.style == stats_value_style()
-        }));
-    }
-
-    #[test]
-    fn test_render_markdown_renders_stats_section_title_style() {
-        // Arrange
-        let input = "```stats\nTokens Usage\n```";
-
-        // Act
-        let lines = render_markdown(input, 80);
-
-        // Assert
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].to_string(), "Tokens Usage");
-        assert_eq!(lines[0].spans[0].style, stats_section_style());
-    }
-
-    #[test]
-    fn test_render_markdown_wraps_bullets_with_continuation_indent() {
-        // Arrange
-        let input = "- one two three four";
-
-        // Act
-        let lines = render_markdown(input, 8);
-
-        // Assert
-        assert!(lines.len() >= 2);
-        assert!(lines[0].to_string().starts_with("- "));
-        assert!(lines[1].to_string().starts_with("  "));
-    }
-
-    #[test]
-    fn test_render_markdown_wraps_numbered_list_with_continuation_indent() {
-        // Arrange
-        let input = "12. one two three";
-
-        // Act
-        let lines = render_markdown(input, 9);
-
-        // Assert
-        assert!(lines.len() >= 2);
-        assert!(lines[0].to_string().starts_with("12. "));
-        assert!(lines[1].to_string().starts_with("    "));
-    }
-
-    #[test]
-    fn test_render_markdown_wraps_blockquote_with_prefix() {
-        // Arrange
-        let input = "> one two three";
-
-        // Act
-        let lines = render_markdown(input, 7);
-
-        // Assert
-        assert!(lines.len() >= 2);
-        assert!(lines[0].to_string().starts_with("│ "));
-        assert!(lines[1].to_string().starts_with("│ "));
-    }
-
-    #[test]
-    fn test_render_markdown_renders_horizontal_rule() {
-        // Arrange
-        let input = "---";
-
-        // Act
-        let lines = render_markdown(input, 5);
-
-        // Assert
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].to_string(), "-----");
-        assert_eq!(lines[0].spans[0].style, horizontal_rule_style());
-    }
-
-    #[test]
-    fn test_render_markdown_renders_pipe_table() {
-        // Arrange
-        let input = "| Name | Status |\n| --- | ---: |\n| Build | passing |\n| Docs | queued |";
-
-        // Act
-        let lines = render_markdown(input, 80);
-        let rendered_lines = lines.iter().map(ToString::to_string).collect::<Vec<_>>();
-        let rendered_text = rendered_lines.join("\n");
-
-        // Assert
-        assert!(rendered_text.contains("Name"));
-        assert!(rendered_text.contains("Status"));
-        assert!(rendered_text.contains("Build"));
-        assert!(rendered_text.contains("passing"));
-        assert!(!rendered_text.contains("| --- | ---: |"));
-        assert!(rendered_lines.iter().any(|line| line.starts_with("┌")));
-        assert!(rendered_lines.iter().any(|line| line.starts_with("├")));
-        assert!(lines[1].spans.iter().any(|span| {
-            span.content.as_ref().contains("Name") && span.style == table_header_style()
-        }));
-        assert!(
-            lines
-                .first()
-                .expect("table should render top border")
-                .spans
-                .iter()
-                .all(|span| span.style == table_border_style())
-        );
-    }
-
-    #[test]
-    fn test_render_markdown_wraps_table_cells_to_available_width() {
-        // Arrange
-        let input = "| Column | Notes |\n| --- | --- |\n| One | alpha beta gamma delta |";
-
-        // Act
-        let lines = render_markdown(input, 20);
-        let rendered_text = lines
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Assert
-        assert!(rendered_text.contains("alpha"));
-        assert!(rendered_text.contains("beta"));
-        assert!(rendered_text.contains("gamma"));
-        assert!(lines.iter().all(|line| line.width() <= 20));
-    }
-
-    #[test]
-    fn test_markdown_render_cache_retains_multiple_entries() {
-        // Arrange
-        let cache = MarkdownRenderCache::default();
-
-        // Act
-        let first_lines = cache.render("# First", 24);
-        let second_lines = cache.render("# Second", 24);
-        let cached_first_lines = cache.render("# First", 24);
-
-        // Assert
-        assert!(Arc::ptr_eq(&first_lines, &cached_first_lines));
-        assert_eq!(
-            second_lines.as_ref(),
-            render_markdown("# Second", 24).as_slice()
-        );
-        assert_eq!(cache.entries.borrow().len(), 2);
-    }
-
-    #[test]
-    fn test_markdown_render_cache_evicts_least_recently_used_entry() {
-        // Arrange
-        let cache = MarkdownRenderCache::default();
-
-        // Act
-        for index in 0..MARKDOWN_RENDER_CACHE_ENTRY_LIMIT {
-            let markdown = format!("# Entry {index}");
-            cache.render(&markdown, 24);
-        }
-        cache.render("# Entry 0", 24);
-        cache.render("# Overflow", 24);
-
-        // Assert
-        let cached_hashes = cache
-            .entries
-            .borrow()
-            .iter()
-            .map(|entry| entry.key.content_hash)
-            .collect::<Vec<_>>();
-        assert_eq!(cached_hashes.len(), MARKDOWN_RENDER_CACHE_ENTRY_LIMIT);
-        assert!(cached_hashes.contains(&MarkdownRenderCache::hash_text("# Entry 0")));
-        assert!(!cached_hashes.contains(&MarkdownRenderCache::hash_text("# Entry 1")));
-        assert!(cached_hashes.contains(&MarkdownRenderCache::hash_text("# Overflow")));
-    }
-
-    #[test]
-    fn test_markdown_render_cache_bump_version_clears_styled_entries() {
-        // Arrange
-        let cache = MarkdownRenderCache::default();
-        let initial_lines = cache.render("# Entry", 24);
-
-        // Act
-        cache.bump_version();
-        let refreshed_lines = cache.render("# Entry", 24);
-
-        // Assert
-        assert!(!Arc::ptr_eq(&initial_lines, &refreshed_lines));
-        assert_eq!(cache.entries.borrow().len(), 1);
-        assert_eq!(cache.version.get(), 1);
     }
 }

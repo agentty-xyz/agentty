@@ -30,6 +30,10 @@ For file-level detail, read the module docstrings directly.
 - `crates/ag-protocol/`: Shared structured response protocol library crate with
   transport-neutral response models, schema generation, parser diagnostics, protocol
   prompt envelopes, repair prompts, and turn prompt payload helpers.
+- `crates/ag-tui-text/`: Shared Ratatui text-rendering library crate with markdown
+  parsing/styling, bounded mermaid-to-terminal diagram rendering, and terminal-width
+  wrapping/truncation helpers. Host applications inject semantic palette and cache
+  version settings at the render boundary.
 - `crates/agentty/`: Main TUI application crate with composition root, application,
   domain, infrastructure, runtime, and UI layers.
 - `crates/testty/`: Rust-native TUI end-to-end testing framework with PTY-driven
@@ -63,9 +67,9 @@ For file-level detail, read the module docstrings directly.
   thread, key dispatch, one handler per `AppMode` under `runtime/mode/`, and shared mode
   helpers for session-output metrics.
 - `ui/`: Rendering — frame composition, mode-to-page routing, pages under `ui/page/`,
-  reusable widgets under `ui/component/`, UI state under `ui/state/`, plus markdown,
-  diff, layout, review-comment formatting, and theme helpers. Render caches are owned by
-  the shared `RenderCacheStore`.
+  reusable widgets under `ui/component/`, UI state under `ui/state/`, Agentty theme
+  adapters for `ag-tui-text`, plus diff, layout, review-comment formatting, and theme
+  helpers. Render caches are owned by the shared `RenderCacheStore`.
 
 ## Layer Rules
 

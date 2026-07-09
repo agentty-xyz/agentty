@@ -16,6 +16,8 @@ Contains the workspace member crates.
 - `crates/ag-protocol/` holds structured agent response contracts, protocol parsing,
   schema generation, and transport-neutral turn prompt payloads shared across frontends
   and agent adapters.
+- `crates/ag-tui-text/` holds shared Ratatui text rendering helpers for markdown,
+  mermaid diagrams, and terminal-width wrapping/truncation.
 - `crates/ag-xtask/` holds workspace maintenance utilities, including migration checks.
 - `crates/agentty/` is the main TUI application crate with `app`, `domain`, `infra`,
   `runtime`, and `ui` layers.
