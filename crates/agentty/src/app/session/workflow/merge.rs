@@ -4867,6 +4867,14 @@ mod tests {
 
         let mut mock_git_client = git::MockGitClient::new();
         mock_git_client
+            .expect_in_progress_operation()
+            .once()
+            .returning(|_| Box::pin(async { Ok(None) }));
+        mock_git_client
+            .expect_detect_git_info()
+            .once()
+            .returning(|_| Box::pin(async { Some("wt/sess-reb".to_string()) }));
+        mock_git_client
             .expect_push_current_branch_to_remote_branch()
             .once()
             .withf(|session_folder, remote_branch_name| {

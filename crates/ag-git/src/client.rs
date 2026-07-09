@@ -6,7 +6,7 @@ use std::pin::Pin;
 
 use super::error::GitError;
 use super::merge::SquashMergeOutcome;
-use super::rebase::RebaseStepResult;
+use super::rebase::{InProgressGitOperation, RebaseStepResult};
 #[cfg(test)]
 use super::sync;
 use super::sync::{BranchTrackingMap, PullRebaseResult, SingleCommitMessageStrategy};
@@ -14,8 +14,8 @@ use super::{
     abort_rebase, branch_tracking_statuses, commit_all, commit_all_preserving_single_commit,
     create_worktree, current_upstream_reference, delete_branch, detect_git_info, diff,
     fetch_remote, find_git_repo_root, get_ahead_behind, get_ref_ahead_behind, has_commits_since,
-    has_unmerged_paths, head_commit_message, head_hash, head_short_hash, is_rebase_in_progress,
-    is_worktree_clean, list_conflicted_files, list_local_commit_titles,
+    has_unmerged_paths, head_commit_message, head_hash, head_short_hash, in_progress_operation,
+    is_rebase_in_progress, is_worktree_clean, list_conflicted_files, list_local_commit_titles,
     list_staged_conflict_marker_files, list_upstream_commit_titles, main_repo_root, pull_rebase,
     push_current_branch, push_current_branch_to_remote_branch, rebase, rebase_continue,
     rebase_onto_start, rebase_start, ref_hash, remote_branch_exists, remove_worktree, repo_url,
@@ -133,6 +133,15 @@ pub trait GitClient: Send + Sync {
     /// # Errors
     /// Returns an error when git state cannot be inspected.
     fn is_rebase_in_progress(&self, repo_path: PathBuf) -> GitFuture<Result<bool, GitError>>;
+
+    /// Returns detected in-progress git operation metadata in `repo_path`.
+    ///
+    /// # Errors
+    /// Returns an error when git state cannot be inspected.
+    fn in_progress_operation(
+        &self,
+        repo_path: PathBuf,
+    ) -> GitFuture<Result<Option<InProgressGitOperation>, GitError>>;
 
     /// Returns whether unmerged index entries remain in `repo_path`.
     ///
@@ -470,6 +479,13 @@ impl GitClient for RealGitClient {
 
     fn is_rebase_in_progress(&self, repo_path: PathBuf) -> GitFuture<Result<bool, GitError>> {
         Box::pin(async move { is_rebase_in_progress(repo_path).await })
+    }
+
+    fn in_progress_operation(
+        &self,
+        repo_path: PathBuf,
+    ) -> GitFuture<Result<Option<InProgressGitOperation>, GitError>> {
+        Box::pin(async move { in_progress_operation(repo_path).await })
     }
 
     fn has_unmerged_paths(&self, repo_path: PathBuf) -> GitFuture<Result<bool, GitError>> {
