@@ -145,12 +145,16 @@ fn stringify_schema_json(schema: &Value) -> String {
 
 /// Normalizes one schema tree for transport-level provider compatibility.
 ///
-/// Codex rejects schemas that use `oneOf` for enum-like constants. Schemars
-/// can emit this shape for simple Rust enums, so this normalizer rewrites
-/// those fragments to string `enum` definitions.
+/// Claude rejects schemas with a top-level `$schema` URI when its validator
+/// cannot resolve that meta-schema. Codex rejects schemas that use `oneOf` for
+/// enum-like constants. Schemars can emit both shapes, so this normalizer
+/// strips transport-only metadata and rewrites enum fragments to string `enum`
+/// definitions.
 fn normalize_schema_for_transport(value: &mut Value) {
     match value {
         Value::Object(object) => {
+            object.remove("$schema");
+
             for nested_value in object.values_mut() {
                 normalize_schema_for_transport(nested_value);
             }
@@ -305,6 +309,17 @@ mod tests {
 
         // Assert
         assert!(!contains_schema_key(&schema, "oneOf"));
+    }
+
+    #[test]
+    /// Ensures generated transport schemas omit `$schema` metadata so Claude
+    /// native schema validation does not need a bundled meta-schema resolver.
+    fn test_agent_response_output_schema_does_not_contain_schema_metadata() {
+        // Arrange / Act
+        let schema = agent_response_output_schema();
+
+        // Assert
+        assert!(!contains_schema_key(&schema, "$schema"));
     }
 
     #[test]
