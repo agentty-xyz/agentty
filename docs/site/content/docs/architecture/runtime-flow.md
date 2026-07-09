@@ -161,10 +161,15 @@ render twice per frame.
    turn creates it, later turns regenerate the message from the cumulative diff with the
    project's `Default Fast Model` and amend `HEAD`; an empty amend drops the reverted
    commit. The session title is synced from the commit text.
-1. If the session already tracks a published upstream branch and no chat messages are
-   queued, a detached auto-push updates the remote branch and refreshes linked
-   review-request metadata when the commit message changed, then appends the push result
-   as a durable transcript notice.
+1. If the session already tracks a published upstream branch and no chat message or sync
+   operation is queued, a per-session branch-operation guard transfers to the detached
+   auto-push until it finishes. Every sync request holds the same guard through status
+   transition and operation persistence, so its rebase is observed before publish starts
+   or waits until the active publish completes. Post-rebase auto-push transfers the
+   guard again, preventing a subsequent sync from starting until that publish finishes.
+   After a successful push, linked review-request and commit metadata are resolved and
+   refreshed; lookup failures append the existing warning notice instead of being
+   discarded. The push result is appended as a durable transcript notice.
 1. Completed stacked-parent turns fan out `SessionCommand::Rebase` to review-ready
    materialized children so child branches replay onto the latest parent branch.
 1. The session size is refreshed and the final status becomes `Review` or `Question`

@@ -8,6 +8,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use ag_agent as agent;
+use ag_forge as forge;
 use ag_git::{self as git, GitClient};
 use ag_protocol::AgentResponseSummary;
 use askama::Template;
@@ -15,7 +16,7 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 use super::published_branch::{self, PublishedBranchAutoPushInput};
-use super::worker::SessionCommand;
+use super::worker::{SessionCommand, has_unfinished_rebase_operation};
 use super::{SessionTaskService, StatusTransition, session_branch};
 use crate::app::assist::{
     AssistContext, AssistPolicy, FailureTracker, append_assist_header, format_detail_lines,
@@ -28,7 +29,7 @@ use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel
 use crate::domain::session::{PublishedBranchSyncStatus, SessionId, Status};
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::transcript_notice::TranscriptNotice;
-use crate::infra::db::{AppRepositories, SessionOperationRow};
+use crate::infra::db::AppRepositories;
 use crate::infra::fs::{self as fs, FsClient};
 
 const REBASE_ASSIST_POLICY: AssistPolicy = AssistPolicy {
@@ -219,6 +220,9 @@ pub(super) struct RebaseCommandInput {
     pub(super) assist_mode: RebaseAssistMode,
     /// Stored base branch for the session worktree.
     pub(super) base_branch: String,
+    /// Serializes post-rebase publish ownership with other queued/running
+    /// branch operations for the same session.
+    pub(super) branch_operation_lock: Arc<tokio::sync::Mutex<()>>,
     /// Shared child-process PID slot used by cancellation.
     pub(super) child_pid: Arc<Mutex<Option<u32>>>,
     /// Clock used for persisted status timing.
@@ -233,6 +237,9 @@ pub(super) struct RebaseCommandInput {
     pub(super) git_client: Arc<dyn GitClient>,
     /// Session identifier receiving transcript/status updates.
     pub(super) id: SessionId,
+    /// Forge boundary used for optional linked PR/MR metadata refresh after
+    /// post-rebase auto-push.
+    pub(super) review_request_client: Arc<dyn forge::ReviewRequestClient>,
     /// Agent/model selection used by agent-assisted conflict prompts.
     pub(super) session_agent: AgentSelection,
     /// Per-app update versions for targeted session refresh events.
@@ -246,11 +253,16 @@ pub(super) struct RebaseCommandInput {
 /// Bundled context for finalizing one rebase task.
 struct FinalizeRebaseInput<'a> {
     app_event_tx: &'a mpsc::UnboundedSender<AppEvent>,
+    /// Serializes post-rebase publish ownership with other queued/running
+    /// branch operations for the same session.
+    branch_operation_lock: &'a Arc<tokio::sync::Mutex<()>>,
+    clock: &'a Arc<dyn Clock>,
     db: &'a AppRepositories,
     folder: &'a Path,
     git_client: &'a Arc<dyn GitClient>,
     id: &'a str,
     rebase_result: Result<String, SessionError>,
+    review_request_client: &'a Arc<dyn forge::ReviewRequestClient>,
     session_update_versions: &'a SessionUpdateVersionMap,
     /// Bound transition context for restoring `Review` after rebase cleanup.
     status_transition: &'a StatusTransition,
@@ -260,9 +272,14 @@ struct FinalizeRebaseInput<'a> {
 /// Bundled context for starting post-rebase auto-publish.
 struct RebaseAutoPushInput<'a> {
     app_event_tx: &'a mpsc::UnboundedSender<AppEvent>,
+    /// Serializes post-rebase publish ownership with other queued/running
+    /// branch operations for the same session.
+    branch_operation_lock: &'a Arc<tokio::sync::Mutex<()>>,
+    clock: &'a Arc<dyn Clock>,
     db: &'a AppRepositories,
     folder: &'a Path,
     git_client: &'a Arc<dyn GitClient>,
+    review_request_client: &'a Arc<dyn forge::ReviewRequestClient>,
     session_id: &'a str,
     session_update_versions: &'a SessionUpdateVersionMap,
     transcript: &'a Arc<Mutex<SessionTranscript>>,
@@ -794,6 +811,11 @@ impl SessionMergeService {
     ) -> Result<(), SessionError> {
         let (base_branch, current_status, persisted_session_id) =
             Self::load_rebase_start_context(manager, services, session_id).await?;
+        let branch_operation_lock = manager
+            .session_handles_or_err(session_id)
+            .map(|handles| Arc::clone(&handles.branch_operation_lock))
+            .map_err(|_| SessionError::HandlesNotFound)?;
+        let _branch_operation_guard = branch_operation_lock.lock_owned().await;
 
         let command = SessionCommand::Rebase {
             base_branch,
@@ -805,7 +827,7 @@ impl SessionMergeService {
                 .operations()
                 .load_unfinished_session_operations()
                 .await?;
-            if Self::has_unfinished_rebase_operation(
+            if has_unfinished_rebase_operation(
                 &unfinished_operations,
                 persisted_session_id.as_str(),
             ) {
@@ -844,17 +866,6 @@ impl SessionMergeService {
         }
 
         Ok(())
-    }
-
-    /// Returns whether a session already has a queued or running rebase
-    /// operation.
-    fn has_unfinished_rebase_operation(
-        operations: &[SessionOperationRow],
-        session_id: &str,
-    ) -> bool {
-        operations
-            .iter()
-            .any(|operation| operation.session_id == session_id && operation.kind == "rebase")
     }
 
     /// Starts automatic rebase commands for review-ready stacked children
@@ -1773,6 +1784,7 @@ impl SessionManager {
             app_event_tx,
             assist_mode,
             base_branch,
+            branch_operation_lock,
             child_pid,
             clock,
             db,
@@ -1780,6 +1792,7 @@ impl SessionManager {
             fs_client,
             git_client,
             id,
+            review_request_client,
             session_agent,
             session_update_versions,
             status,
@@ -1829,11 +1842,14 @@ impl SessionManager {
 
         Self::finalize_rebase_task(FinalizeRebaseInput {
             app_event_tx: &app_event_tx,
+            branch_operation_lock: &branch_operation_lock,
+            clock: &clock,
             db: &db,
             folder: &folder,
             git_client: &git_client,
             id: &id,
             rebase_result,
+            review_request_client: &review_request_client,
             session_update_versions: &session_update_versions,
             status_transition: &status_transition,
             transcript: &transcript,
@@ -2063,11 +2079,14 @@ impl SessionManager {
     async fn finalize_rebase_task(input: FinalizeRebaseInput<'_>) {
         let FinalizeRebaseInput {
             app_event_tx,
+            branch_operation_lock,
+            clock,
             db,
             folder,
             git_client,
             id,
             rebase_result,
+            review_request_client,
             session_update_versions,
             status_transition,
             transcript,
@@ -2090,9 +2109,12 @@ impl SessionManager {
 
                 Self::start_auto_push_after_rebase(RebaseAutoPushInput {
                     app_event_tx,
+                    branch_operation_lock,
+                    clock,
                     db,
                     folder,
                     git_client,
+                    review_request_client,
                     session_id: id,
                     session_update_versions,
                     transcript,
@@ -2133,14 +2155,18 @@ impl SessionManager {
     async fn start_auto_push_after_rebase(input: RebaseAutoPushInput<'_>) {
         let RebaseAutoPushInput {
             app_event_tx,
+            branch_operation_lock,
+            clock,
             db,
             folder,
             git_client,
+            review_request_client,
             session_id,
             session_update_versions,
             transcript,
         } = input;
 
+        let branch_operation_guard = Arc::clone(branch_operation_lock).lock_owned().await;
         let published_upstream_ref = db
             .sessions()
             .load_session_published_upstream_ref(session_id)
@@ -2168,6 +2194,11 @@ impl SessionManager {
                 "failed to publish branch sync start because the app event receiver is closed"
             );
         }
+        let review_request_metadata_sync = Some(published_branch::ReviewRequestMetadataSyncInput {
+            clock: Arc::clone(clock),
+            commit_message: None,
+            review_request_client: Arc::clone(review_request_client),
+        });
 
         let app_event_tx = app_event_tx.clone();
         let db = db.clone();
@@ -2181,7 +2212,7 @@ impl SessionManager {
             folder,
             git_client,
             published_upstream_ref,
-            review_request_metadata_sync: None,
+            review_request_metadata_sync,
             session_id,
             session_update_versions: session_update_versions.clone(),
             sync_operation_id,
@@ -2189,6 +2220,7 @@ impl SessionManager {
         };
 
         tokio::spawn(async move {
+            let _branch_operation_guard = branch_operation_guard;
             published_branch::run_published_branch_auto_push(auto_push_input).await;
         });
     }
@@ -2929,6 +2961,7 @@ mod tests {
     use tempfile::{TempDir, tempdir};
 
     use super::*;
+    use crate::infra::db::SessionOperationRow;
 
     /// Builds a filesystem mock that delegates operations to local disk.
     fn create_passthrough_mock_fs_client() -> fs::MockFsClient {
@@ -2986,8 +3019,7 @@ mod tests {
         ];
 
         // Act
-        let has_rebase =
-            SessionMergeService::has_unfinished_rebase_operation(&operations, "session-a");
+        let has_rebase = has_unfinished_rebase_operation(&operations, "session-a");
 
         // Assert
         assert!(has_rebase);
@@ -3002,8 +3034,7 @@ mod tests {
         ];
 
         // Act
-        let has_rebase =
-            SessionMergeService::has_unfinished_rebase_operation(&operations, "session-a");
+        let has_rebase = has_unfinished_rebase_operation(&operations, "session-a");
 
         // Assert
         assert!(!has_rebase);
@@ -4844,53 +4875,56 @@ mod tests {
             .expect("failed to set published upstream ref");
 
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let branch_operation_lock = Arc::new(tokio::sync::Mutex::new(()));
         let temp_dir = tempdir().expect("failed to create temp dir");
         let folder = temp_dir.path().join("sess-rebase");
         let session_update_versions = Arc::default();
         let status = Arc::new(Mutex::new(Status::Rebasing));
         let transcript = empty_transcript();
+        let clock: Arc<dyn Clock> = Arc::new(crate::infra::clock::RealClock);
+        let review_request_client: Arc<dyn forge::ReviewRequestClient> =
+            Arc::new(forge::MockReviewRequestClient::new());
         let status_transition = StatusTransition::from_parts(
             app_event_tx.clone(),
-            Arc::new(crate::infra::clock::RealClock),
+            Arc::clone(&clock),
             db.clone(),
             "sess-rebase",
             Arc::clone(&session_update_versions),
             Arc::clone(&status),
         );
-
-        let mut mock_git_client = git::MockGitClient::new();
-        mock_git_client
-            .expect_in_progress_operation()
-            .once()
-            .returning(|_| Box::pin(async { Ok(None) }));
-        mock_git_client
-            .expect_detect_git_info()
-            .once()
-            .returning(|_| Box::pin(async { Some("wt/sess-reb".to_string()) }));
-        mock_git_client
-            .expect_push_current_branch_to_remote_branch()
-            .once()
-            .withf(|session_folder, remote_branch_name| {
-                session_folder.ends_with("sess-rebase") && remote_branch_name == "wt/sess-rebase"
-            })
-            .returning(|_, _| Box::pin(async { Ok("origin/wt/sess-rebase".to_string()) }));
-        let git_client: Arc<dyn GitClient> = Arc::new(mock_git_client);
+        let push_started = Arc::new(tokio::sync::Notify::new());
+        let release_push = Arc::new(tokio::sync::Notify::new());
+        let git_client: Arc<dyn GitClient> = Arc::new(blocking_auto_push_git_client(
+            Arc::clone(&push_started),
+            Arc::clone(&release_push),
+        ));
 
         // Act
         SessionManager::finalize_rebase_task(FinalizeRebaseInput {
             app_event_tx: &app_event_tx,
+            branch_operation_lock: &branch_operation_lock,
+            clock: &clock,
             db: &db,
             folder: &folder,
             git_client: &git_client,
             id: "sess-rebase",
             rebase_result: Ok("Successfully synced wt/sess-rebase onto main".to_string()),
+            review_request_client: &review_request_client,
             session_update_versions: &session_update_versions,
             status_transition: &status_transition,
             transcript: &transcript,
         })
         .await;
+        tokio::time::timeout(std::time::Duration::from_secs(2), push_started.notified())
+            .await
+            .expect("timed out waiting for auto-push to start");
 
-        // Assert — collect sync events emitted by the auto-push task.
+        // Assert
+        assert!(
+            branch_operation_lock.try_lock().is_err(),
+            "post-rebase auto-push should retain branch-operation ownership"
+        );
+        release_push.notify_one();
         let sync_events = tokio::time::timeout(std::time::Duration::from_secs(2), async {
             let mut sync_events = Vec::new();
             while sync_events.len() < 2 {
@@ -4924,6 +4958,339 @@ mod tests {
         assert!(transcript_text.contains("[Sync] Successfully synced"));
     }
 
+    /// Returns a git mock whose published-branch push waits for an explicit
+    /// release after notifying the test that push execution has started.
+    fn blocking_auto_push_git_client(
+        push_started: Arc<tokio::sync::Notify>,
+        release_push: Arc<tokio::sync::Notify>,
+    ) -> git::MockGitClient {
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_in_progress_operation()
+            .once()
+            .returning(|_| Box::pin(async { Ok(None) }));
+        mock_git_client
+            .expect_detect_git_info()
+            .once()
+            .returning(|_| Box::pin(async { Some("wt/sess-reb".to_string()) }));
+        mock_git_client
+            .expect_push_current_branch_to_remote_branch()
+            .once()
+            .withf(|session_folder, remote_branch_name| {
+                session_folder.ends_with("sess-rebase") && remote_branch_name == "wt/sess-rebase"
+            })
+            .returning(move |_, _| {
+                let push_started = Arc::clone(&push_started);
+                let release_push = Arc::clone(&release_push);
+
+                Box::pin(async move {
+                    push_started.notify_one();
+                    release_push.notified().await;
+
+                    Ok("origin/wt/sess-rebase".to_string())
+                })
+            });
+
+        mock_git_client
+    }
+
+    /// Inserts one published rebasing session linked to an open GitHub review
+    /// request.
+    async fn insert_published_rebase_session_with_review_request(db: &AppRepositories) {
+        let project_id = db
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to upsert project");
+        db.sessions()
+            .insert_session(
+                "sess-rebase",
+                "gemini-3-flash-preview",
+                "main",
+                "Rebasing",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        db.sessions()
+            .update_session_published_upstream_ref(
+                "sess-rebase",
+                Some("origin/wt/sess-rebase".to_string()),
+            )
+            .await
+            .expect("failed to set published upstream ref");
+        db.reviews()
+            .update_session_review_request("sess-rebase", Some(linked_github_review_request()))
+            .await
+            .expect("failed to persist review request");
+    }
+
+    /// Returns one linked GitHub review request fixture for metadata-sync
+    /// tests.
+    fn linked_github_review_request() -> crate::domain::session::ReviewRequest {
+        crate::domain::session::ReviewRequest {
+            last_refreshed_at: 100,
+            summary: forge::ReviewRequestSummary {
+                display_id: "#42".to_string(),
+                forge_kind: forge::ForgeKind::GitHub,
+                source_branch: "wt/sess-rebase".to_string(),
+                state: crate::domain::session::ReviewRequestState::Open,
+                status_summary: Some("Draft".to_string()),
+                target_branch: "main".to_string(),
+                title: "Old title".to_string(),
+                web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
+            },
+        }
+    }
+
+    /// Returns one git client mock for post-rebase review-request metadata
+    /// sync.
+    fn metadata_sync_git_client() -> git::MockGitClient {
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_head_commit_message()
+            .once()
+            .withf(|session_folder| session_folder.ends_with("sess-rebase"))
+            .returning(|_| {
+                Box::pin(async {
+                    Ok(Some(
+                        "Refresh queued sync metadata\n\n- Preserve sync details.".to_string(),
+                    ))
+                })
+            });
+        mock_git_client
+            .expect_in_progress_operation()
+            .once()
+            .returning(|_| Box::pin(async { Ok(None) }));
+        mock_git_client
+            .expect_detect_git_info()
+            .once()
+            .returning(|_| Box::pin(async { Some("wt/sess-reb".to_string()) }));
+        mock_git_client
+            .expect_push_current_branch_to_remote_branch()
+            .once()
+            .withf(|session_folder, remote_branch_name| {
+                session_folder.ends_with("sess-rebase") && remote_branch_name == "wt/sess-rebase"
+            })
+            .returning(|_, _| Box::pin(async { Ok("origin/wt/sess-rebase".to_string()) }));
+        mock_git_client.expect_repo_url().once().returning(|_| {
+            Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
+        });
+
+        mock_git_client
+    }
+
+    /// Returns one GitHub forge remote fixture for metadata-sync tests.
+    fn github_forge_remote() -> forge::ForgeRemote {
+        forge::ForgeRemote {
+            command_working_directory: None,
+            forge_kind: forge::ForgeKind::GitHub,
+            host: "github.com".to_string(),
+            namespace: "agentty-xyz".to_string(),
+            project: "agentty".to_string(),
+            repo_url: "https://github.com/agentty-xyz/agentty.git".to_string(),
+            web_url: "https://github.com/agentty-xyz/agentty".to_string(),
+        }
+    }
+
+    /// Returns one review-request client mock for post-rebase metadata sync.
+    fn metadata_sync_review_request_client(folder: PathBuf) -> forge::MockReviewRequestClient {
+        let mut mock_review_request_client = forge::MockReviewRequestClient::new();
+        mock_review_request_client
+            .expect_detect_remote()
+            .once()
+            .returning(|_| Ok(github_forge_remote()));
+        mock_review_request_client
+            .expect_sync_review_request_metadata()
+            .once()
+            .withf(move |remote, display_id, input| {
+                remote.command_working_directory.as_deref() == Some(folder.as_path())
+                    && display_id == "#42"
+                    && input.title == "Refresh queued sync metadata"
+                    && input.body.as_deref() == Some("- Preserve sync details.")
+            })
+            .returning(|_, _, input| {
+                Box::pin(async move {
+                    Ok(forge::ReviewRequestSummary {
+                        display_id: "#42".to_string(),
+                        forge_kind: forge::ForgeKind::GitHub,
+                        source_branch: "wt/sess-rebase".to_string(),
+                        state: crate::domain::session::ReviewRequestState::Open,
+                        status_summary: Some("Open".to_string()),
+                        target_branch: "main".to_string(),
+                        title: input.title,
+                        web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
+                    })
+                })
+            });
+
+        mock_review_request_client
+    }
+
+    /// Collects the in-progress and terminal published-branch sync states.
+    async fn collect_published_branch_sync_statuses(
+        app_event_rx: &mut mpsc::UnboundedReceiver<AppEvent>,
+    ) -> Vec<PublishedBranchSyncStatus> {
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            let mut sync_events = Vec::new();
+            while sync_events.len() < 2 {
+                let event = app_event_rx.recv().await.expect("missing app event");
+                if let AppEvent::PublishedBranchSyncUpdated { sync_status, .. } = event {
+                    sync_events.push(sync_status);
+                }
+            }
+
+            sync_events
+        })
+        .await
+        .expect("timed out waiting for sync events")
+    }
+
+    #[tokio::test]
+    /// Verifies post-rebase auto-push refreshes linked PR/MR metadata from the
+    /// latest session commit message.
+    async fn test_finalize_rebase_task_syncs_review_request_metadata_after_auto_push() {
+        // Arrange
+        let db = AppRepositories::in_memory().await;
+        insert_published_rebase_session_with_review_request(&db).await;
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        let folder = temp_dir.path().join("sess-rebase");
+        let session_update_versions = Arc::default();
+        let status = Arc::new(Mutex::new(Status::Rebasing));
+        let transcript = empty_transcript();
+        let clock: Arc<dyn Clock> = Arc::new(crate::infra::clock::RealClock);
+        let status_transition = StatusTransition::from_parts(
+            app_event_tx.clone(),
+            Arc::clone(&clock),
+            db.clone(),
+            "sess-rebase",
+            Arc::clone(&session_update_versions),
+            Arc::clone(&status),
+        );
+        let git_client: Arc<dyn GitClient> = Arc::new(metadata_sync_git_client());
+        let review_request_client: Arc<dyn forge::ReviewRequestClient> =
+            Arc::new(metadata_sync_review_request_client(folder.clone()));
+
+        // Act
+        SessionManager::finalize_rebase_task(FinalizeRebaseInput {
+            app_event_tx: &app_event_tx,
+            branch_operation_lock: &Arc::new(tokio::sync::Mutex::new(())),
+            clock: &clock,
+            db: &db,
+            folder: &folder,
+            git_client: &git_client,
+            id: "sess-rebase",
+            rebase_result: Ok("Successfully synced wt/sess-rebase onto main".to_string()),
+            review_request_client: &review_request_client,
+            session_update_versions: &session_update_versions,
+            status_transition: &status_transition,
+            transcript: &transcript,
+        })
+        .await;
+        let sync_events = collect_published_branch_sync_statuses(&mut app_event_rx).await;
+        let review_request = db
+            .reviews()
+            .load_session_review_request("sess-rebase")
+            .await
+            .expect("failed to load review request")
+            .expect("review request should remain linked");
+
+        // Assert
+        assert_eq!(
+            sync_events,
+            vec![
+                PublishedBranchSyncStatus::InProgress,
+                PublishedBranchSyncStatus::Succeeded,
+            ]
+        );
+        assert_eq!(review_request.title, "Refresh queued sync metadata");
+    }
+
+    #[tokio::test]
+    /// Verifies post-rebase metadata lookup failures remain visible after the
+    /// branch itself pushes successfully.
+    async fn test_finalize_rebase_task_warns_when_commit_message_lookup_fails() {
+        // Arrange
+        let db = AppRepositories::in_memory().await;
+        insert_published_rebase_session_with_review_request(&db).await;
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        let folder = temp_dir.path().join("sess-rebase");
+        let session_update_versions = Arc::default();
+        let status = Arc::new(Mutex::new(Status::Rebasing));
+        let transcript = empty_transcript();
+        let clock: Arc<dyn Clock> = Arc::new(crate::infra::clock::RealClock);
+        let status_transition = StatusTransition::from_parts(
+            app_event_tx.clone(),
+            Arc::clone(&clock),
+            db.clone(),
+            "sess-rebase",
+            Arc::clone(&session_update_versions),
+            Arc::clone(&status),
+        );
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_in_progress_operation()
+            .once()
+            .returning(|_| Box::pin(async { Ok(None) }));
+        mock_git_client
+            .expect_detect_git_info()
+            .once()
+            .returning(|_| Box::pin(async { Some("wt/sess-reb".to_string()) }));
+        mock_git_client
+            .expect_push_current_branch_to_remote_branch()
+            .once()
+            .returning(|_, _| Box::pin(async { Ok("origin/wt/sess-rebase".to_string()) }));
+        mock_git_client
+            .expect_head_commit_message()
+            .once()
+            .returning(|_| {
+                Box::pin(async {
+                    Err(git::GitError::OutputParse(
+                        "commit message unavailable".to_string(),
+                    ))
+                })
+            });
+        let git_client: Arc<dyn GitClient> = Arc::new(mock_git_client);
+        let review_request_client: Arc<dyn forge::ReviewRequestClient> =
+            Arc::new(forge::MockReviewRequestClient::new());
+
+        // Act
+        SessionManager::finalize_rebase_task(FinalizeRebaseInput {
+            app_event_tx: &app_event_tx,
+            branch_operation_lock: &Arc::new(tokio::sync::Mutex::new(())),
+            clock: &clock,
+            db: &db,
+            folder: &folder,
+            git_client: &git_client,
+            id: "sess-rebase",
+            rebase_result: Ok("Successfully synced wt/sess-rebase onto main".to_string()),
+            review_request_client: &review_request_client,
+            session_update_versions: &session_update_versions,
+            status_transition: &status_transition,
+            transcript: &transcript,
+        })
+        .await;
+        let sync_events = collect_published_branch_sync_statuses(&mut app_event_rx).await;
+        let transcript_text = transcript
+            .lock()
+            .expect("transcript lock poisoned")
+            .replay_text()
+            .unwrap_or_default();
+
+        // Assert
+        assert_eq!(
+            sync_events,
+            vec![
+                PublishedBranchSyncStatus::InProgress,
+                PublishedBranchSyncStatus::Succeeded,
+            ]
+        );
+        assert!(transcript_text.contains("[Review Request Sync Warning]"));
+        assert!(transcript_text.contains("commit message unavailable"));
+    }
+
     #[tokio::test]
     /// Verifies that a successful rebase does not trigger auto-push when the
     /// session has no published upstream branch.
@@ -4952,9 +5319,12 @@ mod tests {
         let session_update_versions = Arc::default();
         let status = Arc::new(Mutex::new(Status::Rebasing));
         let transcript = empty_transcript();
+        let clock: Arc<dyn Clock> = Arc::new(crate::infra::clock::RealClock);
+        let review_request_client: Arc<dyn forge::ReviewRequestClient> =
+            Arc::new(forge::MockReviewRequestClient::new());
         let status_transition = StatusTransition::from_parts(
             app_event_tx.clone(),
-            Arc::new(crate::infra::clock::RealClock),
+            Arc::clone(&clock),
             db.clone(),
             "sess-no-push",
             Arc::clone(&session_update_versions),
@@ -4965,11 +5335,14 @@ mod tests {
         // Act
         SessionManager::finalize_rebase_task(FinalizeRebaseInput {
             app_event_tx: &app_event_tx,
+            branch_operation_lock: &Arc::new(tokio::sync::Mutex::new(())),
+            clock: &clock,
             db: &db,
             folder: &folder,
             git_client: &git_client,
             id: "sess-no-push",
             rebase_result: Ok("Successfully synced wt/sess-no-push onto main".to_string()),
+            review_request_client: &review_request_client,
             session_update_versions: &session_update_versions,
             status_transition: &status_transition,
             transcript: &transcript,

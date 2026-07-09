@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use ag_forge as forge;
 use ag_git::GitClient;
-use tokio::sync::mpsc;
+use tokio::sync::{OwnedMutexGuard, mpsc};
 use uuid::Uuid;
 
 use super::SessionTaskService;
@@ -25,6 +25,8 @@ use crate::infra::db::AppRepositories;
 pub(super) struct PublishedBranchAutoPushStartInput {
     /// Reducer event sender used to publish auto-push progress and completion.
     pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    /// Per-session guard retained until the detached push finishes.
+    pub(super) branch_operation_guard: OwnedMutexGuard<()>,
     /// Clock used to timestamp optional review-request metadata refresh.
     pub(super) clock: Arc<dyn Clock>,
     /// Repository bundle used to resolve and persist branch-publish state.
@@ -50,13 +52,14 @@ pub(super) struct PublishedBranchAutoPushStartInput {
 /// Starts one detached auto-push task for a session that already tracks a
 /// published upstream branch.
 pub(super) fn start_published_branch_auto_push(input: PublishedBranchAutoPushStartInput) {
+    let branch_operation_guard = input.branch_operation_guard;
     let sync_operation_id = Uuid::new_v4().to_string();
     let review_request_metadata_sync =
         input
             .review_request_commit_message
             .map(|commit_message| ReviewRequestMetadataSyncInput {
                 clock: Arc::clone(&input.clock),
-                commit_message,
+                commit_message: Some(commit_message),
                 review_request_client: Arc::clone(&input.review_request_client),
             });
 
@@ -81,6 +84,7 @@ pub(super) fn start_published_branch_auto_push(input: PublishedBranchAutoPushSta
         transcript: input.transcript,
     };
     tokio::spawn(async move {
+        let _branch_operation_guard = branch_operation_guard;
         run_published_branch_auto_push_task(auto_push_input).await;
     });
 }
@@ -114,8 +118,8 @@ pub(super) struct PublishedBranchAutoPushInput {
 pub(super) struct ReviewRequestMetadataSyncInput {
     /// Clock used to timestamp the refreshed review-request summary.
     pub(super) clock: Arc<dyn Clock>,
-    /// Latest auto-commit message used to update linked PR/MR metadata.
-    pub(super) commit_message: String,
+    /// Known auto-commit message, or `None` to resolve it after the push.
+    pub(super) commit_message: Option<String>,
     /// Forge boundary used to refresh linked PR/MR metadata after a push.
     pub(super) review_request_client: Arc<dyn forge::ReviewRequestClient>,
 }
@@ -195,11 +199,38 @@ async fn sync_linked_review_request_metadata_after_push(
     input: &PublishedBranchAutoPushInput,
     metadata_sync_input: &ReviewRequestMetadataSyncInput,
 ) {
-    let Some(update_input) = review_request_update_input(&metadata_sync_input.commit_message)
-    else {
-        return;
+    let linked_review_request = match load_open_review_request(input).await {
+        Ok(Some(linked_review_request)) => linked_review_request,
+        Ok(None) => return,
+        Err(error) => {
+            append_review_request_sync_warning(input, error).await;
+
+            return;
+        }
     };
-    let Some(linked_review_request) = load_open_review_request(input).await else {
+    let commit_message = match metadata_sync_input.commit_message.as_deref() {
+        Some(commit_message) => commit_message.to_string(),
+        None => match input
+            .git_client
+            .head_commit_message(input.folder.clone())
+            .await
+        {
+            Ok(Some(commit_message)) => commit_message,
+            Ok(None) => return,
+            Err(error) => {
+                append_review_request_sync_warning(
+                    input,
+                    SessionError::Workflow(format!(
+                        "Failed to resolve the session commit message: {error}"
+                    )),
+                )
+                .await;
+
+                return;
+            }
+        },
+    };
+    let Some(update_input) = review_request_update_input(&commit_message) else {
         return;
     };
 
@@ -227,26 +258,19 @@ fn review_request_update_input(commit_message: &str) -> Option<forge::UpdateRevi
 }
 
 /// Loads the linked review request when it is still open.
-async fn load_open_review_request(input: &PublishedBranchAutoPushInput) -> Option<ReviewRequest> {
-    let review_request = match input
+async fn load_open_review_request(
+    input: &PublishedBranchAutoPushInput,
+) -> Result<Option<ReviewRequest>, SessionError> {
+    let review_request = input
         .db
         .reviews()
         .load_session_review_request(&input.session_id)
         .await
-    {
-        Ok(Some(row)) => review_request_from_row(row),
-        Ok(None) => None,
-        Err(error) => {
-            warn_review_request_metadata_sync(
-                input,
-                &format!("failed to load linked review request: {error}"),
-            );
+        .map_err(SessionError::from)?
+        .and_then(review_request_from_row);
 
-            None
-        }
-    }?;
-
-    (review_request.summary.state == ReviewRequestState::Open).then_some(review_request)
+    Ok(review_request
+        .filter(|review_request| review_request.summary.state == ReviewRequestState::Open))
 }
 
 /// Converts one persisted review-request row into the domain model used by

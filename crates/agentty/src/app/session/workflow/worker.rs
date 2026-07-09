@@ -37,6 +37,7 @@ use crate::infra::process;
 
 const RESTART_FAILURE_REASON: &str = "Interrupted by app restart";
 const CANCEL_BEFORE_EXECUTION_REASON: &str = "Session canceled before execution";
+const REBASE_OPERATION_KIND: &str = "rebase";
 
 /// Per-turn data captured at enqueue time that travels alongside the channel
 /// turn but is consumed only after turn completion.
@@ -95,7 +96,7 @@ impl SessionCommand {
     /// Returns the operation kind persisted in the operations table.
     fn kind(&self) -> &'static str {
         match self {
-            Self::Rebase { .. } => "rebase",
+            Self::Rebase { .. } => REBASE_OPERATION_KIND,
             Self::Run {
                 request_kind: AgentRequestKind::SessionStart,
                 ..
@@ -116,9 +117,21 @@ impl SessionCommand {
     }
 }
 
+/// Returns whether the session has a queued or running rebase operation.
+pub(super) fn has_unfinished_rebase_operation(
+    operations: &[SessionOperationRow],
+    session_id: &str,
+) -> bool {
+    operations.iter().any(|operation| {
+        operation.session_id == session_id && operation.kind == REBASE_OPERATION_KIND
+    })
+}
+
 /// Shared state threaded through all worker turn executions.
 pub(super) struct SessionWorkerContext {
     pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    /// Serializes post-turn publish ownership with queued branch operations.
+    pub(super) branch_operation_lock: Arc<tokio::sync::Mutex<()>>,
     /// Per-turn cancellation token shared with the UI through
     /// [`SessionHandles`]. The worker swaps in a fresh token at the start
     /// of each turn; the UI calls `cancel()` on the current token to
@@ -464,6 +477,7 @@ impl ExistingSessionRebaseAssistClient for SessionWorkerRebaseAssistClient {
 
 /// Runtime snapshot required to create or reuse one session worker.
 pub(super) struct SessionWorkerRuntime {
+    branch_operation_lock: Arc<tokio::sync::Mutex<()>>,
     cancel_token: Arc<Mutex<CancellationToken>>,
     child_pid: Arc<Mutex<Option<u32>>>,
     folder: PathBuf,
@@ -554,7 +568,7 @@ impl SessionWorkerService {
     ) {
         let mut rebase_session_ids = unfinished_operations
             .iter()
-            .filter(|operation| operation.kind == "rebase")
+            .filter(|operation| operation.kind == REBASE_OPERATION_KIND)
             .map(|operation| operation.session_id.as_str())
             .collect::<Vec<_>>();
         rebase_session_ids.sort_unstable();
@@ -643,6 +657,7 @@ impl SessionWorkerService {
 
         let context = SessionWorkerContext {
             app_event_tx: services.event_sender(),
+            branch_operation_lock: Arc::clone(&runtime.branch_operation_lock),
             cancel_token: Arc::clone(&runtime.cancel_token),
             channel,
             child_pid: Arc::clone(&runtime.child_pid),
@@ -876,6 +891,7 @@ impl SessionWorkerService {
             app_event_tx: context.app_event_tx.clone(),
             assist_mode: RebaseAssistMode::ExistingSession(assist_client),
             base_branch,
+            branch_operation_lock: Arc::clone(&context.branch_operation_lock),
             child_pid: Arc::clone(&context.child_pid),
             clock: Arc::clone(&context.clock),
             db: context.db.clone(),
@@ -883,6 +899,7 @@ impl SessionWorkerService {
             fs_client: Arc::clone(&context.fs_client),
             git_client: Arc::clone(&context.git_client),
             id: context.session_id.clone(),
+            review_request_client: Arc::clone(&context.review_request_client),
             session_agent: context.session_agent,
             session_update_versions: context.session_update_versions.clone(),
             status: Arc::clone(&context.status),
@@ -1008,6 +1025,7 @@ impl SessionManager {
         let (session, handles) = self.session_and_handles_or_err(session_id)?;
 
         Ok(SessionWorkerRuntime {
+            branch_operation_lock: Arc::clone(&handles.branch_operation_lock),
             cancel_token: Arc::clone(&handles.cancel_token),
             child_pid: Arc::clone(&handles.child_pid),
             folder: session.folder.clone(),
@@ -1451,6 +1469,7 @@ mod tests {
         let transcript = empty_transcript();
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::clone(&cancel_token),
             channel: Arc::new(mock_channel),
             child_pid: Arc::new(Mutex::new(None)),
@@ -1576,6 +1595,7 @@ mod tests {
 
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::new(Mutex::new(stale_token)),
             channel: Arc::new(mock_channel),
             child_pid: Arc::new(Mutex::new(None)),
@@ -1671,6 +1691,7 @@ mod tests {
         let transcript = empty_transcript();
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             channel: Arc::new(mock_channel),
             child_pid: Arc::new(Mutex::new(None)),
@@ -1769,6 +1790,7 @@ mod tests {
         let transcript = empty_transcript();
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             channel: Arc::new(mock_channel),
             child_pid: Arc::new(Mutex::new(None)),
@@ -1854,6 +1876,7 @@ mod tests {
         let transcript = empty_transcript();
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             channel: Arc::new(mock_channel),
             child_pid: Arc::new(Mutex::new(None)),
@@ -1929,6 +1952,7 @@ mod tests {
 
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             channel: Arc::new(mock_channel),
             child_pid: Arc::new(Mutex::new(None)),
@@ -2003,6 +2027,7 @@ mod tests {
 
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             channel: Arc::new(mock_channel),
             child_pid: Arc::new(Mutex::new(None)),
@@ -2074,6 +2099,7 @@ mod tests {
 
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             channel: Arc::new(MockAgentChannel::new()),
             child_pid: Arc::new(Mutex::new(Some(child_pid))),
@@ -2118,6 +2144,7 @@ mod tests {
         // Arrange
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             channel: Arc::new(MockAgentChannel::new()),
             child_pid: Arc::new(Mutex::new(None)),
@@ -2253,6 +2280,7 @@ mod tests {
             AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini3FlashPreview);
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             channel: Arc::new(MockAgentChannel::new()),
             child_pid: Arc::new(Mutex::new(None)),
@@ -2337,6 +2365,7 @@ mod tests {
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
         let context = SessionWorkerContext {
             app_event_tx,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             channel: Arc::new(MockAgentChannel::new()),
             child_pid: Arc::new(Mutex::new(None)),
@@ -2418,6 +2447,7 @@ mod tests {
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
         let context = SessionWorkerContext {
             app_event_tx,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             channel: Arc::new(MockAgentChannel::new()),
             child_pid: Arc::new(Mutex::new(None)),
@@ -2750,6 +2780,7 @@ mod tests {
             .returning(|_, _| Box::pin(async { Ok("origin/wt/session-id".to_string()) }));
         let context = SessionWorkerContext {
             app_event_tx,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             channel: Arc::new(MockAgentChannel::new()),
             child_pid: Arc::new(Mutex::new(None)),
@@ -2853,6 +2884,7 @@ mod tests {
             .never();
         let context = SessionWorkerContext {
             app_event_tx,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             channel: Arc::new(MockAgentChannel::new()),
             child_pid: Arc::new(Mutex::new(None)),
@@ -2911,6 +2943,100 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Verifies completed turns leave auto-push idle while queued sync will
+    /// publish the branch after rebasing.
+    async fn test_apply_turn_result_skips_background_push_while_sync_is_queued() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let db = AppRepositories::in_memory().await;
+        let project_id = db
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to upsert project");
+        db.sessions()
+            .insert_session(
+                "sess1",
+                "gemini-3-flash-preview",
+                "main",
+                "InProgress",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        db.operations()
+            .insert_session_operation("queued-sync", "sess1", "rebase")
+            .await
+            .expect("failed to insert queued sync operation");
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let session_agent =
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini3FlashPreview);
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client
+            .expect_is_worktree_clean()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(true) }));
+        mock_git_client
+            .expect_push_current_branch_to_remote_branch()
+            .never();
+        let context = SessionWorkerContext {
+            app_event_tx,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
+            cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+            channel: Arc::new(MockAgentChannel::new()),
+            child_pid: Arc::new(Mutex::new(None)),
+            clock: Arc::new(crate::infra::clock::RealClock),
+            db,
+            folder: base_dir.path().join("sess1"),
+            fs_client: Arc::new(fs::MockFsClient::new()),
+            git_client: Arc::new(mock_git_client),
+            transcript: empty_transcript(),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
+            session_update_versions: Arc::default(),
+            session_id: "sess1".into(),
+            session_agent: AgentSelection::new(
+                crate::domain::agent::AgentKind::Antigravity,
+                AgentModel::Gemini3FlashPreview,
+            ),
+            status: Arc::new(Mutex::new(Status::InProgress)),
+        };
+        let turn_result = Ok(TurnResult {
+            assistant_message: AgentResponse {
+                answer: "Implemented the change.".to_string(),
+                questions: Vec::new(),
+                summary: None,
+            },
+            context_reset: false,
+            input_tokens: 0,
+            output_tokens: 0,
+            provider_conversation_id: None,
+        });
+
+        // Act
+        let turn_metadata = TurnMetadata {
+            published_upstream_ref: Some("origin/wt/session-id".to_string()),
+            session_agent,
+        };
+        let status = apply_worker_turn_result(&context, turn_metadata, turn_result)
+            .await
+            .expect("turn result should succeed");
+        let mut emitted_sync_event = false;
+        while let Ok(event) = app_event_rx.try_recv() {
+            if matches!(event, AppEvent::PublishedBranchSyncUpdated { .. }) {
+                emitted_sync_event = true;
+            }
+        }
+
+        // Assert
+        assert_eq!(status, Status::Review);
+        assert!(
+            !emitted_sync_event,
+            "queued sync should suppress post-turn auto-push events"
+        );
+    }
+
+    #[tokio::test]
     /// Verifies failed background auto-push attempts append a visible error
     /// and keep the session marked as failed for the latest sync attempt.
     async fn test_apply_turn_result_reports_background_push_failures() {
@@ -2957,6 +3083,7 @@ mod tests {
         let transcript = empty_transcript();
         let context = SessionWorkerContext {
             app_event_tx,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             channel: Arc::new(MockAgentChannel::new()),
             child_pid: Arc::new(Mutex::new(None)),
@@ -3050,6 +3177,7 @@ mod tests {
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
         let context = SessionWorkerContext {
             app_event_tx,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             channel: Arc::new(MockAgentChannel::new()),
             child_pid: Arc::new(Mutex::new(None)),
@@ -3154,6 +3282,7 @@ mod tests {
         )));
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             channel: Arc::new(MockAgentChannel::new()),
             child_pid: Arc::new(Mutex::new(None)),
@@ -3236,6 +3365,7 @@ mod tests {
             .returning(|_| Box::pin(async { Ok(true) }));
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             channel: Arc::new(MockAgentChannel::new()),
             child_pid: Arc::new(Mutex::new(None)),
@@ -3481,6 +3611,7 @@ mod tests {
         let status = Arc::new(Mutex::new(Status::Rebasing));
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             channel: Arc::new(mock_existing_session_rebase_channel(
                 expected_main_checkout_root,
@@ -3707,6 +3838,7 @@ mod tests {
 
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             channel: Arc::new(mock_channel),
             child_pid: Arc::new(Mutex::new(None)),
@@ -3779,6 +3911,7 @@ mod tests {
 
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             channel: Arc::new(mock_channel),
             child_pid: Arc::new(Mutex::new(None)),
@@ -3865,6 +3998,7 @@ mod tests {
 
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             channel: Arc::new(mock_channel),
             child_pid: Arc::new(Mutex::new(None)),
@@ -3958,6 +4092,7 @@ mod tests {
         let queue_handle = Arc::new(Mutex::new(queued_messages));
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             channel: Arc::new(channel),
             child_pid: Arc::new(Mutex::new(None)),
@@ -3987,6 +4122,7 @@ mod tests {
     async fn queue_helper_context(queue: Arc<Mutex<VecDeque<TurnPrompt>>>) -> SessionWorkerContext {
         SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             channel: Arc::new(MockAgentChannel::new()),
             child_pid: Arc::new(Mutex::new(None)),
