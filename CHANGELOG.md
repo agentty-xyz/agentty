@@ -7,6 +7,30 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.12.6] - 2026-07-09
+
+### Added
+
+- ag-git: detect in-progress rebase, merge, cherry-pick, and revert operations.
+
+### Changed
+
+- ag-protocol: strip `$schema` metadata from transport schemas.
+- deps: bump `ignore` from `0.4.26` to `0.4.27`.
+- deps: bump `time` from `0.3.51` to `0.3.53`.
+- Bump workspace crate metadata and lockfile package versions to `0.12.6`.
+
+### Fixed
+
+- agentty: block session branch pushes when a rebase, merge, cherry-pick, or revert is
+  in progress, or when the worktree is not on the expected session branch.
+- agentty: render Markdown in prompt blocks in session output.
+
+### Contributors
+
+- @dependabot
+- @minev-dev
+
 ## [v0.12.5] - 2026-07-07
 
 ### Added
