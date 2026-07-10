@@ -152,6 +152,7 @@ dependencies = [
  "askama",
  "assert_cmd",
  "async-trait",
+ "clap",
  "crossterm",
  "ignore",
  "image",

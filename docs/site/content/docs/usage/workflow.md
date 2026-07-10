@@ -423,6 +423,10 @@ agentty --no-update
 When `--no-update` is set, Agentty still checks for newer versions and shows the manual
 update hint, but does not install automatically.
 
+Run `agentty --help` to list supported launch options or `agentty --version` to print
+the installed Agentty version. Unsupported arguments produce an error instead of
+launching the TUI.
+
 ## Data Location
 
 <a id="usage-data-location"></a> Agentty stores its data in `~/.agentty/` by default.

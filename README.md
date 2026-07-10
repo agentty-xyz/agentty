@@ -120,6 +120,8 @@ an authentication method that is permitted for your account, plan, and usage pat
 ```sh
 agentty              # Launch with auto-update enabled (default)
 agentty --no-update  # Launch without automatic updates
+agentty --help       # Show supported command-line options
+agentty --version    # Show the installed Agentty version
 ```
 
 ## Documentation
