@@ -29,9 +29,9 @@ pub use instruction::{
 };
 pub use prompt::{PromptPreparationRequest, diff_fence, prepare_prompt_text};
 pub use provider::{
-    build_command_stdin_payload, cleanup_session_worktree_artifacts, create_app_server_client,
-    create_backend, is_app_server_thought_chunk, parse_response, parse_stream_output_line,
-    parse_turn_response, protocol_schema_instruction_mode, provider_kind_for_model, transport_mode,
+    build_command_stdin_payload, create_app_server_client, create_backend,
+    is_app_server_thought_chunk, parse_response, parse_stream_output_line, parse_turn_response,
+    protocol_schema_instruction_mode, provider_kind_for_model, transport_mode,
 };
 pub use response_parser::{
     ParsedResponse, compact_codex_progress_message, is_codex_completion_status_message,

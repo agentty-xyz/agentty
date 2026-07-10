@@ -85,7 +85,7 @@ authenticate at least one provider CLI before starting a session:
 > uncertainty, but commentary does not guarantee that subscription-backed usage is safe
 > for third-party tool invocation.
 
-- Antigravity (`agy`): install the
+- Antigravity (`agy`): install version 1.1.0 or newer of the
   [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli) and run `agy`
   to sign in when prompted.
 

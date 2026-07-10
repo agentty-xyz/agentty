@@ -17,7 +17,7 @@ options.
 requires its respective CLI to be installed and available on your `PATH`.
 
 - Gemini (`gemini`): Google Gemini CLI agent.
-- Antigravity (`agy`): Google Antigravity CLI agent.
+- Antigravity (`agy` 1.1.0 or newer): Google Antigravity CLI agent.
 - Claude (`claude`): Anthropic Claude Code agent.
 - Codex (`codex`): OpenAI Codex CLI agent.
 
