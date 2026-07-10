@@ -76,11 +76,11 @@ impl PreActionApprovalKind {
     }
 }
 
-/// Proactive compaction threshold for Codex models with a 400k context window.
+/// Proactive compaction threshold for Codex models with a 1.05M context window.
 ///
-/// Current Codex models use this larger threshold to keep enough room for the
-/// active turn while delaying compaction.
-pub(super) const AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_400K_CONTEXT: u64 = 300_000;
+/// GPT-5.5 and GPT-5.6 models reserve up to 128k tokens for output, leaving a
+/// maximum input size of 922k tokens before compaction is required.
+pub(super) const AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_1050K_CONTEXT: u64 = 1_050_000 - 128_000;
 
 /// Proactive compaction threshold for Codex Spark models with a 128k context
 /// window.
@@ -93,7 +93,7 @@ pub(super) const AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_128K_CONTEXT: u64 = 120_000;
 /// checks. It keeps larger-window Codex models from compacting too early
 /// while preserving the tighter threshold required by Spark models.
 pub(super) fn auto_compact_input_token_threshold(model: &str) -> u64 {
-    let is_400k_context_model = matches!(
+    let is_1050k_context_model = matches!(
         AgentKind::Codex.parse_model(model),
         Some(
             AgentModel::Gpt56Sol
@@ -102,8 +102,8 @@ pub(super) fn auto_compact_input_token_threshold(model: &str) -> u64 {
                 | AgentModel::Gpt55
         )
     );
-    if is_400k_context_model {
-        return AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_400K_CONTEXT;
+    if is_1050k_context_model {
+        return AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_1050K_CONTEXT;
     }
 
     AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_128K_CONTEXT

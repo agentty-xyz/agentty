@@ -170,7 +170,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_compact_input_token_threshold_uses_400k_limit_for_codex_models() {
+    fn auto_compact_input_token_threshold_uses_1050k_limit_for_codex_models() {
         // Arrange
         let gpt_56_sol_model = AgentModel::Gpt56Sol.as_str();
         let gpt_56_terra_model = AgentModel::Gpt56Terra.as_str();
@@ -188,19 +188,19 @@ mod tests {
         // Assert
         assert_eq!(
             gpt_56_sol_threshold,
-            policy::AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_400K_CONTEXT
+            policy::AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_1050K_CONTEXT
         );
         assert_eq!(
             gpt_56_terra_threshold,
-            policy::AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_400K_CONTEXT
+            policy::AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_1050K_CONTEXT
         );
         assert_eq!(
             gpt_56_luna_threshold,
-            policy::AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_400K_CONTEXT
+            policy::AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_1050K_CONTEXT
         );
         assert_eq!(
             gpt_55_threshold,
-            policy::AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_400K_CONTEXT
+            policy::AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_1050K_CONTEXT
         );
         assert_eq!(
             spark_threshold,
@@ -437,7 +437,7 @@ mod tests {
         // Arrange
         let mut state = build_runtime_state(
             "thread-1",
-            policy::AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_400K_CONTEXT,
+            policy::AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_1050K_CONTEXT,
         );
         let compact_id = Arc::new(Mutex::new(None));
         let turn_id = Arc::new(Mutex::new(None));
