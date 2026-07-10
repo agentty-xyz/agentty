@@ -351,9 +351,13 @@ the full suite.
 - **User-visible UI behavior:** Satisfy the MANDATORY feature-test gate, then run the
   focused E2E workflow. For routine validation, run E2E feature tests with
   `TESTTY_GIF_MODE=check` so agents verify GIF freshness without launching VHS/Chrome.
-  Use `TESTTY_GIF_MODE=force` only when intentionally regenerating GIF assets. Do not
-  run the full E2E feature suite locally; `.github/workflows/postsubmit.yml` runs
-  `test-agentty-e2e` on GitHub after merge to `main`.
+  Use `TESTTY_GIF_MODE=force` only when intentionally regenerating GIF assets, and run
+  it from an unsandboxed shell (a normal terminal, or one command explicitly approved to
+  bypass the agent sandbox): VHS records through localhost sockets (`ttyd` plus Chrome
+  DevTools), so a network-denied sandbox crashes `vhs` before Chrome launches — an error
+  easy to misdiagnose as a missing browser binary. Do not run the full E2E feature suite
+  locally; `.github/workflows/postsubmit.yml` runs `test-agentty-e2e` on GitHub after
+  merge to `main`.
 
 ### Autofix Discipline
 

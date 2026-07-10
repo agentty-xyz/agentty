@@ -156,6 +156,13 @@ Routine agent validation must use `TESTTY_GIF_MODE=check` so the semantic PTY as
 still run while GIF freshness is checked without invoking VHS or launching Chrome. Use
 `TESTTY_GIF_MODE=force` only when intentionally regenerating GIF assets.
 
+`force` mode must run from an unsandboxed shell — a normal user terminal, or a single
+agent command explicitly approved to bypass the sandbox. VHS records through localhost
+sockets (`ttyd` plus the Chrome DevTools protocol), and sandboxed agent shells deny all
+network, so `vhs` segfaults in `randomPort()` before Chrome ever launches. That failure
+is easy to misdiagnose as a missing browser binary: having Chrome, `vhs`, `ttyd`, and
+`ffmpeg` installed is not enough — the shell must also allow localhost sockets.
+
 In default `generate-if-stale` mode, machines without VHS still run and assert the test
 correctly, then gracefully skip GIF generation. In `force` mode, VHS must be installed
 because regeneration was explicitly requested.
