@@ -203,7 +203,8 @@ fn seed_session_with_inline_markdown_punctuation(
 }
 
 /// Seeds one review-ready session whose transcript contains mermaid flowchart,
-/// entity-relationship, and sequence fenced blocks.
+/// entity-relationship, and sequence fenced blocks; the flowchart mixes solid,
+/// thick (`==label==>`), and dotted (`-.label.->`) labeled edges.
 fn seed_session_with_mermaid_output(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
@@ -226,8 +227,8 @@ Here is the merge flow and the data model:
 ```mermaid
 flowchart TD
     A[User starts session] --> B{Choose action}
-    B -->|Ask agent| C[Send prompt]
-    B -->|Review changes| D[Open diff view]
+    B ==Ask agent==> C[Send prompt]
+    B -.Review changes.-> D[Open diff view]
     C --> E[Agent works in worktree]
     E --> F[Run checks]
     F --> G[Report result]
@@ -2621,6 +2622,7 @@ fn session_view_mermaid_output() -> E2eResult {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "User starts session", &full);
                 assertion::assert_text_in_region(frame, "Report result", &full);
+                assertion::assert_text_in_region(frame, "Ask agent", &full);
                 assertion::assert_text_in_region(frame, "▼", &full);
                 assertion::assert_text_in_region(frame, "CUSTOMER", &full);
                 assertion::assert_text_in_region(frame, "places", &full);

@@ -633,7 +633,7 @@ struct StatementCursor<'a> {
     rest: &'a str,
 }
 
-impl<'source> StatementCursor<'source> {
+impl StatementCursor<'_> {
     /// Parses one node reference and returns its dense node index.
     fn parse_node(
         &mut self,
@@ -712,15 +712,17 @@ impl<'source> StatementCursor<'source> {
     fn parse_edge_operator(&mut self) -> Option<(bool, Option<String>)> {
         self.skip_whitespace();
 
-        if let Some(after_dashes) = self.rest.strip_prefix("-- ") {
-            return self.parse_inline_label_operator(after_dashes);
+        if let Some(labeled_operator) = self.parse_inline_label_operator() {
+            return Some(labeled_operator);
         }
 
-        let operators: [(&str, bool); 6] = [
+        let operators: [(&str, bool); 8] = [
             ("--->", true),
             ("-->", true),
             ("-.->", true),
+            ("-.-", false),
             ("==>", true),
+            ("===", false),
             ("---", false),
             ("--", false),
         ];
@@ -743,31 +745,46 @@ impl<'source> StatementCursor<'source> {
         None
     }
 
-    /// Parses the `A -- label --> B` inline edge-label form.
-    fn parse_inline_label_operator(
-        &mut self,
-        after_dashes: &'source str,
-    ) -> Option<(bool, Option<String>)> {
-        let (label_text, has_arrow, after_operator) =
-            if let Some(arrow_index) = after_dashes.find("-->") {
-                (
-                    &after_dashes[..arrow_index],
-                    true,
-                    &after_dashes[arrow_index + 3..],
-                )
-            } else {
-                let line_index = after_dashes.find("---")?;
-
-                (
-                    &after_dashes[..line_index],
-                    false,
-                    &after_dashes[line_index + 3..],
-                )
+    /// Parses the inline edge-label operator forms `A -- label --> B`,
+    /// `A -.label.-> B`, and `A ==label==> B`, plus their arrowless `---`,
+    /// `.-`, and `===` endings.
+    ///
+    /// Leaves the cursor untouched and returns `None` when the current
+    /// position does not open such a form, so plain operators like `-.->` and
+    /// `==>` still parse through the fixed operator table afterwards.
+    fn parse_inline_label_operator(&mut self) -> Option<(bool, Option<String>)> {
+        let label_operators: [(&str, &str, &str); 3] = [
+            ("-- ", "-->", "---"),
+            ("-.", ".->", ".-"),
+            ("==", "==>", "==="),
+        ];
+        for (open_operator, arrow_ending, line_ending) in label_operators {
+            let Some(after_open) = self.rest.strip_prefix(open_operator) else {
+                continue;
             };
-        self.rest = after_operator;
-        let label = renderable_edge_label(label_text);
+            let (label_text, has_arrow, after_operator) =
+                if let Some(arrow_index) = after_open.find(arrow_ending) {
+                    (
+                        &after_open[..arrow_index],
+                        true,
+                        &after_open[arrow_index + arrow_ending.len()..],
+                    )
+                } else if let Some(line_index) = after_open.find(line_ending) {
+                    (
+                        &after_open[..line_index],
+                        false,
+                        &after_open[line_index + line_ending.len()..],
+                    )
+                } else {
+                    continue;
+                };
+            self.rest = after_operator;
+            let label = renderable_edge_label(label_text);
 
-        Some((has_arrow, label))
+            return Some((has_arrow, label));
+        }
+
+        None
     }
 
     /// Advances the cursor past leading whitespace.
@@ -2354,5 +2371,98 @@ mod tests {
         // Assert
         assert!(text.contains('▶'));
         assert!(!text.contains("comment"));
+    }
+
+    #[test]
+    fn test_render_mermaid_renders_dotted_edge_with_embedded_label() {
+        // Arrange
+        let source = "graph TD\n    A --> B\n    A -.yes.-> C";
+
+        // Act
+        let diagram = render_mermaid(source).expect("dotted labeled edge should render");
+        let text = diagram_text(&diagram);
+
+        // Assert
+        assert!(text.contains("yes"));
+        assert_eq!(text.matches('▼').count(), 2);
+    }
+
+    #[test]
+    fn test_render_mermaid_renders_spaced_dotted_edge_label_without_arrow() {
+        // Arrange
+        let source = "graph TD\n    A --> B\n    A -. off .- C";
+
+        // Act
+        let diagram = render_mermaid(source).expect("dotted open labeled edge should render");
+        let text = diagram_text(&diagram);
+
+        // Assert
+        assert!(text.contains("off"));
+        assert_eq!(text.matches('▼').count(), 1);
+    }
+
+    #[test]
+    fn test_render_mermaid_renders_thick_edge_with_embedded_label() {
+        // Arrange
+        let source = "graph TD\n    A --> B\n    A ==big==> C";
+
+        // Act
+        let diagram = render_mermaid(source).expect("thick labeled edge should render");
+        let text = diagram_text(&diagram);
+
+        // Assert
+        assert!(text.contains("big"));
+        assert_eq!(text.matches('▼').count(), 2);
+    }
+
+    #[test]
+    fn test_render_mermaid_keeps_plain_dotted_and_thick_arrows() {
+        // Arrange
+        let source = "graph TD\n    A -.-> B\n    A ==>|yes| C";
+
+        // Act
+        let diagram = render_mermaid(source).expect("plain dotted and thick arrows should render");
+        let text = diagram_text(&diagram);
+
+        // Assert
+        assert!(text.contains("yes"));
+        assert_eq!(text.matches('▼').count(), 2);
+    }
+
+    #[test]
+    fn test_render_mermaid_renders_graph_mixing_solid_and_dotted_labeled_edges() {
+        // Arrange
+        let source = concat!(
+            "graph TD\n",
+            "    T[Turn command] --> C[Auto-commit]\n",
+            "    C --> P[Auto-push]\n",
+            "    C --> R[Rebase]\n",
+            "    P -.race.-> R\n",
+        );
+
+        // Act
+        let diagram = render_mermaid(source).expect("mixed edge graph should render");
+        let text = diagram_text(&diagram);
+
+        // Assert
+        assert!(text.contains("Turn command"));
+        assert!(text.contains("Auto-push"));
+        assert!(text.contains("Rebase"));
+        assert!(text.contains('▼'));
+    }
+
+    #[test]
+    fn test_render_mermaid_renders_plain_dotted_and_thick_open_links() {
+        // Arrange
+        let source = "graph TD\n    A -.- B\n    B === C";
+
+        // Act
+        let diagram = render_mermaid(source).expect("open dotted and thick links should render");
+        let text = diagram_text(&diagram);
+
+        // Assert
+        assert!(text.contains('A'));
+        assert!(text.contains('C'));
+        assert!(!text.contains('▼'));
     }
 }

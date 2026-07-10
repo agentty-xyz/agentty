@@ -195,22 +195,23 @@ tab stops.
 <a id="usage-session-mermaid"></a> Complete ```` ```mermaid ```` fenced blocks in
 session output render as Unicode diagrams. Simple `graph`/`flowchart` diagrams with
 `TD`, `TB`, or `LR` direction are supported, including edges that span multiple layers
-and compact two-node `LR` feedback loops. Long or HTML line-break edge labels degrade to
-the first renderable label line instead of preventing the graph preview. `erDiagram`
-entity-relationship diagrams render entities as boxes, relationships as lines labeled
-with the relationship name, and crow's-foot cardinalities as compact end markers — `1`
-(exactly one), `?` (zero or one), `*` (zero or more), and `+` (one or more). Entity
-attribute blocks are omitted from the diagram. Simple `sequenceDiagram` participant and
-message lines render as lifelines with arrowed message rows; self-messages render as a
-compact loop on their lifeline, and participant or message labels longer than the
-32-character label limit are truncated with a trailing ellipsis instead of preventing
-the diagram preview. Unsupported diagram types, incomplete blocks, and diagrams wider
-than the panel keep the plain fenced-code presentation. Session turn prompts tell agents
-about this supported diagram subset, so agents include a diagram when it explains a
-flow, process, or relationship better than prose. The prompts also instruct agents to
-place Mermaid only in the assistant `answer` as an unindented ```` ```mermaid ````
-fenced block, because plain code fences or indented blocks stay in the fenced-code
-presentation.
+and compact two-node `LR` feedback loops. Solid, dotted, and thick edges render with
+optional labels in the `-->|label|`, `-- label -->`, `-.label.->`, and `==label==>`
+forms. Long or HTML line-break edge labels degrade to the first renderable label line
+instead of preventing the graph preview. `erDiagram` entity-relationship diagrams render
+entities as boxes, relationships as lines labeled with the relationship name, and
+crow's-foot cardinalities as compact end markers — `1` (exactly one), `?` (zero or one),
+`*` (zero or more), and `+` (one or more). Entity attribute blocks are omitted from the
+diagram. Simple `sequenceDiagram` participant and message lines render as lifelines with
+arrowed message rows; self-messages render as a compact loop on their lifeline, and
+participant or message labels longer than the 32-character label limit are truncated
+with a trailing ellipsis instead of preventing the diagram preview. Unsupported diagram
+types, incomplete blocks, and diagrams wider than the panel keep the plain fenced-code
+presentation. Session turn prompts tell agents about this supported diagram subset, so
+agents include a diagram when it explains a flow, process, or relationship better than
+prose. The prompts also instruct agents to place Mermaid only in the assistant `answer`
+as an unindented ```` ```mermaid ```` fenced block, because plain code fences or
+indented blocks stay in the fenced-code presentation.
 
 ### Forking a Review Session
 
