@@ -274,6 +274,7 @@ mod tests {
             (ReasoningLevel::Medium, "medium"),
             (ReasoningLevel::High, "high"),
             (ReasoningLevel::XHigh, "max"),
+            (ReasoningLevel::Max, "max"),
         ];
 
         for (reasoning_level, expected_effort) in cases {

@@ -202,7 +202,7 @@ fn settings_jk_navigation() {
 /// Verify that selector settings are edited through dropdowns.
 ///
 /// Opens the Settings tab, moves to the project reasoning row, opens the
-/// dropdown, and selects the next value. Captures before, during, and after
+/// dropdown, and selects the maximum value. Captures before, during, and after
 /// to show the dropdown workflow in the GIF.
 #[test]
 fn settings_dropdown_selects_value() {
@@ -228,6 +228,7 @@ fn settings_dropdown_selects_value() {
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(1500)
                     .capture_labeled("dropdown", "Reasoning Level dropdown")
+                    .press_key("j")
                     .press_key("j")
                     .wait_for_stable_frame(200, 3000)
                     .press_key("Enter")
@@ -257,10 +258,11 @@ fn settings_dropdown_selects_value() {
                     &dropdown_full,
                 );
                 assertion::assert_text_in_region(&dropdown_frame, "xhigh", &dropdown_full);
+                assertion::assert_text_in_region(&dropdown_frame, "max", &dropdown_full);
 
                 let after_frame = common::frame_from_capture(&report.captures[2]);
                 let after_full = Region::full(after_frame.cols(), after_frame.rows());
-                assertion::assert_text_in_region(&after_frame, "xhigh", &after_full);
+                assertion::assert_text_in_region(&after_frame, "max", &after_full);
             },
         )
         .expect("feature test failed");

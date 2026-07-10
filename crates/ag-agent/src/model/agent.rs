@@ -132,6 +132,8 @@ pub enum ReasoningLevel {
     High,
     /// Extra-high reasoning effort for deeper analysis.
     XHigh,
+    /// Maximum reasoning effort for the hardest tasks.
+    Max,
 }
 
 impl AgentSelection {
@@ -397,7 +399,7 @@ pub fn resolve_prompt_model_agent_kind(
 
 impl ReasoningLevel {
     /// All selectable reasoning-effort levels in UI display order.
-    pub const ALL: [Self; 4] = [Self::Low, Self::Medium, Self::High, Self::XHigh];
+    pub const ALL: [Self; 5] = [Self::Low, Self::Medium, Self::High, Self::XHigh, Self::Max];
 
     /// Returns the stable persisted identifier for this level.
     ///
@@ -409,6 +411,7 @@ impl ReasoningLevel {
             Self::Medium => "medium",
             Self::High => "high",
             Self::XHigh => "xhigh",
+            Self::Max => "max",
         }
     }
 
@@ -419,12 +422,13 @@ impl ReasoningLevel {
             Self::Medium => "medium",
             Self::High => "high",
             Self::XHigh => "xhigh",
+            Self::Max => "max",
         }
     }
 
     /// Returns the Claude `--effort` value for this level.
     ///
-    /// Maps `XHigh` to `"max"`, which is currently only supported on
+    /// Maps `XHigh` and `Max` to `"max"`, which is currently only supported on
     /// `claude-opus-4-8`. The Claude CLI enforces this restriction and will
     /// surface an error for other models.
     pub fn claude(self) -> &'static str {
@@ -432,7 +436,7 @@ impl ReasoningLevel {
             Self::Low => "low",
             Self::Medium => "medium",
             Self::High => "high",
-            Self::XHigh => "max",
+            Self::XHigh | Self::Max => "max",
         }
     }
 
@@ -442,7 +446,8 @@ impl ReasoningLevel {
             Self::Low => "Fastest responses with lighter reasoning.",
             Self::Medium => "Balanced speed and reasoning depth.",
             Self::High => "Deeper reasoning for tougher tasks.",
-            Self::XHigh => "Maximum reasoning effort for the hardest tasks.",
+            Self::XHigh => "Extra-high reasoning for complex tasks.",
+            Self::Max => "Maximum reasoning effort for the hardest tasks.",
         }
     }
 }
@@ -456,6 +461,7 @@ impl FromStr for ReasoningLevel {
             "medium" => Ok(Self::Medium),
             "high" => Ok(Self::High),
             "xhigh" => Ok(Self::XHigh),
+            "max" => Ok(Self::Max),
             other => Err(format!("unknown reasoning level: {other}")),
         }
     }
@@ -858,12 +864,14 @@ mod tests {
         let medium_level = "medium".parse::<ReasoningLevel>();
         let high_level = "high".parse::<ReasoningLevel>();
         let xhigh_level = "xhigh".parse::<ReasoningLevel>();
+        let max_level = "max".parse::<ReasoningLevel>();
 
         // Assert
         assert_eq!(low_level, Ok(ReasoningLevel::Low));
         assert_eq!(medium_level, Ok(ReasoningLevel::Medium));
         assert_eq!(high_level, Ok(ReasoningLevel::High));
         assert_eq!(xhigh_level, Ok(ReasoningLevel::XHigh));
+        assert_eq!(max_level, Ok(ReasoningLevel::Max));
     }
 
     #[test]
@@ -960,13 +968,25 @@ mod tests {
 
     #[test]
     /// Ensures `ReasoningLevel::claude()` maps all levels to the correct
-    /// Claude `--effort` values, including `XHigh` → `"max"`.
+    /// Claude `--effort` values, including the highest generic levels.
     fn test_reasoning_level_claude_maps_all_levels() {
         // Arrange / Act / Assert
         assert_eq!(ReasoningLevel::Low.claude(), "low");
         assert_eq!(ReasoningLevel::Medium.claude(), "medium");
         assert_eq!(ReasoningLevel::High.claude(), "high");
         assert_eq!(ReasoningLevel::XHigh.claude(), "max");
+        assert_eq!(ReasoningLevel::Max.claude(), "max");
+    }
+
+    #[test]
+    /// Ensures Codex reasoning values include the distinct `max` effort.
+    fn test_reasoning_level_codex_maps_all_levels() {
+        // Arrange / Act / Assert
+        assert_eq!(ReasoningLevel::Low.codex(), "low");
+        assert_eq!(ReasoningLevel::Medium.codex(), "medium");
+        assert_eq!(ReasoningLevel::High.codex(), "high");
+        assert_eq!(ReasoningLevel::XHigh.codex(), "xhigh");
+        assert_eq!(ReasoningLevel::Max.codex(), "max");
     }
 
     #[test]
@@ -978,6 +998,7 @@ mod tests {
         assert_eq!(ReasoningLevel::Medium.as_str(), "medium");
         assert_eq!(ReasoningLevel::High.as_str(), "high");
         assert_eq!(ReasoningLevel::XHigh.as_str(), "xhigh");
+        assert_eq!(ReasoningLevel::Max.as_str(), "max");
     }
 
     #[test]

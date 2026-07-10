@@ -2403,13 +2403,13 @@ mod tests {
     fn settings_rows_show_reasoning_level_value() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.reasoning_level = ReasoningLevel::XHigh;
+        manager.reasoning_level = ReasoningLevel::Max;
 
         // Act
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[1].1, "xhigh");
+        assert_eq!(rows[1].1, "max");
     }
 
     #[test]
