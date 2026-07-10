@@ -467,7 +467,7 @@ mod tests {
         let result = process_event_with_key_handler(
             &mut app,
             &mut terminal,
-            Some(Event::Paste("line 1\r\nline 2".to_string())),
+            Some(Event::Paste("    line 1\r\n        line 2".to_string())),
             |_, (), _| Box::pin(async { Err(io::Error::other("unexpected key-handler call")) }),
         )
         .await;
@@ -475,7 +475,7 @@ mod tests {
         // Assert
         assert!(matches!(result, Ok(EventResult::Continue)));
         assert!(
-            matches!(&app.mode, AppMode::Prompt { input, .. } if input.text() == "line 1\nline 2")
+            matches!(&app.mode, AppMode::Prompt { input, .. } if input.text() == "    line 1\n        line 2")
         );
     }
 

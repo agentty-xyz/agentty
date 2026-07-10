@@ -89,10 +89,11 @@ impl SessionMessage {
         }
     }
 
-    /// Creates one raw user or assistant message with outer whitespace removed.
+    /// Creates one raw user or assistant message using kind-specific storage
+    /// normalization.
     pub fn conversation(position: i64, kind: SessionMessageKind, content: impl AsRef<str>) -> Self {
         Self {
-            content: normalized_message_content(content.as_ref()),
+            content: stored_message_content(kind, content.as_ref()),
             kind,
             position,
         }
@@ -198,15 +199,16 @@ impl SessionTranscript {
 
 /// Returns the durable message content for one kind.
 ///
-/// Conversation rows store raw user/assistant text with outer whitespace
-/// removed. Workflow notices preserve exact content so status blocks keep their
-/// spacing.
+/// User prompts preserve leading horizontal whitespace so pasted indentation
+/// survives persistence while outer line breaks and trailing whitespace are
+/// normalized. Assistant rows remove outer whitespace, while workflow notices
+/// preserve exact content so status blocks keep their spacing.
 pub fn stored_message_content(kind: SessionMessageKind, content: &str) -> String {
-    if kind.is_conversation_message() {
-        return normalized_message_content(content);
+    match kind {
+        SessionMessageKind::UserPrompt => normalized_user_prompt_content(content),
+        SessionMessageKind::AssistantAnswer => normalized_message_content(content),
+        SessionMessageKind::WorkflowNotice => content.to_string(),
     }
-
-    content.to_string()
 }
 
 impl SessionMessage {
@@ -231,8 +233,8 @@ pub fn normalized_message_content(content: &str) -> String {
 
 /// Appends one raw user prompt using the session transcript marker and spacing.
 fn append_user_prompt_display_text(output: &mut String, content: &str) {
-    let content = content.trim();
-    if content.is_empty() {
+    let content = normalized_user_prompt_content(content);
+    if content.trim().is_empty() {
         return;
     }
 
@@ -261,6 +263,15 @@ fn append_user_prompt_display_text(output: &mut String, content: &str) {
         output.push('\n');
     }
     output.push('\n');
+}
+
+/// Normalizes prompt boundaries without consuming indentation on the first
+/// content line.
+fn normalized_user_prompt_content(content: &str) -> String {
+    content
+        .trim_end()
+        .trim_start_matches(['\r', '\n'])
+        .to_string()
 }
 
 /// Returns true for raw clarification question rows like `1. Q: Need tests?`.
@@ -486,10 +497,22 @@ mod tests {
     }
 
     #[test]
-    fn test_stored_message_content_normalizes_conversation_spacing() {
+    fn test_stored_message_content_preserves_user_prompt_indentation() {
         // Arrange, Act, Assert
         assert_eq!(
-            stored_message_content(SessionMessageKind::UserPrompt, "\n  hello  \n"),
+            stored_message_content(
+                SessionMessageKind::UserPrompt,
+                "\n    first\n        second  \n"
+            ),
+            "    first\n        second"
+        );
+    }
+
+    #[test]
+    fn test_stored_message_content_normalizes_assistant_spacing() {
+        // Arrange, Act, Assert
+        assert_eq!(
+            stored_message_content(SessionMessageKind::AssistantAnswer, "\n  hello  \n"),
             "hello"
         );
     }

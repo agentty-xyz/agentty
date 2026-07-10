@@ -1477,7 +1477,7 @@ mod tests {
             "session-id",
             SessionTranscriptMessageAppend {
                 kind: SessionMessageKind::UserPrompt,
-                raw_content: " hello ",
+                raw_content: "    hello ",
             },
         )
         .await;
@@ -1489,7 +1489,7 @@ mod tests {
                 .expect("transcript lock should not be poisoned")
                 .replay_text()
                 .expect("transcript should have replay text"),
-            " › hello\n\n"
+            " ›     hello\n\n"
         );
         assert_eq!(
             transcript
@@ -1499,7 +1499,7 @@ mod tests {
             &[SessionMessage::conversation(
                 0,
                 SessionMessageKind::UserPrompt,
-                "hello"
+                "    hello"
             )]
         );
         let messages = database
@@ -1509,7 +1509,7 @@ mod tests {
             .expect("failed to load persisted session messages");
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].kind, "user_prompt");
-        assert_eq!(messages[0].content, "hello");
+        assert_eq!(messages[0].content, "    hello");
     }
 
     #[test]

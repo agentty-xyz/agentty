@@ -246,7 +246,7 @@ async fn test_append_session_message_writes_message_rows() {
     // Act
     database
         .sessions()
-        .append_session_message("session-a", SessionMessageKind::UserPrompt, " hi ")
+        .append_session_message("session-a", SessionMessageKind::UserPrompt, "    hi ")
         .await
         .expect("failed to append prompt message");
     database
@@ -284,7 +284,7 @@ async fn test_append_session_message_writes_message_rows() {
     assert_eq!(messages.len(), 3);
     assert_eq!(messages[0].position, 0);
     assert_eq!(messages[0].kind, SessionMessageKind::UserPrompt.as_str());
-    assert_eq!(messages[0].content, "hi");
+    assert_eq!(messages[0].content, "    hi");
     assert_eq!(messages[1].position, 1);
     assert_eq!(
         messages[1].kind,

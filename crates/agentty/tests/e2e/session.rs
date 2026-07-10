@@ -3157,6 +3157,40 @@ fn prompt_multiline_via_alt_enter() -> E2eResult {
     Ok(())
 }
 
+/// Verify bracketed paste keeps leading indentation after prompt submission.
+#[test]
+fn prompt_paste_indentation() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("prompt_paste_indentation")
+        .with_git()
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .write_text("\x1b[200~    indented prompt\x1b[201~")
+                    .wait_for_text("indented prompt", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("q: back", 10000)
+                    .capture_labeled(
+                        "submitted_indentation",
+                        "Submitted pasted prompt retaining leading indentation",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                let text = frame.text_in_region(&full);
+
+                assert!(text.contains(" ›     indented prompt"));
+            },
+        )?;
+
+    Ok(())
+}
+
 /// Verify that CSI-u `Shift+Enter` inserts a newline in the prompt input.
 #[test]
 fn prompt_multiline_via_csi_u_shift_enter() -> E2eResult {

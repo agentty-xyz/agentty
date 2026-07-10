@@ -188,7 +188,9 @@ review automatically; press `f` for a manual one.
 Session output renders common Markdown blocks in agent answers and persisted user
 messages, including headings, lists, block quotes, code fences, and pipe tables. Tables
 are aligned to the output panel width so compact comparison data stays readable in the
-terminal transcript.
+terminal transcript. Leading horizontal whitespace in pasted prompts is preserved after
+submission, including nested indentation in multiline text. Tabs render at four-column
+tab stops.
 
 <a id="usage-session-mermaid"></a> Complete ```` ```mermaid ```` fenced blocks in
 session output render as Unicode diagrams. Simple `graph`/`flowchart` diagrams with
