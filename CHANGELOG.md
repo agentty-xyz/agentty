@@ -7,9 +7,24 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.12.8] - 2026-07-09
+
 ### Removed
 
 - agentty: remove the `/qe:check` prompt slash command.
+
+### Changed
+
+- agentty: render dotted and thick Mermaid edges with inline labels.
+- agentty: preserve pasted prompt indentation.
+- agentty: pin the user prompt block background to a dedicated RGB surface token.
+- agentty: improve session configuration and E2E stability.
+- docs: document that GIF force mode requires an unsandboxed shell.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
 
 ## [v0.12.7] - 2026-07-09
 
