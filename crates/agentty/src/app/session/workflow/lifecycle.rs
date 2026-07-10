@@ -675,6 +675,39 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Clears the persisted and in-memory draft flag once a draft session
+    /// starts its first live turn.
+    ///
+    /// The flag only means "still staging draft prompts", so it must not
+    /// outlive the session start; a sticky flag would keep draft-only
+    /// restrictions, such as the fork gate, active for the session's whole
+    /// life. Non-draft sessions skip the write.
+    ///
+    /// # Errors
+    /// Returns an error if the session is missing or persistence fails.
+    async fn clear_session_draft_flag(
+        &mut self,
+        services: &AppServices,
+        session_id: &str,
+    ) -> Result<(), SessionError> {
+        if !self.session_or_err(session_id)?.is_draft_session() {
+            return Ok(());
+        }
+
+        services
+            .db()
+            .sessions()
+            .clear_session_draft_flag(session_id)
+            .await?;
+
+        let session_index = self.session_index_or_err(session_id)?;
+        if let Some(session) = self.session_at_mut(session_index) {
+            session.is_draft = false;
+        }
+
+        Ok(())
+    }
+
     /// Persists the parent tip used by a stacked draft's newly materialized
     /// worktree.
     ///
@@ -1124,6 +1157,14 @@ impl SessionManager {
                 .await;
 
             return Err(error);
+        }
+
+        if let Err(error) = self.clear_session_draft_flag(services, session_id).await {
+            warn!(
+                session_id,
+                %error,
+                "failed to clear draft flag after session start"
+            );
         }
 
         Ok(())

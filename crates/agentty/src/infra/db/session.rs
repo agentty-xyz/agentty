@@ -448,6 +448,10 @@ pub trait SessionRepository: Send + Sync {
         model: &str,
     ) -> Result<(), DbError>;
 
+    /// Clears the draft flag for a session row once its staged draft bundle
+    /// starts the first live turn.
+    async fn clear_session_draft_flag(&self, id: &str) -> Result<(), DbError>;
+
     /// Updates the persisted merged commit hash for a session row.
     async fn update_session_merged_commit_hash(
         &self,
@@ -1816,6 +1820,21 @@ WHERE id = ?
         Ok(())
     }
 
+    async fn clear_session_draft_flag(&self, id: &str) -> Result<(), DbError> {
+        sqlx::query(
+            r"
+UPDATE session
+SET is_draft = 0
+WHERE id = ?
+",
+        )
+        .bind(id)
+        .execute(&self.0)
+        .await?;
+
+        Ok(())
+    }
+
     async fn update_session_merged_commit_hash(
         &self,
         id: &str,
@@ -2722,6 +2741,40 @@ WHERE id = ?
 
         assert_source_reset_state(&source_reset_row, source_review_request.as_ref());
         assert_fork_reset_state(&fork_row, &fork_reset_row, fork_review_request.as_ref());
+    }
+
+    #[tokio::test]
+    async fn test_clear_session_draft_flag_marks_draft_session_live() {
+        // Arrange
+        let (database, _pool) = AppRepositories::in_memory_with_pool().await;
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/project", None)
+            .await
+            .expect("failed to upsert project");
+        database
+            .sessions()
+            .insert_draft_session("draft-session", "gpt-5.5", "main", "Draft", project_id)
+            .await
+            .expect("failed to insert draft session");
+
+        // Act
+        database
+            .sessions()
+            .clear_session_draft_flag("draft-session")
+            .await
+            .expect("failed to clear session draft flag");
+
+        // Assert
+        let session_row = database
+            .sessions()
+            .load_sessions()
+            .await
+            .expect("failed to load sessions")
+            .into_iter()
+            .find(|session_row| session_row.id == "draft-session")
+            .expect("missing draft session row");
+        assert!(!session_row.is_draft);
     }
 
     /// Verifies `SessionJoinRow::into_session_row()` drops partially

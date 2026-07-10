@@ -2038,6 +2038,91 @@ async fn test_start_staged_session_launches_bundle_and_clears_staged_drafts() {
 }
 
 #[tokio::test]
+async fn test_start_staged_session_clears_draft_flag() {
+    // Arrange
+    let dir = tempdir().expect("failed to create temp dir");
+    let mut app = new_test_app_with_git(dir.path()).await;
+    let session_id = app
+        .create_draft_session()
+        .await
+        .expect("failed to create draft session");
+    app.stage_draft_message(&session_id, "First draft")
+        .await
+        .expect("failed to stage first draft");
+
+    // Act
+    app.start_staged_session(&session_id)
+        .await
+        .expect("failed to start staged session");
+
+    // Assert
+    let session = app
+        .sessions
+        .sessions()
+        .iter()
+        .find(|session| session.id == session_id)
+        .expect("missing started session");
+    assert!(!session.is_draft);
+    let db_sessions = app
+        .services
+        .db()
+        .sessions()
+        .load_sessions()
+        .await
+        .expect("failed to load sessions");
+    assert!(!db_sessions[0].is_draft);
+}
+
+#[tokio::test]
+async fn test_start_staged_session_succeeds_when_clearing_draft_flag_fails() {
+    // Arrange
+    let dir = tempdir().expect("failed to create temp dir");
+    let (db, pool) = AppRepositories::in_memory_with_pool().await;
+    let mut app = new_test_app_with_git_and_db(dir.path(), db).await;
+    let session_id = app
+        .create_draft_session()
+        .await
+        .expect("failed to create draft session");
+    app.stage_draft_message(&session_id, "First draft")
+        .await
+        .expect("failed to stage first draft");
+    sqlx::query(
+        r"
+CREATE TRIGGER fail_clear_draft_flag
+BEFORE UPDATE OF is_draft ON session
+WHEN OLD.is_draft = 1 AND NEW.is_draft = 0
+BEGIN
+    SELECT RAISE(ABORT, 'draft cleanup failed');
+END
+",
+    )
+    .execute(&pool)
+    .await
+    .expect("failed to install draft cleanup failure trigger");
+
+    // Act
+    let result = app.start_staged_session(&session_id).await;
+
+    // Assert
+    assert!(result.is_ok());
+    let session = app
+        .sessions
+        .sessions()
+        .iter()
+        .find(|session| session.id == session_id)
+        .expect("missing started session");
+    assert!(session.is_draft);
+    let db_sessions = app
+        .services
+        .db()
+        .sessions()
+        .load_sessions()
+        .await
+        .expect("failed to load sessions");
+    assert!(db_sessions[0].is_draft);
+}
+
+#[tokio::test]
 async fn test_start_staged_session_launches_stacked_draft_child() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
