@@ -157,7 +157,7 @@ repos:
         name: cargo nextest agentty e2e
         description: Postsubmit-only `agentty` integration tests from `crates/agentty/tests`.
         entry: >-
-          cargo nextest run --locked --profile ci -p agentty
+          env TESTTY_GIF_MODE=check cargo nextest run --locked --profile ci -p agentty
           --test showcase --test protocol_compliance_e2e --test e2e
         language: system
         always_run: true

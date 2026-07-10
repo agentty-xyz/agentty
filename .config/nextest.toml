@@ -9,6 +9,11 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 agentty-e2e = { max-threads = 1 }
 
 [[profile.ci.overrides]]
-filter = 'package(agentty) and kind(test) and (binary(showcase) or binary(protocol_compliance_e2e) or binary(e2e))'
+filter = 'package(agentty) and kind(test) and binary(e2e)'
+slow-timeout = { period = "120s", terminate-after = 5 }
+test-group = 'agentty-e2e'
+
+[[profile.ci.overrides]]
+filter = 'package(agentty) and kind(test) and (binary(showcase) or binary(protocol_compliance_e2e))'
 slow-timeout = { period = "120s", terminate-after = 5 }
 test-group = 'agentty-e2e'

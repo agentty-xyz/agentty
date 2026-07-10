@@ -950,15 +950,7 @@ async fn create_and_start_session(app: &mut App, prompt: &str) {
 }
 
 async fn wait_for_status(app: &mut App, session_id: &str, expected: Status) {
-    wait_for_status_with_retries(app, session_id, expected, 2000).await;
-}
-
-fn session_replay_text(session: &Session) -> String {
-    session
-        .transcript
-        .as_ref()
-        .and_then(SessionTranscript::replay_text)
-        .unwrap_or_default()
+    wait_for_status_with_retries(app, session_id, expected, 2000, false).await;
 }
 
 async fn wait_for_status_with_retries(
@@ -966,8 +958,12 @@ async fn wait_for_status_with_retries(
     session_id: &str,
     expected: Status,
     retries: usize,
+    process_events_each_iteration: bool,
 ) {
     for _ in 0..retries {
+        if process_events_each_iteration {
+            app.process_pending_app_events().await;
+        }
         app.sessions.sync_from_handles();
         let Some(session) = app
             .sessions
@@ -975,7 +971,8 @@ async fn wait_for_status_with_retries(
             .iter()
             .find(|session| session.id == session_id)
         else {
-            break;
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            continue;
         };
         if session.status == expected {
             return;
@@ -997,6 +994,14 @@ async fn wait_for_status_with_retries(
         "session transcript while waiting for status: {}",
         session_replay_text(session)
     );
+}
+
+fn session_replay_text(session: &Session) -> String {
+    session
+        .transcript
+        .as_ref()
+        .and_then(SessionTranscript::replay_text)
+        .unwrap_or_default()
 }
 
 /// Waits until background cleanup removes `path`.
@@ -3187,7 +3192,7 @@ async fn test_reply_turn_completion_persists_session_size() {
             AgentModel::ClaudeOpus48,
         )
         .await;
-    wait_for_status(&mut app, &session_id, Status::AgentReview).await;
+    wait_for_status_with_retries(&mut app, &session_id, Status::AgentReview, 200, true).await;
     app.process_pending_app_events().await;
     let db_sessions = app
         .services
@@ -4107,7 +4112,7 @@ async fn test_merge_session_removes_worktree_and_branch_after_success() {
 
     // Assert
     assert!(result.is_ok(), "merge should enqueue successfully");
-    wait_for_status_with_retries(&mut app, &session_id, Status::Done, 200).await;
+    wait_for_status_with_retries(&mut app, &session_id, Status::Done, 200, false).await;
 
     app.sessions.sync_from_handles();
     let merged_session = app
@@ -4145,7 +4150,7 @@ async fn test_merge_session_restacks_stacked_child_after_success() {
 
     // Assert
     assert!(result.is_ok(), "merge should enqueue successfully");
-    wait_for_status_with_retries(&mut app, &parent_session_id, Status::Done, 200).await;
+    wait_for_status_with_retries(&mut app, &parent_session_id, Status::Done, 200, false).await;
     let db_sessions = app
         .services
         .db()
@@ -4179,7 +4184,7 @@ async fn test_merge_session_marks_done_when_changes_are_already_in_base() {
 
     // Assert
     assert!(result.is_ok(), "merge should enqueue successfully");
-    wait_for_status_with_retries(&mut app, &session_id, Status::Done, 200).await;
+    wait_for_status_with_retries(&mut app, &session_id, Status::Done, 200, false).await;
 
     app.sessions.sync_from_handles();
     let session = app
