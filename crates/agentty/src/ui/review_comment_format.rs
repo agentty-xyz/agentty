@@ -2,7 +2,8 @@ use ag_forge::{ReviewComment, ReviewCommentAnchorSide, ReviewCommentThread};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::ui::{markdown, style};
+use crate::presentation::style;
+use crate::ui::markdown;
 
 /// Appends comment author rows and two-space-indented markdown bodies.
 pub(crate) fn append_comment_bodies(

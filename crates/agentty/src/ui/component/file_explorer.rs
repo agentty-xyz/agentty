@@ -7,8 +7,9 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 
+use crate::presentation::style;
+use crate::ui::Component;
 use crate::ui::diff_util::{DiffLine, DiffLineKind, FileTreeItem};
-use crate::ui::{Component, style};
 
 const DIFF_GIT_FILE_HEADER_PREFIX: &str = "diff --git";
 const DIFF_GIT_PATH_PREFIX: &str = "diff --git a/";

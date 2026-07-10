@@ -6,13 +6,14 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding};
 
+use crate::app::VisibleSessionReview;
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::session::{Session, SessionId};
 use crate::infra::review_comment_cache::ReviewCommentCache;
+use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, DiffRightPanel, HelpContext};
+use crate::presentation::style::palette;
 use crate::ui::router::{ListBackgroundRenderContext, render_list_background};
-use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, DiffRightPanel, HelpContext};
-use crate::ui::style::palette;
-use crate::ui::{Component, Page, SessionReviewSnapshot, component, markdown, page};
+use crate::ui::{Component, Page, component, markdown, page};
 
 const OVERLAY_HORIZONTAL_PADDING: u16 = 2;
 const OVERLAY_VERTICAL_PADDING: u16 = 1;
@@ -89,7 +90,7 @@ pub(crate) struct ViewInfoPopupRenderContext<'a> {
     /// Restored session view rendered behind the popup.
     pub(crate) restore_view: &'a ConfirmationViewMode,
     /// Focused-review state for the restored session background.
-    pub(crate) review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
+    pub(crate) review_snapshot: Option<&'a VisibleSessionReview<'a>>,
     /// Session progress messages keyed by session id.
     pub(crate) session_progress_messages: &'a HashMap<SessionId, String>,
     /// Latest observable update versions keyed by session id.
@@ -118,7 +119,7 @@ pub(crate) struct HelpOverlayRenderContext<'a, 'state> {
     /// behind help overlays opened from that page.
     pub(crate) review_comment_cache: &'a ReviewCommentCache,
     /// Focused-review state for the restored session background.
-    pub(crate) review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
+    pub(crate) review_snapshot: Option<&'a VisibleSessionReview<'a>>,
     /// Help overlay vertical scroll position.
     pub(crate) scroll_offset: u16,
     /// Session progress messages keyed by session id.
@@ -145,7 +146,7 @@ struct HelpBackgroundRenderContext<'a, 'state> {
     /// help.
     review_comment_cache: &'a ReviewCommentCache,
     /// Focused-review state for the restored session background.
-    review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
+    review_snapshot: Option<&'a VisibleSessionReview<'a>>,
     /// Session progress messages keyed by session id.
     session_progress_messages: &'a HashMap<SessionId, String>,
     /// Latest observable update versions keyed by session id.
@@ -563,7 +564,7 @@ fn render_help_background(f: &mut Frame, area: Rect, context: HelpBackgroundRend
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::style::palette;
+    use crate::presentation::style::palette;
 
     #[test]
     fn test_sync_popup_message_with_project_and_branch() {
@@ -747,7 +748,7 @@ mod tests {
             can_start_staged_session: false,
             publish_pull_request_action: None,
             session_id: "missing-session".into(),
-            session_state: crate::ui::state::help_action::ViewSessionState::Done,
+            session_state: crate::presentation::help_action::ViewSessionState::Done,
             scroll_offset: Some(0),
         };
 

@@ -48,5 +48,8 @@ When changing architecture-level behavior under `src/`, update:
 - `app.rs` and `app/` own orchestration and workflow state.
 - `domain.rs` and `domain/` own business entities and enums.
 - `infra.rs` and `infra/` own external integrations and persistence.
+- `presentation.rs` and `presentation/` own mode state, semantic styling, icons, and
+  display-message contracts shared by app orchestration, runtime input, and UI
+  rendering.
 - `runtime.rs` and `runtime/` own terminal lifecycle and event dispatch.
-- `ui.rs` and `ui/` own rendering, layout, and interaction widgets.
+- `ui.rs` and `ui/` own frame rendering, layout, render caches, and interaction widgets.

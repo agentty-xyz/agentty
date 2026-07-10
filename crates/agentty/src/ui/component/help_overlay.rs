@@ -4,8 +4,8 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::ui::state::app_mode::HelpContext;
-use crate::ui::style::palette;
+use crate::presentation::app_mode::HelpContext;
+use crate::presentation::style::palette;
 use crate::ui::{Component, overlay};
 
 const MIN_OVERLAY_WIDTH: u16 = 30;
@@ -98,7 +98,7 @@ impl Component for HelpOverlay<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::state::help_action::HelpAction;
+    use crate::presentation::help_action::HelpAction;
 
     #[test]
 

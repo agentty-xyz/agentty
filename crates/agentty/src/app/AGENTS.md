@@ -36,7 +36,14 @@ Application-layer workflows and orchestration.
   - A low-frequency metadata poll remains as a safety fallback.
 - Recovery model:
   - Operation state is persisted so interrupted work can be reconciled on startup.
+- Persistence model:
+  - Durable status, transcript, and first-message metadata mutations complete before
+    their corresponding live handles or render snapshots change.
+  - Status writes compare the expected persisted status so concurrent transitions cannot
+    silently overwrite each other.
 - Boundary model:
+  - App orchestration may consume `presentation/` contracts but must not import
+    `runtime/` or `ui/`; expose borrowed render projections for the UI boundary.
   - Keep production filesystem discovery and path probes out of `app/`.
   - Route directory walking, `exists` or `is_dir` checks for external paths, and similar
     host-filesystem lookups through infra traits instead of calling `std::fs`,
@@ -56,6 +63,8 @@ When app orchestration or session lifecycle behavior changes, update:
 ## Entry Points
 
 - `core.rs` owns the main `App` facade and reducer wiring.
+- `at_mention.rs` owns app-layer file-index loading and selection orchestration for
+  prompt mentions.
 - `session.rs` and `session/` own session lifecycle and worker orchestration.
 - `project.rs`, `setting.rs`, and `tab.rs` own project, settings, and top-level
   navigation concerns.

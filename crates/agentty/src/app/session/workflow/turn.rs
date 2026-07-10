@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use super::worker::{SessionWorkerContext, TurnMetadata};
-use super::{SessionTaskService, StatusTransition, isolation, post_turn};
+use super::{SessionTaskService, isolation, post_turn};
 use crate::app::session::SessionError;
 use crate::app::{AppEvent, SessionManager, setting};
 use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel};
@@ -146,7 +146,15 @@ pub(super) async fn run_channel_turn(
     // `run_turn_with_cancellation` for the duration of this turn.
     let turn_cancel_token = fresh_turn_cancel_token(context)?;
 
-    prepare_resume_turn(context, &request_kind).await;
+    if let Err(error) = prepare_resume_turn(context, &request_kind).await {
+        SessionManager::cleanup_prompt_attachment_paths(
+            context.fs_client.clone(),
+            prompt.local_image_paths().cloned().collect(),
+        )
+        .await;
+
+        return Err(error);
+    }
 
     let main_checkout_snapshot = match MainCheckoutSnapshot::capture(context).await {
         Ok(snapshot) => snapshot,
@@ -164,7 +172,7 @@ pub(super) async fn run_channel_turn(
                 Err(AgentError::Backend(error.to_string())),
             )
             .await;
-            post_turn::finalize_channel_turn(&finalizer_context, &result).await;
+            post_turn::finalize_channel_turn(&finalizer_context, &result).await?;
 
             return result.map(|_| ());
         }
@@ -236,32 +244,32 @@ pub(super) async fn run_channel_turn(
     let post_turn_context = post_turn::PostTurnContext::from_worker(context);
     let finalizer_context = post_turn::TurnFinalizerContext::from_worker(context);
     let result = post_turn::apply_turn_result(&post_turn_context, turn_metadata, turn_result).await;
-    post_turn::finalize_channel_turn(&finalizer_context, &result).await;
+    post_turn::finalize_channel_turn(&finalizer_context, &result).await?;
 
     result.map(|_| ())
 }
 
-/// Applies best-effort state cleanup before a resume turn starts.
-async fn prepare_resume_turn(context: &SessionWorkerContext, request_kind: &AgentRequestKind) {
+/// Applies state cleanup and verifies durable status before a resume turn.
+async fn prepare_resume_turn(
+    context: &SessionWorkerContext,
+    request_kind: &AgentRequestKind,
+) -> Result<(), SessionError> {
     if !matches!(request_kind, AgentRequestKind::SessionResume) {
-        return;
+        return Ok(());
     }
 
-    let _ = context
+    let prepared = context
         .db
         .sessions()
-        .update_session_questions(&context.session_id, "")
-        .await;
+        .clear_session_questions_if_status(&context.session_id, &Status::InProgress.to_string())
+        .await?;
+    if !prepared {
+        return Err(SessionError::Workflow(
+            "Session changed before the resume turn could start".to_string(),
+        ));
+    }
 
-    let status_transition = StatusTransition::from_parts(
-        context.app_event_tx.clone(),
-        Arc::clone(&context.clock),
-        context.db.clone(),
-        context.session_id.clone(),
-        Arc::clone(&context.session_update_versions),
-        Arc::clone(&context.status),
-    );
-    let _ = status_transition.apply(Status::InProgress).await;
+    Ok(())
 }
 
 /// Runs one agent turn with cancellation support.
@@ -544,7 +552,7 @@ fn fresh_turn_cancel_token(
 
 /// Appends one main-checkout warning to the live and persisted transcript.
 async fn append_main_checkout_warning(context: &SessionWorkerContext, warning: String) {
-    SessionTaskService::append_workflow_notice(
+    let _ = SessionTaskService::append_workflow_notice(
         &context.transcript,
         &context.db,
         &context.app_event_tx,

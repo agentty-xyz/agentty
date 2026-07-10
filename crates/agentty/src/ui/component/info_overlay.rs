@@ -5,10 +5,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
+use crate::presentation::icon::Icon;
+use crate::presentation::style::palette;
 use crate::ui::component::tachyon_loader::TachyonLoaderEffect;
-use crate::ui::icon::Icon;
 use crate::ui::markdown::render_markdown;
-use crate::ui::style::palette;
 use crate::ui::{Component, overlay};
 
 const MIN_OVERLAY_HEIGHT: u16 = 9;
@@ -334,8 +334,8 @@ fn split_prefixed_title(line: &str) -> Option<&str> {
 mod tests {
     use super::*;
     use crate::domain::theme::ColorTheme;
+    use crate::presentation::style;
     use crate::test_support;
-    use crate::ui::style;
 
     #[test]
     fn test_info_overlay_new_stores_fields() {

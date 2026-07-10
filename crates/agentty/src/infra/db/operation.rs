@@ -6,6 +6,7 @@ use sqlx::SqlitePool;
 use crate::infra::db::{DbError, unix_timestamp_now};
 
 /// Persisted operation lifecycle state for one session command.
+#[derive(sqlx::FromRow)]
 pub struct SessionOperationRow {
     pub cancel_requested: bool,
     pub finished_at: Option<i64>,
@@ -35,6 +36,12 @@ pub trait OperationRepository: Send + Sync {
     /// Loads operations still waiting in queue or currently running.
     async fn load_unfinished_session_operations(&self)
     -> Result<Vec<SessionOperationRow>, DbError>;
+
+    /// Loads operations whose sessions require restart recovery, including
+    /// failed commands stranded with an `InProgress` session status.
+    async fn load_recoverable_session_operations(
+        &self,
+    ) -> Result<Vec<SessionOperationRow>, DbError>;
 
     /// Marks an operation as canceled.
     async fn mark_session_operation_canceled(
@@ -162,6 +169,34 @@ FROM session_operation
 WHERE status IN ('queued', 'running')
 ORDER BY queued_at ASC, id ASC
             "#
+        )
+        .fetch_all(&self.0)
+        .await?;
+
+        Ok(rows)
+    }
+
+    async fn load_recoverable_session_operations(
+        &self,
+    ) -> Result<Vec<SessionOperationRow>, DbError> {
+        let rows = sqlx::query_as::<_, SessionOperationRow>(
+            r"
+SELECT operation.id,
+       operation.session_id,
+       operation.kind,
+       operation.status,
+       operation.queued_at,
+       operation.started_at,
+       operation.finished_at,
+       operation.heartbeat_at,
+       operation.last_error,
+       operation.cancel_requested
+FROM session_operation AS operation
+JOIN session ON session.id = operation.session_id
+WHERE operation.status IN ('queued', 'running')
+   OR (operation.status = 'failed' AND session.status = 'InProgress')
+ORDER BY operation.queued_at ASC, operation.id ASC
+",
         )
         .fetch_all(&self.0)
         .await?;

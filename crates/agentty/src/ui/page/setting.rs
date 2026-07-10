@@ -5,9 +5,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap};
 
 use crate::app::setting::{SettingsManager, SettingsSelectorDropdown};
-use crate::ui::state::help_action;
+use crate::presentation::table_state::TableViewState;
+use crate::presentation::{help_action, style};
 use crate::ui::text_util::truncate_with_ellipsis;
-use crate::ui::{Component, Page, component, layout, overlay, style};
+use crate::ui::{Component, Page, component, layout, overlay};
 
 /// Uses row-background highlighting without a textual cursor glyph.
 const ROW_HIGHLIGHT_SYMBOL: &str = "";
@@ -145,7 +146,7 @@ fn settings_section_height(setting_row_count: usize) -> Constraint {
 
 /// Projects the shared settings selection into a section-local table state.
 fn section_table_state(
-    table_state: &TableState,
+    table_state: &TableViewState,
     section_start: usize,
     section_len: usize,
 ) -> TableState {
@@ -489,7 +490,7 @@ mod tests {
     #[test]
     fn test_section_table_state_selects_global_row() {
         // Arrange
-        let mut table_state = TableState::default();
+        let mut table_state = TableViewState::default();
         table_state.select(Some(0));
 
         // Act
@@ -502,7 +503,7 @@ mod tests {
     #[test]
     fn test_section_table_state_offsets_project_row_selection() {
         // Arrange
-        let mut table_state = TableState::default();
+        let mut table_state = TableViewState::default();
         table_state.select(Some(3));
 
         // Act
@@ -515,7 +516,7 @@ mod tests {
     #[test]
     fn test_section_table_state_leaves_unselected_rows_unhighlighted() {
         // Arrange
-        let mut table_state = TableState::default();
+        let mut table_state = TableViewState::default();
         table_state.select(Some(0));
 
         // Act

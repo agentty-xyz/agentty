@@ -4,7 +4,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
-use crate::ui::style::palette;
+use crate::presentation::style::palette;
 use crate::ui::text_util::truncate_with_ellipsis;
 use crate::ui::{Component, overlay};
 
@@ -116,7 +116,7 @@ impl Component for LaunchConfigurationOverlay<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::style::palette;
+    use crate::presentation::style::palette;
 
     #[test]
     fn test_launch_configuration_overlay_new_stores_default_selection() {

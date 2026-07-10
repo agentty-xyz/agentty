@@ -11,7 +11,8 @@ use crate::domain::session::{
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::setting::SettingName;
 use crate::infra::db::{
-    SessionFocusedReviewRow, SessionOperationRow, SessionRow, SessionTurnMetadata,
+    FirstMessageMetadata, SessionFocusedReviewRow, SessionOperationRow, SessionRow,
+    SessionTurnMetadata, SessionTurnQueueInput,
 };
 /// Environment flag used to run the DST regression helper in an isolated
 /// subprocess with a fixed timezone.
@@ -602,6 +603,120 @@ async fn test_update_session_title_for_prompt_requires_matching_prompt() {
     );
 }
 
+/// Verifies one accepted turn commits status, first-message metadata,
+/// transcript, and operation records together.
+#[tokio::test]
+async fn test_queue_session_turn_commits_all_turn_records() {
+    // Arrange
+    let database = Database::open_in_memory()
+        .await
+        .expect("failed to open in-memory db");
+    let project_id = database
+        .projects()
+        .upsert_project("/tmp/project", Some("main".to_string()))
+        .await
+        .expect("failed to insert project");
+    insert_session_fixture(&database, "session-a", "main", "Draft", project_id).await;
+
+    // Act
+    let queued = database
+        .sessions()
+        .queue_session_turn(SessionTurnQueueInput {
+            expected_status: "Draft".to_string(),
+            first_message_metadata: Some(FirstMessageMetadata {
+                prompt: "Implement persistence-first state".to_string(),
+                title: "Persistence-first state".to_string(),
+            }),
+            message_content: "Implement persistence-first state".to_string(),
+            message_kind: SessionMessageKind::UserPrompt,
+            operation_id: "operation-a".to_string(),
+            operation_kind: "start_prompt".to_string(),
+            session_id: "session-a".to_string(),
+            status: "InProgress".to_string(),
+            timestamp_seconds: 123,
+        })
+        .await
+        .expect("failed to queue session turn");
+
+    // Assert
+    let session_row = load_session_row(&database, "session-a").await;
+    let messages = database
+        .sessions()
+        .load_session_messages("session-a")
+        .await
+        .expect("failed to load queued turn message");
+    let operations = database
+        .operations()
+        .load_unfinished_session_operations()
+        .await
+        .expect("failed to load queued turn operation");
+    assert!(queued);
+    assert_eq!(session_row.status, "InProgress");
+    assert_eq!(session_row.prompt, "Implement persistence-first state");
+    assert_eq!(
+        session_row.title.as_deref(),
+        Some("Persistence-first state")
+    );
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].content, "Implement persistence-first state");
+    assert_eq!(operations.len(), 1);
+    assert_eq!(operations[0].id, "operation-a");
+}
+
+/// Verifies a stale status guard leaves every queued-turn record unchanged.
+#[tokio::test]
+async fn test_queue_session_turn_rejects_stale_status_without_partial_writes() {
+    // Arrange
+    let database = Database::open_in_memory()
+        .await
+        .expect("failed to open in-memory db");
+    let project_id = database
+        .projects()
+        .upsert_project("/tmp/project", Some("main".to_string()))
+        .await
+        .expect("failed to insert project");
+    insert_session_fixture(&database, "session-a", "main", "Canceled", project_id).await;
+
+    // Act
+    let queued = database
+        .sessions()
+        .queue_session_turn(SessionTurnQueueInput {
+            expected_status: "Draft".to_string(),
+            first_message_metadata: Some(FirstMessageMetadata {
+                prompt: "Rejected prompt".to_string(),
+                title: "Rejected title".to_string(),
+            }),
+            message_content: "Rejected prompt".to_string(),
+            message_kind: SessionMessageKind::UserPrompt,
+            operation_id: "operation-rejected".to_string(),
+            operation_kind: "start_prompt".to_string(),
+            session_id: "session-a".to_string(),
+            status: "InProgress".to_string(),
+            timestamp_seconds: 123,
+        })
+        .await
+        .expect("failed to reject stale queued turn");
+
+    // Assert
+    let session_row = load_session_row(&database, "session-a").await;
+    let messages = database
+        .sessions()
+        .load_session_messages("session-a")
+        .await
+        .expect("failed to load session messages");
+    let operations = database
+        .operations()
+        .load_unfinished_session_operations()
+        .await
+        .expect("failed to load session operations");
+    assert!(!queued);
+    assert_eq!(session_row.status, "Canceled");
+    assert!(session_row.prompt.is_empty());
+    assert_eq!(session_row.title, None);
+    assert!(messages.is_empty());
+    assert!(operations.is_empty());
+}
+
 /// Verifies timing-aware status transitions accumulate repeated
 /// `InProgress` intervals.
 #[tokio::test]
@@ -644,6 +759,41 @@ async fn test_update_session_status_with_timing_at_accumulates_repeated_interval
     assert_eq!(session_row.status, "Question");
     assert_eq!(session_row.in_progress_started_at, None);
     assert_eq!(session_row.in_progress_total_seconds, 150);
+}
+
+/// Verifies stale status writers cannot overwrite a newer persisted state.
+#[tokio::test]
+async fn test_transition_session_status_with_timing_at_rejects_stale_expected_status() {
+    // Arrange
+    let database = Database::open_in_memory()
+        .await
+        .expect("failed to open in-memory db");
+    let project_id = database
+        .projects()
+        .upsert_project("/tmp/project", Some("main".to_string()))
+        .await
+        .expect("failed to insert project");
+    insert_session_fixture(&database, "session-a", "main", "Draft", project_id).await;
+
+    // Act
+    let first_transition_applied = database
+        .sessions()
+        .transition_session_status_with_timing_at("session-a", "Draft", "InProgress", 10)
+        .await
+        .expect("failed to apply current status transition");
+    let stale_transition_applied = database
+        .sessions()
+        .transition_session_status_with_timing_at("session-a", "Draft", "Canceled", 20)
+        .await
+        .expect("failed to reject stale status transition");
+
+    // Assert
+    let session_row = load_session_row(&database, "session-a").await;
+    assert!(first_transition_applied);
+    assert!(!stale_transition_applied);
+    assert_eq!(session_row.status, "InProgress");
+    assert_eq!(session_row.in_progress_started_at, Some(10));
+    assert_eq!(session_row.in_progress_total_seconds, 0);
 }
 
 /// Verifies `load_sessions_for_project()` filters rows by project id.

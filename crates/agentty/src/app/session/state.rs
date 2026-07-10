@@ -2,10 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 
-use ratatui::widgets::TableState;
-
 use crate::app::session::{Clock, SESSION_REFRESH_INTERVAL};
 use crate::domain::session::{Session, SessionHandles, SessionId, SessionSize};
+use crate::presentation::table_state::TableViewState;
 
 /// Cached ahead/behind snapshots for one session branch.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -29,7 +28,7 @@ pub struct SessionState {
     /// Cached session list positions keyed by stable session id.
     pub(super) session_index_by_id: HashMap<SessionId, usize>,
     pub(super) sessions: Vec<Session>,
-    pub(super) table_state: TableState,
+    pub(super) table_state: TableViewState,
     pub(super) clock: Arc<dyn Clock>,
     pub(super) refresh_deadline: Instant,
     pub(super) row_count: i64,
@@ -45,7 +44,7 @@ impl SessionState {
     pub(crate) fn new(
         handles: HashMap<SessionId, SessionHandles>,
         sessions: Vec<Session>,
-        table_state: TableState,
+        table_state: TableViewState,
         clock: Arc<dyn Clock>,
         row_count: i64,
         updated_at_max: i64,
@@ -404,8 +403,6 @@ mod tests {
     use std::sync::Arc;
     use std::time::{Duration, Instant, SystemTime};
 
-    use ratatui::widgets::TableState;
-
     use super::*;
     use crate::domain::session::{Session, SessionHandles, SessionSize, SessionStats, Status};
     use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
@@ -490,7 +487,7 @@ mod tests {
         let mut state = SessionState::new(
             handles,
             vec![session],
-            TableState::default(),
+            TableViewState::default(),
             Arc::new(FixedClock::new()),
             0,
             0,
@@ -665,7 +662,7 @@ mod tests {
         let mut state = SessionState::new(
             HashMap::new(),
             vec![session],
-            TableState::default(),
+            TableViewState::default(),
             Arc::new(FixedClock::new()),
             0,
             0,
@@ -751,7 +748,7 @@ mod tests {
         let mut state = SessionState::new(
             HashMap::new(),
             vec![initial_session],
-            TableState::default(),
+            TableViewState::default(),
             Arc::new(FixedClock::new()),
             0,
             0,
@@ -837,7 +834,7 @@ mod tests {
         let mut state = SessionState::new(
             HashMap::new(),
             vec![first_session, second_session],
-            TableState::default(),
+            TableViewState::default(),
             Arc::new(FixedClock::new()),
             0,
             0,
@@ -912,7 +909,7 @@ mod tests {
         let mut state = SessionState::new(
             HashMap::new(),
             Vec::new(),
-            TableState::default(),
+            TableViewState::default(),
             Arc::new(FixedClock::new()),
             0,
             0,
@@ -1035,7 +1032,7 @@ mod tests {
         let mut state = SessionState::new(
             HashMap::new(),
             vec![surviving_session, taskless_session],
-            TableState::default(),
+            TableViewState::default(),
             Arc::new(FixedClock::new()),
             0,
             0,

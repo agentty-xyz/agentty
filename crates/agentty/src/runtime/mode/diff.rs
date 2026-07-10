@@ -2,10 +2,10 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 
 use crate::app::App;
+use crate::presentation::app_mode::{AppMode, DiffScrollCache, HelpContext};
 use crate::runtime::EventResult;
 use crate::ui::component::file_explorer::FileExplorer;
-use crate::ui::page;
-use crate::ui::state::app_mode::{AppMode, DiffScrollCache, HelpContext};
+use crate::ui::{RenderCacheStore, page};
 
 /// Handles key input while the app is in `AppMode::Diff`.
 ///
@@ -13,7 +13,12 @@ use crate::ui::state::app_mode::{AppMode, DiffScrollCache, HelpContext};
 /// explorer entries. Leaving diff mode restores the prior question snapshot
 /// when present; otherwise it rebuilds session view with any cached focused
 /// review output for the same session.
-pub(crate) fn handle(app: &mut App, content_area: Rect, key: KeyEvent) -> EventResult {
+pub(crate) fn handle(
+    app: &mut App,
+    content_area: Rect,
+    key: KeyEvent,
+    render_cache_store: &RenderCacheStore,
+) -> EventResult {
     if handle_help_key(app, key) {
         return EventResult::Continue;
     }
@@ -26,7 +31,7 @@ pub(crate) fn handle(app: &mut App, content_area: Rect, key: KeyEvent) -> EventR
         return EventResult::Continue;
     }
 
-    handle_navigation_key(app, content_area, key);
+    handle_navigation_key(app, content_area, key, render_cache_store);
 
     EventResult::Continue
 }
@@ -110,7 +115,12 @@ fn handle_exit_key(app: &mut App, key: KeyEvent) -> bool {
 }
 
 /// Applies file-selection and scroll navigation keys in diff mode.
-fn handle_navigation_key(app: &mut App, content_area: Rect, key: KeyEvent) {
+fn handle_navigation_key(
+    app: &mut App,
+    content_area: Rect,
+    key: KeyEvent,
+    render_cache_store: &RenderCacheStore,
+) {
     let mode = std::mem::replace(&mut app.mode, AppMode::List);
     let AppMode::Diff {
         diff,
@@ -129,7 +139,7 @@ fn handle_navigation_key(app: &mut App, content_area: Rect, key: KeyEvent) {
 
     match key.code {
         KeyCode::Char('j') if is_plain_char_key(key, 'j') => {
-            let content = app.render_cache_store().diff_layout_cache().content(&diff);
+            let content = render_cache_store.diff_layout_cache().content(&diff);
             let new_index = FileExplorer::next_selected_index(
                 file_explorer_selected_index,
                 content.item_count(),
@@ -142,7 +152,7 @@ fn handle_navigation_key(app: &mut App, content_area: Rect, key: KeyEvent) {
             }
         }
         KeyCode::Char('k') if is_plain_char_key(key, 'k') => {
-            let content = app.render_cache_store().diff_layout_cache().content(&diff);
+            let content = render_cache_store.diff_layout_cache().content(&diff);
             let new_index = FileExplorer::previous_selected_index(
                 file_explorer_selected_index,
                 content.item_count(),
@@ -164,8 +174,8 @@ fn handle_navigation_key(app: &mut App, content_area: Rect, key: KeyEvent) {
                 file_explorer_selected_index,
                 &mut scroll_cache,
                 review_comment_snapshot.as_ref(),
-                app.render_cache_store().markdown_render_cache(),
-                app.render_cache_store().diff_layout_cache(),
+                render_cache_store.markdown_render_cache(),
+                render_cache_store.diff_layout_cache(),
             );
             let clamped_scroll_offset = scroll_offset.min(max_scroll_offset);
 
@@ -183,8 +193,8 @@ fn handle_navigation_key(app: &mut App, content_area: Rect, key: KeyEvent) {
                 file_explorer_selected_index,
                 &mut scroll_cache,
                 review_comment_snapshot.as_ref(),
-                app.render_cache_store().markdown_render_cache(),
-                app.render_cache_store().diff_layout_cache(),
+                render_cache_store.markdown_render_cache(),
+                render_cache_store.diff_layout_cache(),
             );
             let clamped_scroll_offset = scroll_offset.min(max_scroll_offset);
 
@@ -274,6 +284,13 @@ mod tests {
 
     const TEST_TERMINAL_SIZE: Rect = Rect::new(0, 0, 80, 12);
 
+    /// Routes one test key through a fresh render-cache boundary.
+    fn handle(app: &mut App, content_area: Rect, key: KeyEvent) -> EventResult {
+        let render_cache_store = RenderCacheStore::default();
+
+        super::handle(app, content_area, key, &render_cache_store)
+    }
+
     /// Returns a diff long enough to keep the diff pane scrollable in tests.
     fn scrollable_diff_fixture() -> String {
         (0..40)
@@ -327,7 +344,7 @@ mod tests {
             file_explorer_selected_index: 0,
             restore_question: None,
             scroll_cache: None,
-            right_panel: crate::ui::state::app_mode::DiffRightPanel::Diff,
+            right_panel: crate::presentation::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -367,7 +384,7 @@ mod tests {
             file_explorer_selected_index: 0,
             restore_question: None,
             scroll_cache: None,
-            right_panel: crate::ui::state::app_mode::DiffRightPanel::Diff,
+            right_panel: crate::presentation::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -400,7 +417,7 @@ mod tests {
             file_explorer_selected_index: 0,
             restore_question: None,
             scroll_cache: None,
-            right_panel: crate::ui::state::app_mode::DiffRightPanel::Diff,
+            right_panel: crate::presentation::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -432,7 +449,7 @@ mod tests {
             file_explorer_selected_index: 2,
             restore_question: None,
             scroll_cache: None,
-            right_panel: crate::ui::state::app_mode::DiffRightPanel::Diff,
+            right_panel: crate::presentation::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -465,7 +482,7 @@ mod tests {
             file_explorer_selected_index: 0,
             restore_question: None,
             scroll_cache: None,
-            right_panel: crate::ui::state::app_mode::DiffRightPanel::Diff,
+            right_panel: crate::presentation::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -497,7 +514,7 @@ mod tests {
             file_explorer_selected_index: 2,
             restore_question: None,
             scroll_cache: None,
-            right_panel: crate::ui::state::app_mode::DiffRightPanel::Diff,
+            right_panel: crate::presentation::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -548,7 +565,7 @@ mod tests {
             file_explorer_selected_index: 0,
             restore_question: None,
             scroll_cache: None,
-            right_panel: crate::ui::state::app_mode::DiffRightPanel::Diff,
+            right_panel: crate::presentation::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -580,7 +597,7 @@ mod tests {
             file_explorer_selected_index: 1,
             restore_question: None,
             scroll_cache: None,
-            right_panel: crate::ui::state::app_mode::DiffRightPanel::Diff,
+            right_panel: crate::presentation::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -612,7 +629,7 @@ mod tests {
             file_explorer_selected_index: 1,
             restore_question: None,
             scroll_cache: None,
-            right_panel: crate::ui::state::app_mode::DiffRightPanel::Diff,
+            right_panel: crate::presentation::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -644,7 +661,7 @@ mod tests {
             file_explorer_selected_index: 0,
             restore_question: None,
             scroll_cache: None,
-            right_panel: crate::ui::state::app_mode::DiffRightPanel::Diff,
+            right_panel: crate::presentation::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -676,7 +693,7 @@ mod tests {
             file_explorer_selected_index: 3,
             restore_question: None,
             scroll_cache: None,
-            right_panel: crate::ui::state::app_mode::DiffRightPanel::Diff,
+            right_panel: crate::presentation::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -726,7 +743,7 @@ mod tests {
             file_explorer_selected_index: 0,
             restore_question: None,
             scroll_cache: None,
-            right_panel: crate::ui::state::app_mode::DiffRightPanel::Diff,
+            right_panel: crate::presentation::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -770,7 +787,7 @@ mod tests {
             file_explorer_selected_index: 0,
             restore_question: None,
             scroll_cache: None,
-            right_panel: crate::ui::state::app_mode::DiffRightPanel::Diff,
+            right_panel: crate::presentation::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -833,7 +850,7 @@ mod tests {
         // Arrange — diff opened from question mode carries a snapshot.
         use crate::domain::input::InputState;
         use crate::domain::question::QuestionItem;
-        use crate::ui::state::app_mode::QuestionModeSnapshot;
+        use crate::presentation::app_mode::QuestionModeSnapshot;
 
         let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.mode = AppMode::Diff {
@@ -855,7 +872,7 @@ mod tests {
                 session_id: "session-q".into(),
             }),
             scroll_cache: None,
-            right_panel: crate::ui::state::app_mode::DiffRightPanel::Diff,
+            right_panel: crate::presentation::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -871,7 +888,7 @@ mod tests {
             app.mode,
             AppMode::Question {
                 ref session_id,
-                focus: crate::ui::state::app_mode::QuestionFocus::Answer,
+                focus: crate::presentation::app_mode::QuestionFocus::Answer,
                 ..
             } if session_id == "session-q"
         ));
@@ -882,7 +899,7 @@ mod tests {
         // Arrange — diff opened from question mode, then user opens help with `?`.
         use crate::domain::input::InputState;
         use crate::domain::question::QuestionItem;
-        use crate::ui::state::app_mode::QuestionModeSnapshot;
+        use crate::presentation::app_mode::QuestionModeSnapshot;
 
         let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         let snapshot = QuestionModeSnapshot {
@@ -912,7 +929,7 @@ mod tests {
             file_explorer_selected_index: 1,
             restore_question: Some(snapshot),
             scroll_cache: None,
-            right_panel: crate::ui::state::app_mode::DiffRightPanel::Diff,
+            right_panel: crate::presentation::app_mode::DiffRightPanel::Diff,
         };
 
         // Act — open help overlay.
@@ -962,7 +979,7 @@ mod tests {
             AppMode::Question {
                 ref session_id,
                 current_index: 1,
-                focus: crate::ui::state::app_mode::QuestionFocus::Answer,
+                focus: crate::presentation::app_mode::QuestionFocus::Answer,
                 ..
             } if session_id == "session-q"
         ));
@@ -970,7 +987,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_c_toggles_diff_right_panel() {
-        use crate::ui::state::app_mode::DiffRightPanel;
+        use crate::presentation::app_mode::DiffRightPanel;
 
         // Arrange
         let (mut app, _base_dir) = crate::test_support::new_test_app().await;

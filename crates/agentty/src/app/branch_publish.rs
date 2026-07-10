@@ -11,7 +11,7 @@ use crate::app::review_request;
 use crate::domain::session::{PublishBranchAction, ReviewRequest, Session, SessionId, Status};
 use crate::infra::clock::Clock;
 use crate::infra::db;
-use crate::ui::state::app_mode::ConfirmationViewMode;
+use crate::presentation::app_mode::ConfirmationViewMode;
 
 /// Session snapshot cloned into a branch-publish background task.
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -2,7 +2,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::domain::session::{PublishBranchAction, Session, Status};
-use crate::ui::style;
+use crate::presentation::style;
 
 /// Footer shortcut label for prompt image paste.
 ///

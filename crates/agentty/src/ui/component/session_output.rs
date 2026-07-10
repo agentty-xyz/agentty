@@ -15,12 +15,13 @@ use crate::app;
 use crate::domain::agent::AgentModel;
 use crate::domain::session::{Session, SessionId, Status};
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
+use crate::presentation::icon::{Icon, TACHYON_LOADER_WIDTH};
+use crate::presentation::style;
 use crate::ui::component::tachyon_loader::TachyonLoaderEffect;
-use crate::ui::icon::{Icon, TACHYON_LOADER_WIDTH};
 use crate::ui::input_layout::{bottom_pinned_scroll_offset, panel_inner_width};
 use crate::ui::markdown::{self, render_markdown};
 use crate::ui::prompt_block::{self, USER_PROMPT_PREFIX, USER_PROMPT_RIGHT_GUTTER_WIDTH};
-use crate::ui::{Component, session_format, style, text_util};
+use crate::ui::{Component, session_format, text_util};
 
 const DRAFT_PREVIEW_HEADER: &str = "## Draft Session";
 const DRAFT_PREVIEW_EMPTY_NOTE: &str = "No draft messages staged yet. Use `Enter` to stage the \

@@ -227,7 +227,7 @@ impl Status {
                 | (Status::Draft | Status::InProgress, Status::Rebasing)
                 | (Status::InProgress, Status::Canceled)
                 | (Status::Review, Status::AgentReview)
-                | (Status::AgentReview, Status::Review)
+                | (Status::AgentReview | Status::Question, Status::Review)
                 | (
                     Status::Review | Status::AgentReview | Status::Question,
                     Status::InProgress
@@ -1553,6 +1553,18 @@ pub(crate) mod tests {
 
         // Act
         let can_transition = current_status.can_transition_to(Status::AgentReview);
+
+        // Assert
+        assert!(can_transition);
+    }
+
+    #[test]
+    fn test_status_transition_question_to_review() {
+        // Arrange
+        let current_status = Status::Question;
+
+        // Act
+        let can_transition = current_status.can_transition_to(Status::Review);
 
         // Assert
         assert!(can_transition);

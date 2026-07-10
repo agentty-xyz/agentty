@@ -13,8 +13,7 @@ use tokio::sync::mpsc;
 use tracing::warn;
 use uuid::Uuid;
 
-use super::task::SessionTranscriptMessageAppend;
-use super::worker::{SessionCommand, TurnMetadata};
+use super::worker::{PersistedTurnRecovery, SessionCommand, SessionCommandHandoff, TurnMetadata};
 use super::{
     SessionTaskService, StatusTransition, draft, isolation, session_branch, session_folder,
     unix_timestamp_from_system_time,
@@ -69,8 +68,25 @@ struct BuildSessionCommandInput {
     session_agent: AgentSelection,
 }
 
+/// Durable turn values committed before a worker command is sent.
+struct QueueSessionTurnInput<'a> {
+    command: &'a SessionCommand,
+    expected_status: Status,
+    first_message_metadata: Option<db::FirstMessageMetadata>,
+    prompt: &'a TurnPrompt,
+    session_id: &'a str,
+}
+
 /// Intermediate values captured while preparing a session reply.
-type ReplyContext = (Option<String>, bool, SessionId, Option<String>);
+#[derive(Debug)]
+struct ReplyContext {
+    expected_status: Status,
+    first_message_recovery: Option<db::FirstMessageMetadataSnapshot>,
+    is_first_message: bool,
+    persisted_session_id: SessionId,
+    replay_transcript: Option<String>,
+    title_to_save: Option<String>,
+}
 
 /// Cleanup payload for a deleted session's git and filesystem resources.
 struct DeletedSessionCleanup {
@@ -1092,52 +1108,37 @@ impl SessionManager {
             .await?;
 
         let session_index = self.session_index_or_err(session_id)?;
-        let (persisted_session_id, session_agent, title) = {
+        let (expected_status, first_message_recovery, persisted_session_id, session_agent, title) = {
             let session = self
-                .session_at_mut(session_index)
+                .session_at(session_index)
                 .ok_or(SessionError::NotFound)?;
-
-            session.prompt.clone_from(&prompt.text);
-
             let title = prompt.text.clone();
-            session.title = Some(title.clone());
             let session_agent = session.agent;
 
-            (session.id.clone(), session_agent, title)
+            (
+                session.status,
+                db::FirstMessageMetadataSnapshot::capture(
+                    &session.prompt,
+                    session.title.as_deref(),
+                ),
+                session.id.clone(),
+                session_agent,
+                title,
+            )
         };
+        if !expected_status.can_transition_to(Status::InProgress) {
+            return Err(SessionError::Workflow(format!(
+                "Invalid status transition from {expected_status} to InProgress"
+            )));
+        }
 
         let handles = self.session_handles_or_err(&persisted_session_id)?;
         let transcript = Arc::clone(&handles.transcript);
         let status_transition =
             StatusTransition::from_services(services, handles, persisted_session_id.clone());
-        let app_event_tx = services.event_sender();
-
-        self.persist_first_message_metadata(services, &persisted_session_id, &prompt.text, &title)
-            .await;
 
         let prompt_transcript_text = prompt.transcript_text();
         let initial_output = Self::formatted_prompt_output(&prompt, false);
-        SessionTaskService::append_session_transcript_message(
-            &transcript,
-            services.db(),
-            &app_event_tx,
-            &services.session_update_versions(),
-            &persisted_session_id,
-            SessionTranscriptMessageAppend {
-                kind: SessionMessageKind::UserPrompt,
-                raw_content: &prompt_transcript_text,
-            },
-        )
-        .await;
-        self.set_active_prompt_output(&persisted_session_id, initial_output);
-
-        if !status_transition.apply(Status::InProgress).await {
-            warn!(
-                session_id = %persisted_session_id,
-                "skipped session start status update because the in-memory status did not transition to in-progress"
-            );
-        }
-
         let operation_id = Uuid::new_v4().to_string();
         let command = SessionCommand::Run {
             operation_id,
@@ -1149,16 +1150,71 @@ impl SessionManager {
                 session_agent,
             },
         };
-        if let Err(error) = self
-            .enqueue_session_command(services, &persisted_session_id, command)
-            .await
-        {
+        let persisted = Self::queue_session_turn_transaction(
+            services,
+            QueueSessionTurnInput {
+                command: &command,
+                expected_status,
+                first_message_metadata: Some(db::FirstMessageMetadata {
+                    prompt: prompt.text.clone(),
+                    title: title.clone(),
+                }),
+                prompt: &prompt,
+                session_id: &persisted_session_id,
+            },
+        )
+        .await?;
+        if !persisted {
             self.cleanup_prompt_attachment_files(services, &prompt)
                 .await;
 
-            return Err(error);
+            return Err(SessionError::Workflow(
+                "Session changed before the turn could be queued".to_string(),
+            ));
         }
 
+        let handoff = match self
+            .enqueue_persisted_session_command(
+                services,
+                &persisted_session_id,
+                command,
+                PersistedTurnRecovery {
+                    first_message_metadata: Some(first_message_recovery),
+                    status: expected_status,
+                },
+            )
+            .await
+        {
+            Ok(handoff) => handoff,
+            Err(error) => {
+                self.cleanup_prompt_attachment_files(services, &prompt)
+                    .await;
+
+                return Err(error);
+            }
+        };
+
+        if let Some(session) = self.session_at_mut(session_index) {
+            session.prompt.clone_from(&prompt.text);
+            session.title = Some(title);
+        }
+        SessionTaskService::append_live_transcript_message(
+            &transcript,
+            SessionMessageKind::UserPrompt,
+            &prompt_transcript_text,
+        );
+        status_transition.apply_persisted(Status::InProgress);
+        self.set_active_prompt_output(&persisted_session_id, initial_output);
+        handoff.release();
+
+        self.clear_started_session_draft_flag(services, session_id)
+            .await;
+
+        Ok(())
+    }
+
+    /// Clears the persisted draft marker after a first turn reaches its worker.
+    async fn clear_started_session_draft_flag(&mut self, services: &AppServices, session_id: &str) {
         if let Err(error) = self.clear_session_draft_flag(services, session_id).await {
             warn!(
                 session_id,
@@ -1166,8 +1222,6 @@ impl SessionManager {
                 "failed to clear draft flag after session start"
             );
         }
-
-        Ok(())
     }
 
     /// Submits a follow-up prompt to an existing session.
@@ -1800,7 +1854,7 @@ impl SessionManager {
             return false;
         };
         let should_replay_history = self.should_replay_history(session_id);
-        let (replay_transcript, is_first_message, persisted_session_id, title_to_save) =
+        let reply_context =
             match self.prepare_reply_context(session_index, &prompt, should_replay_history) {
                 Ok(Some(reply_context)) => reply_context,
                 Ok(None) => return false,
@@ -1811,12 +1865,14 @@ impl SessionManager {
                     return false;
                 }
             };
-
-        if should_replay_history {
-            self.clear_history_replay_pending(&persisted_session_id);
-        }
-
-        let app_event_tx = services.event_sender();
+        let ReplyContext {
+            expected_status,
+            first_message_recovery,
+            is_first_message,
+            persisted_session_id,
+            replay_transcript,
+            title_to_save,
+        } = reply_context;
 
         let Ok(handles) = self.session_handles_or_err(&persisted_session_id) else {
             return false;
@@ -1826,33 +1882,6 @@ impl SessionManager {
         let status_transition =
             StatusTransition::from_services(services, handles, persisted_session_id.clone());
 
-        let effective_prompt = prompt;
-
-        if let Some(title) = title_to_save {
-            self.persist_first_message_metadata(
-                services,
-                &persisted_session_id,
-                &effective_prompt.text,
-                &title,
-            )
-            .await;
-
-            if !status_transition.apply(Status::InProgress).await {
-                warn!(
-                    session_id = %persisted_session_id,
-                    "skipped reply status update because the in-memory status did not transition to in-progress"
-                );
-            }
-        }
-
-        self.append_reply_prompt_line(
-            services,
-            &transcript,
-            &app_event_tx,
-            &persisted_session_id,
-            &effective_prompt,
-        )
-        .await;
         let published_upstream_ref = self
             .session_or_err(&persisted_session_id)
             .ok()
@@ -1861,18 +1890,124 @@ impl SessionManager {
         let command = Self::build_session_command(BuildSessionCommandInput {
             is_first_message,
             published_upstream_ref,
-            prompt: effective_prompt.clone(),
+            prompt: prompt.clone(),
             replay_transcript,
             session_agent,
         });
-        self.enqueue_reply_command(
+        let prompt_transcript_text = prompt.transcript_text();
+        let first_message_metadata = title_to_save
+            .as_ref()
+            .map(|title| db::FirstMessageMetadata {
+                prompt: prompt.text.clone(),
+                title: title.clone(),
+            });
+        if !Self::queue_reply_turn_transaction(
             services,
-            &transcript,
-            &persisted_session_id,
-            &effective_prompt,
-            command,
+            QueueSessionTurnInput {
+                command: &command,
+                expected_status,
+                first_message_metadata,
+                prompt: &prompt,
+                session_id: &persisted_session_id,
+            },
         )
         .await
+        {
+            return false;
+        }
+
+        let Some(handoff) = self
+            .enqueue_persisted_reply_command(
+                services,
+                &transcript,
+                &persisted_session_id,
+                &prompt,
+                command,
+                PersistedTurnRecovery {
+                    first_message_metadata: first_message_recovery,
+                    status: expected_status,
+                },
+            )
+            .await
+        else {
+            return false;
+        };
+
+        if should_replay_history {
+            self.clear_history_replay_pending(&persisted_session_id);
+        }
+        if let Some(title) = title_to_save
+            && let Some(session) = self.session_at_mut(session_index)
+        {
+            session.prompt.clone_from(&prompt.text);
+            session.title = Some(title);
+        }
+        SessionTaskService::append_live_transcript_message(
+            &transcript,
+            SessionMessageKind::UserPrompt,
+            &prompt_transcript_text,
+        );
+        status_transition.apply_persisted(Status::InProgress);
+        self.set_active_prompt_output(
+            &persisted_session_id,
+            Self::formatted_prompt_output(&prompt, true),
+        );
+        handoff.release();
+
+        true
+    }
+
+    /// Commits a submitted turn as one status-guarded persistence unit.
+    async fn queue_session_turn_transaction(
+        services: &AppServices,
+        input: QueueSessionTurnInput<'_>,
+    ) -> Result<bool, db::DbError> {
+        services
+            .db()
+            .sessions()
+            .queue_session_turn(db::SessionTurnQueueInput {
+                expected_status: input.expected_status.to_string(),
+                first_message_metadata: input.first_message_metadata,
+                message_content: input.prompt.transcript_text(),
+                message_kind: SessionMessageKind::UserPrompt,
+                operation_id: input.command.operation_id().to_string(),
+                operation_kind: input.command.kind().to_string(),
+                session_id: input.session_id.to_string(),
+                status: Status::InProgress.to_string(),
+                timestamp_seconds: unix_timestamp_from_system_time(
+                    services.clock().now_system_time(),
+                ),
+            })
+            .await
+    }
+
+    /// Persists a reply turn and maps stale or failed writes to the reply
+    /// workflow's boolean result.
+    async fn queue_reply_turn_transaction(
+        services: &AppServices,
+        input: QueueSessionTurnInput<'_>,
+    ) -> bool {
+        let session_id = input.session_id.to_string();
+        match Self::queue_session_turn_transaction(services, input).await {
+            Ok(true) => true,
+            Ok(false) => {
+                warn!(
+                    session_id,
+                    "rejected queued reply because persisted session status changed"
+                );
+
+                false
+            }
+            Err(error) => {
+                warn!(
+                    session_id,
+                    error = %error,
+                    "failed to persist queued reply transaction"
+                );
+
+                false
+            }
+        }
     }
 
     /// Validates reply eligibility and gathers per-session values needed for
@@ -1882,7 +2017,7 @@ impl SessionManager {
     /// Returns a [`SessionError::Workflow`] when session status does not allow
     /// replying.
     fn prepare_reply_context(
-        &mut self,
+        &self,
         session_index: usize,
         prompt: &TurnPrompt,
         should_replay_history: bool,
@@ -1901,7 +2036,7 @@ impl SessionManager {
             ));
         }
 
-        let Some(session) = self.state.sessions.get_mut(session_index) else {
+        let Some(session) = self.state.sessions.get(session_index) else {
             return Ok(None);
         };
 
@@ -1915,11 +2050,14 @@ impl SessionManager {
             ));
         }
 
+        let mut first_message_recovery = None;
         let mut title_to_save = None;
         if is_first_message {
-            session.prompt.clone_from(&prompt.text);
+            first_message_recovery = Some(db::FirstMessageMetadataSnapshot::capture(
+                &session.prompt,
+                session.title.as_deref(),
+            ));
             let title = prompt.text.clone();
-            session.title = Some(title.clone());
             title_to_save = Some(title);
         }
 
@@ -1935,78 +2073,14 @@ impl SessionManager {
             None
         };
 
-        Ok(Some((
-            replay_transcript,
+        Ok(Some(ReplyContext {
+            expected_status: session.status,
+            first_message_recovery,
             is_first_message,
-            session.id.clone(),
+            persisted_session_id: session.id.clone(),
+            replay_transcript,
             title_to_save,
-        )))
-    }
-
-    /// Persists first-message prompt/title metadata before queueing execution.
-    ///
-    /// This writes the initial prompt/title.
-    ///
-    /// Title generation itself is triggered once from the start-turn worker
-    /// path as soon as the first turn starts running.
-    async fn persist_first_message_metadata(
-        &self,
-        services: &AppServices,
-        session_id: &str,
-        prompt: &str,
-        title: &str,
-    ) {
-        if let Err(error) = services
-            .db()
-            .sessions()
-            .update_session_title(session_id, title)
-            .await
-        {
-            warn!(
-                session_id = session_id,
-                error = %error,
-                "failed to persist first-message session title"
-            );
-        }
-
-        if let Err(error) = services
-            .db()
-            .sessions()
-            .update_session_prompt(session_id, prompt)
-            .await
-        {
-            warn!(
-                session_id = session_id,
-                error = %error,
-                "failed to persist first-message session prompt"
-            );
-        }
-    }
-
-    /// Appends the user reply marker line to session output.
-    async fn append_reply_prompt_line(
-        &mut self,
-        services: &AppServices,
-        transcript: &Arc<Mutex<SessionTranscript>>,
-        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
-        session_id: &str,
-        prompt: &TurnPrompt,
-    ) {
-        let prompt_transcript_text = prompt.transcript_text();
-        let reply_line = Self::formatted_prompt_output(prompt, true);
-        SessionTaskService::append_session_transcript_message(
-            transcript,
-            services.db(),
-            app_event_tx,
-            &services.session_update_versions(),
-            session_id,
-            SessionTranscriptMessageAppend {
-                kind: SessionMessageKind::UserPrompt,
-                raw_content: &prompt_transcript_text,
-            },
-        )
-        .await;
-        self.set_active_prompt_output(session_id, reply_line);
+        }))
     }
 
     /// Formats one user prompt block for persisted session output.
@@ -2133,7 +2207,7 @@ impl SessionManager {
         };
         let app_event_tx = services.event_sender();
 
-        SessionTaskService::append_workflow_notice(
+        let _ = SessionTaskService::append_workflow_notice(
             &handles.transcript,
             services.db(),
             &app_event_tx,
@@ -2144,38 +2218,40 @@ impl SessionManager {
         .await;
     }
 
-    /// Returns `true` when the command reached the session worker queue and
-    /// `false` when enqueueing failed and a reply-error notice was appended.
-    async fn enqueue_reply_command(
+    /// Returns a handoff barrier when the command reached the worker queue, or
+    /// `None` after appending a reply-error notice when enqueueing failed.
+    async fn enqueue_persisted_reply_command(
         &mut self,
         services: &AppServices,
         transcript: &Arc<Mutex<SessionTranscript>>,
         persisted_session_id: &str,
         prompt: &TurnPrompt,
         command: SessionCommand,
-    ) -> bool {
-        if let Err(error) = self
-            .enqueue_session_command(services, persisted_session_id, command)
+        recovery: PersistedTurnRecovery,
+    ) -> Option<SessionCommandHandoff> {
+        match self
+            .enqueue_persisted_session_command(services, persisted_session_id, command, recovery)
             .await
         {
-            self.cleanup_prompt_attachment_files(services, prompt).await;
+            Ok(handoff) => Some(handoff),
+            Err(error) => {
+                self.cleanup_prompt_attachment_files(services, prompt).await;
 
-            let error_line = TranscriptNotice::ReplyError.format(error);
-            let app_event_tx = services.event_sender();
-            SessionTaskService::append_workflow_notice(
-                transcript,
-                services.db(),
-                &app_event_tx,
-                &services.session_update_versions(),
-                persisted_session_id,
-                &error_line,
-            )
-            .await;
+                let error_line = TranscriptNotice::ReplyError.format(error);
+                let app_event_tx = services.event_sender();
+                let _ = SessionTaskService::append_workflow_notice(
+                    transcript,
+                    services.db(),
+                    &app_event_tx,
+                    &services.session_update_versions(),
+                    persisted_session_id,
+                    &error_line,
+                )
+                .await;
 
-            return false;
+                None
+            }
         }
-
-        true
     }
 
     /// Spawns one detached model command that generates a session title for
@@ -2564,7 +2640,7 @@ impl SessionManager {
         };
         let app_event_tx = services.event_sender();
 
-        SessionTaskService::append_workflow_notice(
+        let _ = SessionTaskService::append_workflow_notice(
             &handles.transcript,
             services.db(),
             &app_event_tx,
@@ -2641,7 +2717,7 @@ impl SessionManager {
             Self::signal_running_session_cancellation(services, handles, session_id).await;
         }
 
-        let status_updated = status_transition.apply(Status::Canceled).await;
+        let status_updated = status_transition.apply(Status::Canceled).await?;
 
         if status_updated {
             Self::spawn_canceled_session_cleanup(
@@ -3002,7 +3078,6 @@ mod tests {
     use std::sync::Arc;
 
     use ag_forge as forge;
-    use ratatui::widgets::TableState;
     use tokio::sync::mpsc;
 
     use super::*;
@@ -3016,6 +3091,7 @@ mod tests {
     use crate::infra::clock::RealClock;
     use crate::infra::db::{self, AppRepositories};
     use crate::infra::fs;
+    use crate::presentation::table_state::TableViewState;
 
     /// Builds a session manager with one session for reply-context tests.
     fn session_manager_with_one_session(session: Session) -> SessionManager {
@@ -3031,7 +3107,7 @@ mod tests {
         let state = SessionState::new(
             handles,
             vec![session],
-            TableState::default(),
+            TableViewState::default(),
             Arc::new(RealClock),
             1,
             0,
@@ -4082,13 +4158,14 @@ mod tests {
     }
 
     #[test]
-    /// Ensures first replies persist the full prompt as the one-time title.
-    fn test_prepare_reply_context_first_message_sets_title_from_prompt() {
+    /// Ensures first replies stage metadata without changing live state before
+    /// persistence.
+    fn test_prepare_reply_context_first_message_stages_metadata_without_live_mutation() {
         // Arrange
         let prompt = "Implement optimistic retry path";
         let turn_prompt = TurnPrompt::from_text(prompt.to_string());
         let session = test_session("", Status::Draft, None, "");
-        let mut session_manager = session_manager_with_one_session(session);
+        let session_manager = session_manager_with_one_session(session);
 
         // Act
         let context = session_manager
@@ -4097,15 +4174,13 @@ mod tests {
             .expect("session should produce reply context");
 
         // Assert
-        assert_eq!(context.0, None);
-        assert!(context.1);
-        assert_eq!(context.2, "session-id");
-        assert_eq!(context.3, Some(prompt.to_string()));
-        assert_eq!(session_manager.sessions()[0].prompt, prompt);
-        assert_eq!(
-            session_manager.sessions()[0].title,
-            Some(prompt.to_string())
-        );
+        assert_eq!(context.expected_status, Status::Draft);
+        assert_eq!(context.replay_transcript, None);
+        assert!(context.is_first_message);
+        assert_eq!(context.persisted_session_id, "session-id");
+        assert_eq!(context.title_to_save, Some(prompt.to_string()));
+        assert!(session_manager.sessions()[0].prompt.is_empty());
+        assert_eq!(session_manager.sessions()[0].title, None);
     }
 
     #[test]
@@ -4118,7 +4193,7 @@ mod tests {
             Some("Initial prompt"),
             "existing output",
         );
-        let mut session_manager = session_manager_with_one_session(session);
+        let session_manager = session_manager_with_one_session(session);
         let prompt = TurnPrompt::from_text("Follow-up prompt".to_string());
 
         // Act
@@ -4128,10 +4203,11 @@ mod tests {
             .expect("session should produce reply context");
 
         // Assert
-        assert_eq!(context.0, None);
-        assert!(!context.1);
-        assert_eq!(context.2, "session-id");
-        assert_eq!(context.3, None);
+        assert_eq!(context.expected_status, Status::Review);
+        assert_eq!(context.replay_transcript, None);
+        assert!(!context.is_first_message);
+        assert_eq!(context.persisted_session_id, "session-id");
+        assert_eq!(context.title_to_save, None);
         assert_eq!(session_manager.sessions()[0].prompt, "Initial prompt");
         assert_eq!(
             session_manager.sessions()[0].title,
@@ -4145,7 +4221,7 @@ mod tests {
     fn test_prepare_reply_context_returns_workflow_error_when_status_blocks_reply() {
         // Arrange
         let session = test_session("Initial prompt", Status::InProgress, Some("Title"), "");
-        let mut session_manager = session_manager_with_one_session(session);
+        let session_manager = session_manager_with_one_session(session);
         let prompt = TurnPrompt::from_text("Another prompt".to_string());
 
         // Act
@@ -4313,7 +4389,7 @@ mod tests {
         let state = SessionState::new(
             handles,
             sessions,
-            TableState::default(),
+            TableViewState::default(),
             Arc::new(RealClock),
             row_count,
             0,

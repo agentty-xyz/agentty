@@ -29,7 +29,6 @@ use app::setting::SettingsManager;
 use app::sync::SyncMainRunner;
 use app::tab::{Tab, TabManager};
 use app::{sync, task};
-use ratatui::widgets::TableState;
 use session::StatusTransition;
 #[cfg(test)]
 use session::{SyncMainOutcome, SyncSessionStartError, TurnAppliedState};
@@ -38,14 +37,15 @@ use tokio::sync::mpsc;
 use super::events::AppEvent;
 #[cfg(test)]
 use super::events::{AppEventBatch, ReviewRequestStatusUpdate};
-use crate::app::{AppError, RequestedReviewState, session};
+use crate::app;
+use crate::app::{AppError, RequestedReviewState, at_mention, session};
 #[cfg(test)]
 use crate::domain::agent::AgentCliInfo;
 #[cfg(test)]
 use crate::domain::agent::AgentSelection;
 use crate::domain::agent::{AgentKind, ReasoningLevel};
 use crate::domain::input::InputState;
-use crate::domain::question::{QuestionItem, QuestionProgress};
+use crate::domain::question::{QuestionItem, QuestionProgress, default_option_index};
 use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, Session, SessionId, Status};
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::setting::SettingName;
@@ -59,9 +59,8 @@ use crate::infra::db;
 use crate::infra::fs::{FsClient, RealFsClient};
 use crate::infra::project_discovery::{ProjectDiscoveryClient, RealProjectDiscoveryClient};
 use crate::infra::tmux::{RealTmuxClient, TmuxClient};
-use crate::runtime::mode::{at_mention, question};
-use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, QuestionFocus};
-use crate::{app, ui};
+use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, QuestionFocus};
+use crate::presentation::table_state::TableViewState;
 
 /// Relative directory name used for session git worktrees within the
 /// `agentty` home directory.
@@ -241,7 +240,7 @@ pub struct App {
     /// top-level `Review` tab, excluding non-selectable section headers.
     pub(super) requested_review_selected_index: Option<usize>,
     /// Persistent table viewport state for the top-level `Review` tab.
-    pub(super) requested_review_table_state: TableState,
+    pub(super) requested_review_table_state: TableViewState,
     /// Caches requested PR/MR reviews for the active project's `Review` tab.
     pub(super) requested_reviews: RequestedReviewState,
     /// Number of log output lines between the visible window and the newest
@@ -260,8 +259,6 @@ pub struct App {
     pub(super) session_progress_messages: HashMap<SessionId, String>,
     /// Interacts with tmux panes for session-specific terminal workflows.
     pub(super) tmux_client: Arc<dyn TmuxClient>,
-    /// Owns UI render caches used by frame rendering and scroll-metric paths.
-    pub(super) render_cache_store: ui::RenderCacheStore,
     /// Tracks the last reduced observable-handle version for each session so
     /// stale `SessionUpdated` events do not trigger redundant redraws.
     pub(super) last_seen_session_update_versions: HashMap<SessionId, u64>,
@@ -363,7 +360,7 @@ impl App {
     /// Clears the persisted review-list table viewport after loading state,
     /// project, or result changes.
     pub(super) fn reset_requested_review_table_state(&mut self) {
-        self.requested_review_table_state = TableState::default();
+        self.requested_review_table_state = TableViewState::default();
     }
 
     /// Moves selection to the next requested review in the `Inbox` tab.
@@ -747,8 +744,8 @@ impl App {
 
         self.mode = AppMode::Prompt {
             at_mention_state: None,
-            attachment_state: crate::ui::state::prompt::PromptAttachmentState::default(),
-            history_state: crate::ui::state::prompt::PromptHistoryState::new(Vec::new()),
+            attachment_state: crate::presentation::prompt::PromptAttachmentState::default(),
+            history_state: crate::presentation::prompt::PromptHistoryState::new(Vec::new()),
             slash_state: self.prompt_slash_state(),
             session_id: SessionId::from(session_id.as_str()),
             input: InputState::default(),
@@ -1038,12 +1035,6 @@ impl App {
             .get(session_id)
             .copied()
             .unwrap_or_default()
-    }
-
-    /// Returns the UI-owned render cache store used by scroll metrics and
-    /// frame rendering.
-    pub(crate) fn render_cache_store(&self) -> &ui::RenderCacheStore {
-        &self.render_cache_store
     }
 
     /// Returns the selected follow-up task action for one session, if that
@@ -1735,7 +1726,7 @@ impl App {
                 0,
                 InputState::default(),
                 Vec::new(),
-                question::default_option_index(&questions, 0),
+                default_option_index(&questions, 0),
             ),
         };
 
@@ -1786,7 +1777,7 @@ impl App {
         let handles = self.sessions.session_handles_or_err(session_id)?;
         let status_transition =
             StatusTransition::from_services(&self.services, handles, session_id);
-        let status_updated = status_transition.apply(Status::Queued).await;
+        let status_updated = status_transition.apply(Status::Queued).await?;
 
         if !status_updated {
             return Err(AppError::Workflow(

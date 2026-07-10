@@ -9,9 +9,10 @@ use tracing::warn;
 use crate::app::{App, ReviewCacheEntry, diff_content_hash};
 use crate::domain::session::SessionId;
 use crate::domain::transcript_notice::TranscriptNotice;
+use crate::presentation::app_mode::{AppMode, ConfirmationIntent, ConfirmationViewMode};
 use crate::runtime::mode::confirmation::ConfirmationDecision;
 use crate::runtime::{EventResult, backend_err, mode};
-use crate::ui::state::app_mode::{AppMode, ConfirmationIntent, ConfirmationViewMode};
+use crate::ui::RenderCacheStore;
 
 /// Routes key events to the active mode handler and returns the next runtime
 /// action.
@@ -22,6 +23,7 @@ pub(crate) async fn handle_key_event<B: Backend>(
     app: &mut App,
     terminal: &mut Terminal<B>,
     key: KeyEvent,
+    render_cache_store: &RenderCacheStore,
 ) -> io::Result<EventResult>
 where
     B::Error: std::error::Error + Send + Sync + 'static,
@@ -48,7 +50,12 @@ where
                 let terminal_rect = Rect::new(0, 0, size.width, size.height);
                 let content_area = content_area_for_terminal(terminal_rect);
 
-                Ok(mode::review_detail::handle(app, content_area, key))
+                Ok(mode::review_detail::handle(
+                    app,
+                    content_area,
+                    key,
+                    render_cache_store,
+                ))
             }
             AppMode::SessionCreation { .. } => {
                 unreachable!("session creation mode is handled before dispatch matching")
@@ -58,20 +65,27 @@ where
             AppMode::Confirmation { .. } => {
                 unreachable!("confirmation mode is handled before dispatch matching")
             }
-            AppMode::View { .. } => mode::session_view::handle(app, terminal, key).await,
+            AppMode::View { .. } => {
+                mode::session_view::handle(app, terminal, key, render_cache_store).await
+            }
             AppMode::Prompt { .. } => mode::prompt::handle(app, terminal, key).await,
             AppMode::Question { .. } => {
                 let size = terminal.size().map_err(backend_err)?;
                 let terminal_rect = Rect::new(0, 0, size.width, size.height);
 
-                Ok(mode::question::handle(app, terminal_rect, key).await)
+                Ok(mode::question::handle(app, terminal_rect, key, render_cache_store).await)
             }
             AppMode::Diff { .. } => {
                 let size = terminal.size().map_err(backend_err)?;
                 let terminal_rect = Rect::new(0, 0, size.width, size.height);
                 let content_area = content_area_for_terminal(terminal_rect);
 
-                Ok(mode::diff::handle(app, content_area, key))
+                Ok(mode::diff::handle(
+                    app,
+                    content_area,
+                    key,
+                    render_cache_store,
+                ))
             }
             AppMode::Help { .. } => Ok(mode::help::handle(app, key)),
             AppMode::LaunchConfigurationSelector { .. } => {
@@ -688,7 +702,21 @@ mod tests {
     use super::*;
     use crate::domain::session_message::SessionTranscript;
     use crate::infra::tmux::MockTmuxClient;
-    use crate::ui::state::app_mode::ConfirmationViewMode;
+    use crate::presentation::app_mode::ConfirmationViewMode;
+
+    /// Routes one test key through a fresh render-cache boundary.
+    async fn handle_key_event<B: Backend>(
+        app: &mut App,
+        terminal: &mut Terminal<B>,
+        key: KeyEvent,
+    ) -> io::Result<EventResult>
+    where
+        B::Error: std::error::Error + Send + Sync + 'static,
+    {
+        let render_cache_store = RenderCacheStore::default();
+
+        super::handle_key_event(app, terminal, key, &render_cache_store).await
+    }
 
     fn session_replay_text(session: &crate::domain::session::Session) -> String {
         session
@@ -877,11 +905,12 @@ mod tests {
             .create_session()
             .await
             .expect("failed to create session");
-        crate::test_support::set_session_status_for_test(
+        crate::test_support::persist_session_status_for_test(
             &mut app,
             &session_id,
             crate::domain::session::Status::Review,
-        );
+        )
+        .await;
         app.mode = AppMode::Confirmation {
             confirmation_intent: ConfirmationIntent::CancelSession,
             confirmation_message: "Cancel session \"test\"?".to_string(),
@@ -1054,11 +1083,12 @@ mod tests {
             )
             .await
             .expect("failed to persist merged commit hash");
-        crate::test_support::set_session_status_for_test(
+        crate::test_support::persist_session_status_for_test(
             &mut app,
             &source_session_id,
             crate::domain::session::Status::Done,
-        );
+        )
+        .await;
         app.mode = AppMode::Confirmation {
             confirmation_intent: ConfirmationIntent::ContinueSession,
             confirmation_message: "Create a new draft session with initial context from this \
@@ -1184,11 +1214,12 @@ mod tests {
             .create_session()
             .await
             .expect("failed to create session");
-        crate::test_support::set_session_status_for_test(
+        crate::test_support::persist_session_status_for_test(
             &mut app,
             &session_id,
             crate::domain::session::Status::Review,
-        );
+        )
+        .await;
         app.mode = AppMode::PublishBranchInput {
             default_branch_name: "wt/session".to_string(),
             input: crate::domain::input::InputState::with_text("review/custom".to_string()),

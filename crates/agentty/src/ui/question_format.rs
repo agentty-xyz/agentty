@@ -3,9 +3,9 @@
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::ui::state::app_mode::QuestionFocus;
-use crate::ui::state::help_action;
-use crate::ui::{style, text_util};
+use crate::presentation::app_mode::QuestionFocus;
+use crate::presentation::{help_action, style};
+use crate::ui::text_util;
 
 /// Returns wrapped question-panel lines with the correct focus styling.
 pub(crate) fn question_panel_lines(

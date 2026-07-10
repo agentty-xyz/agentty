@@ -25,7 +25,7 @@ use crate::domain::setting::SettingName;
 use crate::infra::db::AppRepositories;
 use crate::infra::project_discovery::{HOME_PROJECT_SCAN_MAX_RESULTS, RealProjectDiscoveryClient};
 use crate::infra::tmux::{MockTmuxClient, TmuxClient};
-use crate::ui::state::app_mode::ConfirmationViewMode;
+use crate::presentation::app_mode::ConfirmationViewMode;
 
 /// Builds one reducer-ready turn projection for tests.
 fn test_turn_applied_state(

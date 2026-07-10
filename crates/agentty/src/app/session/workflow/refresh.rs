@@ -9,7 +9,7 @@ use super::SESSION_REFRESH_INTERVAL;
 use crate::app::session::SessionError;
 use crate::app::{AppServices, ProjectManager, SessionManager};
 use crate::domain::session::{ForgeKind, ReviewRequest, SessionId};
-use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode};
+use crate::presentation::app_mode::{AppMode, ConfirmationViewMode};
 
 impl SessionManager {
     /// Reloads session rows when the metadata cache indicates a change.
@@ -308,7 +308,6 @@ mod tests {
 
     use ag_forge as forge;
     use ag_git as git;
-    use ratatui::widgets::TableState;
     use tempfile::tempdir;
     use tokio::sync::mpsc;
 
@@ -322,6 +321,7 @@ mod tests {
     };
     use crate::infra::db::AppRepositories;
     use crate::infra::fs;
+    use crate::presentation::table_state::TableViewState;
 
     /// Builds a filesystem mock that delegates directory checks to local disk.
     fn create_passthrough_mock_fs_client() -> fs::MockFsClient {
@@ -423,7 +423,14 @@ mod tests {
                 model: AgentKind::Antigravity.default_model(),
             },
             Arc::new(git::MockGitClient::new()),
-            SessionState::new(handles, vec![session], TableState::default(), clock, 1, 0),
+            SessionState::new(
+                handles,
+                vec![session],
+                TableViewState::default(),
+                clock,
+                1,
+                0,
+            ),
             Vec::new(),
         )
     }
@@ -729,7 +736,7 @@ mod tests {
             SessionState::new(
                 HashMap::new(),
                 Vec::new(),
-                TableState::default(),
+                TableViewState::default(),
                 clock,
                 0,
                 0,

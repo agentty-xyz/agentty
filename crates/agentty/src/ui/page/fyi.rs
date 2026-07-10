@@ -1,7 +1,7 @@
 //! Shared helpers and message sets for page-scoped status-bar FYIs.
 
 use crate::app::Tab;
-use crate::ui::state::app_mode::{AppMode, HelpContext};
+use crate::presentation::app_mode::{AppMode, HelpContext};
 
 /// Rotating workflow FYI messages shown in the top status bar while the
 /// sessions list is visible.
@@ -90,7 +90,7 @@ pub(crate) fn rotating_message<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::state::app_mode::DiffRightPanel;
+    use crate::presentation::app_mode::DiffRightPanel;
 
     #[test]
     fn rotating_message_cycles_through_messages() {

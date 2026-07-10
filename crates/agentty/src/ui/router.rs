@@ -4,22 +4,20 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::widgets::TableState;
 
-use crate::app::{RequestedReviewState, SettingsManager, Tab};
+use crate::app::{RequestedReviewState, SettingsManager, Tab, VisibleSessionReview};
 use crate::domain::agent::{AgentCliInfo, ReasoningLevel};
 use crate::domain::input::InputState;
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session, SessionId};
 use crate::domain::system_log::SystemLogBuffer;
 use crate::infra::review_comment_cache::ReviewCommentCache;
+use crate::presentation::app_mode::{
+    AppMode, ConfirmationIntent, ConfirmationViewMode, DiffRightPanel,
+};
 use crate::ui::overlay::{
     HelpOverlayRenderContext, SyncBlockedPopupRenderContext, ViewInfoPopupRenderContext,
 };
-use crate::ui::state::app_mode::{
-    AppMode, ConfirmationIntent, ConfirmationViewMode, DiffRightPanel,
-};
-use crate::ui::{
-    Component, Page, RenderContext, SessionReviewSnapshot, component, markdown, overlay, page,
-};
+use crate::ui::{Component, Page, RenderContext, component, markdown, overlay, page};
 
 /// Borrowed list-background view into shared route state.
 pub(crate) struct ListBackgroundRenderContext<'a, 'state> {
@@ -88,7 +86,7 @@ struct SessionChatRenderContext<'a> {
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
     mode: &'a AppMode,
     output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
-    review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
+    review_snapshot: Option<&'a VisibleSessionReview<'a>>,
     session_id: &'a str,
     session_progress_messages: &'a HashMap<SessionId, String>,
     session_update_versions: &'a HashMap<SessionId, u64>,
@@ -109,7 +107,7 @@ struct PublishBranchOverlayContext<'a> {
     output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
     input: &'a InputState,
     locked_upstream_ref: Option<&'a str>,
-    review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
+    review_snapshot: Option<&'a VisibleSessionReview<'a>>,
     restore_view: &'a ConfirmationViewMode,
     session_progress_messages: &'a HashMap<SessionId, String>,
     session_update_versions: &'a HashMap<SessionId, u64>,
@@ -126,7 +124,7 @@ struct RouteAuxContext<'a> {
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
     output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
     review_comment_cache: &'a ReviewCommentCache,
-    review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
+    review_snapshot: Option<&'a VisibleSessionReview<'a>>,
     session_progress_messages: &'a HashMap<SessionId, String>,
     session_update_versions: &'a HashMap<SessionId, u64>,
     session_worktree_availability: &'a HashMap<SessionId, bool>,
@@ -500,7 +498,7 @@ struct SessionOverlayRenderContext<'a> {
     /// Shared output-layout cache for the restored session transcript.
     output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
     /// Focused-review state for the restored session background.
-    review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
+    review_snapshot: Option<&'a VisibleSessionReview<'a>>,
     /// Session view restored after the overlay closes.
     restore_view: &'a ConfirmationViewMode,
     /// Active progress messages keyed by session id.

@@ -330,14 +330,14 @@ mod tests {
         COMMITTING_PROGRESS_LABEL, PublishedBranchSyncStatus, Session, Status,
     };
     use crate::domain::theme::ColorTheme;
+    use crate::presentation::app_mode::QuestionFocus;
+    use crate::presentation::help_action::{self, ViewActionAvailability, ViewHelpState};
+    use crate::presentation::prompt::{PromptAtMentionState, PromptSlashStage, PromptSlashState};
+    use crate::presentation::style;
     use crate::ui::input_layout::*;
     use crate::ui::prompt_format::*;
     use crate::ui::question_format::*;
     use crate::ui::session_format::*;
-    use crate::ui::state::app_mode::QuestionFocus;
-    use crate::ui::state::help_action::{self, ViewActionAvailability, ViewHelpState};
-    use crate::ui::state::prompt::{PromptAtMentionState, PromptSlashStage, PromptSlashState};
-    use crate::ui::style;
 
     fn session_fixture() -> Session {
         crate::test_support::SessionFixtureBuilder::new()

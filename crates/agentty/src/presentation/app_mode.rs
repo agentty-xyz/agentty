@@ -129,7 +129,7 @@ pub enum QuestionFocus {
     Chat,
 }
 
-/// Represents the active UI mode for the application.
+/// Represents the active presentation mode for the application.
 pub enum AppMode {
     List,
     /// Displays the selected forge review request title, description, comment

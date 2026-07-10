@@ -4,7 +4,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::ui::style::palette;
+use crate::presentation::style::palette;
 use crate::ui::text_util::truncate_with_ellipsis;
 use crate::ui::{Component, overlay};
 

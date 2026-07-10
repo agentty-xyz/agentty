@@ -4,8 +4,8 @@ pub use ag_tui_text::markdown::{markdown_block_preservation_mask, parse_inline_s
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
+use crate::presentation::style;
 use crate::ui::prompt_block::{self, USER_PROMPT_PREFIX, USER_PROMPT_RIGHT_GUTTER_WIDTH};
-use crate::ui::style;
 
 const CLARIFICATION_HEADER: &str = "Clarifications:";
 

@@ -11,6 +11,9 @@ use crate::domain::session::{
     can_start_staged_session_in_stack,
 };
 use crate::domain::{input, review};
+use crate::presentation::app_mode::{AppMode, QuestionFocus};
+use crate::presentation::help_action::{self, ViewActionAvailability, ViewHelpState};
+use crate::presentation::prompt::PromptAtMentionState;
 use crate::ui::component::chat_input::{ChatInput, SuggestionList};
 use crate::ui::component::session_output::{
     SessionOutput, SessionOutputLayoutCache, SessionOutputLineContext,
@@ -18,9 +21,6 @@ use crate::ui::component::session_output::{
 use crate::ui::input_layout::{
     calculate_input_height, overlay_area_above, suggestion_dropdown_height,
 };
-use crate::ui::state::app_mode::{AppMode, QuestionFocus};
-use crate::ui::state::help_action::{self, ViewActionAvailability, ViewHelpState};
-use crate::ui::state::prompt::PromptAtMentionState;
 use crate::ui::{
     Component, Page, layout, markdown, prompt_format, question_format, session_format,
 };
@@ -570,8 +570,10 @@ mod tests {
     use crate::domain::question::QuestionItem;
     use crate::domain::session::Status;
     use crate::domain::session_message::SessionTranscript;
-    use crate::ui::state::app_mode::QuestionFocus;
-    use crate::ui::state::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
+    use crate::presentation::app_mode::QuestionFocus;
+    use crate::presentation::prompt::{
+        PromptAttachmentState, PromptHistoryState, PromptSlashState,
+    };
 
     fn session_fixture() -> Session {
         crate::test_support::SessionFixtureBuilder::new()

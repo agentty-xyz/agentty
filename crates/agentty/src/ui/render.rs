@@ -7,22 +7,14 @@ use ratatui::widgets::TableState;
 
 use crate::app::session::session_branch;
 use crate::app::session_state::SessionGitStatus;
-use crate::app::{RequestedReviewState, SettingsManager, Tab, UpdateStatus};
+use crate::app::{RequestedReviewState, SettingsManager, Tab, UpdateStatus, VisibleSessionReview};
 use crate::domain::agent::AgentCliInfo;
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session, SessionId};
 use crate::domain::system_log::SystemLogBuffer;
 use crate::infra::review_comment_cache::ReviewCommentCache;
-use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
+use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
 use crate::ui::{component, markdown, page, router};
-
-/// Focused-review display state projected from the app cache for one visible
-/// session.
-pub struct SessionReviewSnapshot<'a> {
-    pub session_id: &'a str,
-    pub status_message: Option<String>,
-    pub text: Option<&'a str>,
-}
 
 /// A trait for UI pages that enforces a standard rendering interface.
 pub trait Page {
@@ -70,7 +62,7 @@ pub struct RenderContext<'a> {
     pub review_comment_cache: &'a ReviewCommentCache,
     /// Focused-review state for the visible session, projected from the app
     /// cache for this render pass.
-    pub session_review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
+    pub session_review_snapshot: Option<&'a VisibleSessionReview<'a>>,
     /// Project-scoped requested PR/MR review list state.
     pub requested_reviews: &'a RequestedReviewState,
     /// Selected requested-review item index for the review list, excluding

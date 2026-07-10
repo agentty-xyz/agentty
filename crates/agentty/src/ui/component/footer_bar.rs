@@ -7,8 +7,9 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::ui::icon::Icon;
-use crate::ui::{Component, style};
+use crate::presentation::icon::Icon;
+use crate::presentation::style;
+use crate::ui::Component;
 
 /// Footer widget that renders the working directory and optional git status.
 pub struct FooterBar {

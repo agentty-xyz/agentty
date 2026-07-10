@@ -42,8 +42,8 @@ through the correct modules without crossing layer boundaries.
 1. Update the handler in `crates/agentty/src/runtime/mode/`, or in
    `crates/agentty/src/runtime/key_handler.rs` when the interaction is a cross-mode
    overlay dispatch.
-1. If a new mode/state is needed, extend `crates/agentty/src/ui/state/app_mode.rs`.
-1. If help content changes, update `crates/agentty/src/ui/state/help_action.rs` as
+1. If a new mode/state is needed, extend `crates/agentty/src/presentation/app_mode.rs`.
+1. If help content changes, update `crates/agentty/src/presentation/help_action.rs` as
    needed.
 1. Update `docs/site/content/docs/usage/keybindings.md`.
 
@@ -61,12 +61,16 @@ through the correct modules without crossing layer boundaries.
 1. Add the page in `crates/agentty/src/ui/page/` or component in
    `crates/agentty/src/ui/component/`.
 1. Wire the page into `crates/agentty/src/ui/router.rs`.
-1. If a new `AppMode` is needed, extend `crates/agentty/src/ui/state/app_mode.rs` and
-   add a key handler in `crates/agentty/src/runtime/mode/`.
+1. If a new `AppMode` is needed, extend `crates/agentty/src/presentation/app_mode.rs`
+   and add a key handler in `crates/agentty/src/runtime/mode/`.
 
 ## Contributor Checklist for Architecture-Safe Changes
 
 1. Keep workflow/state transitions in `app/`, not in UI rendering modules.
+1. Keep `app/` independent of `runtime/` and `ui/`; share mode/display contracts through
+   `presentation/` and expose borrowed app projections at the render boundary.
+1. Keep app-owned list selection and viewport state renderer-neutral; adapt it to
+   Ratatui widget state inside `ui/`.
 1. Keep external integrations in `infra/` behind traits.
 1. Keep business entities and enums in `domain/`.
 1. In `app/` and `runtime/` orchestration, avoid direct `Command::new`, `Instant::now`,
@@ -86,7 +90,7 @@ through the correct modules without crossing layer boundaries.
    invariants, or change-routing guidance changes.
 1. Treat render-time helpers as hot paths: avoid per-frame cloning of large render
    inputs, and make line-count/layout helpers reuse the same cached derived data as the
-   final paint path.
+   final paint path. Keep the active `RenderCacheStore` runtime-owned.
 1. When changing `TurnRequest`/`TurnEvent`/`TurnResult` shapes in
    `crates/ag-agent/src/channel/contract.rs` (re-exported by the `ag-agent` crate root),
    update the key-types table in `docs/site/content/docs/architecture/runtime-flow.md`.

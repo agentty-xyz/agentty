@@ -5,13 +5,13 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::app::{App, Tab};
 use crate::domain::input::InputState;
 use crate::domain::session::{Session, Status};
-use crate::runtime::EventResult;
-use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
-use crate::ui::state::app_mode::{AppMode, ConfirmationIntent, HelpContext};
-use crate::ui::state::help_action::{
+use crate::presentation::app_mode::{AppMode, ConfirmationIntent, HelpContext};
+use crate::presentation::help_action::{
     HelpAction, project_list_actions, session_list_actions, settings_actions, system_log_actions,
 };
-use crate::ui::state::prompt::{PromptAttachmentState, PromptHistoryState};
+use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState};
+use crate::runtime::EventResult;
+use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
 use crate::ui::text_util::inline_text;
 
 /// Handles key input while the app is in list mode.
@@ -320,7 +320,7 @@ fn list_keybindings(app: &App) -> Vec<HelpAction> {
     }
 
     if app.tabs.current() == Tab::Review {
-        return crate::ui::state::help_action::review_actions();
+        return crate::presentation::help_action::review_actions();
     }
 
     if app.tabs.current() == Tab::Logs {

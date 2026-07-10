@@ -14,7 +14,7 @@ use crate::domain::file_entry::FileEntry;
 use crate::domain::input::InputState;
 use crate::domain::session::SessionId;
 use crate::infra::file_index;
-use crate::ui::state::prompt::PromptAtMentionState;
+use crate::presentation::prompt::PromptAtMentionState;
 
 /// Delay applied before a fresh `@`-mention filesystem walk starts.
 const AT_MENTION_LOAD_DEBOUNCE: Duration = Duration::from_millis(75);
@@ -276,7 +276,6 @@ mod tests {
     use std::sync::Arc;
 
     use ag_git as git;
-    use ratatui::widgets::TableState;
     use tempfile::TempDir;
 
     use super::*;
@@ -285,6 +284,7 @@ mod tests {
     use crate::domain::agent::AgentModel;
     use crate::domain::session::{Session, SessionHandles, SessionSize, SessionStats, Status};
     use crate::infra::clock::RealClock;
+    use crate::presentation::table_state::TableViewState;
 
     #[test]
     fn test_sync_action_requests_activation_for_new_query() {
@@ -569,7 +569,7 @@ mod tests {
                 updated_at: 0,
                 workflow_notice: None,
             }],
-            TableState::default(),
+            TableViewState::default(),
             Arc::new(RealClock),
             1,
             0,

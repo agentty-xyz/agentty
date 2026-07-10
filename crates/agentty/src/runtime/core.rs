@@ -14,6 +14,7 @@ use tokio::sync::mpsc;
 use crate::app::App;
 use crate::infra::clock::Clock;
 use crate::runtime::{FRAME_INTERVAL, event, terminal};
+use crate::ui::RenderCacheStore;
 
 /// Fallback redraw cadence for visible spinner and timer UI when no new
 /// events arrive.
@@ -106,11 +107,13 @@ where
 {
     let clock = app.services.clock();
     let last_draw_at = clock.now_instant();
+    let render_cache_store = RenderCacheStore::default();
     let mut main_loop_state = MainLoopState {
         app,
         clock,
         event_rx,
         last_draw_at,
+        render_cache_store,
         terminal,
         tick,
     };
@@ -124,6 +127,7 @@ struct MainLoopState<'a, B: Backend> {
     clock: Arc<dyn Clock>,
     event_rx: &'a mut mpsc::UnboundedReceiver<crossterm::event::Event>,
     last_draw_at: Instant,
+    render_cache_store: RenderCacheStore,
     terminal: &'a mut Terminal<B>,
     tick: &'a mut tokio::time::Interval,
 }
@@ -147,9 +151,17 @@ where
             self.terminal,
             self.clock.as_ref(),
             &mut self.last_draw_at,
+            &self.render_cache_store,
         )?;
 
-        event::process_events(self.app, self.terminal, self.event_rx, self.tick).await
+        event::process_events(
+            self.app,
+            self.terminal,
+            self.event_rx,
+            self.tick,
+            &self.render_cache_store,
+        )
+        .await
     }
 }
 
@@ -182,6 +194,7 @@ fn render_frame<B: Backend>(
     terminal: &mut Terminal<B>,
     clock: &dyn Clock,
     last_draw_at: &mut Instant,
+    render_cache_store: &RenderCacheStore,
 ) -> io::Result<()>
 where
     B::Error: std::error::Error + Send + Sync + 'static,
@@ -193,7 +206,7 @@ where
     }
 
     terminal
-        .draw(|frame| app.draw(frame))
+        .draw(|frame| crate::ui::draw(app, frame, render_cache_store))
         .map_err(backend_err)?;
     app.clear_redraw();
     *last_draw_at = clock.now_instant();
@@ -224,8 +237,8 @@ mod tests {
     use crate::app::AppEvent;
     use crate::domain::session::{SessionHandles, Status};
     use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
+    use crate::presentation::app_mode::AppMode;
     use crate::test_support::SessionFixtureBuilder;
-    use crate::ui::state::app_mode::AppMode;
 
     /// Test-only loop state that records call counts and scripted outcomes.
     struct TestLoopState {
@@ -562,6 +575,7 @@ mod tests {
             clock,
             event_rx: &mut event_rx,
             last_draw_at,
+            render_cache_store: RenderCacheStore::default(),
             terminal: &mut terminal,
             tick: &mut tick,
         };

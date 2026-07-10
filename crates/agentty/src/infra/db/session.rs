@@ -34,6 +34,81 @@ pub struct SessionTurnMetadata {
     pub(crate) token_usage_delta: SessionStats,
 }
 
+/// Initial session metadata persisted with a first queued turn.
+pub struct FirstMessageMetadata {
+    /// Initial prompt stored on the session row.
+    pub prompt: String,
+    /// Initial display title stored on the session row.
+    pub title: String,
+}
+
+/// Session metadata snapshot restored when a queued first turn cannot reach
+/// its worker.
+#[derive(Debug)]
+pub struct FirstMessageMetadataSnapshot {
+    /// Prompt value that preceded the queued first turn.
+    pub prompt: String,
+    /// Optional title that preceded the queued first turn.
+    pub title: Option<String>,
+}
+
+impl FirstMessageMetadataSnapshot {
+    /// Captures the metadata values that preceded a queued first turn.
+    pub fn capture(prompt: &str, title: Option<&str>) -> Self {
+        Self {
+            prompt: prompt.to_string(),
+            title: title.map(str::to_string),
+        }
+    }
+}
+
+/// Atomic persistence payload for one user-submitted session turn.
+pub struct SessionTurnQueueInput {
+    /// Persisted status required before the turn may be queued.
+    pub expected_status: String,
+    /// Initial prompt and title, present only for the first turn.
+    pub first_message_metadata: Option<FirstMessageMetadata>,
+    /// Raw transcript content for the submitted user message.
+    pub message_content: String,
+    /// Durable transcript category for the submitted message.
+    pub message_kind: SessionMessageKind,
+    /// Stable operation identifier assigned to the queued command.
+    pub operation_id: String,
+    /// Stable operation category stored for recovery and cancellation.
+    pub operation_kind: String,
+    /// Stable identifier of the session receiving the turn.
+    pub session_id: String,
+    /// Lifecycle status entered by the queued turn.
+    pub status: String,
+    /// Clock timestamp used for status timing and queued records.
+    pub timestamp_seconds: i64,
+}
+
+/// Atomic compensation payload for a committed turn that could not reach its
+/// session worker.
+pub struct SessionTurnRollbackInput {
+    /// Metadata restored when the queued turn wrote first-message values.
+    pub first_message_metadata: Option<FirstMessageMetadataSnapshot>,
+    /// Raw content of the transcript message inserted by the queue transaction.
+    pub message_content: String,
+    /// Transcript category inserted by the queue transaction.
+    pub message_kind: SessionMessageKind,
+    /// Operation row inserted by the queue transaction.
+    pub operation_id: String,
+    /// Status restored when persistence still holds the queued status.
+    pub recovery_status: String,
+    /// Session receiving the compensation.
+    pub session_id: String,
+    /// Status written by the queue transaction.
+    pub queued_status: String,
+}
+
+/// Result of compensating one committed queued turn.
+pub struct SessionTurnRollbackOutcome {
+    /// Whether the queued status was still current and was restored.
+    pub status_restored: bool,
+}
+
 /// Borrowed persisted agent/model pair for newly inserted session rows.
 pub struct PersistedSessionAgentModel<'a> {
     /// Persisted agent provider kind for the session.
@@ -207,6 +282,31 @@ pub trait SessionRepository: Send + Sync {
         kind: SessionMessageKind,
         content: &str,
     ) -> Result<(), DbError>;
+
+    /// Atomically transitions status and persists every durable record needed
+    /// to enqueue one user-submitted turn.
+    ///
+    /// Returns `false` without writing metadata, transcript, or operation rows
+    /// when the session is missing or its persisted status is stale.
+    async fn queue_session_turn(&self, input: SessionTurnQueueInput) -> Result<bool, DbError>;
+
+    /// Atomically removes one still-queued operation and its exact transcript
+    /// and first-message mutations after worker handoff fails.
+    ///
+    /// Returns `None` without changing data when the queued operation no
+    /// longer exists, is no longer queued, or its transcript tail changed.
+    async fn rollback_queued_session_turn(
+        &self,
+        input: SessionTurnRollbackInput,
+    ) -> Result<Option<SessionTurnRollbackOutcome>, DbError>;
+
+    /// Clears clarification questions only while the session remains in the
+    /// expected persisted status.
+    async fn clear_session_questions_if_status(
+        &self,
+        id: &str,
+        expected_status: &str,
+    ) -> Result<bool, DbError>;
 
     /// Sets `project_id` for sessions that do not yet reference a project.
     async fn backfill_session_project(&self, project_id: i64) -> Result<(), DbError>;
@@ -507,6 +607,16 @@ pub trait SessionRepository: Send + Sync {
         status: &str,
         timestamp_seconds: i64,
     ) -> Result<(), DbError>;
+
+    /// Atomically updates a session status only when persistence still holds
+    /// the expected current status, including active-work timing changes.
+    async fn transition_session_status_with_timing_at(
+        &self,
+        id: &str,
+        expected_status: &str,
+        status: &str,
+        timestamp_seconds: i64,
+    ) -> Result<bool, DbError>;
 
     /// Updates the persisted session summary text for a session row.
     async fn update_session_summary(&self, id: &str, summary: &str) -> Result<(), DbError>;
@@ -876,6 +986,213 @@ WHERE session_id = ?
         transaction.commit().await?;
 
         Ok(())
+    }
+
+    async fn queue_session_turn(&self, input: SessionTurnQueueInput) -> Result<bool, DbError> {
+        let SessionTurnQueueInput {
+            expected_status,
+            first_message_metadata,
+            message_content,
+            message_kind,
+            operation_id,
+            operation_kind,
+            session_id,
+            status,
+            timestamp_seconds,
+        } = input;
+        let message_content = stored_message_content(message_kind, &message_content);
+        let mut transaction = self.0.begin().await?;
+
+        let status_result = sqlx::query(
+            r"
+UPDATE session
+SET status = ?,
+    updated_at = CAST(strftime('%s', 'now') AS INTEGER),
+    in_progress_total_seconds = CASE
+        WHEN ? = 'InProgress' OR in_progress_started_at IS NULL THEN in_progress_total_seconds
+        ELSE in_progress_total_seconds + MAX(0, ? - in_progress_started_at)
+    END,
+    in_progress_started_at = CASE
+        WHEN ? = 'InProgress' THEN COALESCE(in_progress_started_at, ?)
+        ELSE NULL
+    END
+WHERE id = ? AND status = ?
+",
+        )
+        .bind(&status)
+        .bind(&status)
+        .bind(timestamp_seconds)
+        .bind(&status)
+        .bind(timestamp_seconds)
+        .bind(&session_id)
+        .bind(&expected_status)
+        .execute(&mut *transaction)
+        .await?;
+
+        if status_result.rows_affected() != 1 {
+            transaction.rollback().await?;
+
+            return Ok(false);
+        }
+
+        if let Some(metadata) = first_message_metadata {
+            sqlx::query(
+                r"
+UPDATE session
+SET prompt = ?, title = ?
+WHERE id = ?
+",
+            )
+            .bind(metadata.prompt)
+            .bind(metadata.title)
+            .bind(&session_id)
+            .execute(&mut *transaction)
+            .await?;
+        }
+
+        if !message_content.trim().is_empty() {
+            sqlx::query(
+                r"
+INSERT INTO session_message (session_id, position, kind, content, created_at)
+SELECT ?, COALESCE(MAX(position), -1) + 1, ?, ?, CAST(strftime('%s', 'now') AS INTEGER)
+FROM session_message
+WHERE session_id = ?
+",
+            )
+            .bind(&session_id)
+            .bind(message_kind.as_str())
+            .bind(message_content)
+            .bind(&session_id)
+            .execute(&mut *transaction)
+            .await?;
+        }
+
+        sqlx::query(
+            r"
+INSERT INTO session_operation (id, session_id, kind, status, queued_at)
+VALUES (?, ?, ?, 'queued', CAST(strftime('%s', 'now') AS INTEGER))
+",
+        )
+        .bind(operation_id)
+        .bind(session_id)
+        .bind(operation_kind)
+        .execute(&mut *transaction)
+        .await?;
+
+        transaction.commit().await?;
+
+        Ok(true)
+    }
+
+    async fn rollback_queued_session_turn(
+        &self,
+        input: SessionTurnRollbackInput,
+    ) -> Result<Option<SessionTurnRollbackOutcome>, DbError> {
+        let SessionTurnRollbackInput {
+            first_message_metadata,
+            message_content,
+            message_kind,
+            operation_id,
+            recovery_status,
+            session_id,
+            queued_status,
+        } = input;
+        let message_content = stored_message_content(message_kind, &message_content);
+        let mut transaction = self.0.begin().await?;
+
+        let operation_result = sqlx::query(
+            r"
+DELETE FROM session_operation
+WHERE id = ? AND session_id = ? AND status = 'queued'
+",
+        )
+        .bind(&operation_id)
+        .bind(&session_id)
+        .execute(&mut *transaction)
+        .await?;
+        if operation_result.rows_affected() != 1 {
+            transaction.rollback().await?;
+
+            return Ok(None);
+        }
+
+        if !message_content.trim().is_empty() {
+            let message_result = sqlx::query(
+                r"
+DELETE FROM session_message
+WHERE session_id = ?
+  AND position = (SELECT MAX(position) FROM session_message WHERE session_id = ?)
+  AND kind = ?
+  AND content = ?
+",
+            )
+            .bind(&session_id)
+            .bind(&session_id)
+            .bind(message_kind.as_str())
+            .bind(&message_content)
+            .execute(&mut *transaction)
+            .await?;
+            if message_result.rows_affected() != 1 {
+                transaction.rollback().await?;
+
+                return Ok(None);
+            }
+        }
+
+        if let Some(metadata) = first_message_metadata {
+            sqlx::query(
+                r"
+UPDATE session
+SET prompt = ?, title = ?
+WHERE id = ?
+",
+            )
+            .bind(metadata.prompt)
+            .bind(metadata.title)
+            .bind(&session_id)
+            .execute(&mut *transaction)
+            .await?;
+        }
+
+        let status_result = sqlx::query(
+            r"
+UPDATE session
+SET status = ?,
+    in_progress_started_at = NULL
+WHERE id = ? AND status = ?
+",
+        )
+        .bind(&recovery_status)
+        .bind(&session_id)
+        .bind(&queued_status)
+        .execute(&mut *transaction)
+        .await?;
+
+        transaction.commit().await?;
+
+        Ok(Some(SessionTurnRollbackOutcome {
+            status_restored: status_result.rows_affected() == 1,
+        }))
+    }
+
+    async fn clear_session_questions_if_status(
+        &self,
+        id: &str,
+        expected_status: &str,
+    ) -> Result<bool, DbError> {
+        let query_result = sqlx::query(
+            r"
+UPDATE session
+SET questions = ''
+WHERE id = ? AND status = ?
+",
+        )
+        .bind(id)
+        .bind(expected_status)
+        .execute(&self.0)
+        .await?;
+
+        Ok(query_result.rows_affected() == 1)
     }
 
     async fn backfill_session_project(&self, project_id: i64) -> Result<(), DbError> {
@@ -2021,6 +2338,41 @@ WHERE id = ?
         .await?;
 
         Ok(())
+    }
+
+    async fn transition_session_status_with_timing_at(
+        &self,
+        id: &str,
+        expected_status: &str,
+        status: &str,
+        timestamp_seconds: i64,
+    ) -> Result<bool, DbError> {
+        let query_result = sqlx::query(
+            r"
+UPDATE session
+SET status = ?,
+    in_progress_total_seconds = CASE
+        WHEN ? = 'InProgress' OR in_progress_started_at IS NULL THEN in_progress_total_seconds
+        ELSE in_progress_total_seconds + MAX(0, ? - in_progress_started_at)
+    END,
+    in_progress_started_at = CASE
+        WHEN ? = 'InProgress' THEN COALESCE(in_progress_started_at, ?)
+        ELSE NULL
+    END
+WHERE id = ? AND status = ?
+",
+        )
+        .bind(status)
+        .bind(status)
+        .bind(timestamp_seconds)
+        .bind(status)
+        .bind(timestamp_seconds)
+        .bind(id)
+        .bind(expected_status)
+        .execute(&self.0)
+        .await?;
+
+        Ok(query_result.rows_affected() == 1)
     }
 
     async fn update_session_summary(&self, id: &str, summary: &str) -> Result<(), DbError> {

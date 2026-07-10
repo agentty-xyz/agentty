@@ -17,8 +17,6 @@ use ag_agent::{AppServerClient, MockAppServerClient, StaticAgentAvailabilityProb
 #[cfg(test)]
 use ag_git as git;
 use ratatui::buffer::{Buffer, Cell};
-#[cfg(test)]
-use ratatui::widgets::TableState;
 
 use crate::app;
 #[cfg(test)]
@@ -37,7 +35,9 @@ use crate::domain::session::{
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use crate::domain::setting::SettingName;
 #[cfg(test)]
-use crate::ui::state::app_mode::AppMode;
+use crate::presentation::app_mode::AppMode;
+#[cfg(test)]
+use crate::presentation::table_state::TableViewState;
 
 /// Returns the canonical session folder path for integration-test fixtures.
 pub fn session_folder(base: &Path, session_id: &str) -> PathBuf {
@@ -493,7 +493,7 @@ pub(crate) fn session_manager_with_handles(
         SessionState::new(
             handles,
             sessions,
-            TableState::default(),
+            TableViewState::default(),
             Arc::new(FixedClock::unix_epoch()),
             0,
             0,
@@ -527,6 +527,36 @@ pub(crate) fn set_session_status_for_test(app: &mut App, session_id: &str, statu
     {
         *current_status = status;
     }
+}
+
+/// Persists a fixture status before updating the matching snapshot and live
+/// handle, preserving the production persistence-first invariant in tests.
+#[cfg(test)]
+pub(crate) async fn persist_session_status_for_test(
+    app: &mut App,
+    session_id: &str,
+    status: Status,
+) {
+    app.services
+        .db()
+        .sessions()
+        .update_session_status_with_timing_at(session_id, &status.to_string(), 0)
+        .await
+        .expect("failed to persist test session status");
+    let persisted_status = app
+        .services
+        .db()
+        .sessions()
+        .load_sessions()
+        .await
+        .expect("failed to load test session status")
+        .into_iter()
+        .find(|session| session.id == session_id)
+        .map(|session| session.status)
+        .expect("test session should exist in persistence");
+    assert_eq!(persisted_status, status.to_string());
+
+    set_session_status_for_test(app, session_id, status);
 }
 
 /// Switches a test app into review-detail mode with the provided review.

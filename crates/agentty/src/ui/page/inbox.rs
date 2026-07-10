@@ -6,10 +6,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 
 use crate::app::RequestedReviewState;
+use crate::presentation::{help_action, style};
 use crate::ui::input_layout::first_table_column_width;
-use crate::ui::state::help_action;
 use crate::ui::text_util::{inline_text, truncate_spans_with_ellipsis};
-use crate::ui::{Page, layout, style};
+use crate::ui::{Page, layout};
 
 /// Horizontal spacing between requested-review table columns.
 const TABLE_COLUMN_SPACING: u16 = 2;

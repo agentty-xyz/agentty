@@ -6,7 +6,6 @@ use std::sync::Arc;
 
 use ag_agent::AgentAvailabilityProbe;
 use ag_git::GitClient;
-use ratatui::widgets::TableState;
 use tokio::sync::mpsc;
 
 use super::core::{AGENTTY_WT_DIR, AppEvent};
@@ -23,6 +22,7 @@ use crate::domain::setting::SettingName;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs::FsClient;
 use crate::infra::project_discovery::ProjectDiscoveryClient;
+use crate::presentation::table_state::TableViewState;
 
 /// Startup project context resolved before the first render.
 pub(crate) struct StartupProjectContext {
@@ -204,7 +204,7 @@ impl AppStartup {
             default_session_model,
             startup_working_dir,
         } = context;
-        let mut table_state = TableState::default();
+        let mut table_state = TableViewState::default();
         let mut handles = std::collections::HashMap::new();
         let fs_client = services.fs_client();
         let (sessions, stats_activity, session_worktree_availability) =

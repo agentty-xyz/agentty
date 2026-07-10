@@ -10,13 +10,13 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, 
 use crate::domain::agent::{AgentCliInfo, AgentCliVersion};
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::DailyActivity;
+use crate::presentation::{help_action, style};
 use crate::ui::activity_heatmap::{
     RecentActivityStats, build_activity_heatmap_grid, build_recent_activity_stats,
     build_visible_heatmap_month_row, current_day_key_local, heatmap_intensity_level,
     heatmap_max_count, visible_heatmap_week_count,
 };
-use crate::ui::state::help_action;
-use crate::ui::{Page, layout, style, text_util};
+use crate::ui::{Page, layout, text_util};
 
 const DAY_LABELS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const HEATMAP_CELL_WIDTH: usize = 2;

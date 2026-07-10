@@ -1,4 +1,4 @@
-//! Theme-aware semantic color helpers for Agentty's terminal UI.
+//! Theme-aware semantic color helpers for Agentty's presentation layer.
 
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Mutex, MutexGuard};
@@ -6,9 +6,9 @@ use std::sync::{Mutex, MutexGuard};
 use ag_tui_text::{TextPalette, TextRenderSettings};
 use ratatui::style::{Color, Style};
 
-use super::icon::Icon;
 use crate::domain::session::{ReviewRequestState, Status};
 use crate::domain::theme::ColorTheme;
+use crate::presentation::icon::Icon;
 
 static ACTIVE_THEME: AtomicU8 = AtomicU8::new(theme_index(ColorTheme::Current));
 static ACTIVE_THEME_SCOPE_LOCK: Mutex<()> = Mutex::new(());

@@ -152,6 +152,26 @@ impl SessionTranscript {
             .push(SessionMessage::new(position, kind, content));
     }
 
+    /// Removes the transcript tail when it exactly matches one unexecuted
+    /// message being compensated after worker handoff failure.
+    pub(crate) fn remove_last_message(&mut self, kind: SessionMessageKind, content: &str) -> bool {
+        let content = stored_message_content(kind, content);
+        let is_match = self
+            .messages
+            .last()
+            .is_some_and(|message| message.kind == kind && message.content == content);
+        if !is_match {
+            return false;
+        }
+
+        let Some(removed) = self.messages.pop() else {
+            return false;
+        };
+        self.total_content_len = self.total_content_len.saturating_sub(removed.content.len());
+
+        true
+    }
+
     /// Returns formatted transcript text for replay when content exists.
     ///
     /// User and assistant rows store raw content, so replay injects the prompt
@@ -473,6 +493,26 @@ mod tests {
             transcript.total_content_len(),
             "prompt".len() + "answer".len()
         );
+    }
+
+    #[test]
+    fn test_session_transcript_remove_last_message_requires_exact_tail() {
+        // Arrange
+        let mut transcript = SessionTranscript::new(vec![
+            SessionMessage::conversation(0, SessionMessageKind::UserPrompt, "first"),
+            SessionMessage::conversation(1, SessionMessageKind::UserPrompt, "queued prompt"),
+        ]);
+
+        // Act
+        let rejected = transcript.remove_last_message(SessionMessageKind::UserPrompt, "first");
+        let removed =
+            transcript.remove_last_message(SessionMessageKind::UserPrompt, "queued prompt");
+
+        // Assert
+        assert!(!rejected);
+        assert!(removed);
+        assert_eq!(transcript.messages().len(), 1);
+        assert_eq!(transcript.total_content_len(), "first".len());
     }
 
     #[test]

@@ -9,6 +9,7 @@ mod events;
 mod new;
 mod state;
 
+pub use draw::VisibleSessionReview;
 pub(crate) use events::AppEvent;
 #[cfg(test)]
 pub(crate) use state::AppClients;

@@ -5,8 +5,8 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use crate::ui::state::help_action;
-use crate::ui::{Page, layout, markdown, review_comment_format, style};
+use crate::presentation::{help_action, style};
+use crate::ui::{Page, layout, markdown, review_comment_format};
 
 /// Page renderer for one requested PR or MR review summary, comments, and
 /// comment-load failures.

@@ -55,6 +55,12 @@ which wrap the infra enums via `#[from]` plus a `Workflow(String)` variant for
 contextual app-level failures. At event and display boundaries, errors are converted to
 `String` via `Display` because those types require `Clone` and `Eq`.
 
+Persistence tests should verify both sides of the state boundary. In particular,
+failure-injection coverage for session status and transcript writes asserts that a
+failed repository call does not mutate live handles, emit a `SessionUpdated` event, or
+advance the session update version. Expected-status compare-and-set tests cover stale
+concurrent transitions independently of the in-memory state machine.
+
 ## Testing Guidance
 
 <a id="architecture-boundary-testing-guidance"></a> When adding higher-level flows

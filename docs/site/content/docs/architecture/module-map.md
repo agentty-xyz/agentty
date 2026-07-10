@@ -63,17 +63,29 @@ For file-level detail, read the module docstrings directly.
   `ag-clipboard`, then owns temp-file persistence and attachment metadata. Agentty
   imports the curated `ag-agent` crate-root API; provider registry, router, parser, and
   transport internals stay private to `crates/ag-agent/`.
+- `presentation/`: Shared presentation contracts — `AppMode`, prompt/help state,
+  renderer-neutral table selection/offset state, semantic theme styling, icons, and
+  user-visible status-message formatting. This layer lets app orchestration, runtime
+  input, and UI rendering share presentation state without making `app/` depend on
+  `runtime/` or `ui/`.
 - `runtime/`: Terminal lifecycle and the event loop — terminal setup, the event-reader
   thread, key dispatch, one handler per `AppMode` under `runtime/mode/`, and shared mode
-  helpers for session-output metrics.
+  helpers for session-output metrics. The runtime owns the active render-cache store and
+  passes it to frame rendering and metric helpers.
 - `ui/`: Rendering — frame composition, mode-to-page routing, pages under `ui/page/`,
-  reusable widgets under `ui/component/`, UI state under `ui/state/`, Agentty theme
-  adapters for `ag-tui-text`, plus diff, layout, review-comment formatting, and theme
-  helpers. Render caches are owned by the shared `RenderCacheStore`.
+  reusable widgets under `ui/component/`, Agentty adapters for `ag-tui-text`, plus diff,
+  layout, and review-comment formatting. `App` exposes a borrowed render projection;
+  `ui::draw()` adapts renderer-neutral table state into Ratatui `TableState` values and
+  converts the projection into a `RenderContext` without moving rendering ownership into
+  app orchestration. Render-cache and Ratatui widget-state types remain UI-owned.
 
 ## Layer Rules
 
 - Workflow and state transitions live in `app/`, not in UI rendering modules.
+- `app/` may depend on `domain/`, `infra/`, and `presentation/`, but not on `runtime/`
+  or `ui/`.
+- `runtime/` coordinates input and drawing; `ui/` consumes app render projections and
+  shared `presentation/` contracts.
 - Business entities and enums live in `domain/`.
 - External side effects live in `infra/` behind mockable traits; see
   [Testability Boundaries](@/docs/architecture/testability-boundaries.md).

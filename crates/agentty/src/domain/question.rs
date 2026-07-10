@@ -5,6 +5,18 @@ pub use ag_protocol::QuestionItem;
 
 use crate::domain::input::InputState;
 
+/// Returns the default selected option index for a question at the given
+/// position, or `None` when the free-text input should open immediately.
+pub(crate) fn default_option_index(
+    questions: &[QuestionItem],
+    question_index: usize,
+) -> Option<usize> {
+    questions
+        .get(question_index)
+        .filter(|item| !item.options.is_empty())
+        .map(|_| 0)
+}
+
 /// Partially answered clarification state saved when the user leaves question
 /// mode for the sessions list.
 ///
@@ -45,6 +57,21 @@ impl QuestionProgress {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_option_index_selects_first_predefined_option() {
+        // Arrange
+        let questions = vec![QuestionItem::with_options(
+            "Continue?",
+            vec!["Yes".to_string()],
+        )];
+
+        // Act
+        let selected_option_index = default_option_index(&questions, 0);
+
+        // Assert
+        assert_eq!(selected_option_index, Some(0));
+    }
 
     #[test]
     fn test_applies_to_accepts_matching_progress() {

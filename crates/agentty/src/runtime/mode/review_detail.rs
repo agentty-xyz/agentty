@@ -2,12 +2,17 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 
 use crate::app::App;
+use crate::presentation::app_mode::AppMode;
 use crate::runtime::EventResult;
-use crate::ui::page;
-use crate::ui::state::app_mode::AppMode;
+use crate::ui::{RenderCacheStore, page};
 
 /// Handles key input while a requested-review detail page is visible.
-pub(crate) fn handle(app: &mut App, content_area: Rect, key: KeyEvent) -> EventResult {
+pub(crate) fn handle(
+    app: &mut App,
+    content_area: Rect,
+    key: KeyEvent,
+    render_cache_store: &RenderCacheStore,
+) -> EventResult {
     if matches!(key.code, KeyCode::Esc | KeyCode::Char('q')) {
         app.mode = AppMode::List;
 
@@ -25,7 +30,7 @@ pub(crate) fn handle(app: &mut App, content_area: Rect, key: KeyEvent) -> EventR
             comment_error.as_deref(),
             *is_loading_comments,
             content_area,
-            app.render_cache_store().markdown_render_cache(),
+            render_cache_store.markdown_render_cache(),
         ),
         _ => 0,
     };
@@ -72,6 +77,13 @@ mod tests {
     use crossterm::event::KeyModifiers;
 
     use super::*;
+
+    /// Routes one test key through a fresh render-cache boundary.
+    fn handle(app: &mut App, content_area: Rect, key: KeyEvent) -> EventResult {
+        let render_cache_store = RenderCacheStore::default();
+
+        super::handle(app, content_area, key, &render_cache_store)
+    }
 
     #[tokio::test]
     async fn test_handle_q_returns_to_list_mode() {
@@ -131,12 +143,13 @@ mod tests {
         let mut app = new_test_app().await;
         let content_area = Rect::new(0, 0, 80, 8);
         let review = requested_review("line 1\nline 2\nline 3\nline 4\nline 5\nline 6");
+        let render_cache_store = RenderCacheStore::default();
         let expected_scroll_offset = page::review_detail::review_detail_max_scroll_offset(
             &review,
             None,
             false,
             content_area,
-            app.render_cache_store().markdown_render_cache(),
+            render_cache_store.markdown_render_cache(),
         );
         app.mode = AppMode::ReviewDetail {
             comment_error: None,

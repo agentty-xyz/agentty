@@ -5,8 +5,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::app::UpdateStatus;
+use crate::presentation::style;
+use crate::ui::Component;
 use crate::ui::page::fyi;
-use crate::ui::{Component, style};
 
 /// Top status bar showing current version, update progress, and availability.
 pub struct StatusBar<'a> {

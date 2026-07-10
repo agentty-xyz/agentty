@@ -8,7 +8,7 @@ use crate::app::setting::{
     LaunchConfigurationListEditorMode, LaunchConfigurationListEditorSnapshot,
 };
 use crate::domain::input::InputState;
-use crate::ui::style::palette;
+use crate::presentation::style::palette;
 use crate::ui::text_util::truncate_with_ellipsis;
 use crate::ui::{Component, overlay};
 

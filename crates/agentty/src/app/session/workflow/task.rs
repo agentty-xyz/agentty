@@ -115,7 +115,7 @@ impl StatusTransition {
     }
 
     /// Applies a status transition using the bound session dependencies.
-    pub(crate) async fn apply(&self, status: Status) -> bool {
+    pub(crate) async fn apply(&self, status: Status) -> Result<bool, SessionError> {
         SessionTaskService::update_status(
             self.status.as_ref(),
             self.clock.as_ref(),
@@ -128,13 +128,33 @@ impl StatusTransition {
         .await
     }
 
+    /// Synchronizes live status and refresh events after a surrounding
+    /// transaction has already committed the transition.
+    pub(crate) fn apply_persisted(&self, status: Status) {
+        *self
+            .status
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = status;
+        SessionTaskService::emit_session_updated(
+            &self.app_event_tx,
+            &self.session_update_versions,
+            self.session_id.as_str(),
+        );
+        if SessionTaskService::status_requires_full_refresh(status) {
+            SessionTaskService::send_session_and_project_refresh_events(
+                &self.app_event_tx,
+                self.session_id.as_str(),
+            );
+        }
+    }
+
     /// Applies a status transition or returns a workflow error for invalid
     /// state-machine edges.
     pub(crate) async fn apply_or_invalid_transition(
         &self,
         status: Status,
     ) -> Result<(), SessionError> {
-        if self.apply(status).await {
+        if self.apply(status).await? {
             return Ok(());
         }
 
@@ -337,7 +357,7 @@ impl SessionTaskService {
             }
             Err(commit_error) => {
                 let message = TranscriptNotice::CommitError.format(&commit_error);
-                Self::append_workflow_notice(
+                let _ = Self::append_workflow_notice(
                     &context.transcript,
                     &context.db,
                     &context.app_event_tx,
@@ -921,7 +941,7 @@ impl SessionTaskService {
                     raw_content: &answer_text,
                 },
             )
-            .await;
+            .await?;
         }
 
         if let Err(error) = db
@@ -1004,41 +1024,50 @@ impl SessionTaskService {
         session_update_versions: &SessionUpdateVersionMap,
         id: &str,
         new: Status,
-    ) -> bool {
-        let should_update = if let Ok(mut current) = status.lock() {
-            if (*current).can_transition_to(new) {
-                *current = new;
-                true
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-        if !should_update {
-            return false;
+    ) -> Result<bool, SessionError> {
+        let current = *status
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !current.can_transition_to(new) {
+            return Ok(false);
         }
 
         let timestamp_seconds = unix_timestamp_from_system_time(clock.now_system_time());
-
-        if let Err(error) = db
+        let persisted = match db
             .sessions()
-            .update_session_status_with_timing_at(id, &new.to_string(), timestamp_seconds)
+            .transition_session_status_with_timing_at(
+                id,
+                &current.to_string(),
+                &new.to_string(),
+                timestamp_seconds,
+            )
             .await
         {
-            warn!(
-                session_id = id,
-                status = %new,
-                error = %error,
-                "failed to persist session status update"
-            );
+            Ok(persisted) => persisted,
+            Err(error) => {
+                warn!(
+                    session_id = id,
+                    status = %new,
+                    error = %error,
+                    "failed to persist session status update"
+                );
+
+                return Err(error.into());
+            }
+        };
+        if !persisted {
+            return Ok(false);
         }
+
+        *status
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = new;
         Self::emit_session_updated(app_event_tx, session_update_versions, id);
         if Self::status_requires_full_refresh(new) {
             Self::send_session_and_project_refresh_events(app_event_tx, id);
         }
 
-        true
+        Ok(true)
     }
 
     /// Appends one formatted workflow notice to the in-memory transcript and
@@ -1050,13 +1079,7 @@ impl SessionTaskService {
         session_update_versions: &SessionUpdateVersionMap,
         id: &str,
         message: &str,
-    ) {
-        Self::append_live_transcript_message(
-            transcript,
-            id,
-            SessionMessageKind::WorkflowNotice,
-            message,
-        );
+    ) -> Result<(), SessionError> {
         if let Err(error) = db
             .sessions()
             .append_session_message(id, SessionMessageKind::WorkflowNotice, message)
@@ -1067,8 +1090,17 @@ impl SessionTaskService {
                 error = %error,
                 "failed to persist workflow notice"
             );
+
+            return Err(error.into());
         }
+        Self::append_live_transcript_message(
+            transcript,
+            SessionMessageKind::WorkflowNotice,
+            message,
+        );
         Self::emit_session_updated(app_event_tx, session_update_versions, id);
+
+        Ok(())
     }
 
     /// Appends one raw user/assistant message to the in-memory transcript and
@@ -1080,8 +1112,7 @@ impl SessionTaskService {
         session_update_versions: &SessionUpdateVersionMap,
         id: &str,
         message: SessionTranscriptMessageAppend<'_>,
-    ) {
-        Self::append_live_transcript_message(transcript, id, message.kind, message.raw_content);
+    ) -> Result<(), SessionError> {
         if let Err(error) = db
             .sessions()
             .append_session_message(id, message.kind, message.raw_content)
@@ -1092,27 +1123,25 @@ impl SessionTaskService {
                 error = %error,
                 "failed to persist session transcript message"
             );
+
+            return Err(error.into());
         }
+        Self::append_live_transcript_message(transcript, message.kind, message.raw_content);
         Self::emit_session_updated(app_event_tx, session_update_versions, id);
+
+        Ok(())
     }
 
     /// Appends one typed message to the live transcript snapshot.
-    fn append_live_transcript_message(
+    pub(crate) fn append_live_transcript_message(
         transcript: &Arc<Mutex<SessionTranscript>>,
-        id: &str,
         kind: SessionMessageKind,
         content: &str,
     ) {
-        match transcript.lock() {
-            Ok(mut transcript) => transcript.append_message(kind, content),
-            Err(error) => {
-                warn!(
-                    session_id = id,
-                    error = %error,
-                    "failed to lock session transcript buffer"
-                );
-            }
-        }
+        transcript
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .append_message(kind, content);
     }
 
     /// Clears the transient thinking message for one session.
@@ -1427,7 +1456,8 @@ mod tests {
             "session-id",
             "\n[Commit] No changes to commit.\n",
         )
-        .await;
+        .await
+        .expect("workflow notice should persist");
 
         // Assert
         assert_eq!(
@@ -1480,7 +1510,8 @@ mod tests {
                 raw_content: "    hello ",
             },
         )
-        .await;
+        .await
+        .expect("transcript message should persist");
 
         // Assert
         assert_eq!(
@@ -1510,6 +1541,48 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].kind, "user_prompt");
         assert_eq!(messages[0].content, "    hello");
+    }
+
+    #[tokio::test]
+    async fn append_session_transcript_message_keeps_live_state_unchanged_on_persistence_failure() {
+        // Arrange
+        let (database, pool) = AppRepositories::in_memory_with_pool().await;
+        insert_review_session(&database, AgentModel::Gpt55.as_str()).await;
+        pool.close().await;
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
+        let session_update_versions = Arc::default();
+
+        // Act
+        let result = SessionTaskService::append_session_transcript_message(
+            &transcript,
+            &database,
+            &app_event_tx,
+            &session_update_versions,
+            "session-id",
+            SessionTranscriptMessageAppend {
+                kind: SessionMessageKind::UserPrompt,
+                raw_content: "must stay durable",
+            },
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(result, Err(SessionError::Db(_))));
+        assert!(
+            transcript
+                .lock()
+                .expect("transcript lock should not be poisoned")
+                .messages()
+                .is_empty()
+        );
+        assert!(app_event_rx.try_recv().is_err());
+        assert!(
+            session_update_versions
+                .lock()
+                .expect("session update versions lock should not be poisoned")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1569,7 +1642,8 @@ mod tests {
             "session-id",
             Status::InProgress,
         )
-        .await;
+        .await
+        .expect("first review transition should persist");
         clock.set_now_system_time(SystemTime::UNIX_EPOCH + Duration::from_secs(70));
         let left_first_interval = SessionTaskService::update_status(
             &status,
@@ -1580,7 +1654,8 @@ mod tests {
             "session-id",
             Status::Review,
         )
-        .await;
+        .await
+        .expect("second in-progress transition should persist");
         clock.set_now_system_time(SystemTime::UNIX_EPOCH + Duration::from_secs(100));
         let entered_second_interval = SessionTaskService::update_status(
             &status,
@@ -1591,7 +1666,8 @@ mod tests {
             "session-id",
             Status::InProgress,
         )
-        .await;
+        .await
+        .expect("second in-progress transition should persist");
         clock.set_now_system_time(SystemTime::UNIX_EPOCH + Duration::from_secs(190));
         let left_second_interval = SessionTaskService::update_status(
             &status,
@@ -1602,7 +1678,8 @@ mod tests {
             "session-id",
             Status::Question,
         )
-        .await;
+        .await
+        .expect("question transition should persist");
         let session_row = database
             .sessions()
             .load_sessions()
@@ -1651,7 +1728,10 @@ mod tests {
         let status_transition = StatusTransition::from_services(&services, &handles, "session-id");
 
         // Act
-        let status_updated = status_transition.apply(Status::InProgress).await;
+        let status_updated = status_transition
+            .apply(Status::InProgress)
+            .await
+            .expect("status transition should persist");
         let live_status = handles
             .status
             .lock()
@@ -1670,6 +1750,44 @@ mod tests {
         assert!(status_updated);
         assert_eq!(live_status, Status::InProgress.to_string());
         assert_eq!(session_row.status, Status::InProgress.to_string());
+    }
+
+    #[tokio::test]
+    async fn status_transition_keeps_live_state_unchanged_on_persistence_failure() {
+        // Arrange
+        let (database, pool) = AppRepositories::in_memory_with_pool().await;
+        insert_review_session(&database, "gpt-5.5").await;
+        pool.close().await;
+        let status = Mutex::new(Status::Review);
+        let clock = StaticClock::new(SystemTime::UNIX_EPOCH + Duration::from_secs(42));
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let session_update_versions = Arc::default();
+
+        // Act
+        let result = SessionTaskService::update_status(
+            &status,
+            &clock,
+            &database,
+            &app_event_tx,
+            &session_update_versions,
+            "session-id",
+            Status::InProgress,
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(result, Err(SessionError::Db(_))));
+        assert_eq!(
+            *status.lock().expect("status lock should not be poisoned"),
+            Status::Review
+        );
+        assert!(app_event_rx.try_recv().is_err());
+        assert!(
+            session_update_versions
+                .lock()
+                .expect("session update versions lock should not be poisoned")
+                .is_empty()
+        );
     }
 
     #[test]

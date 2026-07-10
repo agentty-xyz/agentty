@@ -2,8 +2,8 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use tachyonfx::{Duration, Effect, Interpolation, fx};
 
-use crate::ui::icon::TACHYON_LOADER_WIDTH;
-use crate::ui::style;
+use crate::presentation::icon::TACHYON_LOADER_WIDTH;
+use crate::presentation::style;
 
 const TACHYON_LOADER_FRAME_COUNT: usize = 9;
 const TACHYON_LOADER_PERIOD_MS: u32 = 900;

@@ -5,8 +5,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 
 use crate::domain::input::InputState;
+use crate::presentation::style::palette;
 use crate::ui::component::chat_input::ChatInput;
-use crate::ui::style::palette;
 use crate::ui::{Component, overlay};
 
 const REVIEW_REQUEST_EDITABLE_HELP_TEXT: &str = "Enter: publish review request | Esc: cancel";
@@ -150,8 +150,8 @@ impl Component for PublishBranchOverlay<'_> {
 mod tests {
     use super::*;
     use crate::domain::theme::ColorTheme;
+    use crate::presentation::style;
     use crate::test_support;
-    use crate::ui::style;
 
     #[test]
     fn test_publish_branch_overlay_popup_area_is_centered() {

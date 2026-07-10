@@ -4,7 +4,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
-use crate::ui::style::palette;
+use crate::presentation::style::palette;
 use crate::ui::{Component, overlay};
 
 /// Minimum popup height that leaves room for title, options, and hints

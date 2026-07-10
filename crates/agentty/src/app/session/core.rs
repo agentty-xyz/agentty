@@ -7,7 +7,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ag_git as git;
-use ratatui::widgets::TableState;
 use tokio::task::{JoinHandle, JoinSet};
 
 use super::workflow::merge::SessionMergeService;
@@ -25,6 +24,7 @@ use crate::domain::session::{
     DailyActivity, FollowUpTaskAction, PublishedBranchSyncStatus, ReviewRequest, Session,
     SessionFollowUpTask, SessionId, SessionStats,
 };
+use crate::presentation::table_state::TableViewState;
 
 /// Low-frequency fallback interval for metadata-based session refresh.
 pub(crate) const SESSION_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
@@ -56,7 +56,7 @@ pub(crate) struct SessionRenderParts<'a> {
     /// Daily session activity series used by dashboard activity summaries.
     pub(crate) stats_activity: &'a [DailyActivity],
     /// Table selection state for the session list.
-    pub(crate) table_state: &'a mut TableState,
+    pub(crate) table_state: &'a mut TableViewState,
 }
 
 /// Reducer-facing snapshot derived from one persisted turn result.
@@ -256,8 +256,8 @@ impl SessionManager {
     /// for one frame.
     ///
     /// The render parts borrow disjoint manager fields directly so
-    /// [`crate::app::App::draw`] can avoid cloning session maps or active
-    /// prompt output blocks on the render hot path.
+    /// [`crate::app::App::render_parts`] projection can avoid cloning session
+    /// maps or active prompt output blocks on the render hot path.
     pub(crate) fn render_parts(&mut self) -> SessionRenderParts<'_> {
         SessionRenderParts {
             active_prompt_outputs: &self.active_prompt_outputs,

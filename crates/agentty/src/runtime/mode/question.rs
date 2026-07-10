@@ -1,16 +1,17 @@
 use crossterm::event::{self, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 
-use crate::app::session::SessionTaskService;
-use crate::app::{self, App, AppEvent};
+use crate::app::session::StatusTransition;
+use crate::app::{App, at_mention};
 use crate::domain::input::InputState;
-use crate::domain::question::{QuestionItem, QuestionProgress};
+use crate::domain::question::{QuestionItem, QuestionProgress, default_option_index};
 use crate::domain::session::{SessionId, Status};
 use crate::domain::turn_prompt::TurnPrompt;
+use crate::presentation::app_mode::{AppMode, DiffRightPanel, QuestionFocus, QuestionModeSnapshot};
+use crate::presentation::prompt::PromptAtMentionState;
 use crate::runtime::EventResult;
-use crate::runtime::mode::{at_mention, input_key, session_output_metric};
-use crate::ui::state::app_mode::{AppMode, DiffRightPanel, QuestionFocus, QuestionModeSnapshot};
-use crate::ui::state::prompt::PromptAtMentionState;
+use crate::runtime::mode::{input_key, session_output_metric};
+use crate::ui::RenderCacheStore;
 
 /// Default response stored when users skip one model question.
 const NO_ANSWER: &str = "no answer";
@@ -27,7 +28,12 @@ const NO_ANSWER: &str = "no answer";
 /// saving already-submitted answers for the next visit (skipped while the
 /// user is actively typing a free-text answer so the character can still be
 /// inserted into the response).
-pub(crate) async fn handle(app: &mut App, terminal_size: Rect, key: KeyEvent) -> EventResult {
+pub(crate) async fn handle(
+    app: &mut App,
+    terminal_size: Rect,
+    key: KeyEvent,
+    render_cache_store: &RenderCacheStore,
+) -> EventResult {
     if handle_focus_toggle(app, key) {
         return EventResult::Continue;
     }
@@ -44,7 +50,7 @@ pub(crate) async fn handle(app: &mut App, terminal_size: Rect, key: KeyEvent) ->
         return EventResult::Continue;
     }
 
-    if handle_chat_scroll(app, terminal_size, key).await {
+    if handle_chat_scroll(app, terminal_size, key, render_cache_store).await {
         return EventResult::Continue;
     }
 
@@ -159,7 +165,12 @@ fn handle_focus_toggle(app: &mut App, key: KeyEvent) -> bool {
 /// Returns `true` when the key was consumed as a scroll action. `Enter` and
 /// `Esc` switch focus back to `Answer` so they cannot accidentally submit or
 /// end the turn while scrolling. `d` opens the diff preview for the session.
-async fn handle_chat_scroll(app: &mut App, terminal_size: Rect, key: KeyEvent) -> bool {
+async fn handle_chat_scroll(
+    app: &mut App,
+    terminal_size: Rect,
+    key: KeyEvent,
+    render_cache_store: &RenderCacheStore,
+) -> bool {
     if !matches!(
         &app.mode,
         AppMode::Question {
@@ -170,7 +181,7 @@ async fn handle_chat_scroll(app: &mut App, terminal_size: Rect, key: KeyEvent) -
         return false;
     }
 
-    let metrics = question_view_metrics(app, terminal_size);
+    let metrics = question_view_metrics(app, terminal_size, render_cache_store);
 
     let AppMode::Question {
         focus,
@@ -223,7 +234,11 @@ struct QuestionViewMetrics {
 }
 
 /// Computes scroll metrics for the chat output area above the question panel.
-fn question_view_metrics(app: &App, terminal_size: Rect) -> QuestionViewMetrics {
+fn question_view_metrics(
+    app: &App,
+    terminal_size: Rect,
+    render_cache_store: &RenderCacheStore,
+) -> QuestionViewMetrics {
     let view_height = terminal_size.height.saturating_sub(5);
     let output_width = terminal_size.width.saturating_sub(2);
 
@@ -249,6 +264,7 @@ fn question_view_metrics(app: &App, terminal_size: Rect) -> QuestionViewMetrics 
             review_status_message.as_deref(),
             review_text,
             output_width,
+            render_cache_store,
         )
     });
 
@@ -394,20 +410,6 @@ pub(crate) fn handle_paste(app: &mut App, pasted_text: &str) {
     }
 
     sync_question_at_mention_state(app);
-}
-
-/// Returns the default selected option index for a question at the given
-/// position. Returns `Some(0)` when the question has predefined options so
-/// the UI starts in option-selection mode, or `None` when there are no
-/// predefined options so the input line opens immediately.
-pub(crate) fn default_option_index(
-    questions: &[QuestionItem],
-    question_index: usize,
-) -> Option<usize> {
-    questions
-        .get(question_index)
-        .filter(|item| !item.options.is_empty())
-        .map(|_| 0)
 }
 
 /// Semantic action emitted by one question-mode key event.
@@ -920,7 +922,7 @@ fn mark_session_in_progress(app: &mut App, session_id: &str) {
 /// The persisted transition uses the timing-aware status update so any
 /// lingering active-work interval is closed before the session returns to
 /// `Review`. After the write succeeds it emits both
-/// [`AppEvent::SessionUpdated`] plus session and project refresh events so the
+/// session-update plus project-refresh events so the
 /// UI refreshes the focused session snapshot and any aggregate project-list
 /// state. It also updates the shared runtime handle status alongside the
 /// snapshot so the periodic `sync_from_handles` cycle does not revert the
@@ -931,38 +933,23 @@ async fn end_turn_no_answer(app: &mut App) {
     };
 
     let session_id = session_id.clone();
-    let timestamp_seconds =
-        app::session::unix_timestamp_from_system_time(app.services.clock().now_system_time());
-
-    if app
-        .services
-        .db()
-        .sessions()
-        .update_session_status_with_timing_at(
-            &session_id,
-            &Status::Review.to_string(),
-            timestamp_seconds,
-        )
-        .await
-        .is_err()
-    {
+    let Some(handles) = app.sessions.session_handles().get(session_id.as_str()) else {
         return;
-    }
+    };
+    let status_transition =
+        StatusTransition::from_services(&app.services, handles, session_id.clone());
+    match status_transition.apply(Status::Review).await {
+        Ok(true) => {}
+        Ok(false) => {
+            tracing::warn!(
+                session_id = %session_id,
+                "skipped ending question turn because the status changed"
+            );
 
-    if let Some(handles) = app.sessions.session_handles().get(session_id.as_str())
-        && let Ok(mut handle_status) = handles.status.lock()
-    {
-        *handle_status = Status::Review;
+            return;
+        }
+        Err(_) => return,
     }
-
-    app.services.emit_app_event(AppEvent::SessionUpdated {
-        session_id: session_id.clone(),
-        version: SessionTaskService::next_session_update_version(
-            &app.services.session_update_versions(),
-            session_id.as_str(),
-        ),
-    });
-    app.services.emit_session_and_project_refresh_events();
 
     if let Some(session) = app
         .sessions
@@ -1048,13 +1035,53 @@ mod tests {
 
     use super::*;
     use crate::domain::agent::AgentModel;
-    use crate::domain::session::Status;
+    use crate::domain::session::{SessionHandles, Status};
+    use crate::presentation::app_mode::QuestionFocus;
     use crate::ui::component::session_output::SessionOutputLineContext;
     use crate::ui::page::session_chat::SessionChatPage;
-    use crate::ui::state::app_mode::QuestionFocus;
 
     /// Fake terminal size used by tests that don't exercise scrolling.
     const TEST_TERMINAL_SIZE: Rect = Rect::new(0, 0, 80, 24);
+
+    /// Routes one test key through a fresh render-cache boundary.
+    async fn handle(app: &mut App, terminal_size: Rect, key: KeyEvent) -> EventResult {
+        let render_cache_store = RenderCacheStore::default();
+
+        super::handle(app, terminal_size, key, &render_cache_store).await
+    }
+
+    /// Computes test metrics through a fresh render-cache boundary.
+    fn question_view_metrics(app: &App, terminal_size: Rect) -> QuestionViewMetrics {
+        let render_cache_store = RenderCacheStore::default();
+
+        super::question_view_metrics(app, terminal_size, &render_cache_store)
+    }
+
+    /// Adds one persistence-consistent question session and its live handle.
+    async fn add_question_session(app: &mut App, session_id: &str) {
+        app.services
+            .db()
+            .sessions()
+            .insert_session(
+                session_id,
+                AgentModel::Gemini3FlashPreview.as_str(),
+                "main",
+                &Status::Question.to_string(),
+                app.active_project_id(),
+            )
+            .await
+            .expect("failed to insert question session");
+        app.sessions.push_session(
+            crate::test_support::SessionFixtureBuilder::new()
+                .id(session_id)
+                .model(AgentModel::Gemini3FlashPreview)
+                .status(Status::Question)
+                .build(),
+        );
+        app.sessions
+            .session_handles_mut()
+            .insert(session_id.into(), SessionHandles::new(Status::Question));
+    }
 
     #[tokio::test]
     async fn test_question_view_metrics_uses_default_review_model_for_loading_fallback() {
@@ -1086,6 +1113,7 @@ mod tests {
         let terminal_size = Rect::new(0, 0, 16, 24);
         let output_width = terminal_size.width.saturating_sub(2);
         let session = &app.sessions.sessions()[0];
+        let render_cache_store = RenderCacheStore::default();
         let expected = SessionChatPage::rendered_output_line_count(
             session,
             output_width,
@@ -1097,8 +1125,8 @@ mod tests {
                 review_text: None,
                 session_update_version: app.session_update_version(session_id),
             },
-            app.render_cache_store().markdown_render_cache(),
-            app.render_cache_store().session_output_layout_cache(),
+            render_cache_store.markdown_render_cache(),
+            render_cache_store.session_output_layout_cache(),
         );
 
         // Act
@@ -1159,6 +1187,7 @@ mod tests {
         // Arrange — two unanswered questions. Ctrl+C should cancel the
         // question turn and transition to View without sending a reply.
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        add_question_session(&mut app, "session-ctrl-c").await;
         app.review_cache.insert(
             "session-ctrl-c".into(),
             crate::app::ReviewCacheEntry::Ready {
@@ -1210,6 +1239,7 @@ mod tests {
         // Arrange — answer focus with no at-mention overlay. Esc must mirror
         // Ctrl+C and cancel the question turn without sending a reply.
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        add_question_session(&mut app, "session-esc").await;
         app.review_cache.insert(
             "session-esc".into(),
             crate::app::ReviewCacheEntry::Ready {
@@ -1392,44 +1422,9 @@ mod tests {
     async fn test_handle_ctrl_c_sets_in_memory_session_status_to_review() {
         // Arrange — session exists in memory with Question status. Ctrl+C
         // should revert it to Review.
-        use std::path::PathBuf;
-
-        use crate::domain::session::{Session, SessionSize, SessionStats};
-
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         let session_id = "session-review-check";
-        app.sessions.push_session(Session {
-            base_branch: "main".to_string(),
-            created_at: 0,
-            draft_attachments: Vec::new(),
-            folder: PathBuf::from("/tmp/test"),
-            follow_up_tasks: Vec::new(),
-            id: session_id.into(),
-            in_progress_started_at: None,
-            in_progress_total_seconds: 0,
-            is_draft: false,
-            agent: crate::domain::agent::AgentSelection::new(
-                crate::domain::agent::AgentKind::Antigravity,
-                crate::domain::agent::AgentModel::Gemini3FlashPreview,
-            ),
-            parent_session_id: None,
-            project_name: String::new(),
-            prompt: String::new(),
-            queued_messages: Vec::new(),
-            reasoning_level_override: None,
-            published_upstream_ref: None,
-            published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
-            questions: Vec::new(),
-            review_request: None,
-            size: SessionSize::Xs,
-            stats: SessionStats::default(),
-            status: Status::Question,
-            summary: None,
-            title: None,
-            transcript: None,
-            updated_at: 0,
-            workflow_notice: None,
-        });
+        add_question_session(&mut app, session_id).await;
         app.mode = AppMode::Question {
             at_mention_state: None,
             session_id: session_id.into(),
@@ -1468,48 +1463,9 @@ mod tests {
         // Arrange — session has a runtime handle with Question status.
         // Ctrl+C must update the handle so sync_from_handles does not revert
         // the snapshot status back to Question.
-        use std::path::PathBuf;
-
-        use crate::domain::session::{Session, SessionHandles, SessionSize, SessionStats};
-
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         let session_id = "session-handle-review";
-        app.sessions.push_session(Session {
-            base_branch: "main".to_string(),
-            created_at: 0,
-            draft_attachments: Vec::new(),
-            folder: PathBuf::from("/tmp/test"),
-            follow_up_tasks: Vec::new(),
-            id: session_id.into(),
-            in_progress_started_at: None,
-            in_progress_total_seconds: 0,
-            is_draft: false,
-            agent: crate::domain::agent::AgentSelection::new(
-                crate::domain::agent::AgentKind::Antigravity,
-                crate::domain::agent::AgentModel::Gemini3FlashPreview,
-            ),
-            parent_session_id: None,
-            project_name: String::new(),
-            prompt: String::new(),
-            queued_messages: Vec::new(),
-            reasoning_level_override: None,
-            published_upstream_ref: None,
-            published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
-            questions: Vec::new(),
-            review_request: None,
-            size: SessionSize::Xs,
-            stats: SessionStats::default(),
-            status: Status::Question,
-            summary: None,
-            title: None,
-            transcript: None,
-            updated_at: 0,
-            workflow_notice: None,
-        });
-        app.sessions.session_handles_mut().insert(
-            session_id.to_string().into(),
-            SessionHandles::new(Status::Question),
-        );
+        add_question_session(&mut app, session_id).await;
         app.mode = AppMode::Question {
             at_mention_state: None,
             session_id: session_id.into(),
@@ -1544,36 +1500,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_ctrl_c_closes_open_in_progress_timer_before_review() {
-        // Arrange — persisted state still has an open active-work interval
-        // when question mode exits.
+    async fn test_handle_ctrl_c_preserves_closed_in_progress_timer_before_review() {
+        // Arrange — question status has an accumulated active-work interval.
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         let session_id = "session-timer-close";
-        let project_id = app
-            .services
-            .db()
-            .projects()
-            .upsert_project("/tmp/test", None)
-            .await
-            .expect("failed to upsert project");
-        app.services
-            .db()
-            .sessions()
-            .insert_session(
-                session_id,
-                "gemini-3-flash-preview",
-                "main",
-                "InProgress",
-                project_id,
-            )
-            .await
-            .expect("failed to insert session");
+        let project_id = app.active_project_id();
+        add_question_session(&mut app, session_id).await;
         app.services
             .db()
             .sessions()
             .update_session_status_with_timing_at(session_id, "InProgress", 0)
             .await
             .expect("failed to open timing window");
+        app.services
+            .db()
+            .sessions()
+            .update_session_status_with_timing_at(session_id, "Question", 10)
+            .await
+            .expect("failed to close timing window");
         app.mode = AppMode::Question {
             at_mention_state: None,
             session_id: session_id.into(),

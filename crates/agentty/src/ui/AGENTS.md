@@ -14,9 +14,9 @@ When working within `crates/agentty/src/ui/`:
   practical.
 - **Component Reuse**: Check the `component/` directory before building a new common
   widget. All components must implement the `Component` trait.
-- **Palette Usage**: Use semantic color tokens from `style.rs` (`palette::*`) for UI
-  colors. Avoid direct `Color::*` usage in UI components/pages, except approved
-  data-visualization scales (for example heatmap intensity colors).
+- **Palette Usage**: Use semantic color tokens from `presentation/style.rs`
+  (`palette::*`) for UI colors. Avoid direct `Color::*` usage in UI components/pages,
+  except approved data-visualization scales (for example heatmap intensity colors).
 
 ## Procedures
 
@@ -61,11 +61,13 @@ When working within `crates/agentty/src/ui/`:
 - `render.rs` and `router.rs` own frame composition and page dispatch.
 - `page.rs` and `page/` own full-screen pages.
 - `component.rs` and `component/` own reusable widgets and overlays.
-- `state.rs` and `state/` own UI mode and prompt state.
+- `presentation/app_mode.rs`, `presentation/help_action.rs`, and
+  `presentation/prompt.rs` own mode, help, and prompt state shared with app/runtime.
 - `layout.rs` owns pure area and panel geometry.
 - `input_layout.rs` owns chat-input wrapping, cursor geometry, dropdown sizing, and
   table-column geometry.
 - `prompt_format.rs`, `question_format.rs`, and `session_format.rs` own prompt,
   clarification-question, and session display formatting.
-- `style.rs`, `markdown.rs`, `text_util.rs`, `diff_util.rs`, and `activity_heatmap.rs`
-  own focused shared presentation helpers.
+- `presentation/style.rs` and `presentation/icon.rs` own semantic styling and icons;
+  `markdown.rs`, `text_util.rs`, `diff_util.rs`, and `activity_heatmap.rs` own focused
+  render helpers.

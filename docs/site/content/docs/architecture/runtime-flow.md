@@ -56,7 +56,7 @@ flowchart TD
   event_reader["event::spawn_event_reader()<br/>dedicated OS thread"]
   main_loop["run_main_loop()"]
   drain["process_pending_app_events()<br/>reduce queued AppEvent values"]
-  draw["ui::render::draw()"]
+  draw["ui::draw()"]
   process["event::process_events()"]
   key_events["Key events<br/>mode handlers -> app/session orchestration"]
   app_events["App events<br/>App::apply_app_events reducer"]
@@ -83,6 +83,9 @@ flowchart TD
 
 - `run_main_loop()` drains one bounded batch of queued app events before draw so touched
   sessions sync from their live handles without a full list-wide sweep every frame.
+- `run_main_loop()` owns one `RenderCacheStore` and passes the same cache to
+  `ui::draw()` and mode-level line-count/scroll helpers. `App` supplies only a borrowed
+  render projection and does not own or invoke UI rendering.
 - `process_events()` waits on terminal events, app events, or tick, then drains a
   bounded batch of queued terminal events to avoid one-key-per-frame lag.
 - Tick interval is `50ms`; metadata-based session reload fallback is `5s`.
@@ -103,6 +106,11 @@ channels:
   PID, and queued-message state. Handles are the single source of truth for live session
   data; the reducer re-projects them into render snapshots on `SessionUpdated` without a
   full DB reload.
+
+Durable status, transcript, and first-message metadata changes are persistence-first:
+SQLite must accept the mutation before the corresponding live handle or session snapshot
+changes. Status updates use an expected-status compare-and-set query, preventing
+concurrent transitions from overwriting a newer persisted state.
 
 ## App Event Reducer
 
@@ -133,10 +141,11 @@ as `WorkflowNotice` transcript rows instead of synthetic render rows. Structured
 clarification questions render in the bottom question panel (`AppMode::Question`), not
 inside the output component.
 
-`App` owns one shared `RenderCacheStore` for markdown, diff, and session-output layout
-caches. Changes in this area should keep caches bounded and route layout/count helpers
-and the final paint path through the same cached derived data instead of recomputing the
-render twice per frame.
+The single-threaded runtime directly owns one shared `RenderCacheStore` for markdown,
+diff, and session-output layout caches. It passes borrowed references to both mode-level
+metrics and the final UI paint path. Changes in this area should keep caches bounded and
+route layout/count helpers and the final paint path through the same cached derived data
+instead of recomputing the render twice per frame.
 
 ## Session Turn Data Flow
 
@@ -145,10 +154,23 @@ render twice per frame.
 1. Prompt mode converts a submit key into an app-layer prompt intent;
    `App::handle_prompt_submit_intent()` drains normal submissions or dispatches
    slash-command selections.
-1. `start_session()` (first prompt) or `reply()` (follow-up) persists the command in
-   `session_operation` and enqueues it on the per-session worker.
+1. `start_session()` (first prompt) or `reply()` (follow-up) uses one status-guarded
+   transaction to transition to `InProgress`, persist initial prompt/title metadata when
+   needed, append the typed user transcript message, and insert the queued
+   `session_operation`. A stale or missing session row rolls back every write; only a
+   committed transaction enqueues the worker command behind a one-shot barrier,
+   publishes the live projection, and then releases execution. If the worker handoff
+   fails, one guarded compensation removes the queued operation and exact transcript
+   tail, restores first-message metadata, and restores the status replaced by that
+   transaction, including `Draft` starts and `Question` replies.
 1. The worker marks the operation `running`, checks cancel flags, verifies worktree
    isolation, and delegates to `workflow/turn.rs` or the queued session-sync workflow.
+   Resume turns revalidate the persisted `InProgress` status immediately before agent
+   execution while atomically clearing durable questions, so a concurrent cancel, stale
+   row, or question-clear write failure stops the command. After a turn returns to
+   `Review`, each queued follow-up atomically transitions back to `InProgress` while
+   persisting its operation and transcript entry; a rejected or failed transaction
+   leaves the prompt queued for retry.
 1. `workflow/turn.rs` builds a `TurnRequest` and calls `AgentChannel::run_turn()`, which
    streams `TurnEvent` values (loader updates) and returns a `TurnResult`.
 1. `workflow/post_turn.rs` appends the final assistant transcript output, then
@@ -173,17 +195,23 @@ render twice per frame.
 1. Completed stacked-parent turns fan out `SessionCommand::Rebase` to review-ready
    materialized children so child branches replay onto the latest parent branch.
 1. The session size is refreshed and the final status becomes `Review` or `Question`
-   (failures return to `Review`).
+   (failures return to `Review`). Final-status persistence must succeed before the
+   operation can become `done`; failures propagate into operation recovery.
 
 ### Operation Lifecycle and Recovery
 
 <a id="architecture-session-operation-lifecycle"></a> Turn execution is durable and
 restart-safe:
 
-- Before enqueue: insert `session_operation` row (`queued`).
+- Before enqueue: insert the `session_operation` row (`queued`) in the same guarded
+  transaction as the submitted turn's status and transcript writes.
+- If the in-memory worker handoff fails, compensate the session back to `Review` before
+  marking the operation `failed`. If that compensation cannot be persisted, leave the
+  operation unfinished so startup recovery can repair the session.
 - Worker transitions: `queued -> running -> done/failed/canceled`.
 - Cancel requests are persisted and checked before command execution.
 - On startup, unfinished operations are failed with reason `Interrupted by app restart`,
+  failed operations stranded with an `InProgress` session are also reconciled,
   interrupted rebase operations abort stale in-progress git rebase metadata, and
   impacted sessions are reset to `Review`. Pending post-merge stacked-child syncs are
   requeued.
@@ -192,6 +220,12 @@ restart-safe:
 
 <a id="architecture-runtime-flow-status"></a> Runtime status transitions enforced by
 `Status::can_transition_to()` or explicit cancellation paths:
+
+Each transition validates the live edge, atomically updates SQLite only when the row
+still has the expected status, and updates the live status handle only after that write
+succeeds. User-submitted turn transitions also commit their metadata, transcript, and
+operation row in that guarded transaction. Persistence errors propagate to the workflow
+or are logged at explicitly best-effort recovery boundaries.
 
 - `Draft -> InProgress` (first prompt)
 - Draft session in `Draft` status -> `Canceled` (list-mode cancel before first turn)

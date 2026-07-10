@@ -4,22 +4,22 @@ use crossterm::event::{self, KeyCode, KeyEvent};
 use ratatui::Terminal;
 use ratatui::backend::Backend;
 
-use crate::app::App;
 use crate::app::prompt_intent::{
     PromptIntentContext, PromptIntentInputMode, PromptIntentSessionMode,
 };
+use crate::app::{App, at_mention};
 use crate::domain::agent::AgentKind;
 use crate::domain::input::InputState;
 use crate::domain::session::SessionId;
-use crate::runtime::EventResult;
-use crate::runtime::mode::{at_mention, input_key};
-use crate::ui::input_layout::{move_input_cursor_down, move_input_cursor_up};
-use crate::ui::state::app_mode::AppMode;
-use crate::ui::state::prompt::{
+use crate::presentation::app_mode::AppMode;
+use crate::presentation::prompt::{
     PromptAtMentionState, apply_prompt_delete_range as apply_prompt_delete_range_components,
     current_line_delete_range as prompt_current_line_delete_range, insert_prompt_character,
     insert_prompt_text, prompt_slash_option_count,
 };
+use crate::runtime::EventResult;
+use crate::runtime::mode::input_key;
+use crate::ui::input_layout::{move_input_cursor_down, move_input_cursor_up};
 
 /// Captures prompt-mode routing flags derived from the current session.
 ///
@@ -853,7 +853,7 @@ mod tests {
     use crate::domain::file_entry::FileEntry;
     use crate::domain::session_message::SessionTranscript;
     use crate::infra::db::Database;
-    use crate::ui::state::prompt::{
+    use crate::presentation::prompt::{
         PromptAtMentionState, PromptAttachmentState, PromptHistoryState, PromptSlashStage,
         PromptSlashState,
     };
@@ -1407,7 +1407,7 @@ mod tests {
     #[test]
     fn test_prompt_slash_commands_match_model() {
         // Arrange & Act
-        let suggestion_list = crate::ui::state::prompt::build_prompt_slash_suggestion_list(
+        let suggestion_list = crate::presentation::prompt::build_prompt_slash_suggestion_list(
             "/m",
             &PromptSlashState::default(),
             AgentKind::Codex,
@@ -1429,7 +1429,7 @@ mod tests {
     #[test]
     fn test_prompt_slash_commands_lists_all_commands() {
         // Arrange & Act
-        let suggestion_list = crate::ui::state::prompt::build_prompt_slash_suggestion_list(
+        let suggestion_list = crate::presentation::prompt::build_prompt_slash_suggestion_list(
             "/",
             &PromptSlashState::default(),
             AgentKind::Codex,
@@ -1449,7 +1449,7 @@ mod tests {
     #[test]
     fn test_prompt_slash_commands_no_match() {
         // Arrange & Act
-        let commands = crate::ui::state::prompt::build_prompt_slash_suggestion_list(
+        let commands = crate::presentation::prompt::build_prompt_slash_suggestion_list(
             "/x",
             &PromptSlashState::default(),
             AgentKind::Codex,

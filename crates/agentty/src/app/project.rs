@@ -2,9 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
-use ratatui::widgets::TableState;
-
 use crate::domain::project::ProjectListItem;
+use crate::presentation::table_state::TableViewState;
 
 /// Borrowed project state required to draw one UI frame.
 pub(crate) struct ProjectRenderParts<'a> {
@@ -19,7 +18,7 @@ pub(crate) struct ProjectRenderParts<'a> {
     /// Project rows available for rendering.
     pub(crate) project_items: &'a [ProjectListItem],
     /// Table selection state for the projects list.
-    pub(crate) table_state: &'a mut TableState,
+    pub(crate) table_state: &'a mut TableViewState,
     /// Working directory for the active project.
     pub(crate) working_dir: &'a Path,
 }
@@ -32,7 +31,7 @@ pub struct ProjectManager {
     git_status: Option<(u32, u32)>,
     git_upstream_ref: Option<String>,
     project_items: Vec<ProjectListItem>,
-    table_state: TableState,
+    table_state: TableViewState,
     working_dir: PathBuf,
 }
 
@@ -53,7 +52,7 @@ impl ProjectManager {
             git_status: None,
             git_upstream_ref,
             project_items,
-            table_state: TableState::default(),
+            table_state: TableViewState::default(),
             working_dir,
         };
         manager.select_active_project_row();
@@ -65,8 +64,8 @@ impl ProjectManager {
     /// required for one frame.
     ///
     /// The render parts borrow disjoint manager fields directly so
-    /// [`crate::app::App::draw`] can avoid cloning the project list on the
-    /// render hot path.
+    /// [`crate::app::App::render_parts`] projection can avoid cloning the
+    /// project list on the render hot path.
     pub(crate) fn render_parts(&mut self) -> ProjectRenderParts<'_> {
         ProjectRenderParts {
             active_project_id: self.active_project_id,

@@ -1,8 +1,8 @@
 use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::app::App;
+use crate::presentation::app_mode::AppMode;
 use crate::runtime::EventResult;
-use crate::ui::state::app_mode::AppMode;
 
 /// Handles key input while the app is showing the help overlay.
 pub(crate) fn handle(app: &mut App, key: KeyEvent) -> EventResult {
@@ -36,8 +36,8 @@ mod tests {
     use crossterm::event::KeyModifiers;
 
     use super::*;
-    use crate::ui::state::app_mode::{DiffRightPanel, HelpContext};
-    use crate::ui::state::help_action::{HelpAction, ViewSessionState};
+    use crate::presentation::app_mode::{DiffRightPanel, HelpContext};
+    use crate::presentation::help_action::{HelpAction, ViewSessionState};
 
     #[tokio::test]
     async fn test_handle_question_mark_restores_list_mode() {

@@ -1,4 +1,5 @@
 use crate::app::App;
+use crate::ui::RenderCacheStore;
 use crate::ui::component::session_output::SessionOutputLineContext;
 use crate::ui::page::session_chat::SessionChatPage;
 
@@ -10,6 +11,7 @@ pub(crate) fn rendered_output_line_count(
     review_status_message: Option<&str>,
     review_text: Option<&str>,
     output_width: u16,
+    render_cache_store: &RenderCacheStore,
 ) -> u16 {
     let active_progress = app.session_progress_message(session_id);
     let active_prompt_output = app
@@ -30,8 +32,8 @@ pub(crate) fn rendered_output_line_count(
                 review_text,
                 session_update_version: app.session_update_version(session_id),
             },
-            app.render_cache_store().markdown_render_cache(),
-            app.render_cache_store().session_output_layout_cache(),
+            render_cache_store.markdown_render_cache(),
+            render_cache_store.session_output_layout_cache(),
         )
     })
 }

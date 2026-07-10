@@ -27,18 +27,19 @@ use crate::app::session::{
     StatusTransition, SyncMainOutcome, SyncSessionStartError, TurnAppliedState,
 };
 use crate::app::session_state::SessionGitStatus;
-use crate::app::{self, session};
+use crate::app::{self, at_mention, session};
 use crate::domain::agent::AgentCliInfo;
 use crate::domain::file_entry::FileEntry;
 use crate::domain::input::InputState;
+use crate::domain::question::default_option_index;
 use crate::domain::session::{
     PublishBranchAction, PublishedBranchSyncStatus, SessionId, SessionSize, Status,
 };
 use crate::domain::system_log::{SystemLogCategory, SystemLogEvent, SystemLogLevel};
 use crate::domain::transcript_notice::TranscriptNotice;
-use crate::runtime::mode::{at_mention, question, sync_blocked};
-use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, QuestionFocus};
-use crate::ui::state::prompt::PromptAtMentionState;
+use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, QuestionFocus};
+use crate::presentation::prompt::PromptAtMentionState;
+use crate::presentation::sync_message;
 
 /// Internal app events emitted by background workers and workflows.
 ///
@@ -1478,7 +1479,7 @@ impl App {
         if self.is_viewing_session(session_id) {
             self.mode = AppMode::Question {
                 at_mention_state: None,
-                selected_option_index: question::default_option_index(&questions, 0),
+                selected_option_index: default_option_index(&questions, 0),
                 session_id: session_id.into(),
                 questions,
                 responses: Vec::new(),
@@ -2028,7 +2029,7 @@ impl App {
         let conflict_summary =
             Self::sync_conflict_summary(&sync_main_outcome.resolved_conflict_files);
 
-        sync_blocked::format_sync_success_message(
+        sync_message::format_sync_success_message(
             &pulled_summary,
             &pulled_titles,
             &pushed_summary,

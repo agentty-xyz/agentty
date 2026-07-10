@@ -4,12 +4,12 @@ use ratatui::text::Line;
 
 use crate::domain::agent::AgentKind;
 use crate::infra::file_index;
-use crate::ui::component::chat_input::{SuggestionItem, SuggestionList};
-use crate::ui::state::help_action;
-use crate::ui::state::prompt::{
+use crate::presentation::help_action;
+use crate::presentation::prompt::{
     PromptAtMentionState, PromptSlashState, PromptSuggestionList,
     build_prompt_slash_suggestion_list,
 };
+use crate::ui::component::chat_input::{SuggestionItem, SuggestionList};
 
 const AT_MENTION_DEFAULT_MAX_VISIBLE: usize = 10;
 const NEW_SESSION_PROMPT_FOOTER_ACTIONS: [help_action::HelpAction; 4] = [

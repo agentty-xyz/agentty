@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Borders;
 
 use crate::domain::input::{is_at_mention_boundary, is_at_mention_query_character};
-use crate::ui::style;
+use crate::presentation::style;
 
 /// Maximum number of visible content lines inside the chat input viewport.
 pub const CHAT_INPUT_MAX_VISIBLE_LINES: u16 = 10;

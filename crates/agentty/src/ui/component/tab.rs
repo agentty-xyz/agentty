@@ -6,7 +6,8 @@ use ratatui::widgets::{Block, Borders, Padding, Paragraph};
 
 use crate::app::Tab;
 use crate::domain::project::ProjectListItem;
-use crate::ui::{Component, style};
+use crate::presentation::style;
+use crate::ui::Component;
 
 /// Header tabs rendered at the top of list mode pages.
 pub struct Tabs<'a> {

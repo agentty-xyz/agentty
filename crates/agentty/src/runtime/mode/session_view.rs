@@ -8,22 +8,25 @@ use tracing::warn;
 use crate::app::prompt_intent::{
     PromptIntentContext, PromptIntentInputMode, PromptIntentSessionMode,
 };
-use crate::app::session::{SessionTaskService, remote_branch_name_from_upstream_ref};
+use crate::app::session::{
+    SessionTaskService, StatusTransition, remote_branch_name_from_upstream_ref,
+};
 use crate::app::{
-    self, App, AppEvent, ReviewCacheEntry, diff_content_hash, is_review_loading_status_message,
+    App, AppEvent, ReviewCacheEntry, diff_content_hash, is_review_loading_status_message,
 };
 use crate::domain::input::InputState;
 use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, SessionId, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
+use crate::presentation::app_mode::{
+    AppMode, ConfirmationIntent, ConfirmationViewMode, DiffRightPanel, HelpContext,
+};
+use crate::presentation::help_action::{self, ViewSessionState};
+use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState};
 use crate::runtime::EventResult;
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
 use crate::runtime::mode::input_key::is_insertable_char_key;
 use crate::runtime::mode::{prompt, session_output_metric};
-use crate::ui::state::app_mode::{
-    AppMode, ConfirmationIntent, ConfirmationViewMode, DiffRightPanel, HelpContext,
-};
-use crate::ui::state::help_action::{self, ViewSessionState};
-use crate::ui::state::prompt::{PromptAttachmentState, PromptHistoryState};
+use crate::ui::RenderCacheStore;
 
 #[derive(Clone)]
 struct ViewContext {
@@ -201,6 +204,7 @@ pub(crate) async fn handle<B: Backend>(
     app: &mut App,
     terminal: &mut Terminal<B>,
     key: KeyEvent,
+    render_cache_store: &RenderCacheStore,
 ) -> io::Result<EventResult>
 where
     B::Error: std::error::Error + Send + Sync + 'static,
@@ -208,7 +212,7 @@ where
     let Some(view_context) = view_context(app) else {
         return Ok(EventResult::Continue);
     };
-    let view_metrics = view_metrics(app, terminal, &view_context)?;
+    let view_metrics = view_metrics(app, terminal, &view_context, render_cache_store)?;
     let mut pending_update = ViewPendingUpdate::from_context(&view_context);
 
     let Some(view_session_snapshot) = view_session_snapshot(app, &view_context) else {
@@ -783,9 +787,6 @@ async fn pop_last_queued_chat_message_if_any(app: &mut App, session_id: &str) ->
 /// events are emitted so the user can inspect or continue the session instead
 /// of treating it as canceled.
 async fn cancel_in_progress_turn(app: &mut App, session_id: &str) {
-    let timestamp_seconds =
-        app::session::unix_timestamp_from_system_time(app.services.clock().now_system_time());
-
     if let Err(error) = app
         .services
         .db()
@@ -817,30 +818,29 @@ async fn cancel_in_progress_turn(app: &mut App, session_id: &str) {
         }
     }
 
-    if let Err(error) = app
-        .services
-        .db()
-        .sessions()
-        .update_session_status_with_timing_at(
-            session_id,
-            &Status::Review.to_string(),
-            timestamp_seconds,
-        )
-        .await
-    {
-        warn!(
-            session_id = session_id,
-            error = %error,
-            "failed to persist review status after interrupting session turn"
-        );
-
+    let Some(handles) = app.sessions.session_handles().get(session_id) else {
         return;
-    }
+    };
+    let status_transition = StatusTransition::from_services(&app.services, handles, session_id);
+    match status_transition.apply(Status::Review).await {
+        Ok(true) => {}
+        Ok(false) => {
+            warn!(
+                session_id = session_id,
+                "skipped review status after interrupt because the status changed"
+            );
 
-    if let Some(handles) = app.sessions.session_handles().get(session_id)
-        && let Ok(mut handle_status) = handles.status.lock()
-    {
-        *handle_status = Status::Review;
+            return;
+        }
+        Err(error) => {
+            warn!(
+                session_id = session_id,
+                error = %error,
+                "failed to persist review status after interrupting session turn"
+            );
+
+            return;
+        }
     }
 
     if let Some(session) = app
@@ -853,15 +853,6 @@ async fn cancel_in_progress_turn(app: &mut App, session_id: &str) {
     }
 
     suppress_auto_review_for_stopped_turn(app, session_id);
-
-    app.services.emit_app_event(AppEvent::SessionUpdated {
-        session_id: session_id.into(),
-        version: SessionTaskService::next_session_update_version(
-            &app.services.session_update_versions(),
-            session_id,
-        ),
-    });
-    app.services.emit_session_and_project_refresh_events();
 }
 
 /// Marks automatic focused review as suppressed after a user stops one active
@@ -1011,6 +1002,7 @@ fn view_metrics<B: Backend>(
     app: &App,
     terminal: &Terminal<B>,
     view_context: &ViewContext,
+    render_cache_store: &RenderCacheStore,
 ) -> io::Result<ViewMetrics>
 where
     B::Error: std::error::Error + Send + Sync + 'static,
@@ -1026,6 +1018,7 @@ where
         review_status_message.as_deref(),
         review_text,
         output_width,
+        render_cache_store,
     );
 
     Ok(ViewMetrics {
@@ -1258,6 +1251,20 @@ mod tests {
     use crate::infra::tmux::{MockTmuxClient, TmuxClient};
     use crate::ui::component::session_output::SessionOutputLineContext;
     use crate::ui::page::session_chat::SessionChatPage;
+
+    /// Routes one test key through a fresh render-cache boundary.
+    async fn handle<B: Backend>(
+        app: &mut App,
+        terminal: &mut Terminal<B>,
+        key: KeyEvent,
+    ) -> io::Result<EventResult>
+    where
+        B::Error: std::error::Error + Send + Sync + 'static,
+    {
+        let render_cache_store = RenderCacheStore::default();
+
+        super::handle(app, terminal, key, &render_cache_store).await
+    }
 
     fn session_replay_text(session: &crate::domain::session::Session) -> String {
         session
@@ -1846,8 +1853,16 @@ mod tests {
         .unwrap_or(u16::MAX);
 
         // Act
-        let total_lines =
-            session_output_metric::rendered_output_line_count(&app, &session_id, 0, None, None, 20);
+        let render_cache_store = RenderCacheStore::default();
+        let total_lines = session_output_metric::rendered_output_line_count(
+            &app,
+            &session_id,
+            0,
+            None,
+            None,
+            20,
+            &render_cache_store,
+        );
 
         // Assert
         assert!(total_lines > raw_line_count);
@@ -1911,6 +1926,7 @@ mod tests {
             "word ".repeat(60),
         )]);
         app.sessions.sessions_mut()[0].transcript = Some(transcript);
+        let render_cache_store = RenderCacheStore::default();
         let metrics = ViewMetrics {
             total_lines: session_output_metric::rendered_output_line_count(
                 &app,
@@ -1919,6 +1935,7 @@ mod tests {
                 None,
                 None,
                 20,
+                &render_cache_store,
             ),
             view_height: 5,
         };
@@ -2021,6 +2038,7 @@ mod tests {
         app.sessions.sessions_mut()[0].status = Status::AgentReview;
         let output_width = 14;
         let session = &app.sessions.sessions()[0];
+        let render_cache_store = RenderCacheStore::default();
         let expected = SessionChatPage::rendered_output_line_count(
             session,
             output_width,
@@ -2032,8 +2050,8 @@ mod tests {
                 review_text: None,
                 session_update_version: app.session_update_version(&session_id),
             },
-            app.render_cache_store().markdown_render_cache(),
-            app.render_cache_store().session_output_layout_cache(),
+            render_cache_store.markdown_render_cache(),
+            render_cache_store.session_output_layout_cache(),
         );
 
         // Act
@@ -2044,6 +2062,7 @@ mod tests {
             None,
             None,
             output_width,
+            &render_cache_store,
         );
 
         // Assert

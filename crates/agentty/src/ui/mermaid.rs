@@ -1,6 +1,6 @@
 pub use ag_tui_text::mermaid::MermaidDiagram;
 
-use crate::ui::style;
+use crate::presentation::style;
 
 /// Renders one ```` ```mermaid ```` source block using Agentty's active UI
 /// theme.

@@ -152,7 +152,7 @@ async fn run_published_branch_auto_push_task(input: PublishedBranchAutoPushInput
 
             let message = TranscriptNotice::BranchPush
                 .format("Auto-pushed published branch after completed turn.");
-            SessionTaskService::append_workflow_notice(
+            let _ = SessionTaskService::append_workflow_notice(
                 &input.transcript,
                 &input.db,
                 &input.app_event_tx,
@@ -172,7 +172,7 @@ async fn run_published_branch_auto_push_task(input: PublishedBranchAutoPushInput
         }
         Err(failure) => {
             let message = TranscriptNotice::BranchPushError.format(failure.message);
-            SessionTaskService::append_workflow_notice(
+            let _ = SessionTaskService::append_workflow_notice(
                 &input.transcript,
                 &input.db,
                 &input.app_event_tx,
@@ -355,7 +355,7 @@ async fn append_review_request_sync_warning(
     let message = TranscriptNotice::ReviewRequestSyncWarning.format(format!(
         "Failed to update linked review-request metadata: {error}"
     ));
-    SessionTaskService::append_workflow_notice(
+    let _ = SessionTaskService::append_workflow_notice(
         &input.transcript,
         &input.db,
         &input.app_event_tx,

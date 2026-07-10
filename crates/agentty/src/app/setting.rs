@@ -1,4 +1,3 @@
-use ratatui::widgets::TableState;
 use tracing::warn;
 
 use crate::app::AppServices;
@@ -9,6 +8,7 @@ use crate::domain::input::InputState;
 use crate::domain::setting::SettingName;
 use crate::domain::theme::ColorTheme;
 use crate::infra::db::AppRepositories;
+use crate::presentation::table_state::TableViewState;
 
 /// Loads the persisted smart-model default used for new sessions.
 ///
@@ -314,7 +314,7 @@ pub struct SettingsManager {
     /// Currently applied to Codex and Claude turns.
     pub reasoning_level: ReasoningLevel,
     /// Table selection state for the settings page.
-    pub table_state: TableState,
+    pub table_state: TableViewState,
     /// Active terminal color theme for the whole application.
     pub theme: ColorTheme,
     available_agent_kinds: Vec<AgentKind>,
@@ -383,7 +383,7 @@ impl SettingsManager {
         .await;
         let theme = load_theme_setting(services).await;
 
-        let mut table_state = TableState::default();
+        let mut table_state = TableViewState::default();
         table_state.select(Some(0));
 
         Self {
@@ -1613,7 +1613,6 @@ mod tests {
     use ag_agent::MockAppServerClient;
     use ag_forge as forge;
     use ag_git as git;
-    use ratatui::widgets::TableState;
     use tokio::sync::mpsc;
 
     use super::*;
@@ -1654,7 +1653,7 @@ mod tests {
     }
 
     fn new_settings_manager() -> SettingsManager {
-        let mut table_state = TableState::default();
+        let mut table_state = TableViewState::default();
         table_state.select(Some(0));
 
         SettingsManager {

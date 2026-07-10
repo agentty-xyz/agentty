@@ -31,8 +31,9 @@ use crate::domain::setting::SettingName;
 use crate::infra::clock::RealClock;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs::{self as fs, FsClient};
+use crate::presentation::app_mode::AppMode;
+use crate::presentation::table_state::TableViewState;
 use crate::ui::activity_heatmap;
-use crate::ui::state::app_mode::AppMode;
 
 /// Builds a filesystem mock that delegates operations to local disk.
 fn create_passthrough_mock_fs_client() -> fs::MockFsClient {
@@ -717,7 +718,7 @@ fn test_session_manager_with_clock(
             updated_at: 0,
             workflow_notice: None,
         }],
-        ratatui::widgets::TableState::default(),
+        TableViewState::default(),
         clock,
         1,
         0,
@@ -1877,7 +1878,7 @@ async fn test_replace_title_generation_task_aborts_superseded_task() {
     let state = SessionState::new(
         HashMap::new(),
         Vec::new(),
-        TableState::default(),
+        TableViewState::default(),
         Arc::new(RealClock),
         1,
         0,
@@ -1934,7 +1935,7 @@ async fn test_clear_title_generation_task_if_matches_ignores_stale_generation() 
     let state = SessionState::new(
         HashMap::new(),
         Vec::new(),
-        TableState::default(),
+        TableViewState::default(),
         Arc::new(RealClock),
         1,
         0,
@@ -1969,7 +1970,7 @@ async fn test_clear_title_generation_task_if_matches_removes_matching_generation
     let state = SessionState::new(
         HashMap::new(),
         Vec::new(),
-        TableState::default(),
+        TableViewState::default(),
         Arc::new(RealClock),
         1,
         0,
@@ -2128,7 +2129,12 @@ async fn test_start_staged_session_launches_stacked_draft_child() {
     let dir = tempdir().expect("failed to create temp dir");
     let mut app = new_test_app_with_git(dir.path()).await;
     let parent_session_id = app.create_session().await.expect("failed to create parent");
-    crate::test_support::set_session_status_for_test(&mut app, &parent_session_id, Status::Review);
+    crate::test_support::persist_session_status_for_test(
+        &mut app,
+        &parent_session_id,
+        Status::Review,
+    )
+    .await;
     let child_session_id = app
         .create_stacked_draft_session(&parent_session_id)
         .await
@@ -2400,7 +2406,12 @@ async fn test_parent_turn_completion_rebases_review_ready_stacked_child() {
         .create_dir_all(child_folder)
         .await
         .expect("failed to materialize child worktree folder");
-    crate::test_support::set_session_status_for_test(&mut app, &child_session_id, Status::Review);
+    crate::test_support::persist_session_status_for_test(
+        &mut app,
+        &child_session_id,
+        Status::Review,
+    )
+    .await;
     app.services
         .db()
         .sessions()
@@ -2443,7 +2454,8 @@ async fn test_enqueue_message_pushes_prompt_onto_in_memory_queue() {
     create_and_start_session(&mut app, "Initial").await;
     let session_id = app.sessions.sessions()[0].id.clone();
     wait_for_status(&mut app, &session_id, Status::Review).await;
-    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::InProgress);
+    crate::test_support::persist_session_status_for_test(&mut app, &session_id, Status::InProgress)
+        .await;
 
     // Act
     app.enqueue_message(&session_id, "queued reply")
@@ -2482,7 +2494,8 @@ async fn test_enqueue_message_survives_refresh_sessions_reducer_pass() {
     create_and_start_session(&mut app, "Initial").await;
     let session_id = app.sessions.sessions()[0].id.clone();
     wait_for_status(&mut app, &session_id, Status::Review).await;
-    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::InProgress);
+    crate::test_support::persist_session_status_for_test(&mut app, &session_id, Status::InProgress)
+        .await;
     app.enqueue_message(&session_id, "queued reply")
         .expect("enqueue_message should succeed for InProgress session");
 
@@ -2515,7 +2528,8 @@ async fn test_enqueue_message_rejects_empty_payload() {
     create_and_start_session(&mut app, "Initial").await;
     let session_id = app.sessions.sessions()[0].id.clone();
     wait_for_status(&mut app, &session_id, Status::Review).await;
-    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::InProgress);
+    crate::test_support::persist_session_status_for_test(&mut app, &session_id, Status::InProgress)
+        .await;
 
     // Act
     let outcome = app.enqueue_message(&session_id, "");
@@ -3480,6 +3494,94 @@ async fn test_spawn_integration() {
 }
 
 #[tokio::test]
+/// Verifies a concurrent persisted cancellation rejects a stale first reply
+/// without enqueueing an agent command or writing partial turn state.
+async fn test_reply_rejects_stale_persisted_status_without_enqueueing_command() {
+    // Arrange
+    let dir = tempdir().expect("failed to create temp dir");
+    let db = AppRepositories::in_memory().await;
+    let mut app = new_test_app_with_git_and_db(dir.path(), db).await;
+    let session_id = app
+        .create_session()
+        .await
+        .expect("failed to create session");
+    app.services
+        .db()
+        .sessions()
+        .update_session_status_with_timing_at(&session_id, "Canceled", 123)
+        .await
+        .expect("failed to persist concurrent cancellation");
+    let mut mock_channel = MockAgentChannel::new();
+    mock_channel.expect_run_turn().times(0);
+    app.sessions
+        .worker_service
+        .test_agent_channels
+        .insert(session_id.clone().into(), Arc::new(mock_channel));
+
+    // Act
+    let queued = app
+        .sessions
+        .reply(&app.services, &session_id, "Rejected prompt")
+        .await;
+
+    // Assert
+    let session_row = app
+        .services
+        .db()
+        .sessions()
+        .load_sessions()
+        .await
+        .expect("failed to load persisted sessions")
+        .into_iter()
+        .find(|session| session.id == session_id)
+        .expect("missing persisted session");
+    let messages = app
+        .services
+        .db()
+        .sessions()
+        .load_session_messages(&session_id)
+        .await
+        .expect("failed to load persisted transcript");
+    let operations = app
+        .services
+        .db()
+        .operations()
+        .load_unfinished_session_operations()
+        .await
+        .expect("failed to load persisted operations");
+    let live_session = app
+        .sessions
+        .sessions()
+        .iter()
+        .find(|session| session.id == session_id)
+        .expect("missing live session");
+    assert!(!queued);
+    assert_eq!(session_row.status, "Canceled");
+    assert!(session_row.prompt.is_empty());
+    assert_eq!(session_row.title, None);
+    assert!(messages.is_empty());
+    assert!(operations.is_empty());
+    assert_eq!(live_session.status, Status::Draft);
+    assert!(live_session.prompt.is_empty());
+    assert_eq!(live_session.title, None);
+}
+
+/// Persists the review state mirrored by a test session's live snapshot.
+async fn persist_review_session_state(services: &AppServices, session_id: &str, prompt: &str) {
+    services
+        .db()
+        .sessions()
+        .update_session_prompt(session_id, prompt)
+        .await
+        .expect("failed to persist initial prompt");
+    services
+        .db()
+        .sessions()
+        .update_session_status_with_timing_at(session_id, "Review", 0)
+        .await
+        .expect("failed to persist review status");
+}
+
 /// Verifies that the first reply after a model switch replays the full
 /// session transcript and subsequent replies omit the replay snapshot.
 ///
@@ -3488,6 +3590,7 @@ async fn test_spawn_integration() {
 /// worker in `InProgress` and correctly polls until `Review`. Without this,
 /// `wait_for_status` would return immediately because the initial status
 /// is already `Review` before the worker runs.
+#[tokio::test]
 async fn test_reply_with_backend_replays_history_once_after_model_switch() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
@@ -3518,17 +3621,7 @@ async fn test_reply_with_backend_replays_history_once_after_model_switch() {
         }
     }
 
-    // Persist the prompt so that `RefreshSessions` reloads from DB with the
-    // correct value. `update_status(Review)` emits `RefreshSessions`, which
-    // reloads sessions from DB; without persisting here, `session.prompt`
-    // would be reset to `""` causing the second reply to use
-    // `AgentRequestKind::SessionStart`.
-    app.services
-        .db()
-        .sessions()
-        .update_session_prompt(&session_id, "Initial prompt")
-        .await
-        .expect("failed to persist initial prompt");
+    persist_review_session_state(&app.services, &session_id, "Initial prompt").await;
 
     app.set_session_model(
         &session_id,
@@ -3537,18 +3630,9 @@ async fn test_reply_with_backend_replays_history_once_after_model_switch() {
     .await
     .expect("failed to switch model");
 
-    // Shared state to capture replay transcript text from each turn request.
     let captured_replay_transcripts: Arc<Mutex<Vec<Option<String>>>> =
         Arc::new(Mutex::new(Vec::new()));
-
-    // The done channel signals from inside the mock future so the test
-    // can wait on each turn completing before calling `wait_for_status`.
-    // This prevents `wait_for_status` from returning immediately when the
-    // session is already in `Review` before the worker processes the turn.
     let (done_tx, mut done_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
-
-    // Register a MockAgentChannel that collects replay transcript values from
-    // resume turns so they can be asserted synchronously after the test.
     let mut mock_channel = MockAgentChannel::new();
     let captured = Arc::clone(&captured_replay_transcripts);
     let done_capture = done_tx.clone();
@@ -4133,7 +4217,7 @@ async fn test_delete_session_without_git() {
 }
 
 #[tokio::test]
-async fn test_merge_session_no_git() {
+async fn test_merge_session_rejects_snapshot_missing_persisted_session() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
     let mut app = new_test_app(dir.path().to_path_buf()).await;
@@ -4148,7 +4232,7 @@ async fn test_merge_session_no_git() {
         result
             .expect_err("should be error")
             .to_string()
-            .contains("No git worktree")
+            .contains("Invalid status transition to Merging")
     );
 }
 
@@ -4180,7 +4264,8 @@ async fn test_merge_session_removes_worktree_and_branch_after_success() {
         .create_session()
         .await
         .expect("failed to create merge session");
-    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Review);
+    crate::test_support::persist_session_status_for_test(&mut app, &session_id, Status::Review)
+        .await;
     let session_folder = app
         .sessions
         .sessions()
@@ -4226,7 +4311,12 @@ async fn test_merge_session_restacks_stacked_child_after_success() {
     app.stage_draft_message(&child_session_id, "Ready after parent merge")
         .await
         .expect("failed to stage child draft message");
-    crate::test_support::set_session_status_for_test(&mut app, &parent_session_id, Status::Review);
+    crate::test_support::persist_session_status_for_test(
+        &mut app,
+        &parent_session_id,
+        Status::Review,
+    )
+    .await;
     let mock_git = create_mock_git_client_for_successful_noop_merges(1, dir.path().to_path_buf());
     app.sessions.git_client = Arc::new(mock_git);
 
@@ -4260,7 +4350,8 @@ async fn test_merge_session_marks_done_when_changes_are_already_in_base() {
         .create_session()
         .await
         .expect("failed to create merge session");
-    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Review);
+    crate::test_support::persist_session_status_for_test(&mut app, &session_id, Status::Review)
+        .await;
     let mock_git = create_mock_git_client_for_successful_noop_merges(1, dir.path().to_path_buf());
     app.sessions.git_client = Arc::new(mock_git);
 
@@ -4294,8 +4385,18 @@ async fn test_merge_session_queue_processes_sessions_in_fifo_order() {
         .create_session()
         .await
         .expect("failed to create second queue session");
-    crate::test_support::set_session_status_for_test(&mut app, &first_session_id, Status::Review);
-    crate::test_support::set_session_status_for_test(&mut app, &second_session_id, Status::Review);
+    crate::test_support::persist_session_status_for_test(
+        &mut app,
+        &first_session_id,
+        Status::Review,
+    )
+    .await;
+    crate::test_support::persist_session_status_for_test(
+        &mut app,
+        &second_session_id,
+        Status::Review,
+    )
+    .await;
     let mock_git = create_mock_git_client_for_successful_noop_merges(2, dir.path().to_path_buf());
     app.sessions.git_client = Arc::new(mock_git);
 
@@ -4479,12 +4580,8 @@ async fn test_rebase_session_updates_session_worktree_to_base_head() {
         .create_session()
         .await
         .expect("failed to create session");
-    app.sessions.sessions_mut()[0].status = Status::Review;
-    if let Some(handles) = app.sessions.session_handles().get(session_id.as_str())
-        && let Ok(mut session_status) = handles.status.lock()
-    {
-        *session_status = Status::Review;
-    }
+    crate::test_support::persist_session_status_for_test(&mut app, &session_id, Status::Review)
+        .await;
 
     // Act
     let result = app.rebase_session(&session_id).await;
@@ -4512,7 +4609,12 @@ async fn test_rebase_session_cancels_pending_focused_review() {
         )
         .await
         .expect("failed to seed persisted focused review");
-    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::AgentReview);
+    crate::test_support::persist_session_status_for_test(
+        &mut app,
+        &session_id,
+        Status::AgentReview,
+    )
+    .await;
     app.mode = AppMode::View {
         session_id: session_id.clone().into(),
         scroll_offset: None,
@@ -4565,7 +4667,12 @@ async fn test_rebase_session_cleanup_failure_does_not_start_sync() {
         )
         .await
         .expect("failed to seed persisted focused review");
-    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::AgentReview);
+    crate::test_support::persist_session_status_for_test(
+        &mut app,
+        &session_id,
+        Status::AgentReview,
+    )
+    .await;
     app.mode = AppMode::View {
         session_id: session_id.clone().into(),
         scroll_offset: None,
@@ -4670,12 +4777,8 @@ async fn test_rebase_session_auto_commits_uncommitted_changes() {
         .await
         .expect("failed to create session");
     let session_folder = app.sessions.sessions()[0].folder.clone();
-    app.sessions.sessions_mut()[0].status = Status::Review;
-    if let Some(handles) = app.sessions.session_handles().get(session_id.as_str())
-        && let Ok(mut session_status) = handles.status.lock()
-    {
-        *session_status = Status::Review;
-    }
+    crate::test_support::persist_session_status_for_test(&mut app, &session_id, Status::Review)
+        .await;
 
     // Create an uncommitted change in the session worktree
     std::fs::write(session_folder.join("dirty.txt"), "uncommitted content")
@@ -4883,7 +4986,8 @@ async fn test_cancel_session() {
         .expect("missing session")
         .folder
         .clone();
-    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Review);
+    crate::test_support::persist_session_status_for_test(&mut app, &session_id, Status::Review)
+        .await;
 
     // Act
     app.sessions
@@ -4976,7 +5080,12 @@ async fn test_cancel_session_cascades_to_stacked_child() {
         .create_stacked_draft_session(&parent_session_id)
         .await
         .expect("failed to create stacked draft session");
-    crate::test_support::set_session_status_for_test(&mut app, &parent_session_id, Status::Review);
+    crate::test_support::persist_session_status_for_test(
+        &mut app,
+        &parent_session_id,
+        Status::Review,
+    )
+    .await;
 
     // Act
     app.sessions
@@ -5032,7 +5141,8 @@ async fn test_cancel_running_session_stops_turn_and_cancels_session() {
         .create_session()
         .await
         .expect("failed to create session");
-    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::InProgress);
+    crate::test_support::persist_session_status_for_test(&mut app, &session_id, Status::InProgress)
+        .await;
     app.services
         .db()
         .operations()
@@ -5246,7 +5356,8 @@ async fn test_done_status_triggers_app_server_shutdown() {
         &session_id,
         Status::Merging,
     )
-    .await;
+    .await
+    .expect("status transition to Merging should persist");
     assert!(
         transitioned_to_merging,
         "status transition to Merging should succeed"
@@ -5260,7 +5371,8 @@ async fn test_done_status_triggers_app_server_shutdown() {
         &session_id,
         Status::Done,
     )
-    .await;
+    .await
+    .expect("status transition to Done should persist");
     assert!(
         transitioned_to_done,
         "status transition to Done should succeed"

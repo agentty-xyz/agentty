@@ -4,11 +4,12 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 
+use crate::presentation::style;
+use crate::ui::Component;
 use crate::ui::input_layout::{
     CHAT_INPUT_MAX_VISIBLE_LINES, calculate_input_viewport, compute_input_layout,
     input_cursor_position, placeholder_cursor_position, suggestion_dropdown_height,
 };
-use crate::ui::{Component, style};
 
 /// One row rendered inside a prompt suggestion dropdown.
 #[derive(Clone, Debug, Eq, PartialEq)]

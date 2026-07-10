@@ -12,9 +12,9 @@ use time::{OffsetDateTime, UtcOffset};
 use crate::domain::system_log::{
     SYSTEM_LOG_LIMIT, SystemLogBuffer, SystemLogEntry, SystemLogLevel,
 };
-use crate::ui::state::help_action;
+use crate::presentation::{help_action, style};
 use crate::ui::text_util::inline_text;
-use crate::ui::{Page, layout, style};
+use crate::ui::{Page, layout};
 
 /// Renders the process-local system log page.
 pub struct SystemLogPage<'a> {

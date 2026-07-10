@@ -12,8 +12,9 @@ use tokio::sync::mpsc;
 use tracing::debug;
 
 use crate::app::{App, AppEvent};
+use crate::presentation::app_mode::AppMode;
 use crate::runtime::{EventResult, FRAME_INTERVAL, key_handler, mode};
-use crate::ui::state::app_mode::AppMode;
+use crate::ui::RenderCacheStore;
 
 /// Maximum terminal input events processed in one foreground cycle.
 ///
@@ -97,13 +98,21 @@ pub(crate) async fn process_events<B: Backend>(
     terminal: &mut Terminal<B>,
     event_rx: &mut mpsc::UnboundedReceiver<Event>,
     tick: &mut tokio::time::Interval,
+    render_cache_store: &RenderCacheStore,
 ) -> io::Result<EventResult>
 where
     B::Error: std::error::Error + Send + Sync + 'static,
 {
-    process_events_with_handler(app, terminal, event_rx, tick, |app, terminal, event| {
-        Box::pin(process_event(app, terminal, event))
-    })
+    process_events_with_handler(
+        app,
+        terminal,
+        event_rx,
+        tick,
+        render_cache_store,
+        move |app, terminal, event, render_cache_store| {
+            Box::pin(process_event(app, terminal, event, render_cache_store))
+        },
+    )
     .await
 }
 
@@ -114,6 +123,7 @@ async fn process_events_with_handler<Terminal, EventHandler>(
     terminal: &mut Terminal,
     event_rx: &mut mpsc::UnboundedReceiver<Event>,
     tick: &mut tokio::time::Interval,
+    render_cache_store: &RenderCacheStore,
     mut handle_event: EventHandler,
 ) -> io::Result<EventResult>
 where
@@ -121,6 +131,7 @@ where
         &'handler mut App,
         &'handler mut Terminal,
         Option<Event>,
+        &'handler RenderCacheStore,
     ) -> Pin<
         Box<dyn Future<Output = io::Result<EventResult>> + 'handler>,
     >,
@@ -159,7 +170,7 @@ where
     };
 
     if matches!(
-        handle_event(app, terminal, maybe_event).await?,
+        handle_event(app, terminal, maybe_event, render_cache_store).await?,
         EventResult::Quit
     ) {
         return Ok(EventResult::Quit);
@@ -176,7 +187,7 @@ where
 
         handled_terminal_events += 1;
         if matches!(
-            handle_event(app, terminal, Some(event)).await?,
+            handle_event(app, terminal, Some(event), render_cache_store).await?,
             EventResult::Quit
         ) {
             return Ok(EventResult::Quit);
@@ -204,13 +215,25 @@ async fn process_event<B: Backend>(
     app: &mut App,
     terminal: &mut Terminal<B>,
     event: Option<Event>,
+    render_cache_store: &RenderCacheStore,
 ) -> io::Result<EventResult>
 where
     B::Error: std::error::Error + Send + Sync + 'static,
 {
-    process_event_with_key_handler(app, terminal, event, |app, terminal, key| {
-        Box::pin(key_handler::handle_key_event(app, terminal, key))
-    })
+    process_event_with_key_handler(
+        app,
+        terminal,
+        event,
+        render_cache_store,
+        move |app, terminal, key, render_cache_store| {
+            Box::pin(key_handler::handle_key_event(
+                app,
+                terminal,
+                key,
+                render_cache_store,
+            ))
+        },
+    )
     .await
 }
 
@@ -220,6 +243,7 @@ async fn process_event_with_key_handler<Terminal, KeyHandler>(
     app: &mut App,
     terminal: &mut Terminal,
     event: Option<Event>,
+    render_cache_store: &RenderCacheStore,
     mut handle_key_event: KeyHandler,
 ) -> io::Result<EventResult>
 where
@@ -227,6 +251,7 @@ where
         &'handler mut App,
         &'handler mut Terminal,
         KeyEvent,
+        &'handler RenderCacheStore,
     ) -> Pin<
         Box<dyn Future<Output = io::Result<EventResult>> + 'handler>,
     >,
@@ -234,7 +259,7 @@ where
     if let Some(event) = event {
         match event {
             Event::Key(key) if is_press_key_event(key) => {
-                return handle_key_event(app, terminal, key).await;
+                return handle_key_event(app, terminal, key, render_cache_store).await;
             }
             Event::Paste(pasted_text) => {
                 process_paste_event(app, &pasted_text);
@@ -280,8 +305,10 @@ mod tests {
     use crate::domain::input::InputState;
     use crate::domain::question::QuestionItem;
     use crate::domain::session::{Session, SessionSize, SessionStats, Status};
-    use crate::ui::state::app_mode::{AppMode, QuestionFocus};
-    use crate::ui::state::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
+    use crate::presentation::app_mode::{AppMode, QuestionFocus};
+    use crate::presentation::prompt::{
+        PromptAttachmentState, PromptHistoryState, PromptSlashState,
+    };
 
     /// Verifies the event reader forwards one queued event before stopping on
     /// a poll error.
@@ -462,13 +489,15 @@ mod tests {
             slash_state: PromptSlashState::default(),
         };
         let mut terminal = ();
+        let render_cache_store = RenderCacheStore::default();
 
         // Act
         let result = process_event_with_key_handler(
             &mut app,
             &mut terminal,
             Some(Event::Paste("    line 1\r\n        line 2".to_string())),
-            |_, (), _| Box::pin(async { Err(io::Error::other("unexpected key-handler call")) }),
+            &render_cache_store,
+            |_, (), _, _| Box::pin(async { Err(io::Error::other("unexpected key-handler call")) }),
         )
         .await;
 
@@ -500,13 +529,15 @@ mod tests {
             session_id: "session-1".into(),
         };
         let mut terminal = ();
+        let render_cache_store = RenderCacheStore::default();
 
         // Act
         let result = process_event_with_key_handler(
             &mut app,
             &mut terminal,
             Some(Event::Paste("custom\ranswer".to_string())),
-            |_, (), _| Box::pin(async { Err(io::Error::other("unexpected key-handler call")) }),
+            &render_cache_store,
+            |_, (), _, _| Box::pin(async { Err(io::Error::other("unexpected key-handler call")) }),
         )
         .await;
 
@@ -530,13 +561,15 @@ mod tests {
         let original_mode = AppMode::List;
         app.mode = original_mode;
         let mut terminal = ();
+        let render_cache_store = RenderCacheStore::default();
 
         // Act
         let result = process_event_with_key_handler(
             &mut app,
             &mut terminal,
             Some(Event::Resize(120, 40)),
-            |_, (), _| Box::pin(async { Err(io::Error::other("unexpected key-handler call")) }),
+            &render_cache_store,
+            |_, (), _, _| Box::pin(async { Err(io::Error::other("unexpected key-handler call")) }),
         )
         .await;
 
@@ -552,6 +585,7 @@ mod tests {
         // Arrange
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         let mut terminal = ();
+        let render_cache_store = RenderCacheStore::default();
 
         // Act
         let result = process_event_with_key_handler(
@@ -562,7 +596,8 @@ mod tests {
                 KeyModifiers::ALT,
                 KeyEventKind::Release,
             ))),
-            |_, (), _| Box::pin(async { Err(io::Error::other("unexpected key-handler call")) }),
+            &render_cache_store,
+            |_, (), _, _| Box::pin(async { Err(io::Error::other("unexpected key-handler call")) }),
         )
         .await;
 
@@ -584,6 +619,7 @@ mod tests {
             )))
             .expect("failed to queue event");
         let mut tick = tokio::time::interval(Duration::from_mins(1));
+        let render_cache_store = RenderCacheStore::default();
 
         // Act
         let result = process_events_with_handler(
@@ -591,7 +627,8 @@ mod tests {
             &mut terminal,
             &mut event_rx,
             &mut tick,
-            |_, (), _| Box::pin(async { Err(io::Error::other("handler failed")) }),
+            &render_cache_store,
+            |_, (), _, _| Box::pin(async { Err(io::Error::other("handler failed")) }),
         )
         .await;
 
@@ -621,21 +658,28 @@ mod tests {
         }
         let handled_events = Arc::new(AtomicUsize::new(0));
         let mut tick = tokio::time::interval(Duration::from_mins(1));
+        let render_cache_store = RenderCacheStore::default();
 
         // Act
-        let result =
-            process_events_with_handler(&mut app, &mut terminal, &mut event_rx, &mut tick, {
+        let result = process_events_with_handler(
+            &mut app,
+            &mut terminal,
+            &mut event_rx,
+            &mut tick,
+            &render_cache_store,
+            {
                 let handled_events = Arc::clone(&handled_events);
 
-                move |_, (), event| {
+                move |_, (), event, _| {
                     if event.is_some() {
                         handled_events.fetch_add(1, Ordering::Relaxed);
                     }
 
                     Box::pin(async { Ok(EventResult::Continue) })
                 }
-            })
-            .await;
+            },
+        )
+        .await;
 
         // Assert
         assert!(matches!(result, Ok(EventResult::Continue)));

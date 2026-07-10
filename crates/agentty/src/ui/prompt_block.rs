@@ -3,7 +3,8 @@
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::ui::{style, text_util};
+use crate::presentation::style;
+use crate::ui::text_util;
 
 /// Visible prefix for the first row of a user prompt in transcript output.
 pub(crate) const USER_PROMPT_PREFIX: &str = " › ";

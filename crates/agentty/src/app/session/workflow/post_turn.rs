@@ -268,7 +268,7 @@ pub(super) async fn apply_turn_result(
 pub(super) async fn finalize_channel_turn(
     context: &TurnFinalizerContext,
     result: &Result<Status, SessionError>,
-) {
+) -> Result<(), SessionError> {
     if let Some((session_size, added_lines, deleted_lines)) =
         SessionTaskService::refresh_persisted_session_diff_stats(
             &context.db,
@@ -289,7 +289,6 @@ pub(super) async fn finalize_channel_turn(
     }
 
     if let Some(target_status) = status_update_after_turn_result(result) {
-        // Best-effort: status transition failure is non-critical.
         let status_transition = StatusTransition::from_parts(
             context.app_event_tx.clone(),
             Arc::clone(&context.clock),
@@ -298,8 +297,14 @@ pub(super) async fn finalize_channel_turn(
             Arc::clone(&context.session_update_versions),
             Arc::clone(&context.status),
         );
-        let _ = status_transition.apply(target_status).await;
+        if !status_transition.apply(target_status).await? {
+            return Err(SessionError::Workflow(format!(
+                "Session changed before final status {target_status} could be persisted"
+            )));
+        }
     }
+
+    Ok(())
 }
 
 /// Returns the status transition the worker should emit after a turn result.
@@ -321,7 +326,7 @@ pub(super) fn status_update_after_turn_result(
 /// Appends one terminal turn error to the live and persisted transcript.
 async fn append_turn_error(context: &PostTurnContext, error_text: &str) {
     let message = format!("\n{}\n", error_text.trim());
-    SessionTaskService::append_workflow_notice(
+    let _ = SessionTaskService::append_workflow_notice(
         &context.transcript,
         &context.db,
         &context.app_event_tx,
@@ -360,7 +365,7 @@ async fn apply_successful_turn_result(
                 raw_content: message.as_str(),
             },
         )
-        .await;
+        .await?;
     }
     let turn_applied_state = match (TurnPersistence {
         context,
@@ -492,7 +497,7 @@ async fn handle_turn_persistence_failure(context: &PostTurnContext, error: &Sess
     let message = TranscriptNotice::TurnMetadataError.format(format!(
         "Failed to persist completed turn metadata: {error}"
     ));
-    SessionTaskService::append_workflow_notice(
+    let _ = SessionTaskService::append_workflow_notice(
         &context.transcript,
         &context.db,
         &context.app_event_tx,
