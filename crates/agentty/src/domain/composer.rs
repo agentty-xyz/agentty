@@ -1206,8 +1206,10 @@ mod tests {
         assert_eq!(
             labels,
             vec![
+                "gpt-5.6-sol".to_string(),
+                "gpt-5.6-terra".to_string(),
+                "gpt-5.6-luna".to_string(),
                 "gpt-5.5".to_string(),
-                "gpt-5.4-mini".to_string(),
                 "gpt-5.3-codex-spark".to_string(),
             ]
         );

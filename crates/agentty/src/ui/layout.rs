@@ -740,10 +740,10 @@ mod tests {
 
         // Assert
         assert_eq!(menu.items.len(), AgentKind::Codex.models().len());
-        assert_eq!(menu.items[0].label, "gpt-5.5");
+        assert_eq!(menu.items[0].label, "gpt-5.6-sol");
         assert_eq!(
             menu.items[0].detail,
-            Some("Newer Codex model with stronger coding performance when available.".to_string())
+            Some("Newest Codex model for the strongest coding performance.".to_string())
         );
     }
 

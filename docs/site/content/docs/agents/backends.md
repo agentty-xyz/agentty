@@ -115,14 +115,15 @@ Both providers share the same Gemini model ids:
 
 ### Codex Models
 
-- `gpt-5.5` (default): Newer Codex model with stronger coding performance when
-  available.
-- `gpt-5.4-mini`: Small, fast Codex model for simpler coding tasks.
+- `gpt-5.6-sol` (default): Newest Codex model for the strongest coding performance.
+- `gpt-5.6-terra`: Current Codex model for balanced coding performance.
+- `gpt-5.6-luna`: Current Codex model for lighter coding iterations.
+- `gpt-5.5`: Newer Codex model with stronger coding performance when available.
 - `gpt-5.3-codex-spark`: Codex spark model for quick coding iterations.
 
 Stored project defaults or session rows that reference a retired model id (such as
-`claude-opus-4-6`, `claude-opus-4-7`, `claude-sonnet-4-6`, or `gpt-5.4`) are upgraded to
-the current supported replacement when Agentty loads them.
+`claude-opus-4-6`, `claude-opus-4-7`, `claude-sonnet-4-6`, `gpt-5.4`, or `gpt-5.4-mini`)
+are upgraded to the current supported replacement when Agentty loads them.
 
 ## Switching Models
 

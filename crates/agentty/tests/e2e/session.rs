@@ -2004,12 +2004,12 @@ fn gemini_model_picker_includes_current_flash() -> E2eResult {
     Ok(())
 }
 
-/// Verify that the prompt `/model` picker keeps the Codex mini model
-/// selectable when the Codex backend is available.
+/// Verify that the prompt `/model` picker exposes the current Codex models in
+/// the expected order.
 #[test]
-fn codex_model_picker_includes_gpt_54_mini() -> E2eResult {
+fn codex_model_picker_lists_current_models() -> E2eResult {
     // Arrange, Act, Assert
-    FeatureTest::new("codex_model_picker_includes_gpt_54_mini")
+    FeatureTest::new("codex_model_picker_lists_current_models")
         .with_git()
         .setup(seed_all_model_picker_cli_stubs)
         .run(
@@ -2030,15 +2030,19 @@ fn codex_model_picker_includes_gpt_54_mini() -> E2eResult {
                     .press_key("Down")
                     .press_key("Down")
                     .press_key("Enter")
-                    .wait_for_text("gpt-5.4-mini", 3000)
+                    .wait_for_text("gpt-5.6-sol", 3000)
                     .capture_labeled(
                         "codex_model_picker",
-                        "Codex model picker includes GPT-5.4 mini",
+                        "Codex model picker lists current models",
                     )
             },
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "gpt-5.4-mini", &full);
+                assertion::assert_text_in_region(frame, "gpt-5.6-sol", &full);
+                assertion::assert_text_in_region(frame, "gpt-5.6-terra", &full);
+                assertion::assert_text_in_region(frame, "gpt-5.6-luna", &full);
+                assertion::assert_text_in_region(frame, "gpt-5.5", &full);
+                assertion::assert_text_in_region(frame, "gpt-5.3-codex-spark", &full);
             },
         )?;
 

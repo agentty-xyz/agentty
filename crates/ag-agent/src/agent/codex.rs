@@ -110,9 +110,9 @@ mod tests {
         );
     }
 
-    /// Verifies `gpt-5.4-mini` is forwarded to the Codex app-server command.
+    /// Verifies `gpt-5.6-luna` is forwarded to the Codex app-server command.
     #[test]
-    fn build_command_accepts_gpt_54_mini_model() {
+    fn build_command_accepts_gpt_56_luna_model() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
         let backend = CodexBackend;
@@ -125,13 +125,13 @@ mod tests {
                 folder: temp_directory.path(),
                 main_checkout_root: None,
                 replay_transcript: None,
-                model: crate::model::agent::AgentModel::Gpt54Mini.as_str(),
+                model: crate::model::agent::AgentModel::Gpt56Luna.as_str(),
                 prompt: "Run a quick edit",
                 reasoning_level: crate::model::agent::ReasoningLevel::Medium,
                 request_kind: &session_start_request_kind(),
             },
         )
-        .expect("mini model command build should succeed");
+        .expect("luna model command build should succeed");
         let arguments = command
             .get_args()
             .map(|argument| argument.to_string_lossy().into_owned())
@@ -142,7 +142,7 @@ mod tests {
             arguments,
             vec![
                 "--model",
-                "gpt-5.4-mini",
+                "gpt-5.6-luna",
                 "app-server",
                 "--listen",
                 "stdio://"
