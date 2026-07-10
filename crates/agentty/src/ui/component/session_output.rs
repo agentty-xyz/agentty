@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Write as _;
 use std::hash::Hasher;
 use std::sync::Arc;
@@ -35,6 +35,7 @@ const DRAFT_PREVIEW_STACKED_STAGED_NOTE: &str =
     "Draft messages stay local until the parent is review-ready and you press `s` in session view \
      to start the stacked bundle from its parent branch.";
 const SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT: usize = 16;
+const USER_PROMPT_TAB_WIDTH: usize = 4;
 
 /// Cache key for one fully assembled session-output layout.
 ///
@@ -1255,11 +1256,10 @@ impl<'a> SessionOutput<'a> {
             .fg(style::palette::text_subtle())
             .add_modifier(ratatui::style::Modifier::ITALIC);
         for queued_text in queued_messages {
-            let trimmed = queued_text.trim();
-            if trimmed.is_empty() {
+            if queued_text.trim().is_empty() {
                 continue;
             }
-            for (line_index, message_line) in trimmed.split('\n').enumerate() {
+            for (line_index, message_line) in queued_text.split('\n').enumerate() {
                 let prefix = if line_index == 0 {
                     "queued › "
                 } else {
@@ -1284,8 +1284,7 @@ impl<'a> SessionOutput<'a> {
         inner_width: usize,
         markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
     ) {
-        let prompt_text = prompt_text.trim();
-        if prompt_text.is_empty() {
+        if prompt_text.trim().is_empty() {
             return;
         }
 
@@ -1294,8 +1293,13 @@ impl<'a> SessionOutput<'a> {
             .saturating_sub(prompt_prefix_width)
             .saturating_sub(USER_PROMPT_RIGHT_GUTTER_WIDTH)
             .max(1);
-        let rendered_lines =
-            Self::rendered_markdown_lines(prompt_text, prompt_content_width, markdown_render_cache);
+        let (protected_prompt_text, indent_marker) =
+            Self::protect_user_prompt_indentation(prompt_text);
+        let rendered_lines = Self::rendered_markdown_lines(
+            &protected_prompt_text,
+            prompt_content_width,
+            markdown_render_cache,
+        );
         if rendered_lines.is_empty() {
             return;
         }
@@ -1323,7 +1327,7 @@ impl<'a> SessionOutput<'a> {
                 prompt_block::user_prompt_prefix_style()
             };
             lines.push(prompt_block::user_prompt_markdown_line(
-                rendered_line.spans.iter().cloned(),
+                Self::restored_user_prompt_spans(rendered_line, indent_marker),
                 prefix,
                 prefix_style,
                 inner_width,
@@ -1332,6 +1336,102 @@ impl<'a> SessionOutput<'a> {
         }
 
         lines.push(prompt_block::user_prompt_padding_line(inner_width));
+    }
+
+    /// Replaces leading prompt spaces with a visible-width non-whitespace
+    /// marker so Markdown wrapping cannot discard indentation.
+    fn protect_user_prompt_indentation(prompt_text: &str) -> (String, Option<char>) {
+        let Some(indent_marker) = Self::unused_private_use_character(prompt_text) else {
+            return (prompt_text.to_string(), None);
+        };
+
+        let mut protected_text = String::with_capacity(prompt_text.len());
+        let prompt_lines = prompt_text.split('\n').collect::<Vec<_>>();
+        let preservation_mask = markdown::markdown_block_preservation_mask(prompt_text);
+
+        for (line_index, line) in prompt_lines.into_iter().enumerate() {
+            if line_index > 0 {
+                protected_text.push('\n');
+            }
+
+            if preservation_mask[line_index] {
+                protected_text.push_str(line);
+            } else {
+                let (content_start, indentation_width) = Self::leading_indentation(line);
+                let content = &line[content_start..];
+                protected_text.extend(std::iter::repeat_n(indent_marker, indentation_width));
+                protected_text.push_str(content);
+            }
+        }
+
+        (protected_text, Some(indent_marker))
+    }
+
+    /// Chooses a private-use character absent from the prompt so literal user
+    /// content can never collide with the temporary indentation marker.
+    fn unused_private_use_character(prompt_text: &str) -> Option<char> {
+        const DEFAULT_INDENT_MARKER: char = '\u{e000}';
+
+        if !prompt_text.contains(DEFAULT_INDENT_MARKER) {
+            return Some(DEFAULT_INDENT_MARKER);
+        }
+
+        let used_characters = prompt_text
+            .chars()
+            .filter(|character| {
+                matches!(
+                    u32::from(*character),
+                    0xe000..=0xf8ff | 0x000f_0000..=0x000f_fffd | 0x0010_0000..=0x0010_fffd
+                )
+            })
+            .collect::<HashSet<_>>();
+        [
+            0xe000..=0xf8ff,
+            0x000f_0000..=0x000f_fffd,
+            0x0010_0000..=0x0010_fffd,
+        ]
+        .into_iter()
+        .flatten()
+        .filter_map(char::from_u32)
+        .find(|character| !used_characters.contains(character))
+    }
+
+    /// Returns the byte offset after leading horizontal whitespace and its
+    /// terminal width, expanding tabs to four-column tab stops.
+    fn leading_indentation(line: &str) -> (usize, usize) {
+        let mut content_start = 0;
+        let mut indentation_width = 0;
+
+        for (byte_index, character) in line.char_indices() {
+            match character {
+                ' ' => indentation_width += 1,
+                '\t' => {
+                    indentation_width +=
+                        USER_PROMPT_TAB_WIDTH - (indentation_width % USER_PROMPT_TAB_WIDTH);
+                }
+                _ => break,
+            }
+            content_start = byte_index + character.len_utf8();
+        }
+
+        (content_start, indentation_width)
+    }
+
+    /// Lazily restores protected indent markers while yielding spans to the
+    /// final prompt line, avoiding an intermediate `Line` and `Vec` allocation.
+    fn restored_user_prompt_spans<'line>(
+        rendered_line: &'line Line<'static>,
+        indent_marker: Option<char>,
+    ) -> impl Iterator<Item = ratatui::text::Span<'static>> + 'line {
+        rendered_line.spans.iter().cloned().map(move |mut span| {
+            if let Some(indent_marker) = indent_marker
+                && span.content.contains(indent_marker)
+            {
+                span.content = span.content.replace(indent_marker, " ").into();
+            }
+
+            span
+        })
     }
 
     /// Appends rendered markdown with one blank separator while trimming any
@@ -3097,6 +3197,155 @@ mod tests {
         assert!(table_header_line.spans.iter().any(|span| {
             span.content.as_ref().contains("Input")
                 && span.style.bg == Some(style::palette::surface_elevated())
+        }));
+    }
+
+    #[test]
+    fn test_output_lines_preserve_user_prompt_indentation() {
+        // Arrange
+        let mut session = session_fixture();
+        set_conversation_transcript(
+            &mut session,
+            vec![(
+                SessionMessageKind::UserPrompt,
+                "    if ready {\n        run();\n    }",
+            )],
+        );
+        session.status = Status::Review;
+
+        // Act
+        let lines = output_lines(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            line_context(None, None, None),
+            None,
+        );
+        let rendered_lines = lines
+            .iter()
+            .map(|line| line.to_string().trim_end().to_string())
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert!(
+            rendered_lines
+                .iter()
+                .any(|line| line == " ›     if ready {"),
+            "rendered lines: {rendered_lines:#?}"
+        );
+        assert!(
+            rendered_lines
+                .iter()
+                .any(|line| line == "           run();")
+        );
+        assert!(rendered_lines.iter().any(|line| line == "       }"));
+    }
+
+    #[test]
+    fn test_output_lines_expand_user_prompt_tab_indentation() {
+        // Arrange
+        let mut session = session_fixture();
+        set_conversation_transcript(
+            &mut session,
+            vec![(
+                SessionMessageKind::UserPrompt,
+                "\tif ready {\n\t\trun();\n\t}",
+            )],
+        );
+        session.status = Status::Review;
+
+        // Act
+        let lines = output_lines(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            line_context(None, None, None),
+            None,
+        );
+        let rendered_lines = lines
+            .iter()
+            .map(|line| line.to_string().trim_end().to_string())
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert!(
+            rendered_lines
+                .iter()
+                .any(|line| line == " ›     if ready {")
+        );
+        assert!(
+            rendered_lines
+                .iter()
+                .any(|line| line == "           run();")
+        );
+        assert!(rendered_lines.iter().any(|line| line == "       }"));
+    }
+
+    #[test]
+    fn test_output_lines_preserve_literal_private_use_character() {
+        // Arrange
+        let prompt = "  before \u{e000} after";
+        let mut session = session_fixture();
+        set_conversation_transcript(&mut session, vec![(SessionMessageKind::UserPrompt, prompt)]);
+        session.status = Status::Review;
+
+        // Act
+        let lines = output_lines(
+            &session,
+            Rect::new(0, 0, 80, 6),
+            line_context(None, None, None),
+            None,
+        );
+        let rendered_text = lines
+            .iter()
+            .map(|line| line.to_string().trim_end().to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(rendered_text.contains(" ›   before \u{e000} after"));
+    }
+
+    #[test]
+    fn test_output_lines_render_indented_user_prompt_table_and_horizontal_rule() {
+        // Arrange
+        let mut session = session_fixture();
+        set_conversation_transcript(
+            &mut session,
+            vec![(
+                SessionMessageKind::UserPrompt,
+                concat!(
+                    "  | Input | Meaning |\n",
+                    "  | --- | --- |\n",
+                    "  | Prompt | Indented |\n",
+                    "\n",
+                    "  ---",
+                ),
+            )],
+        );
+        session.status = Status::Review;
+
+        // Act
+        let lines = output_lines(
+            &session,
+            Rect::new(0, 0, 80, 12),
+            line_context(None, None, None),
+            None,
+        );
+        let rendered_lines = lines
+            .iter()
+            .map(|line| line.to_string().trim_end().to_string())
+            .collect::<Vec<_>>();
+        let text = rendered_lines.join("\n");
+
+        // Assert
+        assert!(text.contains('┌'));
+        assert!(text.contains("Prompt"));
+        assert!(text.contains("Indented"));
+        assert!(!text.contains("| --- | --- |"));
+        assert!(rendered_lines.iter().any(|line| {
+            line.strip_prefix(prompt_block::user_prompt_continuation_prefix().as_str())
+                .is_some_and(|content| {
+                    content.len() > 10 && content.chars().all(|character| character == '-')
+                })
         }));
     }
 

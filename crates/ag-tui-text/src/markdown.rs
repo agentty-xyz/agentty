@@ -232,6 +232,49 @@ pub fn render_markdown_with_settings(
     style::with_render_settings(settings, || render_markdown_active_settings(text, width))
 }
 
+/// Returns one flag per input line indicating that leading whitespace must be
+/// preserved before Markdown parsing.
+///
+/// The mask uses the same fence, table, and horizontal-rule classifiers as
+/// [`render_markdown`], allowing callers to protect indentation on ordinary
+/// text without hiding trim-tolerant block syntax from the shared parser.
+pub fn markdown_block_preservation_mask(text: &str) -> Vec<bool> {
+    let raw_lines = text.split('\n').collect::<Vec<_>>();
+    let mut block_state = BlockState::Paragraph;
+    let mut preservation_mask = vec![false; raw_lines.len()];
+    let mut line_index = 0;
+
+    while line_index < raw_lines.len() {
+        let raw_line = raw_lines[line_index];
+        if is_fence_delimiter(raw_line) {
+            preservation_mask[line_index] = true;
+            let _ = update_fence_state(raw_line, &mut block_state);
+            line_index += 1;
+
+            continue;
+        }
+        if !matches!(block_state, BlockState::Paragraph) {
+            preservation_mask[line_index] = true;
+            line_index += 1;
+
+            continue;
+        }
+        if let Some((_, next_line_index)) = parse_markdown_table(&raw_lines, line_index) {
+            preservation_mask[line_index..next_line_index].fill(true);
+            line_index = next_line_index;
+
+            continue;
+        }
+        if is_horizontal_rule(raw_line) {
+            preservation_mask[line_index] = true;
+        }
+
+        line_index += 1;
+    }
+
+    preservation_mask
+}
+
 fn render_markdown_active_settings(text: &str, width: usize) -> Vec<Line<'static>> {
     let mut rendered_lines = Vec::new();
     let mut block_state = BlockState::Paragraph;
@@ -2552,6 +2595,31 @@ mod tests {
         assert!(lines[1].spans.iter().any(|span| {
             span.content.as_ref().contains("Name") && span.style == table_header_style()
         }));
+    }
+
+    #[test]
+    fn test_markdown_block_preservation_mask_uses_shared_block_classifiers() {
+        // Arrange
+        let input = concat!(
+            "  plain\n",
+            "  | Name | Status |\n",
+            "  | --- | ---: |\n",
+            "  | Build | passing |\n",
+            "\n",
+            "  ---\n",
+            "  ```text\n",
+            "    fenced\n",
+            "  ```",
+        );
+
+        // Act
+        let preservation_mask = markdown_block_preservation_mask(input);
+
+        // Assert
+        assert_eq!(
+            preservation_mask,
+            vec![false, true, true, true, false, true, true, true, true]
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-pub use ag_tui_text::markdown::parse_inline_spans;
+pub use ag_tui_text::markdown::{markdown_block_preservation_mask, parse_inline_spans};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
