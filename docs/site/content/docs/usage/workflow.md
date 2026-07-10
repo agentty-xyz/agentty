@@ -376,12 +376,12 @@ actions. From an editable session view, press `/` to open the composer with the 
 slash already inserted:
 
 The command picker filters as you type and accepts contains or fuzzy abbreviations such
-as `/o` for `/model` and `/qc` for `/qe:check`.
+as `/o` for `/model`.
 
 | Command | Description | |---------|-------------| | `/apply` | Verify focused-review
 suggestions, then apply the still-valid ones. | | `/model` | Switch the model for the
-current session. | | `/qe:check` | Run a read-only quality-enforcement audit prompt. | |
-`/reasoning` | Override the reasoning level for the current session. |
+current session. | | `/reasoning` | Override the reasoning level for the current
+session. |
 
 `/apply` requires a completed focused review (`f` key). `/model` and `/reasoning` only
 offer locally available backends; see [Agents & Models](@/docs/agents/backends.md).

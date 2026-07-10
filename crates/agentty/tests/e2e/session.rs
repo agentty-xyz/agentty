@@ -2875,45 +2875,6 @@ fn apply_slash_command_unavailable_without_review_cache() -> E2eResult {
     Ok(())
 }
 
-/// Verify that `/qe:check` is exposed in the prompt slash-command menu when
-/// typed as a fuzzy command abbreviation.
-#[test]
-fn qe_check_slash_command_is_visible() -> E2eResult {
-    // Arrange, Act, Assert
-    FeatureTest::new("qe_check_slash_command_visible")
-        .with_git()
-        .run(
-            |scenario| {
-                scenario
-                    .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab("Sessions"))
-                    .press_key("a")
-                    .wait_for_text("Regular", 5000)
-                    .press_key("Enter")
-                    .wait_for_stable_frame(300, 5000)
-                    .press_key("/")
-                    .write_text("qc")
-                    .wait_for_text("/qe:check", 3000)
-                    .viewing_pause_ms(1500)
-                    .capture_labeled(
-                        "qe_check_slash_command_visible",
-                        "`/qe:check` appears for fuzzy slash-command input",
-                    )
-            },
-            |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "/qe:check", &full);
-                assertion::assert_text_in_region(
-                    frame,
-                    "Send the quality-enforcement check prompt.",
-                    &full,
-                );
-            },
-        )?;
-
-    Ok(())
-}
-
 /// Verify that slash-command filtering can match text contained inside a
 /// command name, not only command prefixes.
 #[test]

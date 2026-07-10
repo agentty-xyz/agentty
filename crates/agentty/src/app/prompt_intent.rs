@@ -16,8 +16,6 @@ use crate::ui::state::prompt::{
     insert_prompt_local_image, resolve_prompt_slash_selection,
 };
 
-/// Checked-in prompt body submitted by the `/qe:check` slash command.
-const QE_CHECK_PROMPT: &str = include_str!("template/qe_check_prompt.md");
 /// Checked-in prompt template submitted by the `/apply` slash command.
 const APPLY_REVIEW_PROMPT_TEMPLATE: &str = include_str!("template/apply_review_prompt.md");
 
@@ -140,10 +138,6 @@ impl App {
                 } else {
                     self.reset_prompt_slash_state();
                 }
-            }
-            Some(PromptSuggestionSelection::Command("/qe:check")) => {
-                self.reset_prompt_slash_input();
-                self.handle_qe_check_prompt_command(context).await;
             }
             Some(PromptSuggestionSelection::Command("/reasoning")) => {
                 let selected_reasoning_level = self
@@ -597,22 +591,6 @@ impl App {
 
         true
     }
-
-    /// Handles `/qe:check` by submitting the checked-in quality-enforcement
-    /// prompt as the next agent turn.
-    async fn handle_qe_check_prompt_command(&mut self, context: &PromptIntentContext) {
-        let prompt = build_qe_check_prompt();
-
-        self.cleanup_prompt_attachment_state().await;
-        self.submit_turn_prompt_for_context(context, prompt).await;
-        self.restore_prompt_session_view(context);
-    }
-}
-
-/// Builds the agent-facing `/qe:check` prompt from the checked-in markdown
-/// template.
-pub(crate) fn build_qe_check_prompt() -> TurnPrompt {
-    TurnPrompt::from_text(QE_CHECK_PROMPT.trim_end().to_string())
 }
 
 /// Builds the agent-facing `/apply` prompt from focused-review suggestions.
@@ -634,22 +612,6 @@ pub(crate) fn build_apply_review_prompt(suggestions: &str) -> TurnPrompt {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Verifies `/qe:check` submits the checked-in markdown prompt without
-    /// attachments or generated-data transport semantics.
-    #[test]
-    fn test_build_qe_check_prompt_uses_checked_in_template() {
-        // Arrange, Act
-        let prompt = build_qe_check_prompt();
-
-        // Assert
-        assert!(prompt.text.starts_with("# /qe:check"));
-        assert!(prompt.text.contains("change repository state"));
-        assert!(prompt.text.contains("Agent instruction files"));
-        assert!(prompt.text.contains("Suggested Next Prompt"));
-        assert!(prompt.attachments.is_empty());
-        assert_eq!(prompt.text_source, TurnPromptTextSource::UserPrompt);
-    }
 
     /// Verifies `/apply` submits the checked-in markdown prompt with the
     /// review suggestions fenced as data.

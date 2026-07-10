@@ -1443,10 +1443,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(
-            commands,
-            vec!["/apply", "/model", "/qe:check", "/reasoning"]
-        );
+        assert_eq!(commands, vec!["/apply", "/model", "/reasoning"]);
     }
 
     #[test]

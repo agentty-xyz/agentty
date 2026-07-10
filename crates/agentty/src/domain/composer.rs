@@ -801,7 +801,6 @@ fn command_description(command: &str) -> &'static str {
     match command {
         "/apply" => "Verify focused-review suggestions, then apply the correct ones.",
         "/model" => "Choose an agent and model for this session.",
-        "/qe:check" => "Send the quality-enforcement check prompt.",
         "/reasoning" => "Override the reasoning level for this session.",
         _ => "Prompt slash command.",
     }
@@ -810,7 +809,7 @@ fn command_description(command: &str) -> &'static str {
 /// Returns all slash commands whose fuzzy characters match the current input.
 fn prompt_slash_commands(input: &str, allow_apply_command: bool) -> Vec<&'static str> {
     let lowered = input.to_lowercase();
-    let mut commands = vec!["/apply", "/model", "/qe:check", "/reasoning"];
+    let mut commands = vec!["/apply", "/model", "/reasoning"];
     if !allow_apply_command {
         commands.retain(|command| *command != "/apply");
     }
@@ -1030,29 +1029,6 @@ mod tests {
                 title: "Slash Command (j/k move, Enter select)".to_string(),
             }
         );
-    }
-
-    #[test]
-    fn test_slash_suggestion_list_for_command_stage_fuzzy_matches_non_prefix_input() {
-        // Arrange
-        let composer = PromptComposerState::with_input_and_history(
-            InputState::with_text("/qc".to_string()),
-            AgentKind::ALL.to_vec(),
-            Vec::new(),
-        );
-
-        // Act
-        let suggestion_list = composer
-            .slash_suggestion_list(AgentKind::Codex)
-            .expect("expected suggestion list");
-
-        // Assert
-        let labels = suggestion_list
-            .items
-            .into_iter()
-            .map(|item| item.label)
-            .collect::<Vec<_>>();
-        assert_eq!(labels, vec!["/qe:check"]);
     }
 
     #[test]
@@ -1406,33 +1382,8 @@ mod tests {
             .collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(labels, vec!["/model", "/qe:check", "/reasoning"]);
+        assert_eq!(labels, vec!["/model", "/reasoning"]);
         assert_eq!(suggestion_list.selected_index, 0);
-    }
-
-    /// Verifies `/qe:check` participates in slash suggestions with its
-    /// command-specific description.
-    #[test]
-    fn test_slash_suggestion_list_includes_qe_check_command() {
-        // Arrange
-        let composer = PromptComposerState::with_input_and_history(
-            InputState::with_text("/q".to_string()),
-            AgentKind::ALL.to_vec(),
-            Vec::new(),
-        );
-
-        // Act
-        let suggestion_list = composer
-            .slash_suggestion_list(AgentKind::Codex)
-            .expect("expected suggestion list");
-
-        // Assert
-        assert_eq!(suggestion_list.items.len(), 1);
-        assert_eq!(suggestion_list.items[0].label, "/qe:check");
-        assert_eq!(
-            suggestion_list.items[0].detail.as_deref(),
-            Some("Send the quality-enforcement check prompt.")
-        );
     }
 
     #[test]
