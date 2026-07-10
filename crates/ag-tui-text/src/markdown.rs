@@ -831,7 +831,10 @@ fn render_inline_line(content: &str, base_style: Style, width: usize) -> Vec<Lin
 }
 
 fn render_code_line(raw_line: &str, width: usize) -> Vec<Line<'static>> {
-    wrap_verbatim_line(raw_line, code_block_style(), width)
+    wrap_verbatim_spans_with_word_boundaries(
+        vec![Span::styled(raw_line.to_string(), code_block_style())],
+        width,
+    )
 }
 
 fn render_stats_line(raw_line: &str, width: usize) -> Vec<Line<'static>> {
@@ -2175,6 +2178,27 @@ mod tests {
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].to_string(), "let value = **raw**;");
         assert_eq!(lines[0].spans[0].style, code_block_style());
+    }
+
+    #[test]
+    fn test_render_markdown_wraps_fenced_code_on_word_boundaries() {
+        // Arrange
+        let input = "```text\nformatted blocks in user messages without words breaking\n```";
+
+        // Act
+        let lines = render_markdown(input, 32);
+        let rendered_lines = lines.iter().map(ToString::to_string).collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(rendered_lines[0], "formatted blocks in user ");
+        assert_eq!(rendered_lines[1], "messages without words breaking");
+        assert!(!rendered_lines.iter().any(|line| line.ends_with("message")));
+        assert!(!rendered_lines.iter().any(|line| line.starts_with("s ")));
+        assert!(lines.iter().all(|line| {
+            line.spans
+                .first()
+                .is_some_and(|span| span.style == code_block_style())
+        }));
     }
 
     #[test]

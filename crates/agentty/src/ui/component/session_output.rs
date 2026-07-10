@@ -3143,6 +3143,34 @@ mod tests {
     }
 
     #[test]
+    fn test_append_user_prompt_markdown_lines_wraps_code_blocks_on_word_boundaries() {
+        // Arrange
+        let mut lines = Vec::new();
+        let prompt = "```text\nformatted blocks in user messages without words breaking\n```";
+
+        // Act
+        SessionOutput::append_user_prompt_markdown_lines(&mut lines, prompt, 36, None);
+        let rendered_lines = lines
+            .iter()
+            .map(|line| line.to_string().trim_end().to_string())
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert!(
+            rendered_lines
+                .iter()
+                .any(|line| line == " › formatted blocks in user")
+        );
+        assert!(
+            rendered_lines
+                .iter()
+                .any(|line| line == "   messages without words breaking")
+        );
+        assert!(!rendered_lines.iter().any(|line| line.ends_with("message")));
+        assert!(!rendered_lines.iter().any(|line| line.starts_with("   s ")));
+    }
+
+    #[test]
     fn test_output_lines_render_user_prompt_markdown_with_minimum_content_width() {
         // Arrange
         let mut session = session_fixture();

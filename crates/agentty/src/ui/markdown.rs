@@ -339,6 +339,30 @@ mod tests {
     }
 
     #[test]
+    fn test_render_markdown_wraps_fenced_code_on_word_boundaries() {
+        // Arrange
+        let input = "```text\nformatted blocks in user messages without words breaking\n```";
+
+        // Act
+        let lines = render_markdown(input, 32);
+        let rendered_lines = lines.iter().map(ToString::to_string).collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(rendered_lines[0], "formatted blocks in user ");
+        assert_eq!(rendered_lines[1], "messages without words breaking");
+        assert!(!rendered_lines.iter().any(|line| line.ends_with("message")));
+        assert!(!rendered_lines.iter().any(|line| line.starts_with("s ")));
+        let code_block_style = Style::default()
+            .fg(style::palette::text_muted())
+            .bg(style::palette::surface_overlay());
+        assert!(lines.iter().all(|line| {
+            line.spans
+                .first()
+                .is_some_and(|span| span.style == code_block_style)
+        }));
+    }
+
+    #[test]
     fn test_markdown_render_cache_reuses_prompt_block_lines() {
         // Arrange
         let cache = MarkdownRenderCache::default();
