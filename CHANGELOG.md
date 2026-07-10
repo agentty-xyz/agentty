@@ -7,9 +7,29 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.12.7] - 2026-07-09
+
+### Added
+
+- agentty: add CLI help and version options.
+- agentty: support configuring maximum reasoning levels.
+- agentty: add the shared `ag-tui-text` crate.
+
+### Changed
+
+- agentty: update the Codex model lineup and runtime configuration.
+- agentty: use the session folder directly for Antigravity.
+- agentty: inject the git client into startup discovery.
+- agentty: wrap fenced code blocks on word boundaries.
+- ag-agent: hide internal modules behind the crate root.
+
 ### Removed
 
 - ag-xtask: remove the unused `workspace-map` command.
+
+### Contributors
+
+- @minev-dev
 
 ## [v0.12.6] - 2026-07-09
 

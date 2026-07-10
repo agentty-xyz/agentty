@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.12.6"
+version = "0.12.7"
 authors = [
   "Vladimir Minev <minev.dev@gmail.com>",
   "Andrei Agaev <andagaev@gmail.com>",
@@ -16,13 +16,13 @@ repository = "https://github.com/agentty-xyz/agentty"
 homepage = "https://github.com/agentty-xyz/agentty"
 
 [workspace.dependencies]
-ag-agent = { path = "crates/ag-agent", version = "0.12.6" }
-ag-clipboard = { path = "crates/ag-clipboard", version = "0.12.6" }
-ag-forge = { path = "crates/ag-forge", version = "0.12.6" }
-ag-git = { path = "crates/ag-git", version = "0.12.6" }
-ag-protocol = { path = "crates/ag-protocol", version = "0.12.6" }
-ag-tui-text = { path = "crates/ag-tui-text", version = "0.12.6" }
-testty = { path = "crates/testty", version = "0.12.6" }
+ag-agent = { path = "crates/ag-agent", version = "0.12.7" }
+ag-clipboard = { path = "crates/ag-clipboard", version = "0.12.7" }
+ag-forge = { path = "crates/ag-forge", version = "0.12.7" }
+ag-git = { path = "crates/ag-git", version = "0.12.7" }
+ag-protocol = { path = "crates/ag-protocol", version = "0.12.7" }
+ag-tui-text = { path = "crates/ag-tui-text", version = "0.12.7" }
+testty = { path = "crates/testty", version = "0.12.7" }
 async-trait = "0.1"
 agent-client-protocol = "1.0.0"
 assert_cmd = "2"
