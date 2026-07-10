@@ -122,7 +122,7 @@ mod tests {
     use std::ffi::OsStr;
     use std::path::PathBuf;
 
-    use ag_protocol::ProtocolSchemaInstructionMode;
+    use ag_protocol::{ProtocolSchemaInstructionMode, TurnPromptAttachment};
     use serde_json::Value;
     use tempfile::tempdir;
 
@@ -130,7 +130,6 @@ mod tests {
     use crate::agent::prompt as shared_prompt;
     use crate::channel::AgentRequestKind;
     use crate::model::agent::ReasoningLevel;
-    use crate::model::turn_prompt::TurnPromptAttachment;
 
     fn session_start_request_kind() -> AgentRequestKind {
         AgentRequestKind::SessionStart

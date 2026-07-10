@@ -1,10 +1,8 @@
 //! Domain entities and pure business logic.
 
-pub use ag_agent::model::agent;
 pub mod composer;
 pub mod file_entry;
 pub mod input;
-pub use ag_agent::model::permission;
 pub mod project;
 pub mod question;
 pub mod review;
@@ -15,4 +13,27 @@ pub mod setting;
 pub mod system_log;
 pub mod theme;
 pub(crate) mod transcript_notice;
-pub use ag_agent::model::turn_prompt;
+
+/// Agent provider and model metadata used by the domain layer.
+pub mod agent {
+    pub use ag_agent::{
+        AgentCliInfo, AgentCliVersion, AgentKind, AgentModel, AgentSelection,
+        AgentSelectionMetadata, ReasoningLevel, parse_persisted_session_agent_model,
+        resolve_agent_kind_for_model, resolve_agent_selection_for_model,
+        resolve_model_for_available_agent_kinds, resolve_prompt_model_agent_kind,
+        selectable_models_for_agent_kinds,
+    };
+}
+
+/// Agent permission mode metadata.
+pub mod permission {
+    pub use ag_agent::PermissionMode;
+}
+
+/// Canonical turn prompt payload types.
+pub mod turn_prompt {
+    pub use ag_protocol::{
+        TurnPrompt, TurnPromptAttachment, TurnPromptContentPart, TurnPromptTextSource,
+        render_prompt_text_for_agent, split_turn_prompt_content,
+    };
+}

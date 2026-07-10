@@ -3,8 +3,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use ag_agent::agent;
-use ag_agent::channel::AgentRequestKind;
+use ag_agent as agent;
+use ag_agent::AgentRequestKind;
 use ag_forge as forge;
 use ag_git as git;
 use ag_protocol::{AgentResponse, parse_agent_response_strict};
@@ -2926,7 +2926,7 @@ mod test_support {
         /// Submits a follow-up prompt using a pre-built backend for
         /// deterministic test execution.
         ///
-        /// Creates a [`CliAgentChannel`] backed by the given
+        /// Creates a test CLI channel backed by the given
         /// [`agent::AgentBackend`] and registers it in the session-local
         /// channel map so the worker uses it instead of the default factory.
         /// This allows tests to control spawned process commands without
@@ -2944,11 +2944,8 @@ mod test_support {
                 AgentSelection::new(AgentKind::Antigravity, session_model),
                 |session| session.agent,
             );
-            let channel: Arc<dyn ag_agent::channel::AgentChannel> =
-                Arc::new(ag_agent::channel::cli::CliAgentChannel::with_backend(
-                    backend,
-                    session_agent.kind(),
-                ));
+            let channel =
+                ag_agent::create_cli_agent_channel_with_backend(backend, session_agent.kind());
             self.worker_service
                 .test_agent_channels
                 .insert(session_id.to_string().into(), channel);

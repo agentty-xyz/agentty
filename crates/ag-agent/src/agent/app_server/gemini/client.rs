@@ -1,17 +1,16 @@
 //! Gemini ACP client orchestration.
 
-use ag_protocol::ProtocolSchemaInstructionMode;
+use ag_protocol::{ProtocolSchemaInstructionMode, TurnPrompt};
 use tokio::sync::mpsc;
 
 use super::super::client::{ProviderRuntimeClient, RuntimeClientProvider, RuntimeClientRuntime};
 use super::super::stdio_transport::AppServerStdioTransport;
 use super::lifecycle::{self, GeminiRuntimeState};
-use crate::app_server::contract::BorrowedAppServerFuture;
 use crate::app_server::{
     AppServerError, AppServerFuture, AppServerStreamEvent, AppServerTurnRequest,
+    BorrowedAppServerFuture,
 };
 use crate::model::agent::{AgentKind, ReasoningLevel};
-use crate::model::turn_prompt::TurnPrompt;
 use crate::{agent, app_server_transport};
 
 /// Production [`AppServerClient`] backed by `gemini --acp`.

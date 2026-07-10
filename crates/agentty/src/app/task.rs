@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 
-use ag_agent::agent;
+use ag_agent as agent;
 use ag_forge::{ForgeRemote, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewRequestClient};
 use ag_git::GitClient;
 use ag_protocol::AgentResponse;
@@ -334,7 +334,7 @@ impl TaskService {
                         folder: review_folder,
                         model: review_selection.model(),
                         prompt: review_prompt,
-                        request_kind: ag_agent::channel::AgentRequestKind::UtilityPrompt,
+                        request_kind: ag_agent::AgentRequestKind::UtilityPrompt,
                         reasoning_level: ReasoningLevel::default(),
                     })
                     .await

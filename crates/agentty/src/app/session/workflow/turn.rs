@@ -4,9 +4,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ag_agent::channel::{
-    AgentError, AgentRequestKind, LiveTranscript, TurnEvent, TurnPrompt, TurnRequest, TurnResult,
-};
+use ag_agent::{AgentError, AgentRequestKind, LiveTranscript, TurnEvent, TurnRequest, TurnResult};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
@@ -19,6 +17,7 @@ use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel};
 use crate::domain::session::{SessionId, Status};
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::transcript_notice::TranscriptNotice;
+use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::AppRepositories;
 use crate::infra::process;
 

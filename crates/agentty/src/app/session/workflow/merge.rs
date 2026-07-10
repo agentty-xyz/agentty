@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use ag_agent::agent;
+use ag_agent as agent;
 use ag_git::{self as git, GitClient};
 use ag_protocol::AgentResponseSummary;
 use askama::Template;
@@ -485,7 +485,7 @@ impl RealSyncAssistClient {
             folder: &folder,
             model: session_agent.model(),
             prompt: &prompt,
-            request_kind: ag_agent::channel::AgentRequestKind::UtilityPrompt,
+            request_kind: ag_agent::AgentRequestKind::UtilityPrompt,
             reasoning_level: ReasoningLevel::default(),
         })
         .await

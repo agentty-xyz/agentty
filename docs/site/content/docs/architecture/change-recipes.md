@@ -28,13 +28,13 @@ through the correct modules without crossing layer boundaries.
 1. Update provider model declarations in `crates/ag-agent/src/model/agent.rs`.
 1. Add backend behavior in `crates/ag-agent/src/agent/` and register it in
    `crates/ag-agent/src/agent/provider.rs`.
-1. If app-server-based, implement `app_server_client()` in the concrete backend so the
-   provider owns its runtime wiring.
+1. If app-server-based, wire the provider client through
+   `crates/ag-agent/src/agent/provider.rs` so the provider owns its runtime wiring.
 1. Register any shared parsing, prompt-transport, streaming, or thought-policy changes
    in `crates/ag-agent/src/agent/provider.rs`.
-1. The channel layer (`crates/ag-agent/src/channel.rs`) routes automatically based on
-   the backend-owned transport mode - no change needed there unless the runtime contract
-   itself changes.
+1. The channel factory re-exported by the `ag-agent` crate root routes automatically
+   based on the backend-owned transport mode - no change needed there unless the runtime
+   contract itself changes.
 1. Update `docs/site/content/docs/agents/backends.md` with backend/model documentation.
 
 ## Add a Keybinding or Mode Interaction
@@ -88,9 +88,8 @@ through the correct modules without crossing layer boundaries.
    inputs, and make line-count/layout helpers reuse the same cached derived data as the
    final paint path.
 1. When changing `TurnRequest`/`TurnEvent`/`TurnResult` shapes in
-   `crates/ag-agent/src/channel/contract.rs` (re-exported by
-   `crates/ag-agent/src/channel.rs`), update the key-types table in
-   `docs/site/content/docs/architecture/runtime-flow.md`.
+   `crates/ag-agent/src/channel/contract.rs` (re-exported by the `ag-agent` crate root),
+   update the key-types table in `docs/site/content/docs/architecture/runtime-flow.md`.
 1. When adding/removing `#[cfg_attr(test, mockall::automock)]` external-boundary traits,
    update `docs/site/content/docs/architecture/testability-boundaries.md`.
 1. Run quality gates from `AGENTS.md` before opening a PR.

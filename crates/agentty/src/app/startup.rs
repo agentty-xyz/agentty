@@ -4,7 +4,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use ag_agent::agent::AgentAvailabilityProbe;
+use ag_agent::AgentAvailabilityProbe;
 use ag_git::GitClient;
 use ratatui::widgets::TableState;
 use tokio::sync::mpsc;

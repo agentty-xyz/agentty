@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ag_agent::agent;
-use ag_agent::channel::{
-    AgentChannel, AgentError, AgentRequestKind, TurnEvent, TurnPrompt, TurnRequest, TurnResult,
+use ag_agent as agent;
+use ag_agent::{
+    AgentChannel, AgentError, AgentRequestKind, TurnEvent, TurnRequest, TurnResult,
     create_agent_channel,
 };
 use ag_forge as forge;
@@ -30,6 +30,7 @@ use crate::app::{AppEvent, AppServices, SessionManager};
 use crate::domain::agent::AgentSelection;
 use crate::domain::session::{SessionId, SessionStats, Status};
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
+use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::{AppRepositories, SessionOperationRow};
 use crate::infra::fs::FsClient;
 use crate::infra::process;
@@ -1045,7 +1046,7 @@ async fn append_drained_prompt_to_transcript(context: &SessionWorkerContext, pro
 mod tests {
     use std::sync::Arc;
 
-    use ag_agent::channel::MockAgentChannel;
+    use ag_agent::MockAgentChannel;
     use ag_git::{MockGitClient, RebaseStepResult};
     use mockall::Sequence;
     use serde_json;

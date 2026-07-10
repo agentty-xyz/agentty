@@ -1,6 +1,5 @@
 //! Agent-domain models shared by provider transports and Agentty.
 
-pub mod agent;
-pub mod permission;
-pub mod session;
-pub mod turn_prompt;
+pub(crate) mod agent;
+pub(crate) mod permission;
+pub(crate) mod session;

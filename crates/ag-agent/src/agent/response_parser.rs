@@ -5,7 +5,7 @@ use serde::Deserialize;
 use crate::model::session::SessionStats;
 
 /// Parsed agent response including content text and usage statistics.
-pub struct ParsedResponse {
+pub(crate) struct ParsedResponse {
     /// Final response text from the agent.
     pub content: String,
     /// Token usage statistics associated with `content`.
@@ -838,7 +838,7 @@ fn compact_progress_message_from_stream_label(label: &str) -> Option<String> {
 ///
 /// Returns `None` for `agent_message` since it carries response content, not
 /// progress.
-pub fn compact_codex_progress_message(item_type: &str) -> Option<String> {
+pub(crate) fn compact_codex_progress_message(item_type: &str) -> Option<String> {
     match item_type {
         "agent_message" => None,
         "command_execution" => Some("Running a command".to_string()),
@@ -853,7 +853,7 @@ pub fn compact_codex_progress_message(item_type: &str) -> Option<String> {
 ///
 /// These short status lines are emitted for internal tool/reasoning steps and
 /// should not be rendered as chat content.
-pub fn is_codex_completion_status_message(message: &str) -> bool {
+pub(crate) fn is_codex_completion_status_message(message: &str) -> bool {
     let normalized_message = message.trim().trim_end_matches('.').to_ascii_lowercase();
 
     matches!(

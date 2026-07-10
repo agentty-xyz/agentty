@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 
 #[cfg(test)]
-use ag_agent::{agent, app_server};
+use ag_agent::{AppServerClient, MockAppServerClient, StaticAgentAvailabilityProbe};
 #[cfg(test)]
 use ag_git as git;
 use ratatui::buffer::{Buffer, Cell};
@@ -303,8 +303,8 @@ pub(crate) fn session_fixture_with_folder(session_folder: PathBuf) -> Session {
 
 /// Returns a mock app-server client wrapped in `Arc` for test injection.
 #[cfg(test)]
-pub(crate) fn mock_app_server() -> Arc<dyn app_server::AppServerClient> {
-    Arc::new(app_server::MockAppServerClient::new())
+pub(crate) fn mock_app_server() -> Arc<dyn AppServerClient> {
+    Arc::new(MockAppServerClient::new())
 }
 
 /// Builds one client bundle with a caller-provided agent availability
@@ -313,11 +313,9 @@ pub(crate) fn mock_app_server() -> Arc<dyn app_server::AppServerClient> {
 pub(crate) fn test_app_clients_with_available_agent_kinds(
     available_agent_kinds: Vec<AgentKind>,
 ) -> app::AppClients {
-    app::AppClients::new().with_agent_availability_probe(Arc::new(
-        agent::StaticAgentAvailabilityProbe {
-            available_agent_kinds,
-        },
-    ))
+    app::AppClients::new().with_agent_availability_probe(Arc::new(StaticAgentAvailabilityProbe {
+        available_agent_kinds,
+    }))
 }
 
 /// Builds one client bundle with deterministic agent availability for test

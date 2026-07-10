@@ -3,9 +3,10 @@ use std::fmt;
 use std::path::Path;
 use std::process::Command;
 
+use ag_protocol::TurnPromptAttachment;
+
 use crate::channel::AgentRequestKind;
 use crate::model::agent::ReasoningLevel;
-use crate::model::turn_prompt::TurnPromptAttachment;
 
 /// Transport runtime used to execute turns for one backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

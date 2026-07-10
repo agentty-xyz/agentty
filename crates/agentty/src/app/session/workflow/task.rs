@@ -4,7 +4,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use ag_agent::agent;
+use ag_agent as agent;
 use ag_git::{self as git, GitClient};
 use askama::Template;
 use tokio::sync::mpsc;
@@ -813,7 +813,7 @@ impl SessionTaskService {
                 folder,
                 model: session_agent.model(),
                 prompt: &prompt,
-                request_kind: ag_agent::channel::AgentRequestKind::UtilityPrompt,
+                request_kind: ag_agent::AgentRequestKind::UtilityPrompt,
                 reasoning_level: crate::domain::agent::ReasoningLevel::default(),
             },
         )
@@ -836,7 +836,7 @@ impl SessionTaskService {
                         folder,
                         model: session_agent.model(),
                         prompt: &truncated_prompt,
-                        request_kind: ag_agent::channel::AgentRequestKind::UtilityPrompt,
+                        request_kind: ag_agent::AgentRequestKind::UtilityPrompt,
                         reasoning_level: crate::domain::agent::ReasoningLevel::default(),
                     },
                 )
@@ -902,7 +902,7 @@ impl SessionTaskService {
                 folder: &folder,
                 model: session_agent.model(),
                 prompt: &prompt,
-                request_kind: ag_agent::channel::AgentRequestKind::UtilityPrompt,
+                request_kind: ag_agent::AgentRequestKind::UtilityPrompt,
                 reasoning_level: crate::domain::agent::ReasoningLevel::default(),
             },
         )
@@ -1333,8 +1333,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant, SystemTime};
 
-    use ag_agent::agent::tests::MockAgentBackend;
-    use ag_agent::channel::AgentRequestKind;
+    use ag_agent::{AgentRequestKind, MockAgentBackend};
     use ag_git::{GitError, MockGitClient};
 
     use super::*;

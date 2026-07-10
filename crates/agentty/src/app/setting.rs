@@ -1610,7 +1610,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    use ag_agent::app_server;
+    use ag_agent::MockAppServerClient;
     use ag_forge as forge;
     use ag_git as git;
     use ratatui::widgets::TableState;
@@ -1634,7 +1634,7 @@ mod tests {
             Arc::new(crate::infra::clock::RealClock),
             event_tx,
             crate::app::service::AppServiceDeps {
-                app_server_client_override: Some(Arc::new(app_server::MockAppServerClient::new())),
+                app_server_client_override: Some(Arc::new(MockAppServerClient::new())),
                 available_agent_kinds: AgentKind::ALL.to_vec(),
                 clipboard_image_client_override: None,
                 fs_client: Arc::new(fs::MockFsClient::new()),

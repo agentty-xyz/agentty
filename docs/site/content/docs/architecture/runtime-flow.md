@@ -26,17 +26,17 @@ these constraints:
 
 ## Workspace Map
 
-| Path                      | Responsibility                                                              |
-| ------------------------- | --------------------------------------------------------------------------- |
-| `crates/ag-forge/`        | Shared forge review-request library (`gh`/`glab` adapters).                 |
-| `crates/ag-git/`          | Shared git, worktree, sync, rebase, and merge library.                      |
-| `crates/ag-agent/`        | Shared agent provider models, transports, channels, and app-server routing. |
-| `crates/ag-protocol/`     | Shared structured response protocol and turn prompt payload library.        |
-| `crates/ag-tui-text/`     | Shared markdown, mermaid, wrapping, and truncation text rendering helpers.  |
-| `crates/agentty/`         | Main TUI application crate.                                                 |
-| `crates/testty/`          | TUI end-to-end testing framework.                                           |
-| `crates/ag-xtask/`        | Workspace maintenance and automation commands.                              |
-| `docs/site/content/docs/` | End-user and contributor documentation.                                     |
+| Path                      | Responsibility                                                       |
+| ------------------------- | -------------------------------------------------------------------- |
+| `crates/ag-forge/`        | Shared forge review-request library (`gh`/`glab` adapters).          |
+| `crates/ag-git/`          | Shared git, worktree, sync, rebase, and merge library.               |
+| `crates/ag-agent/`        | Shared agent provider models plus channel and transport boundaries.  |
+| `crates/ag-protocol/`     | Shared structured response protocol and turn prompt payload library. |
+| `crates/ag-tui-text/`     | Shared markdown, mermaid, wrapping, and truncation text helpers.     |
+| `crates/agentty/`         | Main TUI application crate.                                          |
+| `crates/testty/`          | TUI end-to-end testing framework.                                    |
+| `crates/ag-xtask/`        | Workspace maintenance and automation commands.                       |
+| `docs/site/content/docs/` | End-user and contributor documentation.                              |
 
 ## Main Runtime Flow
 
@@ -219,7 +219,7 @@ share the same busy state.
 flowchart TD
   worker["app/session/workflow/worker.rs"]
   turn["app/session/workflow/turn.rs"]
-  factory["create_agent_channel(kind, override)"]
+  factory["ag-agent root factory"]
   provider["Provider registry<br/>ag-agent/src/agent/provider.rs"]
   cli_mode["transport_mode() -> Cli"]
   cli_channel["CliAgentChannel<br/>Antigravity/Claude; subprocess per turn"]
@@ -244,9 +244,9 @@ flowchart TD
 ```
 
 <a id="architecture-key-types"></a> Key types
-(`crates/ag-agent/src/channel/contract.rs`, re-exported by
-`crates/ag-agent/src/channel.rs`, with prompt payloads owned by `ag-protocol` and
-re-exported through `domain/turn_prompt.rs`):
+(`crates/ag-agent/src/channel/contract.rs`, re-exported by the `ag-agent` crate root,
+with prompt payloads owned by `ag-protocol` and re-exported through
+`domain/turn_prompt.rs`):
 
 | Type               | Purpose                                                                                                                                                               |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

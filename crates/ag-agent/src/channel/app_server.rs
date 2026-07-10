@@ -24,7 +24,7 @@ use crate::model::agent::AgentKind;
 /// [`AppServerStreamEvent`]s emitted by the provider are bridged to
 /// [`TurnEvent::ThoughtDelta`] values when transient loader text should be
 /// updated.
-pub struct AppServerAgentChannel {
+pub(crate) struct AppServerAgentChannel {
     /// Provider-specific app-server client.
     client: Arc<dyn AppServerClient>,
     /// Provider kind routed through this channel instance.
@@ -33,7 +33,7 @@ pub struct AppServerAgentChannel {
 
 impl AppServerAgentChannel {
     /// Creates a new app-server channel backed by the given client.
-    pub fn new(client: Arc<dyn AppServerClient>, kind: AgentKind) -> Self {
+    pub(crate) fn new(client: Arc<dyn AppServerClient>, kind: AgentKind) -> Self {
         Self { client, kind }
     }
 }
@@ -233,7 +233,7 @@ async fn parse_or_repair_app_server_response(
         live_transcript: None,
         main_checkout_root: repair_request.main_checkout_root,
         model: repair_request.model,
-        prompt: crate::model::turn_prompt::TurnPrompt::from_agent_data(repair_prompt),
+        prompt: ag_protocol::TurnPrompt::from_agent_data(repair_prompt),
         request_kind: repair_request.request_kind,
         replay_transcript: None,
         provider_conversation_id: repair_provider_conversation_id,
@@ -276,13 +276,13 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
+    use ag_protocol::TurnPromptAttachment;
     use tokio::sync::mpsc;
 
     use super::*;
     use crate::app_server::{AppServerTurnResponse, MockAppServerClient};
     use crate::channel::AgentRequestKind;
     use crate::model::agent::ReasoningLevel;
-    use crate::model::turn_prompt::TurnPromptAttachment;
 
     fn make_turn_request() -> TurnRequest {
         TurnRequest {

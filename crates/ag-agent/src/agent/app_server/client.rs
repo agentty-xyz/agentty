@@ -2,16 +2,14 @@
 
 use std::marker::PhantomData;
 
-use ag_protocol::ProtocolSchemaInstructionMode;
+use ag_protocol::{ProtocolSchemaInstructionMode, TurnPrompt};
 use tokio::sync::mpsc;
 
-use crate::app_server::contract::BorrowedAppServerFuture;
 use crate::app_server::{
     self, AppServerClient, AppServerError, AppServerFuture, AppServerSessionRegistry,
-    AppServerStreamEvent, AppServerTurnRequest, AppServerTurnResponse,
+    AppServerStreamEvent, AppServerTurnRequest, AppServerTurnResponse, BorrowedAppServerFuture,
 };
 use crate::model::agent::ReasoningLevel;
-use crate::model::turn_prompt::TurnPrompt;
 
 /// Provider hook surface for the shared app-server client lifecycle.
 pub(crate) trait RuntimeClientProvider: Send + Sync + 'static {
@@ -163,12 +161,11 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use ag_protocol::ProtocolSchemaInstructionMode;
+    use ag_protocol::{ProtocolSchemaInstructionMode, TurnPrompt};
 
     use super::*;
     use crate::channel::AgentRequestKind;
     use crate::model::agent::ReasoningLevel;
-    use crate::model::turn_prompt::TurnPrompt;
 
     static RUN_COUNT: AtomicUsize = AtomicUsize::new(0);
     static SHUTDOWN_COUNT: AtomicUsize = AtomicUsize::new(0);

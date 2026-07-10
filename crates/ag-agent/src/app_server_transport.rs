@@ -18,7 +18,7 @@ use crate::app_server::AppServerError;
 /// writing JSON-RPC payloads to a child process or reading responses from
 /// its stdout stream.
 #[derive(Debug, thiserror::Error)]
-pub enum AppServerTransportError {
+pub(crate) enum AppServerTransportError {
     /// An IO error occurred during app-server stdio communication.
     #[error("{context}: {source}")]
     Io {
@@ -51,7 +51,7 @@ pub enum AppServerTransportError {
 /// request/response round trip while the runtime initializes tools and model
 /// state, so the shared startup window stays measured in minutes rather than
 /// seconds to avoid aborting healthy app-server bootstraps.
-pub const STARTUP_TIMEOUT: Duration = Duration::from_mins(5);
+pub(crate) const STARTUP_TIMEOUT: Duration = Duration::from_mins(5);
 
 /// Default timeout for a single prompt turn.
 ///
@@ -59,14 +59,14 @@ pub const STARTUP_TIMEOUT: Duration = Duration::from_mins(5);
 /// execute tools, and compact context, so the shared turn window is aligned
 /// with the long-running Codex behavior instead of the shorter bootstrap
 /// timeout.
-pub const TURN_TIMEOUT: Duration = Duration::from_hours(4);
+pub(crate) const TURN_TIMEOUT: Duration = Duration::from_hours(4);
 
 /// Writes one JSON-RPC payload as a newline-delimited line to `stdin`.
 ///
 /// # Errors
 ///
 /// Returns an error when the write or flush to stdin fails.
-pub async fn write_json_line(
+pub(crate) async fn write_json_line(
     stdin: &mut tokio::process::ChildStdin,
     payload: &Value,
 ) -> Result<(), AppServerTransportError> {
@@ -104,7 +104,7 @@ pub async fn write_json_line(
 ///
 /// Returns an error when the read times out or the child process terminates
 /// before a matching response is received.
-pub async fn wait_for_response_line<R>(
+pub(crate) async fn wait_for_response_line<R>(
     stdout_lines: &mut Lines<BufReader<R>>,
     response_id: &str,
 ) -> Result<String, AppServerTransportError>
@@ -138,7 +138,7 @@ where
 }
 
 /// Returns whether a JSON-RPC response line carries the expected `id`.
-pub fn response_id_matches(response_value: &Value, response_id: &str) -> bool {
+pub(crate) fn response_id_matches(response_value: &Value, response_id: &str) -> bool {
     response_value
         .get("id")
         .and_then(Value::as_str)
@@ -146,7 +146,7 @@ pub fn response_id_matches(response_value: &Value, response_id: &str) -> bool {
 }
 
 /// Extracts a top-level `error.message` string from a JSON-RPC error response.
-pub fn extract_json_error_message(response_value: &Value) -> Option<String> {
+pub(crate) fn extract_json_error_message(response_value: &Value) -> Option<String> {
     response_value
         .get("error")
         .and_then(|error| error.get("message"))
@@ -156,7 +156,7 @@ pub fn extract_json_error_message(response_value: &Value) -> Option<String> {
 
 /// Gracefully shuts down a child process by closing stdin, waiting briefly,
 /// then killing if the process has not exited.
-pub async fn shutdown_child(child: &mut tokio::process::Child) {
+pub(crate) async fn shutdown_child(child: &mut tokio::process::Child) {
     // Closing stdin signals the child to exit cleanly.
     drop(child.stdin.take());
 
@@ -182,7 +182,7 @@ pub async fn shutdown_child(child: &mut tokio::process::Child) {
 ///
 /// Returns a provider error when the command cannot be spawned or either
 /// required stdio pipe is unavailable.
-pub fn spawn_runtime_command(
+pub(crate) fn spawn_runtime_command(
     command: std::process::Command,
     runtime_name: &str,
 ) -> Result<

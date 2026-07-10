@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use ag_agent::agent;
+use ag_agent as agent;
 use tracing::warn;
 
 use crate::app::{App, ReviewCacheEntry, diff_content_hash};

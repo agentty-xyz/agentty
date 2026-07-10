@@ -130,7 +130,7 @@ pub async fn submit_one_shot_with_app_server_client(
         live_transcript: None,
         main_checkout_root: None,
         model: request.model.provider_model_str().to_string(),
-        prompt: crate::model::turn_prompt::TurnPrompt::from_agent_data(request.prompt.to_string()),
+        prompt: ag_protocol::TurnPrompt::from_agent_data(request.prompt.to_string()),
         request_kind: request.request_kind.clone(),
         replay_transcript: None,
         provider_conversation_id: None,
@@ -277,7 +277,7 @@ async fn attempt_one_shot_app_server_repair(
         live_transcript: None,
         main_checkout_root: None,
         model: request.model.provider_model_str().to_string(),
-        prompt: crate::model::turn_prompt::TurnPrompt::from_agent_data(repair_prompt),
+        prompt: ag_protocol::TurnPrompt::from_agent_data(repair_prompt),
         request_kind: request.request_kind,
         replay_transcript: None,
         provider_conversation_id: provider_conversation_id.map(String::from),
@@ -318,7 +318,7 @@ async fn execute_one_shot_command(
     prompt: &str,
     request: OneShotRequest<'_>,
 ) -> Result<ParsedResponse, String> {
-    let prompt_payload = crate::model::turn_prompt::TurnPrompt::from_agent_data(prompt.to_string());
+    let prompt_payload = ag_protocol::TurnPrompt::from_agent_data(prompt.to_string());
     let build_request = BuildCommandRequest {
         attachments: &prompt_payload.attachments,
         folder: request.folder,
@@ -458,7 +458,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::agent::tests::MockAgentBackend;
+    use crate::MockAgentBackend;
     use crate::app_server::{AppServerTurnResponse, MockAppServerClient};
 
     /// Builds one shell command that emits controlled stdout/stderr and exits.
