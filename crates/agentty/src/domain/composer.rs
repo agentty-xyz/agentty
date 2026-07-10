@@ -1236,7 +1236,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(labels, vec!["low", "medium", "high", "xhigh"]);
+        assert_eq!(labels, vec!["low", "medium", "high", "xhigh", "max"]);
     }
 
     #[test]

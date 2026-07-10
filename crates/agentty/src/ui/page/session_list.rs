@@ -338,7 +338,7 @@ fn reasoning_level_color(reasoning_level: ReasoningLevel) -> Color {
         ReasoningLevel::Low => style::palette::success(),
         ReasoningLevel::Medium => style::palette::warning(),
         ReasoningLevel::High => style::palette::warning_soft(),
-        ReasoningLevel::XHigh => style::palette::danger(),
+        ReasoningLevel::XHigh | ReasoningLevel::Max => style::palette::danger(),
     }
 }
 
@@ -678,6 +678,7 @@ mod tests {
             (ReasoningLevel::Medium, style::palette::warning()),
             (ReasoningLevel::High, style::palette::warning_soft()),
             (ReasoningLevel::XHigh, style::palette::danger()),
+            (ReasoningLevel::Max, style::palette::danger()),
         ];
 
         // Act & Assert
