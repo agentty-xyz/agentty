@@ -3137,7 +3137,7 @@ mod tests {
                 line.spans
                     .last()
                     .is_some_and(|span| span.content.chars().all(char::is_whitespace)
-                        && span.style.bg == Some(style::palette::surface()))
+                        && span.style.bg == Some(style::palette::surface_prompt()))
             );
         }
     }
@@ -3246,28 +3246,28 @@ mod tests {
         assert_eq!(start_line.width(), 80);
         assert_eq!(
             start_line.spans[0].style.bg,
-            Some(style::palette::surface())
+            Some(style::palette::surface_prompt())
         );
         assert!(start_line.spans.iter().any(|span| {
             span.content.as_ref().trim().is_empty()
-                && span.style.bg == Some(style::palette::surface())
+                && span.style.bg == Some(style::palette::surface_prompt())
         }));
         assert!(
             start_line
                 .spans
                 .iter()
-                .all(|span| span.style.bg == Some(style::palette::surface()))
+                .all(|span| span.style.bg == Some(style::palette::surface_prompt()))
         );
         assert!(border_line.spans.iter().any(|span| {
             span.content.as_ref().contains('┌')
                 && span.style.fg == Some(style::palette::text())
-                && span.style.bg == Some(style::palette::surface())
+                && span.style.bg == Some(style::palette::surface_prompt())
         }));
         assert!(
             border_line
                 .spans
                 .iter()
-                .all(|span| span.style.bg == Some(style::palette::surface()))
+                .all(|span| span.style.bg == Some(style::palette::surface_prompt()))
         );
     }
 
@@ -3315,7 +3315,7 @@ mod tests {
             source_line
                 .spans
                 .iter()
-                .any(|span| span.style.bg == Some(style::palette::surface()))
+                .any(|span| span.style.bg == Some(style::palette::surface_prompt()))
         );
     }
 

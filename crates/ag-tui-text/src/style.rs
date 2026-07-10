@@ -18,7 +18,7 @@ pub struct TextPalette {
     pub info: Color,
     /// Success color used for positive emphasis and stats headings.
     pub success: Color,
-    /// Base surface color used behind prompt transcript blocks.
+    /// Subtle dark surface color used behind prompt transcript blocks.
     pub surface: Color,
     /// Subtle blue-gray surface used behind clarification prompt blocks.
     pub surface_clarification: Color,
@@ -44,7 +44,7 @@ impl TextPalette {
         accent: Color::Cyan,
         info: Color::LightBlue,
         success: Color::Green,
-        surface: Color::DarkGray,
+        surface: Color::Rgb(35, 42, 55),
         surface_clarification: Color::Rgb(28, 38, 48),
         surface_elevated: Color::Black,
         surface_overlay: Color::Black,

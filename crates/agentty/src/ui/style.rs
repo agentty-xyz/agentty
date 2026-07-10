@@ -117,6 +117,16 @@ pub mod palette {
         token_color(|palette| palette.surface_overlay)
     }
 
+    /// Subtle dark slate surface used behind user prompt transcript blocks so
+    /// the block reads as a recessed inset instead of a bright panel.
+    ///
+    /// The default theme pins an RGB value here because ANSI palette colors
+    /// like `DarkGray` can resolve to a light gray in user terminal schemes.
+    #[must_use]
+    pub fn surface_prompt() -> Color {
+        token_color(|palette| palette.surface_prompt)
+    }
+
     /// Primary readable text color.
     #[must_use]
     pub fn text() -> Color {
@@ -197,6 +207,8 @@ pub struct ThemePalette {
     pub surface_success: Color,
     /// Dark surface used to dim background content behind modal overlays.
     pub surface_overlay: Color,
+    /// Subtle dark slate surface used behind user prompt transcript blocks.
+    pub surface_prompt: Color,
     /// Primary readable text color.
     pub text: Color,
     /// Muted text color for secondary copy.
@@ -228,6 +240,7 @@ const CURRENT_PALETTE: ThemePalette = ThemePalette {
     surface_selection: Color::DarkGray,
     surface_success: Color::Rgb(18, 44, 26),
     surface_overlay: Color::Black,
+    surface_prompt: Color::Rgb(35, 42, 55),
     text: Color::White,
     text_muted: Color::Gray,
     text_subtle: Color::DarkGray,
@@ -254,6 +267,7 @@ const HACKER_PALETTE: ThemePalette = ThemePalette {
     surface_selection: Color::Rgb(6, 18, 8),
     surface_success: Color::Rgb(12, 38, 17),
     surface_overlay: Color::Black,
+    surface_prompt: Color::Rgb(6, 18, 8),
     text: Color::Rgb(205, 245, 211),
     text_muted: Color::Rgb(126, 159, 120),
     text_subtle: Color::Rgb(54, 88, 58),
@@ -288,6 +302,7 @@ const DARK_HORIZON_PALETTE: ThemePalette = ThemePalette {
     surface_selection: Color::Rgb(45, 50, 68),
     surface_success: Color::Rgb(28, 64, 54),
     surface_overlay: Color::Rgb(14, 16, 22),
+    surface_prompt: Color::Rgb(22, 24, 31),
     text: Color::Rgb(214, 217, 232),
     text_muted: Color::Rgb(132, 136, 168),
     text_subtle: Color::Rgb(96, 100, 128),
@@ -346,7 +361,7 @@ pub(crate) fn text_render_settings() -> TextRenderSettings {
         palette: TextPalette {
             accent: palette.accent,
             info: palette.info,
-            surface: palette.surface,
+            surface: palette.surface_prompt,
             surface_clarification: palette.surface_clarification,
             surface_elevated: palette.surface_elevated,
             surface_overlay: palette.surface_overlay,
@@ -541,6 +556,7 @@ mod tests {
         // Assert
         assert_eq!(palette.surface, Color::DarkGray);
         assert_eq!(palette.surface_elevated, Color::Black);
+        assert_eq!(palette.surface_prompt, Color::Rgb(35, 42, 55));
         assert_eq!(palette.border, Color::Gray);
         assert_eq!(palette.text, Color::White);
     }
