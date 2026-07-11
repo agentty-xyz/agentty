@@ -252,6 +252,11 @@ impl SessionManager {
             .resolve_default_session_agent(services, project_id)
             .await;
         let session_model = session_agent.model();
+        let reasoning_level = services
+            .db()
+            .settings()
+            .load_project_reasoning_level(project_id)
+            .await?;
         self.default_session_model = session_model;
 
         let session_id = Uuid::new_v4().to_string();
@@ -262,38 +267,23 @@ impl SessionManager {
             )));
         }
 
-        let insert_result = if let Some(parent_session_id) = parent_session_id {
-            let session_agent_kind = session_agent.kind().to_string();
-            services
-                .db()
-                .sessions()
-                .insert_stacked_draft_session_with_agent(
-                    &session_id,
-                    db::PersistedSessionAgentModel {
-                        agent: &session_agent_kind,
-                        model: session_model.as_str(),
-                    },
-                    base_branch,
-                    &Status::Draft.to_string(),
-                    parent_session_id,
-                    project_id,
-                )
-                .await
-        } else {
-            let session_agent_kind = session_agent.kind().to_string();
-            services
-                .db()
-                .sessions()
-                .insert_draft_session_with_agent(
-                    &session_id,
-                    &session_agent_kind,
-                    session_model.as_str(),
-                    base_branch,
-                    &Status::Draft.to_string(),
-                    project_id,
-                )
-                .await
-        };
+        let session_agent_kind = session_agent.kind().to_string();
+        let status = Status::Draft.to_string();
+        let insert_result = services
+            .db()
+            .sessions()
+            .insert_session_with_agent(db::PersistedSessionCreation {
+                agent: &session_agent_kind,
+                base_branch,
+                id: &session_id,
+                is_draft: true,
+                model: session_model.as_str(),
+                parent_session_id,
+                project_id,
+                reasoning_level,
+                status: &status,
+            })
+            .await;
 
         insert_result.map_err(|error| {
             SessionError::Workflow(format!("Failed to save session metadata: {error}"))
@@ -438,6 +428,11 @@ impl SessionManager {
             .resolve_default_session_agent(services, projects.active_project_id())
             .await;
         let session_model = session_agent.model();
+        let reasoning_level = services
+            .db()
+            .settings()
+            .load_project_reasoning_level(projects.active_project_id())
+            .await?;
         self.default_session_model = session_model;
 
         let session_id = Uuid::new_v4().to_string();
@@ -470,17 +465,21 @@ impl SessionManager {
         .await?;
 
         let session_agent_kind = session_agent.kind().to_string();
+        let status = Status::Draft.to_string();
         if let Err(error) = services
             .db()
             .sessions()
-            .insert_session_with_agent(
-                &session_id,
-                &session_agent_kind,
-                session_model.as_str(),
+            .insert_session_with_agent(db::PersistedSessionCreation {
+                agent: &session_agent_kind,
                 base_branch,
-                &Status::Draft.to_string(),
-                projects.active_project_id(),
-            )
+                id: &session_id,
+                is_draft: false,
+                model: session_model.as_str(),
+                parent_session_id: None,
+                project_id: projects.active_project_id(),
+                reasoning_level,
+                status: &status,
+            })
             .await
         {
             self.rollback_failed_session_creation(
@@ -1334,10 +1333,7 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Updates and persists the reasoning override for a single session.
-    ///
-    /// Passing `None` clears the override so future turns inherit the active
-    /// project default reasoning level.
+    /// Updates and persists the reasoning level for a single session.
     ///
     /// # Errors
     /// Returns an error if the session is missing or persistence fails.
@@ -1345,22 +1341,18 @@ impl SessionManager {
         &mut self,
         services: &AppServices,
         session_id: &str,
-        reasoning_level_override: Option<ReasoningLevel>,
+        reasoning_level: ReasoningLevel,
     ) -> Result<(), SessionError> {
         self.session_index_or_err(session_id)?;
 
         services
             .db()
             .sessions()
-            .update_session_reasoning_level(
-                session_id,
-                reasoning_level_override
-                    .map(|reasoning_level| reasoning_level.as_str().to_string()),
-            )
+            .update_session_reasoning_level(session_id, reasoning_level)
             .await?;
 
         services.emit_app_event(AppEvent::SessionReasoningLevelUpdated {
-            reasoning_level_override,
+            reasoning_level,
             session_id: SessionId::from(session_id),
         });
 
@@ -3282,9 +3274,9 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Ensures `set_session_reasoning_level()` persists the override and
+    /// Ensures `set_session_reasoning_level()` persists the level and
     /// emits the matching reducer event.
-    async fn test_set_session_reasoning_level_persists_override_and_emits_event() {
+    async fn test_set_session_reasoning_level_persists_level_and_emits_event() {
         // Arrange
         let session = test_session("Prompt", Status::Review, Some("Title"), "");
         let database = database_with_session(&session).await;
@@ -3297,24 +3289,24 @@ mod tests {
 
         // Act
         session_manager
-            .set_session_reasoning_level(&services, "session-id", Some(ReasoningLevel::High))
+            .set_session_reasoning_level(&services, "session-id", ReasoningLevel::High)
             .await
             .expect("reasoning level update should succeed");
         let persisted_reasoning_level = database
             .sessions()
-            .load_session_reasoning_level_override("session-id")
+            .load_session_reasoning_level("session-id")
             .await
-            .expect("reasoning override should load");
+            .expect("reasoning level should load");
         let emitted_event = event_rx
             .try_recv()
             .expect("expected reasoning update event");
 
         // Assert
-        assert_eq!(persisted_reasoning_level, Some(ReasoningLevel::High));
+        assert_eq!(persisted_reasoning_level, ReasoningLevel::High);
         assert_eq!(
             emitted_event,
             AppEvent::SessionReasoningLevelUpdated {
-                reasoning_level_override: Some(ReasoningLevel::High),
+                reasoning_level: ReasoningLevel::High,
                 session_id: "session-id".into(),
             }
         );

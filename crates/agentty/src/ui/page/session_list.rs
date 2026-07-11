@@ -306,9 +306,9 @@ pub(crate) fn model_column_width(
 /// Formats model name together with the effective reasoning level label.
 fn session_model_and_reasoning_level(
     session: &Session,
-    default_reasoning_level: ReasoningLevel,
+    _default_reasoning_level: ReasoningLevel,
 ) -> String {
-    let reasoning_level = session.effective_reasoning_level(default_reasoning_level);
+    let reasoning_level = session.effective_reasoning_level();
 
     format!(
         "{} [{}]",
@@ -320,9 +320,9 @@ fn session_model_and_reasoning_level(
 /// Builds a styled model column cell where the reasoning label is colorized.
 fn session_model_and_reasoning_level_line(
     session: &Session,
-    default_reasoning_level: ReasoningLevel,
+    _default_reasoning_level: ReasoningLevel,
 ) -> Line<'static> {
-    let reasoning_level = session.effective_reasoning_level(default_reasoning_level);
+    let reasoning_level = session.effective_reasoning_level();
     let color = reasoning_level_color(reasoning_level);
 
     Line::from(vec![
@@ -679,6 +679,7 @@ mod tests {
             crate::domain::agent::AgentKind::Claude,
             AgentModel::ClaudeSonnet5,
         );
+        default_session.reasoning_level_override = Some(ReasoningLevel::Low);
         let mut medium_session =
             crate::test_support::titled_session_fixture("active-2", Status::Review);
         medium_session.agent = crate::domain::agent::AgentSelection::new(
@@ -779,7 +780,7 @@ mod tests {
     }
 
     #[test]
-    fn test_render_session_row_shows_model_with_default_reasoning_level() {
+    fn test_render_session_row_shows_model_with_persisted_reasoning_level() {
         // Arrange
         let backend = ratatui::backend::TestBackend::new(100, 12);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
@@ -790,12 +791,13 @@ mod tests {
             crate::domain::agent::AgentKind::Codex,
             AgentModel::Gpt55,
         );
+        session.reasoning_level_override = Some(ReasoningLevel::Medium);
         let sessions = vec![session];
 
         // Act
         terminal
             .draw(|frame| {
-                SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::Medium, 0)
+                SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::XHigh, 0)
                     .render(frame, frame.area());
             })
             .expect("failed to draw");

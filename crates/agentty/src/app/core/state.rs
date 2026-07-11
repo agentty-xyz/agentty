@@ -988,17 +988,17 @@ impl App {
         Ok(())
     }
 
-    /// Persists and applies a reasoning override for a session.
+    /// Persists and applies a reasoning level for a session.
     ///
     /// # Errors
     /// Returns an error if persistence fails.
     pub async fn set_session_reasoning_level(
         &mut self,
         session_id: &str,
-        reasoning_level_override: Option<ReasoningLevel>,
+        reasoning_level: ReasoningLevel,
     ) -> Result<(), AppError> {
         self.sessions
-            .set_session_reasoning_level(&self.services, session_id, reasoning_level_override)
+            .set_session_reasoning_level(&self.services, session_id, reasoning_level)
             .await?;
         self.process_pending_app_events().await;
 

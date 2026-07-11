@@ -34,12 +34,27 @@ pub struct SessionTurnMetadata {
     pub(crate) token_usage_delta: SessionStats,
 }
 
-/// Borrowed persisted agent/model pair for newly inserted session rows.
-pub struct PersistedSessionAgentModel<'a> {
+/// Borrowed values used to persist a newly created session with explicit
+/// provider identity and reasoning configuration.
+pub struct PersistedSessionCreation<'a> {
     /// Persisted agent provider kind for the session.
     pub agent: &'a str,
+    /// Base branch or parent branch used for future worktree materialization.
+    pub base_branch: &'a str,
+    /// Stable session identifier.
+    pub id: &'a str,
+    /// Whether the row was created through explicit draft staging.
+    pub is_draft: bool,
     /// Persisted model identifier for the session.
     pub model: &'a str,
+    /// Optional parent session id for one-level stacked drafts.
+    pub parent_session_id: Option<&'a str>,
+    /// Owning project identifier.
+    pub project_id: i64,
+    /// Reasoning level captured from the project default at creation.
+    pub reasoning_level: ReasoningLevel,
+    /// Initial lifecycle status string.
+    pub status: &'a str,
 }
 
 /// Borrowed identifiers used to persist one forked session snapshot.
@@ -249,35 +264,11 @@ pub trait SessionRepository: Send + Sync {
         project_id: i64,
     ) -> Result<(), DbError>;
 
-    /// Inserts a newly created draft-session row with explicit provider
-    /// identity.
-    async fn insert_draft_session_with_agent(
-        &self,
-        id: &str,
-        agent: &str,
-        model: &str,
-        base_branch: &str,
-        status: &str,
-        project_id: i64,
-    ) -> Result<(), DbError>;
-
     /// Inserts a newly created stacked draft-session row.
     async fn insert_stacked_draft_session(
         &self,
         id: &str,
         model: &str,
-        base_branch: &str,
-        status: &str,
-        parent_session_id: &str,
-        project_id: i64,
-    ) -> Result<(), DbError>;
-
-    /// Inserts a newly created stacked draft-session row with explicit provider
-    /// identity.
-    async fn insert_stacked_draft_session_with_agent(
-        &self,
-        id: &str,
-        agent_model: PersistedSessionAgentModel<'_>,
         base_branch: &str,
         status: &str,
         parent_session_id: &str,
@@ -297,12 +288,7 @@ pub trait SessionRepository: Send + Sync {
     /// Inserts a newly created session row with explicit provider identity.
     async fn insert_session_with_agent(
         &self,
-        id: &str,
-        agent: &str,
-        model: &str,
-        base_branch: &str,
-        status: &str,
-        project_id: i64,
+        session: PersistedSessionCreation<'_>,
     ) -> Result<(), DbError>;
 
     /// Inserts a new session by snapshotting source metadata and ordered
@@ -379,11 +365,11 @@ pub trait SessionRepository: Send + Sync {
         parent_commit_hash: Option<String>,
     ) -> Result<Vec<String>, DbError>;
 
-    /// Loads the persisted session-specific reasoning override, when present.
-    async fn load_session_reasoning_level_override(
+    /// Loads the persisted session reasoning level.
+    async fn load_session_reasoning_level(
         &self,
         session_id: &str,
-    ) -> Result<Option<ReasoningLevel>, DbError>;
+    ) -> Result<ReasoningLevel, DbError>;
 
     /// Loads the persisted summary text associated with one session.
     async fn load_session_summary(&self, session_id: &str) -> Result<Option<String>, DbError>;
@@ -480,11 +466,11 @@ pub trait SessionRepository: Send + Sync {
     /// Updates the model clarification questions for a session row.
     async fn update_session_questions(&self, id: &str, questions: &str) -> Result<(), DbError>;
 
-    /// Updates the persisted session-specific reasoning override.
+    /// Updates the persisted session reasoning level.
     async fn update_session_reasoning_level(
         &self,
         id: &str,
-        reasoning_level: Option<String>,
+        reasoning_level: ReasoningLevel,
     ) -> Result<(), DbError>;
 
     /// Updates the persisted upstream reference for a published session
@@ -1035,31 +1021,7 @@ WHERE id = ?
                 model,
                 parent_session_id: None,
                 project_id,
-                status,
-            },
-        )
-        .await
-    }
-
-    async fn insert_draft_session_with_agent(
-        &self,
-        id: &str,
-        agent: &str,
-        model: &str,
-        base_branch: &str,
-        status: &str,
-        project_id: i64,
-    ) -> Result<(), DbError> {
-        insert_session_with_draft_mode(
-            &self.0,
-            InsertSessionRow {
-                agent,
-                base_branch,
-                id,
-                is_draft: true,
-                model,
-                parent_session_id: None,
-                project_id,
+                reasoning_level: ReasoningLevel::default(),
                 status,
             },
         )
@@ -1087,33 +1049,7 @@ WHERE id = ?
                 model,
                 parent_session_id: Some(parent_session_id),
                 project_id,
-                status,
-            },
-        )
-        .await
-    }
-
-    async fn insert_stacked_draft_session_with_agent(
-        &self,
-        id: &str,
-        agent_model: PersistedSessionAgentModel<'_>,
-        base_branch: &str,
-        status: &str,
-        parent_session_id: &str,
-        project_id: i64,
-    ) -> Result<(), DbError> {
-        let PersistedSessionAgentModel { agent, model } = agent_model;
-
-        insert_session_with_draft_mode(
-            &self.0,
-            InsertSessionRow {
-                agent,
-                base_branch,
-                id,
-                is_draft: true,
-                model,
-                parent_session_id: Some(parent_session_id),
-                project_id,
+                reasoning_level: ReasoningLevel::default(),
                 status,
             },
         )
@@ -1140,6 +1076,7 @@ WHERE id = ?
                 model,
                 parent_session_id: None,
                 project_id,
+                reasoning_level: ReasoningLevel::default(),
                 status,
             },
         )
@@ -1148,23 +1085,31 @@ WHERE id = ?
 
     async fn insert_session_with_agent(
         &self,
-        id: &str,
-        agent: &str,
-        model: &str,
-        base_branch: &str,
-        status: &str,
-        project_id: i64,
+        session: PersistedSessionCreation<'_>,
     ) -> Result<(), DbError> {
+        let PersistedSessionCreation {
+            agent,
+            base_branch,
+            id,
+            is_draft,
+            model,
+            parent_session_id,
+            project_id,
+            reasoning_level,
+            status,
+        } = session;
+
         insert_session_with_draft_mode(
             &self.0,
             InsertSessionRow {
                 agent,
                 base_branch,
                 id,
-                is_draft: false,
+                is_draft,
                 model,
-                parent_session_id: None,
+                parent_session_id,
                 project_id,
+                reasoning_level,
                 status,
             },
         )
@@ -1487,10 +1432,10 @@ WHERE id = ?
         Ok(row.flatten())
     }
 
-    async fn load_session_reasoning_level_override(
+    async fn load_session_reasoning_level(
         &self,
         session_id: &str,
-    ) -> Result<Option<ReasoningLevel>, DbError> {
+    ) -> Result<ReasoningLevel, DbError> {
         let value = sqlx::query_scalar!(
             r"SELECT reasoning_level FROM session WHERE id = ?",
             session_id
@@ -1499,7 +1444,9 @@ WHERE id = ?
         .await?
         .flatten();
 
-        Ok(value.and_then(|value| value.parse::<ReasoningLevel>().ok()))
+        Ok(value
+            .and_then(|value| value.parse::<ReasoningLevel>().ok())
+            .unwrap_or_default())
     }
 
     async fn restack_child_sessions_after_parent_merge(
@@ -1931,7 +1878,7 @@ WHERE id = ?
     async fn update_session_reasoning_level(
         &self,
         id: &str,
-        reasoning_level: Option<String>,
+        reasoning_level: ReasoningLevel,
     ) -> Result<(), DbError> {
         sqlx::query!(
             r#"
@@ -1939,7 +1886,7 @@ UPDATE session
 SET reasoning_level = ?
 WHERE id = ?
             "#,
-            reasoning_level,
+            reasoning_level.as_str(),
             id
         )
         .execute(&self.0)
@@ -2152,6 +2099,8 @@ struct InsertSessionRow<'a> {
     parent_session_id: Option<&'a str>,
     /// Owning project identifier.
     project_id: i64,
+    /// Reasoning level captured from the project default at creation.
+    reasoning_level: ReasoningLevel,
     /// Initial lifecycle status string.
     status: &'a str,
 }
@@ -2170,6 +2119,7 @@ async fn insert_session_with_draft_mode(
         model,
         parent_session_id,
         project_id,
+        reasoning_level,
         status,
     } = row;
 
@@ -2184,9 +2134,10 @@ INSERT INTO session (
     is_draft,
     parent_session_id,
     project_id,
+    reasoning_level,
     prompt
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ",
     )
     .bind(id)
@@ -2197,6 +2148,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     .bind(is_draft)
     .bind(parent_session_id)
     .bind(project_id)
+    .bind(reasoning_level.as_str())
     .bind("")
     .execute(pool)
     .await?;

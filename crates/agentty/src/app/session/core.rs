@@ -389,12 +389,12 @@ impl SessionManager {
         }
     }
 
-    /// Applies one persisted reasoning override update to the matching
+    /// Applies one persisted reasoning-level update to the matching
     /// in-memory session snapshot.
     pub(crate) fn apply_session_reasoning_level_updated(
         &mut self,
         session_id: &str,
-        reasoning_level_override: Option<ReasoningLevel>,
+        reasoning_level: ReasoningLevel,
     ) {
         if let Some(session) = self
             .state
@@ -402,7 +402,7 @@ impl SessionManager {
             .iter_mut()
             .find(|session| session.id == session_id)
         {
-            session.reasoning_level_override = reasoning_level_override;
+            session.reasoning_level_override = Some(reasoning_level);
         }
     }
 

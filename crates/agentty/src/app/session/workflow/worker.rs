@@ -258,10 +258,7 @@ impl SessionWorkerRebaseAssistClient {
     /// cannot be persisted.
     async fn run_assist_turn(&self, prompt: String) -> Result<(), SessionError> {
         let turn_cancel_token = self.fresh_turn_cancel_token()?;
-        let session_project_id = turn::load_session_project_id(&self.db, &self.session_id).await;
-        let reasoning_level =
-            turn::load_session_reasoning_level(&self.db, &self.session_id, session_project_id)
-                .await;
+        let reasoning_level = turn::load_session_reasoning_level(&self.db, &self.session_id).await;
         let provider_conversation_id = self
             .db
             .sessions()

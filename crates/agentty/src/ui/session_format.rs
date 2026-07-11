@@ -139,7 +139,7 @@ fn session_header_metadata_lines(
 /// single-line metadata renderers.
 fn session_metadata_base_text(
     session: &Session,
-    default_reasoning_level: ReasoningLevel,
+    _default_reasoning_level: ReasoningLevel,
     wall_clock_unix_seconds: i64,
 ) -> String {
     let added_lines = session.stats.added_lines;
@@ -147,7 +147,7 @@ fn session_metadata_base_text(
     let timer = text_util::format_duration_compact(
         session.in_progress_duration_seconds(wall_clock_unix_seconds),
     );
-    let reasoning_level = session.effective_reasoning_level(default_reasoning_level);
+    let reasoning_level = session.effective_reasoning_level();
     let input_tokens = text_util::format_token_count(session.stats.input_tokens);
     let output_tokens = text_util::format_token_count(session.stats.output_tokens);
     format!(
