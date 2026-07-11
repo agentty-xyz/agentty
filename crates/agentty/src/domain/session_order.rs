@@ -28,8 +28,6 @@ pub enum SessionTreePosition {
 pub enum GroupedSessionRow<'a> {
     /// Non-selectable row that labels the following group.
     GroupLabel(SessionGroup),
-    /// Non-selectable placeholder shown when a group has no sessions.
-    EmptyGroupPlaceholder,
     /// Selectable session row in raw-session-index terms.
     Session {
         /// Raw index into the ungrouped session snapshot.
@@ -103,15 +101,15 @@ pub fn selectable_session_indexes(sessions: &[Session]) -> Vec<usize> {
         .into_iter()
         .filter_map(|row| match row {
             GroupedSessionRow::Session { index, .. } => Some(index),
-            GroupedSessionRow::GroupLabel(_) | GroupedSessionRow::EmptyGroupPlaceholder => None,
+            GroupedSessionRow::GroupLabel(_) => None,
         })
         .collect()
 }
 
-/// Returns grouped display rows with merge queue, active, then archive
-/// sessions.
+/// Returns populated grouped display rows with merge queue, active, then
+/// archive sessions.
 pub fn grouped_session_rows(sessions: &[Session]) -> Vec<GroupedSessionRow<'_>> {
-    let mut rows = Vec::with_capacity(sessions.len() + 6);
+    let mut rows = Vec::with_capacity(sessions.len() + 3);
     let stacked_children = stacked_child_index(sessions);
     append_group_rows(
         &mut rows,
@@ -149,19 +147,22 @@ fn stacked_child_index(sessions: &[Session]) -> StackedChildIndex<'_> {
     children_by_parent
 }
 
-/// Adds one group label row and either its sessions or an empty placeholder.
+/// Adds one populated group and its sessions.
 fn append_group_rows<'a>(
     rows: &mut Vec<GroupedSessionRow<'a>>,
     sessions: &'a [Session],
     stacked_children: &StackedChildIndex<'a>,
     group: SessionGroup,
 ) {
-    rows.push(GroupedSessionRow::GroupLabel(group));
-
     let mut group_has_sessions = false;
     for (index, session) in sessions_for_group(sessions, group) {
         if has_loaded_parent_session_in_group(sessions, session, group) {
             continue;
+        }
+
+        if !group_has_sessions {
+            rows.push(GroupedSessionRow::GroupLabel(group));
+            group_has_sessions = true;
         }
 
         rows.push(GroupedSessionRow::Session {
@@ -170,11 +171,6 @@ fn append_group_rows<'a>(
             tree_position: SessionTreePosition::Root,
         });
         append_stacked_child_rows(rows, stacked_children, session.id.as_str(), group);
-        group_has_sessions = true;
-    }
-
-    if !group_has_sessions {
-        rows.push(GroupedSessionRow::EmptyGroupPlaceholder);
     }
 }
 
@@ -419,7 +415,6 @@ mod tests {
             .into_iter()
             .map(|row| match row {
                 GroupedSessionRow::GroupLabel(group) => format!("{group:?}"),
-                GroupedSessionRow::EmptyGroupPlaceholder => "empty".to_string(),
                 GroupedSessionRow::Session { session, .. } => session.id.to_string(),
             })
             .collect::<Vec<_>>();
@@ -442,7 +437,7 @@ mod tests {
     }
 
     #[test]
-    fn test_grouped_session_rows_includes_placeholder_for_groups_without_sessions() {
+    fn test_grouped_session_rows_omits_groups_without_sessions() {
         // Arrange
         let sessions = vec![
             crate::test_support::titled_session_fixture("active-1", Status::Review),
@@ -454,7 +449,6 @@ mod tests {
             .into_iter()
             .map(|row| match row {
                 GroupedSessionRow::GroupLabel(group) => format!("{group:?}"),
-                GroupedSessionRow::EmptyGroupPlaceholder => "empty".to_string(),
                 GroupedSessionRow::Session { session, .. } => session.id.to_string(),
             })
             .collect::<Vec<_>>();
@@ -463,15 +457,23 @@ mod tests {
         assert_eq!(
             labels_and_ids,
             vec![
-                "MergeQueue".to_string(),
-                "empty".to_string(),
                 "Active".to_string(),
                 "active-1".to_string(),
                 "active-2".to_string(),
-                "Archive".to_string(),
-                "empty".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn test_grouped_session_rows_returns_no_rows_without_sessions() {
+        // Arrange
+        let sessions = Vec::new();
+
+        // Act
+        let rows = grouped_session_rows(&sessions);
+
+        // Assert
+        assert!(rows.is_empty());
     }
 
     #[test]
@@ -498,7 +500,7 @@ mod tests {
                     tree_position,
                     ..
                 } => Some((session.id.to_string(), tree_position)),
-                GroupedSessionRow::GroupLabel(_) | GroupedSessionRow::EmptyGroupPlaceholder => None,
+                GroupedSessionRow::GroupLabel(_) => None,
             })
             .collect::<Vec<_>>();
 
@@ -536,7 +538,6 @@ mod tests {
             .into_iter()
             .map(|row| match row {
                 GroupedSessionRow::GroupLabel(group) => format!("{group:?}"),
-                GroupedSessionRow::EmptyGroupPlaceholder => "empty".to_string(),
                 GroupedSessionRow::Session {
                     session,
                     tree_position,
@@ -549,8 +550,6 @@ mod tests {
         assert_eq!(
             labels_positions_and_ids,
             vec![
-                "MergeQueue".to_string(),
-                "empty".to_string(),
                 "Active".to_string(),
                 "parent-1:Root".to_string(),
                 "Archive".to_string(),
@@ -576,7 +575,6 @@ mod tests {
             .into_iter()
             .map(|row| match row {
                 GroupedSessionRow::GroupLabel(group) => format!("{group:?}"),
-                GroupedSessionRow::EmptyGroupPlaceholder => "empty".to_string(),
                 GroupedSessionRow::Session {
                     session,
                     tree_position,
@@ -589,10 +587,6 @@ mod tests {
         assert_eq!(
             labels_positions_and_ids,
             vec![
-                "MergeQueue".to_string(),
-                "empty".to_string(),
-                "Active".to_string(),
-                "empty".to_string(),
                 "Archive".to_string(),
                 "parent-1:Root".to_string(),
                 "child-1:Child { is_last: true }".to_string(),
