@@ -18,10 +18,8 @@ mod render_cache;
 pub mod review_comment_format;
 pub mod router;
 pub mod session_format;
-pub mod state;
 /// Shared theme-aware UI styling helpers and status-display helpers.
 pub mod style;
-pub mod text_util;
 
 pub(crate) use app_render::render_app;
 /// A trait for UI components that enforces a standard rendering interface.

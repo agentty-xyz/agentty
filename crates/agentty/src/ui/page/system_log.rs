@@ -2,6 +2,7 @@
 
 use std::collections::VecDeque;
 
+use ag_tui_text::text_util::inline_text;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -13,7 +14,6 @@ use crate::domain::system_log::{
     SYSTEM_LOG_LIMIT, SystemLogBuffer, SystemLogEntry, SystemLogLevel,
 };
 use crate::presentation::help_action;
-use crate::ui::text_util::inline_text;
 use crate::ui::{Page, layout, style};
 
 /// Renders the process-local system log page.

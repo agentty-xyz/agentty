@@ -1,11 +1,12 @@
 //! Question-mode text and footer formatting.
 
+use ag_tui_text::text_util;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::presentation::app_mode::QuestionFocus;
 use crate::presentation::help_action;
-use crate::ui::{style, text_util};
+use crate::ui::style;
 
 /// Returns wrapped question-panel lines with the correct focus styling.
 pub(crate) fn question_panel_lines(

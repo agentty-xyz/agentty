@@ -1,3 +1,4 @@
+use ag_tui_text::text_util::truncate_with_ellipsis;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
@@ -5,7 +6,6 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
 use crate::ui::style::palette;
-use crate::ui::text_util::truncate_with_ellipsis;
 use crate::ui::{Component, overlay};
 
 const MIN_OVERLAY_HEIGHT: u16 = 9;

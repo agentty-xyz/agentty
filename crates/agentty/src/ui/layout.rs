@@ -1,6 +1,7 @@
+use ag_tui_text::text_util;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
-use crate::ui::{input_layout, text_util};
+use crate::ui::input_layout;
 
 const CHAT_INPUT_MIN_PANEL_HEIGHT: u16 = CHAT_INPUT_BORDER_HEIGHT + 1;
 const CHAT_INPUT_BORDER_HEIGHT: u16 = 2;

@@ -1,12 +1,12 @@
 use ag_forge::AssignedIssue;
+use ag_tui_text::text_util::inline_text;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 
 use crate::app::AssignedIssueState;
-use crate::ui::state::help_action;
-use crate::ui::text_util::inline_text;
+use crate::presentation::help_action;
 use crate::ui::{Page, layout, style};
 
 /// Horizontal spacing between assigned-issue table columns.

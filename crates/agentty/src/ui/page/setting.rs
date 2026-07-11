@@ -1,3 +1,4 @@
+use ag_tui_text::text_util::truncate_with_ellipsis;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -6,7 +7,6 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, 
 
 use crate::app::setting::{SettingsManager, SettingsSelectorDropdown};
 use crate::presentation::help_action;
-use crate::ui::text_util::truncate_with_ellipsis;
 use crate::ui::{Component, Page, component, layout, overlay, style};
 
 /// Uses row-background highlighting without a textual cursor glyph.

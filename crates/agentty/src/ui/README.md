@@ -31,7 +31,7 @@ concerns** design pattern, splitting rendering logic by page and component type.
   table-column geometry.
 - **`prompt_format.rs`**, **`question_format.rs`**, and **`session_format.rs`**:
   Domain-aware display formatting for prompt, clarification, and session surfaces.
-- **`text_util.rs`**, **`diff_util.rs`**, and **`activity_heatmap.rs`**: Focused shared
-  presentation helpers.
+- **`diff_util.rs`** and **`activity_heatmap.rs`**: Focused shared presentation helpers.
+  Reusable terminal text operations live in `ag-tui-text`.
 
 For maintenance procedures and development guidelines, see `AGENTS.md`.

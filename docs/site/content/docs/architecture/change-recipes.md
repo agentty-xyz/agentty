@@ -42,8 +42,8 @@ through the correct modules without crossing layer boundaries.
 1. Update the handler in `crates/agentty/src/runtime/mode/`, or in
    `crates/agentty/src/runtime/key_handler.rs` when the interaction is a cross-mode
    overlay dispatch.
-1. If a new mode/state is needed, extend `crates/agentty/src/ui/state/app_mode.rs`.
-1. If help content changes, update `crates/agentty/src/ui/state/help_action.rs` as
+1. If a new mode/state is needed, extend `crates/agentty/src/presentation/app_mode.rs`.
+1. If help content changes, update `crates/agentty/src/presentation/help_action.rs` as
    needed.
 1. Update `docs/site/content/docs/usage/keybindings.md`.
 
@@ -62,7 +62,7 @@ through the correct modules without crossing layer boundaries.
    `crates/agentty/src/ui/component/`.
 1. Wire the page into `crates/agentty/src/ui/router.rs`.
 1. If a new `AppMode` is needed, extend the shared presentation contract implemented in
-   `crates/agentty/src/ui/state/app_mode.rs` and exported through
+   `crates/agentty/src/presentation/app_mode.rs` and exported through
    `crates/agentty/src/presentation.rs`, then add a key handler in
    `crates/agentty/src/runtime/mode/`.
 
