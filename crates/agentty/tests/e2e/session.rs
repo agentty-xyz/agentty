@@ -2598,12 +2598,6 @@ fn session_view_mermaid_output() -> E2eResult {
     FeatureTest::new("session_mermaid_output")
         .with_terminal_size(160, 72)
         .setup(seed_session_with_mermaid_output)
-        .zola(
-            "Mermaid diagrams in chat",
-            "Agent replies that contain mermaid flowcharts, ER diagrams, or sequence diagrams \
-             render as Unicode diagrams directly in the session chat.",
-            43,
-        )
         .run(
             |scenario| {
                 scenario

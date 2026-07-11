@@ -175,11 +175,6 @@ fn draft_session_cancel_confirmation() -> E2eResult {
     FeatureTest::new("draft_session_cancel")
         .with_git()
         .setup(seed_cancelable_draft_session)
-        .zola(
-            "Draft session cancel",
-            "Cancel an unstarted draft session from the session list before it creates a worktree.",
-            141,
-        )
         .run(
             |scenario| {
                 scenario
