@@ -13,7 +13,7 @@ For keyboard shortcuts by view, see [Keybindings](@/docs/usage/keybindings.md).
 
 ## Interface Layout
 
-<a id="usage-interface-layout"></a> Agentty organizes its interface into five primary
+<a id="usage-interface-layout"></a> Agentty organizes its interface into six primary
 tabs, all accessible with `Tab`:
 
 - **Projects**: Select between projects (git repositories) in a dashboard view with an
@@ -28,6 +28,10 @@ tabs, all accessible with `Tab`:
 - **Inbox**: Read-only list of open GitHub pull requests or GitLab merge requests that
   request your review in the active project, including drafts. Press `s` to refresh and
   `Enter` to open a read-only detail page with the description and comment threads.
+- **Issues**: List-only view of open GitHub issues assigned to the user authenticated
+  with `gh` in the active project repository. Press `s` to refresh and use `j` / `k` to
+  move through the first `100` results; issue details are not available in this
+  iteration.
 - **Settings**: Configure the color theme, default reasoning level, smart/fast/review
   model defaults, the optional `Last used model as default` mode, the session commit
   coauthor trailer, and `Launch Configurations` for the active project.

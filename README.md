@@ -124,6 +124,10 @@ agentty --help       # Show supported command-line options
 agentty --version    # Show the installed Agentty version
 ```
 
+The list-only **Issues** tab uses the GitHub CLI to show open issues assigned to the
+authenticated user in the active project. Install `gh` and run `gh auth login` to enable
+it.
+
 ## Documentation
 
 Documentation for installation and workflows is available at

@@ -66,6 +66,45 @@ struct ReviewAssistPromptTemplate<'a> {
 }
 
 impl TaskService {
+    /// Spawns an assigned GitHub issue refresh for the active project.
+    pub(super) fn spawn_assigned_issues_task(
+        generation: u64,
+        project_id: i64,
+        working_dir: PathBuf,
+        app_event_tx: mpsc::UnboundedSender<AppEvent>,
+        git_client: Arc<dyn GitClient>,
+        review_request_client: Arc<dyn ReviewRequestClient>,
+    ) {
+        tokio::spawn(async move {
+            let result = load_assigned_issues(
+                working_dir,
+                git_client.as_ref(),
+                review_request_client.as_ref(),
+            )
+            .await;
+            let event = match &result {
+                Ok(items) => SystemLogEvent::new(
+                    SystemLogLevel::Success,
+                    SystemLogCategory::Forge,
+                    "Assigned issues query completed",
+                )
+                .with_detail(format!("{} issues", items.len())),
+                Err(error) => SystemLogEvent::new(
+                    SystemLogLevel::Warning,
+                    SystemLogCategory::Forge,
+                    "Assigned issues query failed",
+                )
+                .with_detail(error.clone()),
+            };
+            let _ = app_event_tx.send(AppEvent::SystemLog { event });
+            let _ = app_event_tx.send(AppEvent::AssignedIssuesLoaded {
+                generation,
+                project_id,
+                result,
+            });
+        });
+    }
+
     /// Loads one fresh machine-scoped snapshot of locally runnable agent
     /// kinds without probing CLI versions.
     pub(super) async fn load_agent_availability(
@@ -458,6 +497,20 @@ async fn load_requested_reviews(
         .map_err(|error| error.detail_message())
 }
 
+/// Resolves the active project remote and loads its assigned GitHub issues.
+async fn load_assigned_issues(
+    working_dir: PathBuf,
+    git_client: &dyn GitClient,
+    review_request_client: &dyn ReviewRequestClient,
+) -> Result<Vec<ag_forge::AssignedIssue>, String> {
+    let remote = review_request_remote(working_dir, git_client, review_request_client).await?;
+
+    review_request_client
+        .list_assigned_issues(remote)
+        .await
+        .map_err(|error| error.detail_message())
+}
+
 /// Resolves the active project remote for requested-review list and detail
 /// loading.
 async fn review_request_remote(
@@ -511,8 +564,9 @@ mod tests {
     use std::time::Duration;
 
     use ag_forge::{
-        ForgeKind, MockReviewRequestClient, RequestedReview, RequestedReviewAudience,
-        ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread,
+        AssignedIssue, ForgeKind, MockReviewRequestClient, RequestedReview,
+        RequestedReviewAudience, ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot,
+        ReviewCommentThread,
     };
     use ag_git::MockGitClient;
     use ag_protocol::{AgentResponse, parse_agent_response_strict};
@@ -566,6 +620,53 @@ mod tests {
         // Assert
         assert_eq!(requested_reviews.len(), 1);
         assert_eq!(requested_reviews[0].comment_snapshot, None);
+    }
+
+    #[tokio::test]
+    async fn load_assigned_issues_scopes_query_to_active_project_remote() {
+        // Arrange
+        let working_dir = PathBuf::from("/tmp/project");
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client.expect_repo_url().times(1).returning(|_| {
+            Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
+        });
+        let mut mock_review_request_client = MockReviewRequestClient::new();
+        mock_review_request_client
+            .expect_detect_remote()
+            .times(1)
+            .returning(|_| Ok(forge_remote()));
+        mock_review_request_client
+            .expect_list_assigned_issues()
+            .times(1)
+            .withf({
+                let working_dir = working_dir.clone();
+
+                move |remote| {
+                    remote.project_path() == "agentty-xyz/agentty"
+                        && remote.command_working_directory.as_ref() == Some(&working_dir)
+                }
+            })
+            .returning(|_| {
+                Box::pin(async {
+                    Ok(vec![AssignedIssue {
+                        display_id: "#124".to_string(),
+                        repository: "agentty-xyz/agentty".to_string(),
+                        title: "Keep issue list compact".to_string(),
+                        updated_at: None,
+                        web_url: "https://github.com/agentty-xyz/agentty/issues/124".to_string(),
+                    }])
+                })
+            });
+
+        // Act
+        let assigned_issues =
+            load_assigned_issues(working_dir, &mock_git_client, &mock_review_request_client)
+                .await
+                .expect("assigned issues should load");
+
+        // Assert
+        assert_eq!(assigned_issues.len(), 1);
+        assert_eq!(assigned_issues[0].repository, "agentty-xyz/agentty");
     }
 
     #[tokio::test]

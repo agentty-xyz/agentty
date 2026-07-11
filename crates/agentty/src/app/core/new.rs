@@ -43,7 +43,7 @@ impl App {
     ) -> Result<Self, AppError> {
         let clients = AppClients::new();
 
-        Self::new_with_options(
+        let mut app = Self::new_with_options(
             auto_update,
             base_path,
             working_dir,
@@ -51,7 +51,10 @@ impl App {
             repositories,
             clients,
         )
-        .await
+        .await?;
+        app.refresh_assigned_issues_if_issues_tab(false);
+
+        Ok(app)
     }
 
     /// Builds app state from persisted data with explicit external clients.
@@ -151,12 +154,7 @@ impl App {
             startup_working_dir.as_path(),
         )
         .await;
-        let focused_review_rows = repositories
-            .sessions()
-            .load_session_focused_reviews_for_project(active_project_id)
-            .await
-            .unwrap_or_default();
-        let review_cache = review::review_cache_from_rows(focused_review_rows);
+        let review_cache = Self::load_focused_review_cache(&repositories, active_project_id).await;
 
         let sync_context = Self::sync_context_for(&projects, &services, &sessions);
         let sync_handle = sync::SyncHandle::spawn(event_tx.clone(), sync_context);
@@ -171,6 +169,10 @@ impl App {
             needs_redraw: true,
             settings,
             tabs: crate::app::tab::TabManager::new(initial_tab),
+            assigned_issue_generation: 0,
+            assigned_issue_selected_index: None,
+            assigned_issue_table_state: ratatui::widgets::TableState::default(),
+            assigned_issues: crate::app::AssignedIssueState::default(),
             projects,
             services,
             sessions,
@@ -195,6 +197,22 @@ impl App {
             sync_main_runner,
             tmux_client: clients.tmux_client,
         })
+    }
+
+    /// Loads persisted focused reviews for the startup project into the render
+    /// cache.
+    async fn load_focused_review_cache(
+        repositories: &AppRepositories,
+        active_project_id: i64,
+    ) -> std::collections::HashMap<crate::domain::session::SessionId, review::ReviewCacheEntry>
+    {
+        let focused_review_rows = repositories
+            .sessions()
+            .load_session_focused_reviews_for_project(active_project_id)
+            .await
+            .unwrap_or_default();
+
+        review::review_cache_from_rows(focused_review_rows)
     }
 
     /// Loads startup sessions and requeues durable post-merge stack restacks

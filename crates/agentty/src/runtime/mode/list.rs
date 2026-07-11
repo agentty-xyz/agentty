@@ -65,6 +65,7 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
             Tab::Projects => app.next_project(),
             Tab::Sessions => app.next(),
             Tab::Review => app.next_requested_review(),
+            Tab::Issues => app.next_assigned_issue(),
             Tab::Settings => app.settings.next(),
             Tab::Logs => app.scroll_system_logs_down(),
         },
@@ -72,6 +73,7 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
             Tab::Projects => app.previous_project(),
             Tab::Sessions => app.previous(),
             Tab::Review => app.previous_requested_review(),
+            Tab::Issues => app.previous_assigned_issue(),
             Tab::Settings => app.settings.previous(),
             Tab::Logs => app.scroll_system_logs_up(),
         },
@@ -153,7 +155,7 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
         Tab::Review => {
             app.open_selected_requested_review();
         }
-        Tab::Logs => {}
+        Tab::Issues | Tab::Logs => {}
     }
 
     Ok(EventResult::Continue)
@@ -290,6 +292,12 @@ fn is_settings_text_key(key: KeyEvent) -> bool {
 
 /// Starts the sync action that applies to the visible list tab.
 fn sync_list_context(app: &mut App) {
+    if app.tabs.current() == Tab::Issues {
+        app.refresh_assigned_issues();
+
+        return;
+    }
+
     if app.tabs.current() == Tab::Review {
         app.refresh_requested_reviews_for_current_project();
 
@@ -321,6 +329,10 @@ fn list_keybindings(app: &App) -> Vec<HelpAction> {
 
     if app.tabs.current() == Tab::Review {
         return crate::ui::state::help_action::review_actions();
+    }
+
+    if app.tabs.current() == Tab::Issues {
+        return crate::ui::state::help_action::issue_actions();
     }
 
     if app.tabs.current() == Tab::Logs {

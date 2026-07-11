@@ -22,8 +22,9 @@ For file-level detail, read the module docstrings directly.
   prompt templates, provider-neutral channel contracts, one-shot submission helpers,
   provider availability probes, and crate-private CLI/app-server transport wiring.
 - `crates/ag-forge/`: Shared forge review-request library crate with normalized
-  review-request types, GitHub/GitLab remote detection, and the `gh`/`glab` adapters
-  behind the `ReviewRequestClient` and `ForgeCommandRunner` boundaries.
+  review-request types, GitHub/GitLab remote detection, and the `gh`/`glab` adapters and
+  project-scoped assigned GitHub issue search behind the `ReviewRequestClient` and
+  `ForgeCommandRunner` boundaries.
 - `crates/ag-git/`: Shared git library crate with worktree creation, repository
   metadata, commit/diff/push/pull sync, rebase/conflict handling, and squash-merge
   workflows behind the `GitClient` boundary.

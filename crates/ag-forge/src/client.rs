@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use super::{
-    CreateReviewRequestInput, ForgeCommandRunner, ForgeFuture, ForgeKind, ForgeRemote,
-    GitHubReviewRequestAdapter, GitLabReviewRequestAdapter, RealForgeCommandRunner,
+    AssignedIssue, CreateReviewRequestInput, ForgeCommandRunner, ForgeFuture, ForgeKind,
+    ForgeRemote, GitHubReviewRequestAdapter, GitLabReviewRequestAdapter, RealForgeCommandRunner,
     RequestedReview, ReviewCommentSnapshot, ReviewRequestError, ReviewRequestSummary,
     UpdateReviewRequestInput, detect_remote,
 };
@@ -15,6 +15,15 @@ use super::{
 /// formats remain isolated inside concrete adapters.
 #[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
 pub trait ReviewRequestClient: Send + Sync {
+    /// Lists open GitHub issues assigned to the authenticated user in `remote`.
+    ///
+    /// # Errors
+    /// Returns a GitHub CLI error when the issue search cannot be completed.
+    fn list_assigned_issues(
+        &self,
+        remote: ForgeRemote,
+    ) -> ForgeFuture<Result<Vec<AssignedIssue>, ReviewRequestError>>;
+
     /// Detects whether `repo_url` belongs to one supported forge.
     ///
     /// # Errors
@@ -122,6 +131,23 @@ impl Default for RealReviewRequestClient {
 }
 
 impl ReviewRequestClient for RealReviewRequestClient {
+    fn list_assigned_issues(
+        &self,
+        remote: ForgeRemote,
+    ) -> ForgeFuture<Result<Vec<AssignedIssue>, ReviewRequestError>> {
+        if remote.forge_kind != ForgeKind::GitHub {
+            return Box::pin(async move {
+                Err(ReviewRequestError::OperationFailed {
+                    forge_kind: remote.forge_kind,
+                    message: "assigned issue lists require a GitHub project remote".to_string(),
+                })
+            });
+        }
+
+        GitHubReviewRequestAdapter::new(Arc::clone(&self.command_runner))
+            .list_assigned_issues(remote)
+    }
+
     fn detect_remote(&self, repo_url: String) -> Result<ForgeRemote, ReviewRequestError> {
         detect_remote(&repo_url)
     }

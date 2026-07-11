@@ -8,8 +8,8 @@ use ag_agent::{AgentAvailabilityProbe, AppServerClient, RealAgentAvailabilityPro
 #[cfg(test)]
 use ag_forge as forge;
 use ag_forge::{
-    RealReviewRequestClient, RequestedReview, RequestedReviewAudience, ReviewCommentSnapshot,
-    ReviewRequestClient,
+    AssignedIssue, RealReviewRequestClient, RequestedReview, RequestedReviewAudience,
+    ReviewCommentSnapshot, ReviewRequestClient,
 };
 use ag_git::{GitClient, RealGitClient};
 #[cfg(test)]
@@ -38,7 +38,7 @@ use tokio::sync::mpsc;
 use super::events::AppEvent;
 #[cfg(test)]
 use super::events::{AppEventBatch, ReviewRequestStatusUpdate};
-use crate::app::{AppError, RequestedReviewState, session};
+use crate::app::{AppError, AssignedIssueState, RequestedReviewState, session};
 #[cfg(test)]
 use crate::domain::agent::AgentCliInfo;
 #[cfg(test)]
@@ -199,6 +199,15 @@ pub struct App {
     pub settings: SettingsManager,
     /// Manages the selected top-level list tab.
     pub tabs: TabManager,
+    /// Monotonic assigned-issue refresh generation for rejecting stale task
+    /// results.
+    pub(super) assigned_issue_generation: u64,
+    /// Selected assigned-issue item index for the top-level `Issues` tab.
+    pub(super) assigned_issue_selected_index: Option<usize>,
+    /// Persistent table viewport state for the top-level `Issues` tab.
+    pub(super) assigned_issue_table_state: TableState,
+    /// Caches open GitHub issues assigned to the authenticated user.
+    pub(super) assigned_issues: AssignedIssueState,
     /// Saves partially answered clarification progress per session so
     /// already-submitted answers survive leaving question mode with `q` and
     /// reopening the session. Entries are consumed on restore and cleared
@@ -289,12 +298,14 @@ impl App {
     pub fn next_tab(&mut self) {
         self.tabs.next();
         self.refresh_requested_reviews_if_inbox_tab(false);
+        self.refresh_assigned_issues_if_issues_tab(false);
     }
 
     /// Cycles the active list tab backward.
     pub fn previous_tab(&mut self) {
         self.tabs.previous();
         self.refresh_requested_reviews_if_inbox_tab(false);
+        self.refresh_assigned_issues_if_issues_tab(false);
     }
 
     /// Persists the active list tab for startup restoration.
@@ -310,6 +321,11 @@ impl App {
     /// Refreshes requested reviews when the `Inbox` tab is visible.
     pub fn refresh_requested_reviews_for_current_project(&mut self) {
         self.refresh_requested_reviews_if_inbox_tab(true);
+    }
+
+    /// Refreshes assigned GitHub issues when the `Issues` tab is visible.
+    pub fn refresh_assigned_issues(&mut self) {
+        self.refresh_assigned_issues_if_issues_tab(true);
     }
 
     /// Scrolls the system log view one line toward newer entries.
@@ -358,6 +374,47 @@ impl App {
     /// section headers.
     pub(crate) fn requested_review_selected_index(&self) -> Option<usize> {
         self.requested_review_selected_index
+    }
+
+    /// Replaces the assigned-issue list and selects the first issue when
+    /// available.
+    pub(crate) fn replace_assigned_issues(&mut self, project_id: i64, items: Vec<AssignedIssue>) {
+        self.reset_assigned_issue_table_state();
+        self.assigned_issue_selected_index = (!items.is_empty()).then_some(0);
+        self.assigned_issues = AssignedIssueState::Loaded { items, project_id };
+    }
+
+    /// Returns the currently selected assigned-issue index.
+    pub(crate) fn assigned_issue_selected_index(&self) -> Option<usize> {
+        self.assigned_issue_selected_index
+    }
+
+    /// Moves selection to the next assigned issue.
+    pub(crate) fn next_assigned_issue(&mut self) {
+        let Some(item_count) = self.assigned_issue_item_count() else {
+            self.assigned_issue_selected_index = None;
+
+            return;
+        };
+
+        self.assigned_issue_selected_index = Some(match self.assigned_issue_selected_index {
+            Some(index) => (index + 1) % item_count,
+            None => 0,
+        });
+    }
+
+    /// Moves selection to the previous assigned issue.
+    pub(crate) fn previous_assigned_issue(&mut self) {
+        let Some(item_count) = self.assigned_issue_item_count() else {
+            self.assigned_issue_selected_index = None;
+
+            return;
+        };
+
+        self.assigned_issue_selected_index = Some(match self.assigned_issue_selected_index {
+            Some(0) | None => item_count - 1,
+            Some(index) => index - 1,
+        });
     }
 
     /// Clears the persisted review-list table viewport after loading state,
@@ -615,6 +672,50 @@ impl App {
             self.services.review_request_client(),
         );
         self.mark_dirty();
+    }
+
+    /// Starts an assigned-issue fetch when the visible tab needs one.
+    pub(super) fn refresh_assigned_issues_if_issues_tab(&mut self, force: bool) {
+        if self.tabs.current() != Tab::Issues {
+            return;
+        }
+
+        let project_id = self.projects.active_project_id();
+        if !force && self.assigned_issues.is_current_for_project(project_id) {
+            return;
+        }
+
+        self.assigned_issue_generation = self.assigned_issue_generation.saturating_add(1);
+        let generation = self.assigned_issue_generation;
+        self.reset_assigned_issue_table_state();
+        self.assigned_issue_selected_index = None;
+        self.assigned_issues = AssignedIssueState::Loading {
+            generation,
+            project_id,
+        };
+        task::TaskService::spawn_assigned_issues_task(
+            generation,
+            project_id,
+            self.projects.working_dir().to_path_buf(),
+            self.services.event_sender(),
+            self.services.git_client(),
+            self.services.review_request_client(),
+        );
+        self.mark_dirty();
+    }
+
+    /// Clears the persisted issue-list table viewport after state changes.
+    pub(super) fn reset_assigned_issue_table_state(&mut self) {
+        self.assigned_issue_table_state = TableState::default();
+    }
+
+    /// Returns the loaded assigned-issue row count when a row can be selected.
+    fn assigned_issue_item_count(&self) -> Option<usize> {
+        let AssignedIssueState::Loaded { items, .. } = &self.assigned_issues else {
+            return None;
+        };
+
+        (!items.is_empty()).then_some(items.len())
     }
 
     /// Invalidates pending requested-review comment loads for `project_id`

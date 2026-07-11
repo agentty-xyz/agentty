@@ -1130,6 +1130,7 @@ fn session_list_selected_row_remains_readable_under_dark_horizon() -> E2eResult 
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .compose(&common::switch_to_tab("Inbox"))
+                    .compose(&common::switch_to_tab("Issues"))
                     .compose(&common::switch_to_tab("Settings"))
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
@@ -1155,6 +1156,7 @@ fn session_list_selected_row_remains_readable_under_dark_horizon() -> E2eResult 
                         "Selected session row on the dedicated selection surface",
                     )
                     .compose(&common::switch_to_tab("Inbox"))
+                    .compose(&common::switch_to_tab("Issues"))
                     .compose(&common::switch_to_tab("Settings"))
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
@@ -1314,6 +1316,7 @@ fn session_view_theme_switch_repaints_cached_messages() -> E2eResult {
                     .press_key("q")
                     .wait_for_text("User markdown prompt", 5000)
                     .compose(&common::switch_to_tab("Inbox"))
+                    .compose(&common::switch_to_tab("Issues"))
                     .compose(&common::switch_to_tab("Settings"))
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
