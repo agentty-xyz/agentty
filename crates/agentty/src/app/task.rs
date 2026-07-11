@@ -105,6 +105,48 @@ impl TaskService {
         });
     }
 
+    /// Spawns a base-detail load for one selected GitHub issue.
+    pub(super) fn spawn_issue_detail_task(
+        display_id: String,
+        generation: u64,
+        project_id: i64,
+        working_dir: PathBuf,
+        app_event_tx: mpsc::UnboundedSender<AppEvent>,
+        git_client: Arc<dyn GitClient>,
+        review_request_client: Arc<dyn ReviewRequestClient>,
+    ) {
+        tokio::spawn(async move {
+            let result = load_issue_detail(
+                working_dir,
+                &display_id,
+                git_client.as_ref(),
+                review_request_client.as_ref(),
+            )
+            .await;
+            let event = match &result {
+                Ok(_) => SystemLogEvent::new(
+                    SystemLogLevel::Success,
+                    SystemLogCategory::Forge,
+                    "Issue details loaded",
+                )
+                .with_detail(display_id.clone()),
+                Err(error) => SystemLogEvent::new(
+                    SystemLogLevel::Warning,
+                    SystemLogCategory::Forge,
+                    "Issue detail query failed",
+                )
+                .with_detail(error.clone()),
+            };
+            let _ = app_event_tx.send(AppEvent::SystemLog { event });
+            let _ = app_event_tx.send(AppEvent::IssueDetailLoaded {
+                display_id,
+                generation,
+                project_id,
+                result,
+            });
+        });
+    }
+
     /// Loads one fresh machine-scoped snapshot of locally runnable agent
     /// kinds without probing CLI versions.
     pub(super) async fn load_agent_availability(
@@ -507,6 +549,21 @@ async fn load_assigned_issues(
 
     review_request_client
         .list_assigned_issues(remote)
+        .await
+        .map_err(|error| error.detail_message())
+}
+
+/// Resolves the active project remote and loads one issue without comments.
+async fn load_issue_detail(
+    working_dir: PathBuf,
+    display_id: &str,
+    git_client: &dyn GitClient,
+    review_request_client: &dyn ReviewRequestClient,
+) -> Result<ag_forge::IssueDetail, String> {
+    let remote = review_request_remote(working_dir, git_client, review_request_client).await?;
+
+    review_request_client
+        .fetch_issue_detail(remote, display_id.to_string())
         .await
         .map_err(|error| error.detail_message())
 }

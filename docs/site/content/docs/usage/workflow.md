@@ -30,10 +30,11 @@ tabs. Press `Tab` to move forward or `Shift+Tab` to move backward:
 - **Inbox**: Read-only list of open GitHub pull requests or GitLab merge requests that
   request your review in the active project, including drafts. Press `s` to refresh and
   `Enter` to open a read-only detail page with the description and comment threads.
-- **Issues**: List-only view of open GitHub issues assigned to the user authenticated
-  with `gh` in the active project repository. Press `s` to refresh and use `j` / `k` to
-  move through the first `100` results; issue details are not available in this
-  iteration. Install the GitHub CLI and run `gh auth login` to enable this tab.
+- **Issues**: Open GitHub issues assigned to the user authenticated with `gh` in the
+  active project repository. Press `s` to refresh, use `j` / `k` to move through the
+  first `100` results, and press `Enter` to load a read-only detail page with base
+  metadata and the description. Comments are not loaded in this iteration. Install the
+  GitHub CLI and run `gh auth login` to enable this tab.
 - **Settings**: Configure the color theme, default reasoning level, smart/fast/review
   model defaults, the optional `Last used model as default` mode, the session commit
   coauthor trailer, and `Launch Configurations` for the active project.

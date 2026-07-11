@@ -155,6 +155,24 @@ JSON
   exit 0
 fi
 
+if [ "$1" = "issue" ] && [ "$2" = "view" ] && [ "$3" = "124" ]; then
+  cat <<'JSON'
+{
+  "assignees": [{"login": "octocat"}],
+  "author": {"login": "hubot"},
+  "body": "Show the selected issue's base information without loading comments.",
+  "createdAt": "2026-07-01T10:00:00Z",
+  "labels": [{"name": "enhancement"}, {"name": "ui"}],
+  "number": 124,
+  "state": "OPEN",
+  "title": "Keep issue list compact",
+  "updatedAt": "2026-07-09T18:30:00Z",
+  "url": "https://github.com/agentty-xyz/agentty/issues/124"
+}
+JSON
+  exit 0
+fi
+
 echo "unexpected gh args: $*" >&2
 exit 1
 "#,
@@ -451,9 +469,9 @@ fn inbox_tab_shows_requested_reviews_page() -> E2eResult {
     Ok(())
 }
 
-/// Verify the Issues tab lists open GitHub issues assigned to the current user.
+/// Verify the Issues tab loads base details for a selected assigned issue.
 #[test]
-fn assigned_github_issues_tab_shows_list() -> E2eResult {
+fn test_assigned_github_issues() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("assigned_github_issues")
         .with_git()
@@ -461,7 +479,7 @@ fn assigned_github_issues_tab_shows_list() -> E2eResult {
         .setup(seed_assigned_github_issues)
         .zola(
             "Assigned GitHub issues",
-            "See open GitHub issues assigned to you in the active project.",
+            "Browse assigned GitHub issues and inspect their base details.",
             45,
         )
         .run(
@@ -474,13 +492,37 @@ fn assigned_github_issues_tab_shows_list() -> E2eResult {
                     .wait_for_text("Keep issue list compact", 5000)
                     .viewing_pause_ms(1500)
                     .capture_labeled("issues", "Assigned GitHub issue list")
+                    .press_key("Enter")
+                    .wait_for_text("Description", 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled("issue_detail", "Selected GitHub issue details")
             },
-            |frame, _report| {
+            |frame, report| {
+                assert_eq!(report.captures.len(), 2);
+                let issues_frame = common::frame_from_capture(&report.captures[0]);
+                let issues_full = Region::full(issues_frame.cols(), issues_frame.rows());
+                assertion::assert_text_in_region(
+                    &issues_frame,
+                    "Assigned GitHub Issues",
+                    &issues_full,
+                );
+                assertion::assert_text_in_region(
+                    &issues_frame,
+                    "#124 Keep issue list compact",
+                    &issues_full,
+                );
+
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Assigned GitHub Issues", &full);
-                assertion::assert_text_in_region(frame, "#124 Keep issue list compact", &full);
+                assertion::assert_text_in_region(frame, "Issue #124", &full);
+                assertion::assert_text_in_region(frame, "Author: hubot", &full);
+                assertion::assert_text_in_region(frame, "Assignees: octocat", &full);
+                assertion::assert_text_in_region(frame, "Labels: enhancement, ui", &full);
                 assertion::assert_text_in_region(frame, "agentty-xyz/agentty", &full);
-                assertion::assert_text_in_region(frame, "list only", &full);
+                assertion::assert_text_in_region(
+                    frame,
+                    "Show the selected issue's base information",
+                    &full,
+                );
             },
         )?;
 

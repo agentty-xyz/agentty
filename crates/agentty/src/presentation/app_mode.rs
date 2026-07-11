@@ -1,4 +1,4 @@
-use ag_forge::RequestedReview;
+use ag_forge::{AssignedIssue, IssueDetail, RequestedReview};
 
 use super::help_action::{
     self, HelpAction, ViewActionAvailability, ViewHelpState, ViewSessionState,
@@ -140,6 +140,18 @@ pub enum QuestionFocus {
 /// Represents the active UI mode for the application.
 pub enum AppMode {
     List,
+    /// Displays a selected assigned issue while its base details load and
+    /// after the detail request completes.
+    IssueDetail {
+        /// Loaded base details, excluding comments.
+        detail: Option<IssueDetail>,
+        /// User-facing detail-load failure.
+        error: Option<String>,
+        /// Assigned-issue row opened from the top-level issue list.
+        issue: AssignedIssue,
+        /// Vertical offset applied to the rendered issue detail page.
+        scroll_offset: u16,
+    },
     /// Displays the selected forge review request title, description, comment
     /// loading state, loaded comments, and any comment-load failure.
     ReviewDetail {

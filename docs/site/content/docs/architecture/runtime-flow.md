@@ -408,8 +408,9 @@ orchestration paths:
   deduplication.
 - Assigned-issue refresh: the Issues tab resolves the active project remote and runs a
   repository-scoped, generation-scoped `gh search issues` task through
-  `ReviewRequestClient`; stale completions are discarded before the list-only cache is
-  rendered.
+  `ReviewRequestClient`; stale completions are discarded before the list cache is
+  rendered. Opening a selected row starts a generation-scoped `gh issue view` task for
+  base metadata and the description; the detail query does not request comments.
 
 ## Persistence and Recovery Boundaries
 

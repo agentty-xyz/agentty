@@ -142,6 +142,7 @@ fn visible_review_session_id(mode: &AppMode) -> Option<&str> {
         | AppMode::PublishBranchInput { restore_view, .. }
         | AppMode::ViewInfoPopup { restore_view, .. } => Some(&restore_view.session_id),
         AppMode::List
+        | AppMode::IssueDetail { .. }
         | AppMode::ReviewDetail { .. }
         | AppMode::SessionCreation { .. }
         | AppMode::ProjectSwitcher { .. }

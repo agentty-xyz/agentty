@@ -372,14 +372,25 @@ pub(crate) fn review_actions() -> Vec<HelpAction> {
     actions
 }
 
-/// Returns help actions for the list-only assigned-issue page.
+/// Returns help actions for the assigned-issue list page.
 pub(crate) fn issue_actions() -> Vec<HelpAction> {
     vec![
         HelpAction::new("quit", "q", "Quit"),
         HelpAction::new("nav", "j/k", "Navigate issues"),
+        HelpAction::new("open", "Enter", "Open issue details"),
         HelpAction::new("refresh", "s", "Refresh assigned issues"),
         HelpAction::new("next tab", "Tab", "Switch tab"),
         HelpAction::new("help", "?", "Help"),
+    ]
+}
+
+/// Returns help actions for one assigned-issue detail page.
+pub(crate) fn issue_detail_actions() -> Vec<HelpAction> {
+    vec![
+        HelpAction::new("back", "q/Esc", "Back to issues"),
+        HelpAction::new("scroll", "j/k", "Scroll issue details"),
+        HelpAction::new("page", "Ctrl+d/u", "Scroll half page"),
+        HelpAction::new("top/bottom", "g/G", "Jump to top or bottom"),
     ]
 }
 

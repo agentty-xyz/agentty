@@ -46,12 +46,12 @@ where
     } else {
         match &app.mode {
             AppMode::List => mode::list::handle(app, key).await,
-            AppMode::ReviewDetail { .. } => {
+            AppMode::IssueDetail { .. } | AppMode::ReviewDetail { .. } => {
                 let size = terminal.size().map_err(backend_err)?;
                 let terminal_rect = Rect::new(0, 0, size.width, size.height);
                 let content_area = content_area_for_terminal(terminal_rect);
 
-                Ok(mode::review_detail::handle_with_cache(
+                Ok(mode::detail::handle_with_cache(
                     app,
                     presentation.render_cache_store(),
                     content_area,

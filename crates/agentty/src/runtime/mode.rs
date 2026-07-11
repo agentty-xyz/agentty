@@ -2,13 +2,13 @@
 
 pub(crate) mod at_mention;
 pub(crate) mod confirmation;
+pub(crate) mod detail;
 pub(crate) mod diff;
 pub(crate) mod help;
 pub(crate) mod input_key;
 pub(crate) mod list;
 pub(crate) mod prompt;
 pub(crate) mod question;
-pub(crate) mod review_detail;
 pub(crate) mod session_output_metric;
 pub(crate) mod session_view;
 pub(crate) mod sync_blocked;
