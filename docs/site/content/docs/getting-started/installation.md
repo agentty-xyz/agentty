@@ -9,11 +9,23 @@ Environment) for structured, controllable AI-assisted software development.
 
 <!-- more -->
 
+## Prerequisites
+
+Agentty runs inside Git repositories and uses linked worktrees for session isolation.
+Install Git using the official [Git downloads](https://git-scm.com/downloads) for your
+operating system, then verify the installation:
+
+```bash
+git --version
+```
+
 ## Install
 
-<a id="installation-options"></a> Use one of these installation options:
+<a id="installation-options"></a> npm is recommended because it supports Agentty's
+automatic update flow. Other installation methods remain available when npm is not the
+right fit.
 
-### npm (global)
+### npm (recommended, supports auto-update)
 
 ```bash
 npm install -g agentty
@@ -37,11 +49,35 @@ curl --proto '=https' --tlsv1.2 -LsSf https://github.com/agentty-xyz/agentty/rel
 cargo install agentty
 ```
 
+## Prepare an Agent Backend
+
+Agentty also requires at least one supported agent CLI on your `PATH`. Install and
+authenticate one backend before launching Agentty:
+
+- **Codex** (`codex`, recommended; supports subscription usage): install the
+  [Codex CLI](https://github.com/openai/codex), then run `codex login`.
+- **Claude** (`claude`): install
+  [Claude Code](https://github.com/anthropics/claude-code), then run
+  `claude auth login`.
+- **Antigravity** (`agy` 1.1.0 or newer): install the
+  [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli), then run
+  `agy` and follow its sign-in flow.
+- **Gemini** (`gemini`): install the
+  [Gemini CLI](https://github.com/google-gemini/gemini-cli), then configure an API key
+  or Vertex AI authentication.
+
+See [Agents & Models](@/docs/agents/backends.md) before choosing credentials. Provider
+subscription and OAuth rules differ, and not every interactive CLI sign-in is suitable
+for third-party invocation through Agentty.
+
 ## Start a Session
 
 1. Open a git repository in your terminal.
 1. Run `agentty`.
 1. Start a new session and let the agent work in its dedicated worktree branch.
+
+The optional **Issues** tab also requires the GitHub CLI. Install `gh` and run
+`gh auth login` to show open GitHub issues assigned to you in the active project.
 
 ## Review Changes
 

@@ -14,7 +14,7 @@ For keyboard shortcuts by view, see [Keybindings](@/docs/usage/keybindings.md).
 ## Interface Layout
 
 <a id="usage-interface-layout"></a> Agentty organizes its interface into six primary
-tabs, all accessible with `Tab`:
+tabs. Press `Tab` to move forward or `Shift+Tab` to move backward:
 
 - **Projects**: Select between projects (git repositories) in a dashboard view with an
   activity heatmap, work-pace metrics, token usage, and a project table showing names,
@@ -31,7 +31,7 @@ tabs, all accessible with `Tab`:
 - **Issues**: List-only view of open GitHub issues assigned to the user authenticated
   with `gh` in the active project repository. Press `s` to refresh and use `j` / `k` to
   move through the first `100` results; issue details are not available in this
-  iteration.
+  iteration. Install the GitHub CLI and run `gh auth login` to enable this tab.
 - **Settings**: Configure the color theme, default reasoning level, smart/fast/review
   model defaults, the optional `Last used model as default` mode, the session commit
   coauthor trailer, and `Launch Configurations` for the active project.
@@ -72,16 +72,18 @@ to the assist agent.
 
 <a id="usage-session-lifecycle"></a> Session statuses:
 
-| Status | Meaning | |--------|---------| | **Draft** | Created but not started; draft
-sessions can stage prompts first. | | **InProgress** | Agent is actively working; `r`
-queues session sync behind the running turn. | | **Review** | Agent finished; changes
-are ready for review. | | **AgentReview** | Focused review output is generating in the
-background; `r` sync cancels the pending focused review before rebasing. | |
-**Question** | Agent requested clarification before continuing. | | **Queued** | Waiting
-in the merge queue. | | **Rebasing** | Session branch is rebasing onto its base branch.
-| | **Merging** | Changes are being merged into the base branch. | | **Done** |
-Completed and merged; the worktree was removed. | | **Canceled** | Canceled by the user;
-the worktree was removed. |
+| Status          | Meaning                                                          |
+| --------------- | ---------------------------------------------------------------- |
+| **Draft**       | Created but not started; draft sessions can stage prompts first. |
+| **InProgress**  | Agent is working; `r` queues sync behind the running turn.       |
+| **Review**      | Agent finished; changes are ready for review.                    |
+| **AgentReview** | Focused review is generating; `r` cancels it before syncing.     |
+| **Question**    | Agent requested clarification before continuing.                 |
+| **Queued**      | Waiting in the merge queue.                                      |
+| **Rebasing**    | Session branch is rebasing onto its base branch.                 |
+| **Merging**     | Changes are being merged into the base branch.                   |
+| **Done**        | Completed and merged; the worktree was removed.                  |
+| **Canceled**    | Canceled by the user; the worktree was removed.                  |
 
 The shortcuts available in each state are listed in
 [Keybindings](@/docs/usage/keybindings.md).
@@ -322,9 +324,12 @@ authenticated `glab` for GitLab. See
 refreshes review-request status in the background for **Review** and **AgentReview**
 sessions. The session list shows forge indicators next to the status label:
 
-| Indicator | Meaning | |-----------|---------| | `↑` | Branch published, no review
-request found yet. | | `⊙ <id>` | Review request `<id>` is open. | | `✓ <id>` | Review
-request `<id>` was merged. | | `✗ <id>` | Review request `<id>` was closed. |
+| Indicator | Meaning                                 |
+| --------- | --------------------------------------- |
+| `↑`       | Branch published; no request found yet. |
+| `⊙ <id>`  | Review request `<id>` is open.          |
+| `✓ <id>`  | Review request `<id>` was merged.       |
+| `✗ <id>`  | Review request `<id>` was closed.       |
 
 When a sync detects that the review request was merged, the session moves straight to
 **Done**; a closed request moves it to **Canceled**.
@@ -374,8 +379,14 @@ readable lines.
 <a id="usage-session-size"></a> Agentty classifies sessions by the number of changed
 lines in their diff:
 
-| Size | Changed Lines | |------|---------------| | **XS** | 0-10 | | **S** | 11-30 | |
-**M** | 31-80 | | **L** | 81-200 | | **XL** | 201-500 | | **XXL** | 501+ |
+| Size    | Changed Lines |
+| ------- | ------------- |
+| **XS**  | 0-10          |
+| **S**   | 11-30         |
+| **M**   | 31-80         |
+| **L**   | 81-200        |
+| **XL**  | 201-500       |
+| **XXL** | 501+          |
 
 Session size is recalculated after each completed agent turn, persisted to the session
 record, and rendered as a title prefix in the **Sessions** list.
@@ -389,10 +400,11 @@ slash already inserted:
 The command picker filters as you type and accepts contains or fuzzy abbreviations such
 as `/o` for `/model`.
 
-| Command | Description | |---------|-------------| | `/apply` | Verify focused-review
-suggestions, then apply the still-valid ones. | | `/model` | Switch the model for the
-current session. | | `/reasoning` | Override the reasoning level for the current
-session. |
+| Command      | Description                                                   |
+| ------------ | ------------------------------------------------------------- |
+| `/apply`     | Verify focused-review suggestions, then apply the valid ones. |
+| `/model`     | Switch the model for the current session.                     |
+| `/reasoning` | Override the reasoning level for the current session.         |
 
 `/apply` requires a completed focused review (`f` key). `/model` and `/reasoning` only
 offer locally available backends; see [Agents & Models](@/docs/agents/backends.md).
@@ -423,10 +435,11 @@ pressing `o` in a session opens a selector popup.
 version in the background. If a newer version is detected, it automatically runs
 `npm i -g agentty@latest` without blocking the UI:
 
-| Status bar text | Meaning | |-----------------|---------| | **Updating to vX.Y.Z...**
-| Background npm install is running. | | **Updated to vX.Y.Z — restart to use new
-version** | Install succeeded; relaunch to use it. | | **vX.Y.Z version available update
-with npm i -g agentty@latest** | Install failed; manual hint shown. |
+- **Updating to vX.Y.Z...**: The background npm install is running.
+- **Updated to vX.Y.Z — restart to use new version**: Installation succeeded; relaunch
+  Agentty to use it.
+- **vX.Y.Z version available update with npm i -g agentty@latest**: Automatic
+  installation failed; run the displayed command manually.
 
 To disable automatic updates, launch with `--no-update`:
 

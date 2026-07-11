@@ -11,11 +11,11 @@ boundaries, and change paths.
 
 ## Architecture Topics
 
-- [Runtime Flow](runtime-flow.md) explains runtime goals, the workspace map, the event
-  loop, and agent channel routing.
-- [Module Map](module-map.md) maps source paths to responsibilities across `app`,
-  `domain`, `infra`, `runtime`, and `ui`.
-- [Change Recipes](change-recipes.md) gives architecture-safe change paths for common
-  contribution scenarios.
-- [Testability Boundaries](testability-boundaries.md) documents trait boundaries and
-  deterministic testing guidance for external integrations.
+- [Runtime Flow](@/docs/architecture/runtime-flow.md) explains runtime goals, the
+  workspace map, the event loop, and agent channel routing.
+- [Module Map](@/docs/architecture/module-map.md) maps source paths to responsibilities
+  across `app`, `domain`, `infra`, `runtime`, and `ui`.
+- [Change Recipes](@/docs/architecture/change-recipes.md) gives architecture-safe change
+  paths for common contribution scenarios.
+- [Testability Boundaries](@/docs/architecture/testability-boundaries.md) documents
+  trait boundaries and deterministic testing guidance for external integrations.

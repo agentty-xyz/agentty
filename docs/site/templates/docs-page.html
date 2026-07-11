@@ -45,6 +45,126 @@
         docs-layout
     {% endblock main_extra_classes %}
     {% block extra_scripts %}
+        <script src="https://cdn.jsdelivr.net/npm/elasticlunr@0.9.5/elasticlunr.min.js"
+                integrity="sha384-OTg7E3c9BrviSAvChL8f8At8KVbHCD59BgIO4jczWREK3SRkF7IHd3PVYwE9tzv3"
+                crossorigin="anonymous"></script>
+        <script src="{{ get_url(path='search_index.en.js') }}"></script>
+        <script>
+(function () {
+  var input = document.querySelector('[data-docs-search-input]');
+  var resultsList = document.querySelector('[data-docs-search-results]');
+  var status = document.querySelector('[data-docs-search-status]');
+  if (!input || !resultsList || !status) {
+    return;
+  }
+
+  /** Disable search and explain why navigation remains the fallback. */
+  function disableSearch(message) {
+    input.disabled = true;
+    input.setAttribute('aria-disabled', 'true');
+    input.placeholder = 'Search unavailable';
+    resultsList.replaceChildren();
+    resultsList.hidden = true;
+    status.textContent = message;
+  }
+
+  if (!globalThis.elasticlunr || !globalThis.searchIndex) {
+    disableSearch('Search is temporarily unavailable. Use the documentation navigation.');
+
+    return;
+  }
+
+  var index;
+  try {
+    index = globalThis.elasticlunr.Index.load(globalThis.searchIndex);
+  } catch (error) {
+    console.error('Documentation search index failed to load.', error);
+    disableSearch('Search is temporarily unavailable. Use the documentation navigation.');
+
+    return;
+  }
+
+  /** Clear the current results and announce the supplied search state. */
+  function clearResults(message) {
+    resultsList.replaceChildren();
+    resultsList.hidden = true;
+    status.textContent = message;
+  }
+
+  /** Build one safe, keyboard-accessible result link from an indexed document. */
+  function createResultItem(searchDocument) {
+    var item = document.createElement('li');
+    item.className = 'docs-search-result';
+
+    var link = document.createElement('a');
+    link.className = 'docs-search-result__link';
+    link.href = searchDocument.path;
+
+    var title = document.createElement('span');
+    title.className = 'docs-search-result__title';
+    title.textContent = searchDocument.title || searchDocument.path;
+    link.appendChild(title);
+
+    if (searchDocument.description) {
+      var description = document.createElement('span');
+      description.className = 'docs-search-result__description';
+      description.textContent = searchDocument.description;
+      link.appendChild(description);
+    }
+
+    item.appendChild(link);
+
+    return item;
+  }
+
+  /** Search title, description, and content while keeping results inside `/docs/`. */
+  function updateResults() {
+    var query = input.value.trim();
+    if (query.length < 2) {
+      clearResults(query ? 'Type one more character to search.' : '');
+
+      return;
+    }
+
+    var matches = index.search(query, {
+      bool: 'AND',
+      expand: true,
+      fields: {
+        title: { boost: 4 },
+        description: { boost: 2 },
+        body: { boost: 1 },
+      },
+    }).map(function (match) {
+      return index.documentStore.getDoc(match.ref);
+    }).filter(function (searchDocument) {
+      return searchDocument && searchDocument.path && searchDocument.path.startsWith('/docs/');
+    }).slice(0, 8);
+
+    resultsList.replaceChildren();
+    matches.forEach(function (searchDocument) {
+      resultsList.appendChild(createResultItem(searchDocument));
+    });
+    resultsList.hidden = matches.length === 0;
+    var resultSummary = 'No documentation matches.';
+    if (matches.length > 0) {
+      var resultLabel = 'results';
+      if (matches.length === 1) {
+        resultLabel = 'result';
+      }
+      resultSummary = matches.length + ' ' + resultLabel + '.';
+    }
+    status.textContent = resultSummary;
+  }
+
+  input.addEventListener('input', updateResults);
+  input.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape') {
+      input.value = '';
+      clearResults('');
+    }
+  });
+})();
+        </script>
         <script type="module">
 var mermaidCodeBlockSelector = '.docs-content pre';
 var mermaidModuleUrl = 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
@@ -685,6 +805,23 @@ var renderCounter = 0;
         <aside class="docs-sidebar docs-sidebar--global"
                aria-label="Documentation navigation">
             <h2 class="docs-sidebar-title">Documentation</h2>
+            <div class="docs-search" role="search">
+                <label class="docs-search__label" for="docs-search-input">Search docs</label>
+                <input id="docs-search-input"
+                       class="docs-search__input"
+                       type="search"
+                       placeholder="Search documentation"
+                       autocomplete="off"
+                       data-docs-search-input>
+                <p class="docs-search__status"
+                   aria-live="polite"
+                   data-docs-search-status></p>
+                <noscript>
+                    <p class="docs-search__status">Search requires JavaScript. Use the documentation navigation.</p>
+                </noscript>
+                <ul class="docs-search__results" data-docs-search-results hidden>
+                </ul>
+            </div>
             {{ self::render_docs_nav(section_path="docs/_index.md", current_permalink=page.permalink) }}
         </aside>
         <article class="docs-content-wrapper">

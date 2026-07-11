@@ -16,10 +16,16 @@ options.
 <a id="backends-supported-backends"></a> Agentty supports four agent backends. Each
 requires its respective CLI to be installed and available on your `PATH`.
 
-- Gemini (`gemini`): Google Gemini CLI agent.
-- Antigravity (`agy` 1.1.0 or newer): Google Antigravity CLI agent.
-- Claude (`claude`): Anthropic Claude Code agent.
-- Codex (`codex`): OpenAI Codex CLI agent.
+- Codex (`codex`, recommended; supports subscription usage): install the
+  [Codex CLI](https://github.com/openai/codex), then run `codex login`.
+- Claude (`claude`): install [Claude Code](https://github.com/anthropics/claude-code),
+  then run `claude auth login`.
+- Antigravity (`agy` 1.1.0 or newer): install the
+  [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli), then run
+  `agy` and follow its sign-in flow.
+- Gemini (`gemini`): install the
+  [Gemini CLI](https://github.com/google-gemini/gemini-cli) and authenticate with an API
+  key or Vertex AI.
 
 All backends accept pasted local prompt images from the Agentty composer (`Ctrl+V`,
 `Ctrl+Shift+V`, or `Alt+V` in prompt mode) and run their turns non-interactively inside
@@ -36,6 +42,57 @@ merging.
 Agentty requires at least one supported backend CLI on `PATH` at startup and fails with
 an install hint when none is found.
 
+Agentty uses each provider's official non-interactive CLI or app-server surface
+(`claude -p`, `agy --print`, `codex app-server`, or `gemini --acp`) after you
+authenticate with that provider's CLI. It does not implement OAuth flows, read provider
+OAuth tokens directly, or call private provider APIs. You are responsible for choosing
+an authentication method permitted for your account, plan, and usage pattern.
+
+## Authentication and Usage
+
+### Codex
+
+<a id="backends-codex-authentication"></a> Codex is the recommended backend when you
+want subscription-backed usage. The CLI supports signing in with ChatGPT through
+`codex login`, and Agentty uses the supported `codex app-server` integration surface.
+Usage remains subject to the
+[OpenAI Terms of Use](https://openai.com/policies/terms-of-use/).
+
+### Claude
+
+<a id="backends-claude-authentication"></a> For Agentty usage through `claude -p`, use
+API-key authentication through Claude Console or a supported cloud provider instead of a
+Claude Free, Pro, or Max subscription sign-in. Anthropic's
+[Claude Code legal and compliance documentation](https://code.claude.com/docs/en/legal-and-compliance)
+describes subscription OAuth as intended for Claude Code and native Anthropic
+applications, while developer integrations should use API keys or supported cloud
+providers.
+
+If Claude session turns or utility prompts fail with `authentication_error`,
+`Failed to authenticate`, or `OAuth token has expired`, refresh the CLI session and
+retry:
+
+```bash
+claude auth login
+claude auth status
+```
+
+### Antigravity
+
+<a id="backends-antigravity-authentication"></a> For Agentty usage through
+`agy --print`, prefer authentication backed by a Google Cloud project or API key rather
+than Google Account subscription sign-in. The
+[Antigravity terms](https://antigravity.google/terms) do not currently explain how
+subscription access applies when third-party tools invoke `agy --print`.
+
+### Gemini
+
+<a id="backends-gemini-authentication"></a> Google Account OAuth no longer works for
+Gemini CLI after Google's
+[transition from Gemini CLI to Antigravity CLI](https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/).
+Use `GEMINI_API_KEY` or Vertex AI authentication, or choose the Antigravity backend
+instead.
+
 ## Project Instruction Files
 
 <a id="backends-project-instruction-files"></a> Agentty relies on each backend's native
@@ -48,19 +105,6 @@ project-instruction discovery instead of inlining repository guidance into promp
 
 Keeping `CLAUDE.md` and `GEMINI.md` as symlinks to a canonical `AGENTS.md` gives all
 backends the same repository guidance.
-
-## Claude Authentication
-
-<a id="backends-claude-authentication"></a> If Claude session turns or utility prompts
-fail with `authentication_error`, `Failed to authenticate`, or
-`OAuth token has expired`, refresh the Claude CLI session and retry:
-
-```bash
-claude auth login
-claude auth status
-```
-
-For SSO-backed accounts, use `claude auth login --sso`.
 
 ## Selecting a Backend
 
