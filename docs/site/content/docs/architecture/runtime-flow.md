@@ -279,7 +279,10 @@ compact reminder.
 - Merge and `sync main` workflows require a clean target checkout before changing
   base-branch state.
 - Provider permission policies are scoped per transport: Codex turns run with a
-  non-interactive approval policy and workspace-write sandbox, Claude turns receive
+  non-interactive approval policy and workspace-write sandbox. Agentty immediately
+  declines MCP elicitations and grants no additional permission requests so an
+  app-server request cannot leave the turn waiting for interactive input. Codex tool
+  input requests receive an empty answer set for the same reason. Claude turns receive
   session-scoped settings that deny writes to the known main checkout, Gemini ACP
   requests prefer one-shot allow options, and CLI-backed providers run from the session
   worktree process directory.

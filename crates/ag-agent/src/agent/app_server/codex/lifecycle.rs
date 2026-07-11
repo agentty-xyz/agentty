@@ -540,10 +540,10 @@ impl CodexTurnEventLoopState {
             return Ok(None);
         }
 
-        if let Some(approval_response) =
-            policy::build_pre_action_approval_response(&response_value, folder)
+        if let Some(server_request_response) =
+            policy::build_server_request_response(&response_value, folder)
         {
-            transport.write_json_line(approval_response).await?;
+            transport.write_json_line(server_request_response).await?;
 
             return Ok(None);
         }
