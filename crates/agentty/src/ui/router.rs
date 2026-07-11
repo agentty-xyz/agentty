@@ -4,7 +4,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::widgets::TableState;
 
-use crate::app::{RequestedReviewState, SettingsManager, Tab};
+use crate::app::{AssignedIssueState, RequestedReviewState, SettingsManager, Tab};
 use crate::domain::agent::{AgentCliInfo, ReasoningLevel};
 use crate::domain::input::InputState;
 use crate::domain::project::ProjectListItem;
@@ -56,6 +56,9 @@ impl ListBackgroundRenderContext<'_, '_> {
 pub(crate) struct RouteSharedContext<'a> {
     /// Identifier for the active project shared across list-mode renders.
     active_project_id: i64,
+    assigned_issue_selected_index: Option<usize>,
+    assigned_issue_table_state: &'a mut TableState,
+    assigned_issues: &'a AssignedIssueState,
     /// Locally available agent CLI executables and detected versions.
     available_agent_clis: &'a [AgentCliInfo],
     current_tab: Tab,
@@ -220,6 +223,9 @@ impl<'a> RouteAuxContext<'a> {
 pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>) {
     let RenderContext {
         active_project_id,
+        assigned_issue_selected_index,
+        assigned_issue_table_state,
+        assigned_issues,
         active_prompt_outputs,
         available_agent_clis,
         current_tab,
@@ -249,6 +255,9 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
 
     let mut shared = RouteSharedContext {
         active_project_id,
+        assigned_issue_selected_index,
+        assigned_issue_table_state,
+        assigned_issues,
         available_agent_clis,
         current_tab,
         project_table_state,
@@ -873,6 +882,14 @@ pub(crate) fn render_list_background(
                 shared.requested_reviews,
                 shared.requested_review_selected_index,
                 &mut *shared.requested_review_table_state,
+            )
+            .render(f, chunks[1]);
+        }
+        Tab::Issues => {
+            page::issue::IssuePage::new(
+                shared.assigned_issues,
+                shared.assigned_issue_selected_index,
+                &mut *shared.assigned_issue_table_state,
             )
             .render(f, chunks[1]);
         }

@@ -6,16 +6,18 @@ use std::sync::Arc;
 use serde::Deserialize;
 
 use super::{
-    CreateReviewRequestInput, ForgeCommand, ForgeCommandRunner, ForgeFuture, ForgeKind,
-    ForgeRemote, RequestedReview, RequestedReviewAudience, ReviewComment, ReviewCommentAnchorSide,
-    ReviewCommentSnapshot, ReviewCommentThread, ReviewRequestAdapter, ReviewRequestError,
-    ReviewRequestOperations, ReviewRequestState, ReviewRequestSummary,
+    AssignedIssue, CreateReviewRequestInput, ForgeCommand, ForgeCommandRunner, ForgeFuture,
+    ForgeKind, ForgeRemote, RequestedReview, RequestedReviewAudience, ReviewComment,
+    ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread, ReviewRequestAdapter,
+    ReviewRequestError, ReviewRequestOperations, ReviewRequestState, ReviewRequestSummary,
     SyncReviewRequestMetadataConfig, UpdateReviewRequestInput, map_parse_error,
     normalize_provider_label, operation_failed, parse_remote_url, status_summary_parts, strip_port,
 };
 
 /// Maximum requested-review rows loaded from `gh` for one refresh.
 const REQUESTED_REVIEW_LIMIT: usize = 100;
+/// Maximum assigned-issue rows loaded from `gh` for one refresh.
+const ASSIGNED_ISSUE_LIMIT: usize = 100;
 
 /// GitHub pull-request adapter that normalizes `gh` command output.
 #[derive(Clone)]
@@ -39,6 +41,31 @@ impl GitHubReviewRequestAdapter {
         }
 
         Some(parsed_remote.into_forge_remote(ForgeKind::GitHub))
+    }
+
+    /// Lists open GitHub issues assigned to the authenticated user in `remote`.
+    pub(crate) fn list_assigned_issues(
+        &self,
+        remote: ForgeRemote,
+    ) -> ForgeFuture<Result<Vec<AssignedIssue>, ReviewRequestError>> {
+        let adapter = self.clone();
+
+        Box::pin(async move {
+            adapter.ensure_authenticated(&remote).await?;
+            let output = adapter
+                .operations
+                .run_review_command(
+                    &remote,
+                    assigned_issues_command(&remote),
+                    "list assigned issues",
+                )
+                .await?;
+
+            map_parse_error(
+                ForgeKind::GitHub,
+                parse_assigned_issues_response(&output.stdout),
+            )
+        })
     }
 }
 
@@ -212,6 +239,28 @@ fn auth_status_command(remote: &ForgeRemote) -> ForgeCommand {
             "status".to_string(),
             "--hostname".to_string(),
             remote.host.clone(),
+        ],
+    )
+}
+
+/// Builds the project-scoped `gh search issues` command for assigned open
+/// issues.
+fn assigned_issues_command(remote: &ForgeRemote) -> ForgeCommand {
+    github_command(
+        remote,
+        vec![
+            "search".to_string(),
+            "issues".to_string(),
+            "--assignee".to_string(),
+            "@me".to_string(),
+            "--state".to_string(),
+            "open".to_string(),
+            "--repo".to_string(),
+            remote.project_path(),
+            "--limit".to_string(),
+            ASSIGNED_ISSUE_LIMIT.to_string(),
+            "--json".to_string(),
+            "number,title,url,updatedAt,repository".to_string(),
         ],
     )
 }
@@ -471,6 +520,23 @@ fn parse_requested_reviews_response(
         .collect())
 }
 
+/// Parses GitHub issue search rows into normalized assigned-issue rows.
+fn parse_assigned_issues_response(stdout: &str) -> Result<Vec<AssignedIssue>, String> {
+    let issues: Vec<GitHubAssignedIssueResponse> = serde_json::from_str(stdout)
+        .map_err(|error| format!("invalid GitHub assigned-issue response: {error}"))?;
+
+    Ok(issues
+        .into_iter()
+        .map(|issue| AssignedIssue {
+            display_id: format!("#{}", issue.number),
+            repository: issue.repository.name_with_owner,
+            title: issue.title,
+            updated_at: issue.updated_at,
+            web_url: issue.url,
+        })
+        .collect())
+}
+
 /// Merges requested-review rows from both GitHub searches, marking rows as
 /// personal when they appear in the `user-review-requested:@me` result and as
 /// group requests otherwise.
@@ -674,6 +740,24 @@ struct GitHubRequestedReviewAuthor {
     login: String,
 }
 
+/// GitHub search row returned by `gh search issues --json`.
+#[derive(Deserialize)]
+struct GitHubAssignedIssueResponse {
+    number: u64,
+    repository: GitHubAssignedIssueRepository,
+    title: String,
+    #[serde(rename = "updatedAt")]
+    updated_at: Option<String>,
+    url: String,
+}
+
+/// Repository identity nested in one GitHub issue search row.
+#[derive(Deserialize)]
+struct GitHubAssignedIssueRepository {
+    #[serde(rename = "nameWithOwner")]
+    name_with_owner: String,
+}
+
 /// GraphQL response envelope for review-threads queries.
 #[derive(Deserialize)]
 struct GitHubReviewThreadsEnvelope {
@@ -824,6 +908,53 @@ mod tests {
 
     use super::*;
     use crate::command::{ForgeCommandOutput, MockForgeCommandRunner};
+
+    #[tokio::test]
+    async fn list_assigned_issues_authenticates_and_normalizes_rows() {
+        // Arrange
+        let remote = github_remote();
+        let mut sequence = Sequence::new();
+        let mut command_runner = MockForgeCommandRunner::new();
+        command_runner
+            .expect_run()
+            .once()
+            .in_sequence(&mut sequence)
+            .withf({
+                let remote = remote.clone();
+
+                move |command| command == &auth_status_command(&remote)
+            })
+            .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
+        command_runner
+            .expect_run()
+            .once()
+            .in_sequence(&mut sequence)
+            .withf({
+                let remote = remote.clone();
+
+                move |command| command == &assigned_issues_command(&remote)
+            })
+            .returning(|_| Box::pin(async { Ok(success_output(github_assigned_issues_json())) }));
+        let adapter = GitHubReviewRequestAdapter::new(Arc::new(command_runner));
+
+        // Act
+        let issues = adapter
+            .list_assigned_issues(remote)
+            .await
+            .expect("assigned issue search should succeed");
+
+        // Assert
+        assert_eq!(
+            issues,
+            vec![AssignedIssue {
+                display_id: "#124".to_string(),
+                repository: "agentty-xyz/agentty".to_string(),
+                title: "Keep issue list compact".to_string(),
+                updated_at: Some("2026-07-09T18:30:00Z".to_string()),
+                web_url: "https://github.com/agentty-xyz/agentty/issues/124".to_string(),
+            }]
+        );
+    }
 
     #[tokio::test]
     async fn find_authenticated_by_source_branch_builds_lookup_and_refresh_commands() {
@@ -1448,6 +1579,19 @@ mod tests {
             "body": "Current body.",
             "title": "Add forge review support"
         }"#
+        .to_string()
+    }
+
+    fn github_assigned_issues_json() -> String {
+        r#"[
+            {
+                "number": 124,
+                "repository": {"nameWithOwner": "agentty-xyz/agentty"},
+                "title": "Keep issue list compact",
+                "updatedAt": "2026-07-09T18:30:00Z",
+                "url": "https://github.com/agentty-xyz/agentty/issues/124"
+            }
+        ]"#
         .to_string()
     }
 

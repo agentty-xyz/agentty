@@ -249,6 +249,7 @@ impl AppServices {
 /// Returns a stable instrumentation label for one app event variant.
 fn app_event_label(event: &AppEvent) -> &'static str {
     match event {
+        AppEvent::AssignedIssuesLoaded { .. } => "AssignedIssuesLoaded",
         AppEvent::AtMentionEntriesLoaded { .. } => "AtMentionEntriesLoaded",
         AppEvent::GitStatusUpdated { .. } => "GitStatusUpdated",
         AppEvent::VersionAvailabilityUpdated { .. } => "VersionAvailabilityUpdated",

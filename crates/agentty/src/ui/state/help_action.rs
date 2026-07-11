@@ -374,6 +374,17 @@ pub(crate) fn review_actions() -> Vec<HelpAction> {
     actions
 }
 
+/// Returns help actions for the list-only assigned-issue page.
+pub(crate) fn issue_actions() -> Vec<HelpAction> {
+    vec![
+        HelpAction::new("quit", "q", "Quit"),
+        HelpAction::new("nav", "j/k", "Navigate issues"),
+        HelpAction::new("refresh", "s", "Refresh assigned issues"),
+        HelpAction::new("next tab", "Tab", "Switch tab"),
+        HelpAction::new("help", "?", "Help"),
+    ]
+}
+
 /// Projects currently available view-mode actions into help entries.
 /// These entries are used by the help overlay and include all available
 /// actions.

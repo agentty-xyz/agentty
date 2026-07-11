@@ -3,6 +3,7 @@
 pub mod diff;
 pub mod fyi;
 pub mod inbox;
+pub mod issue;
 pub mod project_list;
 pub mod review_detail;
 pub mod session_chat;

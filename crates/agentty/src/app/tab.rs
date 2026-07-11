@@ -17,6 +17,7 @@ pub enum Tab {
     Projects,
     Sessions,
     Review,
+    Issues,
     Settings,
     /// Process-local system event log page.
     Logs,
@@ -24,16 +25,22 @@ pub enum Tab {
 
 impl Tab {
     /// Tabs in the order they are rendered.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Projects,
         Self::Sessions,
         Self::Review,
+        Self::Issues,
         Self::Settings,
         Self::Logs,
     ];
     /// Project-scoped tabs in display order.
-    pub const PROJECT_SCOPED: [Self; 4] =
-        [Self::Sessions, Self::Review, Self::Settings, Self::Logs];
+    pub const PROJECT_SCOPED: [Self; 5] = [
+        Self::Sessions,
+        Self::Review,
+        Self::Issues,
+        Self::Settings,
+        Self::Logs,
+    ];
 
     /// Returns the available top-level tabs.
     pub fn available_tabs() -> &'static [Self] {
@@ -51,6 +58,7 @@ impl Tab {
             Tab::Projects => "Projects",
             Tab::Sessions => "Sessions",
             Tab::Review => "Inbox",
+            Tab::Issues => "Issues",
             Tab::Settings => "Settings",
             Tab::Logs => "Logs",
         }
@@ -67,6 +75,7 @@ impl Tab {
             "Projects" => Some(Self::Projects),
             "Sessions" => Some(Self::Sessions),
             "Inbox" => Some(Self::Review),
+            "Issues" => Some(Self::Issues),
             "Settings" => Some(Self::Settings),
             "Logs" => Some(Self::Logs),
             _ => None,
@@ -78,7 +87,9 @@ impl Tab {
     pub fn scope(self) -> TabScope {
         match self {
             Tab::Projects => TabScope::Global,
-            Tab::Sessions | Tab::Review | Tab::Settings | Tab::Logs => TabScope::Project,
+            Tab::Sessions | Tab::Review | Tab::Issues | Tab::Settings | Tab::Logs => {
+                TabScope::Project
+            }
         }
     }
 
@@ -163,7 +174,9 @@ mod tests {
         // Assert
         assert_eq!(
             titles,
-            ["Projects", "Sessions", "Inbox", "Settings", "Logs"]
+            [
+                "Projects", "Sessions", "Inbox", "Issues", "Settings", "Logs"
+            ]
         );
     }
 
@@ -182,6 +195,7 @@ mod tests {
                 TabScope::Project,
                 TabScope::Project,
                 TabScope::Project,
+                TabScope::Project,
                 TabScope::Project
             ]
         );
@@ -194,6 +208,7 @@ mod tests {
             ("Projects", Some(Tab::Projects)),
             ("Sessions", Some(Tab::Sessions)),
             ("Inbox", Some(Tab::Review)),
+            ("Issues", Some(Tab::Issues)),
             ("Settings", Some(Tab::Settings)),
             ("Logs", Some(Tab::Logs)),
             ("Invalid", None),
@@ -215,7 +230,9 @@ mod tests {
         // Assert
         assert_eq!(
             values,
-            ["Projects", "Sessions", "Inbox", "Settings", "Logs"]
+            [
+                "Projects", "Sessions", "Inbox", "Issues", "Settings", "Logs"
+            ]
         );
     }
 
@@ -232,6 +249,7 @@ mod tests {
             [
                 Tab::Sessions,
                 Tab::Review,
+                Tab::Issues,
                 Tab::Settings,
                 Tab::Logs,
                 Tab::Projects
@@ -254,6 +272,7 @@ mod tests {
                 Tab::Projects,
                 Tab::Sessions,
                 Tab::Review,
+                Tab::Issues,
                 Tab::Settings
             ]
         );
@@ -269,7 +288,13 @@ mod tests {
         // Assert
         assert_eq!(
             project_scoped_tabs,
-            &[Tab::Sessions, Tab::Review, Tab::Settings, Tab::Logs]
+            &[
+                Tab::Sessions,
+                Tab::Review,
+                Tab::Issues,
+                Tab::Settings,
+                Tab::Logs
+            ]
         );
     }
 
@@ -296,12 +321,14 @@ mod tests {
     }
 
     #[test]
-    fn test_tab_manager_next_cycles_tabs_with_tasks() {
+    fn test_tab_manager_next_cycles_all_tabs() {
         // Arrange
         let mut manager = TabManager::default();
         let mut observed_tabs = Vec::new();
 
         // Act
+        observed_tabs.push(manager.current());
+        manager.next();
         observed_tabs.push(manager.current());
         manager.next();
         observed_tabs.push(manager.current());
@@ -321,6 +348,7 @@ mod tests {
                 Tab::Projects,
                 Tab::Sessions,
                 Tab::Review,
+                Tab::Issues,
                 Tab::Settings,
                 Tab::Logs,
                 Tab::Projects
@@ -329,12 +357,14 @@ mod tests {
     }
 
     #[test]
-    fn test_tab_manager_previous_cycles_tabs_without_tasks() {
+    fn test_tab_manager_previous_cycles_all_tabs() {
         // Arrange
         let mut manager = TabManager::default();
         let mut observed_tabs = Vec::new();
 
         // Act
+        observed_tabs.push(manager.current());
+        manager.previous();
         observed_tabs.push(manager.current());
         manager.previous();
         observed_tabs.push(manager.current());
@@ -354,6 +384,7 @@ mod tests {
                 Tab::Projects,
                 Tab::Logs,
                 Tab::Settings,
+                Tab::Issues,
                 Tab::Review,
                 Tab::Sessions,
                 Tab::Projects

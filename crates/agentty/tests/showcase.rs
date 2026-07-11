@@ -306,8 +306,8 @@ Sleep 2s
 
 /// Generate a feature GIF cycling through all tabs.
 ///
-/// Shows each major view — Projects, Sessions, Inbox, and Settings — to give
-/// a complete overview of the agentty interface.
+/// Shows each major view — Projects, Sessions, Inbox, Issues, and Settings — to
+/// give a complete overview of the agentty interface.
 #[tokio::test]
 #[ignore = "requires VHS and a renderable terminal — run explicitly with --ignored"]
 async fn feature_tab_tour() -> ShowcaseResult {
@@ -318,6 +318,8 @@ async fn feature_tab_tour() -> ShowcaseResult {
     let gif_path = feature_output_dir()?.join("tab_tour.gif");
 
     let steps = "\
+Sleep 2s
+Tab
 Sleep 2s
 Tab
 Sleep 2s

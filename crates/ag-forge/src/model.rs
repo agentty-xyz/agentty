@@ -220,6 +220,21 @@ pub struct RequestedReview {
     pub web_url: String,
 }
 
+/// Normalized row for one open GitHub issue assigned to the authenticated user.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AssignedIssue {
+    /// Provider display id such as GitHub `#123`.
+    pub display_id: String,
+    /// Repository path shown for the issue, such as `owner/repo`.
+    pub repository: String,
+    /// Remote issue title.
+    pub title: String,
+    /// Provider update timestamp, when the CLI returns one.
+    pub updated_at: Option<String>,
+    /// Browser-openable issue URL.
+    pub web_url: String,
+}
+
 /// Boxed async result used by review-request trait methods.
 pub type ForgeFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 

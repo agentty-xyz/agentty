@@ -46,6 +46,15 @@ use crate::ui::state::prompt::PromptAtMentionState;
 /// [`App::apply_app_events`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum AppEvent {
+    /// Indicates completion of one assigned GitHub issue list refresh.
+    AssignedIssuesLoaded {
+        /// Refresh generation assigned when the task was spawned.
+        generation: u64,
+        /// Project id whose assigned issues were loaded.
+        project_id: i64,
+        /// GitHub CLI result from the background issue task.
+        result: Result<Vec<ag_forge::AssignedIssue>, String>,
+    },
     /// Indicates background-loaded prompt at-mention entries for one session.
     AtMentionEntriesLoaded {
         entries: Vec<FileEntry>,
@@ -202,6 +211,8 @@ pub(crate) enum AppEvent {
 /// Reduced representation of all app events currently queued for one tick.
 #[derive(Default)]
 pub(super) struct AppEventBatch {
+    /// Latest assigned-issue task result collected for this reducer batch.
+    pub(super) assigned_issues: Option<(u64, i64, Result<Vec<ag_forge::AssignedIssue>, String>)>,
     pub(super) applied_turns: HashMap<SessionId, TurnAppliedState>,
     pub(super) agent_cli_updates: Option<Vec<AgentCliInfo>>,
     pub(super) at_mention_entries_updates: HashMap<SessionId, Vec<FileEntry>>,
@@ -295,6 +306,13 @@ impl AppEventBatch {
     /// tick preserves cumulative usage from multiple completed turns.
     pub(super) fn collect_event(&mut self, event: AppEvent) {
         match event {
+            AppEvent::AssignedIssuesLoaded {
+                generation,
+                project_id,
+                result,
+            } => {
+                self.collect_assigned_issues_loaded(generation, project_id, result);
+            }
             AppEvent::AtMentionEntriesLoaded {
                 entries,
                 session_id,
@@ -424,6 +442,23 @@ impl AppEventBatch {
                 self.collect_review_comments_updated(session_id);
             }
             _ => unreachable!("top-level app event should be collected before runtime events"),
+        }
+    }
+
+    /// Keeps the freshest assigned-issue result when one batch contains
+    /// overlapping loads.
+    fn collect_assigned_issues_loaded(
+        &mut self,
+        generation: u64,
+        project_id: i64,
+        result: Result<Vec<ag_forge::AssignedIssue>, String>,
+    ) {
+        if self
+            .assigned_issues
+            .as_ref()
+            .is_none_or(|(current_generation, _, _)| generation >= *current_generation)
+        {
+            self.assigned_issues = Some((generation, project_id, result));
         }
     }
 
@@ -1033,6 +1068,25 @@ impl App {
             self.projects.set_git_status(git_status_update.status);
             self.sessions
                 .replace_session_git_statuses(event_batch.session_git_status_updates.clone());
+        }
+
+        if let Some((generation, project_id, result)) = event_batch.assigned_issues.take()
+            && project_id == self.projects.active_project_id()
+            && self
+                .assigned_issues
+                .matches_loading_request(project_id, generation)
+        {
+            match result {
+                Ok(items) => self.replace_assigned_issues(project_id, items),
+                Err(message) => {
+                    self.reset_assigned_issue_table_state();
+                    self.assigned_issue_selected_index = None;
+                    self.assigned_issues = app::AssignedIssueState::Failed {
+                        message,
+                        project_id,
+                    };
+                }
+            }
         }
 
         if let Some((generation, project_id, result)) = event_batch.requested_reviews.take()

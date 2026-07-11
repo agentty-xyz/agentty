@@ -112,6 +112,7 @@ impl App {
             u64::try_from(wall_clock_unix_seconds.div_euclid(60)).unwrap_or_default();
         let review_comment_cache = self.services.review_comment_cache();
         let requested_review_selected_index = self.requested_review_selected_index();
+        let assigned_issue_selected_index = self.assigned_issue_selected_index();
         let mode = &self.mode;
         let session_review_snapshot = visible_session_review_snapshot(
             mode,
@@ -119,6 +120,7 @@ impl App {
             self.settings.default_review_selection.model(),
         );
         let requested_review_table_state = &mut self.requested_review_table_state;
+        let assigned_issue_table_state = &mut self.assigned_issue_table_state;
         let project_render_parts = self.projects.render_parts();
         let session_render_parts = self.sessions.render_parts();
         let render_cache_store = &self.render_cache_store;
@@ -128,6 +130,9 @@ impl App {
         ui::render(
             frame,
             ui::RenderContext {
+                assigned_issues: &self.assigned_issues,
+                assigned_issue_selected_index,
+                assigned_issue_table_state,
                 active_project_id: project_render_parts.active_project_id,
                 available_agent_clis: &available_agent_clis,
                 current_tab,

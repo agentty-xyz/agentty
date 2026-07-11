@@ -394,6 +394,10 @@ orchestration paths:
   linked request are polled; merged requests move the session to `Done`, closed requests
   to `Canceled`. The Inbox tab loads comment snapshots on demand with generation-scoped
   deduplication.
+- Assigned-issue refresh: the Issues tab resolves the active project remote and runs a
+  repository-scoped, generation-scoped `gh search issues` task through
+  `ReviewRequestClient`; stale completions are discarded before the list-only cache is
+  rendered.
 
 ## Persistence and Recovery Boundaries
 

@@ -68,13 +68,30 @@ Switch tab | | `?` | Help |
 
 ## Review
 
-| Key | Action | |-----|--------| | `q` | Quit | | `j` / `k` | Navigate reviews | |
-`Enter` | Open review details | | `s` | Refresh PRs/MRs requesting your review | | `Tab`
-| Switch tab | | `?` | Help |
+| Key       | Action                                 |
+| --------- | -------------------------------------- |
+| `q`       | Quit                                   |
+| `j` / `k` | Navigate reviews                       |
+| `Enter`   | Open review details                    |
+| `s`       | Refresh PRs/MRs requesting your review |
+| `Tab`     | Switch tab                             |
+| `?`       | Help                                   |
 
 On the read-only detail page, use `j` / `k` or `Up` / `Down` to scroll, `Ctrl+d` /
 `Ctrl+u` to move by half pages, `g` / `G` to jump to the top or bottom, and `q` / `Esc`
 to return to the review list.
+
+## Issues
+
+| Key       | Action                                                           |
+| --------- | ---------------------------------------------------------------- |
+| `q`       | Quit                                                             |
+| `j` / `k` | Navigate assigned issues                                         |
+| `s`       | Refresh open GitHub issues assigned to you in the active project |
+| `Tab`     | Switch tab                                                       |
+| `?`       | Help                                                             |
+
+The page is list-only in this iteration, so `Enter` has no action.
 
 ## Session View
 

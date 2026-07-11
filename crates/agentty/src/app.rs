@@ -3,6 +3,7 @@
 //! This parent module intentionally exposes child modules and re-exports app
 //! orchestration types and functions.
 
+mod assigned_issue;
 mod assist;
 mod branch_publish;
 mod core;
@@ -28,6 +29,7 @@ pub(crate) use core::AppClients;
 pub(crate) use core::AppEvent;
 pub use core::{AGENTTY_WT_DIR, App, UpdateStatus, agentty_home};
 
+pub(crate) use assigned_issue::AssignedIssueState;
 pub use error::AppError;
 pub use project::ProjectManager;
 pub(crate) use requested_review::RequestedReviewState;

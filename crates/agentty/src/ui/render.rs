@@ -7,7 +7,7 @@ use ratatui::widgets::TableState;
 
 use crate::app::session::session_branch;
 use crate::app::session_state::SessionGitStatus;
-use crate::app::{RequestedReviewState, SettingsManager, Tab, UpdateStatus};
+use crate::app::{AssignedIssueState, RequestedReviewState, SettingsManager, Tab, UpdateStatus};
 use crate::domain::agent::AgentCliInfo;
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session, SessionId};
@@ -38,6 +38,12 @@ pub trait Component {
 
 /// Immutable data required to draw a single UI frame.
 pub struct RenderContext<'a> {
+    /// Selected assigned-issue row index.
+    pub assigned_issue_selected_index: Option<usize>,
+    /// Table selection and viewport state for the assigned-issue list.
+    pub assigned_issue_table_state: &'a mut TableState,
+    /// Account-wide assigned GitHub issue list state.
+    pub assigned_issues: &'a AssignedIssueState,
     /// Exact prompt transcript blocks keyed by session id for active turns.
     pub active_prompt_outputs: &'a HashMap<SessionId, String>,
     /// Identifier of the currently active project.
