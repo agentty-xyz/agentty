@@ -433,6 +433,130 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn execute_turn_event_loop_answers_user_input_request_without_blocking() {
+        // Arrange
+        let folder = tempdir().expect("temporary folder should be created");
+        let turn_start_id = Arc::new(Mutex::new(None));
+        let mut transport = MockCodexRuntimeTransport::new();
+        let mut sequence = Sequence::new();
+        let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
+
+        expect_user_input_request_turn(&mut transport, &mut sequence, turn_start_id);
+
+        // Act
+        let result = lifecycle::execute_turn_event_loop(
+            &mut transport,
+            folder.path(),
+            AgentModel::Gpt55.as_str(),
+            "thread-1",
+            "Implement the task",
+            ReasoningLevel::default(),
+            stream_tx,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(result.expect("turn should complete"), (String::new(), 0, 0));
+    }
+
+    /// Expects a user-input request to receive an empty response before turn
+    /// completion.
+    fn expect_user_input_request_turn(
+        transport: &mut MockCodexRuntimeTransport,
+        sequence: &mut Sequence,
+        turn_start_id: Arc<Mutex<Option<String>>>,
+    ) {
+        transport
+            .expect_write_json_line()
+            .times(1)
+            .in_sequence(sequence)
+            .withf(|payload| payload.get("method").and_then(Value::as_str) == Some("turn/start"))
+            .returning({
+                let turn_start_id = Arc::clone(&turn_start_id);
+
+                move |payload| {
+                    remember_request_id(&turn_start_id, &payload);
+
+                    Box::pin(async { Ok(()) })
+                }
+            });
+        transport
+            .expect_next_stdout()
+            .times(1)
+            .in_sequence(sequence)
+            .return_once(move || {
+                let response_id = turn_start_id
+                    .lock()
+                    .expect("turn/start mutex should lock")
+                    .clone()
+                    .expect("turn/start id should be recorded");
+
+                Box::pin(async move {
+                    Ok(Some(
+                        serde_json::json!({
+                            "id": response_id,
+                            "result": {"turn": {"id": "turn-123"}}
+                        })
+                        .to_string(),
+                    ))
+                })
+            });
+        transport
+            .expect_next_stdout()
+            .times(1)
+            .in_sequence(sequence)
+            .return_once(|| {
+                Box::pin(async {
+                    Ok(Some(
+                        serde_json::json!({
+                            "id": "user-input-1",
+                            "method": "item/tool/requestUserInput",
+                            "params": {
+                                "questions": [{
+                                    "id": "approval",
+                                    "question": "Allow this action?"
+                                }]
+                            }
+                        })
+                        .to_string(),
+                    ))
+                })
+            });
+        transport
+            .expect_write_json_line()
+            .times(1)
+            .in_sequence(sequence)
+            .withf(|payload| {
+                payload
+                    == &serde_json::json!({
+                        "id": "user-input-1",
+                        "result": {"answers": {}}
+                    })
+            })
+            .returning(|_| Box::pin(async { Ok(()) }));
+        transport
+            .expect_next_stdout()
+            .times(1)
+            .in_sequence(sequence)
+            .return_once(|| {
+                Box::pin(async {
+                    Ok(Some(
+                        serde_json::json!({
+                            "method": "turn/completed",
+                            "params": {
+                                "turn": {
+                                    "id": "turn-123",
+                                    "status": "completed"
+                                }
+                            }
+                        })
+                        .to_string(),
+                    ))
+                })
+            });
+    }
+
+    #[tokio::test]
     async fn run_turn_with_runtime_compacts_proactively_before_turn_start() {
         // Arrange
         let mut state = build_runtime_state(
@@ -609,7 +733,7 @@ mod tests {
 
         // Act
         let approval_response =
-            policy::build_pre_action_approval_response(&response_value, session_folder)
+            policy::build_server_request_response(&response_value, session_folder)
                 .expect("approval response should be generated");
 
         // Assert
@@ -665,7 +789,7 @@ mod tests {
 
         // Act
         let approval_response =
-            policy::build_pre_action_approval_response(&response_value, session_folder)
+            policy::build_server_request_response(&response_value, session_folder)
                 .expect("approval response should be generated");
 
         // Assert
@@ -694,7 +818,7 @@ mod tests {
 
         // Act
         let approval_response =
-            policy::build_pre_action_approval_response(&response_value, session_folder)
+            policy::build_server_request_response(&response_value, session_folder)
                 .expect("approval response should be generated");
 
         // Assert
@@ -704,6 +828,65 @@ mod tests {
                 .and_then(|result| result.get("decision"))
                 .and_then(Value::as_str),
             Some("reject")
+        );
+    }
+
+    #[test]
+    fn build_server_request_response_grants_no_additional_permissions() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "id": "permission-1",
+            "method": "item/permissions/requestApproval",
+            "params": {
+                "permissions": {
+                    "network": { "enabled": true }
+                }
+            }
+        });
+        let session_folder = Path::new("/tmp/session");
+
+        // Act
+        let response = policy::build_server_request_response(&response_value, session_folder)
+            .expect("permission response should be generated");
+
+        // Assert
+        assert_eq!(
+            response,
+            serde_json::json!({
+                "id": "permission-1",
+                "result": {
+                    "permissions": {},
+                    "scope": "turn"
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn build_server_request_response_declines_mcp_elicitation() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "id": "elicitation-1",
+            "method": "mcpServer/elicitation/request",
+            "params": {
+                "message": "Allow this MCP action?"
+            }
+        });
+        let session_folder = Path::new("/tmp/session");
+
+        // Act
+        let response = policy::build_server_request_response(&response_value, session_folder)
+            .expect("elicitation response should be generated");
+
+        // Assert
+        assert_eq!(
+            response,
+            serde_json::json!({
+                "id": "elicitation-1",
+                "result": {
+                    "action": "decline"
+                }
+            })
         );
     }
 

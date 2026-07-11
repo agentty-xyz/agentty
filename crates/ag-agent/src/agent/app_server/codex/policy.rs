@@ -154,16 +154,48 @@ pub(super) fn web_search_mode() -> &'static str {
     permission_mode_policy(PermissionMode::default()).web_search_mode
 }
 
-/// Builds a JSON-RPC approval response for known pre-action request methods.
+/// Builds a JSON-RPC response for known approval-like server requests.
 ///
-/// Returns `None` when the input line is not a supported approval request or
-/// does not include a request id.
-pub(super) fn build_pre_action_approval_response(
+/// Agentty declines requests that require interactive user input and grants no
+/// additional permissions. Pre-action command and file-change requests retain
+/// the scoped auto-edit decisions used by older Codex app-server versions.
+/// Returns `None` when the input line is not a supported request or does not
+/// include a request id.
+pub(super) fn build_server_request_response(
     response_value: &Value,
     session_folder: &Path,
 ) -> Option<Value> {
     let method = response_value.get("method")?.as_str()?;
     let request_id = response_value.get("id")?.clone();
+
+    if method == "item/permissions/requestApproval" {
+        return Some(serde_json::json!({
+            "id": request_id,
+            "result": {
+                "permissions": {},
+                "scope": "turn"
+            }
+        }));
+    }
+
+    if method == "mcpServer/elicitation/request" {
+        return Some(serde_json::json!({
+            "id": request_id,
+            "result": {
+                "action": "decline"
+            }
+        }));
+    }
+
+    if method == "item/tool/requestUserInput" {
+        return Some(serde_json::json!({
+            "id": request_id,
+            "result": {
+                "answers": {}
+            }
+        }));
+    }
+
     let approval_kind = PreActionApprovalKind::from_method(method)?;
     let decision = scoped_pre_action_decision(response_value, session_folder, &approval_kind);
 
