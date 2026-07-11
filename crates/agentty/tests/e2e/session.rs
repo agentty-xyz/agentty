@@ -959,19 +959,18 @@ fn seed_active_loader_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error
     Ok(())
 }
 
-/// Verify that the Sessions tab shows an empty-state message when no
-/// sessions exist.
+/// Verify that the Sessions tab hides empty groups and guides session creation.
 ///
-/// Starts agentty in a fresh temp directory (no database, no sessions),
-/// switches to the Sessions tab, and asserts that the placeholder text
-/// is visible.
+/// Starts Agentty with no sessions, then creates an active session and verifies
+/// that only the populated group is visible.
 #[test]
 fn session_list_empty_state() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_empty")
+        .with_git()
         .zola(
             "Empty session state",
-            "A clean slate when no sessions exist yet.",
+            "See how Agentty guides session creation and hides empty groups.",
             40,
         )
         .run(
@@ -982,10 +981,29 @@ fn session_list_empty_state() -> E2eResult {
                     .compose(&common::switch_to_tab("Sessions"))
                     .viewing_pause_ms(2000)
                     .capture_labeled("sessions_tab", "Sessions tab with no sessions")
+                    .compose(&common::create_session_with_prompt_and_return_to_list(
+                        "Keep only populated groups",
+                    ))
+                    .viewing_pause_ms(2000)
+                    .capture_labeled("active_group", "Only the populated group is visible")
             },
-            |frame, _report| {
+            |frame, report| {
+                let empty_frame = common::frame_from_capture(&report.captures[0]);
+                let empty_full = Region::full(empty_frame.cols(), empty_frame.rows());
+                assertion::assert_text_in_region(
+                    &empty_frame,
+                    "No sessions. Press 'a' to start one.",
+                    &empty_full,
+                );
+                assertion::assert_not_visible(&empty_frame, "Merge queue");
+                assertion::assert_not_visible(&empty_frame, "Active sessions");
+                assertion::assert_not_visible(&empty_frame, "Archive");
+
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "No sessions", &full);
+                assertion::assert_text_in_region(frame, "Active sessions", &full);
+                assertion::assert_not_visible(frame, "Merge queue");
+                assertion::assert_not_visible(frame, "Archive");
+                assertion::assert_not_visible(frame, "No sessions");
             },
         )?;
 

@@ -16,8 +16,8 @@ use crate::ui::{Page, layout, markdown, style};
 const ROW_HIGHLIGHT_SYMBOL: &str = "";
 /// Horizontal spacing between table columns in the session list.
 const TABLE_COLUMN_SPACING: u16 = 2;
-/// Placeholder text rendered under group headers with no sessions.
-const GROUP_EMPTY_PLACEHOLDER: &str = "No sessions...";
+/// Guidance rendered when the project has no sessions.
+const EMPTY_SESSIONS_HINT: &str = "No sessions. Press 'a' to start one.";
 /// Tree branch prefix for child rows that have siblings after them.
 const TREE_BRANCH_MIDDLE: &str = "├ ";
 /// Tree branch prefix for the final child row in a stack.
@@ -86,14 +86,17 @@ impl Page for SessionListPage<'_> {
         let table_rows = session_order::grouped_session_rows(self.sessions);
         let selected_session_id = selected_session_id(self.sessions, self.table_state.selected());
         let selected_row = selected_render_row(&table_rows, selected_session_id);
-        let rows = table_rows.iter().map(|table_row| {
-            render_table_row(
-                table_row,
-                title_column_width,
-                self.default_reasoning_level,
-                self.wall_clock_unix_seconds,
-            )
-        });
+        let rows = table_rows
+            .iter()
+            .map(|table_row| {
+                render_table_row(
+                    table_row,
+                    title_column_width,
+                    self.default_reasoning_level,
+                    self.wall_clock_unix_seconds,
+                )
+            })
+            .chain(table_rows.is_empty().then(render_empty_sessions_hint_row));
         let table = Table::new(rows, column_constraints)
             .column_spacing(TABLE_COLUMN_SPACING)
             .header(header)
@@ -130,9 +133,9 @@ fn session_list_help_line(selected_session: Option<&Session>) -> Line<'static> {
 /// Prepares list table state for grouped row rendering.
 ///
 /// The app stores selection as an index in the raw session slice, while the
-/// table is rendered with extra group label and placeholder rows. Resetting
-/// the offset before selecting a grouped row avoids stale deep offsets hiding
-/// top group sections after scrolling back up.
+/// table is rendered with extra group label rows. Resetting the offset before
+/// selecting a grouped row avoids stale deep offsets hiding top group sections
+/// after scrolling back up.
 fn prepare_grouped_table_state(table_state: &mut TableState, selected_row: Option<usize>) {
     *table_state.offset_mut() = 0;
     table_state.select(selected_row);
@@ -176,7 +179,7 @@ fn selected_render_row(
     let selected_session_id = selected_session_id?;
 
     rows.iter().position(|row| match row {
-        GroupedSessionRow::GroupLabel(_) | GroupedSessionRow::EmptyGroupPlaceholder => false,
+        GroupedSessionRow::GroupLabel(_) => false,
         GroupedSessionRow::Session { session, .. } => session.id == selected_session_id,
     })
 }
@@ -190,7 +193,6 @@ fn render_table_row(
 ) -> Row<'static> {
     match row {
         GroupedSessionRow::GroupLabel(group) => render_group_label_row(*group),
-        GroupedSessionRow::EmptyGroupPlaceholder => render_empty_group_placeholder_row(),
         GroupedSessionRow::Session {
             session,
             tree_position,
@@ -217,11 +219,10 @@ fn render_group_label_row(group: SessionGroup) -> Row<'static> {
     Row::new(cells).height(1)
 }
 
-/// Renders a non-selectable placeholder row for empty groups.
-fn render_empty_group_placeholder_row() -> Row<'static> {
+/// Renders guidance when no grouped sessions exist.
+fn render_empty_sessions_hint_row() -> Row<'static> {
     let cells = vec![
-        Cell::from(GROUP_EMPTY_PLACEHOLDER)
-            .style(Style::default().fg(style::palette::text_subtle())),
+        Cell::from(EMPTY_SESSIONS_HINT).style(Style::default().fg(style::palette::text_subtle())),
         Cell::from(""),
         Cell::from(""),
         Cell::from(""),
@@ -593,6 +594,30 @@ mod tests {
         // Assert
         let border_cell_count = foreground_symbol_cell_count(terminal.backend().buffer(), "┌");
         assert_eq!(border_cell_count, 1);
+    }
+
+    #[test]
+    fn test_render_empty_session_list_shows_creation_hint_without_group_labels() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(100, 12);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let mut table_state = TableState::default();
+        let sessions = Vec::new();
+
+        // Act
+        terminal
+            .draw(|frame| {
+                SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::default(), 0)
+                    .render(frame, frame.area());
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains(EMPTY_SESSIONS_HINT));
+        assert!(!text.contains("Merge queue"));
+        assert!(!text.contains("Active sessions"));
+        assert!(!text.contains("Archive"));
     }
 
     #[test]
