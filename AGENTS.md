@@ -439,6 +439,20 @@ Always wrap these code elements in backticks when referenced in prose:
 - Every feature page under `docs/site/content/features/` that declares `[extra].gif`
   must have the matching GIF committed under `docs/site/static/features/`; if GIF
   generation is skipped locally, do not add or keep the feature page yet.
+- Keep feature-page title, description, and weight identical to the owning E2E test's
+  `FeatureTest::zola()` declaration; the test metadata is the source of truth.
+- Use checked Zola `@/...` links for internal Markdown targets. Reject relative `.md`
+  links and browser-relative paths in docs content.
+- Keep Markdown pipe tables structurally valid with the header, delimiter, and each body
+  row on separate lines. Use short titled blocks instead when cells need sentences.
+- Keep the installation journey complete: document Git plus installation and
+  authentication of at least one required agent CLI before the first launch step.
+- Keep root `README.md`, the installation guide, and Agents & Models aligned on provider
+  installation, authentication, supported invocation surfaces, and account usage
+  caveats. Use `README.md` as the concise public source of truth.
+- Keep docs search configuration, generated-index loading, sidebar UI, and `/docs/`
+  result filtering synchronized. Broad docs validation must exercise both title and
+  body-term searches in a rendered site.
 - When keybindings or visible shortcut labels change, verify
   `docs/site/content/docs/usage/keybindings.md` and
   `docs/site/content/docs/usage/workflow.md` against the runtime mode handlers and

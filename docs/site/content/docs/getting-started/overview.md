@@ -77,9 +77,17 @@ updates with `--no-update`.
 - **Diff view**: Press `d` in a review-state session to see exactly what the agent
   changed.
 
+## Development Status
+
+Agentty is in active development. Releases follow Semantic Versioning, but the current
+`0.y.z` series may still introduce breaking changes as workflows, integrations, and
+safeguards evolve. Always review and verify changes before relying on them in your
+repositories.
+
 ## Next Steps
 
-- [Installation](./installation) — install Agentty and run it for the first time.
+- [Installation](@/docs/getting-started/installation.md) — install Agentty and run it
+  for the first time.
 - [Agents & Models](@/docs/agents/backends.md) — configure backends and choose models.
 - [Workflow](@/docs/usage/workflow.md) — learn the interface layout and session
   lifecycle.

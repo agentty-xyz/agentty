@@ -24,8 +24,10 @@ documentation maintainable as it grows.
 
 - Set `sort_by = "weight"` and define page `weight` values for intentional ordering.
 - Keep `page_template` on the docs section so all guides share a consistent layout.
-- Use `in_search_index = true` in docs sections, and ensure site-level search indexing
-  is enabled when search is needed.
+- Keep `build_search_index = true` and the `[search]` configuration in `config.toml` so
+  the documentation sidebar search remains available.
+- Keep documentation pages in the search index. When adding non-docs content, verify
+  that the client-side result filter still limits the docs search to `/docs/` routes.
 
 ## Scale with Nested Sections
 
@@ -78,4 +80,9 @@ hardcoded and curated separately.
 1. Create a new Markdown page under `content/docs/`.
 1. Add `title`, `description`, and `weight` front matter.
 1. Add a `<!-- more -->` break so docs listings show concise summaries.
-1. Run `zola check` before publishing.
+1. Use Zola `@/...` links for internal Markdown pages so renamed or missing targets fail
+   validation instead of producing deployed `.md` links.
+1. Keep every pipe-table header, delimiter, and body row on its own source line. Prefer
+   short titled blocks when cells need full sentences.
+1. Run `zola check` before publishing, then test sidebar search with a title and a term
+   that appears only in page content.

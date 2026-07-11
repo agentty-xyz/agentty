@@ -27,12 +27,34 @@ Scope: `docs/site/content/docs/` and its child documentation pages.
   titled blocks instead of relying on horizontal scrolling.
 - Prefer one subsection per concept with consistent labels such as `Comes from`,
   `Prints`, and `Hidden or removed` when documenting lifecycle-style behavior.
+- Use Zola `@/...` links for every internal Markdown target. Do not use relative `.md`
+  links or browser-relative paths such as `./installation`; checked Zola links prevent
+  silent production 404s.
+- Keep pipe tables syntactically valid: the header, delimiter, and every body row must
+  occupy separate source lines. Keep cell content to short phrases; use titled blocks
+  when a cell would need a sentence.
+- Keep the first-run path executable from a clean machine. Installation docs must name
+  Git plus the required agent CLI installation and authentication step before telling
+  users to launch Agentty.
+- Keep provider installation, authentication, supported invocation surfaces, and account
+  usage caveats aligned between root `README.md`, `getting-started/installation.md`, and
+  `agents/backends.md`. Treat `README.md` as the concise public source of truth and
+  route detailed troubleshooting to the backend page.
 - For backend and model docs, document installed CLI requirements, visible model picker
   behavior, prompt attachment support, and user-facing fallback behavior. Keep provider
   protocol or transport internals out of user-facing pages unless users must understand
   them to operate Agentty.
 - For workflow and keybinding docs, split dense lifecycle behavior into short titled
   sections and keep shortcut tables scan-friendly.
+- Treat `crates/agentty/src/ui/state/help_action.rs`, visible `Tab` labels, and runtime
+  mode handlers as the source of truth for shortcut names and availability. Include both
+  forward and reverse tab navigation when documenting list-mode controls.
+- Treat each E2E test's `FeatureTest::zola()` declaration as the source of truth for its
+  generated feature-page title, description, and weight. Do not hand-edit those fields
+  to values that disagree with the test.
+- Keep the docs search operational: `build_search_index = true`, the `[search]`
+  configuration, the generated-index scripts, and the `/docs/` result filter must change
+  together.
 
 ## Change Routing
 
@@ -63,3 +85,6 @@ Scope: `docs/site/content/docs/` and its child documentation pages.
 - Before handoff for broad docs refreshes, scan edited pages for duplicated lifecycle
   descriptions, long table cells, stale setup instructions, and implementation details
   that should live in architecture docs or source docstrings instead.
+- Before handoff, scan for same-line pipe-table delimiters and non-`@/...` internal
+  Markdown links, compare feature metadata with `FeatureTest::zola()`, run `mdformat`,
+  run `zola-check`, and exercise docs search against the rendered site.

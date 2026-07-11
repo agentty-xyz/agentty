@@ -4,7 +4,7 @@ description = "Agentty is an ADE (Agentic Development Environment) for structure
 default_language = "en"
 compile_sass = true
 minify_html = true
-build_search_index = false
+build_search_index = true
 generate_feeds = false
 ignored_content = ["**/AGENTS.md", "**/CLAUDE.md", "**/GEMINI.md"]
 
@@ -16,6 +16,13 @@ insert_anchor_links = "right"
 [markdown.highlighting]
 style = "inline"
 theme = "gruvbox-dark-medium"
+
+[search]
+include_title = true
+include_description = true
+include_path = true
+include_content = true
+index_format = "elasticlunr_javascript"
 
 [extra]
 github_repo = "https://github.com/agentty-xyz/agentty"
