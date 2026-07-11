@@ -10,6 +10,7 @@ pub use ag_agent::SessionStats;
 use serde::de::{self, Deserializer};
 use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
 
 use super::agent::{AgentSelection, ReasoningLevel};
@@ -942,6 +943,11 @@ fn find_session<'a>(sessions: &'a [Session], session_id: &str) -> Option<&'a Ses
 
 /// Shared runtime handles for one active session worker.
 pub struct SessionHandles {
+    /// Serializes branch-publish ownership with queued branch operations.
+    ///
+    /// The guard is held across async persistence and push work, so this is
+    /// intentionally an async mutex rather than [`std::sync::Mutex`].
+    pub branch_operation_lock: Arc<AsyncMutex<()>>,
     /// Per-turn cancellation token shared between the UI and the worker.
     ///
     /// The worker swaps in a fresh [`CancellationToken`] at the start of
@@ -967,6 +973,7 @@ impl SessionHandles {
     /// Creates handles initialized with the given status.
     pub fn new(status: Status) -> Self {
         Self {
+            branch_operation_lock: Arc::new(AsyncMutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             child_pid: Arc::new(Mutex::new(None)),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
@@ -978,6 +985,7 @@ impl SessionHandles {
     /// Creates handles initialized with a typed transcript snapshot.
     pub fn new_with_transcript(status: Status, transcript: SessionTranscript) -> Self {
         Self {
+            branch_operation_lock: Arc::new(AsyncMutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             child_pid: Arc::new(Mutex::new(None)),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),

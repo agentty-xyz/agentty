@@ -11,9 +11,10 @@ use ag_git::GitClient;
 use ag_protocol::AgentResponse;
 use serde_json;
 use tokio::sync::mpsc;
+use tracing::warn;
 
 use super::task::SessionTranscriptMessageAppend;
-use super::worker::{SessionWorkerContext, TurnMetadata};
+use super::worker::{SessionWorkerContext, TurnMetadata, has_unfinished_rebase_operation};
 use super::{SessionTaskService, StatusTransition, published_branch};
 use crate::app::AppEvent;
 use crate::app::assist::AssistContext;
@@ -35,6 +36,8 @@ use crate::infra::fs::FsClient;
 pub(super) struct PostTurnContext {
     /// Reducer event sender used for output and post-turn projections.
     pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    /// Serializes post-turn publish ownership with queued branch operations.
+    pub(super) branch_operation_lock: Arc<tokio::sync::Mutex<()>>,
     /// Shared child-process PID slot reused by auto-commit cancellation.
     pub(super) child_pid: Arc<Mutex<Option<u32>>>,
     /// Clock used by linked review-request metadata refresh.
@@ -62,6 +65,7 @@ impl PostTurnContext {
     pub(super) fn from_worker(context: &SessionWorkerContext) -> Self {
         Self {
             app_event_tx: context.app_event_tx.clone(),
+            branch_operation_lock: Arc::clone(&context.branch_operation_lock),
             child_pid: Arc::clone(&context.child_pid),
             clock: Arc::clone(&context.clock),
             db: context.db.clone(),
@@ -84,6 +88,30 @@ impl PostTurnContext {
         self.queued_messages
             .lock()
             .map_or(true, |guard| !guard.is_empty())
+    }
+
+    /// Returns whether session sync is already queued or running on this
+    /// worker, failing closed when persisted operation state cannot be read.
+    async fn has_unfinished_rebase_operation(&self) -> bool {
+        let unfinished_operations = match self
+            .db
+            .operations()
+            .load_unfinished_session_operations()
+            .await
+        {
+            Ok(unfinished_operations) => unfinished_operations,
+            Err(error) => {
+                warn!(
+                    session_id = %self.session_id,
+                    %error,
+                    "Skipping post-turn auto-push because unfinished session operations could not be loaded"
+                );
+
+                return true;
+            }
+        };
+
+        has_unfinished_rebase_operation(&unfinished_operations, self.session_id.as_str())
     }
 }
 
@@ -376,7 +404,7 @@ async fn apply_successful_turn_result(
     })
     .await;
     let review_request_commit_message = commit_outcome.map(|outcome| outcome.commit_message);
-    start_published_branch_auto_push(context, turn_metadata, review_request_commit_message);
+    start_published_branch_auto_push(context, turn_metadata, review_request_commit_message).await;
     if target_status.allows_review_actions() && has_review_ready_stacked_children(context).await {
         let _ = context
             .app_event_tx
@@ -422,22 +450,28 @@ async fn has_review_ready_stacked_children(context: &PostTurnContext) -> bool {
 
 /// Starts the optional published-branch auto-push effect from explicit
 /// post-turn inputs.
-fn start_published_branch_auto_push(
+async fn start_published_branch_auto_push(
     context: &PostTurnContext,
     turn_metadata: TurnMetadata,
     review_request_commit_message: Option<String>,
 ) {
-    if context.has_queued_messages() {
-        return;
-    }
-
     let Some(published_upstream_ref) = turn_metadata.published_upstream_ref else {
         return;
     };
+    if context.has_queued_messages() {
+        return;
+    }
+    let branch_operation_guard = Arc::clone(&context.branch_operation_lock)
+        .lock_owned()
+        .await;
+    if context.has_unfinished_rebase_operation().await {
+        return;
+    }
 
     published_branch::start_published_branch_auto_push(
         published_branch::PublishedBranchAutoPushStartInput {
             app_event_tx: context.app_event_tx.clone(),
+            branch_operation_guard,
             clock: Arc::clone(&context.clock),
             db: context.db.clone(),
             folder: context.folder.clone(),
@@ -520,4 +554,116 @@ pub(super) fn persisted_session_summary_payload(assistant_message: &AgentRespons
 /// response.
 fn turn_applied_follow_up_tasks(_assistant_message: &AgentResponse) -> Vec<SessionFollowUpTask> {
     Vec::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use ag_git::MockGitClient;
+
+    use super::*;
+    use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
+
+    #[tokio::test]
+    async fn test_unfinished_rebase_check_fails_closed_when_operation_query_fails() {
+        // Arrange
+        let (db, pool) = AppRepositories::in_memory_with_pool().await;
+        pool.close().await;
+        let context = PostTurnContext {
+            app_event_tx: mpsc::unbounded_channel().0,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
+            child_pid: Arc::new(Mutex::new(None)),
+            clock: Arc::new(crate::infra::clock::RealClock),
+            db,
+            folder: PathBuf::new(),
+            git_client: Arc::new(MockGitClient::new()),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
+            session_update_versions: Arc::default(),
+            session_id: "session-id".into(),
+            transcript: Arc::new(Mutex::new(SessionTranscript::default())),
+        };
+
+        // Act
+        let should_skip_auto_push = context.has_unfinished_rebase_operation().await;
+
+        // Assert
+        assert!(
+            should_skip_auto_push,
+            "operation-query failures must suppress post-turn auto-push"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_auto_push_rechecks_queued_rebase_after_waiting_for_branch_lock() {
+        // Arrange
+        let db = AppRepositories::in_memory().await;
+        let project_id = db
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to upsert project");
+        db.sessions()
+            .insert_session(
+                "session-id",
+                "gemini-3-flash-preview",
+                "main",
+                "InProgress",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        let branch_operation_lock = Arc::new(tokio::sync::Mutex::new(()));
+        let enqueue_guard = Arc::clone(&branch_operation_lock).lock_owned().await;
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client
+            .expect_push_current_branch_to_remote_branch()
+            .never();
+        let context = Arc::new(PostTurnContext {
+            app_event_tx,
+            branch_operation_lock,
+            child_pid: Arc::new(Mutex::new(None)),
+            clock: Arc::new(crate::infra::clock::RealClock),
+            db: db.clone(),
+            folder: PathBuf::new(),
+            git_client: Arc::new(mock_git_client),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
+            session_update_versions: Arc::default(),
+            session_id: "session-id".into(),
+            transcript: Arc::new(Mutex::new(SessionTranscript::default())),
+        });
+        let auto_push_task = {
+            let context = Arc::clone(&context);
+
+            tokio::spawn(async move {
+                start_published_branch_auto_push(
+                    &context,
+                    TurnMetadata {
+                        published_upstream_ref: Some("origin/wt/session-id".to_string()),
+                        session_agent: AgentSelection::new(
+                            AgentKind::Antigravity,
+                            AgentModel::Gemini3FlashPreview,
+                        ),
+                    },
+                    None,
+                )
+                .await;
+            })
+        };
+        db.operations()
+            .insert_session_operation("queued-sync", "session-id", "rebase")
+            .await
+            .expect("failed to insert queued sync");
+
+        // Act
+        drop(enqueue_guard);
+        auto_push_task.await.expect("auto-push task should join");
+
+        // Assert
+        assert!(
+            app_event_rx.try_recv().is_err(),
+            "the queued sync should retain publish ownership"
+        );
+    }
 }

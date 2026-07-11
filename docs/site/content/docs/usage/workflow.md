@@ -167,7 +167,9 @@ Pressing `r` during a running turn queues session sync on the same session worke
 session stays **InProgress** while the active turn runs, then moves to **Rebasing** when
 the queued sync command starts. Agentty shows a `[Sync]` notice in the session output
 while the rebase is queued, and repeated `r` presses keep the single queued rebase
-instead of adding duplicates.
+instead of adding duplicates. Session sync reserves branch-publish ownership before it
+queues or starts, and retains that ownership through its post-rebase push. A completed
+turn or subsequent sync therefore cannot start a competing published-branch auto-push.
 
 ### Focused Review
 
@@ -295,9 +297,10 @@ publish popup for the linked forge review request:
 - When no review request is linked yet, only an open request for the same branch is
   reused; merged or closed requests are left alone.
 - After the first publish, later completed turns push the same remote branch
-  automatically in the background and update the review request title and description
-  from the latest session commit message when they differ. Failed background pushes keep
-  the manual `p` flow available for retry.
+  automatically in the background when no chat message or sync is already queued, and
+  update the review request title and description from the latest session commit message
+  when they differ. Failed background pushes keep the manual `p` flow available for
+  retry.
 
 <a id="usage-review-request-prerequisites"></a> Publishing needs regular Git
 authentication (credential helper or PAT for HTTPS remotes, SSH key for SSH remotes)
