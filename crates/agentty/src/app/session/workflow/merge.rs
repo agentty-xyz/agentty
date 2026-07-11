@@ -704,11 +704,17 @@ impl SessionMergeService {
     /// Restores a failed merge-start attempt to `Review` status without
     /// masking the original error.
     async fn restore_review_status(context: &MergeStartRestoreContext<'_>) {
-        if !context.status_transition.apply(Status::Review).await {
-            warn!(
+        match context.status_transition.apply(Status::Review).await {
+            Ok(true) => {}
+            Ok(false) => warn!(
                 session_id = context.session_id,
                 "skipped restoring review status because the in-memory status was already current"
-            );
+            ),
+            Err(error) => warn!(
+                session_id = context.session_id,
+                error = %error,
+                "failed to persist restored review status"
+            ),
         }
     }
 
@@ -1457,7 +1463,7 @@ impl SessionManager {
             }
             Err(error) => {
                 let merge_error = TranscriptNotice::MergeError.format(error);
-                SessionTaskService::append_workflow_notice(
+                let _ = SessionTaskService::append_workflow_notice(
                     transcript,
                     db,
                     app_event_tx,
@@ -1466,12 +1472,18 @@ impl SessionManager {
                     &merge_error,
                 )
                 .await;
-                if !status_transition.apply(Status::Review).await {
-                    warn!(
+                match status_transition.apply(Status::Review).await {
+                    Ok(true) => {}
+                    Ok(false) => warn!(
                         session_id = id,
                         "skipped restoring review status after merge error because the in-memory \
                          status was already current"
-                    );
+                    ),
+                    Err(error) => warn!(
+                        session_id = id,
+                        error = %error,
+                        "failed to persist restored review status after merge error"
+                    ),
                 }
             }
         }
@@ -2096,7 +2108,7 @@ impl SessionManager {
         match rebase_result {
             Ok(message) => {
                 let rebase_message = TranscriptNotice::Rebase.format(message);
-                SessionTaskService::append_workflow_notice(
+                let _ = SessionTaskService::append_workflow_notice(
                     transcript,
                     db,
                     app_event_tx,
@@ -2123,7 +2135,7 @@ impl SessionManager {
             }
             Err(error) => {
                 let rebase_error = TranscriptNotice::RebaseError.format(error);
-                SessionTaskService::append_workflow_notice(
+                let _ = SessionTaskService::append_workflow_notice(
                     transcript,
                     db,
                     app_event_tx,
@@ -2135,7 +2147,17 @@ impl SessionManager {
             }
         }
 
-        let restored_review_status = status_transition.apply(Status::Review).await;
+        let restored_review_status = match status_transition.apply(Status::Review).await {
+            Ok(status_updated) => status_updated,
+            Err(error) => {
+                warn!(
+                    session_id = id,
+                    error = %error,
+                    "failed to persist restored review status after rebase"
+                );
+                false
+            }
+        };
         if !restored_review_status {
             warn!(
                 session_id = id,

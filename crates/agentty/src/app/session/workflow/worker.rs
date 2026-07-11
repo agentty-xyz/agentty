@@ -85,16 +85,34 @@ pub(super) enum SessionCommand {
     },
 }
 
+/// Internal messages consumed by one per-session worker loop.
+enum SessionWorkerMessage {
+    /// Executes one persisted session operation.
+    Command(SessionCommand),
+    /// Retries queued-prompt drainage after an earlier persistence failure.
+    DrainQueued,
+}
+
+/// Result of attempting to drain the in-memory queued-prompt list.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum QueueDrainOutcome {
+    /// Drainage completed, paused for questions, or stopped after a prompt
+    /// persistence failure that a later wake-up may retry.
+    Complete,
+    /// A queued turn completed but its terminal status could not be persisted.
+    TerminalStatusRecoveryPending,
+}
+
 impl SessionCommand {
     /// Returns the persisted operation identifier for this command.
-    fn operation_id(&self) -> &str {
+    pub(super) fn operation_id(&self) -> &str {
         match self {
             Self::Rebase { operation_id, .. } | Self::Run { operation_id, .. } => operation_id,
         }
     }
 
     /// Returns the operation kind persisted in the operations table.
-    fn kind(&self) -> &'static str {
+    pub(super) fn kind(&self) -> &'static str {
         match self {
             Self::Rebase { .. } => REBASE_OPERATION_KIND,
             Self::Run {
@@ -170,6 +188,20 @@ impl SessionWorkerContext {
             .lock()
             .ok()
             .and_then(|mut guard| guard.pop_front())
+    }
+
+    /// Restores one undispatched prompt to the front of the shared queue.
+    fn requeue_prompt_front(&self, prompt: TurnPrompt) {
+        // Sync critical section (single push, no `.await`); `std::sync::Mutex`
+        // is the correct choice per CLAUDE.md §"Mutex Selection".
+        let mut guard = self.queued_messages.lock().unwrap_or_else(|error| {
+            tracing::warn!(
+                session_id = %self.session_id,
+                "queued-message mutex poisoned while restoring prompt; recovering queue state"
+            );
+            error.into_inner()
+        });
+        guard.push_front(prompt);
     }
 
     /// Removes every queued prompt without dispatching it.
@@ -301,7 +333,7 @@ impl SessionWorkerRebaseAssistClient {
         let turn_result = turn_result.map_err(turn::session_error_from_agent_error)?;
 
         self.append_assist_answer(&turn_result.assistant_message)
-            .await;
+            .await?;
         self.persist_assist_turn_metadata(&turn_result).await?;
 
         Ok(())
@@ -374,10 +406,13 @@ impl SessionWorkerRebaseAssistClient {
     }
 
     /// Appends the utility prompt answer to the session transcript.
-    async fn append_assist_answer(&self, assistant_message: &AgentResponse) {
+    async fn append_assist_answer(
+        &self,
+        assistant_message: &AgentResponse,
+    ) -> Result<(), SessionError> {
         let answer_text = assistant_message.to_answer_display_text();
         if answer_text.trim().is_empty() {
-            return;
+            return Ok(());
         }
 
         SessionTaskService::append_session_transcript_message(
@@ -391,7 +426,9 @@ impl SessionWorkerRebaseAssistClient {
                 raw_content: &answer_text,
             },
         )
-        .await;
+        .await?;
+
+        Ok(())
     }
 
     /// Persists token usage and updated provider conversation identifiers.
@@ -499,7 +536,7 @@ pub(crate) struct SessionWorkerService {
     /// default factory, enabling deterministic command execution without
     /// spawning real provider processes.
     pub(in crate::app::session) test_agent_channels: HashMap<SessionId, Arc<dyn AgentChannel>>,
-    workers: HashMap<SessionId, mpsc::UnboundedSender<SessionCommand>>,
+    workers: HashMap<SessionId, mpsc::UnboundedSender<SessionWorkerMessage>>,
 }
 
 impl SessionWorkerService {
@@ -537,22 +574,36 @@ impl SessionWorkerService {
             .collect();
 
         for session_id in interrupted_session_ids {
-            // Best-effort: status persistence failure is non-critical.
-            let _ = db
+            if let Err(error) = db
                 .sessions()
                 .update_session_status_with_timing_at(
                     &session_id,
                     &Status::Review.to_string(),
                     timestamp_seconds,
                 )
-                .await;
-        }
+                .await
+            {
+                tracing::warn!(
+                    session_id,
+                    error = %error,
+                    "retaining unfinished operations because startup status recovery failed"
+                );
 
-        // Best-effort: operation tracking metadata is non-critical.
-        let _ = db
-            .operations()
-            .fail_unfinished_session_operations(RESTART_FAILURE_REASON)
-            .await;
+                continue;
+            }
+
+            if let Err(error) = db
+                .operations()
+                .fail_unfinished_session_operations_for_session(&session_id, RESTART_FAILURE_REASON)
+                .await
+            {
+                tracing::warn!(
+                    session_id,
+                    error = %error,
+                    "failed to finalize startup-recovered session operations"
+                );
+            }
+        }
     }
 
     /// Aborts stale git rebase state left by interrupted worker operations.
@@ -603,8 +654,25 @@ impl SessionWorkerService {
             .insert_session_operation(&operation_id, &session_id, command.kind())
             .await?;
 
+        self.enqueue_persisted_session_command(services, runtime, command)
+            .await
+    }
+
+    /// Enqueues a command whose operation row committed with its owning use
+    /// case transaction.
+    ///
+    /// # Errors
+    /// Returns an error when the session worker is no longer available.
+    pub(super) async fn enqueue_persisted_session_command(
+        &mut self,
+        services: &AppServices,
+        runtime: SessionWorkerRuntime,
+        command: SessionCommand,
+    ) -> Result<(), SessionError> {
+        let operation_id = command.operation_id().to_string();
+
         let sender = self.ensure_session_worker(services, &runtime);
-        if sender.send(command).is_err() {
+        if sender.send(SessionWorkerMessage::Command(command)).is_err() {
             // Best-effort: operation tracking metadata is non-critical.
             let _ = services
                 .db()
@@ -621,8 +689,29 @@ impl SessionWorkerService {
     }
 
     /// Drops the in-memory worker sender for a session.
-    pub(super) fn clear_session_worker(&mut self, session_id: &str) {
+    pub(in crate::app::session) fn clear_session_worker(&mut self, session_id: &str) {
         self.workers.remove(session_id);
+    }
+
+    /// Wakes an active worker to retry queued-prompt drainage.
+    ///
+    /// Queue submissions can arrive while the worker is still executing a
+    /// turn. Their wake-up messages remain ordered behind that command and
+    /// provide one bounded retry if the inline drain cannot persist the next
+    /// prompt. A later submission supplies another retry without polling.
+    pub(super) fn wake_queued_messages(&self, session_id: &str) {
+        if let Some(sender) = self.workers.get(session_id) {
+            let _ = sender.send(SessionWorkerMessage::DrainQueued);
+        }
+    }
+
+    /// Wakes every active worker during the low-frequency session fallback
+    /// poll so restored prompts receive another persistence retry without
+    /// requiring a new user submission.
+    pub(super) fn wake_all_queued_messages(&self) {
+        for sender in self.workers.values() {
+            let _ = sender.send(SessionWorkerMessage::DrainQueued);
+        }
     }
 
     /// Drops worker queues for sessions no longer present in the active list.
@@ -636,7 +725,7 @@ impl SessionWorkerService {
         &mut self,
         services: &AppServices,
         runtime: &SessionWorkerRuntime,
-    ) -> mpsc::UnboundedSender<SessionCommand> {
+    ) -> mpsc::UnboundedSender<SessionWorkerMessage> {
         if let Some(sender) = self.workers.get(&runtime.session_id) {
             return sender.clone();
         }
@@ -692,18 +781,39 @@ impl SessionWorkerService {
     /// into the next session activity.
     fn spawn_session_worker(
         context: SessionWorkerContext,
-        mut receiver: mpsc::UnboundedReceiver<SessionCommand>,
+        mut receiver: mpsc::UnboundedReceiver<SessionWorkerMessage>,
     ) {
         tokio::spawn(async move {
-            while let Some(command) = receiver.recv().await {
+            let mut terminal_status_recovery_pending = false;
+            while let Some(message) = receiver.recv().await {
+                if terminal_status_recovery_pending {
+                    continue;
+                }
+                let SessionWorkerMessage::Command(command) = message else {
+                    terminal_status_recovery_pending = matches!(
+                        Self::drain_queued_messages(&context).await,
+                        QueueDrainOutcome::TerminalStatusRecoveryPending
+                    );
+                    continue;
+                };
                 let result = Self::process_session_command(&context, command).await;
                 if matches!(result, Some(Err(SessionError::StoppedByUser(_)))) {
                     context.clear_queued_messages();
                     Self::emit_queue_session_updated(&context);
                     continue;
                 }
+                if matches!(
+                    result,
+                    Some(Err(SessionError::TerminalStatusPersistence { .. }))
+                ) {
+                    terminal_status_recovery_pending = true;
+                    continue;
+                }
 
-                Self::drain_queued_messages(&context).await;
+                terminal_status_recovery_pending = matches!(
+                    Self::drain_queued_messages(&context).await,
+                    QueueDrainOutcome::TerminalStatusRecoveryPending
+                );
             }
 
             // Best-effort: session transport may already be torn down.
@@ -752,6 +862,14 @@ impl SessionWorkerService {
                     .mark_session_operation_done(&operation_id)
                     .await;
             }
+            Err(error @ SessionError::TerminalStatusPersistence { .. }) => {
+                tracing::warn!(
+                    operation_id,
+                    session_id = %context.session_id,
+                    error = %error,
+                    "retaining unfinished operation for terminal-status recovery"
+                );
+            }
             Err(error) => {
                 // Best-effort: operation tracking metadata is non-critical.
                 let _ = context
@@ -774,13 +892,13 @@ impl SessionWorkerService {
     /// behave the same as a normal reply. The drain stops on the first
     /// user-stopped turn and clears the remaining queue so `Ctrl+C` cancels
     /// the queued work cleanly.
-    async fn drain_queued_messages(context: &SessionWorkerContext) {
+    async fn drain_queued_messages(context: &SessionWorkerContext) -> QueueDrainOutcome {
         loop {
             if matches!(context.current_status(), Status::Question) {
-                return;
+                return QueueDrainOutcome::Complete;
             }
             let Some(prompt) = context.pop_queued_prompt() else {
-                return;
+                return QueueDrainOutcome::Complete;
             };
 
             // Mirror the queue change into render snapshots so the inline
@@ -791,14 +909,39 @@ impl SessionWorkerService {
             Self::emit_queue_session_updated(context);
 
             let operation_id = Uuid::new_v4().to_string();
-            // Best-effort: operation tracking metadata is non-critical.
-            let _ = context
+            if let Err(error) = context
                 .db
                 .operations()
                 .insert_session_operation(&operation_id, &context.session_id, "reply")
-                .await;
+                .await
+            {
+                context.requeue_prompt_front(prompt);
+                Self::emit_queue_session_updated(context);
+                tracing::warn!(
+                    session_id = %context.session_id,
+                    error = %error,
+                    "failed to persist drained queued prompt operation"
+                );
+
+                return QueueDrainOutcome::Complete;
+            }
             let published_upstream_ref = context.load_published_upstream_ref().await;
-            append_drained_prompt_to_transcript(context, &prompt).await;
+            if let Err(error) = append_drained_prompt_to_transcript(context, &prompt).await {
+                context.requeue_prompt_front(prompt);
+                Self::emit_queue_session_updated(context);
+                let _ = context
+                    .db
+                    .operations()
+                    .mark_session_operation_failed(&operation_id, &error.to_string())
+                    .await;
+                tracing::warn!(
+                    session_id = %context.session_id,
+                    error = %error,
+                    "failed to persist drained queued prompt"
+                );
+
+                return QueueDrainOutcome::Complete;
+            }
             let command = SessionCommand::Run {
                 operation_id,
                 request_kind: AgentRequestKind::SessionResume,
@@ -814,7 +957,13 @@ impl SessionWorkerService {
                 context.clear_queued_messages();
                 Self::emit_queue_session_updated(context);
 
-                return;
+                return QueueDrainOutcome::Complete;
+            }
+            if matches!(
+                result,
+                Some(Err(SessionError::TerminalStatusPersistence { .. }))
+            ) {
+                return QueueDrainOutcome::TerminalStatusRecoveryPending;
             }
         }
     }
@@ -979,6 +1128,23 @@ impl SessionManager {
             .await
     }
 
+    /// Enqueues a command whose operation row is already durable.
+    ///
+    /// # Errors
+    /// Returns an error when no worker is available.
+    pub(super) async fn enqueue_persisted_session_command(
+        &mut self,
+        services: &AppServices,
+        session_id: &str,
+        command: SessionCommand,
+    ) -> Result<(), SessionError> {
+        let runtime = self.session_worker_runtime_or_err(services, session_id)?;
+
+        self.worker_service_mut()
+            .enqueue_persisted_session_command(services, runtime, command)
+            .await
+    }
+
     /// Drops the in-memory worker sender for a session.
     pub(super) fn clear_session_worker(&mut self, session_id: &str) {
         self.worker_service_mut().clear_session_worker(session_id);
@@ -1041,7 +1207,10 @@ impl SessionManager {
 /// Appends one drained queued prompt to the typed session transcript so it
 /// renders alongside the normal reply prompt line once the queued turn starts
 /// running.
-async fn append_drained_prompt_to_transcript(context: &SessionWorkerContext, prompt: &TurnPrompt) {
+async fn append_drained_prompt_to_transcript(
+    context: &SessionWorkerContext,
+    prompt: &TurnPrompt,
+) -> Result<(), SessionError> {
     let prompt_transcript_text = prompt.transcript_text();
 
     SessionTaskService::append_session_transcript_message(
@@ -1055,7 +1224,9 @@ async fn append_drained_prompt_to_transcript(context: &SessionWorkerContext, pro
             raw_content: &prompt_transcript_text,
         },
     )
-    .await;
+    .await?;
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1073,7 +1244,8 @@ mod tests {
         persisted_session_summary_payload, status_update_after_turn_result,
     };
     use super::super::turn::{
-        consume_turn_events, run_channel_turn, run_turn_with_cancellation, terminate_child_process,
+        append_main_checkout_warning_best_effort, consume_turn_events, run_channel_turn,
+        run_turn_with_cancellation, terminate_child_process,
     };
     use super::*;
     use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
@@ -1409,6 +1581,14 @@ mod tests {
         );
     }
 
+    struct TerminalStatusFailureHarness {
+        context: SessionWorkerContext,
+        db: AppRepositories,
+        queued_messages: Arc<Mutex<VecDeque<TurnPrompt>>>,
+        shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+        status: Arc<Mutex<Status>>,
+    }
+
     #[tokio::test]
     /// Verifies process-only events do not append transcript content.
     async fn test_consume_turn_events_ignores_pid_only_events_for_transcript_messages() {
@@ -1580,9 +1760,11 @@ mod tests {
             .returning(|_| Box::pin(async { Ok(String::new()) }));
         mock_git_client
             .expect_diff()
+            .times(0..)
             .returning(|_, _| Box::pin(async { Ok(String::new()) }));
         mock_git_client
             .expect_is_worktree_clean()
+            .times(0..)
             .returning(|_| Box::pin(async { Ok(true) }));
 
         // Pre-cancel the token to simulate a previous turn's cancellation.
@@ -1681,9 +1863,11 @@ mod tests {
             });
         mock_git_client
             .expect_diff()
+            .times(0..)
             .returning(|_, _| Box::pin(async { Ok(String::new()) }));
         mock_git_client
             .expect_is_worktree_clean()
+            .times(0..)
             .returning(|_| Box::pin(async { Ok(true) }));
 
         let transcript = empty_transcript();
@@ -1726,6 +1910,182 @@ mod tests {
         assert!(output_text.contains("[Main Checkout Warning]"));
         assert!(output_text.contains("tracked-file status changed"));
         assert!(output_text.contains("done"));
+    }
+
+    #[tokio::test]
+    /// Verifies an informational warning write failure does not escape into
+    /// the otherwise successful provider-turn path.
+    async fn test_main_checkout_warning_persistence_is_best_effort() {
+        // Arrange
+        let (context, _db, _queue_handle, pool, _base_dir) =
+            queue_test_context(MockAgentChannel::new(), VecDeque::new(), Status::InProgress).await;
+        pool.close().await;
+
+        // Act
+        append_main_checkout_warning_best_effort(
+            &context,
+            "[Main Checkout Warning] test warning".to_string(),
+        )
+        .await;
+
+        // Assert
+        assert!(
+            context
+                .transcript
+                .lock()
+                .expect("transcript lock")
+                .is_empty(),
+            "persist-first warning append must leave memory unchanged when persistence fails"
+        );
+    }
+
+    #[tokio::test]
+    /// Verifies a completed provider turn whose terminal status cannot be
+    /// persisted keeps its operation unfinished for startup recovery.
+    async fn test_worker_retains_terminal_status_failure_for_recovery() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let harness = terminal_status_failure_harness(base_dir.path()).await;
+        let command = SessionCommand::Run {
+            operation_id: "op-terminal-status".to_string(),
+            request_kind: AgentRequestKind::SessionStart,
+            replay_transcript: None,
+            prompt: "test prompt".into(),
+            turn_metadata: default_turn_metadata(),
+        };
+
+        // Act
+        let (sender, receiver) = mpsc::unbounded_channel();
+        SessionWorkerService::spawn_session_worker(harness.context, receiver);
+        sender
+            .send(SessionWorkerMessage::Command(command))
+            .expect("failed to send worker command");
+        sender
+            .send(SessionWorkerMessage::DrainQueued)
+            .expect("failed to send queued drain wake-up");
+        drop(sender);
+        tokio::time::timeout(Duration::from_secs(1), harness.shutdown_rx)
+            .await
+            .expect("timed out waiting for worker shutdown")
+            .expect("worker dropped shutdown signal");
+        let unfinished_operations = harness
+            .db
+            .operations()
+            .load_unfinished_session_operations()
+            .await
+            .expect("failed to load unfinished operations");
+
+        // Assert
+        assert_eq!(unfinished_operations.len(), 1);
+        assert_eq!(unfinished_operations[0].id, "op-terminal-status");
+        assert_eq!(unfinished_operations[0].session_id, "sess1");
+        assert_eq!(unfinished_operations[0].kind, "start_prompt");
+        assert_eq!(unfinished_operations[0].status, "running");
+        assert_eq!(
+            *harness.queued_messages.lock().expect("queue lock"),
+            VecDeque::from([TurnPrompt::from_text("must wait for recovery".to_string())])
+        );
+        assert_eq!(
+            harness
+                .db
+                .sessions()
+                .load_sessions()
+                .await
+                .expect("failed to load sessions")[0]
+                .status,
+            Status::InProgress.to_string()
+        );
+        assert_eq!(
+            *harness.status.lock().expect("status lock"),
+            Status::InProgress
+        );
+    }
+
+    async fn terminal_status_failure_harness(base_dir: &Path) -> TerminalStatusFailureHarness {
+        let (db, pool) = AppRepositories::in_memory_with_pool().await;
+        insert_in_progress_test_session(&db).await;
+        db.operations()
+            .insert_session_operation("op-terminal-status", "sess1", "start_prompt")
+            .await
+            .expect("failed to insert operation");
+        sqlx::query(
+            r"
+CREATE TRIGGER fail_worker_terminal_status
+BEFORE UPDATE OF status ON session
+BEGIN
+    SELECT RAISE(FAIL, 'injected worker terminal status failure');
+END
+",
+        )
+        .execute(&pool)
+        .await
+        .expect("failed to install status failure trigger");
+
+        let mut mock_channel = MockAgentChannel::new();
+        mock_channel
+            .expect_run_turn()
+            .once()
+            .returning(|_, _, _| Box::pin(async { Ok(successful_turn_result("done")) }));
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let shutdown_tx = Arc::new(Mutex::new(Some(shutdown_tx)));
+        mock_channel
+            .expect_shutdown_session()
+            .once()
+            .returning(move |_| {
+                let shutdown_tx = shutdown_tx.lock().expect("shutdown sender lock").take();
+                Box::pin(async move {
+                    if let Some(shutdown_tx) = shutdown_tx {
+                        let _ = shutdown_tx.send(());
+                    }
+
+                    Ok(())
+                })
+            });
+        let mut mock_git_client = mock_git_client_detecting_main_repo(base_dir.join("main"));
+        mock_git_client
+            .expect_tracked_worktree_status()
+            .times(2)
+            .returning(|_| Box::pin(async { Ok(String::new()) }));
+        mock_git_client
+            .expect_diff()
+            .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+        mock_git_client
+            .expect_is_worktree_clean()
+            .returning(|_| Box::pin(async { Ok(true) }));
+        let queued_messages = Arc::new(Mutex::new(VecDeque::from([TurnPrompt::from_text(
+            "must wait for recovery".to_string(),
+        )])));
+        let status = Arc::new(Mutex::new(Status::InProgress));
+        let context = SessionWorkerContext {
+            app_event_tx: mpsc::unbounded_channel().0,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
+            cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+            channel: Arc::new(mock_channel),
+            child_pid: Arc::new(Mutex::new(None)),
+            clock: Arc::new(crate::infra::clock::RealClock),
+            db: db.clone(),
+            folder: base_dir.to_path_buf(),
+            fs_client: Arc::new(mock_fs_client_with_existing_directories()),
+            git_client: Arc::new(mock_git_client),
+            transcript: empty_transcript(),
+            queued_messages: Arc::clone(&queued_messages),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
+            session_update_versions: Arc::default(),
+            session_id: "sess1".into(),
+            session_agent: AgentSelection::new(
+                crate::domain::agent::AgentKind::Antigravity,
+                AgentModel::Gemini3FlashPreview,
+            ),
+            status: Arc::clone(&status),
+        };
+
+        TerminalStatusFailureHarness {
+            context,
+            db,
+            queued_messages,
+            shutdown_rx,
+            status,
+        }
     }
 
     #[tokio::test]
@@ -3244,7 +3604,7 @@ mod tests {
     async fn test_apply_turn_result_refreshes_when_turn_metadata_persistence_fails() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = AppRepositories::in_memory().await;
+        let (db, pool) = AppRepositories::in_memory_with_pool().await;
         let project_id = db
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
@@ -3260,10 +3620,18 @@ mod tests {
             )
             .await
             .expect("failed to insert session");
-        db.sessions()
-            .delete_session("sess1")
-            .await
-            .expect("failed to delete session");
+        sqlx::query(
+            r"
+CREATE TRIGGER fail_session_turn_metadata
+BEFORE UPDATE OF summary ON session
+BEGIN
+    SELECT RAISE(FAIL, 'injected turn metadata failure');
+END
+",
+        )
+        .execute(&pool)
+        .await
+        .expect("failed to install metadata failure trigger");
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
         let context = SessionWorkerContext {
             app_event_tx,
@@ -3318,11 +3686,7 @@ mod tests {
         let output = transcript_text(&context.transcript);
 
         // Assert
-        assert!(
-            error
-                .to_string()
-                .contains("no rows returned by a query that expected to return at least one row")
-        );
+        assert!(error.to_string().contains("injected turn metadata failure"));
         assert!(output.contains("Implemented the change."));
         assert!(
             output.contains("[Turn Metadata Error] Failed to persist completed turn metadata:")
@@ -3839,6 +4203,93 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Verifies startup recovery retains an unfinished operation until its
+    /// owning session's `Review` status is durably repaired.
+    async fn test_startup_recovery_retains_operation_when_status_write_fails() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let (db, pool) = AppRepositories::in_memory_with_pool().await;
+        insert_in_progress_test_session(&db).await;
+        db.operations()
+            .insert_session_operation("op-recovery", "sess1", "reply")
+            .await
+            .expect("failed to insert session operation");
+        sqlx::query(
+            r"
+CREATE TRIGGER fail_startup_review_status
+BEFORE UPDATE OF status ON session
+WHEN NEW.status = 'Review'
+BEGIN
+    SELECT RAISE(FAIL, 'injected startup status recovery failure');
+END
+",
+        )
+        .execute(&pool)
+        .await
+        .expect("failed to install startup recovery failure trigger");
+        let mut failed_recovery_git_client = MockGitClient::new();
+        failed_recovery_git_client
+            .expect_is_rebase_in_progress()
+            .times(0);
+        failed_recovery_git_client.expect_abort_rebase().times(0);
+
+        // Act
+        SessionWorkerService::fail_unfinished_operations_from_previous_run_at(
+            &db,
+            base_dir.path(),
+            Arc::new(failed_recovery_git_client),
+            300,
+        )
+        .await;
+
+        // Assert
+        let failed_recovery_session = db
+            .sessions()
+            .load_sessions()
+            .await
+            .expect("failed to load session after failed recovery");
+        assert_eq!(failed_recovery_session[0].status, "InProgress");
+        assert!(
+            db.operations()
+                .is_session_operation_unfinished("op-recovery")
+                .await
+                .expect("failed to inspect retained operation")
+        );
+
+        // Arrange recovery
+        sqlx::query("DROP TRIGGER fail_startup_review_status")
+            .execute(&pool)
+            .await
+            .expect("failed to remove startup recovery failure trigger");
+        let mut recovered_git_client = MockGitClient::new();
+        recovered_git_client.expect_is_rebase_in_progress().times(0);
+        recovered_git_client.expect_abort_rebase().times(0);
+
+        // Act recovery
+        SessionWorkerService::fail_unfinished_operations_from_previous_run_at(
+            &db,
+            base_dir.path(),
+            Arc::new(recovered_git_client),
+            600,
+        )
+        .await;
+
+        // Assert recovery
+        let recovered_session = db
+            .sessions()
+            .load_sessions()
+            .await
+            .expect("failed to load recovered session");
+        assert_eq!(recovered_session[0].status, "Review");
+        assert!(
+            !db.operations()
+                .is_session_operation_unfinished("op-recovery")
+                .await
+                .expect("failed to inspect recovered operation")
+        );
+    }
+
+    #[tokio::test]
     /// Verifies restart recovery aborts stale rebase metadata for interrupted
     /// rebase operations before restoring review state.
     async fn test_fail_unfinished_operations_from_previous_run_aborts_interrupted_rebase() {
@@ -4134,11 +4585,12 @@ mod tests {
         SessionWorkerContext,
         AppRepositories,
         Arc<Mutex<VecDeque<TurnPrompt>>>,
+        sqlx::SqlitePool,
         tempfile::TempDir,
     ) {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = AppRepositories::in_memory().await;
+        let (db, pool) = AppRepositories::in_memory_with_pool().await;
         let project_id = db
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
@@ -4185,9 +4637,11 @@ mod tests {
             .returning(|_| Box::pin(async { Ok(String::new()) }));
         mock_git_client
             .expect_diff()
+            .times(0..)
             .returning(|_, _| Box::pin(async { Ok(String::new()) }));
         mock_git_client
             .expect_is_worktree_clean()
+            .times(0..)
             .returning(|_| Box::pin(async { Ok(true) }));
 
         let queue_handle = Arc::new(Mutex::new(queued_messages));
@@ -4214,7 +4668,7 @@ mod tests {
             status: Arc::new(Mutex::new(status)),
         };
 
-        (context, db, queue_handle, base_dir)
+        (context, db, queue_handle, pool, base_dir)
     }
 
     /// Builds one [`SessionWorkerContext`] whose only meaningful state is the
@@ -4267,6 +4721,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_requeue_prompt_front_recovers_poisoned_queue_without_losing_prompt() {
+        // Arrange
+        let queue = Arc::new(Mutex::new(VecDeque::from([TurnPrompt::from_text(
+            "queued second".to_string(),
+        )])));
+        let queue_to_poison = Arc::clone(&queue);
+        let poison_result = std::panic::catch_unwind(move || {
+            let _guard = queue_to_poison.lock().expect("initial queue lock");
+            std::panic::resume_unwind(Box::new("poison queued-message mutex"));
+        });
+        assert!(poison_result.is_err(), "test setup must poison the mutex");
+        let context = queue_helper_context(Arc::clone(&queue)).await;
+
+        // Act
+        context.requeue_prompt_front(TurnPrompt::from_text("queued first".to_string()));
+
+        // Assert
+        let queue = queue
+            .lock()
+            .expect_err("queued-message mutex should remain marked poisoned")
+            .into_inner();
+        assert_eq!(queue.len(), 2);
+        assert_eq!(queue[0].text, "queued first");
+        assert_eq!(queue[1].text, "queued second");
+    }
+
+    #[tokio::test]
     async fn test_clear_queued_messages_drops_all_pending_prompts() {
         // Arrange
         let queue: Arc<Mutex<VecDeque<TurnPrompt>>> = Arc::new(Mutex::new(VecDeque::from([
@@ -4312,7 +4793,7 @@ mod tests {
             Box::pin(async { unreachable!("drain must not dispatch while status is Question") })
         });
         let queued = VecDeque::from([TurnPrompt::from_text("queued reply".to_string())]);
-        let (context, _db, queue_handle, _base_dir) =
+        let (context, _db, queue_handle, _pool, _base_dir) =
             queue_test_context(mock_channel, queued, Status::Question).await;
 
         // Act
@@ -4323,6 +4804,280 @@ mod tests {
         let queue = queue_handle.lock().expect("queue lock");
         assert_eq!(queue.len(), 1);
         assert_eq!(queue.front().expect("queued head").text, "queued reply");
+    }
+
+    #[tokio::test]
+    async fn test_drain_queued_messages_restores_prompt_when_transcript_persistence_fails() {
+        // Arrange
+        let mut mock_channel = MockAgentChannel::new();
+        mock_channel.expect_run_turn().never().returning(|_, _, _| {
+            Box::pin(async { unreachable!("failed transcript append must not dispatch") })
+        });
+        let queued = VecDeque::from([
+            TurnPrompt::from_text("queued first".to_string()),
+            TurnPrompt::from_text("queued second".to_string()),
+        ]);
+        let (context, _db, queue_handle, pool, _base_dir) =
+            queue_test_context(mock_channel, queued, Status::InProgress).await;
+        pool.close().await;
+
+        // Act
+        SessionWorkerService::drain_queued_messages(&context).await;
+
+        // Assert
+        let queue = queue_handle.lock().expect("queue lock");
+        assert_eq!(queue.len(), 2);
+        assert_eq!(queue[0].text, "queued first");
+        assert_eq!(queue[1].text, "queued second");
+        assert!(
+            context
+                .transcript
+                .lock()
+                .expect("transcript lock")
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    /// Verifies a drained prompt remains queued and unpersisted until its
+    /// owning operation row can be inserted successfully.
+    async fn test_drain_queued_messages_retries_after_operation_insert_failure() {
+        // Arrange
+        let mut mock_channel = MockAgentChannel::new();
+        mock_channel
+            .expect_run_turn()
+            .once()
+            .withf(|_, request, _| request.prompt.text == "queued reply")
+            .returning(|_, _, _| {
+                Box::pin(async {
+                    Err(AgentError::Backend(
+                        "stop after operation insert recovery".to_string(),
+                    ))
+                })
+            });
+        let queued = VecDeque::from([TurnPrompt::from_text("queued reply".to_string())]);
+        let (context, db, queue_handle, pool, _base_dir) =
+            queue_test_context(mock_channel, queued, Status::InProgress).await;
+        sqlx::query(
+            r"
+CREATE TRIGGER fail_drained_operation_insert
+BEFORE INSERT ON session_operation
+BEGIN
+    SELECT RAISE(FAIL, 'injected drained operation insert failure');
+END
+",
+        )
+        .execute(&pool)
+        .await
+        .expect("failed to install operation insert failure trigger");
+
+        // Act
+        SessionWorkerService::drain_queued_messages(&context).await;
+
+        // Assert
+        assert_eq!(queue_handle.lock().expect("queue lock").len(), 1);
+        assert!(
+            context
+                .transcript
+                .lock()
+                .expect("transcript lock")
+                .is_empty()
+        );
+        assert!(
+            db.sessions()
+                .load_session_messages("sess1")
+                .await
+                .expect("failed to load session messages")
+                .is_empty()
+        );
+
+        // Arrange recovery
+        sqlx::query("DROP TRIGGER fail_drained_operation_insert")
+            .execute(&pool)
+            .await
+            .expect("failed to remove operation insert failure trigger");
+
+        // Act recovery
+        SessionWorkerService::drain_queued_messages(&context).await;
+
+        // Assert recovery
+        assert!(queue_handle.lock().expect("queue lock").is_empty());
+        assert!(transcript_text(&context.transcript).contains("queued reply"));
+    }
+
+    #[tokio::test]
+    /// Verifies terminal-status persistence failure inside a queued turn
+    /// propagates to the worker and leaves later prompts untouched.
+    async fn test_drain_queued_messages_propagates_terminal_status_recovery() {
+        // Arrange
+        let executed_prompts = Arc::new(Mutex::new(Vec::new()));
+        let executed_prompts_for_channel = Arc::clone(&executed_prompts);
+        let mut mock_channel = MockAgentChannel::new();
+        mock_channel
+            .expect_run_turn()
+            .once()
+            .returning(move |_, request, _| {
+                executed_prompts_for_channel
+                    .lock()
+                    .expect("executed prompts lock")
+                    .push(request.prompt.text);
+                Box::pin(async { Ok(successful_turn_result("queued turn complete")) })
+            });
+        let queued = VecDeque::from([
+            TurnPrompt::from_text("queued first".to_string()),
+            TurnPrompt::from_text("queued second".to_string()),
+        ]);
+        let (context, db, queue_handle, pool, _base_dir) =
+            queue_test_context(mock_channel, queued, Status::InProgress).await;
+        sqlx::query(
+            r"
+CREATE TRIGGER fail_drained_turn_terminal_status
+BEFORE UPDATE OF status ON session
+WHEN NEW.status = 'Review'
+BEGIN
+    SELECT RAISE(FAIL, 'injected drained turn terminal status failure');
+END
+",
+        )
+        .execute(&pool)
+        .await
+        .expect("failed to install terminal status failure trigger");
+
+        // Act
+        let outcome = SessionWorkerService::drain_queued_messages(&context).await;
+        let unfinished_operations = db
+            .operations()
+            .load_unfinished_session_operations()
+            .await
+            .expect("failed to load unfinished operations");
+
+        // Assert
+        assert_eq!(outcome, QueueDrainOutcome::TerminalStatusRecoveryPending);
+        assert_eq!(
+            *executed_prompts.lock().expect("executed prompts lock"),
+            vec!["queued first".to_string()]
+        );
+        {
+            let queue = queue_handle.lock().expect("queue lock");
+            assert_eq!(queue.len(), 1);
+            assert_eq!(queue[0].text, "queued second");
+        }
+        assert_eq!(unfinished_operations.len(), 1);
+        assert_eq!(unfinished_operations[0].status, "running");
+        assert_eq!(
+            db.sessions()
+                .load_sessions()
+                .await
+                .expect("failed to load sessions")[0]
+                .status,
+            Status::InProgress.to_string()
+        );
+    }
+
+    #[tokio::test]
+    /// Verifies the periodic recovery wake retries a restored prompt after
+    /// both submission-time drain attempts fail, without new user input.
+    async fn test_periodic_worker_wake_recovers_after_two_prompt_write_failures() {
+        // Arrange
+        let executed_prompts = Arc::new(Mutex::new(Vec::new()));
+        let executed_prompts_for_channel = Arc::clone(&executed_prompts);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let shutdown_tx = Arc::new(Mutex::new(Some(shutdown_tx)));
+        let shutdown_tx_for_channel = Arc::clone(&shutdown_tx);
+        let mut mock_channel = MockAgentChannel::new();
+        mock_channel
+            .expect_run_turn()
+            .times(2)
+            .returning(move |_, request, _| {
+                executed_prompts_for_channel
+                    .lock()
+                    .expect("executed prompts lock")
+                    .push(request.prompt.text);
+                Box::pin(async {
+                    Err(AgentError::Backend(
+                        "stop after recording queued prompt".to_string(),
+                    ))
+                })
+            });
+        mock_channel
+            .expect_shutdown_session()
+            .once()
+            .returning(move |_| {
+                let shutdown_tx = shutdown_tx_for_channel
+                    .lock()
+                    .expect("shutdown sender lock")
+                    .take();
+                Box::pin(async move {
+                    if let Some(shutdown_tx) = shutdown_tx {
+                        let _ = shutdown_tx.send(());
+                    }
+
+                    Ok(())
+                })
+            });
+        let queued = VecDeque::from([
+            TurnPrompt::from_text("queued first".to_string()),
+            TurnPrompt::from_text("queued second".to_string()),
+        ]);
+        let (context, _db, queue_handle, pool, _base_dir) =
+            queue_test_context(mock_channel, queued, Status::InProgress).await;
+        let transcript = Arc::clone(&context.transcript);
+        sqlx::query(
+            r"
+CREATE TRIGGER fail_queued_prompt_append
+BEFORE INSERT ON session_message
+BEGIN
+    SELECT RAISE(FAIL, 'injected queued prompt append failure');
+END
+",
+        )
+        .execute(&pool)
+        .await
+        .expect("failed to install queued prompt failure trigger");
+        SessionWorkerService::drain_queued_messages(&context).await;
+        let (sender, receiver) = mpsc::unbounded_channel();
+        SessionWorkerService::spawn_session_worker(context, receiver);
+        let mut worker_service = SessionWorkerService::new();
+        worker_service.workers.insert("sess1".into(), sender);
+        worker_service.wake_queued_messages("sess1");
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let failed_operation_count = sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM session_operation WHERE status = 'failed'",
+                )
+                .fetch_one(&pool)
+                .await
+                .expect("failed to count failed operations");
+                if failed_operation_count >= 2 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("timed out waiting for both queued prompt append failures");
+        sqlx::query("DROP TRIGGER fail_queued_prompt_append")
+            .execute(&pool)
+            .await
+            .expect("failed to remove queued prompt failure trigger");
+
+        // Act
+        worker_service.wake_all_queued_messages();
+        drop(worker_service);
+        tokio::time::timeout(Duration::from_secs(1), shutdown_rx)
+            .await
+            .expect("timed out waiting for worker shutdown")
+            .expect("worker dropped shutdown signal");
+
+        // Assert
+        assert!(queue_handle.lock().expect("queue lock").is_empty());
+        assert_eq!(
+            *executed_prompts.lock().expect("executed prompts lock"),
+            vec!["queued first".to_string(), "queued second".to_string()]
+        );
+        let transcript = transcript_text(&transcript);
+        assert!(transcript.contains("queued first"));
+        assert!(transcript.contains("queued second"));
     }
 
     #[tokio::test]
@@ -4339,7 +5094,7 @@ mod tests {
             })
             .returning(|_, _, _| Box::pin(async { Ok(successful_turn_result("Queued done.")) }));
         let queued = VecDeque::from([TurnPrompt::from_text("queued reply".to_string())]);
-        let (mut context, db, queue_handle, base_dir) =
+        let (mut context, db, queue_handle, _pool, base_dir) =
             queue_test_context(mock_channel, queued, Status::InProgress).await;
         db.sessions()
             .update_session_published_upstream_ref(
@@ -4446,7 +5201,7 @@ mod tests {
             TurnPrompt::from_text("queued first".to_string()),
             TurnPrompt::from_text("queued second".to_string()),
         ]);
-        let (context, _db, queue_handle, _base_dir) =
+        let (context, _db, queue_handle, _pool, _base_dir) =
             queue_test_context(mock_channel, queued, Status::InProgress).await;
 
         // Act

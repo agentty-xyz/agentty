@@ -1063,6 +1063,30 @@ mod tests {
     /// Fake terminal size used by tests that don't exercise scrolling.
     const TEST_TERMINAL_SIZE: Rect = Rect::new(0, 0, 80, 24);
 
+    /// Inserts one persisted question session for tests that exercise durable
+    /// question-mode status transitions.
+    async fn insert_question_session(app: &App, session_id: &str) {
+        let project_id = app
+            .services
+            .db()
+            .projects()
+            .upsert_project("/tmp/test", None)
+            .await
+            .expect("failed to upsert project");
+        app.services
+            .db()
+            .sessions()
+            .insert_session(
+                session_id,
+                "gemini-3-flash-preview",
+                "main",
+                "Question",
+                project_id,
+            )
+            .await
+            .expect("failed to insert question session");
+    }
+
     #[tokio::test]
     async fn test_question_view_metrics_uses_default_review_model_for_loading_fallback() {
         // Arrange
@@ -1167,6 +1191,7 @@ mod tests {
         // Arrange — two unanswered questions. Ctrl+C should cancel the
         // question turn and transition to View without sending a reply.
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        insert_question_session(&app, "session-ctrl-c").await;
         app.review_cache.insert(
             "session-ctrl-c".into(),
             crate::app::ReviewCacheEntry::Ready {
@@ -1218,6 +1243,7 @@ mod tests {
         // Arrange — answer focus with no at-mention overlay. Esc must mirror
         // Ctrl+C and cancel the question turn without sending a reply.
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        insert_question_session(&app, "session-esc").await;
         app.review_cache.insert(
             "session-esc".into(),
             crate::app::ReviewCacheEntry::Ready {
@@ -1406,6 +1432,7 @@ mod tests {
 
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         let session_id = "session-review-check";
+        insert_question_session(&app, session_id).await;
         app.sessions.push_session(Session {
             base_branch: "main".to_string(),
             created_at: 0,
@@ -1482,6 +1509,7 @@ mod tests {
 
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         let session_id = "session-handle-review";
+        insert_question_session(&app, session_id).await;
         app.sessions.push_session(Session {
             base_branch: "main".to_string(),
             created_at: 0,

@@ -23,8 +23,13 @@ pub struct SessionOperationRow {
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait OperationRepository: Send + Sync {
-    /// Marks unfinished operations as failed after process restart.
-    async fn fail_unfinished_session_operations(&self, reason: &str) -> Result<(), DbError>;
+    /// Marks one session's unfinished operations as failed after its status
+    /// has been durably recovered from an interrupted process run.
+    async fn fail_unfinished_session_operations_for_session(
+        &self,
+        session_id: &str,
+        reason: &str,
+    ) -> Result<(), DbError>;
 
     /// Returns whether cancellation is requested for a specific operation.
     async fn is_cancel_requested_for_operation(&self, operation_id: &str) -> Result<bool, DbError>;
@@ -86,7 +91,11 @@ struct RequiredBoolValueRow {
 
 #[async_trait]
 impl OperationRepository for SqliteOperationRepository {
-    async fn fail_unfinished_session_operations(&self, reason: &str) -> Result<(), DbError> {
+    async fn fail_unfinished_session_operations_for_session(
+        &self,
+        session_id: &str,
+        reason: &str,
+    ) -> Result<(), DbError> {
         let now = unix_timestamp_now();
 
         sqlx::query(
@@ -97,12 +106,14 @@ SET status = 'failed',
     heartbeat_at = ?,
     last_error = ?,
     cancel_requested = 1
-WHERE status IN ('queued', 'running')
+WHERE session_id = ?
+  AND status IN ('queued', 'running')
 ",
         )
         .bind(now)
         .bind(now)
         .bind(reason)
+        .bind(session_id)
         .execute(&self.0)
         .await?;
 

@@ -5155,6 +5155,113 @@ async fn test_apply_review_request_status_update_closed_cancels_stacked_child() 
 }
 
 #[tokio::test]
+async fn test_closed_review_does_not_cancel_stacked_child_when_parent_update_fails() {
+    // Arrange
+    let base_dir = tempdir().expect("failed to create temp dir");
+    let base_path = base_dir.path().to_path_buf();
+    let (database, pool) = AppRepositories::in_memory_with_pool().await;
+    let mut app = App::new_with_clients(
+        base_path.clone(),
+        base_path,
+        None,
+        database,
+        crate::test_support::test_app_clients(),
+    )
+    .await
+    .expect("failed to build app");
+    let project_id = app.active_project_id();
+    let session_id = "session-closed-failure";
+    let child_session_id = "session-child-preserved";
+    app.services
+        .db()
+        .sessions()
+        .insert_session(
+            session_id,
+            "gemini-3-flash-preview",
+            "main",
+            &Status::Review.to_string(),
+            project_id,
+        )
+        .await
+        .expect("failed to insert parent session");
+    app.services
+        .db()
+        .sessions()
+        .insert_stacked_draft_session(
+            child_session_id,
+            "gemini-3-flash-preview",
+            "wt/session",
+            &Status::Draft.to_string(),
+            session_id,
+            project_id,
+        )
+        .await
+        .expect("failed to insert child session");
+    let session_data_dir = app
+        .services
+        .base_path()
+        .join(session_id.chars().take(8).collect::<String>())
+        .join(SESSION_DATA_DIR);
+    fs::create_dir_all(session_data_dir).expect("failed to create session data dir");
+    app.refresh_sessions_now().await;
+    sqlx::query(
+        r"
+CREATE TRIGGER fail_external_parent_cancel
+BEFORE UPDATE OF status ON session
+WHEN OLD.id = 'session-closed-failure' AND NEW.status = 'Canceled'
+BEGIN
+    SELECT RAISE(FAIL, 'injected parent cancellation failure');
+END
+",
+    )
+    .execute(&pool)
+    .await
+    .expect("failed to install parent cancellation failure trigger");
+    let update = ReviewRequestStatusUpdate {
+        generation: 0,
+        result: Ok(SyncReviewRequestTaskResult {
+            outcome: session::SyncReviewRequestOutcome::Closed {
+                display_id: "#8".to_string(),
+            },
+            summary: Some(test_review_request_summary(
+                "#8",
+                ReviewRequestState::Closed,
+            )),
+        }),
+        session_id: session_id.into(),
+    };
+
+    // Act
+    app.apply_review_request_status_update(update).await;
+    app.process_pending_app_events().await;
+
+    // Assert
+    let parent_session = app
+        .sessions
+        .session_or_err(session_id)
+        .expect("expected parent session to remain loaded");
+    let child_session = app
+        .sessions
+        .session_or_err(child_session_id)
+        .expect("expected child session to remain loaded");
+    assert_eq!(parent_session.status, Status::Review);
+    assert_eq!(child_session.status, Status::Draft);
+    let persisted_sessions = app
+        .services
+        .db()
+        .sessions()
+        .load_sessions()
+        .await
+        .expect("failed to load persisted sessions");
+    assert!(persisted_sessions.iter().any(|session| {
+        session.id == session_id && session.status == Status::Review.to_string()
+    }));
+    assert!(persisted_sessions.iter().any(|session| {
+        session.id == child_session_id && session.status == Status::Draft.to_string()
+    }));
+}
+
+#[tokio::test]
 async fn test_apply_review_request_status_update_merged_marks_session_done() {
     // Arrange
     let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(

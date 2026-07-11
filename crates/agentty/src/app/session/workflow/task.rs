@@ -115,8 +115,11 @@ impl StatusTransition {
     }
 
     /// Applies a status transition using the bound session dependencies.
-    pub(crate) async fn apply(&self, status: Status) -> bool {
-        SessionTaskService::update_status(
+    ///
+    /// # Errors
+    /// Returns an error when the durable status update fails.
+    pub(crate) async fn apply(&self, status: Status) -> Result<bool, SessionError> {
+        Ok(SessionTaskService::update_status(
             self.status.as_ref(),
             self.clock.as_ref(),
             &self.db,
@@ -125,7 +128,7 @@ impl StatusTransition {
             self.session_id.as_str(),
             status,
         )
-        .await
+        .await?)
     }
 
     /// Applies a status transition or returns a workflow error for invalid
@@ -134,7 +137,7 @@ impl StatusTransition {
         &self,
         status: Status,
     ) -> Result<(), SessionError> {
-        if self.apply(status).await {
+        if self.apply(status).await? {
             return Ok(());
         }
 
@@ -337,7 +340,7 @@ impl SessionTaskService {
             }
             Err(commit_error) => {
                 let message = TranscriptNotice::CommitError.format(&commit_error);
-                Self::append_workflow_notice(
+                let _ = Self::append_workflow_notice(
                     &context.transcript,
                     &context.db,
                     &context.app_event_tx,
@@ -921,7 +924,7 @@ impl SessionTaskService {
                     raw_content: &answer_text,
                 },
             )
-            .await;
+            .await?;
         }
 
         if let Err(error) = db
@@ -990,10 +993,11 @@ impl SessionTaskService {
             .map_err(SessionError::Workflow)
     }
 
-    /// Applies a status transition to memory and database when valid.
+    /// Applies a valid status transition to durable storage and then memory.
     ///
     /// This bumps the session-update version, emits
-    /// [`AppEvent::SessionUpdated`] for targeted snapshot sync, and emits
+    /// [`AppEvent::SessionUpdated`] for targeted snapshot sync only after
+    /// persistence succeeds, and emits
     /// session/project refresh events for transitions that affect list
     /// snapshots or project session aggregates.
     pub(crate) async fn update_status(
@@ -1004,45 +1008,79 @@ impl SessionTaskService {
         session_update_versions: &SessionUpdateVersionMap,
         id: &str,
         new: Status,
-    ) -> bool {
-        let should_update = if let Ok(mut current) = status.lock() {
-            if (*current).can_transition_to(new) {
-                *current = new;
-                true
-            } else {
-                false
-            }
-        } else {
-            false
+    ) -> Result<bool, crate::infra::db::DbError> {
+        let Some(current) = status.lock().ok().map(|current| *current) else {
+            return Ok(false);
         };
-        if !should_update {
-            return false;
+        if !current.can_transition_to(new) {
+            return Ok(false);
         }
 
         let timestamp_seconds = unix_timestamp_from_system_time(clock.now_system_time());
 
-        if let Err(error) = db
+        let status_persisted = match db
             .sessions()
-            .update_session_status_with_timing_at(id, &new.to_string(), timestamp_seconds)
+            .transition_session_status_with_timing_at(
+                id,
+                &current.to_string(),
+                &new.to_string(),
+                timestamp_seconds,
+            )
             .await
         {
-            warn!(
-                session_id = id,
-                status = %new,
-                error = %error,
-                "failed to persist session status update"
-            );
+            Ok(status_persisted) => status_persisted,
+            Err(error) => {
+                warn!(
+                    session_id = id,
+                    status = %new,
+                    error = %error,
+                    "failed to persist session status update"
+                );
+
+                return Err(error);
+            }
+        };
+        if !status_persisted {
+            return Ok(false);
+        }
+        if let Ok(mut current) = status.lock() {
+            *current = new;
         }
         Self::emit_session_updated(app_event_tx, session_update_versions, id);
         if Self::status_requires_full_refresh(new) {
             Self::send_session_and_project_refresh_events(app_event_tx, id);
         }
 
-        true
+        Ok(true)
     }
 
-    /// Appends one formatted workflow notice to the in-memory transcript and
-    /// durable message store.
+    /// Publishes a runnable turn snapshot after its use-case transaction
+    /// commits.
+    pub(crate) fn publish_persisted_turn_start(
+        status: &Mutex<Status>,
+        transcript: &Arc<Mutex<SessionTranscript>>,
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+        session_update_versions: &SessionUpdateVersionMap,
+        id: &str,
+        message_content: &str,
+    ) {
+        Self::append_live_transcript_message(
+            transcript,
+            id,
+            SessionMessageKind::UserPrompt,
+            message_content,
+        );
+        if let Ok(mut current) = status.lock() {
+            *current = Status::InProgress;
+        }
+        Self::emit_session_updated(app_event_tx, session_update_versions, id);
+        Self::send_session_and_project_refresh_events(app_event_tx, id);
+    }
+
+    /// Persists one formatted workflow notice, then appends it to memory.
+    ///
+    /// # Errors
+    /// Returns an error when the durable transcript append fails.
     pub(crate) async fn append_workflow_notice(
         transcript: &Arc<Mutex<SessionTranscript>>,
         db: &AppRepositories,
@@ -1050,13 +1088,7 @@ impl SessionTaskService {
         session_update_versions: &SessionUpdateVersionMap,
         id: &str,
         message: &str,
-    ) {
-        Self::append_live_transcript_message(
-            transcript,
-            id,
-            SessionMessageKind::WorkflowNotice,
-            message,
-        );
+    ) -> Result<(), crate::infra::db::DbError> {
         if let Err(error) = db
             .sessions()
             .append_session_message(id, SessionMessageKind::WorkflowNotice, message)
@@ -1067,12 +1099,24 @@ impl SessionTaskService {
                 error = %error,
                 "failed to persist workflow notice"
             );
+
+            return Err(error);
         }
+        Self::append_live_transcript_message(
+            transcript,
+            id,
+            SessionMessageKind::WorkflowNotice,
+            message,
+        );
         Self::emit_session_updated(app_event_tx, session_update_versions, id);
+
+        Ok(())
     }
 
-    /// Appends one raw user/assistant message to the in-memory transcript and
-    /// durable message store.
+    /// Persists one raw user/assistant message, then appends it to memory.
+    ///
+    /// # Errors
+    /// Returns an error when the durable transcript append fails.
     pub(crate) async fn append_session_transcript_message(
         transcript: &Arc<Mutex<SessionTranscript>>,
         db: &AppRepositories,
@@ -1080,8 +1124,7 @@ impl SessionTaskService {
         session_update_versions: &SessionUpdateVersionMap,
         id: &str,
         message: SessionTranscriptMessageAppend<'_>,
-    ) {
-        Self::append_live_transcript_message(transcript, id, message.kind, message.raw_content);
+    ) -> Result<(), crate::infra::db::DbError> {
         if let Err(error) = db
             .sessions()
             .append_session_message(id, message.kind, message.raw_content)
@@ -1092,8 +1135,13 @@ impl SessionTaskService {
                 error = %error,
                 "failed to persist session transcript message"
             );
+
+            return Err(error);
         }
+        Self::append_live_transcript_message(transcript, id, message.kind, message.raw_content);
         Self::emit_session_updated(app_event_tx, session_update_versions, id);
+
+        Ok(())
     }
 
     /// Appends one typed message to the live transcript snapshot.
@@ -1427,7 +1475,8 @@ mod tests {
             "session-id",
             "\n[Commit] No changes to commit.\n",
         )
-        .await;
+        .await
+        .expect("workflow notice persistence should succeed");
 
         // Assert
         assert_eq!(
@@ -1480,7 +1529,8 @@ mod tests {
                 raw_content: "    hello ",
             },
         )
-        .await;
+        .await
+        .expect("transcript message persistence should succeed");
 
         // Assert
         assert_eq!(
@@ -1510,6 +1560,47 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].kind, "user_prompt");
         assert_eq!(messages[0].content, "    hello");
+    }
+
+    #[tokio::test]
+    async fn test_append_session_transcript_message_preserves_memory_on_database_failure() {
+        // Arrange
+        let (database, pool) = AppRepositories::in_memory_with_pool().await;
+        insert_review_session(&database, AgentModel::Gpt55.as_str()).await;
+        pool.close().await;
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
+        let session_update_versions = Arc::default();
+
+        // Act
+        let result = SessionTaskService::append_session_transcript_message(
+            &transcript,
+            &database,
+            &app_event_tx,
+            &session_update_versions,
+            "session-id",
+            SessionTranscriptMessageAppend {
+                kind: SessionMessageKind::UserPrompt,
+                raw_content: "hello",
+            },
+        )
+        .await;
+
+        // Assert
+        assert!(result.is_err());
+        assert!(
+            transcript
+                .lock()
+                .expect("transcript lock should not be poisoned")
+                .is_empty()
+        );
+        assert!(app_event_rx.try_recv().is_err());
+        assert!(
+            session_update_versions
+                .lock()
+                .expect("session update versions lock should not be poisoned")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1613,13 +1704,151 @@ mod tests {
             .expect("missing session row");
 
         // Assert
-        assert!(entered_first_interval);
-        assert!(left_first_interval);
-        assert!(entered_second_interval);
-        assert!(left_second_interval);
+        assert!(entered_first_interval.expect("first interval should start"));
+        assert!(left_first_interval.expect("first interval should end"));
+        assert!(entered_second_interval.expect("second interval should start"));
+        assert!(left_second_interval.expect("second interval should end"));
         assert_eq!(session_row.status, "Question");
         assert_eq!(session_row.in_progress_started_at, None);
         assert_eq!(session_row.in_progress_total_seconds, 150);
+    }
+
+    #[tokio::test]
+    async fn test_update_status_preserves_memory_on_database_failure() {
+        // Arrange
+        let (database, pool) = AppRepositories::in_memory_with_pool().await;
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to upsert project");
+        database
+            .sessions()
+            .insert_session(
+                "session-id",
+                "gpt-5.5",
+                "main",
+                &Status::Draft.to_string(),
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        pool.close().await;
+        let status = Mutex::new(Status::Draft);
+        let clock = StaticClock::new(SystemTime::UNIX_EPOCH + Duration::from_secs(10));
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let session_update_versions = Arc::default();
+
+        // Act
+        let result = SessionTaskService::update_status(
+            &status,
+            &clock,
+            &database,
+            &app_event_tx,
+            &session_update_versions,
+            "session-id",
+            Status::InProgress,
+        )
+        .await;
+
+        // Assert
+        assert!(result.is_err());
+        assert_eq!(
+            *status.lock().expect("status lock should not be poisoned"),
+            Status::Draft
+        );
+        assert!(app_event_rx.try_recv().is_err());
+        assert!(
+            session_update_versions
+                .lock()
+                .expect("session update versions lock should not be poisoned")
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_status_compare_and_swap_serializes_concurrent_transitions() {
+        // Arrange
+        let (database, pool) = AppRepositories::in_memory_with_pool().await;
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to upsert project");
+        database
+            .sessions()
+            .insert_session(
+                "session-id",
+                "gpt-5.5",
+                "main",
+                &Status::Draft.to_string(),
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        let status = Arc::new(Mutex::new(Status::Draft));
+        let clock = Arc::new(StaticClock::new(
+            SystemTime::UNIX_EPOCH + Duration::from_secs(10),
+        ));
+        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+        let session_update_versions = Arc::default();
+        let mut connection = pool.acquire().await.expect("failed to acquire connection");
+        sqlx::query("BEGIN IMMEDIATE")
+            .execute(&mut *connection)
+            .await
+            .expect("failed to hold status write lock");
+
+        // Act
+        let spawn_update = |new_status| {
+            let app_event_tx = app_event_tx.clone();
+            let clock = Arc::clone(&clock);
+            let database = database.clone();
+            let session_update_versions = Arc::clone(&session_update_versions);
+            let status = Arc::clone(&status);
+
+            tokio::spawn(async move {
+                SessionTaskService::update_status(
+                    status.as_ref(),
+                    clock.as_ref(),
+                    &database,
+                    &app_event_tx,
+                    &session_update_versions,
+                    "session-id",
+                    new_status,
+                )
+                .await
+            })
+        };
+        let in_progress_task = spawn_update(Status::InProgress);
+        let canceled_task = spawn_update(Status::Canceled);
+        tokio::task::yield_now().await;
+        sqlx::query("COMMIT")
+            .execute(&mut *connection)
+            .await
+            .expect("failed to release status write lock");
+        drop(connection);
+        let in_progress_updated = in_progress_task
+            .await
+            .expect("in-progress task should join")
+            .expect("in-progress update should not fail");
+        let canceled_updated = canceled_task
+            .await
+            .expect("canceled task should join")
+            .expect("canceled update should not fail");
+        let live_status = *status.lock().expect("status lock should not be poisoned");
+        let persisted_status = database
+            .sessions()
+            .load_sessions()
+            .await
+            .expect("failed to load sessions")
+            .into_iter()
+            .find(|row| row.id == "session-id")
+            .expect("missing session row")
+            .status;
+
+        // Assert
+        assert_ne!(in_progress_updated, canceled_updated);
+        assert_eq!(persisted_status, live_status.to_string());
     }
 
     /// Verifies the status-transition context updates both live handles and
@@ -1651,7 +1880,10 @@ mod tests {
         let status_transition = StatusTransition::from_services(&services, &handles, "session-id");
 
         // Act
-        let status_updated = status_transition.apply(Status::InProgress).await;
+        let status_updated = status_transition
+            .apply(Status::InProgress)
+            .await
+            .expect("status persistence should succeed");
         let live_status = handles
             .status
             .lock()

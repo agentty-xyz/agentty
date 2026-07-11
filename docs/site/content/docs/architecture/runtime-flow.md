@@ -173,10 +173,12 @@ render twice per frame.
    After a successful push, linked review-request and commit metadata are resolved and
    refreshed; lookup failures append the existing warning notice instead of being
    discarded. The push result is appended as a durable transcript notice.
-1. Completed stacked-parent turns fan out `SessionCommand::Rebase` to review-ready
-   materialized children so child branches replay onto the latest parent branch.
 1. The session size is refreshed and the final status becomes `Review` or `Question`
    (failures return to `Review`).
+1. After the terminal status commits, completed stacked-parent turns fan out
+   `SessionCommand::Rebase` to review-ready materialized children so child branches
+   replay onto the latest parent branch. A failed terminal-status write emits no child
+   synchronization event.
 
 ### Operation Lifecycle and Recovery
 
@@ -184,12 +186,26 @@ render twice per frame.
 restart-safe:
 
 - Before enqueue: insert `session_operation` row (`queued`).
+- Queued-prompt drainage restores the prompt and waits for a recovery wake-up when its
+  operation row cannot be inserted; transcript persistence and dispatch begin only after
+  that operation exists.
 - Worker transitions: `queued -> running -> done/failed/canceled`.
+- If a completed turn cannot persist its terminal status, the worker leaves the
+  operation `running` instead of marking it failed, so startup recovery can reset the
+  session to `Review` rather than overlooking a persistent `InProgress` session. That
+  worker stops dispatching later messages until recovery so it cannot execute more work
+  from the inconsistent status.
 - Cancel requests are persisted and checked before command execution.
-- On startup, unfinished operations are failed with reason `Interrupted by app restart`,
-  interrupted rebase operations abort stale in-progress git rebase metadata, and
-  impacted sessions are reset to `Review`. Pending post-merge stacked-child syncs are
-  requeued.
+- On startup, interrupted rebase operations abort stale in-progress git rebase metadata.
+  Each impacted session is durably reset to `Review` before its unfinished operations
+  are failed with reason `Interrupted by app restart`; a failed status repair retains
+  those operations for the next recovery pass. Pending post-merge stacked-child syncs
+  are requeued.
+- Prompts queued behind an active turn send ordered drain wake-ups to the same worker.
+  If transcript persistence fails, the prompt returns to the front of the queue and the
+  next pending wake-up retries it before later prompts. The existing low-frequency
+  session fallback poll supplies further recovery wake-ups after transient storage
+  failures, preserving FIFO order without requiring another user submission.
 
 ### Status Transition Rules
 
@@ -420,6 +436,26 @@ runtime flow:
   startup.
 - Session snapshots in memory are authoritative for rendering; DB is authoritative for
   restart recovery.
+- Durable session mutations commit before shared handles change or `SessionUpdated` is
+  emitted. Failed status or transcript writes therefore leave the render snapshot and
+  reducer event stream unchanged.
+- Status transitions use the validated current status as a SQLite compare-and-swap
+  condition, so concurrent stale transitions cannot both commit. The initial prompt,
+  title, user transcript row, runnable status/timing, draft flag, and queued operation
+  commit together before the first-turn snapshot is published or dispatched. Follow-up
+  replies likewise commit their expected-status transition, question clear, user
+  transcript row, and queued operation atomically, so cancellation winning the status
+  race leaves the unanswered question and transcript unchanged.
+- The one-time transcript replay marker used after an agent or model switch is consumed
+  only after the reply transaction commits and its command reaches the worker. A failed
+  reply start therefore retries with the same replay context.
+- Externally closed review requests cancel stacked children only after the parent
+  cancellation commits; a failed or stale parent transition leaves the entire stack
+  unchanged.
+- Status and active-work timing, transcript messages and ordering metadata, and
+  completed-turn metadata each commit through transaction-scoped repository methods;
+  app-layer callers receive persistence errors instead of publishing best-effort
+  snapshots.
 - System logs are process-local only: a bounded in-memory buffer, never written to
   SQLite or disk.
 - Shared session handles provide low-latency updates between DB reloads.

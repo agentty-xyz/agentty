@@ -28,6 +28,7 @@ impl SessionManager {
         }
 
         self.state.refresh_deadline = self.next_refresh_deadline();
+        self.worker_service.wake_all_queued_messages();
 
         let Ok(sessions_metadata) = services.db().sessions().load_sessions_metadata().await else {
             return false;

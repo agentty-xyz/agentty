@@ -107,7 +107,7 @@ pub(super) async fn append_assist_header(
     let assist_header = notice.format(format!(
         "Attempt {assist_attempt}/{max_assist_attempts}. {assist_action}\n{detail}"
     ));
-    SessionTaskService::append_workflow_notice(
+    let _ = SessionTaskService::append_workflow_notice(
         &context.transcript,
         &context.db,
         &context.app_event_tx,

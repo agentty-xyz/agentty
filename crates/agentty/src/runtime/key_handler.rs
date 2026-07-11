@@ -1208,7 +1208,8 @@ mod tests {
             &mut app,
             &session_id,
             crate::domain::session::Status::Review,
-        );
+        )
+        .await;
         app.mode = AppMode::Confirmation {
             confirmation_intent: ConfirmationIntent::CancelSession,
             confirmation_message: "Cancel session \"test\"?".to_string(),
@@ -1386,7 +1387,8 @@ mod tests {
             &mut app,
             &source_session_id,
             crate::domain::session::Status::Done,
-        );
+        )
+        .await;
         app.mode = AppMode::Confirmation {
             confirmation_intent: ConfirmationIntent::ContinueSession,
             confirmation_message: "Create a new draft session with initial context from this \
@@ -1516,7 +1518,8 @@ mod tests {
             &mut app,
             &session_id,
             crate::domain::session::Status::Review,
-        );
+        )
+        .await;
         app.mode = AppMode::PublishBranchInput {
             default_branch_name: "wt/session".to_string(),
             input: crate::domain::input::InputState::with_text("review/custom".to_string()),

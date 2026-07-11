@@ -268,7 +268,7 @@ pub(super) async fn apply_turn_result(
 pub(super) async fn finalize_channel_turn(
     context: &TurnFinalizerContext,
     result: &Result<Status, SessionError>,
-) {
+) -> Result<(), SessionError> {
     if let Some((session_size, added_lines, deleted_lines)) =
         SessionTaskService::refresh_persisted_session_diff_stats(
             &context.db,
@@ -289,7 +289,6 @@ pub(super) async fn finalize_channel_turn(
     }
 
     if let Some(target_status) = status_update_after_turn_result(result) {
-        // Best-effort: status transition failure is non-critical.
         let status_transition = StatusTransition::from_parts(
             context.app_event_tx.clone(),
             Arc::clone(&context.clock),
@@ -298,8 +297,37 @@ pub(super) async fn finalize_channel_turn(
             Arc::clone(&context.session_update_versions),
             Arc::clone(&context.status),
         );
-        let _ = status_transition.apply(target_status).await;
+        match status_transition.apply(target_status).await {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(SessionError::Workflow(format!(
+                    "Session status changed before the turn could finalize as {target_status}"
+                )));
+            }
+            Err(SessionError::Db(source)) => {
+                return Err(SessionError::TerminalStatusPersistence {
+                    target_status,
+                    source,
+                });
+            }
+            Err(error) => return Err(error),
+        }
     }
+
+    if result
+        .as_ref()
+        .is_ok_and(|status| status.allows_review_actions())
+        && has_review_ready_stacked_children(&context.db, &context.session_id).await
+    {
+        // Fire-and-forget: receiver may be dropped during shutdown.
+        let _ = context
+            .app_event_tx
+            .send(AppEvent::StackedParentTurnCompleted {
+                session_id: context.session_id.clone(),
+            });
+    }
+
+    Ok(())
 }
 
 /// Returns the status transition the worker should emit after a turn result.
@@ -321,7 +349,7 @@ pub(super) fn status_update_after_turn_result(
 /// Appends one terminal turn error to the live and persisted transcript.
 async fn append_turn_error(context: &PostTurnContext, error_text: &str) {
     let message = format!("\n{}\n", error_text.trim());
-    SessionTaskService::append_workflow_notice(
+    let _ = SessionTaskService::append_workflow_notice(
         &context.transcript,
         &context.db,
         &context.app_event_tx,
@@ -360,7 +388,7 @@ async fn apply_successful_turn_result(
                 raw_content: message.as_str(),
             },
         )
-        .await;
+        .await?;
     }
     let turn_applied_state = match (TurnPersistence {
         context,
@@ -405,34 +433,16 @@ async fn apply_successful_turn_result(
     .await;
     let review_request_commit_message = commit_outcome.map(|outcome| outcome.commit_message);
     start_published_branch_auto_push(context, turn_metadata, review_request_commit_message).await;
-    if target_status.allows_review_actions() && has_review_ready_stacked_children(context).await {
-        let _ = context
-            .app_event_tx
-            .send(AppEvent::StackedParentTurnCompleted {
-                session_id: context.session_id.clone(),
-            });
-    }
-
     Ok(target_status)
 }
 
 /// Returns whether the completed session has materialized stacked children
 /// whose persisted statuses parse to review-action-ready states.
-async fn has_review_ready_stacked_children(context: &PostTurnContext) -> bool {
-    let Ok(Some(project_id)) = context
-        .db
-        .sessions()
-        .load_session_project_id(&context.session_id)
-        .await
-    else {
+async fn has_review_ready_stacked_children(db: &AppRepositories, session_id: &SessionId) -> bool {
+    let Ok(Some(project_id)) = db.sessions().load_session_project_id(session_id).await else {
         return false;
     };
-    let Ok(sessions) = context
-        .db
-        .sessions()
-        .load_sessions_for_project(project_id)
-        .await
-    else {
+    let Ok(sessions) = db.sessions().load_sessions_for_project(project_id).await else {
         return false;
     };
 
@@ -440,7 +450,7 @@ async fn has_review_ready_stacked_children(context: &PostTurnContext) -> bool {
         session
             .parent_session_id
             .as_deref()
-            .is_some_and(|parent_session_id| parent_session_id == context.session_id.as_str())
+            .is_some_and(|parent_session_id| parent_session_id == session_id.as_str())
             && session
                 .status
                 .parse::<Status>()
@@ -492,7 +502,7 @@ async fn handle_turn_persistence_failure(context: &PostTurnContext, error: &Sess
     let message = TranscriptNotice::TurnMetadataError.format(format!(
         "Failed to persist completed turn metadata: {error}"
     ));
-    SessionTaskService::append_workflow_notice(
+    let _ = SessionTaskService::append_workflow_notice(
         &context.transcript,
         &context.db,
         &context.app_event_tx,
@@ -562,6 +572,123 @@ mod tests {
 
     use super::*;
     use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
+
+    #[tokio::test]
+    async fn test_completed_turn_surfaces_terminal_status_persistence_failure() {
+        // Arrange
+        let (db, pool) = AppRepositories::in_memory_with_pool().await;
+        let project_id = db
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to upsert project");
+        db.sessions()
+            .insert_session("session-id", "gpt-5.5", "main", "InProgress", project_id)
+            .await
+            .expect("failed to insert session");
+        insert_review_ready_stacked_child(&db, project_id).await;
+        db.sessions()
+            .append_session_message(
+                "session-id",
+                SessionMessageKind::AssistantAnswer,
+                "Completed answer",
+            )
+            .await
+            .expect("failed to persist assistant answer");
+        db.sessions()
+            .persist_session_turn_metadata(
+                "session-id",
+                &SessionTurnMetadata {
+                    instruction_conversation_id: None,
+                    model: "gpt-5.5".to_string(),
+                    provider_conversation_id: None,
+                    questions_json: String::new(),
+                    summary: "completed summary".to_string(),
+                    token_usage_delta: SessionStats::default(),
+                },
+            )
+            .await
+            .expect("failed to persist completed turn metadata");
+        sqlx::query(
+            r"
+CREATE TRIGGER fail_completed_turn_status
+BEFORE UPDATE OF status ON session
+BEGIN
+    SELECT RAISE(FAIL, 'injected terminal status failure');
+END
+",
+        )
+        .execute(&pool)
+        .await
+        .expect("failed to install status failure trigger");
+        let mut fs_client = crate::infra::fs::MockFsClient::new();
+        fs_client.expect_is_dir().returning(|_| false);
+        let status = Arc::new(Mutex::new(Status::InProgress));
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let context = TurnFinalizerContext {
+            app_event_tx,
+            clock: Arc::new(crate::infra::clock::RealClock),
+            db: db.clone(),
+            folder: PathBuf::new(),
+            fs_client: Arc::new(fs_client),
+            git_client: Arc::new(MockGitClient::new()),
+            session_update_versions: Arc::default(),
+            session_id: "session-id".into(),
+            status: Arc::clone(&status),
+        };
+        let turn_result = Ok(Status::Review);
+
+        // Act
+        let result = finalize_channel_turn(&context, &turn_result).await;
+
+        // Assert
+        assert!(matches!(
+            result,
+            Err(SessionError::TerminalStatusPersistence {
+                target_status: Status::Review,
+                ..
+            })
+        ));
+        assert_eq!(*status.lock().expect("status lock"), Status::InProgress);
+        let session = db
+            .sessions()
+            .load_sessions()
+            .await
+            .expect("failed to load sessions")
+            .into_iter()
+            .find(|session| session.id == "session-id")
+            .expect("missing session");
+        assert_eq!(session.status, "InProgress");
+        assert_eq!(session.summary.as_deref(), Some("completed summary"));
+        assert_eq!(
+            db.sessions()
+                .load_session_messages("session-id")
+                .await
+                .expect("failed to load messages")
+                .len(),
+            1
+        );
+        while let Ok(event) = app_event_rx.try_recv() {
+            assert!(!matches!(
+                event,
+                AppEvent::StackedParentTurnCompleted { .. }
+            ));
+        }
+    }
+
+    async fn insert_review_ready_stacked_child(db: &AppRepositories, project_id: i64) {
+        db.sessions()
+            .insert_stacked_draft_session(
+                "child-id",
+                "gpt-5.5",
+                "child-branch",
+                "Review",
+                "session-id",
+                project_id,
+            )
+            .await
+            .expect("failed to insert stacked child");
+    }
 
     #[tokio::test]
     async fn test_unfinished_rebase_check_fails_closed_when_operation_query_fails() {

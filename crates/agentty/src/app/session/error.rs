@@ -1,3 +1,5 @@
+use crate::domain::session::Status;
+
 /// Typed error returned by session-layer workflow operations.
 ///
 /// Wraps infrastructure errors from git, database, app-server, and forge
@@ -21,6 +23,17 @@ pub enum SessionError {
     /// A database operation failed.
     #[error("{0}")]
     Db(#[from] crate::infra::db::DbError),
+
+    /// Durable terminal status persistence failed after the provider turn
+    /// completed, so the owning operation must remain recoverable.
+    #[error("Failed to persist terminal session status `{target_status}`: {source}")]
+    TerminalStatusPersistence {
+        /// Terminal status that still needs to be persisted.
+        target_status: Status,
+        /// Database failure returned by the status transition.
+        #[source]
+        source: crate::infra::db::DbError,
+    },
 
     /// A filesystem boundary operation failed.
     #[error("{0}")]

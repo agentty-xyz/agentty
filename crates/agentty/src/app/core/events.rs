@@ -1927,7 +1927,26 @@ impl App {
 
         let status_transition =
             StatusTransition::from_services(&self.services, handles, session_id);
-        let _ = status_transition.apply(Status::Canceled).await;
+        match status_transition.apply(Status::Canceled).await {
+            Ok(true) => {}
+            Ok(false) => {
+                tracing::warn!(
+                    session_id,
+                    "skipping stacked-child cancellation because parent status changed"
+                );
+
+                return;
+            }
+            Err(error) => {
+                tracing::warn!(
+                    session_id,
+                    error = %error,
+                    "skipping stacked-child cancellation because parent cancellation failed"
+                );
+
+                return;
+            }
+        }
         self.sessions
             .cancel_stacked_child_sessions(&self.services, session_id)
             .await;

@@ -1858,7 +1858,7 @@ impl App {
         let handles = self.sessions.session_handles_or_err(session_id)?;
         let status_transition =
             StatusTransition::from_services(&self.services, handles, session_id);
-        let status_updated = status_transition.apply(Status::Queued).await;
+        let status_updated = status_transition.apply(Status::Queued).await?;
 
         if !status_updated {
             return Err(AppError::Workflow(
@@ -2071,7 +2071,8 @@ mod fork_tests {
 
         persist_fork_source_runtime_linkage(app, &source_session_id).await;
         persist_fork_source_transcript(app, &source_session_id).await;
-        crate::test_support::set_session_status_for_test(app, &source_session_id, Status::Review);
+        crate::test_support::set_session_status_for_test(app, &source_session_id, Status::Review)
+            .await;
 
         source_session_id
     }

@@ -530,10 +530,17 @@ pub(crate) fn session_manager_with_sessions(sessions: Vec<Session>) -> SessionMa
     session_manager_with_handles(sessions, std::collections::HashMap::new())
 }
 
-/// Sets a session status in both the session snapshot and its live handles,
-/// when either exists.
+/// Persists a session status, then updates both the session snapshot and its
+/// live handles when either exists.
 #[cfg(test)]
-pub(crate) fn set_session_status_for_test(app: &mut App, session_id: &str, status: Status) {
+pub(crate) async fn set_session_status_for_test(app: &mut App, session_id: &str, status: Status) {
+    app.services
+        .db()
+        .sessions()
+        .update_session_status_with_timing_at(session_id, &status.to_string(), 0)
+        .await
+        .expect("failed to persist test session status");
+
     if let Some(session) = app
         .sessions
         .sessions_mut()
