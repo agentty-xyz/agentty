@@ -632,19 +632,9 @@ impl Session {
         self.in_progress_total_seconds > 0 || self.in_progress_started_at.is_some()
     }
 
-    /// Returns the reasoning level that will be used for the next turn.
-    pub fn effective_reasoning_level(
-        &self,
-        default_reasoning_level: ReasoningLevel,
-    ) -> ReasoningLevel {
-        self.reasoning_level_override
-            .unwrap_or(default_reasoning_level)
-    }
-
-    /// Returns whether this session currently inherits the project default
-    /// reasoning level.
-    pub fn uses_default_reasoning_level(&self) -> bool {
-        self.reasoning_level_override.is_none()
+    /// Returns the session-persisted reasoning level used for the next turn.
+    pub fn effective_reasoning_level(&self) -> ReasoningLevel {
+        self.reasoning_level_override.unwrap_or_default()
     }
 
     /// Returns cumulative active-work time including any open `InProgress`
@@ -1665,19 +1655,16 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
     }
 
     #[test]
-    /// Ensures sessions without an override inherit the provided default
-    /// reasoning level.
-    fn test_effective_reasoning_level_uses_default_when_override_is_missing() {
+    /// Ensures invalid rows without a stored value use the stable application
+    /// fallback rather than the current project setting.
+    fn test_effective_reasoning_level_uses_stable_fallback_when_value_is_missing() {
         // Arrange
         let session = test_session(None);
 
         // Act
-        let effective_reasoning_level = session.effective_reasoning_level(ReasoningLevel::Medium);
-        let uses_default_reasoning_level = session.uses_default_reasoning_level();
-
+        let effective_reasoning_level = session.effective_reasoning_level();
         // Assert
-        assert_eq!(effective_reasoning_level, ReasoningLevel::Medium);
-        assert!(uses_default_reasoning_level);
+        assert_eq!(effective_reasoning_level, ReasoningLevel::High);
     }
 
     #[test]
@@ -1688,29 +1675,22 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
         let session = test_session(Some(ReasoningLevel::High));
 
         // Act
-        let effective_reasoning_level = session.effective_reasoning_level(ReasoningLevel::Low);
-        let uses_default_reasoning_level = session.uses_default_reasoning_level();
-
+        let effective_reasoning_level = session.effective_reasoning_level();
         // Assert
         assert_eq!(effective_reasoning_level, ReasoningLevel::High);
-        assert!(!uses_default_reasoning_level);
     }
 
     #[test]
-    /// Ensures clearing a session override restores inheritance from the
-    /// provided default reasoning level.
-    fn test_effective_reasoning_level_returns_to_default_after_override_is_cleared() {
+    /// Ensures clearing a session value uses the stable application fallback.
+    fn test_effective_reasoning_level_uses_stable_fallback_after_value_is_cleared() {
         // Arrange
         let mut session = test_session(Some(ReasoningLevel::XHigh));
         session.reasoning_level_override = None;
 
         // Act
-        let effective_reasoning_level = session.effective_reasoning_level(ReasoningLevel::Low);
-        let uses_default_reasoning_level = session.uses_default_reasoning_level();
-
+        let effective_reasoning_level = session.effective_reasoning_level();
         // Assert
-        assert_eq!(effective_reasoning_level, ReasoningLevel::Low);
-        assert!(uses_default_reasoning_level);
+        assert_eq!(effective_reasoning_level, ReasoningLevel::High);
     }
 
     #[test]

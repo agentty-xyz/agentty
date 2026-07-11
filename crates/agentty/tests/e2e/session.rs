@@ -517,7 +517,7 @@ fn seed_child_worktree_for_onto_rebase(
     Ok(parent_tip)
 }
 
-/// Seeds one review-ready session with a persisted reasoning-level override.
+/// Seeds one review-ready session with a persisted reasoning level.
 fn seed_session_with_reasoning_level(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     seed_review_ready_session(env)?;
 
@@ -527,10 +527,7 @@ fn seed_session_with_reasoning_level(env: &BuilderEnv) -> Result<(), Box<dyn std
         let database = common::open_database(env).await?;
         database
             .sessions()
-            .update_session_reasoning_level(
-                "review-shortcut-0001",
-                Some(ReasoningLevel::Medium.as_str().to_string()),
-            )
+            .update_session_reasoning_level("review-shortcut-0001", ReasoningLevel::Medium)
             .await
     })?;
 
@@ -633,6 +630,15 @@ fn seed_running_stop_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
     // runtime expects for this session id.
     let worktree_name = &RUNNING_STOP_SESSION_ID[..8];
     std::fs::create_dir_all(env.agentty_root.join("wt").join(worktree_name))?;
+
+    let runtime = common::seed_runtime()?;
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .update_session_reasoning_level(RUNNING_STOP_SESSION_ID, ReasoningLevel::High)
+            .await
+    })?;
 
     Ok(())
 }
@@ -1032,6 +1038,44 @@ fn session_list_model_reasoning_level() -> E2eResult {
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "gpt-5.5 [medium]", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that changing the project reasoning default does not relabel a turn
+/// that is already in progress.
+#[test]
+fn existing_session_keeps_persisted_reasoning_label() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_persisted_reasoning_label")
+        .with_git()
+        .setup(seed_running_stop_session)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .wait_for_text("gpt-5.5 [high]", 5000)
+                    .compose(&common::switch_to_tab("Inbox"))
+                    .compose(&common::switch_to_tab("Settings"))
+                    .press_key("j")
+                    .press_key("Enter")
+                    .press_key("j")
+                    .press_key("Enter")
+                    .wait_for_text("xhigh", 5000)
+                    .press_key("BackTab")
+                    .press_key("BackTab")
+                    .wait_for_text("gpt-5.5 [high]", 5000)
+                    .capture_labeled(
+                        "active_reasoning",
+                        "Existing session retains persisted reasoning",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "gpt-5.5 [high]", &full);
             },
         )?;
 

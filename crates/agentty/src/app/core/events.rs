@@ -74,9 +74,9 @@ pub(crate) enum AppEvent {
         session_id: SessionId,
         session_agent: crate::domain::agent::AgentSelection,
     },
-    /// Indicates a session reasoning override selection has been persisted.
+    /// Indicates a session reasoning-level selection has been persisted.
     SessionReasoningLevelUpdated {
-        reasoning_level_override: Option<crate::domain::agent::ReasoningLevel>,
+        reasoning_level: crate::domain::agent::ReasoningLevel,
         session_id: SessionId,
     },
     /// Requests a DB-backed session list refresh.
@@ -215,7 +215,7 @@ pub(super) struct AppEventBatch {
     pub(super) session_update_versions: HashMap<SessionId, u64>,
     pub(super) session_model_updates: HashMap<SessionId, crate::domain::agent::AgentSelection>,
     pub(super) session_reasoning_level_updates:
-        HashMap<SessionId, Option<crate::domain::agent::ReasoningLevel>>,
+        HashMap<SessionId, crate::domain::agent::ReasoningLevel>,
     pub(super) session_progress_updates: HashMap<SessionId, Option<String>>,
     pub(super) session_size_updates: HashMap<SessionId, (u64, u64, SessionSize)>,
     pub(super) stacked_parent_merge_child_rebases: HashSet<SessionId>,
@@ -319,9 +319,9 @@ impl AppEventBatch {
                 session_agent,
             } => self.collect_session_model_updated(session_id, session_agent),
             AppEvent::SessionReasoningLevelUpdated {
-                reasoning_level_override,
+                reasoning_level,
                 session_id,
-            } => self.collect_session_reasoning_level_updated(session_id, reasoning_level_override),
+            } => self.collect_session_reasoning_level_updated(session_id, reasoning_level),
             AppEvent::RefreshSessions => self.collect_refresh_sessions(),
             AppEvent::RefreshProjects => self.collect_refresh_projects(),
             AppEvent::RefreshGitStatus => self.collect_refresh_git_status(),
@@ -478,10 +478,10 @@ impl AppEventBatch {
     fn collect_session_reasoning_level_updated(
         &mut self,
         session_id: SessionId,
-        reasoning_level_override: Option<crate::domain::agent::ReasoningLevel>,
+        reasoning_level: crate::domain::agent::ReasoningLevel,
     ) {
         self.session_reasoning_level_updates
-            .insert(session_id, reasoning_level_override);
+            .insert(session_id, reasoning_level);
     }
 
     /// Stores a workflow notice update and marks its session as touched.
@@ -1396,11 +1396,11 @@ impl App {
                 .apply_session_model_updated(&session_id, session_agent);
         }
 
-        for (session_id, reasoning_level_override) in
+        for (session_id, reasoning_level) in
             std::mem::take(&mut event_batch.session_reasoning_level_updates)
         {
             self.sessions
-                .apply_session_reasoning_level_updated(&session_id, reasoning_level_override);
+                .apply_session_reasoning_level_updated(&session_id, reasoning_level);
         }
 
         for (session_id, (added_lines, deleted_lines, session_size)) in

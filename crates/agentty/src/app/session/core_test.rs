@@ -810,11 +810,10 @@ fn test_apply_session_reasoning_level_updated_updates_only_matching_session() {
     let mut session_manager = test_session_manager("session-id", Some(ReasoningLevel::Low));
 
     // Act
-    session_manager
-        .apply_session_reasoning_level_updated("other-session", Some(ReasoningLevel::High));
+    session_manager.apply_session_reasoning_level_updated("other-session", ReasoningLevel::High);
     let reasoning_level_after_non_matching_update =
         session_manager.state.sessions[0].reasoning_level_override;
-    session_manager.apply_session_reasoning_level_updated("session-id", None);
+    session_manager.apply_session_reasoning_level_updated("session-id", ReasoningLevel::Medium);
 
     // Assert
     assert_eq!(
@@ -823,7 +822,7 @@ fn test_apply_session_reasoning_level_updated_updates_only_matching_session() {
     );
     assert_eq!(
         session_manager.state.sessions[0].reasoning_level_override,
-        None
+        Some(ReasoningLevel::Medium)
     );
 }
 
@@ -1383,6 +1382,12 @@ async fn test_create_session() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
     let mut app = new_test_app_with_git(dir.path()).await;
+    app.services
+        .db()
+        .settings()
+        .set_project_reasoning_level(app.projects.active_project_id(), ReasoningLevel::Low)
+        .await
+        .expect("failed to set project reasoning level");
 
     // Act
     let session_id = app
@@ -1433,7 +1438,30 @@ async fn test_create_session() {
     );
     assert!(!db_sessions[0].is_draft);
     assert_eq!(db_sessions[0].status, "Draft");
+    assert_eq!(
+        db_sessions[0].reasoning_level_override.as_deref(),
+        Some(ReasoningLevel::Low.as_str())
+    );
     assert_eq!(activity_timestamps.len(), 1);
+}
+
+#[tokio::test]
+async fn test_create_session_propagates_project_reasoning_read_failure() {
+    // Arrange
+    let dir = tempdir().expect("failed to create temp dir");
+    let (database, pool) = AppRepositories::in_memory_with_pool().await;
+    let mut app = new_test_app_with_git_and_db(dir.path(), database).await;
+    sqlx::query("DROP TABLE project_setting")
+        .execute(&pool)
+        .await
+        .expect("failed to drop project settings table");
+
+    // Act
+    let result = app.create_session().await;
+
+    // Assert
+    assert!(result.is_err());
+    assert!(app.sessions.sessions().is_empty());
 }
 
 #[tokio::test]

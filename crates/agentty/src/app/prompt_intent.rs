@@ -143,7 +143,7 @@ impl App {
                 let selected_reasoning_level = self
                     .session_at(context.session_index)
                     .map_or(self.settings.reasoning_level, |session| {
-                        session.effective_reasoning_level(self.settings.reasoning_level)
+                        session.effective_reasoning_level()
                     });
                 let selected_index = ReasoningLevel::ALL
                     .iter()
@@ -405,7 +405,7 @@ impl App {
         }
     }
 
-    /// Persists one slash-selected reasoning override and logs any failure
+    /// Persists one slash-selected reasoning level and logs any failure
     /// with session context.
     async fn update_prompt_session_reasoning_level(
         &mut self,
@@ -413,7 +413,7 @@ impl App {
         reasoning_level: ReasoningLevel,
     ) {
         if let Err(error) = self
-            .set_session_reasoning_level(&context.session_id, Some(reasoning_level))
+            .set_session_reasoning_level(&context.session_id, reasoning_level)
             .await
         {
             warn!(

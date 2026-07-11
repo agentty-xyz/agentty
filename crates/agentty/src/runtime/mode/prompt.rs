@@ -1727,10 +1727,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_prompt_slash_submit_prefills_reasoning_selection_from_default_setting() {
+    async fn test_handle_prompt_slash_submit_prefills_reasoning_selection_from_session_value() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("/reasoning", None).await;
         app.settings.reasoning_level = ReasoningLevel::Medium;
+        app.sessions.sessions_mut()[0].reasoning_level_override = Some(ReasoningLevel::Low);
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
@@ -1741,7 +1742,7 @@ mod tests {
         if let AppMode::Prompt { slash_state, .. } = &app.mode {
             assert_eq!(slash_state.stage, PromptSlashStage::Reasoning);
             assert_eq!(slash_state.selected_agent, None);
-            assert_eq!(slash_state.selected_index, 1);
+            assert_eq!(slash_state.selected_index, 0);
         }
     }
 

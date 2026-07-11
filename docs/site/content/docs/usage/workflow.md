@@ -42,7 +42,9 @@ In session chat view, the status-colored session title renders in a header row a
 output panel, with a metadata row showing the size bucket, `+added` / `-deleted` line
 totals, the cumulative active-work timer, the current model, the effective reasoning
 level, and token usage. A linked pull-request or merge-request URL appears in the header
-when present. The timer ticks only while the session is actively working.
+when present. The timer ticks only while the session is actively working. Each session
+stores the project reasoning default when it is created, so later default changes affect
+new sessions without relabeling existing ones.
 
 The top status bar shows the current version and update status, and rotates short
 page-scoped `FYI:` messages once per minute in the **Sessions** list and session chat
