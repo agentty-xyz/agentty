@@ -451,17 +451,14 @@ mod tests {
             queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: None,
-            published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
             questions: Vec::new(),
             review_request: None,
             size: SessionSize::Xs,
             stats: SessionStats::default(),
             status: Status::Draft,
-            summary: None,
             title: None,
             transcript: None,
             updated_at: 0,
-            workflow_notice: None,
         });
         app.mode = AppMode::Prompt {
             at_mention_state: None,

@@ -1077,14 +1077,25 @@ async fn open_review_output_mode(app: &mut App, view_context: &ViewContext) {
     };
     let session_folder = session.folder.clone();
     let diff = load_view_session_diff(app, view_context).await;
+    let turn_id = app.focused_review_turn_id(&view_context.session_id);
     if diff.trim().is_empty() {
+        let diff_hash = diff_content_hash(&diff);
         app.review_cache.insert(
             view_context.session_id.clone(),
             ReviewCacheEntry::Ready {
-                diff_hash: diff_content_hash(&diff),
+                diff_hash,
                 text: REVIEW_NO_DIFF_MESSAGE.to_string(),
             },
         );
+        let _ = app
+            .post_focused_review_entry(
+                &view_context.session_id,
+                diff_hash,
+                turn_id,
+                REVIEW_NO_DIFF_MESSAGE,
+                crate::domain::session_message::SessionMessageState::Resolved,
+            )
+            .await;
 
         return;
     }
@@ -1095,25 +1106,25 @@ async fn open_review_output_mode(app: &mut App, view_context: &ViewContext) {
             view_context.session_id.clone(),
             ReviewCacheEntry::Ready {
                 diff_hash,
-                text: diff,
+                text: diff.clone(),
             },
         );
+        let _ = app
+            .post_focused_review_entry(
+                &view_context.session_id,
+                diff_hash,
+                turn_id,
+                &diff,
+                crate::domain::session_message::SessionMessageState::Failed,
+            )
+            .await;
 
         return;
     }
 
     let diff_hash = diff_content_hash(&diff);
-    app.review_cache.insert(
-        view_context.session_id.clone(),
-        ReviewCacheEntry::Loading { diff_hash },
-    );
-    let _ = app
-        .services
-        .db()
-        .sessions()
-        .update_session_focused_review(&view_context.session_id, None, None)
+    app.start_review_assist(&view_context.session_id, &session_folder, diff_hash, &diff)
         .await;
-    app.start_review_assist(&view_context.session_id, &session_folder, diff_hash, &diff);
 }
 
 /// Opens diff mode only when the viewed session has actual worktree changes.
@@ -1191,7 +1202,9 @@ mod tests {
     use super::*;
     use crate::app::review_loading_message;
     use crate::domain::agent::AgentModel;
-    use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
+    use crate::domain::session_message::{
+        SessionMessage, SessionMessageKind, SessionMessageState, SessionTranscript,
+    };
     use crate::infra::tmux::{MockTmuxClient, TmuxClient};
     use crate::runtime::mode::session_output_metric;
     use crate::ui::component::session_output::SessionOutputLineContext;
@@ -1785,7 +1798,7 @@ mod tests {
 
         // Act
         let total_lines =
-            session_output_metric::rendered_output_line_count(&app, &session_id, 0, None, None, 20);
+            session_output_metric::rendered_output_line_count(&app, &session_id, 0, 20);
 
         // Assert
         assert!(total_lines > raw_line_count);
@@ -1854,8 +1867,6 @@ mod tests {
                 &app,
                 &session_id,
                 0,
-                None,
-                None,
                 20,
             ),
             view_height: 5,
@@ -1936,9 +1947,6 @@ mod tests {
             SessionOutputLineContext {
                 active_prompt_output: None,
                 active_progress: None,
-                review_model: AgentModel::ClaudeHaiku4520251001,
-                review_status_message: None,
-                review_text: None,
                 session_update_version: app.session_update_version(&session_id),
             },
             render_cache_store.markdown_render_cache(),
@@ -1946,14 +1954,8 @@ mod tests {
         );
 
         // Act
-        let total_lines = session_output_metric::rendered_output_line_count(
-            &app,
-            &session_id,
-            0,
-            None,
-            None,
-            output_width,
-        );
+        let total_lines =
+            session_output_metric::rendered_output_line_count(&app, &session_id, 0, output_width);
 
         // Assert
         assert_eq!(total_lines, expected);
@@ -1999,7 +2001,7 @@ mod tests {
             .expect("failed to update readme");
         let view_context = ViewContext {
             scroll_offset: None,
-            session_id: session_id.into(),
+            session_id: session_id.clone().into(),
             session_index: 0,
         };
 
@@ -2018,6 +2020,22 @@ mod tests {
             app.review_cache.get(&view_context.session_id),
             Some(ReviewCacheEntry::Loading { .. })
         ));
+        let persisted_messages = app
+            .services
+            .db()
+            .sessions()
+            .load_session_messages(&session_id)
+            .await
+            .expect("failed to load session messages");
+        let persisted_review = persisted_messages
+            .iter()
+            .find(|message| message.kind == SessionMessageKind::FocusedReview.as_str())
+            .expect("missing persisted focused-review entry");
+        assert_eq!(
+            persisted_review.content,
+            review_loading_message(AgentModel::ClaudeOpus48)
+        );
+        assert!(!persisted_review.content.contains("review test content"));
     }
 
     #[tokio::test]
@@ -2559,7 +2577,10 @@ mod tests {
         );
         app.review_cache.insert(
             session_id.clone().into(),
-            ReviewCacheEntry::Loading { diff_hash: 456 },
+            ReviewCacheEntry::Loading {
+                diff_hash: 456,
+                turn_id: 0,
+            },
         );
         let view_context = ViewContext {
             scroll_offset: None,
@@ -2636,7 +2657,10 @@ mod tests {
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.review_cache.insert(
             session_id.clone().into(),
-            ReviewCacheEntry::Loading { diff_hash: 42 },
+            ReviewCacheEntry::Loading {
+                diff_hash: 42,
+                turn_id: 0,
+            },
         );
         app.mode = AppMode::View {
             scroll_offset: None,
@@ -2655,7 +2679,7 @@ mod tests {
         // Assert — cache and loading state are preserved, no duplicate spawned
         assert!(matches!(
             app.review_cache.get(session_id.as_str()),
-            Some(ReviewCacheEntry::Loading { diff_hash: 42 })
+            Some(ReviewCacheEntry::Loading { diff_hash: 42, .. })
         ));
         assert!(matches!(
             app.mode,
@@ -2838,7 +2862,14 @@ mod tests {
             .find(|session| session.id == source_session_id)
             .expect("expected source session in session list");
         source_session.status = Status::Done;
-        source_session.summary = Some("# Summary\n\nKeep going.".to_string());
+        source_session.transcript = Some(SessionTranscript::new(vec![SessionMessage::timeline(
+            0,
+            0,
+            "turn_summary:0",
+            SessionMessageKind::TurnSummary,
+            SessionMessageState::Resolved,
+            "# Summary\n\nKeep going.",
+        )]));
         source_session.title = Some("Done source".to_string());
         app.mode = AppMode::View {
             session_id: source_session_id.clone().into(),

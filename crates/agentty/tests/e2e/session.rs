@@ -10,12 +10,12 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 
-use agentty::db::{DB_DIR, DB_FILE, Database};
+use agentty::db::{DB_DIR, DB_FILE, Database, SessionTimelineMessage};
 use agentty::domain::agent::ReasoningLevel;
 use agentty::domain::session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
 };
-use agentty::domain::session_message::SessionMessageKind;
+use agentty::domain::session_message::{SessionMessageKind, SessionMessageState};
 use agentty::test_support;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection, Executor};
@@ -299,9 +299,15 @@ fn seed_session_with_typed_marker_collision(
             .await?;
         database
             .sessions()
-            .update_session_summary(
+            .upsert_session_timeline_message(
                 session_id,
-                r#"{"turn":"Kept marker-looking output in the assistant answer.","session":"Typed transcript rows preserve render grouping."}"#,
+                SessionTimelineMessage {
+                    content: r#"{"turn":"Kept marker-looking output in the assistant answer.","session":"Typed transcript rows preserve render grouping."}"#,
+                    entry_key: "turn_summary:0",
+                    kind: SessionMessageKind::TurnSummary,
+                    state: SessionMessageState::Resolved,
+                    turn_id: 0,
+                },
             )
             .await
     })?;
@@ -374,6 +380,57 @@ fn seed_session_with_published_branch_push_notice(
     })?;
 
     // Match `session_folder()` so startup loads the seeded review session.
+    let worktree_name = &session_id[..8];
+    std::fs::create_dir_all(env.agentty_root.join("wt").join(worktree_name))?;
+
+    Ok(())
+}
+
+/// Seeds one review-ready session with timeline rows left pending by a
+/// previous Agentty process.
+fn seed_session_with_interrupted_timeline_entries(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let session_id = "push-recovery-0001";
+
+    common::seed_session(
+        env,
+        SessionSeed::regular(session_id, "gpt-5.5", "main", "Review")
+            .with_title("Interrupted push recovery"),
+    )?;
+
+    let runtime = common::seed_runtime()?;
+
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .upsert_session_timeline_message(
+                session_id,
+                SessionTimelineMessage {
+                    content: "Auto-pushing published branch after completed turn...",
+                    entry_key: "branch_push:interrupted",
+                    kind: SessionMessageKind::WorkflowNotice,
+                    state: SessionMessageState::Pending,
+                    turn_id: 1,
+                },
+            )
+            .await?;
+        database
+            .sessions()
+            .upsert_session_timeline_message(
+                session_id,
+                SessionTimelineMessage {
+                    content: "Reviewing changes",
+                    entry_key: "focused_review:42",
+                    kind: SessionMessageKind::FocusedReview,
+                    state: SessionMessageState::Pending,
+                    turn_id: 1,
+                },
+            )
+            .await
+    })?;
+
     let worktree_name = &session_id[..8];
     std::fs::create_dir_all(env.agentty_root.join("wt").join(worktree_name))?;
 
@@ -644,8 +701,8 @@ fn seed_all_model_picker_cli_stubs(env: &BuilderEnv) -> Result<(), Box<dyn std::
     Ok(())
 }
 
-/// Seeds one review-ready session with a focused review already persisted as
-/// if Agentty had been restarted after review generation completed.
+/// Seeds a later prompt before delayed turn-one metadata resolves, proving
+/// semantic timeline order survives persistence and reload.
 fn seed_review_ready_session_with_persisted_focused_review(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -657,10 +714,65 @@ fn seed_review_ready_session_with_persisted_focused_review(
         let database = common::open_database(env).await?;
         database
             .sessions()
-            .update_session_focused_review(
+            .append_session_message(
                 "review-shortcut-0001",
-                Some("42".to_string()),
-                Some("## Review\nPersisted focused review finding.".to_string()),
+                SessionMessageKind::UserPrompt,
+                "Implement the stable session timeline.",
+            )
+            .await?;
+        database
+            .sessions()
+            .append_session_message(
+                "review-shortcut-0001",
+                SessionMessageKind::AssistantAnswer,
+                "The first turn is complete.",
+            )
+            .await?;
+        database
+            .sessions()
+            .append_session_message(
+                "review-shortcut-0001",
+                SessionMessageKind::UserPrompt,
+                "Polish the remaining details.",
+            )
+            .await?;
+        database
+            .sessions()
+            .upsert_session_timeline_message(
+                "review-shortcut-0001",
+                SessionTimelineMessage {
+                    content: r#"{"turn":"Completed the stable timeline.","session":"Timeline entries stay attached to their turns."}"#,
+                    entry_key: "turn_summary:1",
+                    kind: SessionMessageKind::TurnSummary,
+                    state: SessionMessageState::Resolved,
+                    turn_id: 1,
+                },
+            )
+            .await?;
+        database
+            .sessions()
+            .upsert_session_timeline_message(
+                "review-shortcut-0001",
+                SessionTimelineMessage {
+                    content: "## Review\nPersisted focused review finding.",
+                    entry_key: "focused_review:1:42",
+                    kind: SessionMessageKind::FocusedReview,
+                    state: SessionMessageState::Resolved,
+                    turn_id: 1,
+                },
+            )
+            .await?;
+        database
+            .sessions()
+            .upsert_session_timeline_message(
+                "review-shortcut-0001",
+                SessionTimelineMessage {
+                    content: "## Review\nSecond-turn review for the unchanged diff.",
+                    entry_key: "focused_review:2:42",
+                    kind: SessionMessageKind::FocusedReview,
+                    state: SessionMessageState::Resolved,
+                    turn_id: 2,
+                },
             )
             .await
     })?;
@@ -2702,6 +2814,7 @@ fn session_active_loader_uses_tachyonfx_glyph() -> E2eResult {
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "▌▌▌ Working...", &full);
+                assertion::assert_not_visible(frame, "Reviewing changes with");
             },
         )?;
 
@@ -2804,6 +2917,46 @@ fn published_branch_push_notice_renders_as_transcript_message() -> E2eResult {
                         .count(),
                     1
                 );
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that startup replaces interrupted timeline loaders with durable
+/// retry guidance.
+#[test]
+fn interrupted_timeline_entries_are_failed_on_startup() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("interrupted_timeline_entries_are_failed_on_startup")
+        .with_git()
+        .setup(seed_session_with_interrupted_timeline_entries)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_text("[Branch Push Error]", 5000)
+                    .wait_for_text("Review assist unavailable", 5000)
+                    .wait_for_stable_frame(500, 5000)
+                    .capture_labeled(
+                        "interrupted_timeline_recovered",
+                        "Interrupted timeline tasks rendered as durable retry guidance",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+
+                assertion::assert_text_in_region(frame, "[Branch Push Error]", &full);
+                assertion::assert_text_in_region(
+                    frame,
+                    "Auto-push was interrupted when Agentty exited.",
+                    &full,
+                );
+                assertion::assert_text_in_region(frame, "branch again to retry.", &full);
+                assertion::assert_text_in_region(frame, "Review assist unavailable", &full);
+                assertion::assert_text_in_region(frame, "Press f to retry.", &full);
             },
         )?;
 
@@ -3020,8 +3173,8 @@ fn session_view_mermaid_output() -> E2eResult {
     Ok(())
 }
 
-/// Verify that persisted focused review text is restored into the session
-/// output panel after Agentty starts again.
+/// Verify delayed summary and same-diff review entries retain their turn
+/// placement after a later prompt is stored and Agentty starts again.
 #[test]
 fn persisted_focused_review_survives_reload() -> E2eResult {
     // Arrange, Act, Assert
@@ -3038,12 +3191,31 @@ fn persisted_focused_review_survives_reload() -> E2eResult {
                     .viewing_pause_ms(1500)
                     .capture_labeled(
                         "persisted_focused_review",
-                        "Persisted focused review visible after startup",
+                        "Turn summary and review remain before the later prompt",
                     )
             },
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
+                let view_text = frame.text_in_region(&full);
+
+                assertion::assert_text_in_region(frame, "Completed the stable timeline.", &full);
                 assertion::assert_text_in_region(frame, "Persisted focused review finding.", &full);
+                assertion::assert_text_in_region(frame, "Polish the remaining details.", &full);
+                let summary_index = view_text
+                    .find("Completed the stable timeline.")
+                    .expect("summary should be visible");
+                let review_index = view_text
+                    .find("Persisted focused review finding.")
+                    .expect("review should be visible");
+                let next_prompt_index = view_text
+                    .find("Polish the remaining details.")
+                    .expect("later prompt should be visible");
+                let second_review_index = view_text
+                    .find("Second-turn review for the unchanged diff.")
+                    .expect("second review should be visible");
+                assert!(summary_index < review_index);
+                assert!(review_index < next_prompt_index);
+                assert!(next_prompt_index < second_review_index);
             },
         )?;
 

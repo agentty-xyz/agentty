@@ -169,6 +169,12 @@ While a session is **InProgress**, an animated loader row shows transient provid
 thought and tool-status text; the transcript itself updates only after the final turn
 result is parsed and persisted.
 
+Turn summaries, focused reviews, and workflow results are durable timeline entries. A
+background operation first shows one pending row, then updates that row in place when it
+succeeds or fails. Starting another turn does not remove earlier summaries or reviews;
+they remain directly after the turn that produced them, including when consecutive turns
+produce the same diff hash.
+
 Pressing `Enter` during a running turn opens the composer and queues the message inline
 with a `queued ›` prefix. Queued messages dispatch one-by-one as new turns after the
 running turn finishes. Each `Ctrl+c` press retracts the most recently queued message
@@ -192,16 +198,22 @@ turn or subsequent sync therefore cannot start a competing published-branch auto
 ### Focused Review
 
 When a session enters **Review**, Agentty starts generating a focused review in the
-background and temporarily shows **AgentReview**. Press `f` to append the cached review
-into the session output, or to see a loading message while generation is still running.
-The appended review stays visible across diff mode and question mode, and is cleared
-when you submit the next prompt. Focused review includes the saved user and agent chat
-history for context. It uses inspection-only context: it may read files, search, inspect
-git history, and browse when needed, but it recommends verification commands instead of
-running checks itself. `Project Impact` renders as concise bullets, and `Suggestions`
-renders as bullets formatted `[Severity]: Issue details`, using `[High]` or `[Medium]`
-when follow-up work is needed. A turn stopped with `Ctrl+c` does not start a focused
-review automatically; press `f` for a manual one.
+background and temporarily shows **AgentReview**. Its pending row is replaced by the
+completed review or a visible failure in the same timeline position. Press `f` to start
+or regenerate review for the current diff. Completed review entries stay visible across
+diff mode, question mode, later prompts, and restarts. Replying while review generation
+is still pending cancels that pending row before the new turn continues. Focused review
+generation interrupted by an Agentty exit becomes visible retry guidance on the next
+startup instead of remaining stuck as a loader. If saving a pending or completed review
+fails while Agentty is running, the same row changes to visible retry guidance; review
+generation does not start when its pending row cannot be saved. Focused review includes
+the saved user and agent chat history for context. It uses inspection-only context: it
+may read files, search, inspect git history, and browse when needed, but it recommends
+verification commands instead of running checks itself. `Project Impact` renders as
+concise bullets, and `Suggestions` renders as bullets formatted
+`[Severity]: Issue details`, using `[High]` or `[Medium]` when follow-up work is needed.
+A turn stopped with `Ctrl+c` does not start a focused review automatically; press `f`
+for a manual one.
 
 ### Session Output Markdown
 
@@ -252,7 +264,8 @@ existed at fork time. Stacked child sessions hide `F` because their branch remai
 to the parent stack workflow. Provider-native conversation IDs, focused-review cache,
 published branch state, linked review-request metadata, stack parent links, active-work
 timing, and token usage are reset on the fork so future replies and publishing are
-tracked separately from the source session.
+tracked separately from the source session. Historical timeline entries, including
+completed summaries and focused reviews, remain part of the copied transcript.
 
 ### Commit and Merge Behavior
 
@@ -260,8 +273,8 @@ After each successful turn with file changes, Agentty keeps the session branch a
 evolving commit: it regenerates the commit message from the cumulative session diff
 using the project's `Default Fast Model`, applies the `Coauthored by Agentty` setting,
 amends `HEAD`, and refreshes the session title from the commit text. If a later turn
-reverts every change, the empty session commit is dropped. Commit and merge notices
-appear as transient status rows rather than persisted transcript messages.
+reverts every change, the empty session commit is dropped. Commit, merge, sync, and
+published-branch push results are persisted in the session timeline.
 
 When a session merges, Agentty reuses the session branch `HEAD` commit message for the
 final squash commit on the base branch. Merging requires a clean main checkout and
@@ -329,8 +342,9 @@ publish popup for the linked forge review request:
 - After the first publish, later completed turns push the same remote branch
   automatically in the background when no chat message or sync is already queued, and
   update the review request title and description from the latest session commit message
-  when they differ. Failed background pushes keep the manual `p` flow available for
-  retry.
+  when they differ. If Agentty exits during a background push, the interrupted loader is
+  replaced with retry guidance on the next startup. Failed background pushes keep the
+  manual `p` flow available for retry.
 
 <a id="usage-review-request-prerequisites"></a> Publishing needs regular Git
 authentication (credential helper or PAT for HTTPS remotes, SSH key for SSH remotes)

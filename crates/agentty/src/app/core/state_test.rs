@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use ag_protocol::AgentResponseSummary;
 use mockall::predicate::eq;
-use serde_json;
 use tempfile::tempdir;
 
 use super::*;
@@ -17,10 +16,10 @@ use crate::domain::agent::AgentModel;
 use crate::domain::file_entry::FileEntry;
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
-    ForgeKind, PublishedBranchSyncStatus, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
-    SESSION_DATA_DIR, SessionFollowUpTask, SessionHandles, SessionSize, SessionStats, Status,
+    ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SESSION_DATA_DIR,
+    SessionFollowUpTask, SessionHandles, SessionSize, SessionStats, Status,
 };
-use crate::domain::session_message::SessionTranscript;
+use crate::domain::session_message::{SessionMessageKind, SessionMessageState, SessionTranscript};
 use crate::domain::setting::SettingName;
 use crate::infra::db::AppRepositories;
 use crate::infra::project_discovery::{HOME_PROJECT_SCAN_MAX_RESULTS, RealProjectDiscoveryClient};
@@ -31,7 +30,7 @@ use crate::presentation::app_mode::ConfirmationViewMode;
 fn test_turn_applied_state(
     questions: Vec<QuestionItem>,
     follow_up_tasks: Vec<&str>,
-    summary: Option<AgentResponseSummary>,
+    _summary: Option<AgentResponseSummary>,
     token_usage_delta: SessionStats,
 ) -> TurnAppliedState {
     TurnAppliedState {
@@ -46,7 +45,6 @@ fn test_turn_applied_state(
             })
             .collect(),
         questions,
-        summary: summary.and_then(|summary| serde_json::to_string(&summary).ok()),
         token_usage_delta,
     }
 }
@@ -89,7 +87,23 @@ async fn test_app_viewing_reconcile_session(
     app
 }
 
-/// Builds a successful branch-publish batch payload for one session.
+/// Persists one session row for timeline tests with manually assembled state.
+async fn persist_timeline_test_session(app: &App, session_id: &str, status: Status) {
+    app.services
+        .db()
+        .sessions()
+        .insert_session(
+            session_id,
+            AgentModel::Gemini3FlashPreview.as_str(),
+            "main",
+            &status.to_string(),
+            app.active_project_id(),
+        )
+        .await
+        .expect("failed to persist timeline test session");
+}
+
+/// Builds one successful branch-publish batch payload for one session.
 fn test_pushed_branch_result(branch_name: &str) -> BranchPublishTaskSuccess {
     BranchPublishTaskSuccess::Pushed {
         branch_name: branch_name.to_string(),
@@ -2083,8 +2097,8 @@ fn app_event_batch_collect_event_merges_agent_response_token_usage() {
     // Assert
     let merged_turn = event_batch.applied_turns.get("session-1");
     assert_eq!(
-        merged_turn.map(|turn| turn.questions.clone()),
-        Some(latest_turn.questions.clone())
+        merged_turn.map(|turn| &turn.questions),
+        Some(&latest_turn.questions)
     );
     assert_eq!(
         merged_turn.map(|turn| {
@@ -2094,10 +2108,6 @@ fn app_event_batch_collect_event_merges_agent_response_token_usage() {
                 .collect::<Vec<_>>()
         }),
         Some(vec!["Document the batched reducer path.".to_string()])
-    );
-    assert_eq!(
-        merged_turn.and_then(|turn| turn.summary.as_deref()),
-        latest_turn.summary.as_deref()
     );
     assert_eq!(
         merged_turn.map(|turn| turn.token_usage_delta.input_tokens),
@@ -2302,7 +2312,7 @@ fn app_event_batch_collect_event_keeps_latest_same_session_updates() {
 }
 
 #[test]
-fn app_event_batch_collect_event_uses_final_wins_for_review_and_branch_publish() {
+fn app_event_batch_collect_event_preserves_reviews_and_uses_final_branch_publish() {
     // Arrange
     let mut event_batch = AppEventBatch::default();
 
@@ -2311,16 +2321,19 @@ fn app_event_batch_collect_event_uses_final_wins_for_review_and_branch_publish()
         diff_hash: 11,
         review_text: "first review".to_string(),
         session_id: "session-a".into(),
+        turn_id: 1,
     });
     event_batch.collect_event(AppEvent::ReviewPreparationFailed {
         diff_hash: 12,
         error: "latest failure".to_string(),
         session_id: "session-a".into(),
+        turn_id: 2,
     });
     event_batch.collect_event(AppEvent::ReviewPrepared {
         diff_hash: 21,
         review_text: "stable review".to_string(),
         session_id: "session-b".into(),
+        turn_id: 3,
     });
     event_batch.collect_event(AppEvent::BranchPublishActionCompleted {
         restore_view: test_confirmation_view_mode("session-a"),
@@ -2335,18 +2348,33 @@ fn app_event_batch_collect_event_uses_final_wins_for_review_and_branch_publish()
 
     // Assert
     assert_eq!(
-        event_batch.review_updates.get("session-a"),
-        Some(&ReviewUpdate {
-            diff_hash: 12,
-            result: Err("latest failure".to_string()),
-        })
-    );
-    assert_eq!(
-        event_batch.review_updates.get("session-b"),
-        Some(&ReviewUpdate {
-            diff_hash: 21,
-            result: Ok("stable review".to_string()),
-        })
+        event_batch.review_updates,
+        vec![
+            (
+                "session-a".into(),
+                ReviewUpdate {
+                    diff_hash: 11,
+                    result: Ok("first review".to_string()),
+                    turn_id: 1,
+                },
+            ),
+            (
+                "session-a".into(),
+                ReviewUpdate {
+                    diff_hash: 12,
+                    result: Err("latest failure".to_string()),
+                    turn_id: 2,
+                },
+            ),
+            (
+                "session-b".into(),
+                ReviewUpdate {
+                    diff_hash: 21,
+                    result: Ok("stable review".to_string()),
+                    turn_id: 3,
+                },
+            ),
+        ]
     );
     assert_eq!(
         event_batch.branch_publish_action_update,
@@ -2489,8 +2517,7 @@ async fn apply_app_events_records_system_log_events() {
 }
 
 #[tokio::test]
-/// Verifies workflow notices append to in-memory session state without
-/// changing persisted transcript messages.
+/// Verifies workflow notices append to the session timeline in event order.
 async fn apply_app_events_session_workflow_notice_updates_session_state() {
     // Arrange
     let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
@@ -2500,10 +2527,13 @@ async fn apply_app_events_session_workflow_notice_updates_session_state() {
     let mut session =
         crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/session-review"));
     session.id = "session-1".into();
-    session.transcript = Some(crate::test_support::assistant_transcript(
-        "assistant output",
-    ));
+    let transcript = crate::test_support::assistant_transcript("assistant output");
+    session.transcript = Some(transcript.clone());
     app.sessions.push_session(session);
+    app.sessions.session_handles_mut().insert(
+        "session-1".into(),
+        SessionHandles::new_with_transcript(Status::Review, transcript),
+    );
     app.services
         .event_sender()
         .send(AppEvent::SessionWorkflowNoticeUpdated {
@@ -2527,20 +2557,14 @@ async fn apply_app_events_session_workflow_notice_updates_session_state() {
         .iter()
         .find(|session| session.id == "session-1")
         .expect("session should exist");
-    assert_eq!(
-        session.workflow_notice.as_deref(),
-        Some(
-            "[Commit] No changes to commit.\n\n[Merge] Successfully merged wt/session-1 into main"
-        )
-    );
-    assert_eq!(
-        session
-            .transcript
-            .as_ref()
-            .and_then(SessionTranscript::replay_text)
-            .as_deref(),
-        Some("assistant output\n\n")
-    );
+    let transcript = session
+        .transcript
+        .as_ref()
+        .and_then(SessionTranscript::replay_text)
+        .unwrap_or_default();
+    assert!(transcript.contains("assistant output"));
+    assert!(transcript.contains("[Commit] No changes to commit."));
+    assert!(transcript.contains("[Merge] Successfully merged"));
     assert!(app.needs_redraw());
 }
 
@@ -3220,47 +3244,6 @@ async fn apply_app_events_agent_response_keeps_list_mode_when_not_viewing_sessio
 }
 
 #[tokio::test]
-/// Verifies reducer-applied turn projections update the cached session
-/// summary immediately.
-async fn apply_app_events_agent_response_updates_session_summary() {
-    // Arrange
-    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
-        Arc::new(MockTmuxClient::new()),
-    )
-    .await;
-    app.sessions
-        .push_session(crate::test_support::session_fixture_with_folder(
-            PathBuf::from("/tmp/session-summary-view"),
-        ));
-    let expected_summary = serde_json::to_string(&AgentResponseSummary {
-        turn: "- Added structured protocol summary fields.".to_string(),
-        session: "- Session output now renders persisted summary separately.".to_string(),
-    })
-    .expect("summary should serialize");
-
-    // Act
-    app.apply_app_events(AppEvent::AgentResponseReceived {
-        session_id: "session-1".into(),
-        turn_applied_state: test_turn_applied_state(
-            Vec::new(),
-            Vec::new(),
-            Some(AgentResponseSummary {
-                turn: "- Added structured protocol summary fields.".to_string(),
-                session: "- Session output now renders persisted summary separately.".to_string(),
-            }),
-            SessionStats::default(),
-        ),
-    })
-    .await;
-
-    // Assert
-    assert_eq!(
-        app.sessions.sessions()[0].summary.as_deref(),
-        Some(expected_summary.as_str())
-    );
-}
-
-#[tokio::test]
 /// Verifies agent responses update cached follow-up tasks immediately for
 /// the active session.
 async fn apply_app_events_agent_response_updates_session_follow_up_tasks() {
@@ -3302,85 +3285,6 @@ async fn apply_app_events_agent_response_updates_session_follow_up_tasks() {
         ]
     );
 }
-#[tokio::test]
-/// Verifies stale published-branch sync completions do not overwrite the
-/// latest in-progress auto-push state.
-async fn apply_app_events_ignores_stale_published_branch_sync_updates() {
-    // Arrange
-    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
-        Arc::new(MockTmuxClient::new()),
-    )
-    .await;
-    app.sessions
-        .push_session(crate::test_support::session_fixture_with_folder(
-            PathBuf::from("/tmp/session-branch-sync-view"),
-        ));
-
-    // Act
-    app.apply_app_events(AppEvent::PublishedBranchSyncUpdated {
-        session_id: "session-1".into(),
-        sync_operation_id: "sync-1".to_string(),
-        sync_status: PublishedBranchSyncStatus::InProgress,
-    })
-    .await;
-    app.apply_app_events(AppEvent::PublishedBranchSyncUpdated {
-        session_id: "session-1".into(),
-        sync_operation_id: "sync-2".to_string(),
-        sync_status: PublishedBranchSyncStatus::InProgress,
-    })
-    .await;
-    app.apply_app_events(AppEvent::PublishedBranchSyncUpdated {
-        session_id: "session-1".into(),
-        sync_operation_id: "sync-1".to_string(),
-        sync_status: PublishedBranchSyncStatus::Failed,
-    })
-    .await;
-
-    // Assert
-    assert_eq!(
-        app.sessions.sessions()[0].published_branch_sync_status,
-        PublishedBranchSyncStatus::InProgress
-    );
-}
-
-#[tokio::test]
-/// Verifies one reducer tick preserves a completed auto-push message even
-/// when start and success updates are drained together.
-async fn apply_app_events_preserves_completed_published_branch_sync_updates() {
-    // Arrange
-    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
-        Arc::new(MockTmuxClient::new()),
-    )
-    .await;
-    let event_sender = app.services.event_sender();
-    app.sessions
-        .push_session(crate::test_support::session_fixture_with_folder(
-            PathBuf::from("/tmp/session-branch-sync-success"),
-        ));
-
-    event_sender
-        .send(AppEvent::PublishedBranchSyncUpdated {
-            session_id: "session-1".into(),
-            sync_operation_id: "sync-1".to_string(),
-            sync_status: PublishedBranchSyncStatus::Succeeded,
-        })
-        .expect("queued event should send");
-
-    // Act
-    app.apply_app_events(AppEvent::PublishedBranchSyncUpdated {
-        session_id: "session-1".into(),
-        sync_operation_id: "sync-1".to_string(),
-        sync_status: PublishedBranchSyncStatus::InProgress,
-    })
-    .await;
-
-    // Assert
-    assert_eq!(
-        app.sessions.sessions()[0].published_branch_sync_status,
-        PublishedBranchSyncStatus::Succeeded
-    );
-}
-
 #[tokio::test]
 /// Verifies reducer-applied turn projections clear stale questions and add
 /// token deltas to cached session stats.
@@ -3433,6 +3337,7 @@ async fn apply_app_events_agent_response_starts_auto_review_from_synced_handle_s
     let session_id = "session-1";
     let diff_text = "diff --git a/file.rs b/file.rs\n+new line";
     let expected_hash = diff_content_hash(diff_text);
+    persist_timeline_test_session(&app, session_id, Status::InProgress).await;
 
     app.sessions
         .push_session(crate::test_support::session_fixture_with_folder(
@@ -3472,7 +3377,7 @@ async fn apply_app_events_agent_response_starts_auto_review_from_synced_handle_s
     // Assert
     assert!(matches!(
         app.review_cache.get(session_id),
-        Some(ReviewCacheEntry::Loading { diff_hash }) if *diff_hash == expected_hash
+        Some(ReviewCacheEntry::Loading { diff_hash, .. }) if *diff_hash == expected_hash
     ));
     assert_eq!(app.sessions.sessions()[0].status, Status::AgentReview);
     assert_eq!(
@@ -3502,6 +3407,7 @@ async fn apply_app_events_agent_response_starts_auto_review_when_snapshot_alread
     let session_id = "session-1";
     let diff_text = "diff --git a/file.rs b/file.rs\n+new line";
     let expected_hash = diff_content_hash(diff_text);
+    persist_timeline_test_session(&app, session_id, Status::Review).await;
 
     app.sessions
         .push_session(crate::test_support::session_fixture_with_folder(
@@ -3540,7 +3446,7 @@ async fn apply_app_events_agent_response_starts_auto_review_when_snapshot_alread
     // Assert
     assert!(matches!(
         app.review_cache.get(session_id),
-        Some(ReviewCacheEntry::Loading { diff_hash }) if *diff_hash == expected_hash
+        Some(ReviewCacheEntry::Loading { diff_hash, .. }) if *diff_hash == expected_hash
     ));
     assert_eq!(app.sessions.sessions()[0].status, Status::AgentReview);
     assert!(matches!(
@@ -4573,7 +4479,10 @@ async fn apply_review_update_stores_success_in_cache() {
     );
     app.review_cache.insert(
         session_id.to_string().into(),
-        ReviewCacheEntry::Loading { diff_hash: 123 },
+        ReviewCacheEntry::Loading {
+            diff_hash: 123,
+            turn_id: 0,
+        },
     );
 
     // Act
@@ -4582,6 +4491,7 @@ async fn apply_review_update_stores_success_in_cache() {
         ReviewUpdate {
             diff_hash: 123,
             result: Ok(review_text.to_string()),
+            turn_id: 0,
         },
     );
 
@@ -4614,7 +4524,10 @@ async fn apply_review_update_stores_failure_in_cache() {
     let error_message = "Review assist failed with exit code 1";
     app.review_cache.insert(
         session_id.to_string().into(),
-        ReviewCacheEntry::Loading { diff_hash: 456 },
+        ReviewCacheEntry::Loading {
+            diff_hash: 456,
+            turn_id: 0,
+        },
     );
 
     // Act
@@ -4623,6 +4536,7 @@ async fn apply_review_update_stores_failure_in_cache() {
         ReviewUpdate {
             diff_hash: 456,
             result: Err(error_message.to_string()),
+            turn_id: 0,
         },
     );
 
@@ -4643,7 +4557,10 @@ async fn apply_review_update_ignores_stale_diff_hash() {
     let session_id = "session-review-stale";
     app.review_cache.insert(
         session_id.to_string().into(),
-        ReviewCacheEntry::Loading { diff_hash: 999 },
+        ReviewCacheEntry::Loading {
+            diff_hash: 999,
+            turn_id: 0,
+        },
     );
 
     // Act
@@ -4652,13 +4569,14 @@ async fn apply_review_update_ignores_stale_diff_hash() {
         ReviewUpdate {
             diff_hash: 111,
             result: Ok("stale review".to_string()),
+            turn_id: 0,
         },
     );
 
     // Assert
     assert!(matches!(
         app.review_cache.get(session_id),
-        Some(ReviewCacheEntry::Loading { diff_hash }) if *diff_hash == 999
+        Some(ReviewCacheEntry::Loading { diff_hash, .. }) if *diff_hash == 999
     ));
 }
 
@@ -4682,7 +4600,10 @@ async fn apply_review_update_keeps_non_agent_review_status_unchanged() {
     );
     app.review_cache.insert(
         session_id.to_string().into(),
-        ReviewCacheEntry::Loading { diff_hash: 222 },
+        ReviewCacheEntry::Loading {
+            diff_hash: 222,
+            turn_id: 0,
+        },
     );
 
     // Act
@@ -4691,6 +4612,7 @@ async fn apply_review_update_keeps_non_agent_review_status_unchanged() {
         ReviewUpdate {
             diff_hash: 222,
             result: Ok("## Review\nBackground review".to_string()),
+            turn_id: 0,
         },
     );
 
@@ -4735,6 +4657,41 @@ async fn auto_start_reviews_clears_cache_on_in_progress_transition() {
 
     // Assert
     assert!(!app.review_cache.contains_key(session_id));
+}
+
+#[tokio::test]
+async fn auto_start_reviews_skips_stale_review_status_while_prompt_is_active() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+        Arc::new(MockTmuxClient::new()),
+    )
+    .await;
+    let session_id = "session-1";
+    app.sessions
+        .push_session(crate::test_support::session_fixture_with_folder(
+            PathBuf::from("/tmp/session-active-prompt"),
+        ));
+    app.sessions.sessions_mut()[0].status = Status::Review;
+    app.sessions
+        .set_active_prompt_output(session_id, " › Reply\n\n".to_string());
+    app.review_cache.insert(
+        session_id.into(),
+        ReviewCacheEntry::Ready {
+            diff_hash: 789,
+            text: "old review".to_string(),
+        },
+    );
+    let session_ids = HashSet::from([session_id.into()]);
+    let mut mock_git_client = ag_git::MockGitClient::new();
+    mock_git_client.expect_diff().times(0);
+    install_mock_git_client(&mut app, mock_git_client);
+
+    // Act
+    app.auto_start_reviews(&session_ids).await;
+
+    // Assert
+    assert!(!app.review_cache.contains_key(session_id));
+    assert_eq!(app.sessions.sessions()[0].status, Status::Review);
 }
 
 #[tokio::test]
@@ -4798,7 +4755,10 @@ async fn auto_start_reviews_skips_when_already_loading_with_same_hash() {
     let hash = diff_content_hash(diff_text);
     app.review_cache.insert(
         session_id.to_string().into(),
-        ReviewCacheEntry::Loading { diff_hash: hash },
+        ReviewCacheEntry::Loading {
+            diff_hash: hash,
+            turn_id: 0,
+        },
     );
     let session_ids = HashSet::from([session_id.into()]);
 
@@ -4814,7 +4774,7 @@ async fn auto_start_reviews_skips_when_already_loading_with_same_hash() {
     // Assert — still Loading, not re-triggered
     assert!(matches!(
         app.review_cache.get(session_id),
-        Some(ReviewCacheEntry::Loading { diff_hash }) if *diff_hash == hash
+        Some(ReviewCacheEntry::Loading { diff_hash, .. }) if *diff_hash == hash
     ));
     // Status remains Review because mark_session_agent_review was not called.
     assert_eq!(app.sessions.sessions()[0].status, Status::Review);
@@ -4867,11 +4827,15 @@ async fn auto_start_reviews_starts_loading_for_review_session() {
     )
     .await;
     let session_id = "session-1";
+    persist_timeline_test_session(&app, session_id, Status::Review).await;
     app.sessions
         .push_session(crate::test_support::session_fixture_with_folder(
             PathBuf::from("/tmp/session-hash-start"),
         ));
     app.sessions.sessions_mut()[0].status = Status::Review;
+    app.sessions
+        .session_handles_mut()
+        .insert(session_id.into(), SessionHandles::new(Status::Review));
 
     let diff_text = "diff --git a/file.rs b/file.rs\n+new line";
     let expected_hash = diff_content_hash(diff_text);
@@ -4889,9 +4853,69 @@ async fn auto_start_reviews_starts_loading_for_review_session() {
     // Assert
     assert!(matches!(
         app.review_cache.get(session_id),
-        Some(ReviewCacheEntry::Loading { diff_hash }) if *diff_hash == expected_hash
+        Some(ReviewCacheEntry::Loading { diff_hash, .. }) if *diff_hash == expected_hash
     ));
     assert_eq!(app.sessions.sessions()[0].status, Status::AgentReview);
+}
+
+#[tokio::test]
+async fn auto_start_reviews_storage_failure_skips_provider_start() {
+    // Arrange
+    let base_dir = tempdir().expect("failed to create temp dir");
+    let base_path = base_dir.path().to_path_buf();
+    let (database, pool) = AppRepositories::in_memory_with_pool().await;
+    let mut app = App::new_with_clients(
+        base_path.clone(),
+        base_path,
+        None,
+        database,
+        crate::test_support::test_app_clients(),
+    )
+    .await
+    .expect("failed to build app");
+    let session_id = "session-1";
+    app.sessions
+        .push_session(crate::test_support::session_fixture_with_folder(
+            PathBuf::from("/tmp/session-storage-failure"),
+        ));
+    app.sessions.sessions_mut()[0].status = Status::Review;
+    app.sessions
+        .session_handles_mut()
+        .insert(session_id.into(), SessionHandles::new(Status::Review));
+    let diff_text = "diff --git a/file.rs b/file.rs\n+new line";
+    let expected_hash = diff_content_hash(diff_text);
+    let session_ids = HashSet::from([session_id.into()]);
+    let mut mock_git_client = ag_git::MockGitClient::new();
+    mock_git_client
+        .expect_diff()
+        .returning(move |_, _| Box::pin(async move { Ok(diff_text.to_string()) }));
+    install_mock_git_client(&mut app, mock_git_client);
+    pool.close().await;
+
+    // Act
+    app.auto_start_reviews(&session_ids).await;
+
+    // Assert
+    assert!(matches!(
+        app.review_cache.get(session_id),
+        Some(ReviewCacheEntry::Failed { diff_hash, error })
+            if *diff_hash == expected_hash && error.contains("Press f to retry")
+    ));
+    assert_eq!(app.sessions.sessions()[0].status, Status::Review);
+    let transcript = app
+        .sessions
+        .session_handles()
+        .get(session_id)
+        .expect("missing session handles")
+        .transcript
+        .lock()
+        .expect("failed to lock transcript");
+    assert!(transcript.messages().iter().any(|message| {
+        message.kind == SessionMessageKind::FocusedReview
+            && message.state == SessionMessageState::Failed
+            && message.content.contains("Press f to retry")
+    }));
+    assert!(!transcript.has_pending_messages());
 }
 
 #[tokio::test]

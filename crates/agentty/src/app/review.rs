@@ -1,19 +1,15 @@
 //! Focused review-cache and review-assist orchestration helpers.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use ag_git::GitClient;
-use tokio::sync::mpsc;
-
-use super::core::AppEvent;
 use super::task;
+use crate::app::service::AppServices;
 use crate::app::session_state::SessionState;
 use crate::domain::agent::{AgentModel, AgentSelection};
 use crate::domain::session::{SessionId, Status};
-use crate::domain::session_message::SessionTranscript;
-use crate::infra::db::SessionFocusedReviewRow;
+use crate::domain::session_message::{SessionMessageKind, SessionMessageState, SessionTranscript};
+use crate::infra::db::{SessionFocusedReviewRow, SessionTimelineMessage};
 
 /// Cached focused review state for a session.
 #[derive(Debug)]
@@ -22,6 +18,8 @@ pub(crate) enum ReviewCacheEntry {
     Loading {
         /// Hash of the diff text that triggered this review generation.
         diff_hash: u64,
+        /// Turn that owns the in-flight focused-review timeline entry.
+        turn_id: i64,
     },
     /// Review text was successfully generated.
     Ready {
@@ -50,7 +48,7 @@ impl ReviewCacheEntry {
     /// Returns the diff content hash stored in any variant.
     pub(crate) fn diff_hash(&self) -> u64 {
         match self {
-            Self::Loading { diff_hash }
+            Self::Loading { diff_hash, .. }
             | Self::Ready { diff_hash, .. }
             | Self::Failed { diff_hash, .. }
             | Self::Suppressed { diff_hash } => *diff_hash,
@@ -79,23 +77,125 @@ pub(crate) struct ReviewUpdate {
     pub(crate) diff_hash: u64,
     /// Completed review assist result for the matching session.
     pub(crate) result: Result<String, String>,
+    /// Turn that owned the review task when it started.
+    pub(crate) turn_id: i64,
 }
 
-/// Persistable focused-review cache change produced by the reducer.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct FocusedReviewPersistence {
-    /// Hash of the diff that the persisted text applies to, or `None` when
-    /// clearing a stale persisted review.
-    pub(crate) diff_hash: Option<u64>,
-    /// Stable session identifier for the focused-review cache row.
-    pub(crate) session_id: SessionId,
-    /// Focused-review markdown to persist, or `None` when clearing it.
-    pub(crate) text: Option<String>,
+/// Persists focused-review timeline states and keeps failures visible.
+pub(crate) struct FocusedReviewTimeline<'a> {
+    /// Focused-review cache kept consistent with persistence outcomes.
+    pub(crate) review_cache: &'a mut HashMap<SessionId, ReviewCacheEntry>,
+    /// Shared application services used for persistence and redraw events.
+    pub(crate) services: &'a AppServices,
+    /// Shared live transcript updated after each write.
+    pub(crate) transcript: &'a Arc<Mutex<SessionTranscript>>,
+}
+
+impl FocusedReviewTimeline<'_> {
+    /// Persists one focused-review state, replacing storage failures with
+    /// visible retry guidance in the live transcript.
+    pub(crate) async fn persist(
+        &mut self,
+        session_id: &str,
+        diff_hash: u64,
+        turn_id: i64,
+        content: &str,
+        state: SessionMessageState,
+    ) -> Result<(), super::session::SessionError> {
+        let entry_key = focused_review_entry_key(turn_id, diff_hash);
+        let app_event_tx = self.services.event_sender();
+        let session_update_versions = self.services.session_update_versions();
+        let result = super::session::SessionTaskService::upsert_timeline_message(
+            self.transcript,
+            self.services.db(),
+            &app_event_tx,
+            &session_update_versions,
+            session_id,
+            SessionTimelineMessage {
+                content,
+                entry_key: &entry_key,
+                kind: SessionMessageKind::FocusedReview,
+                state,
+                turn_id,
+            },
+        )
+        .await;
+        if let Err(error) = result {
+            self.record_failure(
+                session_id,
+                diff_hash,
+                turn_id,
+                &entry_key,
+                &error.to_string(),
+            )
+            .await;
+
+            return Err(error);
+        }
+
+        Ok(())
+    }
+
+    async fn record_failure(
+        &mut self,
+        session_id: &str,
+        diff_hash: u64,
+        turn_id: i64,
+        entry_key: &str,
+        storage_error: &str,
+    ) {
+        tracing::warn!(
+            session_id,
+            entry_key,
+            error = storage_error,
+            "failed to persist focused-review timeline entry"
+        );
+        self.review_cache.insert(
+            SessionId::from(session_id),
+            ReviewCacheEntry::Failed {
+                diff_hash,
+                error: REVIEW_PERSISTENCE_ERROR.to_string(),
+            },
+        );
+
+        let content = format!("Review assist unavailable: {REVIEW_PERSISTENCE_ERROR}");
+        let app_event_tx = self.services.event_sender();
+        let session_update_versions = self.services.session_update_versions();
+        let update = SessionTimelineMessage {
+            content: &content,
+            entry_key,
+            kind: SessionMessageKind::FocusedReview,
+            state: SessionMessageState::Failed,
+            turn_id,
+        };
+        if super::session::SessionTaskService::upsert_timeline_message(
+            self.transcript,
+            self.services.db(),
+            &app_event_tx,
+            &session_update_versions,
+            session_id,
+            update,
+        )
+        .await
+        .is_err()
+        {
+            super::session::SessionTaskService::upsert_live_timeline_message(
+                self.transcript,
+                &app_event_tx,
+                &session_update_versions,
+                session_id,
+                update,
+            );
+        }
+    }
 }
 
 /// Prefix for the focused-review loading status while assist output is being
 /// prepared.
 const REVIEW_LOADING_MESSAGE_PREFIX: &str = "Reviewing changes with";
+
+/// Retry guidance shown when focused-review timeline persistence fails.
+const REVIEW_PERSISTENCE_ERROR: &str = "Failed to save focused review. Press f to retry.";
 
 /// Computes a deterministic `FNV-1a` hash of diff text for focused-review
 /// cache invalidation.
@@ -106,6 +206,11 @@ pub(crate) fn diff_content_hash(diff: &str) -> u64 {
     diff.as_bytes().iter().fold(FNV_OFFSET_BASIS, |hash, byte| {
         (hash ^ u64::from(*byte)).wrapping_mul(FNV_PRIME)
     })
+}
+
+/// Builds the stable identity for one focused review owned by a session turn.
+pub(crate) fn focused_review_entry_key(turn_id: i64, diff_hash: u64) -> String {
+    format!("focused_review:{turn_id}:{diff_hash}")
 }
 
 /// Returns whether one status line represents an in-flight focused review.
@@ -147,7 +252,13 @@ pub(crate) fn review_cache_from_rows(
     focused_review_rows
         .into_iter()
         .filter_map(|row| {
-            let diff_hash = row.diff_hash.parse::<u64>().ok()?;
+            let diff_hash = row
+                .entry_key
+                .strip_prefix("focused_review:")?
+                .rsplit(':')
+                .next()?
+                .parse::<u64>()
+                .ok()?;
 
             Some((
                 SessionId::from(row.session_id),
@@ -178,27 +289,6 @@ pub(crate) fn cancel_pending_review(
     true
 }
 
-/// Spawns one focused review-assist task for the provided session diff.
-pub(crate) fn start_review_assist(
-    app_event_tx: mpsc::UnboundedSender<AppEvent>,
-    review_selection: AgentSelection,
-    session_id: &str,
-    session_folder: &Path,
-    diff_hash: u64,
-    review_diff: &str,
-    session_chat_history: Option<&str>,
-) {
-    task::TaskService::spawn_review_assist_task(task::ReviewAssistTaskInput {
-        app_event_tx,
-        diff_hash,
-        review_diff: review_diff.to_string(),
-        review_selection,
-        session_chat_history: session_chat_history.map(str::to_string),
-        session_folder: session_folder.to_path_buf(),
-        session_id: SessionId::from(session_id),
-    });
-}
-
 /// Marks one review-ready session as transient `AgentReview` while focused
 /// review generation is running.
 pub(crate) fn mark_session_agent_review(session_state: &mut SessionState, session_id: &str) {
@@ -214,19 +304,19 @@ pub(crate) fn mark_session_agent_review(session_state: &mut SessionState, sessio
 pub(crate) fn apply_review_updates(
     review_cache: &mut HashMap<SessionId, ReviewCacheEntry>,
     session_state: &mut SessionState,
-    review_updates: HashMap<SessionId, ReviewUpdate>,
-) -> Vec<FocusedReviewPersistence> {
-    let mut persistence_updates = Vec::new();
+    review_updates: Vec<(SessionId, ReviewUpdate)>,
+) -> Vec<(SessionId, ReviewUpdate)> {
+    let mut accepted_updates = Vec::new();
 
     for (session_id, review_update) in review_updates {
-        if let Some(persistence_update) =
+        if let Some(review_update) =
             apply_review_update(review_cache, session_state, &session_id, review_update)
         {
-            persistence_updates.push(persistence_update);
+            accepted_updates.push((session_id, review_update));
         }
     }
 
-    persistence_updates
+    accepted_updates
 }
 
 /// Starts focused review generation for sessions that just entered review.
@@ -236,19 +326,24 @@ pub(crate) fn apply_review_updates(
 /// paired review-related reducer work runs, making transition detection
 /// unreliable.
 ///
-/// Sessions returning to `InProgress` clear their cached review immediately so
-/// the next completed diff triggers a fresh assist run. Sessions with a
-/// [`ReviewCacheEntry::Suppressed`] marker skip diff loading entirely; stopped
-/// turns set that marker synchronously so cancellation does not block on `git
-/// diff` just to prevent automatic review startup.
+/// Sessions returning to `InProgress`, or with an active prompt recorded
+/// before their status update is reduced, clear their cached review immediately
+/// so only the working loader is shown. The next completed diff then triggers
+/// a fresh assist run. Sessions with a [`ReviewCacheEntry::Suppressed`] marker
+/// skip diff loading entirely; stopped turns set that marker synchronously so
+/// cancellation does not block on `git diff` just to prevent automatic review
+/// startup.
 pub(crate) async fn auto_start_reviews(
     review_cache: &mut HashMap<SessionId, ReviewCacheEntry>,
     session_ids: &HashSet<SessionId>,
+    active_prompt_session_ids: &HashSet<SessionId>,
     session_state: &mut SessionState,
-    git_client: Arc<dyn GitClient>,
-    app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    services: &AppServices,
     review_selection: AgentSelection,
 ) {
+    let app_event_tx = services.event_sender();
+    let git_client = services.git_client();
+
     for session_id in session_ids {
         let Some(session) = session_state
             .sessions()
@@ -259,7 +354,7 @@ pub(crate) async fn auto_start_reviews(
         };
         let current_status = session.status;
 
-        if current_status == Status::InProgress {
+        if current_status == Status::InProgress || active_prompt_session_ids.contains(session_id) {
             review_cache.remove(session_id);
 
             continue;
@@ -275,6 +370,14 @@ pub(crate) async fn auto_start_reviews(
         ) {
             continue;
         }
+
+        let Some(transcript) = session_state
+            .handles()
+            .get(session_id)
+            .map(|handles| Arc::clone(&handles.transcript))
+        else {
+            continue;
+        };
 
         let base_branch = session.base_branch.clone();
         let session_chat_history = session
@@ -301,22 +404,48 @@ pub(crate) async fn auto_start_reviews(
             continue;
         }
 
+        let turn_id = transcript
+            .lock()
+            .ok()
+            .map(|transcript| transcript.current_turn_id())
+            .unwrap_or_default();
         review_cache.insert(
             session_id.clone(),
             ReviewCacheEntry::Loading {
                 diff_hash: new_hash,
+                turn_id,
             },
         );
+        let loading_message = review_loading_message(review_selection.model());
+        let mut timeline = FocusedReviewTimeline {
+            review_cache,
+            services,
+            transcript: &transcript,
+        };
+        if timeline
+            .persist(
+                session_id,
+                new_hash,
+                turn_id,
+                &loading_message,
+                SessionMessageState::Pending,
+            )
+            .await
+            .is_err()
+        {
+            continue;
+        }
         mark_session_agent_review(session_state, session_id);
-        start_review_assist(
-            app_event_tx.clone(),
+        task::TaskService::spawn_review_assist_task(task::ReviewAssistTaskInput {
+            app_event_tx: app_event_tx.clone(),
+            diff_hash: new_hash,
+            review_diff: diff,
             review_selection,
-            session_id,
-            &session_folder,
-            new_hash,
-            &diff,
-            session_chat_history.as_deref(),
-        );
+            session_chat_history,
+            session_folder,
+            session_id: session_id.clone(),
+            turn_id,
+        });
     }
 }
 
@@ -326,28 +455,27 @@ fn apply_review_update(
     session_state: &mut SessionState,
     session_id: &str,
     review_update: ReviewUpdate,
-) -> Option<FocusedReviewPersistence> {
-    let ReviewUpdate { diff_hash, result } = review_update;
+) -> Option<ReviewUpdate> {
     let cache_entry = review_cache.get(session_id)?;
 
-    if !matches!(cache_entry, ReviewCacheEntry::Loading { .. })
-        || cache_entry.diff_hash() != diff_hash
-    {
+    if !matches!(
+        cache_entry,
+        ReviewCacheEntry::Loading {
+            diff_hash: cached_diff_hash,
+            turn_id: cached_turn_id,
+        } if *cached_diff_hash == review_update.diff_hash
+            && *cached_turn_id == review_update.turn_id
+    ) {
         return None;
     }
 
-    let persistence_update = FocusedReviewPersistence {
-        diff_hash: result.as_ref().ok().map(|_| diff_hash),
-        session_id: SessionId::from(session_id),
-        text: result.as_ref().ok().cloned(),
-    };
     review_cache.insert(
         SessionId::from(session_id),
-        ReviewCacheEntry::from_result(diff_hash, &result),
+        ReviewCacheEntry::from_result(review_update.diff_hash, &review_update.result),
     );
     restore_session_review_status(session_state, session_id);
 
-    Some(persistence_update)
+    Some(review_update)
 }
 
 /// Restores one transient `AgentReview` session back to `Review` after the
@@ -413,8 +541,12 @@ mod tests {
     fn loading_review_cache(
         session_id: &SessionId,
         diff_hash: u64,
+        turn_id: i64,
     ) -> HashMap<SessionId, ReviewCacheEntry> {
-        HashMap::from([(session_id.clone(), ReviewCacheEntry::Loading { diff_hash })])
+        HashMap::from([(
+            session_id.clone(),
+            ReviewCacheEntry::Loading { diff_hash, turn_id },
+        )])
     }
 
     /// Builds a single successful review update for one session.
@@ -422,14 +554,16 @@ mod tests {
         session_id: &SessionId,
         diff_hash: u64,
         review_text: &str,
-    ) -> HashMap<SessionId, ReviewUpdate> {
-        HashMap::from([(
+        turn_id: i64,
+    ) -> Vec<(SessionId, ReviewUpdate)> {
+        vec![(
             session_id.clone(),
             ReviewUpdate {
                 diff_hash,
                 result: Ok(review_text.to_string()),
+                turn_id,
             },
-        )])
+        )]
     }
 
     #[test]
@@ -462,7 +596,10 @@ mod tests {
         let mut review_cache = HashMap::new();
         review_cache.insert(
             "session-id".into(),
-            ReviewCacheEntry::Loading { diff_hash: 7 },
+            ReviewCacheEntry::Loading {
+                diff_hash: 7,
+                turn_id: 3,
+            },
         );
 
         // Act
@@ -499,7 +636,7 @@ mod tests {
     fn review_cache_from_rows_restores_persisted_ready_review() {
         // Arrange
         let focused_review_rows = vec![SessionFocusedReviewRow {
-            diff_hash: "42".to_string(),
+            entry_key: "focused_review:3:42".to_string(),
             session_id: "session-id".to_string(),
             text: "## Review\nPersisted finding.".to_string(),
         }];
@@ -516,58 +653,130 @@ mod tests {
     }
 
     #[test]
-    fn apply_review_updates_returns_success_for_persistence() {
+    fn review_cache_from_rows_accepts_legacy_diff_only_entry_key() {
+        // Arrange
+        let focused_review_rows = vec![SessionFocusedReviewRow {
+            entry_key: "focused_review:42".to_string(),
+            session_id: "legacy-session".to_string(),
+            text: "## Review\nLegacy finding.".to_string(),
+        }];
+
+        // Act
+        let review_cache = review_cache_from_rows(focused_review_rows);
+
+        // Assert
+        assert!(matches!(
+            review_cache.get("legacy-session"),
+            Some(ReviewCacheEntry::Ready { diff_hash: 42, text })
+                if text == "## Review\nLegacy finding."
+        ));
+    }
+
+    #[test]
+    fn apply_review_updates_returns_accepted_success() {
         // Arrange
         let session_id = SessionId::from("session-persist-review");
         let diff_hash = 19;
         let review_text = "## Review\nPersist this finding.";
-        let mut review_cache = loading_review_cache(&session_id, diff_hash);
+        let turn_id = 3;
+        let mut review_cache = loading_review_cache(&session_id, diff_hash, turn_id);
         let mut session_state = empty_session_state();
-        let review_updates = successful_review_update(&session_id, diff_hash, review_text);
+        let review_updates = successful_review_update(&session_id, diff_hash, review_text, turn_id);
+        let expected_updates = review_updates.clone();
 
         // Act
-        let persistence_updates =
+        let accepted_updates =
             apply_review_updates(&mut review_cache, &mut session_state, review_updates);
 
         // Assert
+        assert_eq!(accepted_updates, expected_updates);
+    }
+
+    #[test]
+    fn apply_review_updates_keeps_same_diff_scoped_to_owning_turn() {
+        // Arrange
+        let session_id = SessionId::from("session-same-diff-review");
+        let diff_hash = 41;
+        let first_turn_id = 1;
+        let second_turn_id = 2;
+        let mut review_cache = loading_review_cache(&session_id, diff_hash, first_turn_id);
+        let mut session_state = empty_session_state();
+        let first_updates = successful_review_update(
+            &session_id,
+            diff_hash,
+            "## Review\nFirst turn finding.",
+            first_turn_id,
+        );
+        let first_accepted =
+            apply_review_updates(&mut review_cache, &mut session_state, first_updates);
+        review_cache.insert(
+            session_id.clone(),
+            ReviewCacheEntry::Loading {
+                diff_hash,
+                turn_id: second_turn_id,
+            },
+        );
+        let second_updates = vec![
+            (
+                session_id.clone(),
+                ReviewUpdate {
+                    diff_hash,
+                    result: Ok("## Review\nStale first turn result.".to_string()),
+                    turn_id: first_turn_id,
+                },
+            ),
+            (
+                session_id.clone(),
+                ReviewUpdate {
+                    diff_hash,
+                    result: Ok("## Review\nSecond turn finding.".to_string()),
+                    turn_id: second_turn_id,
+                },
+            ),
+        ];
+
+        // Act
+        let second_accepted =
+            apply_review_updates(&mut review_cache, &mut session_state, second_updates);
+
+        // Assert
         assert_eq!(
-            persistence_updates,
-            vec![FocusedReviewPersistence {
-                diff_hash: Some(diff_hash),
-                session_id,
-                text: Some(review_text.to_string()),
-            }]
+            first_accepted[0].1.turn_id, first_turn_id,
+            "the first result must retain its owning turn"
+        );
+        assert_eq!(second_accepted.len(), 1);
+        assert_eq!(second_accepted[0].0, session_id);
+        assert_eq!(second_accepted[0].1.turn_id, second_turn_id);
+        assert_eq!(
+            second_accepted[0].1.result,
+            Ok("## Review\nSecond turn finding.".to_string())
         );
     }
 
     #[test]
-    fn apply_review_updates_returns_clear_for_failed_regeneration() {
+    fn apply_review_updates_returns_accepted_failure() {
         // Arrange
         let session_id = SessionId::from("session-failed-review");
         let diff_hash = 29;
-        let mut review_cache = loading_review_cache(&session_id, diff_hash);
+        let turn_id = 4;
+        let mut review_cache = loading_review_cache(&session_id, diff_hash, turn_id);
         let mut session_state = empty_session_state();
-        let review_updates = HashMap::from([(
-            session_id.clone(),
+        let review_updates = vec![(
+            session_id,
             ReviewUpdate {
                 diff_hash,
                 result: Err("provider failed".to_string()),
+                turn_id,
             },
-        )]);
+        )];
+        let expected_updates = review_updates.clone();
 
         // Act
-        let persistence_updates =
+        let accepted_updates =
             apply_review_updates(&mut review_cache, &mut session_state, review_updates);
 
         // Assert
-        assert_eq!(
-            persistence_updates,
-            vec![FocusedReviewPersistence {
-                diff_hash: None,
-                session_id,
-                text: None,
-            }]
-        );
+        assert_eq!(accepted_updates, expected_updates);
     }
 
     #[test]
@@ -576,9 +785,10 @@ mod tests {
         let session_id = SessionId::from("session-cache-review");
         let diff_hash = 11;
         let review_text = "## Review\nCache-backed finding.";
-        let mut review_cache = loading_review_cache(&session_id, diff_hash);
+        let turn_id = 5;
+        let mut review_cache = loading_review_cache(&session_id, diff_hash, turn_id);
         let mut session_state = empty_session_state();
-        let review_updates = successful_review_update(&session_id, diff_hash, review_text);
+        let review_updates = successful_review_update(&session_id, diff_hash, review_text, turn_id);
 
         // Act
         apply_review_updates(&mut review_cache, &mut session_state, review_updates);
@@ -600,8 +810,12 @@ mod tests {
             ReviewCacheEntry::Suppressed { diff_hash },
         )]);
         let mut session_state = empty_session_state();
-        let review_updates =
-            successful_review_update(&session_id, diff_hash, "## Review\nShould not be rendered.");
+        let review_updates = successful_review_update(
+            &session_id,
+            diff_hash,
+            "## Review\nShould not be rendered.",
+            6,
+        );
 
         // Act
         apply_review_updates(&mut review_cache, &mut session_state, review_updates);

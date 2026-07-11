@@ -1078,7 +1078,7 @@ mod tests {
     use super::*;
     use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
     use crate::domain::question::QuestionItem;
-    use crate::domain::session::{PublishedBranchSyncStatus, ReviewRequest, ReviewRequestState};
+    use crate::domain::session::{ReviewRequest, ReviewRequestState};
     use crate::infra::db::AppRepositories;
     use crate::infra::fs;
 
@@ -1179,6 +1179,23 @@ mod tests {
             .ok()
             .and_then(|transcript| transcript.replay_text())
             .unwrap_or_default()
+    }
+
+    async fn wait_for_transcript_text(
+        transcript: &Arc<Mutex<SessionTranscript>>,
+        expected_text: &str,
+    ) -> String {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let text = transcript_text(transcript);
+                if text.contains(expected_text) {
+                    return text;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("timed out waiting for transcript text")
     }
 
     /// Applies one turn result through the narrowed post-turn dependency set
@@ -2414,15 +2431,15 @@ mod tests {
         let status = apply_worker_turn_result(&context, turn_metadata, turn_result)
             .await
             .expect("turn result should succeed");
-        let sessions = db
+        let persisted_summary = db
             .sessions()
-            .load_sessions()
+            .load_latest_session_message("sess1", SessionMessageKind::TurnSummary)
             .await
-            .expect("failed to load sessions");
+            .expect("failed to load summary");
 
         // Assert
         assert_eq!(status, Status::Review);
-        let summary = sessions[0].summary.as_deref().map(|raw| {
+        let summary = persisted_summary.as_deref().map(|raw| {
             serde_json::from_str::<AgentResponseSummary>(raw)
                 .expect("stored summary should deserialize")
         });
@@ -2436,7 +2453,7 @@ mod tests {
         let output = transcript_text(&context.transcript);
         assert!(output.starts_with("Implemented the change.\n\n"));
         assert!(!output.contains("[Commit] No changes to commit."));
-        assert!(!output.contains("## Change Summary"));
+        assert!(output.contains("Updated the worker flow."));
         assert!(!output.contains("Document the worker summary flow."));
     }
 
@@ -2493,19 +2510,16 @@ mod tests {
         )
         .await
         .expect("turn result should succeed");
-        let sync_events = tokio::time::timeout(Duration::from_secs(1), async {
-            let mut sync_events = Vec::new();
-            while sync_events.len() < 2 {
-                let event = app_event_rx.recv().await.expect("missing app event");
-                if let AppEvent::PublishedBranchSyncUpdated { sync_status, .. } = event {
-                    sync_events.push(sync_status);
+        let output = wait_for_transcript_text(&context.transcript, "[Branch Push]").await;
+        let refresh_requested = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if app_event_rx.recv().await == Some(AppEvent::RefreshGitStatus) {
+                    return;
                 }
             }
-
-            sync_events
         })
         .await
-        .expect("timed out waiting for sync events");
+        .is_ok();
         let review_request = db
             .reviews()
             .load_session_review_request("sess1")
@@ -2515,13 +2529,8 @@ mod tests {
 
         // Assert
         assert_eq!(status, Status::Review);
-        assert_eq!(
-            sync_events,
-            vec![
-                PublishedBranchSyncStatus::InProgress,
-                PublishedBranchSyncStatus::Succeeded,
-            ]
-        );
+        assert!(output.contains("Auto-pushed published branch"));
+        assert!(refresh_requested);
         assert_eq!(review_request.title, "Refine review metadata sync");
     }
 
@@ -2534,7 +2543,7 @@ mod tests {
         insert_in_progress_session_with_review_request(&db).await;
         let commit_message =
             "Refine review metadata sync\n\n- Update the linked review request body.";
-        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let context = SessionWorkerContext {
             app_event_tx,
             branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -2572,19 +2581,7 @@ mod tests {
         )
         .await
         .expect("turn result should succeed");
-        let sync_events = tokio::time::timeout(Duration::from_secs(1), async {
-            let mut sync_events = Vec::new();
-            while sync_events.len() < 2 {
-                let event = app_event_rx.recv().await.expect("missing app event");
-                if let AppEvent::PublishedBranchSyncUpdated { sync_status, .. } = event {
-                    sync_events.push(sync_status);
-                }
-            }
-
-            sync_events
-        })
-        .await
-        .expect("timed out waiting for sync events");
+        let output = wait_for_transcript_text(&context.transcript, "[Branch Push Error]").await;
         let review_request = db
             .reviews()
             .load_session_review_request("sess1")
@@ -2594,13 +2591,7 @@ mod tests {
 
         // Assert
         assert_eq!(status, Status::Review);
-        assert_eq!(
-            sync_events,
-            vec![
-                PublishedBranchSyncStatus::InProgress,
-                PublishedBranchSyncStatus::Failed,
-            ]
-        );
+        assert!(output.contains("[Branch Push Error]"));
         assert_eq!(review_request.title, "Old title");
     }
 
@@ -2852,7 +2843,7 @@ mod tests {
             )
             .await
             .expect("failed to insert session");
-        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let session_agent =
             AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini3FlashPreview);
         let mut mock_git_client = MockGitClient::new();
@@ -2911,32 +2902,11 @@ mod tests {
         let status = apply_worker_turn_result(&context, turn_metadata, turn_result)
             .await
             .expect("turn result should succeed");
-        let sync_events = tokio::time::timeout(Duration::from_secs(1), async {
-            let mut sync_events = Vec::new();
-            while sync_events.len() < 2 {
-                let event = app_event_rx.recv().await.expect("missing app event");
-                if let AppEvent::PublishedBranchSyncUpdated {
-                    session_id,
-                    sync_operation_id,
-                    sync_status,
-                } = event
-                {
-                    sync_events.push((session_id, sync_operation_id, sync_status));
-                }
-            }
-
-            sync_events
-        })
-        .await
-        .expect("timed out waiting for sync events");
+        let output = wait_for_transcript_text(&context.transcript, "[Branch Push]").await;
 
         // Assert
         assert_eq!(status, Status::Review);
-        assert_eq!(sync_events[0].2, PublishedBranchSyncStatus::InProgress);
-        assert_eq!(sync_events[1].2, PublishedBranchSyncStatus::Succeeded);
-        assert_eq!(sync_events[0].0, "sess1");
-        assert_eq!(sync_events[1].0, "sess1");
-        assert_eq!(sync_events[0].1, sync_events[1].1);
+        assert!(output.contains("Auto-pushed published branch"));
     }
 
     #[tokio::test]
@@ -2961,7 +2931,7 @@ mod tests {
             )
             .await
             .expect("failed to insert session");
-        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let session_agent =
             AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini3FlashPreview);
         let mut mock_git_client = MockGitClient::new();
@@ -3017,18 +2987,13 @@ mod tests {
         let status = apply_worker_turn_result(&context, turn_metadata, turn_result)
             .await
             .expect("turn result should succeed");
-        let mut emitted_sync_event = false;
-        while let Ok(event) = app_event_rx.try_recv() {
-            if matches!(event, AppEvent::PublishedBranchSyncUpdated { .. }) {
-                emitted_sync_event = true;
-            }
-        }
+        let output = transcript_text(&context.transcript);
 
         // Assert
         assert_eq!(status, Status::Review);
         assert!(
-            !emitted_sync_event,
-            "queued follow-up messages should suppress post-turn auto-push events"
+            !output.contains("[Branch Push]"),
+            "queued follow-up messages should suppress post-turn auto-push output"
         );
     }
 
@@ -3058,7 +3023,7 @@ mod tests {
             .insert_session_operation("queued-sync", "sess1", "rebase")
             .await
             .expect("failed to insert queued sync operation");
-        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let session_agent =
             AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini3FlashPreview);
         let mut mock_git_client = MockGitClient::new();
@@ -3111,18 +3076,13 @@ mod tests {
         let status = apply_worker_turn_result(&context, turn_metadata, turn_result)
             .await
             .expect("turn result should succeed");
-        let mut emitted_sync_event = false;
-        while let Ok(event) = app_event_rx.try_recv() {
-            if matches!(event, AppEvent::PublishedBranchSyncUpdated { .. }) {
-                emitted_sync_event = true;
-            }
-        }
+        let output = transcript_text(&context.transcript);
 
         // Assert
         assert_eq!(status, Status::Review);
         assert!(
-            !emitted_sync_event,
-            "queued sync should suppress post-turn auto-push events"
+            !output.contains("[Branch Push]"),
+            "queued sync should suppress post-turn auto-push output"
         );
     }
 
@@ -3148,7 +3108,7 @@ mod tests {
             )
             .await
             .expect("failed to insert session");
-        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let session_agent =
             AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini3FlashPreview);
         let mut mock_git_client = MockGitClient::new();
@@ -3210,30 +3170,10 @@ mod tests {
         let status = apply_worker_turn_result(&context, turn_metadata, turn_result)
             .await
             .expect("turn result should succeed");
-        let sync_events = tokio::time::timeout(Duration::from_secs(1), async {
-            let mut sync_events = Vec::new();
-            while sync_events.len() < 2 {
-                let event = app_event_rx.recv().await.expect("missing app event");
-                if let AppEvent::PublishedBranchSyncUpdated { sync_status, .. } = event {
-                    sync_events.push(sync_status);
-                }
-            }
-
-            sync_events
-        })
-        .await
-        .expect("timed out waiting for sync events");
-        let output = transcript_text(&transcript);
+        let output = wait_for_transcript_text(&transcript, "[Branch Push Error]").await;
 
         // Assert
         assert_eq!(status, Status::Review);
-        assert_eq!(
-            sync_events,
-            vec![
-                PublishedBranchSyncStatus::InProgress,
-                PublishedBranchSyncStatus::Failed,
-            ]
-        );
         assert!(output.contains("[Branch Push Error]"));
         assert!(output.contains("gh auth login"));
     }
@@ -4349,7 +4289,7 @@ mod tests {
             .await
             .expect("failed to persist published upstream ref");
 
-        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         context.app_event_tx = app_event_tx;
 
         let mut mock_git_client = MockGitClient::new();
@@ -4393,32 +4333,11 @@ mod tests {
 
         // Act
         SessionWorkerService::drain_queued_messages(&context).await;
-        let sync_events = tokio::time::timeout(Duration::from_secs(1), async {
-            let mut sync_events = Vec::new();
-            while sync_events.len() < 2 {
-                let event = app_event_rx.recv().await.expect("missing app event");
-                if let AppEvent::PublishedBranchSyncUpdated {
-                    session_id,
-                    sync_operation_id,
-                    sync_status,
-                } = event
-                {
-                    sync_events.push((session_id, sync_operation_id, sync_status));
-                }
-            }
-
-            sync_events
-        })
-        .await
-        .expect("timed out waiting for sync events");
+        let output = wait_for_transcript_text(&context.transcript, "[Branch Push]").await;
 
         // Assert
         assert!(queue_handle.lock().expect("queue lock").is_empty());
-        assert_eq!(sync_events[0].2, PublishedBranchSyncStatus::InProgress);
-        assert_eq!(sync_events[1].2, PublishedBranchSyncStatus::Succeeded);
-        assert_eq!(sync_events[0].0, "sess1");
-        assert_eq!(sync_events[1].0, "sess1");
-        assert_eq!(sync_events[0].1, sync_events[1].1);
+        assert!(output.contains("Auto-pushed published branch"));
     }
 
     #[tokio::test]

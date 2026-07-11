@@ -359,9 +359,7 @@ mod tests {
     use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
     use crate::domain::file_entry::FileEntry;
     use crate::domain::input::InputState;
-    use crate::domain::session::{
-        COMMITTING_PROGRESS_LABEL, PublishedBranchSyncStatus, Session, Status,
-    };
+    use crate::domain::session::{COMMITTING_PROGRESS_LABEL, Session, Status};
     use crate::domain::theme::ColorTheme;
     use crate::presentation::app_mode::ChatFocus;
     use crate::presentation::help_action::{self, ViewActionAvailability, ViewHelpState};
@@ -1212,13 +1210,9 @@ mod tests {
         // Arrange
 
         // Act
-        let status_line = session_output_status_line(
-            Status::InProgress,
-            Some("Inspecting changed files"),
-            None,
-            AgentModel::Gpt55,
-        )
-        .expect("in-progress sessions should render a status line");
+        let status_line =
+            session_output_status_line(Status::InProgress, Some("Inspecting changed files"))
+                .expect("in-progress sessions should render a status line");
 
         // Assert
         assert!(
@@ -1233,13 +1227,9 @@ mod tests {
         // Arrange
 
         // Act
-        let status_line = session_output_status_line(
-            Status::InProgress,
-            Some(COMMITTING_PROGRESS_LABEL),
-            None,
-            AgentModel::ClaudeOpus48,
-        )
-        .expect("in-progress sessions should render a status line");
+        let status_line =
+            session_output_status_line(Status::InProgress, Some(COMMITTING_PROGRESS_LABEL))
+                .expect("in-progress sessions should render a status line");
 
         // Assert
         assert!(status_line.to_string().contains(COMMITTING_PROGRESS_LABEL));
@@ -1251,73 +1241,15 @@ mod tests {
     }
 
     #[test]
-    fn test_session_output_status_line_for_agent_review_uses_review_loader_text() {
-        // Arrange
-
-        // Act
-        let status_line = session_output_status_line(
-            Status::AgentReview,
-            None,
-            Some("Reviewing changes with gpt-5.5"),
-            AgentModel::Gpt55,
-        )
-        .expect("agent-review sessions should render a status line");
-
-        // Assert
-        assert!(
-            status_line
-                .to_string()
-                .contains("Reviewing changes with gpt-5.5")
-        );
-    }
-
-    #[test]
-    fn test_session_output_status_line_for_agent_review_falls_back_to_model_loader_text() {
-        // Arrange
-
-        // Act
-        let status_line =
-            session_output_status_line(Status::AgentReview, None, None, AgentModel::ClaudeOpus48)
-                .expect("agent-review sessions should render a status line");
-
-        // Assert
-        assert!(
-            status_line
-                .to_string()
-                .contains("Reviewing changes with claude-opus-4-8")
-        );
-    }
-
-    #[test]
     fn test_session_output_status_line_for_merging_uses_status_label() {
         // Arrange
 
         // Act
-        let status_line =
-            session_output_status_line(Status::Merging, None, None, AgentModel::Gpt55)
-                .expect("merging sessions should render a status line");
+        let status_line = session_output_status_line(Status::Merging, None)
+            .expect("merging sessions should render a status line");
 
         // Assert
         assert!(status_line.to_string().contains("Merging..."));
-    }
-
-    #[test]
-    fn test_session_output_published_branch_sync_line_uses_sync_message() {
-        // Arrange
-        let mut session = session_fixture();
-        session.published_upstream_ref = Some("origin/wt/session-id".to_string());
-        session.published_branch_sync_status = PublishedBranchSyncStatus::InProgress;
-
-        // Act
-        let sync_line = session_output_published_branch_sync_line(&session)
-            .expect("published branch sync should render a status line");
-
-        // Assert
-        assert!(
-            sync_line
-                .to_string()
-                .contains("Auto-pushing published branch after completed turn...")
-        );
     }
 
     #[test]

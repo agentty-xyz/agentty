@@ -12,6 +12,10 @@ pub enum SessionMessageKind {
     UserPrompt,
     /// Raw assistant answer text without transcript padding.
     AssistantAnswer,
+    /// Structured summary associated with one completed agent turn.
+    TurnSummary,
+    /// Focused-review output associated with one completed agent turn.
+    FocusedReview,
     /// Generic workflow notice emitted by Agentty session workflows.
     WorkflowNotice,
 }
@@ -22,12 +26,13 @@ impl SessionMessageKind {
         match self {
             Self::UserPrompt => "user_prompt",
             Self::AssistantAnswer => "assistant_answer",
+            Self::TurnSummary => "turn_summary",
+            Self::FocusedReview => "focused_review",
             Self::WorkflowNotice => "workflow_notice",
         }
     }
 
-    /// Returns whether this kind represents a raw conversation message that
-    /// belongs in the normal `session_message` store.
+    /// Returns whether this kind represents raw provider conversation history.
     pub fn is_conversation_message(self) -> bool {
         matches!(self, Self::UserPrompt | Self::AssistantAnswer)
     }
@@ -46,6 +51,8 @@ impl FromStr for SessionMessageKind {
         match value {
             "user_prompt" => Ok(Self::UserPrompt),
             "assistant_answer" => Ok(Self::AssistantAnswer),
+            "turn_summary" => Ok(Self::TurnSummary),
+            "focused_review" => Ok(Self::FocusedReview),
             "workflow_notice" => Ok(Self::WorkflowNotice),
             _ => Err(SessionMessageKindParseError {
                 value: value.to_string(),
@@ -68,15 +75,72 @@ impl fmt::Display for SessionMessageKindParseError {
 
 impl std::error::Error for SessionMessageKindParseError {}
 
+/// Lifecycle state for one stable session timeline entry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SessionMessageState {
+    /// An asynchronous producer is still preparing the final content.
+    Pending,
+    /// The final content completed successfully.
+    Resolved,
+    /// The producer completed with a user-visible failure.
+    Failed,
+}
+
+impl SessionMessageState {
+    /// Returns the stable database string for this state.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Resolved => "resolved",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+impl FromStr for SessionMessageState {
+    type Err = SessionMessageStateParseError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "pending" => Ok(Self::Pending),
+            "resolved" => Ok(Self::Resolved),
+            "failed" => Ok(Self::Failed),
+            _ => Err(SessionMessageStateParseError {
+                value: value.to_string(),
+            }),
+        }
+    }
+}
+
+/// Error returned when a stored timeline-entry state is unknown.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionMessageStateParseError {
+    value: String,
+}
+
+impl fmt::Display for SessionMessageStateParseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "unknown session message state `{}`", self.value)
+    }
+}
+
+impl std::error::Error for SessionMessageStateParseError {}
+
 /// One persisted transcript message for a session.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionMessage {
     /// Canonical transcript text for this message.
     pub content: String,
+    /// Stable producer identity used to replace pending entries in place.
+    pub entry_key: Option<String>,
     /// Durable message category.
     pub kind: SessionMessageKind,
     /// Monotonic position within the owning session transcript.
     pub position: i64,
+    /// Current lifecycle state for this timeline entry.
+    pub state: SessionMessageState,
+    /// Monotonic turn identifier used for semantic timeline ordering.
+    pub turn_id: i64,
 }
 
 impl SessionMessage {
@@ -84,8 +148,11 @@ impl SessionMessage {
     pub fn new(position: i64, kind: SessionMessageKind, content: impl Into<String>) -> Self {
         Self {
             content: content.into(),
+            entry_key: None,
             kind,
             position,
+            state: SessionMessageState::Resolved,
+            turn_id: 0,
         }
     }
 
@@ -94,8 +161,30 @@ impl SessionMessage {
     pub fn conversation(position: i64, kind: SessionMessageKind, content: impl AsRef<str>) -> Self {
         Self {
             content: stored_message_content(kind, content.as_ref()),
+            entry_key: None,
             kind,
             position,
+            state: SessionMessageState::Resolved,
+            turn_id: 0,
+        }
+    }
+
+    /// Creates one turn-scoped entry with a stable replacement key.
+    pub fn timeline(
+        position: i64,
+        turn_id: i64,
+        entry_key: impl Into<String>,
+        kind: SessionMessageKind,
+        state: SessionMessageState,
+        content: impl Into<String>,
+    ) -> Self {
+        Self {
+            content: content.into(),
+            entry_key: Some(entry_key.into()),
+            kind,
+            position,
+            state,
+            turn_id,
         }
     }
 }
@@ -110,7 +199,7 @@ pub struct SessionTranscript {
 impl SessionTranscript {
     /// Creates an ordered transcript from persisted messages.
     pub fn new(mut messages: Vec<SessionMessage>) -> Self {
-        messages.sort_by_key(|message| message.position);
+        messages.sort_by_key(SessionMessage::sort_key);
 
         let total_content_len = messages.iter().map(|message| message.content.len()).sum();
 
@@ -145,11 +234,89 @@ impl SessionTranscript {
 
         let position = self
             .messages
-            .last()
-            .map_or(0, |message| message.position.saturating_add(1));
+            .iter()
+            .map(|message| message.position)
+            .max()
+            .unwrap_or(-1)
+            .saturating_add(1);
         self.total_content_len = self.total_content_len.saturating_add(content.len());
+        let turn_id = if kind == SessionMessageKind::UserPrompt {
+            self.current_turn_id().saturating_add(1)
+        } else {
+            self.current_turn_id()
+        };
+        let mut message = SessionMessage::new(position, kind, content);
+        message.turn_id = turn_id;
+        self.messages.push(message);
+        self.messages.sort_by_key(SessionMessage::sort_key);
+    }
+
+    /// Returns the latest turn identifier represented in the transcript.
+    pub fn current_turn_id(&self) -> i64 {
         self.messages
-            .push(SessionMessage::new(position, kind, content));
+            .iter()
+            .map(|message| message.turn_id)
+            .max()
+            .unwrap_or_default()
+    }
+
+    /// Returns whether any timeline producer is still pending.
+    pub fn has_pending_messages(&self) -> bool {
+        self.messages
+            .iter()
+            .any(|message| message.state == SessionMessageState::Pending)
+    }
+
+    /// Inserts or replaces one stable timeline entry.
+    pub fn upsert_timeline_message(&mut self, message: SessionMessage) {
+        if let Some(entry_key) = message.entry_key.as_deref()
+            && let Some(existing) = self
+                .messages
+                .iter_mut()
+                .find(|existing| existing.entry_key.as_deref() == Some(entry_key))
+        {
+            self.total_content_len = self
+                .total_content_len
+                .saturating_sub(existing.content.len())
+                .saturating_add(message.content.len());
+            *existing = message;
+        } else {
+            self.total_content_len = self.total_content_len.saturating_add(message.content.len());
+            self.messages.push(message);
+        }
+        self.messages.sort_by_key(SessionMessage::sort_key);
+    }
+
+    /// Removes one stable timeline entry and returns whether it existed.
+    pub fn remove_timeline_message(&mut self, entry_key: &str) -> bool {
+        let Some(message_index) = self
+            .messages
+            .iter()
+            .position(|message| message.entry_key.as_deref() == Some(entry_key))
+        else {
+            return false;
+        };
+        let removed_message = self.messages.remove(message_index);
+        self.total_content_len = self
+            .total_content_len
+            .saturating_sub(removed_message.content.len());
+
+        true
+    }
+
+    /// Returns the resolved summary belonging to the latest represented turn.
+    pub fn latest_turn_summary(&self) -> Option<&str> {
+        let current_turn_id = self.current_turn_id();
+
+        self.messages
+            .iter()
+            .rev()
+            .find(|message| {
+                message.turn_id == current_turn_id
+                    && message.kind == SessionMessageKind::TurnSummary
+                    && message.state == SessionMessageState::Resolved
+            })
+            .map(|message| message.content.as_str())
     }
 
     /// Returns formatted transcript text for replay when content exists.
@@ -185,6 +352,27 @@ impl SessionTranscript {
         Some(output)
     }
 
+    /// Returns provider replay text without Agentty-authored summary or
+    /// focused-review metadata.
+    pub fn provider_replay_text(&self) -> Option<String> {
+        let mut output = String::new();
+
+        for message in self.messages.iter().filter(|message| {
+            !matches!(
+                message.kind,
+                SessionMessageKind::TurnSummary | SessionMessageKind::FocusedReview
+            )
+        }) {
+            message.append_display_text(&mut output);
+        }
+
+        if output.trim().is_empty() {
+            return None;
+        }
+
+        Some(output)
+    }
+
     /// Formats one ordered message slice for session output display.
     pub(crate) fn display_text_for_messages(messages: &[SessionMessage]) -> String {
         let mut output = String::new();
@@ -206,12 +394,26 @@ impl SessionTranscript {
 pub fn stored_message_content(kind: SessionMessageKind, content: &str) -> String {
     match kind {
         SessionMessageKind::UserPrompt => normalized_user_prompt_content(content),
-        SessionMessageKind::AssistantAnswer => normalized_message_content(content),
+        SessionMessageKind::AssistantAnswer
+        | SessionMessageKind::TurnSummary
+        | SessionMessageKind::FocusedReview => normalized_message_content(content),
         SessionMessageKind::WorkflowNotice => content.to_string(),
     }
 }
 
 impl SessionMessage {
+    /// Returns the semantic ordering key used by the visible session timeline.
+    fn sort_key(&self) -> (i64, u8, i64) {
+        let phase = match self.kind {
+            SessionMessageKind::UserPrompt | SessionMessageKind::AssistantAnswer => 0,
+            SessionMessageKind::TurnSummary => 1,
+            SessionMessageKind::FocusedReview => 2,
+            SessionMessageKind::WorkflowNotice => 3,
+        };
+
+        (self.turn_id, phase, self.position)
+    }
+
     /// Appends this message to a formatted transcript display buffer.
     pub(crate) fn append_display_text(&self, output: &mut String) {
         match self.kind {
@@ -221,7 +423,9 @@ impl SessionMessage {
             SessionMessageKind::AssistantAnswer => {
                 append_assistant_answer_display_text(output, &self.content);
             }
-            SessionMessageKind::WorkflowNotice => output.push_str(&self.content),
+            SessionMessageKind::TurnSummary
+            | SessionMessageKind::FocusedReview
+            | SessionMessageKind::WorkflowNotice => output.push_str(&self.content),
         }
     }
 }
@@ -321,6 +525,107 @@ mod tests {
     }
 
     #[test]
+    fn test_session_message_state_round_trips_database_value() {
+        // Arrange
+        let state = SessionMessageState::Failed;
+
+        // Act
+        let parsed = state
+            .as_str()
+            .parse::<SessionMessageState>()
+            .expect("state should parse");
+
+        // Assert
+        assert_eq!(parsed, state);
+    }
+
+    #[test]
+    fn test_session_transcript_orders_delayed_timeline_entries_before_later_turn() {
+        // Arrange
+        let mut first_prompt =
+            SessionMessage::conversation(0, SessionMessageKind::UserPrompt, "first prompt");
+        first_prompt.turn_id = 1;
+        let mut first_answer =
+            SessionMessage::conversation(1, SessionMessageKind::AssistantAnswer, "first answer");
+        first_answer.turn_id = 1;
+        let mut second_prompt =
+            SessionMessage::conversation(2, SessionMessageKind::UserPrompt, "second prompt");
+        second_prompt.turn_id = 2;
+
+        // Act
+        let transcript = SessionTranscript::new(vec![
+            second_prompt,
+            SessionMessage::timeline(
+                4,
+                1,
+                "focused_review:1",
+                SessionMessageKind::FocusedReview,
+                SessionMessageState::Resolved,
+                "first review",
+            ),
+            first_answer,
+            SessionMessage::timeline(
+                3,
+                1,
+                "turn_summary:1",
+                SessionMessageKind::TurnSummary,
+                SessionMessageState::Resolved,
+                "first summary",
+            ),
+            first_prompt,
+        ]);
+        let ordered_content = transcript
+            .messages()
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(
+            ordered_content,
+            [
+                "first prompt",
+                "first answer",
+                "first summary",
+                "first review",
+                "second prompt",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_session_transcript_replaces_pending_timeline_entry_in_place() {
+        // Arrange
+        let mut transcript = SessionTranscript::new(vec![SessionMessage::timeline(
+            3,
+            1,
+            "branch_push:1",
+            SessionMessageKind::WorkflowNotice,
+            SessionMessageState::Pending,
+            "Pushing branch...",
+        )]);
+
+        // Act
+        transcript.upsert_timeline_message(SessionMessage::timeline(
+            3,
+            1,
+            "branch_push:1",
+            SessionMessageKind::WorkflowNotice,
+            SessionMessageState::Resolved,
+            "Branch pushed.",
+        ));
+
+        // Assert
+        assert_eq!(transcript.messages().len(), 1);
+        assert_eq!(transcript.messages()[0].position, 3);
+        assert_eq!(
+            transcript.messages()[0].state,
+            SessionMessageState::Resolved
+        );
+        assert_eq!(transcript.messages()[0].content, "Branch pushed.");
+    }
+
+    #[test]
     fn test_session_transcript_formats_messages_by_position() {
         // Arrange
         let messages = vec![
@@ -416,6 +721,46 @@ mod tests {
         // Assert
         assert_eq!(conversation_text, " › review changes\n\ndone\n\n");
         assert!(!conversation_text.contains("[Commit]"));
+    }
+
+    #[test]
+    fn test_session_transcript_provider_replay_excludes_timeline_metadata() {
+        // Arrange
+        let transcript = SessionTranscript::new(vec![
+            SessionMessage::conversation(0, SessionMessageKind::UserPrompt, "review changes"),
+            SessionMessage::timeline(
+                1,
+                1,
+                "turn_summary:1",
+                SessionMessageKind::TurnSummary,
+                SessionMessageState::Resolved,
+                "summary metadata",
+            ),
+            SessionMessage::timeline(
+                2,
+                1,
+                "focused_review:1",
+                SessionMessageKind::FocusedReview,
+                SessionMessageState::Resolved,
+                "review metadata",
+            ),
+            SessionMessage::new(
+                3,
+                SessionMessageKind::WorkflowNotice,
+                "[Commit] No changes.\n",
+            ),
+        ]);
+
+        // Act
+        let provider_text = transcript
+            .provider_replay_text()
+            .expect("provider replay should render");
+
+        // Assert
+        assert!(provider_text.contains("review changes"));
+        assert!(provider_text.contains("[Commit] No changes."));
+        assert!(!provider_text.contains("summary metadata"));
+        assert!(!provider_text.contains("review metadata"));
     }
 
     #[test]

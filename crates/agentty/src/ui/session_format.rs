@@ -6,12 +6,9 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Borders;
 
-use crate::app;
-use crate::domain::agent::{AgentModel, ReasoningLevel};
+use crate::domain::agent::ReasoningLevel;
 use crate::domain::review;
-use crate::domain::session::{
-    COMMITTING_PROGRESS_LABEL, PublishedBranchSyncStatus, Session, Status,
-};
+use crate::domain::session::{COMMITTING_PROGRESS_LABEL, Session, Status};
 use crate::presentation::help_action::{self, ViewHelpState};
 use crate::ui::icon::Icon;
 use crate::ui::{markdown, style};
@@ -241,42 +238,19 @@ pub fn session_output_done_line() -> Line<'static> {
 pub fn session_output_status_line(
     status: Status,
     active_progress: Option<&str>,
-    review_status_message: Option<&str>,
-    review_model: AgentModel,
 ) -> Option<Line<'static>> {
     if !matches!(
         status,
-        Status::InProgress
-            | Status::AgentReview
-            | Status::Queued
-            | Status::Rebasing
-            | Status::Merging
+        Status::InProgress | Status::Queued | Status::Rebasing | Status::Merging
     ) {
         return None;
     }
 
-    let status_message =
-        session_output_status_message(status, active_progress, review_status_message, review_model);
+    let status_message = session_output_status_message(status, active_progress);
 
     Some(Line::from(vec![Span::styled(
         format!("{} {status_message}", session_output_status_icon(status)),
         Style::default().fg(style::status_color(status)),
-    )]))
-}
-
-/// Builds the published-branch sync status line appended after transcript
-/// content while an auto-push is in progress.
-pub fn session_output_published_branch_sync_line(session: &Session) -> Option<Line<'static>> {
-    let sync_message = session.published_branch_sync_message()?;
-
-    Some(Line::from(vec![Span::styled(
-        format!(
-            "{} {sync_message}",
-            session_output_published_branch_sync_icon(session.published_branch_sync_status)
-        ),
-        Style::default().fg(session_output_published_branch_sync_color(
-            session.published_branch_sync_status,
-        )),
     )]))
 }
 
@@ -295,12 +269,7 @@ fn summary_section_text(summary_text: &str) -> &str {
 /// Most in-progress details are agent thinking snippets appended to the
 /// generic working label. Post-turn auto-commit sends a complete loader label
 /// so commit-message generation and git commit work render as committing.
-fn session_output_status_message(
-    status: Status,
-    active_progress: Option<&str>,
-    review_status_message: Option<&str>,
-    review_model: AgentModel,
-) -> String {
+fn session_output_status_message(status: Status, active_progress: Option<&str>) -> String {
     match status {
         Status::InProgress => active_progress
             .map(str::trim)
@@ -315,30 +284,25 @@ fn session_output_status_message(
                     }
                 },
             ),
-        Status::AgentReview => review_status_message
-            .map(str::trim)
-            .filter(|status_message| !status_message.is_empty())
-            .map_or_else(
-                || app::review_loading_message(review_model),
-                ToString::to_string,
-            ),
         Status::Queued => "Waiting in merge queue...".to_string(),
         Status::Rebasing => "Rebasing...".to_string(),
         Status::Merging => "Merging...".to_string(),
-        Status::Draft | Status::Review | Status::Question | Status::Done | Status::Canceled => {
-            String::new()
-        }
+        Status::Draft
+        | Status::AgentReview
+        | Status::Review
+        | Status::Question
+        | Status::Done
+        | Status::Canceled => String::new(),
     }
 }
 
 /// Returns the status indicator icon used for inline session-output messages.
 fn session_output_status_icon(status: Status) -> Icon {
     match status {
-        Status::InProgress | Status::AgentReview | Status::Rebasing | Status::Merging => {
-            Icon::TachyonLoader
-        }
+        Status::InProgress | Status::Rebasing | Status::Merging => Icon::TachyonLoader,
         Status::Queued
         | Status::Draft
+        | Status::AgentReview
         | Status::Review
         | Status::Question
         | Status::Done
@@ -346,32 +310,10 @@ fn session_output_status_icon(status: Status) -> Icon {
     }
 }
 
-/// Returns the icon used for published-branch sync status lines.
-fn session_output_published_branch_sync_icon(sync_status: PublishedBranchSyncStatus) -> Icon {
-    match sync_status {
-        PublishedBranchSyncStatus::Idle => Icon::Pending,
-        PublishedBranchSyncStatus::InProgress => Icon::Spinner,
-        PublishedBranchSyncStatus::Succeeded => Icon::Check,
-        PublishedBranchSyncStatus::Failed => Icon::Warn,
-    }
-}
-
-/// Returns the color used for published-branch sync status lines.
-fn session_output_published_branch_sync_color(
-    sync_status: PublishedBranchSyncStatus,
-) -> ratatui::style::Color {
-    match sync_status {
-        PublishedBranchSyncStatus::Idle => style::palette::text_muted(),
-        PublishedBranchSyncStatus::InProgress | PublishedBranchSyncStatus::Failed => {
-            style::palette::warning()
-        }
-        PublishedBranchSyncStatus::Succeeded => style::palette::success(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::agent::AgentModel;
     use crate::domain::session::{
         ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
     };

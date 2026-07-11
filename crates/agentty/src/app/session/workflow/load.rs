@@ -10,10 +10,13 @@ use crate::app::SessionManager;
 use crate::domain::agent::{AgentSelection, ReasoningLevel, parse_persisted_session_agent_model};
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
-    DailyActivity, PublishedBranchSyncStatus, ReviewRequest, ReviewRequestSummary, Session,
-    SessionFollowUpTask, SessionHandles, SessionId, SessionSize, SessionStats, Status,
+    DailyActivity, ReviewRequest, ReviewRequestSummary, Session, SessionFollowUpTask,
+    SessionHandles, SessionId, SessionSize, SessionStats, Status,
 };
-use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
+use crate::domain::session_message::{
+    SessionMessage, SessionMessageKind, SessionMessageState, SessionTranscript,
+};
+use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::db::{
     AppRepositories, DbError, SessionDetailRow, SessionListRow, SessionMessageRow,
 };
@@ -50,7 +53,6 @@ struct LoadedSessionInput {
     session_prompt: String,
     session_queued_messages: Vec<String>,
     session_questions: Vec<QuestionItem>,
-    session_summary: Option<String>,
     session_status: Status,
     session_transcript: Option<SessionTranscript>,
     size: SessionSize,
@@ -175,6 +177,10 @@ impl SessionManager {
         session_worktree_availability.insert(session_id.clone(), has_session_folder);
         let session_agent = parse_persisted_session_agent_model(Some(&row.agent), &row.model);
 
+        if !handles.contains_key(&session_id) {
+            Self::fail_orphaned_timeline_entries_on_load(db, &session_id).await;
+        }
+
         let (session_detail, loaded_transcript) =
             load_active_session_detail(db, *active_session_id, &row.id).await;
 
@@ -231,11 +237,41 @@ impl SessionManager {
                 .unwrap_or_default(),
             session_queued_messages,
             session_questions: questions,
-            session_summary: session_detail.and_then(|detail| detail.summary),
             session_status,
             session_transcript,
             size: persisted_size,
         }));
+    }
+
+    /// Replaces timeline loaders whose detached tasks disappeared with the
+    /// previous app process while preserving live tasks on ordinary reloads.
+    async fn fail_orphaned_timeline_entries_on_load(db: &AppRepositories, session_id: &str) {
+        let branch_push_message = TranscriptNotice::BranchPushError.format(
+            "Auto-push was interrupted when Agentty exited. Push the branch again to retry.",
+        );
+        let focused_review_message =
+            "Review assist unavailable: interrupted when Agentty exited. Press f to retry.";
+        for (entry_key_prefix, content) in [
+            ("branch_push:", branch_push_message.as_str()),
+            ("focused_review:", focused_review_message),
+        ] {
+            if let Err(error) = db
+                .sessions()
+                .fail_pending_session_timeline_messages_with_key_prefix(
+                    session_id,
+                    entry_key_prefix,
+                    content,
+                )
+                .await
+            {
+                tracing::warn!(
+                    session_id,
+                    entry_key_prefix,
+                    %error,
+                    "failed to recover interrupted timeline entries"
+                );
+            }
+        }
     }
 
     /// Computes diff-derived session size and line-count totals from one
@@ -306,7 +342,6 @@ impl SessionManager {
             queued_messages: input.session_queued_messages,
             reasoning_level_override: input.reasoning_level_override,
             published_upstream_ref: input.row.published_upstream_ref,
-            published_branch_sync_status: PublishedBranchSyncStatus::Idle,
             questions: input.session_questions,
             review_request: input.review_request,
             size: input.size,
@@ -317,11 +352,9 @@ impl SessionManager {
                 output_tokens: input.row.output_tokens.cast_unsigned(),
             },
             status: input.session_status,
-            summary: input.session_summary,
             title: input.row.title,
             transcript: input.session_transcript,
             updated_at: input.row.updated_at,
-            workflow_notice: None,
         }
     }
 
@@ -349,7 +382,6 @@ impl SessionManager {
         if let Some(questions) = detail.questions {
             session.questions = parse_questions_json(&questions).unwrap_or_default();
         }
-        session.summary = detail.summary;
         session.transcript = session_transcript;
     }
 }
@@ -431,8 +463,8 @@ async fn load_session_transcript(
     Ok(SessionTranscript::new(session_messages_from_rows(messages)))
 }
 
-/// Synchronizes a handle transcript from loaded rows when the handle does not
-/// already have live transcript messages.
+/// Synchronizes a handle transcript from loaded rows without regressing a
+/// terminal live timeline state to a stale persisted pending state.
 fn sync_handle_transcript_with_loaded(
     handles: &SessionHandles,
     loaded_transcript: Option<&SessionTranscript>,
@@ -440,10 +472,26 @@ fn sync_handle_transcript_with_loaded(
     let Ok(mut handle_transcript) = handles.transcript.lock() else {
         return None;
     };
-    if handle_transcript.is_empty()
-        && let Some(loaded_transcript) = loaded_transcript
-    {
-        handle_transcript.clone_from(loaded_transcript);
+    if let Some(loaded_transcript) = loaded_transcript {
+        if handle_transcript.is_empty() {
+            handle_transcript.clone_from(loaded_transcript);
+        } else {
+            for message in loaded_transcript
+                .messages()
+                .iter()
+                .filter(|message| message.entry_key.is_some())
+            {
+                let would_regress_to_pending = message.state == SessionMessageState::Pending
+                    && handle_transcript.messages().iter().any(|live_message| {
+                        live_message.entry_key.as_deref() == message.entry_key.as_deref()
+                            && live_message.state != SessionMessageState::Pending
+                    });
+                if would_regress_to_pending {
+                    continue;
+                }
+                handle_transcript.upsert_timeline_message(message.clone());
+            }
+        }
     }
     if handle_transcript.is_empty() {
         return None;
@@ -457,10 +505,14 @@ fn sync_handle_transcript_with_loaded(
 fn session_messages_from_rows(rows: Vec<SessionMessageRow>) -> Vec<SessionMessage> {
     rows.into_iter()
         .filter_map(|row| {
-            row.kind
-                .parse::<SessionMessageKind>()
-                .ok()
-                .map(|kind| SessionMessage::new(row.position, kind, row.content))
+            let kind = row.kind.parse::<SessionMessageKind>().ok()?;
+            let state = row.state.parse::<SessionMessageState>().ok()?;
+            let mut message = SessionMessage::new(row.position, kind, row.content);
+            message.entry_key = row.entry_key;
+            message.state = state;
+            message.turn_id = row.turn_id;
+
+            Some(message)
         })
         .collect()
 }
@@ -692,6 +744,96 @@ mod tests {
         assert_eq!(handle_status, live_status);
     }
 
+    /// Ensures a fresh process converts orphaned timeline loaders into durable
+    /// failures instead of restoring indefinitely pending rows.
+    #[tokio::test]
+    async fn test_load_sessions_fails_orphaned_timeline_entries() {
+        // Arrange
+        let db = AppRepositories::in_memory().await;
+        let project_id = db
+            .projects()
+            .upsert_project("/tmp/test", None)
+            .await
+            .expect("failed to upsert project");
+        let session_id = "interrupted-push-session";
+        db.sessions()
+            .insert_session(
+                session_id,
+                "gemini-3-flash-preview",
+                "main",
+                "Review",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        db.sessions()
+            .upsert_session_timeline_message(
+                session_id,
+                crate::infra::db::SessionTimelineMessage {
+                    content: "Auto-pushing published branch after completed turn...",
+                    entry_key: "branch_push:interrupted",
+                    kind: SessionMessageKind::WorkflowNotice,
+                    state: SessionMessageState::Pending,
+                    turn_id: 1,
+                },
+            )
+            .await
+            .expect("failed to seed pending branch push");
+        db.sessions()
+            .upsert_session_timeline_message(
+                session_id,
+                crate::infra::db::SessionTimelineMessage {
+                    content: "Reviewing changes",
+                    entry_key: "focused_review:42",
+                    kind: SessionMessageKind::FocusedReview,
+                    state: SessionMessageState::Pending,
+                    turn_id: 1,
+                },
+            )
+            .await
+            .expect("failed to seed pending focused review");
+        let base_path = Path::new("/virtual/session-base");
+        let session_dir = session_folder(base_path, session_id);
+        let mock_fs_client = create_folder_lookup_mock(vec![session_dir]);
+        let mut handles = HashMap::new();
+
+        // Act
+        let (sessions, _, _) = SessionManager::load_sessions_with_fs_client(
+            base_path,
+            &db,
+            project_id,
+            Path::new("/tmp/test"),
+            &mut handles,
+            &mock_fs_client,
+            Some(session_id),
+        )
+        .await;
+        let messages = db
+            .sessions()
+            .load_session_messages(session_id)
+            .await
+            .expect("failed to load recovered messages");
+
+        // Assert
+        let branch_push = messages
+            .iter()
+            .find(|message| message.entry_key.as_deref() == Some("branch_push:interrupted"))
+            .expect("missing recovered branch-push row");
+        assert_eq!(branch_push.state, SessionMessageState::Failed.as_str());
+        assert!(
+            branch_push
+                .content
+                .contains("interrupted when Agentty exited")
+        );
+        let focused_review = messages
+            .iter()
+            .find(|message| message.entry_key.as_deref() == Some("focused_review:42"))
+            .expect("missing recovered focused-review row");
+        assert_eq!(focused_review.state, SessionMessageState::Failed.as_str());
+        assert!(focused_review.content.contains("Press f to retry"));
+        assert!(!sessions[0].has_pending_timeline_messages());
+    }
+
     /// Ensures reload caches worktree availability alongside loaded session
     /// rows.
     #[tokio::test]
@@ -788,7 +930,16 @@ mod tests {
             .await
             .expect("failed to update session questions");
         db.sessions()
-            .update_session_summary(session_id, "persisted summary")
+            .upsert_session_timeline_message(
+                session_id,
+                crate::infra::db::SessionTimelineMessage {
+                    content: "persisted summary",
+                    entry_key: "turn_summary:0",
+                    kind: SessionMessageKind::TurnSummary,
+                    state: SessionMessageState::Resolved,
+                    turn_id: 0,
+                },
+            )
             .await
             .expect("failed to update session summary");
         db.sessions()
@@ -831,7 +982,11 @@ mod tests {
             .find(|session| session.id == session_id)
             .expect("missing reloaded session");
         assert_eq!(
-            session_replay_text(session),
+            session
+                .transcript
+                .as_ref()
+                .and_then(SessionTranscript::conversation_replay_text)
+                .unwrap_or_default(),
             assistant_replay_text("Live Output")
         );
         assert_eq!(session.prompt, "persisted prompt");
@@ -842,7 +997,7 @@ mod tests {
                 text: "persisted question?".to_string(),
             }]
         );
-        assert_eq!(session.summary.as_deref(), Some("persisted summary"));
+        assert_eq!(session.latest_summary(), Some("persisted summary"));
     }
 
     /// Ensures inactive session refresh skips transcript-scale fields.
@@ -876,7 +1031,16 @@ mod tests {
             .await
             .expect("failed to update questions");
         db.sessions()
-            .update_session_summary(session_id, "large summary")
+            .upsert_session_timeline_message(
+                session_id,
+                crate::infra::db::SessionTimelineMessage {
+                    content: "large summary",
+                    entry_key: "turn_summary:0",
+                    kind: SessionMessageKind::TurnSummary,
+                    state: SessionMessageState::Resolved,
+                    turn_id: 0,
+                },
+            )
             .await
             .expect("failed to update summary");
         db.sessions()
@@ -913,7 +1077,7 @@ mod tests {
         assert_eq!(session_replay_text(session), "");
         assert!(session.prompt.is_empty());
         assert!(session.questions.is_empty());
-        assert!(session.summary.is_none());
+        assert!(session.latest_summary().is_none());
 
         let handle = handles.get(session_id).expect("missing runtime handle");
         let handle_output = handle
@@ -1191,6 +1355,42 @@ mod tests {
             handles.transcript.lock().ok().as_deref(),
             Some(&live_transcript)
         );
+    }
+
+    #[test]
+    fn sync_handle_transcript_with_loaded_keeps_live_failure_over_stale_pending_row() {
+        // Arrange
+        let entry_key = "focused_review:0:42";
+        let live_transcript = SessionTranscript::new(vec![SessionMessage::timeline(
+            0,
+            0,
+            entry_key,
+            SessionMessageKind::FocusedReview,
+            SessionMessageState::Failed,
+            "Review assist unavailable: Press f to retry.",
+        )]);
+        let handles = SessionHandles::new_with_transcript(Status::Review, live_transcript);
+        let loaded_transcript = SessionTranscript::new(vec![SessionMessage::timeline(
+            0,
+            0,
+            entry_key,
+            SessionMessageKind::FocusedReview,
+            SessionMessageState::Pending,
+            "Reviewing changes",
+        )]);
+
+        // Act
+        let transcript = sync_handle_transcript_with_loaded(&handles, Some(&loaded_transcript))
+            .expect("missing synchronized transcript");
+
+        // Assert
+        let focused_review = transcript
+            .messages()
+            .iter()
+            .find(|message| message.entry_key.as_deref() == Some(entry_key))
+            .expect("missing focused review");
+        assert_eq!(focused_review.state, SessionMessageState::Failed);
+        assert!(!transcript.has_pending_messages());
     }
 
     #[test]

@@ -27,10 +27,10 @@ use crate::domain::selection::SelectionState;
 use crate::domain::session::{
     DailyActivity, SESSION_DATA_DIR, Session, SessionHandles, SessionSize, SessionStats, Status,
 };
-use crate::domain::session_message::SessionTranscript;
+use crate::domain::session_message::{SessionMessageKind, SessionMessageState, SessionTranscript};
 use crate::domain::setting::SettingName;
 use crate::infra::clock::RealClock;
-use crate::infra::db::AppRepositories;
+use crate::infra::db::{AppRepositories, SessionTimelineMessage};
 use crate::infra::fs::{self as fs, FsClient};
 use crate::presentation::app_mode::AppMode;
 use crate::ui::activity_heatmap;
@@ -672,17 +672,14 @@ fn add_manual_session_with_status(
         queued_messages: Vec::new(),
         reasoning_level_override: None,
         published_upstream_ref: None,
-        published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
         questions: Vec::new(),
         review_request: None,
         size: SessionSize::Xs,
         stats: SessionStats::default(),
         status,
-        summary: None,
         title: Some(prompt.to_string()),
         transcript: None,
         updated_at: 0,
-        workflow_notice: None,
     });
     if app.sessions.selected_session_index().is_none() {
         app.sessions.select_session_index(Some(0));
@@ -732,17 +729,14 @@ fn test_session_manager_with_clock(
             queued_messages: Vec::new(),
             reasoning_level_override,
             published_upstream_ref: None,
-            published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
             questions: Vec::new(),
             review_request: None,
             size: SessionSize::Xs,
             stats: SessionStats::default(),
             status: Status::Review,
-            summary: None,
             title: Some("Title".to_string()),
             transcript: None,
             updated_at: 0,
-            workflow_notice: None,
         }],
         crate::domain::selection::SelectionState::default(),
         clock,
@@ -874,7 +868,6 @@ async fn test_apply_turn_applied_state_clears_active_prompt_output() {
         &TurnAppliedState {
             follow_up_tasks: Vec::new(),
             questions: Vec::new(),
-            summary: None,
             token_usage_delta: SessionStats::default(),
         },
     );
@@ -2396,6 +2389,247 @@ async fn test_reply() {
 }
 
 #[tokio::test]
+async fn test_reply_during_agent_review_cancels_pending_focused_review() {
+    // Arrange
+    let dir = tempdir().expect("failed to create temp dir");
+    let mut app = new_test_app_with_git(dir.path()).await;
+    create_and_start_session(&mut app, "Initial").await;
+    let session_id = app.sessions.sessions()[0].id.clone();
+    wait_for_status(&mut app, &session_id, Status::Review).await;
+    app.services
+        .db()
+        .sessions()
+        .upsert_session_timeline_message(
+            &session_id,
+            SessionTimelineMessage {
+                content: "Reviewing changes",
+                entry_key: "focused_review:1:777",
+                kind: SessionMessageKind::FocusedReview,
+                state: SessionMessageState::Pending,
+                turn_id: 1,
+            },
+        )
+        .await
+        .expect("failed to seed pending focused review");
+    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::AgentReview);
+    app.review_cache.insert(
+        session_id.clone(),
+        ReviewCacheEntry::Loading {
+            diff_hash: 777,
+            turn_id: 1,
+        },
+    );
+
+    // Act
+    let reply_enqueued = app.reply(&session_id, "Reply while reviewing").await;
+    app.apply_app_events(AppEvent::ReviewPrepared {
+        diff_hash: 777,
+        review_text: "stale focused review".to_string(),
+        session_id: session_id.clone(),
+        turn_id: 1,
+    })
+    .await;
+    let messages = app
+        .services
+        .db()
+        .sessions()
+        .load_session_messages(&session_id)
+        .await
+        .expect("failed to load session messages");
+
+    // Assert
+    assert!(reply_enqueued);
+    assert!(!app.review_cache.contains_key(session_id.as_str()));
+    assert!(
+        messages
+            .iter()
+            .all(|message| message.entry_key.as_deref() != Some("focused_review:1:777"))
+    );
+}
+
+#[tokio::test]
+async fn test_reply_clears_live_review_loader_when_delete_fails() {
+    // Arrange
+    let dir = tempdir().expect("failed to create temp dir");
+    let (database, pool) = AppRepositories::in_memory_with_pool().await;
+    let mut app = new_test_app_with_git_and_db(dir.path(), database).await;
+    create_and_start_session(&mut app, "Initial").await;
+    let session_id = app.sessions.sessions()[0].id.clone();
+    wait_for_status(&mut app, &session_id, Status::Review).await;
+    let entry_key = "focused_review:1:777";
+    let transcript = Arc::clone(
+        &app.sessions
+            .session_handles()
+            .get(session_id.as_str())
+            .expect("missing session handles")
+            .transcript,
+    );
+    SessionTaskService::upsert_timeline_message(
+        &transcript,
+        app.services.db(),
+        &app.services.event_sender(),
+        &app.services.session_update_versions(),
+        &session_id,
+        SessionTimelineMessage {
+            content: "Reviewing changes",
+            entry_key,
+            kind: SessionMessageKind::FocusedReview,
+            state: SessionMessageState::Pending,
+            turn_id: 1,
+        },
+    )
+    .await
+    .expect("failed to seed pending focused review");
+    sqlx::query(
+        r"
+CREATE TRIGGER fail_focused_review_delete
+BEFORE DELETE ON session_message
+WHEN OLD.entry_key = 'focused_review:1:777'
+BEGIN
+    SELECT RAISE(FAIL, 'delete blocked for test');
+END
+",
+    )
+    .execute(&pool)
+    .await
+    .expect("failed to install delete failure trigger");
+    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::AgentReview);
+    app.review_cache.insert(
+        session_id.clone(),
+        ReviewCacheEntry::Loading {
+            diff_hash: 777,
+            turn_id: 1,
+        },
+    );
+
+    // Act
+    let reply_enqueued = app.reply(&session_id, "Reply while reviewing").await;
+
+    // Assert
+    assert!(reply_enqueued);
+    assert!(!app.review_cache.contains_key(session_id.as_str()));
+    let transcript = transcript.lock().expect("failed to lock transcript");
+    assert!(
+        transcript
+            .messages()
+            .iter()
+            .all(|message| message.entry_key.as_deref() != Some(entry_key))
+    );
+    assert!(!transcript.has_pending_messages());
+}
+
+#[tokio::test]
+async fn test_focused_review_storage_failure_replaces_pending_loader() {
+    // Arrange
+    let dir = tempdir().expect("failed to create temp dir");
+    let (db, pool) = AppRepositories::in_memory_with_pool().await;
+    let mut app = new_test_app_with_git_and_db(dir.path(), db).await;
+    let session_id = app
+        .create_session()
+        .await
+        .expect("failed to create session");
+    let diff_hash = 777;
+    let turn_id = 0;
+    let entry_key = "focused_review:0:777";
+    let transcript = Arc::clone(
+        &app.sessions
+            .session_handles()
+            .get(session_id.as_str())
+            .expect("missing session handles")
+            .transcript,
+    );
+    SessionTaskService::upsert_timeline_message(
+        &transcript,
+        app.services.db(),
+        &app.services.event_sender(),
+        &app.services.session_update_versions(),
+        &session_id,
+        SessionTimelineMessage {
+            content: "Reviewing changes",
+            entry_key,
+            kind: SessionMessageKind::FocusedReview,
+            state: SessionMessageState::Pending,
+            turn_id,
+        },
+    )
+    .await
+    .expect("failed to seed pending focused review");
+    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::AgentReview);
+    app.review_cache.insert(
+        session_id.clone().into(),
+        ReviewCacheEntry::Loading { diff_hash, turn_id },
+    );
+    pool.close().await;
+
+    // Act
+    app.apply_app_events(AppEvent::ReviewPrepared {
+        diff_hash,
+        review_text: "Completed focused review".to_string(),
+        session_id: session_id.clone().into(),
+        turn_id,
+    })
+    .await;
+
+    // Assert
+    assert!(matches!(
+        app.review_cache.get(session_id.as_str()),
+        Some(ReviewCacheEntry::Failed {
+            diff_hash: cached_diff_hash,
+            error,
+        }) if *cached_diff_hash == diff_hash && error.contains("Press f to retry")
+    ));
+    let transcript = transcript.lock().expect("failed to lock transcript");
+    let focused_review = transcript
+        .messages()
+        .iter()
+        .find(|message| message.entry_key.as_deref() == Some(entry_key))
+        .expect("missing focused-review timeline entry");
+    assert_eq!(focused_review.state, SessionMessageState::Failed);
+    assert!(focused_review.content.contains("Press f to retry"));
+    assert!(!transcript.has_pending_messages());
+}
+
+#[tokio::test]
+async fn test_manual_focused_review_storage_failure_skips_provider_start() {
+    // Arrange
+    let dir = tempdir().expect("failed to create temp dir");
+    let (db, pool) = AppRepositories::in_memory_with_pool().await;
+    let mut app = new_test_app_with_git_and_db(dir.path(), db).await;
+    let session_id = app
+        .create_session()
+        .await
+        .expect("failed to create session");
+    let session_folder = app.sessions.sessions()[0].folder.clone();
+    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Review);
+    pool.close().await;
+
+    // Act
+    app.start_review_assist(&session_id, &session_folder, 777, "diff content")
+        .await;
+
+    // Assert
+    assert!(matches!(
+        app.review_cache.get(session_id.as_str()),
+        Some(ReviewCacheEntry::Failed { error, .. }) if error.contains("Press f to retry")
+    ));
+    assert_eq!(app.sessions.sessions()[0].status, Status::Review);
+    let transcript = app
+        .sessions
+        .session_handles()
+        .get(session_id.as_str())
+        .expect("missing session handles")
+        .transcript
+        .lock()
+        .expect("failed to lock transcript");
+    assert!(transcript.messages().iter().any(|message| {
+        message.kind == SessionMessageKind::FocusedReview
+            && message.state == SessionMessageState::Failed
+            && message.content.contains("Press f to retry")
+    }));
+    assert!(!transcript.has_pending_messages());
+}
+
+#[tokio::test]
 async fn test_reply_to_parent_allows_review_ready_stacked_child() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
@@ -3313,7 +3547,8 @@ async fn test_reply_turn_completion_persists_session_size() {
         command
             .args([
                 "-lc",
-                "yes line | head -n 20 > turn-size-test.txt; echo turn-complete",
+                "yes line | head -n 20 > turn-size-test.txt; printf '%s\\n' \
+                 '{\"answer\":\"turn-complete\",\"questions\":[],\"summary\":null}'",
             ])
             .current_dir(request.folder)
             .stdout(Stdio::piped())
@@ -3702,6 +3937,7 @@ async fn test_reply_with_backend_replays_history_after_app_restart_for_review_se
         .expect("missing persisted session");
     assert!(first_run_output.contains("Initial prompt"));
     assert!(first_run_output.contains("mock-start"));
+    seed_provider_replay_timeline_metadata(&db, &session_id).await;
     drop(first_app);
 
     let mut resumed_app = new_test_app_with_git_and_db(dir.path(), db).await;
@@ -3723,6 +3959,9 @@ async fn test_reply_with_backend_replays_history_after_app_restart_for_review_se
             .expect("expected replayed session transcript after restart");
         assert!(replay_transcript.contains("Initial prompt"));
         assert!(replay_transcript.contains("mock-start"));
+        assert!(replay_transcript.contains("Provider-visible workflow context"));
+        assert!(!replay_transcript.contains("Agentty summary metadata"));
+        assert!(!replay_transcript.contains("Focused review metadata"));
 
         let mut cmd = Command::new("sh");
         cmd.arg("-c")
@@ -3755,6 +3994,43 @@ async fn test_reply_with_backend_replays_history_after_app_restart_for_review_se
     )
     .await;
     wait_for_status(&mut resumed_app, &session_id, Status::Review).await;
+}
+
+async fn seed_provider_replay_timeline_metadata(db: &AppRepositories, session_id: &str) {
+    db.sessions()
+        .upsert_session_timeline_message(
+            session_id,
+            SessionTimelineMessage {
+                content: "Agentty summary metadata",
+                entry_key: "turn_summary:1",
+                kind: SessionMessageKind::TurnSummary,
+                state: SessionMessageState::Resolved,
+                turn_id: 1,
+            },
+        )
+        .await
+        .expect("failed to seed turn summary");
+    db.sessions()
+        .upsert_session_timeline_message(
+            session_id,
+            SessionTimelineMessage {
+                content: "Focused review metadata",
+                entry_key: "focused_review:1:42",
+                kind: SessionMessageKind::FocusedReview,
+                state: SessionMessageState::Resolved,
+                turn_id: 1,
+            },
+        )
+        .await
+        .expect("failed to seed focused review");
+    db.sessions()
+        .append_session_message(
+            session_id,
+            SessionMessageKind::WorkflowNotice,
+            "[Commit] Provider-visible workflow context.",
+        )
+        .await
+        .expect("failed to seed workflow notice");
 }
 
 #[tokio::test]
@@ -3848,18 +4124,12 @@ async fn test_spawn_session_task_auto_commits_changes() {
     app.process_pending_app_events().await;
     app.sessions.sync_from_handles();
 
-    // Assert — commit completion details are transient workflow notice
-    // state, not persisted transcript output.
+    // Assert
     let session = &app.sessions.sessions()[0];
     let output = session_replay_text(session);
-    let workflow_notice = session.workflow_notice.as_deref();
     assert!(
-        !output.contains("[Commit] committed with hash"),
-        "commit completion should not be persisted, got: {output}"
-    );
-    assert_eq!(
-        workflow_notice,
-        Some("[Commit] committed with hash `abc1234`")
+        output.contains("[Commit] committed with hash `abc1234`"),
+        "commit completion should be persisted, got: {output}"
     );
 }
 
@@ -4011,15 +4281,13 @@ async fn test_spawn_session_task_skips_commit_when_nothing_to_commit() {
     app.process_pending_app_events().await;
     app.sessions.sync_from_handles();
 
-    // Assert — no-op commit output is visible as transient workflow state.
+    // Assert
     let session = &app.sessions.sessions()[0];
     let output = session_replay_text(session);
-    let workflow_notice = session.workflow_notice.as_deref();
     assert!(
-        !output.contains("[Commit] No changes to commit."),
-        "no-op commit output should not be persisted when nothing to commit"
+        output.contains("[Commit] No changes to commit."),
+        "no-op commit output should be persisted in the turn timeline"
     );
-    assert_eq!(workflow_notice, Some("[Commit] No changes to commit."));
     assert!(
         !output.contains("[Commit Error]"),
         "should not contain commit error when nothing to commit"
@@ -4564,10 +4832,15 @@ async fn test_rebase_session_cancels_pending_focused_review() {
         .expect("failed to create session");
     let db = app.services.db().clone();
     db.sessions()
-        .update_session_focused_review(
+        .upsert_session_timeline_message(
             &session_id,
-            Some("111".to_string()),
-            Some("old persisted focused review".to_string()),
+            SessionTimelineMessage {
+                content: "Reviewing changes",
+                entry_key: "focused_review:0:777",
+                kind: SessionMessageKind::FocusedReview,
+                state: SessionMessageState::Pending,
+                turn_id: 0,
+            },
         )
         .await
         .expect("failed to seed persisted focused review");
@@ -4578,7 +4851,10 @@ async fn test_rebase_session_cancels_pending_focused_review() {
     };
     app.review_cache.insert(
         session_id.clone().into(),
-        ReviewCacheEntry::Loading { diff_hash: 777 },
+        ReviewCacheEntry::Loading {
+            diff_hash: 777,
+            turn_id: 0,
+        },
     );
 
     // Act
@@ -4594,6 +4870,7 @@ async fn test_rebase_session_cancels_pending_focused_review() {
         diff_hash: 777,
         review_text: "stale focused review".to_string(),
         session_id: session_id.clone().into(),
+        turn_id: 0,
     })
     .await;
 
@@ -4617,10 +4894,15 @@ async fn test_rebase_session_cleanup_failure_does_not_start_sync() {
         .await
         .expect("failed to create session");
     db.sessions()
-        .update_session_focused_review(
+        .upsert_session_timeline_message(
             &session_id,
-            Some("111".to_string()),
-            Some("old persisted focused review".to_string()),
+            SessionTimelineMessage {
+                content: "Reviewing changes",
+                entry_key: "focused_review:0:777",
+                kind: SessionMessageKind::FocusedReview,
+                state: SessionMessageState::Pending,
+                turn_id: 0,
+            },
         )
         .await
         .expect("failed to seed persisted focused review");
@@ -4631,7 +4913,10 @@ async fn test_rebase_session_cleanup_failure_does_not_start_sync() {
     };
     app.review_cache.insert(
         session_id.clone().into(),
-        ReviewCacheEntry::Loading { diff_hash: 777 },
+        ReviewCacheEntry::Loading {
+            diff_hash: 777,
+            turn_id: 0,
+        },
     );
     let mut mock_git_client = git::MockGitClient::new();
     mock_git_client.expect_rebase_start().times(0);

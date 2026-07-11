@@ -30,11 +30,12 @@ use crate::domain::question::QuestionItem;
 use crate::domain::selection::SelectionState;
 #[cfg(test)]
 use crate::domain::session::{
-    PublishedBranchSyncStatus, ReviewRequest, Session, SessionHandles, SessionId, SessionSize,
-    SessionStats, Status,
+    ReviewRequest, Session, SessionHandles, SessionId, SessionSize, SessionStats, Status,
 };
 #[cfg(test)]
-use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
+use crate::domain::session_message::{
+    SessionMessage, SessionMessageKind, SessionMessageState, SessionTranscript,
+};
 use crate::domain::setting::SettingName;
 #[cfg(test)]
 use crate::presentation::app_mode::AppMode;
@@ -162,17 +163,14 @@ impl SessionFixtureBuilder {
                 queued_messages: Vec::new(),
                 reasoning_level_override: None,
                 published_upstream_ref: None,
-                published_branch_sync_status: PublishedBranchSyncStatus::Idle,
                 questions: Vec::new(),
                 review_request: None,
                 size: SessionSize::Xs,
                 stats: SessionStats::default(),
                 status: Status::Review,
-                summary: None,
                 title: None,
                 transcript: None,
                 updated_at: 0,
-                workflow_notice: None,
             },
         }
     }
@@ -273,7 +271,28 @@ impl SessionFixtureBuilder {
 
     /// Overrides the optional persisted session summary text.
     pub(crate) fn summary(mut self, summary: Option<String>) -> Self {
-        self.session.summary = summary;
+        if let Some(summary) = summary {
+            let transcript = self
+                .session
+                .transcript
+                .get_or_insert_with(SessionTranscript::default);
+            let turn_id = transcript.current_turn_id();
+            let position = transcript
+                .messages()
+                .iter()
+                .map(|message| message.position)
+                .max()
+                .unwrap_or(-1)
+                .saturating_add(1);
+            transcript.upsert_timeline_message(SessionMessage::timeline(
+                position,
+                turn_id,
+                format!("turn_summary:{turn_id}"),
+                SessionMessageKind::TurnSummary,
+                SessionMessageState::Resolved,
+                summary,
+            ));
+        }
 
         self
     }

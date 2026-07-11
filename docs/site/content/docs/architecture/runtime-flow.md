@@ -128,13 +128,20 @@ loader updates), and applies side effects in stable order. Key behaviors:
 <a id="architecture-runtime-flow-session-chat"></a> The session chat panel is rendered
 by `crates/agentty/src/ui/page/session_chat.rs` and
 `crates/agentty/src/ui/component/session_output.rs`. The durable transcript is the
-ordered `session_message` rows (typed `UserPrompt`, `AssistantAnswer`, `WorkflowNotice`,
-rows); the component layers synthetic content on top at render time: the
-`session.summary` block, focused review text, the in-progress published-branch sync row,
-and the animated loader row. Completed published-branch auto-push results are persisted
-as `WorkflowNotice` transcript rows instead of synthetic render rows. Structured
-clarification questions render in the bottom question panel (`AppMode::Question`), not
-inside the output component.
+ordered `session_message` timeline: typed `UserPrompt`, `AssistantAnswer`,
+`TurnSummary`, `FocusedReview`, and `WorkflowNotice` rows share a `turn_id`, while
+asynchronous entries also carry a stable `entry_key` and `Pending`, `Resolved`, or
+`Failed` state. Producers insert a pending row and replace that same row with the final
+result, so the renderer does not remove and append synthetic status blocks between
+frames. Semantic ordering keeps summaries and reviews attached to their owning turn even
+when they finish after a later prompt is stored. Focused-review entry keys combine the
+owning turn and diff hash, so an unchanged diff reviewed after another prompt creates a
+new turn entry instead of replacing earlier review history. If focused-review storage
+fails, the cache and live row both become a retryable `Failed` state so a stale
+`Pending` row cannot keep the renderer ticking; an in-process reload cannot regress that
+terminal live state back to stale persisted `Pending` data. Structured clarification
+questions render in the bottom question panel (`AppMode::Question`), not inside the
+output component.
 
 `App` owns one shared `RenderCacheStore` for markdown, diff, and session-output layout
 caches. Changes in this area should keep caches bounded and route layout/count helpers
@@ -155,8 +162,8 @@ render twice per frame.
 1. `workflow/turn.rs` builds a `TurnRequest` and calls `AgentChannel::run_turn()`, which
    streams `TurnEvent` values (loader updates) and returns a `TurnResult`.
 1. `workflow/post_turn.rs` appends the final assistant transcript output, then
-   `TurnPersistence::apply(...)` transactionally stores the summary payload, question
-   payload, token-usage deltas, and provider conversation markers.
+   `TurnPersistence::apply(...)` transactionally stores the turn-scoped summary timeline
+   entry, question payload, token-usage deltas, and provider conversation markers.
 1. `AppEvent::AgentResponseReceived` carries the reducer projection so the active
    session updates without a forced reload. If persistence fails, the worker appends a
    recovery error and falls back to a durable-state reload.
@@ -171,8 +178,12 @@ render twice per frame.
    or waits until the active publish completes. Post-rebase auto-push transfers the
    guard again, preventing a subsequent sync from starting until that publish finishes.
    After a successful push, linked review-request and commit metadata are resolved and
-   refreshed; lookup failures append the existing warning notice instead of being
-   discarded. The push result is appended as a durable transcript notice.
+   refreshed; lookup failures persist a keyed warning under the turn that started the
+   push instead of inheriting a later prompt's turn. Auto-push status is a keyed
+   timeline entry that changes from `Pending` to `Resolved` or `Failed` in place. On
+   startup, orphaned `Pending` auto-push and focused-review entries become durable
+   failures with retry guidance; ordinary in-process reloads preserve entries owned by
+   live tasks.
 1. Completed stacked-parent turns fan out `SessionCommand::Rebase` to review-ready
    materialized children so child branches replay onto the latest parent branch.
 1. The session size is refreshed and the final status becomes `Review` or `Question`
@@ -189,7 +200,8 @@ restart-safe:
 - On startup, unfinished operations are failed with reason `Interrupted by app restart`,
   interrupted rebase operations abort stale in-progress git rebase metadata, and
   impacted sessions are reset to `Review`. Pending post-merge stacked-child syncs are
-  requeued.
+  requeued, while orphaned detached branch-push and focused-review timeline entries are
+  failed in place.
 
 ### Status Transition Rules
 
@@ -307,9 +319,11 @@ one structured response protocol (`answer`, `questions`, optional `summary`):
    provider context already received the full bootstrap, and replay the transcript when
    provider context was lost. Transcript replay frames the new prompt as a follow-up in
    the whole-session context, so rollback wording applies to changes made during the
-   Agentty session unless the user explicitly says otherwise. `crates/ag-protocol/src/`
-   owns the shared response model, schema, parser diagnostics, protocol prompt
-   envelopes, repair prompts, and turn prompt payloads.
+   Agentty session unless the user explicitly says otherwise. Provider replay includes
+   user and assistant conversation plus workflow notices, but excludes Agentty-authored
+   `TurnSummary` and `FocusedReview` rows. `crates/ag-protocol/src/` owns the shared
+   response model, schema, parser diagnostics, protocol prompt envelopes, repair
+   prompts, and turn prompt payloads.
 1. Channels emit transient loader updates as `TurnEvent::ThoughtDelta` values while the
    turn runs; assistant transcript output is appended once from the final parsed result.
 1. Final output must parse as the shared protocol JSON object. Claude, Gemini, and Codex

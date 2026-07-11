@@ -53,6 +53,8 @@ pub(super) struct ReviewAssistTaskInput {
     pub(super) session_chat_history: Option<String>,
     pub(super) session_folder: PathBuf,
     pub(super) session_id: SessionId,
+    /// Turn that owns the review task and its durable timeline entry.
+    pub(super) turn_id: i64,
 }
 
 /// Askama view model for rendering review assist prompts.
@@ -376,6 +378,7 @@ impl TaskService {
             session_chat_history,
             session_folder,
             session_id,
+            turn_id,
         } = input;
 
         tokio::spawn(async move {
@@ -387,7 +390,7 @@ impl TaskService {
             )
             .await;
 
-            let app_event = Self::review_app_event(diff_hash, review_result, session_id);
+            let app_event = Self::review_app_event(diff_hash, review_result, session_id, turn_id);
             // Fire-and-forget: receiver may be dropped during shutdown.
             let _ = app_event_tx.send(app_event);
         });
@@ -472,17 +475,20 @@ impl TaskService {
         diff_hash: u64,
         review_result: Result<String, AppError>,
         session_id: SessionId,
+        turn_id: i64,
     ) -> AppEvent {
         match review_result {
             Ok(review_text) => AppEvent::ReviewPrepared {
                 diff_hash,
                 review_text,
                 session_id,
+                turn_id,
             },
             Err(error) => AppEvent::ReviewPreparationFailed {
                 diff_hash,
                 error: error.to_string(),
                 session_id,
+                turn_id,
             },
         }
     }
@@ -967,7 +973,8 @@ mod tests {
         let session_id = "session-7".to_string();
 
         // Act
-        let app_event = TaskService::review_app_event(diff_hash, review_result, session_id.into());
+        let app_event =
+            TaskService::review_app_event(diff_hash, review_result, session_id.into(), 3);
 
         // Assert
         assert_eq!(
@@ -976,6 +983,7 @@ mod tests {
                 diff_hash: 7,
                 review_text: "Flagged one missing error branch.".to_string(),
                 session_id: "session-7".into(),
+                turn_id: 3,
             }
         );
     }
@@ -990,7 +998,8 @@ mod tests {
         let session_id = "session-9".to_string();
 
         // Act
-        let app_event = TaskService::review_app_event(diff_hash, review_result, session_id.into());
+        let app_event =
+            TaskService::review_app_event(diff_hash, review_result, session_id.into(), 4);
 
         // Assert
         assert_eq!(
@@ -999,6 +1008,7 @@ mod tests {
                 diff_hash: 9,
                 error: "empty response".to_string(),
                 session_id: "session-9".into(),
+                turn_id: 4,
             }
         );
     }

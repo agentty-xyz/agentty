@@ -838,9 +838,6 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         markdown_render_cache,
         mode,
         output_layout_cache,
-        review_status_message: review_snapshot
-            .filter(|snapshot| snapshot.session_id == session_id)
-            .and_then(|snapshot| snapshot.status_message.as_deref()),
         review_text: review_snapshot
             .filter(|snapshot| snapshot.session_id == session_id)
             .and_then(|snapshot| snapshot.text),

@@ -21,8 +21,8 @@ use crate::domain::agent::{AgentModel, ReasoningLevel};
 use crate::domain::file_entry::FileEntry;
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
-    DailyActivity, FollowUpTaskAction, PublishedBranchSyncStatus, ReviewRequest, Session,
-    SessionFollowUpTask, SessionId, SessionStats,
+    DailyActivity, FollowUpTaskAction, ReviewRequest, Session, SessionFollowUpTask, SessionId,
+    SessionStats,
 };
 
 /// Low-frequency fallback interval for metadata-based session refresh.
@@ -61,16 +61,15 @@ pub(crate) struct SessionRenderParts<'a> {
 /// Reducer-facing snapshot derived from one persisted turn result.
 ///
 /// The worker computes this projection immediately after writing canonical turn
-/// metadata so the reducer can apply the same summary, clarification-question,
-/// follow-up-task, and token-usage updates without waiting for a full reload.
+/// metadata so the reducer can apply clarification-question, follow-up-task,
+/// and token-usage updates without waiting for a full reload. Summary output
+/// is synchronized through the shared typed transcript timeline.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TurnAppliedState {
     /// Persisted follow-up tasks for the latest completed turn.
     pub(crate) follow_up_tasks: Vec<SessionFollowUpTask>,
     /// Persisted clarification questions for the latest completed turn.
     pub(crate) questions: Vec<QuestionItem>,
-    /// Raw persisted summary payload, if the turn produced one.
-    pub(crate) summary: Option<String>,
     /// Token-usage delta reported for the completed turn.
     pub(crate) token_usage_delta: SessionStats,
 }
@@ -78,14 +77,13 @@ pub(crate) struct TurnAppliedState {
 impl TurnAppliedState {
     /// Merges one newer reducer projection into this batched state.
     ///
-    /// Latest-turn fields (`follow_up_tasks`, `questions`, `summary`) replace
+    /// Latest-turn fields (`follow_up_tasks`, `questions`) replace
     /// the previous projection, while `token_usage_delta` accumulates so
     /// multiple completed turns queued in one reducer tick do not undercount
     /// session usage.
     pub(crate) fn merge_newer(&mut self, newer_turn_applied_state: Self) {
         self.follow_up_tasks = newer_turn_applied_state.follow_up_tasks;
         self.questions = newer_turn_applied_state.questions;
-        self.summary = newer_turn_applied_state.summary;
         self.token_usage_delta.input_tokens = self
             .token_usage_delta
             .input_tokens
@@ -107,7 +105,6 @@ pub struct SessionManager {
     pub(super) git_client: Arc<dyn git::GitClient>,
     pub(super) merge_service: SessionMergeService,
     pub(super) pending_history_replay: HashSet<SessionId>,
-    pub(super) published_branch_sync_operations: HashMap<SessionId, String>,
     pub(super) state: SessionState,
     pub(super) stats_activity: Vec<DailyActivity>,
     pub(super) title_generation_tasks: HashMap<SessionId, TitleGenerationTask>,
@@ -148,7 +145,6 @@ impl SessionManager {
             git_client,
             merge_service: SessionMergeService,
             pending_history_replay,
-            published_branch_sync_operations: HashMap::new(),
             state,
             stats_activity,
             title_generation_tasks: HashMap::new(),
@@ -435,71 +431,6 @@ impl SessionManager {
         }
     }
 
-    /// Marks one session branch as currently auto-syncing to its published
-    /// upstream reference.
-    pub(crate) fn start_published_branch_sync(
-        &mut self,
-        session_id: &str,
-        sync_operation_id: String,
-    ) {
-        self.published_branch_sync_operations
-            .insert(SessionId::from(session_id), sync_operation_id);
-
-        if let Some(session) = self
-            .state
-            .sessions
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        {
-            session.published_branch_sync_status = PublishedBranchSyncStatus::InProgress;
-        }
-    }
-
-    /// Applies one terminal auto-push state when it matches the latest tracked
-    /// sync operation for the session.
-    pub(crate) fn finish_published_branch_sync(
-        &mut self,
-        session_id: &str,
-        sync_operation_id: &str,
-        sync_status: PublishedBranchSyncStatus,
-    ) {
-        let Some(current_operation_id) = self.published_branch_sync_operations.get(session_id)
-        else {
-            return;
-        };
-        if current_operation_id != sync_operation_id {
-            return;
-        }
-
-        self.published_branch_sync_operations.remove(session_id);
-
-        if let Some(session) = self
-            .state
-            .sessions
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        {
-            session.published_branch_sync_status = sync_status;
-        }
-    }
-
-    /// Appends one transient workflow notice shown for one session.
-    pub(crate) fn append_workflow_notice(&mut self, session_id: &str, notice: String) {
-        if let Some(session) = self
-            .state
-            .sessions
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        {
-            if let Some(workflow_notice) = &mut session.workflow_notice {
-                workflow_notice.push_str("\n\n");
-                workflow_notice.push_str(&notice);
-            } else {
-                session.workflow_notice = Some(notice);
-            }
-        }
-    }
-
     /// Applies one completed-turn projection to the matching in-memory
     /// session snapshot.
     pub(crate) fn apply_turn_applied_state(
@@ -520,7 +451,6 @@ impl SessionManager {
             .follow_up_tasks
             .clone_from(&turn_applied_state.follow_up_tasks);
         session.questions.clone_from(&turn_applied_state.questions);
-        session.summary.clone_from(&turn_applied_state.summary);
         session.stats.input_tokens = session
             .stats
             .input_tokens

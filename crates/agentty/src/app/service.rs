@@ -280,7 +280,6 @@ fn app_event_label(event: &AppEvent) -> &'static str {
         AppEvent::StackedParentSyncCompleted { .. } => "StackedParentSyncCompleted",
         AppEvent::StackedParentMergeCompleted { .. } => "StackedParentMergeCompleted",
         AppEvent::SessionWorkflowNoticeUpdated { .. } => "SessionWorkflowNoticeUpdated",
-        AppEvent::PublishedBranchSyncUpdated { .. } => "PublishedBranchSyncUpdated",
         AppEvent::ReviewRequestStatusUpdated { .. } => "ReviewRequestStatusUpdated",
         AppEvent::ReviewCommentsUpdated { .. } => "ReviewCommentsUpdated",
     }

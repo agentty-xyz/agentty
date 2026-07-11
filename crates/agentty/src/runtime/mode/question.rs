@@ -1044,9 +1044,6 @@ mod tests {
             SessionOutputLineContext {
                 active_prompt_output: None,
                 active_progress: None,
-                review_model: AgentModel::ClaudeHaiku4520251001,
-                review_status_message: None,
-                review_text: None,
                 session_update_version: app.session_update_version(session_id),
             },
             render_cache_store.markdown_render_cache(),
@@ -1374,17 +1371,14 @@ mod tests {
             queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: None,
-            published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
             questions: Vec::new(),
             review_request: None,
             size: SessionSize::Xs,
             stats: SessionStats::default(),
             status: Status::Question,
-            summary: None,
             title: None,
             transcript: None,
             updated_at: 0,
-            workflow_notice: None,
         });
         app.mode = AppMode::Question {
             at_mention_state: None,
@@ -1450,17 +1444,14 @@ mod tests {
             queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: None,
-            published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
             questions: Vec::new(),
             review_request: None,
             size: SessionSize::Xs,
             stats: SessionStats::default(),
             status: Status::Question,
-            summary: None,
             title: None,
             transcript: None,
             updated_at: 0,
-            workflow_notice: None,
         });
         app.sessions.session_handles_mut().insert(
             session_id.to_string().into(),
@@ -3071,17 +3062,14 @@ mod tests {
             queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: None,
-            published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
             questions: Vec::new(),
             review_request: None,
             size: SessionSize::Xs,
             stats: SessionStats::default(),
             status: Status::Question,
-            summary: None,
             title: None,
             transcript: None,
             updated_at: 0,
-            workflow_notice: None,
         });
 
         app.mode = AppMode::Question {

@@ -39,7 +39,7 @@ impl LiveTranscript for LiveSessionTranscript {
         self.transcript
             .lock()
             .ok()
-            .and_then(|transcript| transcript.replay_text())
+            .and_then(|transcript| transcript.provider_replay_text())
     }
 }
 

@@ -20,7 +20,7 @@ const SESSION_CHAT_FYI_MESSAGES: [&str; 9] = [
     "Ctrl+c retracts queued replies before stopping the running turn.",
     "Published sessions auto-push after queued replies drain.",
     "After publishing once, p refreshes the same review request.",
-    "Focused review output stays visible until you submit the next prompt.",
+    "Focused reviews stay attached to their turn across later prompts.",
     "Done sessions can continue in a fresh draft with c.",
     "Stacked child review requests target the parent's review branch.",
     "Use @ to attach files or project context to the next prompt.",

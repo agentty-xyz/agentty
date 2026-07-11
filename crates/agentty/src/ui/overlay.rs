@@ -290,9 +290,6 @@ pub(crate) fn render_view_info_popup(
             markdown_render_cache,
             mode: &background_mode,
             output_layout_cache,
-            review_status_message: review_snapshot
-                .filter(|snapshot| snapshot.session_id == restore_view.session_id.as_str())
-                .and_then(|snapshot| snapshot.status_message.as_deref()),
             review_text: review_snapshot
                 .filter(|snapshot| snapshot.session_id == restore_view.session_id.as_str())
                 .and_then(|snapshot| snapshot.text),
@@ -545,9 +542,6 @@ fn render_help_background(f: &mut Frame, area: Rect, context: HelpBackgroundRend
                 markdown_render_cache,
                 mode: &bg_mode,
                 output_layout_cache,
-                review_status_message: review_snapshot
-                    .filter(|snapshot| snapshot.session_id == session_id)
-                    .and_then(|snapshot| snapshot.status_message.as_deref()),
                 review_text: review_snapshot
                     .filter(|snapshot| snapshot.session_id == session_id)
                     .and_then(|snapshot| snapshot.text),

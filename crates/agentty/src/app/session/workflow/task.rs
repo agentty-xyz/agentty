@@ -23,10 +23,10 @@ use crate::domain::agent::{AgentModel, AgentSelectionMetadata};
 use crate::domain::session::{
     COMMITTING_PROGRESS_LABEL, SessionHandles, SessionId, SessionSize, Status,
 };
-use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
+use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use crate::domain::setting::SettingName;
 use crate::domain::transcript_notice::TranscriptNotice;
-use crate::infra::db::AppRepositories;
+use crate::infra::db::{AppRepositories, SessionTimelineMessage};
 use crate::infra::fs::FsClient;
 
 const AUTO_COMMIT_ASSIST_POLICY: AssistPolicy = AssistPolicy {
@@ -1071,6 +1071,131 @@ impl SessionTaskService {
         Self::emit_session_updated(app_event_tx, session_update_versions, id);
     }
 
+    /// Persists and applies one stable turn-scoped timeline entry before
+    /// emitting a single redraw notification.
+    pub(crate) async fn upsert_timeline_message(
+        transcript: &Arc<Mutex<SessionTranscript>>,
+        db: &AppRepositories,
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+        session_update_versions: &SessionUpdateVersionMap,
+        id: &str,
+        message: SessionTimelineMessage<'_>,
+    ) -> Result<(), SessionError> {
+        let row = db
+            .sessions()
+            .upsert_session_timeline_message(id, message)
+            .await?;
+        let message = SessionMessage::timeline(
+            row.position,
+            row.turn_id,
+            row.entry_key
+                .unwrap_or_else(|| message.entry_key.to_string()),
+            message.kind,
+            message.state,
+            row.content,
+        );
+        match transcript.lock() {
+            Ok(mut transcript) => transcript.upsert_timeline_message(message),
+            Err(error) => {
+                warn!(
+                    session_id = id,
+                    error = %error,
+                    "failed to lock session timeline buffer"
+                );
+            }
+        }
+        Self::emit_session_updated(app_event_tx, session_update_versions, id);
+
+        Ok(())
+    }
+
+    /// Applies one timeline state only to the live transcript after durable
+    /// persistence fails, preventing a stale pending row from animating
+    /// indefinitely in the current process.
+    pub(crate) fn upsert_live_timeline_message(
+        transcript: &Arc<Mutex<SessionTranscript>>,
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+        session_update_versions: &SessionUpdateVersionMap,
+        id: &str,
+        message: SessionTimelineMessage<'_>,
+    ) {
+        match transcript.lock() {
+            Ok(mut transcript) => {
+                let position = transcript
+                    .messages()
+                    .iter()
+                    .find(|entry| entry.entry_key.as_deref() == Some(message.entry_key))
+                    .map_or_else(
+                        || {
+                            transcript
+                                .messages()
+                                .iter()
+                                .map(|message| message.position)
+                                .max()
+                                .unwrap_or(-1)
+                                .saturating_add(1)
+                        },
+                        |message| message.position,
+                    );
+                transcript.upsert_timeline_message(SessionMessage::timeline(
+                    position,
+                    message.turn_id,
+                    message.entry_key,
+                    message.kind,
+                    message.state,
+                    message.content,
+                ));
+            }
+            Err(error) => {
+                warn!(
+                    session_id = id,
+                    error = %error,
+                    "failed to lock session timeline buffer"
+                );
+            }
+        }
+        Self::emit_session_updated(app_event_tx, session_update_versions, id);
+    }
+
+    /// Deletes one stable timeline entry from persistence and the live
+    /// transcript before emitting a single redraw notification.
+    pub(crate) async fn delete_timeline_message(
+        transcript: &Arc<Mutex<SessionTranscript>>,
+        db: &AppRepositories,
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+        session_update_versions: &SessionUpdateVersionMap,
+        id: &str,
+        entry_key: &str,
+    ) -> Result<(), SessionError> {
+        db.sessions()
+            .delete_session_timeline_message(id, entry_key)
+            .await?;
+        Self::remove_live_timeline_message(
+            transcript,
+            app_event_tx,
+            session_update_versions,
+            id,
+            entry_key,
+        );
+
+        Ok(())
+    }
+
+    /// Removes one timeline entry from the live transcript without touching
+    /// durable storage, then requests a redraw.
+    pub(crate) fn remove_live_timeline_message(
+        transcript: &Arc<Mutex<SessionTranscript>>,
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+        session_update_versions: &SessionUpdateVersionMap,
+        id: &str,
+        entry_key: &str,
+    ) {
+        if let Ok(mut transcript) = transcript.lock() {
+            transcript.remove_timeline_message(entry_key);
+        }
+        Self::emit_session_updated(app_event_tx, session_update_versions, id);
+    }
+
     /// Appends one raw user/assistant message to the in-memory transcript and
     /// durable message store.
     pub(crate) async fn append_session_transcript_message(
@@ -1340,7 +1465,7 @@ mod tests {
     use crate::app::service::AppServiceDeps;
     use crate::db::AppRepositories;
     use crate::domain::agent::AgentCliInfo;
-    use crate::domain::session_message::SessionMessage;
+    use crate::domain::session_message::{SessionMessage, SessionMessageState};
     use crate::infra::fs;
 
     /// Mutable test clock used to drive deterministic status-transition timing
@@ -1491,16 +1616,15 @@ mod tests {
                 .expect("transcript should have replay text"),
             " ›     hello\n\n"
         );
+        let mut expected_message =
+            SessionMessage::conversation(0, SessionMessageKind::UserPrompt, "    hello");
+        expected_message.turn_id = 1;
         assert_eq!(
             transcript
                 .lock()
                 .expect("transcript lock should not be poisoned")
                 .messages(),
-            &[SessionMessage::conversation(
-                0,
-                SessionMessageKind::UserPrompt,
-                "    hello"
-            )]
+            &[expected_message]
         );
         let messages = database
             .sessions()
@@ -2249,7 +2373,16 @@ mod tests {
         let summary_payload = "- Session branch updates README formatting.".to_string();
         database
             .sessions()
-            .update_session_summary("session-id", &summary_payload)
+            .upsert_session_timeline_message(
+                "session-id",
+                SessionTimelineMessage {
+                    content: &summary_payload,
+                    entry_key: "turn_summary:0",
+                    kind: SessionMessageKind::TurnSummary,
+                    state: SessionMessageState::Resolved,
+                    turn_id: 0,
+                },
+            )
             .await
             .expect("failed to persist summary text");
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
@@ -2276,8 +2409,13 @@ mod tests {
 
         // Assert
         assert_eq!(sessions[0].title.as_deref(), Some("Refine README updates"));
+        let persisted_summary = database
+            .sessions()
+            .load_latest_session_message("session-id", SessionMessageKind::TurnSummary)
+            .await
+            .expect("failed to load summary");
         assert_eq!(
-            sessions[0].summary.as_deref(),
+            persisted_summary.as_deref(),
             Some("- Session branch updates README formatting.")
         );
         let events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();

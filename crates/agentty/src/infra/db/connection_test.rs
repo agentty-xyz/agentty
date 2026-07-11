@@ -8,10 +8,11 @@ use crate::domain::agent::{AgentModel, ReasoningLevel};
 use crate::domain::session::{
     DailyActivity, ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionStats,
 };
-use crate::domain::session_message::SessionMessageKind;
+use crate::domain::session_message::{SessionMessageKind, SessionMessageState};
 use crate::domain::setting::SettingName;
 use crate::infra::db::{
-    SessionFocusedReviewRow, SessionOperationRow, SessionRow, SessionTurnMetadata,
+    SessionFocusedReviewRow, SessionOperationRow, SessionRow, SessionTimelineMessage,
+    SessionTurnMetadata,
 };
 /// Environment flag used to run the DST regression helper in an isolated
 /// subprocess with a fixed timezone.
@@ -131,6 +132,30 @@ VALUES (?, ?, ?, ?)
     .expect("failed to insert raw session message row");
 }
 
+/// Inserts or replaces one resolved timeline message for database tests.
+async fn upsert_resolved_timeline_message(
+    database: &Database,
+    session_id: &str,
+    entry_key: &str,
+    kind: SessionMessageKind,
+    content: &str,
+) {
+    database
+        .sessions()
+        .upsert_session_timeline_message(
+            session_id,
+            SessionTimelineMessage {
+                content,
+                entry_key,
+                kind,
+                state: SessionMessageState::Resolved,
+                turn_id: 1,
+            },
+        )
+        .await
+        .expect("failed to upsert timeline message");
+}
+
 /// Loads one session row by identifier through `load_sessions()`.
 async fn load_session_row(database: &Database, session_id: &str) -> SessionRow {
     database
@@ -215,10 +240,6 @@ async fn test_load_sessions_maps_joined_session_fields() {
     assert_eq!(session_row.output_tokens, 29);
     assert_eq!(session_row.parent_session_id, None);
     assert_eq!(session_row.size, "L");
-    assert_eq!(
-        session_row.summary.as_deref(),
-        Some("Implemented the requested feature")
-    );
     assert_eq!(session_row.questions.as_deref(), Some("[\"Need logs?\"]"));
     assert_eq!(session_row.title.as_deref(), Some("Feature work"));
     assert_eq!(
@@ -430,11 +451,14 @@ async fn test_load_session_detail_reads_message_transcript() {
         .update_session_prompt("session-a", "Do something")
         .await
         .expect("failed to update prompt");
-    database
-        .sessions()
-        .update_session_summary("session-a", "migrated summary")
-        .await
-        .expect("failed to update summary");
+    upsert_resolved_timeline_message(
+        &database,
+        "session-a",
+        "turn_summary:1",
+        SessionMessageKind::TurnSummary,
+        "migrated summary",
+    )
+    .await;
 
     // Act
     let detail = database
@@ -446,7 +470,6 @@ async fn test_load_session_detail_reads_message_transcript() {
 
     // Assert
     assert_eq!(detail.prompt, "Do something");
-    assert_eq!(detail.summary.as_deref(), Some("migrated summary"));
 }
 
 /// Builds an in-memory database with one session covering joined fields
@@ -501,11 +524,14 @@ async fn persist_joined_session_metadata(database: &Database, review_request: &R
         .update_session_title("session-a", "Feature work")
         .await
         .expect("failed to update session title");
-    database
-        .sessions()
-        .update_session_summary("session-a", "Implemented the requested feature")
-        .await
-        .expect("failed to update session summary");
+    upsert_resolved_timeline_message(
+        database,
+        "session-a",
+        "turn_summary:1",
+        SessionMessageKind::TurnSummary,
+        "Implemented the requested feature",
+    )
+    .await;
     database
         .sessions()
         .update_session_stats(
@@ -2217,6 +2243,7 @@ async fn test_load_projects_with_stats_returns_session_counts_tokens_and_last_up
                     input_tokens: 1_200,
                     output_tokens: 650,
                 },
+                turn_id: 1,
             },
         )
         .await
@@ -2242,6 +2269,7 @@ async fn test_load_projects_with_stats_returns_session_counts_tokens_and_last_up
                     input_tokens: 3,
                     output_tokens: 5,
                 },
+                turn_id: 1,
             },
         )
         .await
@@ -2469,21 +2497,83 @@ async fn test_load_session_summary_returns_persisted_summary() {
         .insert_session("session-a", "gpt-5.5", "main", "Done", project_id)
         .await
         .expect("failed to insert session");
-    database
-        .sessions()
-        .update_session_summary("session-a", "persisted summary")
-        .await
-        .expect("failed to update session summary");
+    upsert_resolved_timeline_message(
+        &database,
+        "session-a",
+        "turn_summary:1",
+        SessionMessageKind::TurnSummary,
+        "persisted summary",
+    )
+    .await;
 
     // Act
     let loaded_summary = database
         .sessions()
-        .load_session_summary("session-a")
+        .load_latest_session_message("session-a", SessionMessageKind::TurnSummary)
         .await
         .expect("failed to load session summary");
 
     // Assert
     assert_eq!(loaded_summary.as_deref(), Some("persisted summary"));
+}
+
+#[tokio::test]
+async fn test_upsert_session_timeline_message_replaces_pending_row_in_place() {
+    // Arrange
+    let database = Database::open_in_memory()
+        .await
+        .expect("failed to open in-memory db");
+    let project_id = database
+        .projects()
+        .upsert_project("/tmp/project", Some("main".to_string()))
+        .await
+        .expect("failed to insert project");
+    database
+        .sessions()
+        .insert_session("session-a", "gpt-5.5", "main", "Review", project_id)
+        .await
+        .expect("failed to insert session");
+    let pending = database
+        .sessions()
+        .upsert_session_timeline_message(
+            "session-a",
+            SessionTimelineMessage {
+                content: "Pushing branch...",
+                entry_key: "branch_push:1",
+                kind: SessionMessageKind::WorkflowNotice,
+                state: SessionMessageState::Pending,
+                turn_id: 1,
+            },
+        )
+        .await
+        .expect("failed to insert pending timeline row");
+
+    // Act
+    let resolved = database
+        .sessions()
+        .upsert_session_timeline_message(
+            "session-a",
+            SessionTimelineMessage {
+                content: "Branch pushed.",
+                entry_key: "branch_push:1",
+                kind: SessionMessageKind::WorkflowNotice,
+                state: SessionMessageState::Resolved,
+                turn_id: 1,
+            },
+        )
+        .await
+        .expect("failed to resolve timeline row");
+    let messages = database
+        .sessions()
+        .load_session_messages("session-a")
+        .await
+        .expect("failed to load timeline");
+
+    // Assert
+    assert_eq!(resolved.position, pending.position);
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].content, "Branch pushed.");
+    assert_eq!(messages[0].state, SessionMessageState::Resolved.as_str());
 }
 
 #[tokio::test]
@@ -2502,15 +2592,14 @@ async fn test_load_session_focused_reviews_for_project_returns_persisted_review(
         .insert_session("session-a", "gpt-5.5", "main", "Review", project_id)
         .await
         .expect("failed to insert session");
-    database
-        .sessions()
-        .update_session_focused_review(
-            "session-a",
-            Some("42".to_string()),
-            Some("## Review\nPersisted".to_string()),
-        )
-        .await
-        .expect("failed to update focused review");
+    upsert_resolved_timeline_message(
+        &database,
+        "session-a",
+        "focused_review:42",
+        SessionMessageKind::FocusedReview,
+        "## Review\nPersisted",
+    )
+    .await;
 
     // Act
     let focused_reviews = database
@@ -2523,7 +2612,7 @@ async fn test_load_session_focused_reviews_for_project_returns_persisted_review(
     assert_eq!(
         focused_reviews,
         vec![SessionFocusedReviewRow {
-            diff_hash: "42".to_string(),
+            entry_key: "focused_review:42".to_string(),
             session_id: "session-a".to_string(),
             text: "## Review\nPersisted".to_string(),
         }]
@@ -2531,7 +2620,7 @@ async fn test_load_session_focused_reviews_for_project_returns_persisted_review(
 }
 
 #[tokio::test]
-async fn test_update_session_focused_review_clears_persisted_review() {
+async fn test_delete_session_timeline_message_clears_persisted_review() {
     // Arrange
     let database = Database::open_in_memory()
         .await
@@ -2546,20 +2635,23 @@ async fn test_update_session_focused_review_clears_persisted_review() {
         .insert_session("session-a", "gpt-5.5", "main", "Review", project_id)
         .await
         .expect("failed to insert session");
-    database
-        .sessions()
-        .update_session_focused_review(
-            "session-a",
-            Some("42".to_string()),
-            Some("## Review\nPersisted".to_string()),
-        )
+    upsert_resolved_timeline_message(
+        &database,
+        "session-a",
+        "focused_review:42",
+        SessionMessageKind::FocusedReview,
+        "## Review\nPersisted",
+    )
+    .await;
+    sqlx::query("UPDATE session SET updated_at = 1 WHERE id = 'session-a'")
+        .execute(database.pool())
         .await
-        .expect("failed to update focused review");
+        .expect("failed to set stale session timestamp");
 
     // Act
     database
         .sessions()
-        .update_session_focused_review("session-a", None, None)
+        .delete_session_timeline_message("session-a", "focused_review:42")
         .await
         .expect("failed to clear focused review");
     let focused_reviews = database
@@ -2567,9 +2659,16 @@ async fn test_update_session_focused_review_clears_persisted_review() {
         .load_session_focused_reviews_for_project(project_id)
         .await
         .expect("failed to load focused reviews");
+    let (_, updated_at) = database
+        .sessions()
+        .load_session_timestamps("session-a")
+        .await
+        .expect("failed to load session timestamps")
+        .expect("session timestamps should exist");
 
     // Assert
     assert!(focused_reviews.is_empty());
+    assert!(updated_at > 1);
 }
 
 #[tokio::test]
@@ -2590,11 +2689,14 @@ async fn test_persist_session_turn_metadata_rolls_back_on_failure() {
         .insert_session("session-a", "gpt-5.5", "main", "Review", project_id)
         .await
         .expect("failed to insert session");
-    database
-        .sessions()
-        .update_session_summary("session-a", "persisted summary")
-        .await
-        .expect("failed to seed summary");
+    upsert_resolved_timeline_message(
+        &database,
+        "session-a",
+        "turn_summary:1",
+        SessionMessageKind::TurnSummary,
+        "persisted summary",
+    )
+    .await;
     sqlx::query("DROP TABLE session_usage")
         .execute(database.pool())
         .await
@@ -2618,6 +2720,7 @@ async fn test_persist_session_turn_metadata_rolls_back_on_failure() {
                     input_tokens: 3,
                     output_tokens: 5,
                 },
+                turn_id: 1,
             },
         )
         .await;
@@ -2637,7 +2740,12 @@ async fn test_persist_session_turn_metadata_rolls_back_on_failure() {
 
     // Assert
     assert!(matches!(result, Err(DbError::Query(_))));
-    assert_eq!(session.summary.as_deref(), Some("persisted summary"));
+    let summary = database
+        .sessions()
+        .load_latest_session_message("session-a", SessionMessageKind::TurnSummary)
+        .await
+        .expect("failed to load summary after rollback");
+    assert_eq!(summary.as_deref(), Some("persisted summary"));
     assert_eq!(session.questions.as_deref(), None);
     assert_eq!(session.input_tokens, 0);
     assert_eq!(session.output_tokens, 0);

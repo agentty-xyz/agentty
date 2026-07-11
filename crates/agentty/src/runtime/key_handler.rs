@@ -762,6 +762,7 @@ async fn handle_regenerate_review_confirmation(
         .diff(session_folder.clone(), base_branch)
         .await
         .unwrap_or_else(|error| format!("Failed to run git diff: {error}"));
+    let turn_id = app.focused_review_turn_id(session_id.as_str());
 
     if diff.trim().is_empty() || diff.starts_with("Failed to run git diff:") {
         let view_mode = restore_view.unwrap_or(ConfirmationViewMode {
@@ -775,27 +776,29 @@ async fn handle_regenerate_review_confirmation(
             diff
         };
         app.review_cache.insert(
-            session_id,
+            session_id.clone(),
             ReviewCacheEntry::Ready {
                 diff_hash,
-                text: review_text,
+                text: review_text.clone(),
             },
         );
+        let _ = app
+            .post_focused_review_entry(
+                &session_id,
+                diff_hash,
+                turn_id,
+                &review_text,
+                crate::domain::session_message::SessionMessageState::Resolved,
+            )
+            .await;
         app.mode = view_mode.into_view_mode();
 
         return Ok(EventResult::Continue);
     }
 
     let diff_hash = diff_content_hash(&diff);
-    app.review_cache
-        .insert(session_id.clone(), ReviewCacheEntry::Loading { diff_hash });
-    let _ = app
-        .services
-        .db()
-        .sessions()
-        .update_session_focused_review(session_id.as_str(), None, None)
+    app.start_review_assist(session_id.as_str(), &session_folder, diff_hash, &diff)
         .await;
-    app.start_review_assist(session_id.as_str(), &session_folder, diff_hash, &diff);
 
     let view_mode = restore_view.unwrap_or(ConfirmationViewMode {
         scroll_offset: None,

@@ -21,7 +21,9 @@ use crate::app::assist::AssistContext;
 use crate::app::service::SessionUpdateVersionMap;
 use crate::app::session::{Clock, SessionError, TurnAppliedState};
 use crate::domain::session::{SessionFollowUpTask, SessionId, SessionStats, Status};
-use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
+use crate::domain::session_message::{
+    SessionMessage, SessionMessageKind, SessionMessageState, SessionTranscript,
+};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::{AppRepositories, SessionTurnMetadata};
@@ -197,6 +199,11 @@ impl TurnPersistence<'_> {
                 None
             };
         let session_model = self.session_agent.model();
+        let turn_id = self
+            .context
+            .transcript
+            .lock()
+            .map_or(0, |transcript| transcript.current_turn_id());
         self.context
             .db
             .sessions()
@@ -209,6 +216,7 @@ impl TurnPersistence<'_> {
                     questions_json,
                     summary: summary.clone(),
                     token_usage_delta: token_usage_delta.clone(),
+                    turn_id,
                 },
             )
             .await?;
@@ -217,11 +225,29 @@ impl TurnPersistence<'_> {
             .sessions()
             .replace_session_follow_up_tasks(&self.context.session_id, &persisted_follow_up_text)
             .await?;
+        if !summary.trim().is_empty()
+            && let Ok(mut transcript) = self.context.transcript.lock()
+        {
+            let position = transcript
+                .messages()
+                .iter()
+                .map(|message| message.position)
+                .max()
+                .unwrap_or(-1)
+                .saturating_add(1);
+            transcript.upsert_timeline_message(SessionMessage::timeline(
+                position,
+                turn_id,
+                format!("turn_summary:{turn_id}"),
+                SessionMessageKind::TurnSummary,
+                SessionMessageState::Resolved,
+                summary.clone(),
+            ));
+        }
 
         Ok(TurnAppliedState {
             follow_up_tasks,
             questions,
-            summary: (!summary.is_empty()).then_some(summary),
             token_usage_delta,
         })
     }
@@ -483,7 +509,8 @@ async fn start_published_branch_auto_push(
             session_update_versions: context.session_update_versions.clone(),
             transcript: Arc::clone(&context.transcript),
         },
-    );
+    )
+    .await;
 }
 
 /// Reconciles a failed turn-metadata write by surfacing the error and forcing

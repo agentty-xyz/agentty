@@ -16,11 +16,10 @@ use crate::infra::review_comment_cache::ReviewCommentCache;
 use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
 use crate::ui::{component, layout, markdown, page, router};
 
-/// Focused-review display state projected from the app cache for one visible
+/// Focused-review command state projected from the app cache for one visible
 /// session.
 pub struct SessionReviewSnapshot<'a> {
     pub session_id: &'a str,
-    pub status_message: Option<String>,
     pub text: Option<&'a str>,
 }
 
