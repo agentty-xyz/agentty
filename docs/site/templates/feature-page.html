@@ -9,21 +9,34 @@
     site-container
 {% endblock main_width_class %}
 {% block content %}
+    {% set feature_poster = page.extra.gif | replace(from=".gif", to=".png") %}
     <header class="feature-demo-header">
         <p class="feature-demo-page-intro">
             <a href="/features/">&larr; all features</a>
         </p>
+        <p class="section-eyebrow">// feature demo</p>
         <h1 class="feature-demo-page-title">{{ page.title }}</h1>
         <p class="feature-demo-page-intro">{{ page.description }}</p>
     </header>
     <div class="feature-demo-stack">
         <article class="feature-demo-card">
             <div class="feature-demo-frame">
-                <img src="/features/{{ page.extra.gif }}"
-                     alt="{{ page.title }} demo"
-                     width="800"
-                     height="400"
-                     loading="lazy" />
+                <picture>
+                    <img data-motion-demo
+                         src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs="
+                         data-src="/features/{{ page.extra.gif }}"
+                         data-poster="/features/{{ feature_poster }}"
+                         alt="{{ page.title }} demo"
+                         width="800"
+                         height="400"
+                         decoding="async" />
+                </picture>
+                <noscript>
+                    <img src="/features/{{ feature_poster }}"
+                         alt="{{ page.title }} demo"
+                         width="800"
+                         height="400" />
+                </noscript>
             </div>
         </article>
     </div>

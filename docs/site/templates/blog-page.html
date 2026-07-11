@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "macros/navigation.html" as navigation %}
 {# Render the blog sidebar from the section tree so post navigation stays aligned with content files. #}
 {% macro render_blog_nav(section_path, current_permalink, nested=false) %}
     {% set blog_nav_section = get_section(path=section_path) %}
@@ -12,6 +13,7 @@
                 {% for blog_post in blog_nav_section.pages %}
                     <li>
                         <a class="docs-nav-link {% if blog_post.permalink == current_permalink %}is-active{% endif %}"
+                           {% if blog_post.permalink == current_permalink %}aria-current="page"{% endif %}
                            href="{{ blog_post.permalink }}">{{ blog_post.title }}</a>
                     </li>
                 {% endfor %}
@@ -21,19 +23,6 @@
             {{ self::render_blog_nav(section_path=subsection_path, current_permalink=current_permalink, nested=true) }}
         {% endfor %}
     {% endmacro render_blog_nav %}
-    {# Reuse the docs-style page outline so blog posts keep heading-based deep navigation. #}
-    {% macro render_page_toc(items, nested=false) %}
-        {% if items | length > 0 %}
-            <ul class="docs-outline-list {% if nested %}docs-outline-list--nested{% endif %}">
-                {% for heading in items %}
-                    <li class="docs-outline-item">
-                        <a class="docs-outline-link" href="{{ heading.permalink | safe }}">{{ heading.title }}</a>
-                        {% if heading.children | length > 0 %}{{ self::render_page_toc(items=heading.children, nested=true) }}{% endif %}
-                    </li>
-                {% endfor %}
-            </ul>
-        {% endif %}
-    {% endmacro render_page_toc %}
     {% block title %}
         {{ page.title }} | {{ config.title }} Blog
     {% endblock title %}
@@ -49,10 +38,20 @@
     {% block content %}
         <aside class="docs-sidebar docs-sidebar--global"
                aria-label="Blog navigation">
-            <h2 class="docs-sidebar-title">Blog</h2>
-            {{ self::render_blog_nav(section_path="blog/_index.md", current_permalink=page.permalink) }}
+            <details class="docs-nav-disclosure" data-responsive-details open>
+                <summary>Blog</summary>
+                <div class="docs-nav-disclosure-content">
+                    <h2 class="docs-sidebar-title">Blog</h2>
+                    {{ self::render_blog_nav(section_path="blog/_index.md", current_permalink=page.permalink) }}
+                </div>
+            </details>
         </aside>
         <article class="docs-content-wrapper">
+            <nav class="docs-breadcrumbs" aria-label="Breadcrumb">
+                <a href="/blog/">blog</a>
+                <span aria-hidden="true">/</span>
+                <span aria-current="page">{{ page.title }}</span>
+            </nav>
             <h1 class="docs-page-title">{{ page.title }}</h1>
             {% if page.date %}
                 <p class="docs-section-intro">{{ page.date | date(format="%B %d, %Y") }}</p>
@@ -61,11 +60,16 @@
         </article>
         <aside class="docs-sidebar docs-sidebar--page"
                aria-label="Post table of contents">
-            <h2 class="docs-sidebar-title">On this page</h2>
-            {% if page.toc and page.toc | length > 0 %}
-                {{ self::render_page_toc(items=page.toc) }}
-            {% else %}
-                <p class="docs-outline-empty">No headings in this post.</p>
-            {% endif %}
+            <details class="docs-nav-disclosure" data-responsive-details open>
+                <summary>On this page</summary>
+                <div class="docs-nav-disclosure-content">
+                    <h2 class="docs-sidebar-title">On this page</h2>
+                    {% if page.toc and page.toc | length > 0 %}
+                        {{ navigation::render_page_toc(items=page.toc) }}
+                    {% else %}
+                        <p class="docs-outline-empty">No headings in this post.</p>
+                    {% endif %}
+                </div>
+            </details>
         </aside>
     {% endblock content %}

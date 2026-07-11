@@ -24,10 +24,27 @@ documentation maintainable as it grows.
 
 - Set `sort_by = "weight"` and define page `weight` values for intentional ordering.
 - Keep `page_template` on the docs section so all guides share a consistent layout.
-- Keep `build_search_index = true` and the `[search]` configuration in `config.toml` so
-  the documentation sidebar search remains available.
-- Keep documentation pages in the search index. When adding non-docs content, verify
-  that the client-side result filter still limits the docs search to `/docs/` routes.
+- Keep `build_search_index = true`, use the `fuse_json` format in the `[search]`
+  configuration, and keep documentation pages in the index.
+- The shared navigation searches documentation, feature pages, and blog posts. The
+  documentation sidebar uses the same generated index and filters its results to
+  `/docs/` routes.
+
+## Preserve the Site Design System
+
+- Treat `sass/site.scss` as the source of truth for semantic color, typography, radius,
+  layout, and motion tokens. Extend an existing token before adding a raw visual value.
+- Keep the terminal identity in the ASCII mark, monospace labels, code, prompts, and
+  demo frames. Use the sans-serif stack for prose and larger interface headings.
+- Use `--color-text` for primary content, `--color-muted` for supporting prose, and
+  `--color-dim` only for short metadata. Interactive boundaries should use
+  `--color-border-strong`, and keyboard focus should use `--color-focus`.
+- Preserve the shared `:focus-visible` treatment and test both the `hacker` and `dark`
+  themes when adding controls.
+- Keep animated feature images behind the `data-motion-demo` loader so off-screen media
+  remains deferred. Pair each GIF with a same-named PNG poster so
+  `prefers-reduced-motion` users receive a meaningful static preview. Regenerate and
+  visually inspect the poster whenever its GIF changes.
 
 ## Scale with Nested Sections
 

@@ -1,0 +1,15 @@
+{# Render a recursive page outline shared by documentation and blog pages. #}
+{% macro render_page_toc(items, nested=false) %}
+    {% if items | length > 0 %}
+        <ul class="docs-outline-list {% if nested %}docs-outline-list--nested{% endif %}">
+            {% for heading in items %}
+                <li class="docs-outline-item">
+                    <a class="docs-outline-link" href="{{ heading.permalink | safe }}">{{ heading.title }}</a>
+                    {% if heading.children | length > 0 %}
+                        {{ navigation::render_page_toc(items=heading.children, nested=true) }}
+                    {% endif %}
+                </li>
+            {% endfor %}
+        </ul>
+    {% endif %}
+{% endmacro render_page_toc %}
