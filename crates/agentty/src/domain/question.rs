@@ -5,6 +5,18 @@ pub use ag_protocol::QuestionItem;
 
 use crate::domain::input::InputState;
 
+/// Returns the initial highlighted option for a clarification question.
+///
+/// Questions with predefined options begin on the first option; free-text
+/// questions begin with no highlighted option.
+#[must_use]
+pub fn default_option_index(questions: &[QuestionItem], question_index: usize) -> Option<usize> {
+    questions
+        .get(question_index)
+        .filter(|item| !item.options.is_empty())
+        .map(|_| 0)
+}
+
 /// Partially answered clarification state saved when the user leaves question
 /// mode for the sessions list.
 ///

@@ -1,5 +1,4 @@
 use ag_forge::RequestedReview;
-use ratatui::layout::Rect;
 
 use super::help_action::{
     self, HelpAction, ViewActionAvailability, ViewHelpState, ViewSessionState,
@@ -50,9 +49,18 @@ impl ConfirmationViewMode {
 /// Cached scroll bounds for the current diff selection and content area.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DiffScrollCache {
-    pub content_area: Rect,
+    pub content_area: ViewportRect,
     pub file_explorer_selected_index: usize,
     pub max_scroll_offset: u16,
+}
+
+/// Frontend-neutral rectangular viewport coordinates.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ViewportRect {
+    pub height: u16,
+    pub width: u16,
+    pub x: u16,
+    pub y: u16,
 }
 
 /// Selects which content pane is shown on the right side of the diff page.

@@ -165,13 +165,12 @@ impl App {
         let system_logs = Self::startup_system_logs(clock.as_ref(), projects.project_name());
 
         Ok(Self {
-            mode: crate::ui::state::app_mode::AppMode::List,
+            mode: crate::presentation::app_mode::AppMode::List,
             needs_redraw: true,
             settings,
             tabs: crate::app::tab::TabManager::new(initial_tab),
             assigned_issue_generation: 0,
             assigned_issue_selected_index: None,
-            assigned_issue_table_state: ratatui::widgets::TableState::default(),
             assigned_issues: crate::app::AssignedIssueState::default(),
             projects,
             services,
@@ -181,13 +180,11 @@ impl App {
             requested_review_generation: 0,
             requested_review_comment_fetches: std::collections::HashSet::new(),
             requested_review_selected_index: None,
-            requested_review_table_state: ratatui::widgets::TableState::default(),
             requested_reviews: crate::app::RequestedReviewState::default(),
             event_rx,
             review_cache,
             latest_available_version: None,
             last_seen_session_update_versions: std::collections::HashMap::new(),
-            render_cache_store: crate::ui::RenderCacheStore::default(),
             merge_queue: crate::app::merge_queue::MergeQueue::default(),
             session_progress_messages: std::collections::HashMap::new(),
             system_log_tail_offset: 0,

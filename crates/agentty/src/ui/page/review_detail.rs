@@ -5,7 +5,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use crate::ui::state::help_action;
+use crate::presentation::help_action;
 use crate::ui::{Page, layout, markdown, review_comment_format, style};
 
 /// Page renderer for one requested PR or MR review summary, comments, and
@@ -454,7 +454,7 @@ fn section_label(label: &'static str) -> Line<'static> {
 
 /// Builds the review-detail footer with the currently supported action.
 fn review_detail_footer_line() -> Line<'static> {
-    help_action::footer_line(&[
+    crate::ui::help_format::footer_line(&[
         help_action::HelpAction::new("back", "q", "Back"),
         help_action::HelpAction::new("scroll", "j/k", "Scroll"),
         help_action::HelpAction::new("page", "Ctrl+d/u", "Page"),

@@ -7,8 +7,8 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::session::{Session, SessionSize, Status};
 use crate::domain::session_order::{self, GroupedSessionRow, SessionGroup, SessionTreePosition};
+use crate::presentation::help_action;
 use crate::ui::input_layout::first_table_column_width;
-use crate::ui::state::help_action;
 use crate::ui::text_util::{format_duration_compact, inline_text, truncate_spans_with_ellipsis};
 use crate::ui::{Page, layout, markdown, style};
 
@@ -127,7 +127,7 @@ fn session_list_help_line(selected_session: Option<&Session>) -> Line<'static> {
         can_open_selected_session,
     );
 
-    help_action::footer_line(&actions)
+    crate::ui::help_format::footer_line(&actions)
 }
 
 /// Prepares list table state for grouped row rendering.

@@ -1,4 +1,3 @@
-use ratatui::widgets::TableState;
 use tracing::warn;
 
 use crate::app::AppServices;
@@ -6,6 +5,7 @@ use crate::domain::agent::{
     self, AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ReasoningLevel,
 };
 use crate::domain::input::InputState;
+use crate::domain::selection::SelectionState;
 use crate::domain::setting::SettingName;
 use crate::domain::theme::ColorTheme;
 use crate::infra::db::AppRepositories;
@@ -313,8 +313,8 @@ pub struct SettingsManager {
     ///
     /// Currently applied to Codex and Claude turns.
     pub reasoning_level: ReasoningLevel,
-    /// Table selection state for the settings page.
-    pub table_state: TableState,
+    /// Frontend-neutral selected-row state for the settings page.
+    pub table_state: SelectionState,
     /// Active terminal color theme for the whole application.
     pub theme: ColorTheme,
     available_agent_kinds: Vec<AgentKind>,
@@ -383,7 +383,7 @@ impl SettingsManager {
         .await;
         let theme = load_theme_setting(services).await;
 
-        let mut table_state = TableState::default();
+        let mut table_state = SelectionState::default();
         table_state.select(Some(0));
 
         Self {
@@ -1613,11 +1613,11 @@ mod tests {
     use ag_agent::MockAppServerClient;
     use ag_forge as forge;
     use ag_git as git;
-    use ratatui::widgets::TableState;
     use tokio::sync::mpsc;
 
     use super::*;
     use crate::db::AppRepositories;
+    use crate::domain::selection::SelectionState;
     use crate::infra::fs;
 
     /// Builds app services backed by an in-memory database for settings tests.
@@ -1654,7 +1654,7 @@ mod tests {
     }
 
     fn new_settings_manager() -> SettingsManager {
-        let mut table_state = TableState::default();
+        let mut table_state = SelectionState::default();
         table_state.select(Some(0));
 
         SettingsManager {

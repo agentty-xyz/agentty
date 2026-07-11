@@ -29,7 +29,6 @@ use app::setting::SettingsManager;
 use app::sync::SyncMainRunner;
 use app::tab::{Tab, TabManager};
 use app::{sync, task};
-use ratatui::widgets::TableState;
 use session::StatusTransition;
 #[cfg(test)]
 use session::{SyncMainOutcome, SyncSessionStartError, TurnAppliedState};
@@ -38,6 +37,7 @@ use tokio::sync::mpsc;
 use super::events::AppEvent;
 #[cfg(test)]
 use super::events::{AppEventBatch, ReviewRequestStatusUpdate};
+use crate::app;
 use crate::app::{AppError, AssignedIssueState, RequestedReviewState, session};
 #[cfg(test)]
 use crate::domain::agent::AgentCliInfo;
@@ -45,7 +45,7 @@ use crate::domain::agent::AgentCliInfo;
 use crate::domain::agent::AgentSelection;
 use crate::domain::agent::{AgentKind, ReasoningLevel};
 use crate::domain::input::InputState;
-use crate::domain::question::{QuestionItem, QuestionProgress};
+use crate::domain::question::{QuestionItem, QuestionProgress, default_option_index};
 use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, Session, SessionId, Status};
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::setting::SettingName;
@@ -59,9 +59,7 @@ use crate::infra::db;
 use crate::infra::fs::{FsClient, RealFsClient};
 use crate::infra::project_discovery::{ProjectDiscoveryClient, RealProjectDiscoveryClient};
 use crate::infra::tmux::{RealTmuxClient, TmuxClient};
-use crate::runtime::mode::{at_mention, question};
-use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, QuestionFocus};
-use crate::{app, ui};
+use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, QuestionFocus};
 
 /// Relative directory name used for session git worktrees within the
 /// `agentty` home directory.
@@ -204,10 +202,8 @@ pub struct App {
     pub(super) assigned_issue_generation: u64,
     /// Selected assigned-issue item index for the top-level `Issues` tab.
     pub(super) assigned_issue_selected_index: Option<usize>,
-    /// Persistent table viewport state for the top-level `Issues` tab.
-    pub(super) assigned_issue_table_state: TableState,
     /// Caches open GitHub issues assigned to the authenticated user.
-    pub(super) assigned_issues: AssignedIssueState,
+    pub(crate) assigned_issues: AssignedIssueState,
     /// Saves partially answered clarification progress per session so
     /// already-submitted answers survive leaving question mode with `q` and
     /// reopening the session. Entries are consumed on restore and cleared
@@ -248,11 +244,9 @@ pub struct App {
     pub(super) requested_review_comment_fetches: HashSet<RequestedReviewCommentFetchKey>,
     /// Selected requested-review item index for the active project's
     /// top-level `Review` tab, excluding non-selectable section headers.
-    pub(super) requested_review_selected_index: Option<usize>,
-    /// Persistent table viewport state for the top-level `Review` tab.
-    pub(super) requested_review_table_state: TableState,
+    pub(crate) requested_review_selected_index: Option<usize>,
     /// Caches requested PR/MR reviews for the active project's `Review` tab.
-    pub(super) requested_reviews: RequestedReviewState,
+    pub(crate) requested_reviews: RequestedReviewState,
     /// Number of log output lines between the visible window and the newest
     /// log lines. `0` keeps the logs page tailed to the newest events.
     pub(crate) system_log_tail_offset: u16,
@@ -260,22 +254,20 @@ pub struct App {
     pub(super) event_rx: mpsc::UnboundedReceiver<AppEvent>,
     /// Stores the latest available stable `agentty` version when one is
     /// detected.
-    pub(super) latest_available_version: Option<String>,
+    pub(crate) latest_available_version: Option<String>,
     /// Serializes local merge requests so only one merge workflow runs at a
     /// time.
     pub(super) merge_queue: MergeQueue,
     /// Tracks per-session thinking text rendered while background work is
     /// active.
-    pub(super) session_progress_messages: HashMap<SessionId, String>,
+    pub(crate) session_progress_messages: HashMap<SessionId, String>,
     /// Interacts with tmux panes for session-specific terminal workflows.
     pub(super) tmux_client: Arc<dyn TmuxClient>,
-    /// Owns UI render caches used by frame rendering and scroll-metric paths.
-    pub(super) render_cache_store: ui::RenderCacheStore,
     /// Tracks the last reduced observable-handle version for each session so
     /// stale `SessionUpdated` events do not trigger redundant redraws.
-    pub(super) last_seen_session_update_versions: HashMap<SessionId, u64>,
+    pub(crate) last_seen_session_update_versions: HashMap<SessionId, u64>,
     /// Stores the current auto-update progress state when an update is running.
-    pub(super) update_status: Option<UpdateStatus>,
+    pub(crate) update_status: Option<UpdateStatus>,
 }
 
 impl App {
@@ -365,7 +357,6 @@ impl App {
         mut items: Vec<RequestedReview>,
     ) {
         items.sort_by_key(|item| Self::requested_review_audience_order(item.audience));
-        self.reset_requested_review_table_state();
         self.requested_review_selected_index = (!items.is_empty()).then_some(0);
         self.requested_reviews = RequestedReviewState::Loaded { items, project_id };
     }
@@ -379,7 +370,6 @@ impl App {
     /// Replaces the assigned-issue list and selects the first issue when
     /// available.
     pub(crate) fn replace_assigned_issues(&mut self, project_id: i64, items: Vec<AssignedIssue>) {
-        self.reset_assigned_issue_table_state();
         self.assigned_issue_selected_index = (!items.is_empty()).then_some(0);
         self.assigned_issues = AssignedIssueState::Loaded { items, project_id };
     }
@@ -415,12 +405,6 @@ impl App {
             Some(0) | None => item_count - 1,
             Some(index) => index - 1,
         });
-    }
-
-    /// Clears the persisted review-list table viewport after loading state,
-    /// project, or result changes.
-    pub(super) fn reset_requested_review_table_state(&mut self) {
-        self.requested_review_table_state = TableState::default();
     }
 
     /// Moves selection to the next requested review in the `Inbox` tab.
@@ -645,7 +629,6 @@ impl App {
 
         self.requested_review_generation = self.requested_review_generation.saturating_add(1);
         let generation = self.requested_review_generation;
-        self.reset_requested_review_table_state();
         self.requested_review_selected_index = None;
         self.clear_requested_review_comment_fetches_for_project(project_id);
         self.requested_reviews = RequestedReviewState::Loading {
@@ -687,7 +670,6 @@ impl App {
 
         self.assigned_issue_generation = self.assigned_issue_generation.saturating_add(1);
         let generation = self.assigned_issue_generation;
-        self.reset_assigned_issue_table_state();
         self.assigned_issue_selected_index = None;
         self.assigned_issues = AssignedIssueState::Loading {
             generation,
@@ -702,11 +684,6 @@ impl App {
             self.services.review_request_client(),
         );
         self.mark_dirty();
-    }
-
-    /// Clears the persisted issue-list table viewport after state changes.
-    pub(super) fn reset_assigned_issue_table_state(&mut self) {
-        self.assigned_issue_table_state = TableState::default();
     }
 
     /// Returns the loaded assigned-issue row count when a row can be selected.
@@ -848,8 +825,8 @@ impl App {
 
         self.mode = AppMode::Prompt {
             at_mention_state: None,
-            attachment_state: crate::ui::state::prompt::PromptAttachmentState::default(),
-            history_state: crate::ui::state::prompt::PromptHistoryState::new(Vec::new()),
+            attachment_state: crate::presentation::prompt::PromptAttachmentState::default(),
+            history_state: crate::presentation::prompt::PromptHistoryState::new(Vec::new()),
             slash_state: self.prompt_slash_state(),
             session_id: SessionId::from(session_id.as_str()),
             input: InputState::default(),
@@ -1141,12 +1118,6 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// Returns the UI-owned render cache store used by scroll metrics and
-    /// frame rendering.
-    pub(crate) fn render_cache_store(&self) -> &ui::RenderCacheStore {
-        &self.render_cache_store
-    }
-
     /// Returns the selected follow-up task action for one session, if that
     /// session currently exposes follow-up tasks.
     pub(crate) fn selected_follow_up_task_action(
@@ -1220,7 +1191,7 @@ impl App {
             .await;
 
         if let Some(session_id) = session_id {
-            at_mention::clear_pending_load(&session_id);
+            app::at_mention_task::clear_pending_load(&session_id);
             self.review_cache.remove(&session_id);
         }
 
@@ -1238,7 +1209,7 @@ impl App {
             .await;
 
         if let Some(session_id) = session_id {
-            at_mention::clear_pending_load(&session_id);
+            app::at_mention_task::clear_pending_load(&session_id);
             self.review_cache.remove(&session_id);
         }
 
@@ -1836,7 +1807,7 @@ impl App {
                 0,
                 InputState::default(),
                 Vec::new(),
-                question::default_option_index(&questions, 0),
+                default_option_index(&questions, 0),
             ),
         };
 

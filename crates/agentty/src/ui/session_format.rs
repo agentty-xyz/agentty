@@ -11,8 +11,8 @@ use crate::domain::review;
 use crate::domain::session::{
     COMMITTING_PROGRESS_LABEL, PublishedBranchSyncStatus, Session, Status,
 };
+use crate::presentation::help_action::{self, ViewHelpState};
 use crate::ui::icon::Icon;
-use crate::ui::state::help_action::{self, ViewHelpState};
 use crate::ui::{markdown, style, text_util};
 
 const REVIEW_SUGGESTIONS_HEADER: &str = "### Suggestions";
@@ -162,7 +162,7 @@ fn session_metadata_base_text(
 
 /// Builds the footer help line shown in session view mode.
 pub(crate) fn session_view_footer_line(view_help_state: ViewHelpState) -> Line<'static> {
-    help_action::footer_line(&help_action::view_footer_actions(view_help_state))
+    crate::ui::help_format::footer_line(&help_action::view_footer_actions(view_help_state))
 }
 
 /// Renders persisted summary payloads into display markdown.

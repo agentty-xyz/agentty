@@ -15,15 +15,16 @@ use crate::app::{
 use crate::domain::input::InputState;
 use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, SessionId, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
+use crate::presentation::app_mode::{
+    AppMode, ConfirmationIntent, ConfirmationViewMode, DiffRightPanel, HelpContext,
+};
+use crate::presentation::help_action::{self, ViewSessionState};
+use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState};
 use crate::runtime::EventResult;
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
 use crate::runtime::mode::input_key::is_insertable_char_key;
 use crate::runtime::mode::{prompt, session_output_metric};
-use crate::ui::state::app_mode::{
-    AppMode, ConfirmationIntent, ConfirmationViewMode, DiffRightPanel, HelpContext,
-};
-use crate::ui::state::help_action::{self, ViewSessionState};
-use crate::ui::state::prompt::{PromptAttachmentState, PromptHistoryState};
+use crate::ui::RenderCacheStore;
 
 #[derive(Clone)]
 struct ViewContext {
@@ -197,8 +198,9 @@ const REVIEW_NO_DIFF_MESSAGE: &str = "No diff changes found for review.";
 /// Processes view-mode key presses and keeps shortcut availability aligned with
 /// session status (`o` disabled outside editable/review-ready local
 /// worktrees, and diff/review available for review-ready statuses).
-pub(crate) async fn handle<B: Backend>(
+pub(crate) async fn handle_with_cache<B: Backend>(
     app: &mut App,
+    render_cache_store: &RenderCacheStore,
     terminal: &mut Terminal<B>,
     key: KeyEvent,
 ) -> io::Result<EventResult>
@@ -208,7 +210,7 @@ where
     let Some(view_context) = view_context(app) else {
         return Ok(EventResult::Continue);
     };
-    let view_metrics = view_metrics(app, terminal, &view_context)?;
+    let view_metrics = view_metrics(app, render_cache_store, terminal, &view_context)?;
     let mut pending_update = ViewPendingUpdate::from_context(&view_context);
 
     let Some(view_session_snapshot) = view_session_snapshot(app, &view_context) else {
@@ -227,6 +229,18 @@ where
     apply_view_scroll_and_output_mode(app, pending_update.scroll_offset);
 
     Ok(EventResult::Continue)
+}
+
+#[cfg(test)]
+async fn handle<B: Backend>(
+    app: &mut App,
+    terminal: &mut Terminal<B>,
+    key: KeyEvent,
+) -> io::Result<EventResult>
+where
+    B::Error: std::error::Error + Send + Sync + 'static,
+{
+    handle_with_cache(app, &RenderCacheStore::default(), terminal, key).await
 }
 
 /// Applies one view-mode key press and updates pending output/scroll state.
@@ -1009,6 +1023,7 @@ fn view_context(app: &mut App) -> Option<ViewContext> {
 
 fn view_metrics<B: Backend>(
     app: &App,
+    render_cache_store: &RenderCacheStore,
     terminal: &Terminal<B>,
     view_context: &ViewContext,
 ) -> io::Result<ViewMetrics>
@@ -1019,8 +1034,9 @@ where
     let view_height = terminal_size.height.saturating_sub(5);
     let output_width = terminal_size.width.saturating_sub(2);
     let (review_status_message, review_text) = app.review_view_state(&view_context.session_id);
-    let total_lines = session_output_metric::rendered_output_line_count(
+    let total_lines = session_output_metric::rendered_output_line_count_with_cache(
         app,
+        render_cache_store,
         &view_context.session_id,
         view_context.session_index,
         review_status_message.as_deref(),
@@ -2020,6 +2036,7 @@ mod tests {
         );
         app.sessions.sessions_mut()[0].status = Status::AgentReview;
         let output_width = 14;
+        let render_cache_store = RenderCacheStore::default();
         let session = &app.sessions.sessions()[0];
         let expected = SessionChatPage::rendered_output_line_count(
             session,
@@ -2032,8 +2049,8 @@ mod tests {
                 review_text: None,
                 session_update_version: app.session_update_version(&session_id),
             },
-            app.render_cache_store().markdown_render_cache(),
-            app.render_cache_store().session_output_layout_cache(),
+            render_cache_store.markdown_render_cache(),
+            render_cache_store.session_output_layout_cache(),
         );
 
         // Act

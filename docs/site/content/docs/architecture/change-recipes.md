@@ -61,8 +61,10 @@ through the correct modules without crossing layer boundaries.
 1. Add the page in `crates/agentty/src/ui/page/` or component in
    `crates/agentty/src/ui/component/`.
 1. Wire the page into `crates/agentty/src/ui/router.rs`.
-1. If a new `AppMode` is needed, extend `crates/agentty/src/ui/state/app_mode.rs` and
-   add a key handler in `crates/agentty/src/runtime/mode/`.
+1. If a new `AppMode` is needed, extend the shared presentation contract implemented in
+   `crates/agentty/src/ui/state/app_mode.rs` and exported through
+   `crates/agentty/src/presentation.rs`, then add a key handler in
+   `crates/agentty/src/runtime/mode/`.
 
 ## Contributor Checklist for Architecture-Safe Changes
 

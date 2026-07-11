@@ -66,15 +66,30 @@ For file-level detail, read the module docstrings directly.
   transport internals stay private to `crates/ag-agent/`.
 - `runtime/`: Terminal lifecycle and the event loop — terminal setup, the event-reader
   thread, key dispatch, one handler per `AppMode` under `runtime/mode/`, and shared mode
-  helpers for session-output metrics.
+  helpers for session-output metrics. Runtime owns `PresentationState`, including the
+  shared `RenderCacheStore` used by input metrics and frame rendering.
+- `presentation.rs`: Frontend-neutral interaction state shared by runtime input and UI
+  output. It exposes mode, help-action, prompt, editor, scroll, viewport, and semantic
+  list-selection contracts without importing Ratatui or `ui/` formatting.
 - `ui/`: Rendering — frame composition, mode-to-page routing, pages under `ui/page/`,
-  reusable widgets under `ui/component/`, UI state under `ui/state/`, Agentty theme
-  adapters for `ag-tui-text`, plus diff, layout, review-comment formatting, and theme
-  helpers. Render caches are owned by the shared `RenderCacheStore`.
+  reusable widgets under `ui/component/`, application-to-frame projection in
+  `ui/app_render.rs`, Agentty theme adapters for `ag-tui-text`, plus diff, layout,
+  review-comment formatting, and theme helpers. `ui/state.rs` only provides
+  compatibility re-exports for the shared presentation contracts.
 
 ## Layer Rules
 
 - Workflow and state transitions live in `app/`, not in UI rendering modules.
+- `App` does not render terminal frames or own concrete render caches; runtime passes
+  its presentation cache into the UI projection boundary.
+- `App::view_snapshot()` creates the immutable borrowed application view consumed by
+  frontends. `ui/app_render.rs` receives that snapshot plus runtime-owned Ratatui state
+  and does not access the concrete `App`, services, or managers directly.
+- Application managers retain semantic selected-row indexes through
+  `domain::selection::SelectionState`; runtime owns Ratatui table viewport state and
+  synchronizes selection at the frame projection boundary.
+- `app/` must not import runtime mode handlers. Shared interaction calculations belong
+  in `domain/` or `presentation.rs`, while application task registries belong in `app/`.
 - Business entities and enums live in `domain/`.
 - External side effects live in `infra/` behind mockable traits; see
   [Testability Boundaries](@/docs/architecture/testability-boundaries.md).

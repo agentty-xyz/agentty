@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -12,8 +13,8 @@ use tokio::sync::mpsc;
 use tracing::debug;
 
 use crate::app::{App, AppEvent};
-use crate::runtime::{EventResult, FRAME_INTERVAL, key_handler, mode};
-use crate::ui::state::app_mode::AppMode;
+use crate::presentation::app_mode::AppMode;
+use crate::runtime::{EventResult, FRAME_INTERVAL, PresentationState, key_handler, mode};
 
 /// Maximum terminal input events processed in one foreground cycle.
 ///
@@ -94,6 +95,7 @@ fn spawn_event_reader_with_source(
 /// processing cycle.
 pub(crate) async fn process_events<B: Backend>(
     app: &mut App,
+    presentation: Rc<PresentationState>,
     terminal: &mut Terminal<B>,
     event_rx: &mut mpsc::UnboundedReceiver<Event>,
     tick: &mut tokio::time::Interval,
@@ -102,7 +104,9 @@ where
     B::Error: std::error::Error + Send + Sync + 'static,
 {
     process_events_with_handler(app, terminal, event_rx, tick, |app, terminal, event| {
-        Box::pin(process_event(app, terminal, event))
+        let presentation = Rc::clone(&presentation);
+
+        Box::pin(process_event(app, presentation, terminal, event))
     })
     .await
 }
@@ -202,6 +206,7 @@ where
 /// content is inserted as text instead of interpreted as navigation keys.
 async fn process_event<B: Backend>(
     app: &mut App,
+    presentation: Rc<PresentationState>,
     terminal: &mut Terminal<B>,
     event: Option<Event>,
 ) -> io::Result<EventResult>
@@ -209,7 +214,11 @@ where
     B::Error: std::error::Error + Send + Sync + 'static,
 {
     process_event_with_key_handler(app, terminal, event, |app, terminal, key| {
-        Box::pin(key_handler::handle_key_event(app, terminal, key))
+        let presentation = Rc::clone(&presentation);
+
+        Box::pin(async move {
+            key_handler::handle_key_event(app, presentation.as_ref(), terminal, key).await
+        })
     })
     .await
 }
@@ -280,8 +289,10 @@ mod tests {
     use crate::domain::input::InputState;
     use crate::domain::question::QuestionItem;
     use crate::domain::session::{Session, SessionSize, SessionStats, Status};
-    use crate::ui::state::app_mode::{AppMode, QuestionFocus};
-    use crate::ui::state::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
+    use crate::presentation::app_mode::{AppMode, QuestionFocus};
+    use crate::presentation::prompt::{
+        PromptAttachmentState, PromptHistoryState, PromptSlashState,
+    };
 
     /// Verifies the event reader forwards one queued event before stopping on
     /// a poll error.

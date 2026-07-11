@@ -25,7 +25,7 @@ use crate::domain::setting::SettingName;
 use crate::infra::db::AppRepositories;
 use crate::infra::project_discovery::{HOME_PROJECT_SCAN_MAX_RESULTS, RealProjectDiscoveryClient};
 use crate::infra::tmux::{MockTmuxClient, TmuxClient};
-use crate::ui::state::app_mode::ConfirmationViewMode;
+use crate::presentation::app_mode::ConfirmationViewMode;
 
 /// Builds one reducer-ready turn projection for tests.
 fn test_turn_applied_state(
@@ -878,7 +878,7 @@ async fn test_new_with_clients_falls_back_from_stale_active_project_and_loads_cu
         .expect("failed to create current session folder");
 
     // Act
-    let mut app = App::new_with_clients(
+    let app = App::new_with_clients(
         agentty_home.clone(),
         current_project_path.clone(),
         Some("main".to_string()),

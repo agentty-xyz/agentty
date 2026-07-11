@@ -12,7 +12,7 @@ use time::{OffsetDateTime, UtcOffset};
 use crate::domain::system_log::{
     SYSTEM_LOG_LIMIT, SystemLogBuffer, SystemLogEntry, SystemLogLevel,
 };
-use crate::ui::state::help_action;
+use crate::presentation::help_action;
 use crate::ui::text_util::inline_text;
 use crate::ui::{Page, layout, style};
 
@@ -141,11 +141,13 @@ fn top_scroll_offset(line_count: usize, viewport_height: u16, tail_offset: u16) 
 
 /// Builds the footer help content for the logs page.
 fn system_log_footer_line() -> Line<'static> {
-    let mut line = help_action::footer_line(&help_action::system_log_footer_actions());
-    line.spans.push(help_action::footer_separator_span());
-    line.spans.push(help_action::footer_muted_span(format!(
-        "keeps last {SYSTEM_LOG_LIMIT} entries in memory"
-    )));
+    let mut line = crate::ui::help_format::footer_line(&help_action::system_log_footer_actions());
+    line.spans
+        .push(crate::ui::help_format::footer_separator_span());
+    line.spans
+        .push(crate::ui::help_format::footer_muted_span(format!(
+            "keeps last {SYSTEM_LOG_LIMIT} entries in memory"
+        )));
 
     line
 }

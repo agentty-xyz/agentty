@@ -2994,13 +2994,13 @@ mod tests {
     use std::sync::Arc;
 
     use ag_forge as forge;
-    use ratatui::widgets::TableState;
     use tokio::sync::mpsc;
 
     use super::*;
     use crate::app::session::SessionDefaults;
     use crate::app::{AppEvent, AppServices, SessionState};
     use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
+    use crate::domain::selection::SelectionState;
     use crate::domain::session::{
         ForgeKind, ReviewRequestState, ReviewRequestSummary, SessionHandles,
     };
@@ -3023,7 +3023,7 @@ mod tests {
         let state = SessionState::new(
             handles,
             vec![session],
-            TableState::default(),
+            SelectionState::default(),
             Arc::new(RealClock),
             1,
             0,
@@ -4305,7 +4305,7 @@ mod tests {
         let state = SessionState::new(
             handles,
             sessions,
-            TableState::default(),
+            SelectionState::default(),
             Arc::new(RealClock),
             row_count,
             0,

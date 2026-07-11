@@ -9,8 +9,8 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding};
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::session::{Session, SessionId};
 use crate::infra::review_comment_cache::ReviewCommentCache;
+use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, DiffRightPanel, HelpContext};
 use crate::ui::router::{ListBackgroundRenderContext, render_list_background};
-use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, DiffRightPanel, HelpContext};
 use crate::ui::style::palette;
 use crate::ui::{Component, Page, SessionReviewSnapshot, component, markdown, page};
 
@@ -747,7 +747,7 @@ mod tests {
             can_start_staged_session: false,
             publish_pull_request_action: None,
             session_id: "missing-session".into(),
-            session_state: crate::ui::state::help_action::ViewSessionState::Done,
+            session_state: crate::presentation::help_action::ViewSessionState::Done,
             scroll_offset: Some(0),
         };
 

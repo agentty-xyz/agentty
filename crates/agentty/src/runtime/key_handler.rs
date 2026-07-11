@@ -9,9 +9,9 @@ use tracing::warn;
 use crate::app::{App, ReviewCacheEntry, diff_content_hash};
 use crate::domain::session::SessionId;
 use crate::domain::transcript_notice::TranscriptNotice;
+use crate::presentation::app_mode::{AppMode, ConfirmationIntent, ConfirmationViewMode};
 use crate::runtime::mode::confirmation::ConfirmationDecision;
-use crate::runtime::{EventResult, backend_err, mode};
-use crate::ui::state::app_mode::{AppMode, ConfirmationIntent, ConfirmationViewMode};
+use crate::runtime::{EventResult, PresentationState, backend_err, mode};
 
 /// Routes key events to the active mode handler and returns the next runtime
 /// action.
@@ -20,6 +20,7 @@ use crate::ui::state::app_mode::{AppMode, ConfirmationIntent, ConfirmationViewMo
 /// the updated UI state.
 pub(crate) async fn handle_key_event<B: Backend>(
     app: &mut App,
+    presentation: &PresentationState,
     terminal: &mut Terminal<B>,
     key: KeyEvent,
 ) -> io::Result<EventResult>
@@ -48,7 +49,12 @@ where
                 let terminal_rect = Rect::new(0, 0, size.width, size.height);
                 let content_area = content_area_for_terminal(terminal_rect);
 
-                Ok(mode::review_detail::handle(app, content_area, key))
+                Ok(mode::review_detail::handle_with_cache(
+                    app,
+                    presentation.render_cache_store(),
+                    content_area,
+                    key,
+                ))
             }
             AppMode::SessionCreation { .. } => {
                 unreachable!("session creation mode is handled before dispatch matching")
@@ -58,20 +64,39 @@ where
             AppMode::Confirmation { .. } => {
                 unreachable!("confirmation mode is handled before dispatch matching")
             }
-            AppMode::View { .. } => mode::session_view::handle(app, terminal, key).await,
+            AppMode::View { .. } => {
+                mode::session_view::handle_with_cache(
+                    app,
+                    presentation.render_cache_store(),
+                    terminal,
+                    key,
+                )
+                .await
+            }
             AppMode::Prompt { .. } => mode::prompt::handle(app, terminal, key).await,
             AppMode::Question { .. } => {
                 let size = terminal.size().map_err(backend_err)?;
                 let terminal_rect = Rect::new(0, 0, size.width, size.height);
 
-                Ok(mode::question::handle(app, terminal_rect, key).await)
+                Ok(mode::question::handle_with_cache(
+                    app,
+                    presentation.render_cache_store(),
+                    terminal_rect,
+                    key,
+                )
+                .await)
             }
             AppMode::Diff { .. } => {
                 let size = terminal.size().map_err(backend_err)?;
                 let terminal_rect = Rect::new(0, 0, size.width, size.height);
                 let content_area = content_area_for_terminal(terminal_rect);
 
-                Ok(mode::diff::handle(app, content_area, key))
+                Ok(mode::diff::handle_with_cache(
+                    app,
+                    presentation.render_cache_store(),
+                    content_area,
+                    key,
+                ))
             }
             AppMode::Help { .. } => Ok(mode::help::handle(app, key)),
             AppMode::LaunchConfigurationSelector { .. } => {
@@ -688,7 +713,7 @@ mod tests {
     use super::*;
     use crate::domain::session_message::SessionTranscript;
     use crate::infra::tmux::MockTmuxClient;
-    use crate::ui::state::app_mode::ConfirmationViewMode;
+    use crate::presentation::app_mode::ConfirmationViewMode;
 
     fn session_replay_text(session: &crate::domain::session::Session) -> String {
         session
@@ -939,6 +964,7 @@ mod tests {
         // Act
         let event_result = handle_key_event(
             &mut app,
+            &PresentationState::default(),
             &mut terminal,
             KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
         )

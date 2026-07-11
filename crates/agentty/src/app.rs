@@ -5,6 +5,7 @@
 
 mod assigned_issue;
 mod assist;
+pub(crate) mod at_mention_task;
 mod branch_publish;
 mod core;
 mod error;
@@ -21,8 +22,10 @@ pub mod session_state;
 pub(crate) mod setting;
 mod startup;
 mod sync;
+pub(crate) mod sync_message;
 pub(crate) mod tab;
 mod task;
+mod view;
 
 #[cfg(test)]
 pub(crate) use core::AppClients;
@@ -35,6 +38,7 @@ pub use project::ProjectManager;
 pub(crate) use requested_review::RequestedReviewState;
 pub(crate) use review::{
     ReviewCacheEntry, diff_content_hash, is_review_loading_status_message, review_loading_message,
+    review_view_state,
 };
 #[cfg(test)]
 pub(crate) use service::AppServiceDeps;
@@ -46,3 +50,4 @@ pub use setting::SettingsManager;
 #[cfg(test)]
 pub(crate) use sync::MockSyncMainRunner;
 pub use tab::{Tab, TabManager};
+pub(crate) use view::AppViewSnapshot;

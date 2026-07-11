@@ -6,8 +6,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 
 use crate::app::RequestedReviewState;
+use crate::presentation::help_action;
 use crate::ui::input_layout::first_table_column_width;
-use crate::ui::state::help_action;
 use crate::ui::text_util::{inline_text, truncate_spans_with_ellipsis};
 use crate::ui::{Page, layout, style};
 
@@ -158,16 +158,20 @@ fn is_at_display_limit(requested_reviews: &RequestedReviewState) -> bool {
 
 /// Builds the review footer, including read-only and truncation hints.
 fn review_footer_line(show_limit_hint: bool) -> Line<'static> {
-    let mut line = help_action::footer_line(&help_action::review_actions());
-    line.spans.push(help_action::footer_separator_span());
+    let mut line = crate::ui::help_format::footer_line(&help_action::review_actions());
     line.spans
-        .push(help_action::footer_muted_span("read-only forge list"));
+        .push(crate::ui::help_format::footer_separator_span());
+    line.spans.push(crate::ui::help_format::footer_muted_span(
+        "read-only forge list",
+    ));
 
     if show_limit_hint {
-        line.spans.push(help_action::footer_separator_span());
-        line.spans.push(help_action::footer_muted_span(format!(
-            "showing first {REQUESTED_REVIEW_DISPLAY_LIMIT}"
-        )));
+        line.spans
+            .push(crate::ui::help_format::footer_separator_span());
+        line.spans
+            .push(crate::ui::help_format::footer_muted_span(format!(
+                "showing first {REQUESTED_REVIEW_DISPLAY_LIMIT}"
+            )));
     }
 
     line

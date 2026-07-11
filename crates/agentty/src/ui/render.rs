@@ -13,7 +13,7 @@ use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session, SessionId};
 use crate::domain::system_log::SystemLogBuffer;
 use crate::infra::review_comment_cache::ReviewCommentCache;
-use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
+use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
 use crate::ui::{component, markdown, page, router};
 
 /// Focused-review display state projected from the app cache for one visible
@@ -99,7 +99,7 @@ pub struct RenderContext<'a> {
     /// disk, keyed by session id.
     pub session_worktree_availability: &'a HashMap<SessionId, bool>,
     /// Mutable project-scoped settings snapshot.
-    pub settings: &'a mut SettingsManager,
+    pub settings: &'a SettingsManager,
     /// Process-local retained system log entries.
     pub system_logs: &'a SystemLogBuffer,
     /// Tail-relative scroll offset for the logs page.

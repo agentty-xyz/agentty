@@ -1,45 +1,10 @@
 use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::app::App;
+#[cfg(test)]
+use crate::app::sync_message::format_sync_success_message;
+use crate::presentation::app_mode::AppMode;
 use crate::runtime::EventResult;
-use crate::ui::state::app_mode::AppMode;
-
-const SYNC_SUCCESS_HEADER: &str = "Successfully synchronized with its upstream.";
-
-/// Builds a sync completion message using markdown headers and spacing between
-/// pull/push/conflict blocks.
-pub(crate) fn format_sync_success_message(
-    pulled_summary: &str,
-    pulled_titles: &str,
-    pushed_summary: &str,
-    pushed_titles: &str,
-    conflict_summary: &str,
-) -> String {
-    let pull_section = sync_success_section(&format!("## 1. {pulled_summary}"), pulled_titles);
-    let push_section = sync_success_section(&format!("## 2. {pushed_summary}"), pushed_titles);
-    let conflict_section = sync_success_section(&format!("## 3. {conflict_summary}"), "");
-
-    [
-        SYNC_SUCCESS_HEADER,
-        &pull_section,
-        &push_section,
-        &conflict_section,
-    ]
-    .join("\n\n")
-}
-
-/// Builds one markdown sync section with a title and optional details.
-fn sync_success_section(title: &str, details: &str) -> String {
-    let mut lines = Vec::with_capacity(2);
-
-    lines.push(title.to_string());
-
-    if !details.is_empty() {
-        lines.push(details.to_string());
-    }
-
-    lines.join("\n")
-}
 
 /// Handles key input while the sync informational popup is visible.
 pub(crate) fn handle(app: &mut App, key: KeyEvent) -> EventResult {
