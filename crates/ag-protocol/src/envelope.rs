@@ -291,6 +291,7 @@ mod tests {
         assert!(rendered_prompt.contains("```mermaid"));
         assert!(rendered_prompt.contains("put the diagram only in `answer`"));
         assert!(normalized_rendered_prompt.contains("start the opening fence at column 1"));
+        assert!(rendered_prompt.contains("recognizes Mermaid diagrams only in this fenced"));
         assert!(rendered_prompt.contains("Do not emit Mermaid as plain text"));
         assert!(rendered_prompt.contains("Supported mermaid syntax"));
         assert!(normalized_rendered_prompt.contains("Do not create commits"));
