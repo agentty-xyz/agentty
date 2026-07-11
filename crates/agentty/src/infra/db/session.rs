@@ -1187,7 +1187,7 @@ SELECT session.base_branch AS base_branch,
 FROM session
 LEFT JOIN session_review_request
 ON session_review_request.session_id = session.id
-ORDER BY session.updated_at DESC, session.id
+ORDER BY session.updated_at DESC, session.created_at DESC, session.id
 ",
         )
         .fetch_all(&self.0)
@@ -1238,7 +1238,7 @@ FROM session
 LEFT JOIN session_review_request
 ON session_review_request.session_id = session.id
 WHERE session.project_id = ?
-ORDER BY session.updated_at DESC, session.id
+ORDER BY session.updated_at DESC, session.created_at DESC, session.id
 ",
         )
         .bind(project_id)
@@ -2655,6 +2655,57 @@ WHERE id = ?
         assert_eq!(fork_reset_row.in_progress_started_at, None);
         assert_eq!(fork_reset_row.in_progress_total_seconds, 0);
         assert_eq!(fork_review_request, None);
+    }
+
+    #[tokio::test]
+    async fn test_load_sessions_uses_created_at_to_break_updated_at_ties() {
+        // Arrange
+        let (database, pool) = AppRepositories::in_memory_with_pool().await;
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/project", None)
+            .await
+            .expect("failed to upsert project");
+        for session_id in ["a-older", "z-newer"] {
+            database
+                .sessions()
+                .insert_session(session_id, "gpt-5.5", "main", "Review", project_id)
+                .await
+                .expect("failed to insert session");
+        }
+        sqlx::query(
+            r"
+UPDATE session
+SET created_at = CASE id WHEN 'a-older' THEN 100 ELSE 200 END,
+    updated_at = 300
+WHERE id IN ('a-older', 'z-newer')
+",
+        )
+        .execute(&pool)
+        .await
+        .expect("failed to set session timestamps");
+
+        // Act
+        let all_session_ids = database
+            .sessions()
+            .load_sessions()
+            .await
+            .expect("failed to load sessions")
+            .into_iter()
+            .map(|session| session.id)
+            .collect::<Vec<_>>();
+        let project_session_ids = database
+            .sessions()
+            .load_sessions_for_project(project_id)
+            .await
+            .expect("failed to load project sessions")
+            .into_iter()
+            .map(|session| session.id)
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(all_session_ids, ["z-newer", "a-older"]);
+        assert_eq!(project_session_ids, ["z-newer", "a-older"]);
     }
 
     #[tokio::test]

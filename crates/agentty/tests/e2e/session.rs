@@ -534,6 +534,52 @@ fn seed_session_with_reasoning_level(env: &BuilderEnv) -> Result<(), Box<dyn std
     Ok(())
 }
 
+/// Seeds sessions whose matching update times require creation-time ordering.
+fn seed_sessions_with_matching_update_times(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    common::seed_session(
+        env,
+        SessionSeed::regular("a-older", "gpt-5.5", "main", "Review")
+            .with_title("Older created session"),
+    )?;
+    common::seed_session(
+        env,
+        SessionSeed::regular("z-newer", "gpt-5.5", "main", "Review")
+            .with_title("Newer created session"),
+    )?;
+
+    let runtime = common::seed_runtime()?;
+    runtime.block_on(async {
+        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
+        let mut connection = SqliteConnectOptions::new()
+            .filename(&db_path)
+            .connect()
+            .await?;
+        let query = sqlx::query(
+            r"
+UPDATE session
+SET created_at = CASE id WHEN 'a-older' THEN 100 ELSE 200 END,
+    updated_at = 300
+WHERE id IN ('a-older', 'z-newer')
+",
+        );
+        connection.execute(query).await?;
+        connection.close().await?;
+
+        Result::<(), Box<dyn std::error::Error>>::Ok(())
+    })?;
+
+    for session_id in ["a-older", "z-newer"] {
+        std::fs::create_dir_all(test_support::session_folder(
+            &env.agentty_root.join("wt"),
+            session_id,
+        ))?;
+    }
+
+    Ok(())
+}
+
 /// Adds a Gemini CLI stub that intentionally exits with failure.
 ///
 /// Picker tests only need the executable to exist on `PATH`; using a failing
@@ -1038,6 +1084,45 @@ fn session_list_model_reasoning_level() -> E2eResult {
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "gpt-5.5 [medium]", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify matching update times fall back to newest creation time first.
+#[test]
+fn session_list_matching_update_times_use_creation_order() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_list_creation_order")
+        .with_git()
+        .setup(seed_sessions_with_matching_update_times)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .wait_for_text("Newer created session", 5000)
+                    .capture_labeled(
+                        "creation_order",
+                        "Matching update times ordered by creation time",
+                    )
+            },
+            |frame, _report| {
+                let newer_row = frame
+                    .find_text("Newer created session")
+                    .first()
+                    .expect("missing newer session row")
+                    .rect
+                    .row;
+                let older_row = frame
+                    .find_text("Older created session")
+                    .first()
+                    .expect("missing older session row")
+                    .rect
+                    .row;
+
+                assert!(newer_row < older_row);
             },
         )?;
 
