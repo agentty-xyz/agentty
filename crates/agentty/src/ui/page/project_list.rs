@@ -10,12 +10,12 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, 
 use crate::domain::agent::{AgentCliInfo, AgentCliVersion};
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::DailyActivity;
+use crate::presentation::help_action;
 use crate::ui::activity_heatmap::{
     RecentActivityStats, build_activity_heatmap_grid, build_recent_activity_stats,
     build_visible_heatmap_month_row, current_day_key_local, heatmap_intensity_level,
     heatmap_max_count, visible_heatmap_week_count,
 };
-use crate::ui::state::help_action;
 use crate::ui::{Page, layout, style, text_util};
 
 const DAY_LABELS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -408,7 +408,7 @@ fn stat_value_span(text: impl Into<String>) -> Span<'static> {
 
 /// Returns the footer help content rendered below the projects table.
 fn project_list_footer_line() -> Line<'static> {
-    help_action::footer_line(&help_action::project_list_footer_actions())
+    crate::ui::help_format::footer_line(&help_action::project_list_footer_actions())
 }
 
 /// Returns project row display values for reuse and testing.
@@ -873,7 +873,8 @@ mod tests {
     #[test]
     fn test_project_list_footer_line_matches_project_shortcuts() {
         // Arrange
-        let expected_line = help_action::footer_line(&help_action::project_list_footer_actions());
+        let expected_line =
+            crate::ui::help_format::footer_line(&help_action::project_list_footer_actions());
 
         // Act
         let footer_line = project_list_footer_line();

@@ -63,17 +63,23 @@ impl Page for IssuePage<'_> {
             }
         }
 
-        let mut footer = help_action::footer_line(&help_action::issue_actions());
-        footer.spans.push(help_action::footer_separator_span());
+        let mut footer = crate::ui::help_format::footer_line(&help_action::issue_actions());
         footer
             .spans
-            .push(help_action::footer_muted_span("list only"));
+            .push(crate::ui::help_format::footer_separator_span());
+        footer
+            .spans
+            .push(crate::ui::help_format::footer_muted_span("list only"));
         if matches!(self.assigned_issues, AssignedIssueState::Loaded { items, .. } if items.len() >= ASSIGNED_ISSUE_DISPLAY_LIMIT)
         {
-            footer.spans.push(help_action::footer_separator_span());
-            footer.spans.push(help_action::footer_muted_span(format!(
-                "showing first {ASSIGNED_ISSUE_DISPLAY_LIMIT}"
-            )));
+            footer
+                .spans
+                .push(crate::ui::help_format::footer_separator_span());
+            footer
+                .spans
+                .push(crate::ui::help_format::footer_muted_span(format!(
+                    "showing first {ASSIGNED_ISSUE_DISPLAY_LIMIT}"
+                )));
         }
         frame.render_widget(Paragraph::new(footer), areas.footer_area);
     }

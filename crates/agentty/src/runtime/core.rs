@@ -3,6 +3,7 @@
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
@@ -13,7 +14,7 @@ use tokio::sync::mpsc;
 
 use crate::app::App;
 use crate::infra::clock::Clock;
-use crate::runtime::{FRAME_INTERVAL, event, terminal};
+use crate::runtime::{FRAME_INTERVAL, PresentationState, event, terminal};
 
 /// Fallback redraw cadence for visible spinner and timer UI when no new
 /// events arrive.
@@ -111,6 +112,7 @@ where
         clock,
         event_rx,
         last_draw_at,
+        presentation: Rc::new(PresentationState::default()),
         terminal,
         tick,
     };
@@ -124,6 +126,7 @@ struct MainLoopState<'a, B: Backend> {
     clock: Arc<dyn Clock>,
     event_rx: &'a mut mpsc::UnboundedReceiver<crossterm::event::Event>,
     last_draw_at: Instant,
+    presentation: Rc<PresentationState>,
     terminal: &'a mut Terminal<B>,
     tick: &'a mut tokio::time::Interval,
 }
@@ -147,9 +150,17 @@ where
             self.terminal,
             self.clock.as_ref(),
             &mut self.last_draw_at,
+            self.presentation.as_ref(),
         )?;
 
-        event::process_events(self.app, self.terminal, self.event_rx, self.tick).await
+        event::process_events(
+            self.app,
+            Rc::clone(&self.presentation),
+            self.terminal,
+            self.event_rx,
+            self.tick,
+        )
+        .await
     }
 }
 
@@ -182,6 +193,7 @@ fn render_frame<B: Backend>(
     terminal: &mut Terminal<B>,
     clock: &dyn Clock,
     last_draw_at: &mut Instant,
+    presentation: &PresentationState,
 ) -> io::Result<()>
 where
     B::Error: std::error::Error + Send + Sync + 'static,
@@ -192,8 +204,23 @@ where
         return Ok(());
     }
 
+    let mut assigned_issue_table_state = presentation.assigned_issue_table_state();
+    let mut project_table_state = presentation.project_table_state();
+    let mut requested_review_table_state = presentation.requested_review_table_state();
+    let mut session_table_state = presentation.session_table_state();
+    let snapshot = app.view_snapshot();
     terminal
-        .draw(|frame| app.draw(frame))
+        .draw(|frame| {
+            crate::ui::render_app(
+                &snapshot,
+                frame,
+                &mut assigned_issue_table_state,
+                &mut project_table_state,
+                presentation.render_cache_store(),
+                &mut requested_review_table_state,
+                &mut session_table_state,
+            );
+        })
         .map_err(backend_err)?;
     app.clear_redraw();
     *last_draw_at = clock.now_instant();
@@ -224,8 +251,8 @@ mod tests {
     use crate::app::AppEvent;
     use crate::domain::session::{SessionHandles, Status};
     use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
+    use crate::presentation::app_mode::AppMode;
     use crate::test_support::SessionFixtureBuilder;
-    use crate::ui::state::app_mode::AppMode;
 
     /// Test-only loop state that records call counts and scripted outcomes.
     struct TestLoopState {
@@ -562,6 +589,7 @@ mod tests {
             clock,
             event_rx: &mut event_rx,
             last_draw_at,
+            presentation: Rc::new(PresentationState::default()),
             terminal: &mut terminal,
             tick: &mut tick,
         };

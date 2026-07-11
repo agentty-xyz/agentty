@@ -27,18 +27,18 @@ use crate::app::session::{
     StatusTransition, SyncMainOutcome, SyncSessionStartError, TurnAppliedState,
 };
 use crate::app::session_state::SessionGitStatus;
-use crate::app::{self, session};
+use crate::app::{self, session, sync_message};
 use crate::domain::agent::AgentCliInfo;
-use crate::domain::file_entry::FileEntry;
+use crate::domain::file_entry::{FileEntry, at_mention_lookup_root};
 use crate::domain::input::InputState;
+use crate::domain::question::default_option_index;
 use crate::domain::session::{
     PublishBranchAction, PublishedBranchSyncStatus, SessionId, SessionSize, Status,
 };
 use crate::domain::system_log::{SystemLogCategory, SystemLogEvent, SystemLogLevel};
 use crate::domain::transcript_notice::TranscriptNotice;
-use crate::runtime::mode::{at_mention, question, sync_blocked};
-use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, QuestionFocus};
-use crate::ui::state::prompt::PromptAtMentionState;
+use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, QuestionFocus};
+use crate::presentation::prompt::PromptAtMentionState;
 
 /// Internal app events emitted by background workers and workflows.
 ///
@@ -1079,7 +1079,6 @@ impl App {
             match result {
                 Ok(items) => self.replace_assigned_issues(project_id, items),
                 Err(message) => {
-                    self.reset_assigned_issue_table_state();
                     self.assigned_issue_selected_index = None;
                     self.assigned_issues = app::AssignedIssueState::Failed {
                         message,
@@ -1100,7 +1099,6 @@ impl App {
                     self.replace_requested_reviews(project_id, items);
                 }
                 Err(message) => {
-                    self.reset_requested_review_table_state();
                     self.requested_review_selected_index = None;
 
                     self.requested_reviews = app::RequestedReviewState::Failed {
@@ -1532,7 +1530,7 @@ impl App {
         if self.is_viewing_session(session_id) {
             self.mode = AppMode::Question {
                 at_mention_state: None,
-                selected_option_index: question::default_option_index(&questions, 0),
+                selected_option_index: default_option_index(&questions, 0),
                 session_id: session_id.into(),
                 questions,
                 responses: Vec::new(),
@@ -1638,7 +1636,7 @@ impl App {
                 let session_folder = session.folder.clone();
                 let has_session_folder = self.services.fs_client().is_dir(session_folder.clone());
 
-                at_mention::lookup_root(
+                at_mention_lookup_root(
                     project_working_dir,
                     Some(session_folder),
                     has_session_folder,
@@ -2082,7 +2080,7 @@ impl App {
         let conflict_summary =
             Self::sync_conflict_summary(&sync_main_outcome.resolved_conflict_files);
 
-        sync_blocked::format_sync_success_message(
+        sync_message::format_sync_success_message(
             &pulled_summary,
             &pulled_titles,
             &pushed_summary,

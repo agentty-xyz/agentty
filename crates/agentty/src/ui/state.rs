@@ -1,5 +1,3 @@
-//! Shared UI state modules.
+//! Compatibility re-exports for shared presentation state.
 
-pub mod app_mode;
-pub mod help_action;
-pub mod prompt;
+pub use crate::presentation::{app_mode, help_action, prompt};

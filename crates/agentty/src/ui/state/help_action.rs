@@ -1,8 +1,4 @@
-use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
-
 use crate::domain::session::{PublishBranchAction, Session, Status};
-use crate::ui::style;
 
 /// Footer shortcut label for prompt image paste.
 ///
@@ -726,47 +722,6 @@ fn diff_toggle_comments_label(right_panel: super::app_mode::DiffRightPanel) -> &
         super::app_mode::DiffRightPanel::Diff => "Show comments",
         super::app_mode::DiffRightPanel::Comments => "Show diff",
     }
-}
-
-/// Renders one-line footer help as styled spans where keys are emphasized and
-/// labels are muted for faster scanning.
-pub(crate) fn footer_line(actions: &[HelpAction]) -> Line<'static> {
-    let mut spans = Vec::new();
-
-    for (index, action) in actions.iter().enumerate() {
-        if index > 0 {
-            spans.push(footer_separator_span());
-        }
-
-        spans.push(footer_key_span(action.key));
-        spans.push(footer_muted_span(": "));
-        spans.push(footer_muted_span(action.footer_label));
-    }
-
-    Line::from(spans)
-}
-
-/// Returns one highlighted footer key span.
-pub(crate) fn footer_key_span(key: &'static str) -> Span<'static> {
-    Span::styled(
-        key.to_string(),
-        Style::default()
-            .fg(style::palette::accent())
-            .add_modifier(Modifier::BOLD),
-    )
-}
-
-/// Returns one muted footer text span for labels and informational notes.
-pub(crate) fn footer_muted_span(text: impl Into<String>) -> Span<'static> {
-    Span::styled(
-        text.into(),
-        Style::default().fg(style::palette::text_muted()),
-    )
-}
-
-/// Returns the shared separator span used between footer help items.
-pub(crate) fn footer_separator_span() -> Span<'static> {
-    Span::styled(" | ", Style::default().fg(style::palette::text_subtle()))
 }
 
 /// Returns list-mode actions shared by all tabs.
@@ -1593,45 +1548,6 @@ mod tests {
     }
 
     #[test]
-    fn test_footer_line_styles_keys_labels_and_separator() {
-        // Arrange
-        let actions = vec![
-            HelpAction::new("quit", "q", "Quit"),
-            HelpAction::new("help", "?", "Help"),
-        ];
-
-        // Act
-        let line = footer_line(&actions);
-
-        // Assert
-        assert_eq!(line.to_string(), "q: quit | ?: help");
-        assert_eq!(
-            line.spans[0].style,
-            Style::default()
-                .fg(style::palette::accent())
-                .add_modifier(Modifier::BOLD)
-        );
-        assert_eq!(
-            line.spans[1].style,
-            Style::default().fg(style::palette::text_muted())
-        );
-        assert_eq!(
-            line.spans[2].style,
-            Style::default().fg(style::palette::text_muted())
-        );
-        assert_eq!(
-            line.spans[3].style,
-            Style::default().fg(style::palette::text_subtle())
-        );
-        assert_eq!(
-            line.spans[4].style,
-            Style::default()
-                .fg(style::palette::accent())
-                .add_modifier(Modifier::BOLD)
-        );
-    }
-
-    #[test]
     fn test_view_footer_actions_in_progress_shows_stop_and_hides_open() {
         // Arrange
         let state = ViewHelpState {
@@ -1698,33 +1614,5 @@ mod tests {
 
         // Assert
         assert!(!actions.iter().any(|action| action.key == "Ctrl+c"));
-    }
-
-    #[test]
-    fn test_footer_muted_span_uses_muted_footer_style() {
-        // Arrange
-        // Act
-        let span = footer_muted_span("note");
-
-        // Assert
-        assert_eq!(span.content, "note");
-        assert_eq!(
-            span.style,
-            Style::default().fg(style::palette::text_muted())
-        );
-    }
-
-    #[test]
-    fn test_footer_separator_span_uses_shared_separator_style() {
-        // Arrange
-        // Act
-        let span = footer_separator_span();
-
-        // Assert
-        assert_eq!(span.content, " | ");
-        assert_eq!(
-            span.style,
-            Style::default().fg(style::palette::text_subtle())
-        );
     }
 }

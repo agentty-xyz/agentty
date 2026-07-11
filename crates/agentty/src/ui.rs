@@ -1,6 +1,8 @@
 pub mod activity_heatmap;
+mod app_render;
 pub mod component;
 pub mod diff_util;
+pub(crate) mod help_format;
 pub mod icon;
 pub mod input_layout;
 pub mod layout;
@@ -21,6 +23,7 @@ pub mod state;
 pub mod style;
 pub mod text_util;
 
+pub(crate) use app_render::render_app;
 /// A trait for UI components that enforces a standard rendering interface.
 pub use render::Component;
 /// A trait for UI pages that enforces a standard rendering interface.

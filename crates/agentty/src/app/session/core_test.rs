@@ -23,6 +23,7 @@ use crate::app::{App, AppEvent, ReviewCacheEntry, SyncSessionStartError, Tab};
 use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ReasoningLevel,
 };
+use crate::domain::selection::SelectionState;
 use crate::domain::session::{
     DailyActivity, SESSION_DATA_DIR, Session, SessionHandles, SessionSize, SessionStats, Status,
 };
@@ -31,8 +32,8 @@ use crate::domain::setting::SettingName;
 use crate::infra::clock::RealClock;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs::{self as fs, FsClient};
+use crate::presentation::app_mode::AppMode;
 use crate::ui::activity_heatmap;
-use crate::ui::state::app_mode::AppMode;
 
 /// Builds a filesystem mock that delegates operations to local disk.
 fn create_passthrough_mock_fs_client() -> fs::MockFsClient {
@@ -717,7 +718,7 @@ fn test_session_manager_with_clock(
             updated_at: 0,
             workflow_notice: None,
         }],
-        ratatui::widgets::TableState::default(),
+        crate::domain::selection::SelectionState::default(),
         clock,
         1,
         0,
@@ -1905,7 +1906,7 @@ async fn test_replace_title_generation_task_aborts_superseded_task() {
     let state = SessionState::new(
         HashMap::new(),
         Vec::new(),
-        TableState::default(),
+        SelectionState::default(),
         Arc::new(RealClock),
         1,
         0,
@@ -1962,7 +1963,7 @@ async fn test_clear_title_generation_task_if_matches_ignores_stale_generation() 
     let state = SessionState::new(
         HashMap::new(),
         Vec::new(),
-        TableState::default(),
+        SelectionState::default(),
         Arc::new(RealClock),
         1,
         0,
@@ -1997,7 +1998,7 @@ async fn test_clear_title_generation_task_if_matches_removes_matching_generation
     let state = SessionState::new(
         HashMap::new(),
         Vec::new(),
-        TableState::default(),
+        SelectionState::default(),
         Arc::new(RealClock),
         1,
         0,

@@ -391,10 +391,9 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use ratatui::widgets::TableState;
-
     use super::*;
     use crate::app::session_state::SessionState;
+    use crate::domain::selection::SelectionState;
     use crate::infra::clock::RealClock;
 
     /// Builds empty session state for review reducer tests that only need mode
@@ -403,7 +402,7 @@ mod tests {
         SessionState::new(
             HashMap::new(),
             Vec::new(),
-            TableState::default(),
+            SelectionState::default(),
             Arc::new(RealClock),
             0,
             0,

@@ -11,11 +11,11 @@ use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session, SessionId};
 use crate::domain::system_log::SystemLogBuffer;
 use crate::infra::review_comment_cache::ReviewCommentCache;
+use crate::presentation::app_mode::{
+    AppMode, ConfirmationIntent, ConfirmationViewMode, DiffRightPanel,
+};
 use crate::ui::overlay::{
     HelpOverlayRenderContext, SyncBlockedPopupRenderContext, ViewInfoPopupRenderContext,
-};
-use crate::ui::state::app_mode::{
-    AppMode, ConfirmationIntent, ConfirmationViewMode, DiffRightPanel,
 };
 use crate::ui::{
     Component, Page, RenderContext, SessionReviewSnapshot, component, markdown, overlay, page,
@@ -68,7 +68,7 @@ pub(crate) struct RouteSharedContext<'a> {
     requested_review_table_state: &'a mut TableState,
     requested_reviews: &'a RequestedReviewState,
     sessions: &'a [Session],
-    settings: &'a mut SettingsManager,
+    settings: &'a SettingsManager,
     stats_activity: &'a [DailyActivity],
     system_log_tail_offset: u16,
     system_logs: &'a SystemLogBuffer,
@@ -896,7 +896,7 @@ pub(crate) fn render_list_background(
         Tab::Settings => {
             let active_project_name =
                 active_project_name(shared.active_project_id, shared.projects);
-            page::setting::SettingsPage::new(&mut *shared.settings, active_project_name)
+            page::setting::SettingsPage::new(shared.settings, active_project_name)
                 .render(f, chunks[1]);
         }
         Tab::Logs => {

@@ -17,8 +17,6 @@ use ag_agent::{AppServerClient, MockAppServerClient, StaticAgentAvailabilityProb
 #[cfg(test)]
 use ag_git as git;
 use ratatui::buffer::{Buffer, Cell};
-#[cfg(test)]
-use ratatui::widgets::TableState;
 
 use crate::app;
 #[cfg(test)]
@@ -29,6 +27,8 @@ use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel
 #[cfg(test)]
 use crate::domain::question::QuestionItem;
 #[cfg(test)]
+use crate::domain::selection::SelectionState;
+#[cfg(test)]
 use crate::domain::session::{
     PublishedBranchSyncStatus, ReviewRequest, Session, SessionHandles, SessionId, SessionSize,
     SessionStats, Status,
@@ -37,7 +37,7 @@ use crate::domain::session::{
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use crate::domain::setting::SettingName;
 #[cfg(test)]
-use crate::ui::state::app_mode::AppMode;
+use crate::presentation::app_mode::AppMode;
 
 /// Returns the canonical session folder path for integration-test fixtures.
 pub fn session_folder(base: &Path, session_id: &str) -> PathBuf {
@@ -493,7 +493,7 @@ pub(crate) fn session_manager_with_handles(
         SessionState::new(
             handles,
             sessions,
-            TableState::default(),
+            SelectionState::default(),
             Arc::new(FixedClock::unix_epoch()),
             0,
             0,

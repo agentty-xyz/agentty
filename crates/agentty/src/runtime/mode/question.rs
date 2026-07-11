@@ -4,13 +4,14 @@ use ratatui::layout::Rect;
 use crate::app::session::SessionTaskService;
 use crate::app::{self, App, AppEvent};
 use crate::domain::input::InputState;
-use crate::domain::question::{QuestionItem, QuestionProgress};
+use crate::domain::question::{QuestionItem, QuestionProgress, default_option_index};
 use crate::domain::session::{SessionId, Status};
 use crate::domain::turn_prompt::TurnPrompt;
+use crate::presentation::app_mode::{AppMode, DiffRightPanel, QuestionFocus, QuestionModeSnapshot};
+use crate::presentation::prompt::PromptAtMentionState;
 use crate::runtime::EventResult;
 use crate::runtime::mode::{at_mention, input_key, session_output_metric};
-use crate::ui::state::app_mode::{AppMode, DiffRightPanel, QuestionFocus, QuestionModeSnapshot};
-use crate::ui::state::prompt::PromptAtMentionState;
+use crate::ui::RenderCacheStore;
 
 /// Default response stored when users skip one model question.
 const NO_ANSWER: &str = "no answer";
@@ -27,7 +28,12 @@ const NO_ANSWER: &str = "no answer";
 /// saving already-submitted answers for the next visit (skipped while the
 /// user is actively typing a free-text answer so the character can still be
 /// inserted into the response).
-pub(crate) async fn handle(app: &mut App, terminal_size: Rect, key: KeyEvent) -> EventResult {
+pub(crate) async fn handle_with_cache(
+    app: &mut App,
+    render_cache_store: &RenderCacheStore,
+    terminal_size: Rect,
+    key: KeyEvent,
+) -> EventResult {
     if handle_focus_toggle(app, key) {
         return EventResult::Continue;
     }
@@ -44,7 +50,7 @@ pub(crate) async fn handle(app: &mut App, terminal_size: Rect, key: KeyEvent) ->
         return EventResult::Continue;
     }
 
-    if handle_chat_scroll(app, terminal_size, key).await {
+    if handle_chat_scroll(app, render_cache_store, terminal_size, key).await {
         return EventResult::Continue;
     }
 
@@ -68,6 +74,11 @@ pub(crate) async fn handle(app: &mut App, terminal_size: Rect, key: KeyEvent) ->
     }
 
     EventResult::Continue
+}
+
+#[cfg(test)]
+async fn handle(app: &mut App, terminal_size: Rect, key: KeyEvent) -> EventResult {
+    handle_with_cache(app, &RenderCacheStore::default(), terminal_size, key).await
 }
 
 /// Returns whether `key` is a plain `Ctrl+C` press.
@@ -159,7 +170,12 @@ fn handle_focus_toggle(app: &mut App, key: KeyEvent) -> bool {
 /// Returns `true` when the key was consumed as a scroll action. `Enter` and
 /// `Esc` switch focus back to `Answer` so they cannot accidentally submit or
 /// end the turn while scrolling. `d` opens the diff preview for the session.
-async fn handle_chat_scroll(app: &mut App, terminal_size: Rect, key: KeyEvent) -> bool {
+async fn handle_chat_scroll(
+    app: &mut App,
+    render_cache_store: &RenderCacheStore,
+    terminal_size: Rect,
+    key: KeyEvent,
+) -> bool {
     if !matches!(
         &app.mode,
         AppMode::Question {
@@ -170,7 +186,7 @@ async fn handle_chat_scroll(app: &mut App, terminal_size: Rect, key: KeyEvent) -
         return false;
     }
 
-    let metrics = question_view_metrics(app, terminal_size);
+    let metrics = question_view_metrics(app, render_cache_store, terminal_size);
 
     let AppMode::Question {
         focus,
@@ -223,7 +239,11 @@ struct QuestionViewMetrics {
 }
 
 /// Computes scroll metrics for the chat output area above the question panel.
-fn question_view_metrics(app: &App, terminal_size: Rect) -> QuestionViewMetrics {
+fn question_view_metrics(
+    app: &App,
+    render_cache_store: &RenderCacheStore,
+    terminal_size: Rect,
+) -> QuestionViewMetrics {
     let view_height = terminal_size.height.saturating_sub(5);
     let output_width = terminal_size.width.saturating_sub(2);
 
@@ -242,8 +262,9 @@ fn question_view_metrics(app: &App, terminal_size: Rect) -> QuestionViewMetrics 
 
     let (review_status_message, review_text) = app.review_view_state(session_id);
     let total_lines = session_index.map_or(0, |index| {
-        session_output_metric::rendered_output_line_count(
+        session_output_metric::rendered_output_line_count_with_cache(
             app,
+            render_cache_store,
             session_id,
             index,
             review_status_message.as_deref(),
@@ -394,20 +415,6 @@ pub(crate) fn handle_paste(app: &mut App, pasted_text: &str) {
     }
 
     sync_question_at_mention_state(app);
-}
-
-/// Returns the default selected option index for a question at the given
-/// position. Returns `Some(0)` when the question has predefined options so
-/// the UI starts in option-selection mode, or `None` when there are no
-/// predefined options so the input line opens immediately.
-pub(crate) fn default_option_index(
-    questions: &[QuestionItem],
-    question_index: usize,
-) -> Option<usize> {
-    questions
-        .get(question_index)
-        .filter(|item| !item.options.is_empty())
-        .map(|_| 0)
 }
 
 /// Semantic action emitted by one question-mode key event.
@@ -1049,9 +1056,9 @@ mod tests {
     use super::*;
     use crate::domain::agent::AgentModel;
     use crate::domain::session::Status;
+    use crate::presentation::app_mode::QuestionFocus;
     use crate::ui::component::session_output::SessionOutputLineContext;
     use crate::ui::page::session_chat::SessionChatPage;
-    use crate::ui::state::app_mode::QuestionFocus;
 
     /// Fake terminal size used by tests that don't exercise scrolling.
     const TEST_TERMINAL_SIZE: Rect = Rect::new(0, 0, 80, 24);
@@ -1085,6 +1092,7 @@ mod tests {
         };
         let terminal_size = Rect::new(0, 0, 16, 24);
         let output_width = terminal_size.width.saturating_sub(2);
+        let render_cache_store = RenderCacheStore::default();
         let session = &app.sessions.sessions()[0];
         let expected = SessionChatPage::rendered_output_line_count(
             session,
@@ -1097,12 +1105,12 @@ mod tests {
                 review_text: None,
                 session_update_version: app.session_update_version(session_id),
             },
-            app.render_cache_store().markdown_render_cache(),
-            app.render_cache_store().session_output_layout_cache(),
+            render_cache_store.markdown_render_cache(),
+            render_cache_store.session_output_layout_cache(),
         );
 
         // Act
-        let metrics = question_view_metrics(&app, terminal_size);
+        let metrics = question_view_metrics(&app, &render_cache_store, terminal_size);
 
         // Assert
         assert_eq!(metrics.total_lines, expected);

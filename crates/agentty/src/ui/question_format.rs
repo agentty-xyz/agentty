@@ -3,8 +3,8 @@
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::ui::state::app_mode::QuestionFocus;
-use crate::ui::state::help_action;
+use crate::presentation::app_mode::QuestionFocus;
+use crate::presentation::help_action;
 use crate::ui::{style, text_util};
 
 /// Returns wrapped question-panel lines with the correct focus styling.
@@ -128,5 +128,5 @@ pub fn question_help_footer_line(
         }
     }
 
-    help_action::footer_line(&help_actions)
+    crate::ui::help_format::footer_line(&help_actions)
 }

@@ -7,7 +7,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ag_git as git;
-use ratatui::widgets::TableState;
 use tokio::task::{JoinHandle, JoinSet};
 
 use super::workflow::merge::SessionMergeService;
@@ -55,8 +54,8 @@ pub(crate) struct SessionRenderParts<'a> {
     pub(crate) sessions: &'a [Session],
     /// Daily session activity series used by dashboard activity summaries.
     pub(crate) stats_activity: &'a [DailyActivity],
-    /// Table selection state for the session list.
-    pub(crate) table_state: &'a mut TableState,
+    /// Selected session row index.
+    pub(crate) selected_index: Option<usize>,
 }
 
 /// Reducer-facing snapshot derived from one persisted turn result.
@@ -252,13 +251,13 @@ impl SessionManager {
         setting::load_default_smart_model_setting(services, project_id, fallback_model).await
     }
 
-    /// Returns session snapshots, render caches, and list table state required
-    /// for one frame.
+    /// Returns session snapshots, render caches, and semantic selection
+    /// required for one frame.
     ///
     /// The render parts borrow disjoint manager fields directly so
-    /// [`crate::app::App::draw`] can avoid cloning session maps or active
-    /// prompt output blocks on the render hot path.
-    pub(crate) fn render_parts(&mut self) -> SessionRenderParts<'_> {
+    /// [`crate::ui::render_app`] can avoid cloning session maps or active
+    /// prompt output blocks while runtime retains the concrete table viewport.
+    pub(crate) fn render_parts(&self) -> SessionRenderParts<'_> {
         SessionRenderParts {
             active_prompt_outputs: &self.active_prompt_outputs,
             session_branch_names: &self.state.session_branch_names,
@@ -267,7 +266,7 @@ impl SessionManager {
             session_worktree_availability: &self.state.session_worktree_availability,
             sessions: &self.state.sessions,
             stats_activity: &self.stats_activity,
-            table_state: &mut self.state.table_state,
+            selected_index: self.state.table_state.selected(),
         }
     }
 

@@ -4,12 +4,12 @@ use ratatui::text::Line;
 
 use crate::domain::agent::AgentKind;
 use crate::infra::file_index;
-use crate::ui::component::chat_input::{SuggestionItem, SuggestionList};
-use crate::ui::state::help_action;
-use crate::ui::state::prompt::{
+use crate::presentation::help_action;
+use crate::presentation::prompt::{
     PromptAtMentionState, PromptSlashState, PromptSuggestionList,
     build_prompt_slash_suggestion_list,
 };
+use crate::ui::component::chat_input::{SuggestionItem, SuggestionList};
 
 const AT_MENTION_DEFAULT_MAX_VISIBLE: usize = 10;
 const NEW_SESSION_PROMPT_FOOTER_ACTIONS: [help_action::HelpAction; 4] = [
@@ -38,14 +38,16 @@ pub fn prompt_footer_line(
     session: &crate::domain::session::Session,
     attachment_count: usize,
 ) -> Line<'static> {
-    let mut footer_line = help_action::footer_line(prompt_footer_actions(session));
+    let mut footer_line = crate::ui::help_format::footer_line(prompt_footer_actions(session));
 
     if attachment_count > 0 {
         let suffix = if attachment_count == 1 { "" } else { "s" };
-        footer_line.spans.push(help_action::footer_separator_span());
         footer_line
             .spans
-            .push(help_action::footer_muted_span(format!(
+            .push(crate::ui::help_format::footer_separator_span());
+        footer_line
+            .spans
+            .push(crate::ui::help_format::footer_muted_span(format!(
                 "{attachment_count} image{suffix} ready"
             )));
     }

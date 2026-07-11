@@ -16,13 +16,13 @@ use rustc_hash::FxHasher;
 
 use crate::domain::session::{ReviewRequest, Session};
 use crate::infra::review_comment_cache::CachedReviewCommentSnapshot;
+use crate::presentation::app_mode::DiffRightPanel;
+use crate::presentation::help_action;
 use crate::ui::component::file_explorer::FileExplorer;
 use crate::ui::diff_util::{
     DiffLine, DiffLineKind, FileTreeItem, diff_header_new_path, diff_header_old_path,
     parse_diff_lines,
 };
-use crate::ui::state::app_mode::DiffRightPanel;
-use crate::ui::state::help_action;
 use crate::ui::text_util::{self, inline_text, wrap_lines_to_rows};
 use crate::ui::{Component, Page, diff_util, markdown, review_comment_format, style};
 
@@ -1081,7 +1081,7 @@ impl Page for DiffPage<'_> {
             }
         }
 
-        let help_message = Paragraph::new(help_action::footer_line(
+        let help_message = Paragraph::new(crate::ui::help_format::footer_line(
             &help_action::diff_footer_actions(self.right_panel),
         ));
         f.render_widget(help_message, areas.footer_area);

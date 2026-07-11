@@ -1,28 +1,24 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
+#[cfg(test)]
+use at_mention_task::clear_pending_load;
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
 use tracing::warn;
 
-use crate::app::AppEvent;
 use crate::app::session::SessionManager;
-use crate::domain::file_entry::FileEntry;
+use crate::app::{AppEvent, at_mention_task};
+use crate::domain::file_entry::{FileEntry, at_mention_lookup_root};
 use crate::domain::input::InputState;
 use crate::domain::session::SessionId;
 use crate::infra::file_index;
-use crate::ui::state::prompt::PromptAtMentionState;
+use crate::presentation::prompt::PromptAtMentionState;
 
 /// Delay applied before a fresh `@`-mention filesystem walk starts.
 const AT_MENTION_LOAD_DEBOUNCE: Duration = Duration::from_millis(75);
 /// Monotonic counter used to distinguish stale and current load tasks.
 static NEXT_AT_MENTION_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
-/// Per-session debounced file-index tasks keyed by session identifier.
-static PENDING_AT_MENTION_LOADS: LazyLock<Mutex<HashMap<SessionId, PendingAtMentionLoad>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Describes how one mode should update its visible `@`-mention state after an
 /// input edit or cursor move.
@@ -45,14 +41,6 @@ pub(crate) struct AtMentionSelection {
     pub text: String,
     /// Start character index of the active `@query`.
     pub at_start: usize,
-}
-
-/// Tracks one debounced background file-index load for a session.
-struct PendingAtMentionLoad {
-    /// Background task that sleeps, walks, and publishes the latest entries.
-    handle: JoinHandle<()>,
-    /// Monotonic identifier used to ignore stale completions.
-    request_id: u64,
 }
 
 /// Returns the next `@`-mention sync action for one input buffer and dropdown
@@ -131,41 +119,10 @@ pub(crate) fn start_loading_entries(
             );
         }
 
-        finish_pending_load(&task_session_id, request_id);
+        at_mention_task::finish_pending_load(&task_session_id, request_id);
     });
 
-    track_pending_load(tracked_session_id, request_id, handle);
-}
-
-/// Aborts and removes any pending debounced load for one session.
-pub(crate) fn clear_pending_load(session_id: &str) {
-    if let Ok(mut pending_loads) = PENDING_AT_MENTION_LOADS.lock()
-        && let Some(pending_load) = pending_loads.remove(session_id)
-    {
-        pending_load.handle.abort();
-    }
-}
-
-/// Stores the latest pending load task for one session and aborts any stale
-/// debounced predecessor.
-fn track_pending_load(session_id: SessionId, request_id: u64, handle: JoinHandle<()>) {
-    if let Ok(mut pending_loads) = PENDING_AT_MENTION_LOADS.lock()
-        && let Some(previous_task) =
-            pending_loads.insert(session_id, PendingAtMentionLoad { handle, request_id })
-    {
-        previous_task.handle.abort();
-    }
-}
-
-/// Clears a pending task entry when the completing request is still current.
-fn finish_pending_load(session_id: &str, request_id: u64) {
-    if let Ok(mut pending_loads) = PENDING_AT_MENTION_LOADS.lock()
-        && pending_loads
-            .get(session_id)
-            .is_some_and(|task| task.request_id == request_id)
-    {
-        pending_loads.remove(session_id);
-    }
+    at_mention_task::track_pending_load(tracked_session_id, request_id, handle);
 }
 
 /// Returns the directory that should back one active `@`-mention lookup.
@@ -178,11 +135,7 @@ pub(crate) fn lookup_root(
     session_folder: Option<PathBuf>,
     has_session_folder: bool,
 ) -> PathBuf {
-    if has_session_folder && let Some(session_folder) = session_folder {
-        return session_folder;
-    }
-
-    project_working_dir
+    at_mention_lookup_root(project_working_dir, session_folder, has_session_folder)
 }
 
 /// Returns the lookup root for an optional session folder after checking
@@ -276,13 +229,13 @@ mod tests {
     use std::sync::Arc;
 
     use ag_git as git;
-    use ratatui::widgets::TableState;
     use tempfile::TempDir;
 
     use super::*;
     use crate::app::SessionState;
     use crate::app::session::SessionDefaults;
     use crate::domain::agent::AgentModel;
+    use crate::domain::selection::SelectionState;
     use crate::domain::session::{Session, SessionHandles, SessionSize, SessionStats, Status};
     use crate::infra::clock::RealClock;
 
@@ -569,7 +522,7 @@ mod tests {
                 updated_at: 0,
                 workflow_notice: None,
             }],
-            TableState::default(),
+            SelectionState::default(),
             Arc::new(RealClock),
             1,
             0,

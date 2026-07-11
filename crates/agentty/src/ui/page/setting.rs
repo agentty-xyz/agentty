@@ -5,7 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap};
 
 use crate::app::setting::{SettingsManager, SettingsSelectorDropdown};
-use crate::ui::state::help_action;
+use crate::presentation::help_action;
 use crate::ui::text_util::truncate_with_ellipsis;
 use crate::ui::{Component, Page, component, layout, overlay, style};
 
@@ -22,13 +22,13 @@ const DROPDOWN_WIDTH_PERCENT: u16 = 58;
 
 /// Renders the settings page table and inline editing hints.
 pub struct SettingsPage<'a> {
-    manager: &'a mut SettingsManager,
+    manager: &'a SettingsManager,
     project_name: Option<String>,
 }
 
 impl<'a> SettingsPage<'a> {
     /// Creates a settings page renderer bound to the active project settings.
-    pub fn new(manager: &'a mut SettingsManager, project_name: Option<String>) -> Self {
+    pub fn new(manager: &'a SettingsManager, project_name: Option<String>) -> Self {
         Self {
             manager,
             project_name,
@@ -56,9 +56,9 @@ impl Page for SettingsPage<'_> {
         let global_section_title = "Global settings".to_string();
 
         let global_table_state =
-            section_table_state(&self.manager.table_state, 0, global_row_count);
+            section_table_state(self.manager.table_state.selected(), 0, global_row_count);
         let project_table_state = section_table_state(
-            &self.manager.table_state,
+            self.manager.table_state.selected(),
             global_row_count,
             project_rows.len(),
         );
@@ -145,12 +145,12 @@ fn settings_section_height(setting_row_count: usize) -> Constraint {
 
 /// Projects the shared settings selection into a section-local table state.
 fn section_table_state(
-    table_state: &TableState,
+    selected: Option<usize>,
     section_start: usize,
     section_len: usize,
 ) -> TableState {
     let mut section_table_state = TableState::default();
-    let Some(selected) = table_state.selected() else {
+    let Some(selected) = selected else {
         return section_table_state;
     };
 
@@ -379,7 +379,7 @@ fn settings_footer_line_for_mode(uses_inline_hint: bool, footer_hint: &str) -> L
 
     let actions = help_action::settings_footer_actions();
 
-    help_action::footer_line(&actions)
+    crate::ui::help_format::footer_line(&actions)
 }
 
 /// Builds single-line settings table rows.
@@ -493,7 +493,7 @@ mod tests {
         table_state.select(Some(0));
 
         // Act
-        let section_state = section_table_state(&table_state, 0, 1);
+        let section_state = section_table_state(table_state.selected(), 0, 1);
 
         // Assert
         assert_eq!(section_state.selected(), Some(0));
@@ -506,7 +506,7 @@ mod tests {
         table_state.select(Some(3));
 
         // Act
-        let section_state = section_table_state(&table_state, 1, 6);
+        let section_state = section_table_state(table_state.selected(), 1, 6);
 
         // Assert
         assert_eq!(section_state.selected(), Some(2));
@@ -519,7 +519,7 @@ mod tests {
         table_state.select(Some(0));
 
         // Act
-        let section_state = section_table_state(&table_state, 1, 6);
+        let section_state = section_table_state(table_state.selected(), 1, 6);
 
         // Assert
         assert_eq!(section_state.selected(), None);
@@ -643,7 +643,8 @@ mod tests {
     fn test_settings_footer_line_uses_shared_actions_in_list_mode() {
         // Arrange
         let footer_hint = "unused while not editing";
-        let expected_line = help_action::footer_line(&help_action::settings_footer_actions());
+        let expected_line =
+            crate::ui::help_format::footer_line(&help_action::settings_footer_actions());
 
         // Act
         let footer_line = settings_footer_line_for_mode(false, footer_hint);

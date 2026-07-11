@@ -6,6 +6,7 @@ pub mod input;
 pub mod project;
 pub mod question;
 pub mod review;
+pub mod selection;
 pub mod session;
 pub mod session_message;
 pub mod session_order;

@@ -1,17 +1,9 @@
 //! Draw helpers and render-facing accessors for the app core module.
 
-use std::collections::HashMap;
-
-use ratatui::Frame;
-
 use super::state::{App, UpdateStatus};
 use crate::app::tab::Tab;
-use crate::app::{ReviewCacheEntry, review, session};
-use crate::domain::agent::AgentModel;
-use crate::domain::session::{PublishedBranchSyncStatus, Session, SessionId, Status};
-use crate::ui;
-use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
-use crate::ui::style;
+use crate::domain::session::{PublishedBranchSyncStatus, Session, Status};
+use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
 
 impl App {
     /// Returns the active project identifier.
@@ -42,8 +34,8 @@ impl App {
 
     /// Builds prompt slash-menu state from the cached machine-scoped agent
     /// availability snapshot.
-    pub(crate) fn prompt_slash_state(&self) -> crate::ui::state::prompt::PromptSlashState {
-        crate::ui::state::prompt::PromptSlashState::with_available_agent_kinds(
+    pub(crate) fn prompt_slash_state(&self) -> crate::presentation::prompt::PromptSlashState {
+        crate::presentation::prompt::PromptSlashState::with_available_agent_kinds(
             self.services.available_agent_kinds(),
         )
     }
@@ -97,81 +89,6 @@ impl App {
         }
     }
 
-    /// Renders a complete UI frame by applying the active color theme,
-    /// assembling a [`ui::RenderContext`] from current app state, and
-    /// dispatching to the UI render pipeline.
-    pub fn draw(&mut self, frame: &mut Frame) {
-        let current_tab = self.tabs.current();
-        let available_agent_clis = self.services.available_agent_clis();
-        let latest_available_version = self.latest_available_version.as_deref();
-        let session_progress_messages = &self.session_progress_messages;
-        let update_status = self.update_status.as_ref();
-        let wall_clock_unix_seconds =
-            session::unix_timestamp_from_system_time(self.sessions.state().now_system_time());
-        let status_bar_fyi_rotation_index =
-            u64::try_from(wall_clock_unix_seconds.div_euclid(60)).unwrap_or_default();
-        let review_comment_cache = self.services.review_comment_cache();
-        let requested_review_selected_index = self.requested_review_selected_index();
-        let assigned_issue_selected_index = self.assigned_issue_selected_index();
-        let mode = &self.mode;
-        let session_review_snapshot = visible_session_review_snapshot(
-            mode,
-            &self.review_cache,
-            self.settings.default_review_selection.model(),
-        );
-        let requested_review_table_state = &mut self.requested_review_table_state;
-        let assigned_issue_table_state = &mut self.assigned_issue_table_state;
-        let project_render_parts = self.projects.render_parts();
-        let session_render_parts = self.sessions.render_parts();
-        let render_cache_store = &self.render_cache_store;
-        let settings = &mut self.settings;
-        let _theme_scope = style::scoped_active_theme(settings.theme);
-
-        ui::render(
-            frame,
-            ui::RenderContext {
-                assigned_issues: &self.assigned_issues,
-                assigned_issue_selected_index,
-                assigned_issue_table_state,
-                active_project_id: project_render_parts.active_project_id,
-                available_agent_clis: &available_agent_clis,
-                current_tab,
-                git_branch: project_render_parts.git_branch,
-                diff_layout_cache: render_cache_store.diff_layout_cache(),
-                git_upstream_ref: project_render_parts.git_upstream_ref,
-                git_status: project_render_parts.git_status,
-                latest_available_version,
-                markdown_render_cache: render_cache_store.markdown_render_cache(),
-                update_status,
-                mode,
-                output_layout_cache: render_cache_store.session_output_layout_cache(),
-                project_table_state: project_render_parts.table_state,
-                projects: project_render_parts.project_items,
-                review_comment_cache: &review_comment_cache,
-                session_review_snapshot: session_review_snapshot.as_ref(),
-                requested_reviews: &self.requested_reviews,
-                requested_review_selected_index,
-                requested_review_table_state,
-                active_prompt_outputs: session_render_parts.active_prompt_outputs,
-                session_branch_names: session_render_parts.session_branch_names,
-                session_git_statuses: session_render_parts.session_git_statuses,
-                session_index_by_id: session_render_parts.session_index_by_id,
-                session_progress_messages,
-                session_update_versions: &self.last_seen_session_update_versions,
-                session_worktree_availability: session_render_parts.session_worktree_availability,
-                settings,
-                system_log_tail_offset: self.system_log_tail_offset,
-                system_logs: &self.system_logs,
-                stats_activity: session_render_parts.stats_activity,
-                sessions: session_render_parts.sessions,
-                status_bar_fyi_rotation_index,
-                table_state: session_render_parts.table_state,
-                working_dir: project_render_parts.working_dir,
-                wall_clock_unix_seconds,
-            },
-        );
-    }
-
     /// Returns whether the currently visible list background contains any
     /// spinner or timer-driven session rows.
     fn list_background_has_tick_driven_ui(&self) -> bool {
@@ -212,43 +129,4 @@ impl App {
             )
             || session.published_branch_sync_status == PublishedBranchSyncStatus::InProgress
     }
-}
-
-/// Projects focused-review cache state for the session currently visible behind
-/// the active mode without cloning the cached review body during rendering.
-fn visible_session_review_snapshot<'a>(
-    mode: &'a AppMode,
-    review_cache: &'a HashMap<SessionId, ReviewCacheEntry>,
-    review_model: AgentModel,
-) -> Option<ui::SessionReviewSnapshot<'a>> {
-    let session_id = match mode {
-        AppMode::View { session_id, .. }
-        | AppMode::Prompt { session_id, .. }
-        | AppMode::Question { session_id, .. }
-        | AppMode::Diff { session_id, .. }
-        | AppMode::Help {
-            context: HelpContext::View { session_id, .. } | HelpContext::Diff { session_id, .. },
-            ..
-        } => session_id,
-        AppMode::Confirmation {
-            restore_view: Some(restore_view),
-            ..
-        }
-        | AppMode::LaunchConfigurationSelector { restore_view, .. }
-        | AppMode::PublishBranchInput { restore_view, .. }
-        | AppMode::ViewInfoPopup { restore_view, .. } => &restore_view.session_id,
-        AppMode::List
-        | AppMode::ReviewDetail { .. }
-        | AppMode::SessionCreation { .. }
-        | AppMode::Confirmation { .. }
-        | AppMode::SyncBlockedPopup { .. }
-        | AppMode::Help { .. } => return None,
-    };
-    let (status_message, text) = review::review_view_state(review_cache, session_id, review_model);
-
-    Some(ui::SessionReviewSnapshot {
-        session_id: session_id.as_str(),
-        status_message,
-        text,
-    })
 }

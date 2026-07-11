@@ -56,7 +56,7 @@ flowchart TD
   event_reader["event::spawn_event_reader()<br/>dedicated OS thread"]
   main_loop["run_main_loop()"]
   drain["process_pending_app_events()<br/>reduce queued AppEvent values"]
-  draw["ui::render::draw()"]
+  draw["ui::render_app()"]
   process["event::process_events()"]
   key_events["Key events<br/>mode handlers -> app/session orchestration"]
   app_events["App events<br/>App::apply_app_events reducer"]
@@ -83,6 +83,9 @@ flowchart TD
 
 - `run_main_loop()` drains one bounded batch of queued app events before draw so touched
   sessions sync from their live handles without a full list-wide sweep every frame.
+- `run_main_loop()` owns `PresentationState`; input measurement and `ui::render_app()`
+  share its bounded `RenderCacheStore`. `App` neither constructs Ratatui frames nor owns
+  render caches.
 - `process_events()` waits on terminal events, app events, or tick, then drains a
   bounded batch of queued terminal events to avoid one-key-per-frame lag.
 - Tick interval is `50ms`; metadata-based session reload fallback is `5s`.
