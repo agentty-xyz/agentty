@@ -65,6 +65,27 @@ SET value = excluded.value
     Ok(())
 }
 
+/// Persists the active list tab for integration-test database setup.
+pub async fn persist_active_tab_for_test(
+    database: &Database,
+    tab: app::Tab,
+) -> Result<(), DbError> {
+    sqlx::query(
+        r"
+INSERT INTO setting (name, value)
+VALUES (?, ?)
+ON CONFLICT(name) DO UPDATE
+SET value = excluded.value
+",
+    )
+    .bind(SettingName::ActiveTab.as_str())
+    .bind(tab.as_str())
+    .execute(database.pool())
+    .await?;
+
+    Ok(())
+}
+
 /// Deterministic [`crate::infra::clock::Clock`] implementation for unit-test
 /// fixtures.
 #[cfg(test)]

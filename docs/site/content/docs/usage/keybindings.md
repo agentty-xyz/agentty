@@ -21,12 +21,19 @@ For session states and transition behavior, see [Workflow](@/docs/usage/workflow
 | `c`                 | Cancel selected session after confirmation                |
 | `Enter`             | Open session                                              |
 | `j` / `k`           | Navigate sessions                                         |
+| `p`                 | Open project switcher popup                               |
 | `Tab` / `Shift+Tab` | Switch to next / previous tab                             |
 | `?`                 | Help                                                      |
 
 In the `a` selector, `Stacked` is enabled only when the selected session is a root
 session with an active branch. `c` appears only for cancelable rows: running sessions,
 review-ready sessions, and unstarted draft sessions.
+
+<a id="usage-session-list-project-switcher"></a> The `p` popup lists registered projects
+in most-recently-opened order with the active project marked by a `* ` prefix. Each row
+shows `▶ N` for projects with running sessions and stays blank otherwise. Use `j` / `k`
+to move, `Enter` to switch the active project without leaving the Sessions view, and
+`Esc` or `q` to close.
 
 ## Project List
 

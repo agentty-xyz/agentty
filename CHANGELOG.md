@@ -7,6 +7,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- agentty: add a `p` project switcher popup to the Sessions view that lists registered
+  projects in most-recently-opened order and switches the active project in place.
+
 ## [v0.12.9] - 2026-07-11
 
 The `v0.12.8` release was not successful, so `v0.12.9` includes all changes originally

@@ -66,6 +66,9 @@ pub struct RenderContext<'a> {
     pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
     /// Current app mode and its transient state.
     pub mode: &'a AppMode,
+    /// Cached most-recently-opened ordering over `projects`, reused by the
+    /// project switcher popup instead of re-sorting each frame.
+    pub mru_project_order: &'a [usize],
     /// Shared cache for fully assembled session-output layouts.
     pub output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
     /// Table selection state for the projects list.

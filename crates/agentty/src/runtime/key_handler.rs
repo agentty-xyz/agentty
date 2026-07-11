@@ -37,6 +37,8 @@ where
         handle_confirmation_decision(app, decision).await
     } else if matches!(app.mode, AppMode::SessionCreation { .. }) {
         handle_session_creation_key(app, key).await
+    } else if matches!(app.mode, AppMode::ProjectSwitcher { .. }) {
+        handle_project_switcher_key(app, key).await
     } else if matches!(app.mode, AppMode::LaunchConfigurationSelector { .. }) {
         handle_launch_configuration_selector_key(app, key).await
     } else if matches!(app.mode, AppMode::PublishBranchInput { .. }) {
@@ -58,6 +60,9 @@ where
             }
             AppMode::SessionCreation { .. } => {
                 unreachable!("session creation mode is handled before dispatch matching")
+            }
+            AppMode::ProjectSwitcher { .. } => {
+                unreachable!("project switcher mode is handled before dispatch matching")
             }
             AppMode::SyncBlockedPopup { .. } => Ok(mode::sync_blocked::handle(app, key)),
             AppMode::ViewInfoPopup { .. } => Ok(handle_view_info_popup_key(app, key)),
@@ -216,6 +221,96 @@ fn selected_stacked_parent_session_id(app: &App) -> Option<SessionId> {
     app.selected_session()
         .filter(|session| session.allows_stacked_child_creation())
         .map(|session| session.id.clone())
+}
+
+/// Handles key input while the MRU project switcher popup is visible.
+async fn handle_project_switcher_key(app: &mut App, key: KeyEvent) -> io::Result<EventResult> {
+    match key.code {
+        KeyCode::Esc => {
+            app.mode = AppMode::List;
+        }
+        KeyCode::Char(character) if character.eq_ignore_ascii_case(&'q') => {
+            app.mode = AppMode::List;
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            update_project_switcher_selection(
+                app,
+                current_project_switcher_selection(app).saturating_sub(1),
+            );
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            update_project_switcher_selection(
+                app,
+                current_project_switcher_selection(app).saturating_add(1),
+            );
+        }
+        KeyCode::Enter => {
+            switch_to_selected_switcher_project(app).await;
+        }
+        _ => {}
+    }
+
+    Ok(EventResult::Continue)
+}
+
+/// Switches the active project to the highlighted MRU row and returns to the
+/// sessions list.
+///
+/// Selecting the already-active project closes the popup without a switch. A
+/// failed switch replaces the popup with the list informational popup so the
+/// user sees why the project did not change instead of a no-op.
+async fn switch_to_selected_switcher_project(app: &mut App) {
+    let selected_project = app
+        .projects
+        .mru_project_items()
+        .get(current_project_switcher_selection(app))
+        .map(|project_item| {
+            (
+                project_item.project.id,
+                project_item.project.display_label(),
+            )
+        });
+    app.mode = AppMode::List;
+
+    let Some((selected_project_id, selected_project_label)) = selected_project else {
+        return;
+    };
+
+    if selected_project_id == app.active_project_id() {
+        return;
+    }
+
+    if let Err(error) = app.switch_project(selected_project_id).await {
+        app.mode = AppMode::SyncBlockedPopup {
+            default_branch: None,
+            is_loading: false,
+            message: error.to_string(),
+            project_name: Some(selected_project_label),
+            title: "Project switch failed".to_string(),
+        };
+    }
+}
+
+/// Clamps and stores the highlighted row in the project switcher popup.
+fn update_project_switcher_selection(app: &mut App, selected_option_index: usize) {
+    let max_option_index = app.projects.mru_project_items().len().saturating_sub(1);
+
+    if let AppMode::ProjectSwitcher {
+        selected_option_index: current_index,
+    } = &mut app.mode
+    {
+        *current_index = selected_option_index.min(max_option_index);
+    }
+}
+
+/// Returns the currently highlighted project switcher row.
+fn current_project_switcher_selection(app: &App) -> usize {
+    match app.mode {
+        AppMode::ProjectSwitcher {
+            selected_option_index,
+        } => selected_option_index,
+        _ => 0,
+    }
 }
 
 /// Handles key input while a session-scoped informational popup is visible.
@@ -815,6 +910,213 @@ mod tests {
         // Assert
         assert!(matches!(result, Ok(EventResult::Continue)));
         assert!(app.sessions.sessions().is_empty());
+        assert!(matches!(app.mode, AppMode::List));
+    }
+
+    /// Builds one in-memory project row for project switcher handler tests.
+    fn switcher_project_item(
+        project_id: i64,
+        name: &str,
+        path: std::path::PathBuf,
+        last_opened_at: Option<i64>,
+    ) -> crate::domain::project::ProjectListItem {
+        crate::domain::project::ProjectListItem {
+            active_session_count: 0,
+            input_tokens: 0,
+            last_session_updated_at: None,
+            output_tokens: 0,
+            project: crate::domain::project::Project {
+                created_at: 0,
+                display_name: Some(name.to_string()),
+                git_branch: None,
+                id: project_id,
+                is_favorite: false,
+                last_opened_at,
+                path,
+                updated_at: 0,
+            },
+            session_count: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_project_switcher_key_escape_returns_to_list() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
+        app.mode = AppMode::ProjectSwitcher {
+            selected_option_index: 0,
+        };
+
+        // Act
+        let result =
+            handle_project_switcher_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+                .await;
+
+        // Assert
+        assert!(matches!(result, Ok(EventResult::Continue)));
+        assert!(matches!(app.mode, AppMode::List));
+    }
+
+    #[tokio::test]
+    async fn test_handle_project_switcher_key_navigation_clamps_to_project_count() {
+        // Arrange
+        let (mut app, base_dir) = crate::test_support::new_git_test_app().await;
+        let second_project = switcher_project_item(999, "beta", base_dir.path().join("beta"), None);
+        let active_project = switcher_project_item(
+            app.active_project_id(),
+            "alpha",
+            app.projects.working_dir().to_path_buf(),
+            Some(20),
+        );
+        app.projects
+            .replace_project_items(vec![active_project, second_project]);
+        app.mode = AppMode::ProjectSwitcher {
+            selected_option_index: 0,
+        };
+
+        // Act
+        for _ in 0..3 {
+            handle_project_switcher_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+            )
+            .await
+            .expect("failed to move selection down");
+        }
+        let clamped_down_index = match app.mode {
+            AppMode::ProjectSwitcher {
+                selected_option_index,
+            } => selected_option_index,
+            _ => usize::MAX,
+        };
+        handle_project_switcher_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to move selection up");
+
+        // Assert
+        assert_eq!(clamped_down_index, 1);
+        assert!(matches!(
+            app.mode,
+            AppMode::ProjectSwitcher {
+                selected_option_index: 0,
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_project_switcher_key_enter_switches_to_selected_project() {
+        // Arrange
+        let (mut app, base_dir) = crate::test_support::new_git_test_app().await;
+        let second_project_dir = base_dir.path().join("beta-project");
+        std::fs::create_dir_all(&second_project_dir).expect("failed to create second project dir");
+        let second_project_path = second_project_dir
+            .canonicalize()
+            .expect("failed to canonicalize second project dir");
+        let second_project_id = app
+            .services
+            .db()
+            .projects()
+            .upsert_project(&second_project_path.to_string_lossy(), None)
+            .await
+            .expect("failed to seed second project");
+        let active_project = switcher_project_item(
+            app.active_project_id(),
+            "alpha",
+            app.projects.working_dir().to_path_buf(),
+            Some(20),
+        );
+        let second_project =
+            switcher_project_item(second_project_id, "beta-project", second_project_path, None);
+        app.projects
+            .replace_project_items(vec![active_project, second_project]);
+        app.mode = AppMode::ProjectSwitcher {
+            selected_option_index: 1,
+        };
+
+        // Act
+        let result = handle_project_switcher_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(result, Ok(EventResult::Continue)));
+        assert_eq!(app.active_project_id(), second_project_id);
+        assert!(matches!(app.mode, AppMode::List));
+    }
+
+    #[tokio::test]
+    async fn test_handle_project_switcher_key_enter_surfaces_switch_failure() {
+        // Arrange
+        let (mut app, base_dir) = crate::test_support::new_git_test_app().await;
+        let missing_project_id = 987_654;
+        let active_project = switcher_project_item(
+            app.active_project_id(),
+            "alpha",
+            app.projects.working_dir().to_path_buf(),
+            Some(20),
+        );
+        let missing_project = switcher_project_item(
+            missing_project_id,
+            "beta-project",
+            base_dir.path().join("beta-project"),
+            None,
+        );
+        app.projects
+            .replace_project_items(vec![active_project, missing_project]);
+        app.mode = AppMode::ProjectSwitcher {
+            selected_option_index: 1,
+        };
+
+        // Act
+        let result = handle_project_switcher_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(result, Ok(EventResult::Continue)));
+        assert_ne!(app.active_project_id(), missing_project_id);
+
+        let missing_project_id_text = missing_project_id.to_string();
+        assert!(matches!(
+            &app.mode,
+            AppMode::SyncBlockedPopup {
+                is_loading: false,
+                message,
+                project_name,
+                title,
+                ..
+            } if title == "Project switch failed"
+                && project_name.as_deref() == Some("beta-project")
+                && message.contains(&missing_project_id_text)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_project_switcher_key_enter_on_active_project_only_closes_popup() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
+        let active_project_id = app.active_project_id();
+        app.mode = AppMode::ProjectSwitcher {
+            selected_option_index: 0,
+        };
+
+        // Act
+        let result = handle_project_switcher_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(result, Ok(EventResult::Continue)));
+        assert_eq!(app.active_project_id(), active_project_id);
         assert!(matches!(app.mode, AppMode::List));
     }
 

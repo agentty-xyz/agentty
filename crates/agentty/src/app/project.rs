@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::domain::project::ProjectListItem;
+use crate::domain::project::{ProjectListItem, mru_project_order, ordered_project_items};
 use crate::domain::selection::SelectionState;
 
 /// Borrowed project state required to draw one UI frame.
@@ -15,6 +15,8 @@ pub(crate) struct ProjectRenderParts<'a> {
     pub(crate) git_status: Option<(u32, u32)>,
     /// Current upstream reference tracked by the active project branch.
     pub(crate) git_upstream_ref: Option<&'a str>,
+    /// Cached most-recently-opened ordering of `project_items`.
+    pub(crate) mru_project_order: &'a [usize],
     /// Project rows available for rendering.
     pub(crate) project_items: &'a [ProjectListItem],
     /// Selected project row index.
@@ -30,6 +32,10 @@ pub struct ProjectManager {
     git_branch: Option<String>,
     git_status: Option<(u32, u32)>,
     git_upstream_ref: Option<String>,
+    /// Most-recently-opened order over `project_items`, cached so the switcher
+    /// popup never re-sorts on the render or key-input path. Rebuilt whenever
+    /// `project_items` is replaced.
+    mru_project_order: Vec<usize>,
     project_items: Vec<ProjectListItem>,
     table_state: SelectionState,
     working_dir: PathBuf,
@@ -51,6 +57,7 @@ impl ProjectManager {
             git_branch,
             git_status: None,
             git_upstream_ref,
+            mru_project_order: mru_project_order(&project_items),
             project_items,
             table_state: SelectionState::default(),
             working_dir,
@@ -72,6 +79,7 @@ impl ProjectManager {
             git_branch: self.git_branch.as_deref(),
             git_status: self.git_status,
             git_upstream_ref: self.git_upstream_ref.as_deref(),
+            mru_project_order: &self.mru_project_order,
             project_items: &self.project_items,
             selected_index: self.table_state.selected(),
             working_dir: self.working_dir.as_path(),
@@ -112,6 +120,12 @@ impl ProjectManager {
     /// Returns the active project working directory.
     pub(crate) fn working_dir(&self) -> &Path {
         self.working_dir.as_path()
+    }
+
+    /// Returns project rows ordered most-recently-opened first for the
+    /// sessions-view project switcher.
+    pub(crate) fn mru_project_items(&self) -> Vec<&ProjectListItem> {
+        ordered_project_items(&self.project_items, &self.mru_project_order)
     }
 
     /// Returns the selected project in the project list, when present.
@@ -184,6 +198,7 @@ impl ProjectManager {
     /// Replaces loaded project list snapshots and keeps selection stable.
     pub(crate) fn replace_project_items(&mut self, project_items: Vec<ProjectListItem>) {
         let selected_project_id = self.selected_project_id();
+        self.mru_project_order = mru_project_order(&project_items);
         self.project_items = project_items;
 
         if self.project_items.is_empty() {

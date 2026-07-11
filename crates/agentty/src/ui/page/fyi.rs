@@ -60,6 +60,7 @@ pub(crate) fn current_page_messages(
         } => Some(session_chat_messages()),
         AppMode::List
         | AppMode::SessionCreation { .. }
+        | AppMode::ProjectSwitcher { .. }
         | AppMode::Confirmation {
             restore_view: None, ..
         }

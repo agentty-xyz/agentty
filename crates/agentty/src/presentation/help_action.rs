@@ -241,6 +241,7 @@ pub(crate) fn session_list_actions(
         can_cancel_selected_session,
         can_open_selected_session,
     );
+    actions.push(HelpAction::new("project", "p", "Switch project"));
     actions.push(HelpAction::new("next tab", "Tab", "Switch tab"));
     actions.push(HelpAction::new("help", "?", "Help"));
 
@@ -282,6 +283,7 @@ pub(crate) fn session_list_footer_actions(
         can_cancel_selected_session,
         can_open_selected_session,
     );
+    actions.push(HelpAction::new("projects", "p", "Switch project"));
     actions.push(HelpAction::new("help", "?", "Help"));
 
     actions
@@ -775,6 +777,20 @@ mod tests {
     }
 
     #[test]
+    fn test_session_list_actions_include_switch_project_shortcut() {
+        // Arrange
+        // Act
+        let actions = session_list_actions(false, false);
+
+        // Assert
+        assert!(
+            actions
+                .iter()
+                .any(|action| action.key == "p" && action.popup_label == "Switch project")
+        );
+    }
+
+    #[test]
     fn test_session_list_actions_hide_enter_without_openable_session() {
         // Arrange
         // Act
@@ -795,6 +811,11 @@ mod tests {
         // Assert
         assert!(actions.iter().any(|action| action.key == "Enter"));
         assert!(actions.iter().any(|action| action.key == "a"));
+        assert!(
+            actions
+                .iter()
+                .any(|action| action.key == "p" && action.footer_label == "projects")
+        );
         assert!(!actions.iter().any(|action| action.key == "d"));
         assert!(!actions.iter().any(|action| action.key == "c"));
         assert!(!actions.iter().any(|action| action.key == "Tab"));

@@ -35,6 +35,7 @@ pub(crate) struct AppViewSnapshot<'a> {
     pub(crate) git_upstream_ref: Option<&'a str>,
     pub(crate) latest_available_version: Option<&'a str>,
     pub(crate) mode: &'a AppMode,
+    pub(crate) mru_project_order: &'a [usize],
     pub(crate) project_selected_index: Option<usize>,
     pub(crate) projects: &'a [ProjectListItem],
     pub(crate) requested_review_selected_index: Option<usize>,
@@ -95,6 +96,7 @@ impl App {
             git_upstream_ref: project.git_upstream_ref,
             latest_available_version: self.latest_available_version.as_deref(),
             mode: &self.mode,
+            mru_project_order: project.mru_project_order,
             project_selected_index: project.selected_index,
             projects: project.project_items,
             requested_review_selected_index: self.requested_review_selected_index(),
@@ -142,6 +144,7 @@ fn visible_review_session_id(mode: &AppMode) -> Option<&str> {
         AppMode::List
         | AppMode::ReviewDetail { .. }
         | AppMode::SessionCreation { .. }
+        | AppMode::ProjectSwitcher { .. }
         | AppMode::Confirmation { .. }
         | AppMode::SyncBlockedPopup { .. }
         | AppMode::Help { .. } => None,
