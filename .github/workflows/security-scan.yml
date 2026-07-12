@@ -1,4 +1,4 @@
-name: Security Scan
+name: SonarQube Scan
 on:
   push:
     branches:
@@ -10,14 +10,32 @@ on:
 permissions:
   contents: read
 jobs:
-  sonarqube:
+  # Trusted events use repository secrets directly without an approval gate.
+  sonar-internal:
     name: SonarQube
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
           fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@713881670b6b3676cda39549040e2d88c70d582e # v8.2.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+  # Fork PRs require approval through the environment before secrets are released.
+  sonar-fork:
+    name: SonarQube (Fork)
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    environment: sonar-fork-approved
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
+          ref: ${{ github.event.pull_request.head.sha }}
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@713881670b6b3676cda39549040e2d88c70d582e # v8.2.0
         env:
