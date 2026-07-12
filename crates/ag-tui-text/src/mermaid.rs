@@ -743,34 +743,57 @@ fn parse_statement(
 
         let (has_source_arrow, has_arrow, is_visible, label) = cursor.parse_edge_operator()?;
         let to_indexes = cursor.parse_node_group(node_indexes, nodes)?;
-        let is_reversed = has_source_arrow && !has_arrow;
-
-        for from_index in &from_indexes {
-            for to_index in &to_indexes {
-                if edges.len() >= MAX_EDGE_COUNT {
-                    return None;
-                }
-
-                let (source_index, target_index) = if is_reversed {
-                    (*to_index, *from_index)
-                } else {
-                    (*from_index, *to_index)
-                };
-
-                edges.push(MermaidEdge {
-                    from_index: source_index,
-                    has_arrow: has_arrow || is_reversed,
-                    has_source_arrow: has_source_arrow && !is_reversed,
-                    is_visible,
-                    label: label.clone(),
-                    source_marker: None,
-                    target_marker: None,
-                    to_index: target_index,
-                });
-            }
-        }
+        append_group_edges(
+            &from_indexes,
+            &to_indexes,
+            has_source_arrow,
+            has_arrow,
+            is_visible,
+            label.as_deref(),
+            edges,
+        )?;
         from_indexes = to_indexes;
     }
+}
+
+/// Appends the bounded Cartesian product of two node groups for one operator.
+fn append_group_edges(
+    from_indexes: &[usize],
+    to_indexes: &[usize],
+    has_source_arrow: bool,
+    has_arrow: bool,
+    is_visible: bool,
+    label: Option<&str>,
+    edges: &mut Vec<MermaidEdge>,
+) -> Option<()> {
+    let is_reversed = has_source_arrow && !has_arrow;
+
+    for from_index in from_indexes {
+        for to_index in to_indexes {
+            if edges.len() >= MAX_EDGE_COUNT {
+                return None;
+            }
+
+            let (source_index, target_index) = if is_reversed {
+                (*to_index, *from_index)
+            } else {
+                (*from_index, *to_index)
+            };
+
+            edges.push(MermaidEdge {
+                from_index: source_index,
+                has_arrow: has_arrow || is_reversed,
+                has_source_arrow: has_source_arrow && !is_reversed,
+                is_visible,
+                label: label.map(str::to_owned),
+                source_marker: None,
+                target_marker: None,
+                to_index: target_index,
+            });
+        }
+    }
+
+    Some(())
 }
 
 /// Successful outcome of parsing an optional node-shape suffix.
