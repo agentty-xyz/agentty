@@ -1,5 +1,6 @@
 use std::io;
 
+use ag_tui_text::text_util::inline_text;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::{App, Tab};
@@ -12,7 +13,6 @@ use crate::presentation::help_action::{
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState};
 use crate::runtime::EventResult;
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
-use crate::ui::text_util::inline_text;
 
 /// Handles key input while the app is in list mode.
 ///
@@ -332,7 +332,7 @@ fn list_keybindings(app: &App) -> Vec<HelpAction> {
     }
 
     if app.tabs.current() == Tab::Issues {
-        return crate::ui::state::help_action::issue_actions();
+        return crate::presentation::help_action::issue_actions();
     }
 
     if app.tabs.current() == Tab::Logs {

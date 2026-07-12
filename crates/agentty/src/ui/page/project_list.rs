@@ -1,6 +1,7 @@
 use std::env;
 use std::path::Path;
 
+use ag_tui_text::text_util;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -16,7 +17,7 @@ use crate::ui::activity_heatmap::{
     build_visible_heatmap_month_row, current_day_key_local, heatmap_intensity_level,
     heatmap_max_count, visible_heatmap_week_count,
 };
-use crate::ui::{Page, layout, style, text_util};
+use crate::ui::{Page, layout, style};
 
 const DAY_LABELS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const HEATMAP_CELL_WIDTH: usize = 2;

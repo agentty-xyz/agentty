@@ -7,6 +7,7 @@ use ag_forge::{
     ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread,
     ReviewRequestState,
 };
+use ag_tui_text::text_util::{self, inline_text, wrap_lines_to_rows};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -23,7 +24,6 @@ use crate::ui::diff_util::{
     DiffLine, DiffLineKind, FileTreeItem, diff_header_new_path, diff_header_old_path,
     parse_diff_lines,
 };
-use crate::ui::text_util::{self, inline_text, wrap_lines_to_rows};
 use crate::ui::{Component, Page, diff_util, markdown, review_comment_format, style};
 
 const SCROLLBAR_TRACK_SYMBOL: &str = "│";

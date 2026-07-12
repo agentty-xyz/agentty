@@ -46,9 +46,9 @@ Scope: `docs/site/content/docs/` and its child documentation pages.
   them to operate Agentty.
 - For workflow and keybinding docs, split dense lifecycle behavior into short titled
   sections and keep shortcut tables scan-friendly.
-- Treat `crates/agentty/src/ui/state/help_action.rs`, visible `Tab` labels, and runtime
-  mode handlers as the source of truth for shortcut names and availability. Include both
-  forward and reverse tab navigation when documenting list-mode controls.
+- Treat `crates/agentty/src/presentation/help_action.rs`, visible `Tab` labels, and
+  runtime mode handlers as the source of truth for shortcut names and availability.
+  Include both forward and reverse tab navigation when documenting list-mode controls.
 - Treat each E2E test's `FeatureTest::zola()` declaration as the source of truth for its
   generated feature-page title, description, and weight. Do not hand-edit those fields
   to values that disagree with the test.

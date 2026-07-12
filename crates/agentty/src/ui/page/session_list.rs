@@ -1,3 +1,4 @@
+use ag_tui_text::text_util::{format_duration_compact, inline_text, truncate_spans_with_ellipsis};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -9,7 +10,6 @@ use crate::domain::session::{Session, SessionSize, Status};
 use crate::domain::session_order::{self, GroupedSessionRow, SessionGroup, SessionTreePosition};
 use crate::presentation::help_action;
 use crate::ui::input_layout::first_table_column_width;
-use crate::ui::text_util::{format_duration_compact, inline_text, truncate_spans_with_ellipsis};
 use crate::ui::{Page, layout, markdown, style};
 
 /// Uses row-background highlighting without a textual cursor glyph.

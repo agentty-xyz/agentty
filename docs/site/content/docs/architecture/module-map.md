@@ -68,14 +68,14 @@ For file-level detail, read the module docstrings directly.
   thread, key dispatch, one handler per `AppMode` under `runtime/mode/`, and shared mode
   helpers for session-output metrics. Runtime owns `PresentationState`, including the
   shared `RenderCacheStore` used by input metrics and frame rendering.
-- `presentation.rs`: Frontend-neutral interaction state shared by runtime input and UI
-  output. It exposes mode, help-action, prompt, editor, scroll, viewport, and semantic
-  list-selection contracts without importing Ratatui or `ui/` formatting.
+- `presentation.rs` and `presentation/`: Frontend-neutral interaction state shared by
+  runtime input and UI output. They expose mode, help-action, prompt, editor, scroll,
+  viewport, and semantic list-selection contracts without importing Ratatui or `ui/`
+  formatting.
 - `ui/`: Rendering — frame composition, mode-to-page routing, pages under `ui/page/`,
   reusable widgets under `ui/component/`, application-to-frame projection in
   `ui/app_render.rs`, Agentty theme adapters for `ag-tui-text`, plus diff, layout,
-  review-comment formatting, and theme helpers. `ui/state.rs` only provides
-  compatibility re-exports for the shared presentation contracts.
+  review-comment formatting, and theme helpers.
 
 ## Layer Rules
 

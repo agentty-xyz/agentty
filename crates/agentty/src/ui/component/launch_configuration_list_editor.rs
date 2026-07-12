@@ -1,3 +1,4 @@
+use ag_tui_text::text_util::truncate_with_ellipsis;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
@@ -9,7 +10,6 @@ use crate::app::setting::{
 };
 use crate::domain::input::InputState;
 use crate::ui::style::palette;
-use crate::ui::text_util::truncate_with_ellipsis;
 use crate::ui::{Component, overlay};
 
 const FOOTER_LINE_COUNT: usize = 3;

@@ -1,6 +1,7 @@
 //! Session header, footer, and transcript display formatting.
 
 use ag_protocol::AgentResponseSummary;
+use ag_tui_text::text_util;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Borders;
@@ -13,7 +14,7 @@ use crate::domain::session::{
 };
 use crate::presentation::help_action::{self, ViewHelpState};
 use crate::ui::icon::Icon;
-use crate::ui::{markdown, style, text_util};
+use crate::ui::{markdown, style};
 
 const REVIEW_SUGGESTIONS_HEADER: &str = "### Suggestions";
 const REVIEW_SUGGESTIONS_HEADER_WITH_HINT: &str =

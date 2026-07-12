@@ -456,7 +456,7 @@ Always wrap these code elements in backticks when referenced in prose:
 - When keybindings or visible shortcut labels change, verify
   `docs/site/content/docs/usage/keybindings.md` and
   `docs/site/content/docs/usage/workflow.md` against the runtime mode handlers and
-  `crates/agentty/src/ui/state/help_action.rs`.
+  `crates/agentty/src/presentation/help_action.rs`.
 - When forge review-request support changes, keep the docs phrasing aligned with all
   supported forge families and their CLIs, including GitHub/`gh` and GitLab/`glab`.
 
