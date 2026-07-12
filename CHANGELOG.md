@@ -13,6 +13,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   folder holding per-branch worktrees). Previously, starting a session turn in such a
   project failed with a git status `must be run in a work tree` error.
 
+### Changed
+
+- agentty: render more Mermaid syntax in chat — extended node shapes, arrow variants,
+  invisible layout links, `&` fan-outs, flattened subgraphs, skipped styling and
+  sequence control statements, truncated over-long labels, and adaptive sequence
+  lifeline spacing.
+
 ## [v0.12.8] - 2026-07-09
 
 ### Removed
