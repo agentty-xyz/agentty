@@ -233,7 +233,7 @@ flowchart TD
   cli_channel["CliAgentChannel<br/>Antigravity/Claude; subprocess per turn"]
   app_server_mode["transport_mode() -> AppServer"]
   app_server_client["create_app_server_client()"]
-  app_server_channel["AppServerAgentChannel<br/>Codex/Gemini; persistent runtime per session"]
+  app_server_channel["AppServerAgentChannel<br/>Codex/Gemini"]
   client_trait["AppServerClient"]
   codex_client["RealCodexAppServerClient"]
   gemini_client["RealGeminiAcpClient"]
@@ -268,6 +268,12 @@ with prompt payloads owned by `ag-protocol` and re-exported through
 with an instruction-bootstrap marker, so later turns and runtime restarts can resume the
 native provider context and choose between resending the full prompt contract and a
 compact reminder.
+
+Codex keeps its app-server runtime resident between turns. Gemini ACP shuts down after
+each completed turn and replays the persisted transcript when a follow-up starts, so
+review-ready sessions do not accumulate idle Gemini processes. Both app-server providers
+run in isolated process groups; shutdown terminates the runtime and any tool or MCP
+descendants it spawned.
 
 <a id="architecture-session-isolation-guards"></a> Session isolation guards:
 

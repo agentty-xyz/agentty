@@ -5,8 +5,12 @@
 //! protocol-agnostic — it operates on raw JSON values and async stdio handles
 //! without knowledge of specific method names or event shapes.
 
+#![cfg(unix)]
+
+use std::os::unix::process::CommandExt as _;
 use std::time::Duration;
 
+use rustix::process::{self, Pid, Signal};
 use serde_json::Value;
 use tokio::io::{AsyncWriteExt, BufReader, Lines};
 
@@ -60,6 +64,35 @@ pub(crate) const STARTUP_TIMEOUT: Duration = Duration::from_mins(5);
 /// with the long-running Codex behavior instead of the shorter bootstrap
 /// timeout.
 pub(crate) const TURN_TIMEOUT: Duration = Duration::from_hours(4);
+
+/// App-server child isolated in its own Unix process group.
+///
+/// The process-group handle ensures abandoning a runtime terminates both the
+/// direct CLI process and any tool or MCP descendants that it spawned.
+pub(crate) struct AppServerRuntimeChild {
+    child: tokio::process::Child,
+    process_group_id: Option<Pid>,
+}
+
+impl AppServerRuntimeChild {
+    /// Returns the direct app-server process id while it is running.
+    pub(crate) fn id(&self) -> Option<u32> {
+        self.child.id()
+    }
+
+    /// Sends `signal` to every process in the isolated runtime group.
+    fn signal_process_group(&self, signal: Signal) {
+        if let Some(process_group_id) = self.process_group_id {
+            let _ = process::kill_process_group(process_group_id, signal);
+        }
+    }
+}
+
+impl Drop for AppServerRuntimeChild {
+    fn drop(&mut self) {
+        self.signal_process_group(Signal::KILL);
+    }
+}
 
 /// Writes one JSON-RPC payload as a newline-delimited line to `stdin`.
 ///
@@ -156,19 +189,25 @@ pub(crate) fn extract_json_error_message(response_value: &Value) -> Option<Strin
 
 /// Gracefully shuts down a child process by closing stdin, waiting briefly,
 /// then killing if the process has not exited.
-pub(crate) async fn shutdown_child(child: &mut tokio::process::Child) {
+pub(crate) async fn shutdown_child(child: &mut AppServerRuntimeChild) {
     // Closing stdin signals the child to exit cleanly.
-    drop(child.stdin.take());
+    drop(child.child.stdin.take());
 
-    if tokio::time::timeout(Duration::from_secs(1), child.wait())
+    if tokio::time::timeout(Duration::from_secs(1), child.child.wait())
         .await
         .is_err()
     {
+        child.signal_process_group(Signal::KILL);
+        // Best-effort fallback for a runtime that failed to enter its process group.
+        let _ = child.child.kill().await;
         // Best-effort: process may have already exited.
-        let _ = child.kill().await;
-        // Best-effort: process may have already exited.
-        let _ = child.wait().await;
+        let _ = child.child.wait().await;
     }
+
+    // A cooperative parent may still have left tool processes in its group.
+    // Kill any stragglers before relinquishing the group identifier.
+    child.signal_process_group(Signal::KILL);
+    child.process_group_id = None;
 }
 
 /// Spawns one app-server child process with piped stdin/stdout and hidden
@@ -187,12 +226,14 @@ pub(crate) fn spawn_runtime_command(
     runtime_name: &str,
 ) -> Result<
     (
-        tokio::process::Child,
+        AppServerRuntimeChild,
         tokio::process::ChildStdin,
         tokio::process::ChildStdout,
     ),
     AppServerError,
 > {
+    let mut command = command;
+    command.process_group(0);
     let mut command = tokio::process::Command::from(command);
     command
         .stdin(std::process::Stdio::piped())
@@ -200,40 +241,45 @@ pub(crate) fn spawn_runtime_command(
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true);
 
-    let mut child = command.spawn().map_err(|error| {
+    let child = command.spawn().map_err(|error| {
         AppServerError::Provider(format!("Failed to spawn `{runtime_name}`: {error}"))
     })?;
-    let stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| AppServerError::Provider(format!("{runtime_name} stdin is unavailable")))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| AppServerError::Provider(format!("{runtime_name} stdout is unavailable")))?;
+    let process_group_id = child
+        .id()
+        .and_then(|pid| i32::try_from(pid).ok())
+        .and_then(Pid::from_raw);
+    let mut child = AppServerRuntimeChild {
+        child,
+        process_group_id,
+    };
+    let stdin =
+        child.child.stdin.take().ok_or_else(|| {
+            AppServerError::Provider(format!("{runtime_name} stdin is unavailable"))
+        })?;
+    let stdout =
+        child.child.stdout.take().ok_or_else(|| {
+            AppServerError::Provider(format!("{runtime_name} stdout is unavailable"))
+        })?;
 
     Ok((child, stdin, stdout))
 }
 
 #[cfg(test)]
 mod tests {
-    use std::process::Stdio;
-
     use tokio::io::AsyncBufReadExt;
 
     use super::*;
 
     /// Spawns a simple echo process that mirrors stdin to stdout for transport
     /// write tests.
-    fn spawn_cat_process() -> tokio::process::Child {
-        let mut command = tokio::process::Command::new("cat");
-        command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true);
+    fn spawn_cat_process() -> (
+        AppServerRuntimeChild,
+        tokio::process::ChildStdin,
+        tokio::process::ChildStdout,
+    ) {
+        let command = std::process::Command::new("cat");
 
-        command.spawn().expect("failed to spawn `cat`")
+        spawn_runtime_command(command, "cat").expect("failed to spawn `cat`")
     }
 
     #[test]
@@ -319,9 +365,7 @@ mod tests {
     #[tokio::test]
     async fn write_json_line_writes_serialized_payload_with_newline() {
         // Arrange
-        let mut child = spawn_cat_process();
-        let mut stdin = child.stdin.take().expect("`cat` stdin should be piped");
-        let stdout = child.stdout.take().expect("`cat` stdout should be piped");
+        let (mut child, mut stdin, stdout) = spawn_cat_process();
         let payload = serde_json::json!({
             "id": "req-1",
             "method": "initialize",
@@ -442,18 +486,49 @@ mod tests {
         );
     }
 
-    /// Verifies `shutdown_child()` closes stdin and waits for a cooperative
-    /// child process to exit.
+    /// Verifies `shutdown_child()` closes stdin and reaps a cooperative child.
     #[tokio::test]
-    async fn shutdown_child_exits_cleanly_after_closing_stdin() {
+    async fn shutdown_child_reaps_process_after_closing_stdin() {
         // Arrange
-        let mut child = spawn_cat_process();
+        let (mut child, stdin, _stdout) = spawn_cat_process();
 
         // Act
+        drop(stdin);
         shutdown_child(&mut child).await;
-        let exit_status = child.wait().await.expect("child wait should succeed");
 
         // Assert
-        assert!(exit_status.success());
+        assert!(child.id().is_none());
+    }
+
+    /// Verifies forced shutdown reaches descendants spawned by an app-server.
+    #[tokio::test]
+    async fn shutdown_child_terminates_runtime_process_group() {
+        // Arrange
+        let mut command = std::process::Command::new("sh");
+        command.args([
+            "-c",
+            "trap '' TERM; sleep 60 & echo ready; cat >/dev/null; wait",
+        ]);
+        let (mut child, stdin, stdout) =
+            spawn_runtime_command(command, "process-group fixture").expect("fixture should spawn");
+        let mut stdout_lines = BufReader::new(stdout).lines();
+        let readiness_line = stdout_lines
+            .next_line()
+            .await
+            .expect("fixture readiness read should succeed")
+            .expect("fixture readiness line should be present");
+        assert_eq!(readiness_line, "ready");
+
+        // Act
+        drop(stdin);
+        shutdown_child(&mut child).await;
+        let stdout_closed =
+            tokio::time::timeout(Duration::from_secs(2), stdout_lines.next_line()).await;
+
+        // Assert
+        assert!(
+            matches!(stdout_closed, Ok(Ok(None))),
+            "runtime descendant should release inherited stdout when its process group terminates"
+        );
     }
 }

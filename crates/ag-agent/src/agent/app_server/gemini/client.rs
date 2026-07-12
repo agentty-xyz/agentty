@@ -30,6 +30,10 @@ impl RuntimeClientProvider for GeminiRuntimeProvider {
         agent::protocol_schema_instruction_mode(AgentKind::Gemini)
     }
 
+    fn retain_runtime_after_turn() -> bool {
+        false
+    }
+
     fn start_runtime(
         request: AppServerTurnRequest,
     ) -> AppServerFuture<Result<Self::Runtime, AppServerError>> {
@@ -64,7 +68,7 @@ impl RuntimeClientProvider for GeminiRuntimeProvider {
 
 /// Active Gemini ACP session runtime.
 pub(crate) struct GeminiSessionRuntime {
-    child: tokio::process::Child,
+    child: app_server_transport::AppServerRuntimeChild,
     state: GeminiRuntimeState,
     transport: AppServerStdioTransport,
 }

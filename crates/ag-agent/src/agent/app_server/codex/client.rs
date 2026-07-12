@@ -31,6 +31,10 @@ impl RuntimeClientProvider for CodexRuntimeProvider {
         agent::protocol_schema_instruction_mode(AgentKind::Codex)
     }
 
+    fn retain_runtime_after_turn() -> bool {
+        true
+    }
+
     fn start_runtime(
         request: AppServerTurnRequest,
     ) -> AppServerFuture<Result<Self::Runtime, AppServerError>> {
@@ -66,7 +70,7 @@ impl RuntimeClientProvider for CodexRuntimeProvider {
 
 /// Active Codex app-server session runtime.
 pub(crate) struct CodexSessionRuntime {
-    child: tokio::process::Child,
+    child: app_server_transport::AppServerRuntimeChild,
     state: CodexRuntimeState,
     transport: AppServerStdioTransport,
 }
