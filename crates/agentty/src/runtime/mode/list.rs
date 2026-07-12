@@ -6,7 +6,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::app::{App, Tab};
 use crate::domain::input::InputState;
 use crate::domain::session::{Session, Status};
-use crate::presentation::app_mode::{AppMode, ConfirmationIntent, HelpContext};
+use crate::presentation::app_mode::{AppMode, ChatFocus, ConfirmationIntent, HelpContext};
 use crate::presentation::help_action::{
     HelpAction, project_list_actions, session_list_actions, settings_actions, system_log_actions,
 };
@@ -367,6 +367,7 @@ pub(crate) fn open_session_prompt(app: &mut App, session_id: String) {
     app.mode = AppMode::Prompt {
         at_mention_state: None,
         attachment_state: PromptAttachmentState::default(),
+        focus: ChatFocus::Input,
         history_state: PromptHistoryState::new(Vec::new()),
         slash_state: app.prompt_slash_state(),
         session_id: session_id.into(),

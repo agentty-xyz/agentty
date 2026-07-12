@@ -6,7 +6,7 @@ use std::path::Path;
 use crate::app::session_state::SessionGitStatus;
 use crate::app::{
     App, AssignedIssueState, RequestedReviewState, SettingsManager, Tab, UpdateStatus,
-    review_view_state, session,
+    review_view_state,
 };
 use crate::domain::agent::AgentCliInfo;
 use crate::domain::project::ProjectListItem;
@@ -63,8 +63,7 @@ pub(crate) struct AppViewSnapshot<'a> {
 impl App {
     /// Projects immutable application state for one frontend frame.
     pub(crate) fn view_snapshot(&self) -> AppViewSnapshot<'_> {
-        let wall_clock_unix_seconds =
-            session::unix_timestamp_from_system_time(self.sessions.state().now_system_time());
+        let wall_clock_unix_seconds = self.wall_clock_unix_seconds();
         let status_bar_fyi_rotation_index =
             u64::try_from(wall_clock_unix_seconds.div_euclid(60)).unwrap_or_default();
         let visible_session_id = visible_review_session_id(&self.mode);

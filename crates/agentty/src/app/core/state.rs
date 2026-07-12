@@ -59,7 +59,7 @@ use crate::infra::db;
 use crate::infra::fs::{FsClient, RealFsClient};
 use crate::infra::project_discovery::{ProjectDiscoveryClient, RealProjectDiscoveryClient};
 use crate::infra::tmux::{RealTmuxClient, TmuxClient};
-use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, QuestionFocus};
+use crate::presentation::app_mode::{AppMode, ChatFocus, ConfirmationViewMode};
 
 /// Relative directory name used for session git worktrees within the
 /// `agentty` home directory.
@@ -861,6 +861,7 @@ impl App {
         self.mode = AppMode::Prompt {
             at_mention_state: None,
             attachment_state: crate::presentation::prompt::PromptAttachmentState::default(),
+            focus: ChatFocus::Input,
             history_state: crate::presentation::prompt::PromptHistoryState::new(Vec::new()),
             slash_state: self.prompt_slash_state(),
             session_id: SessionId::from(session_id.as_str()),
@@ -1072,6 +1073,11 @@ impl App {
     ) -> Result<(), crate::app::session::SessionError> {
         self.sessions
             .enqueue_message(&self.services, session_id, prompt)
+    }
+
+    /// Returns the current wall-clock time used for render-time timers.
+    pub(crate) fn wall_clock_unix_seconds(&self) -> i64 {
+        session::unix_timestamp_from_system_time(self.sessions.state().now_system_time())
     }
 
     /// Returns the focused-review output state that should be shown when one
@@ -1849,7 +1855,7 @@ impl App {
         self.mode = AppMode::Question {
             at_mention_state: None,
             current_index,
-            focus: QuestionFocus::Answer,
+            focus: ChatFocus::Input,
             input,
             questions,
             responses,

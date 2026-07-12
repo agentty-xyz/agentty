@@ -3,6 +3,7 @@ use std::io;
 use crossterm::event::{self, KeyCode, KeyEvent};
 use ratatui::Terminal;
 use ratatui::backend::Backend;
+use ratatui::layout::Rect;
 use tracing::warn;
 
 use crate::app::prompt_intent::{
@@ -16,14 +17,15 @@ use crate::domain::input::InputState;
 use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, SessionId, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::presentation::app_mode::{
-    AppMode, ConfirmationIntent, ConfirmationViewMode, DiffRightPanel, HelpContext,
+    AppMode, ChatFocus, ConfirmationIntent, ConfirmationViewMode, DiffRightPanel, HelpContext,
 };
 use crate::presentation::help_action::{self, ViewSessionState};
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState};
 use crate::runtime::EventResult;
+use crate::runtime::mode::chat_scroll::{self, ChatScrollMetrics};
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
 use crate::runtime::mode::input_key::is_insertable_char_key;
-use crate::runtime::mode::{prompt, session_output_metric};
+use crate::runtime::mode::prompt;
 use crate::ui::RenderCacheStore;
 
 #[derive(Clone)]
@@ -31,12 +33,6 @@ struct ViewContext {
     scroll_offset: Option<u16>,
     session_id: SessionId,
     session_index: usize,
-}
-
-#[derive(Clone, Copy)]
-struct ViewMetrics {
-    total_lines: u16,
-    view_height: u16,
 }
 
 /// Pending review and scroll updates produced by one key event in session-view
@@ -57,7 +53,7 @@ impl ViewPendingUpdate {
 /// Borrowed per-key context used while processing one session-view key event.
 struct ViewKeyContext<'a> {
     context: &'a ViewContext,
-    metrics: ViewMetrics,
+    metrics: ChatScrollMetrics,
     session_snapshot: &'a ViewSessionSnapshot,
 }
 
@@ -269,7 +265,7 @@ async fn handle_view_key(
         return should_apply_pending_update;
     }
 
-    if handle_scroll_key(key, view_metrics, pending_update) {
+    if chat_scroll::apply_scroll_key(&mut pending_update.scroll_offset, view_metrics, key) {
         return true;
     }
 
@@ -380,42 +376,6 @@ async fn handle_primary_view_key(
     }
 
     Some(true)
-}
-
-/// Handles scroll-only keys in session view.
-fn handle_scroll_key(
-    key: KeyEvent,
-    view_metrics: ViewMetrics,
-    pending_update: &mut ViewPendingUpdate,
-) -> bool {
-    match key.code {
-        KeyCode::Char('j') | KeyCode::Down => {
-            pending_update.scroll_offset =
-                scroll_offset_down(pending_update.scroll_offset, view_metrics, 1);
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            pending_update.scroll_offset = Some(scroll_offset_up(
-                pending_update.scroll_offset,
-                view_metrics,
-                1,
-            ));
-        }
-        KeyCode::Char('g') => pending_update.scroll_offset = Some(0),
-        KeyCode::Char('G') => pending_update.scroll_offset = None,
-        KeyCode::Char('d') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
-            pending_update.scroll_offset =
-                scroll_offset_half_page_down(pending_update.scroll_offset, view_metrics);
-        }
-        KeyCode::Char('u') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
-            pending_update.scroll_offset = Some(scroll_offset_half_page_up(
-                pending_update.scroll_offset,
-                view_metrics,
-            ));
-        }
-        _ => return false,
-    }
-
-    true
 }
 
 /// Handles workflow actions in session view such as diff, publish, review,
@@ -910,6 +870,7 @@ fn switch_view_to_prompt(
     app.mode = AppMode::Prompt {
         at_mention_state: None,
         attachment_state: PromptAttachmentState::default(),
+        focus: ChatFocus::Input,
         history_state,
         slash_state: app.prompt_slash_state(),
         session_id: view_context.session_id.clone(),
@@ -1026,29 +987,22 @@ fn view_metrics<B: Backend>(
     render_cache_store: &RenderCacheStore,
     terminal: &Terminal<B>,
     view_context: &ViewContext,
-) -> io::Result<ViewMetrics>
+) -> io::Result<ChatScrollMetrics>
 where
     B::Error: std::error::Error + Send + Sync + 'static,
 {
     let terminal_size = terminal.size().map_err(crate::runtime::backend_err)?;
-    let view_height = terminal_size.height.saturating_sub(5);
-    let output_width = terminal_size.width.saturating_sub(2);
-    let (review_status_message, review_text) = app.review_view_state(&view_context.session_id);
-    let total_lines = session_output_metric::rendered_output_line_count_with_cache(
+    let terminal_rect = Rect::new(0, 0, terminal_size.width, terminal_size.height);
+
+    Ok(ChatScrollMetrics::new(
         app,
         render_cache_store,
         &view_context.session_id,
         view_context.session_index,
-        review_status_message.as_deref(),
-        review_text,
-        output_width,
-    );
-
-    Ok(ViewMetrics {
-        total_lines,
-        view_height,
-    })
+        terminal_rect,
+    ))
 }
+
 /// Extracts user prompt history entries from persisted session output text.
 ///
 /// The parser accepts both legacy multiline prompts (raw continuation lines)
@@ -1101,39 +1055,6 @@ fn session_prompt_history_entries(session: &crate::domain::session::Session) -> 
     };
 
     prompt_history_entries(&transcript_text)
-}
-
-fn scroll_offset_down(scroll_offset: Option<u16>, metrics: ViewMetrics, step: u16) -> Option<u16> {
-    let current_offset = scroll_offset?;
-
-    let next_offset = current_offset.saturating_add(step.max(1));
-    if next_offset >= metrics.total_lines.saturating_sub(metrics.view_height) {
-        return None;
-    }
-
-    Some(next_offset)
-}
-
-fn scroll_offset_up(scroll_offset: Option<u16>, metrics: ViewMetrics, step: u16) -> u16 {
-    let current_offset =
-        scroll_offset.unwrap_or_else(|| metrics.total_lines.saturating_sub(metrics.view_height));
-
-    current_offset.saturating_sub(step.max(1))
-}
-
-/// Computes the next scroll offset for half-page downward navigation.
-fn scroll_offset_half_page_down(scroll_offset: Option<u16>, metrics: ViewMetrics) -> Option<u16> {
-    scroll_offset_down(scroll_offset, metrics, half_page_scroll_step(metrics))
-}
-
-/// Computes the next scroll offset for half-page upward navigation.
-fn scroll_offset_half_page_up(scroll_offset: Option<u16>, metrics: ViewMetrics) -> u16 {
-    scroll_offset_up(scroll_offset, metrics, half_page_scroll_step(metrics))
-}
-
-/// Returns the number of lines used for half-page scroll shortcuts.
-fn half_page_scroll_step(metrics: ViewMetrics) -> u16 {
-    metrics.view_height / 2
 }
 
 /// Opens review mode and serves cached review or loading status.
@@ -1272,6 +1193,7 @@ mod tests {
     use crate::domain::agent::AgentModel;
     use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
     use crate::infra::tmux::{MockTmuxClient, TmuxClient};
+    use crate::runtime::mode::session_output_metric;
     use crate::ui::component::session_output::SessionOutputLineContext;
     use crate::ui::page::session_chat::SessionChatPage;
 
@@ -1927,7 +1849,7 @@ mod tests {
             "word ".repeat(60),
         )]);
         app.sessions.sessions_mut()[0].transcript = Some(transcript);
-        let metrics = ViewMetrics {
+        let metrics = ChatScrollMetrics {
             total_lines: session_output_metric::rendered_output_line_count(
                 &app,
                 &session_id,
@@ -1940,40 +1862,10 @@ mod tests {
         };
 
         // Act
-        let next_offset = scroll_offset_down(Some(0), metrics, 1);
+        let next_offset = chat_scroll::scroll_offset_down(Some(0), metrics, 1);
 
         // Assert
         assert_eq!(next_offset, Some(1));
-    }
-
-    #[test]
-    fn test_scroll_offset_down_returns_none_at_end_of_content() {
-        // Arrange
-        let metrics = ViewMetrics {
-            total_lines: 20,
-            view_height: 10,
-        };
-
-        // Act
-        let next_offset = scroll_offset_down(Some(9), metrics, 1);
-
-        // Assert
-        assert_eq!(next_offset, None);
-    }
-
-    #[test]
-    fn test_scroll_offset_up_uses_bottom_when_scroll_is_unset() {
-        // Arrange
-        let metrics = ViewMetrics {
-            total_lines: 30,
-            view_height: 10,
-        };
-
-        // Act
-        let next_offset = scroll_offset_up(None, metrics, 5);
-
-        // Assert
-        assert_eq!(next_offset, 15);
     }
 
     #[tokio::test]
@@ -2800,7 +2692,7 @@ mod tests {
         };
         let view_key_context = ViewKeyContext {
             context: &view_context,
-            metrics: ViewMetrics {
+            metrics: ChatScrollMetrics {
                 total_lines: 10,
                 view_height: 5,
             },
@@ -2856,7 +2748,7 @@ mod tests {
         };
         let view_key_context = ViewKeyContext {
             context: &view_context,
-            metrics: ViewMetrics {
+            metrics: ChatScrollMetrics {
                 total_lines: 10,
                 view_height: 5,
             },
@@ -3046,7 +2938,7 @@ mod tests {
         };
         let view_key_context = ViewKeyContext {
             context: &view_context,
-            metrics: ViewMetrics {
+            metrics: ChatScrollMetrics {
                 total_lines: 10,
                 view_height: 5,
             },
@@ -3103,7 +2995,7 @@ mod tests {
         };
         let view_key_context = ViewKeyContext {
             context: &view_context,
-            metrics: ViewMetrics {
+            metrics: ChatScrollMetrics {
                 total_lines: 10,
                 view_height: 5,
             },
@@ -3157,7 +3049,7 @@ mod tests {
         };
         let view_key_context = ViewKeyContext {
             context: &view_context,
-            metrics: ViewMetrics {
+            metrics: ChatScrollMetrics {
                 total_lines: 10,
                 view_height: 5,
             },
@@ -3196,7 +3088,7 @@ mod tests {
             scroll_offset: Some(2),
         };
         let view_context = view_context(&mut app).expect("expected view context");
-        let view_metrics = ViewMetrics {
+        let view_metrics = ChatScrollMetrics {
             total_lines: 10,
             view_height: 5,
         };

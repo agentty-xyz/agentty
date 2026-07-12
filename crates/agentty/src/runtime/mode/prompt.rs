@@ -3,6 +3,7 @@ use std::io;
 use crossterm::event::{self, KeyCode, KeyEvent};
 use ratatui::Terminal;
 use ratatui::backend::Backend;
+use ratatui::layout::Rect;
 
 use crate::app::App;
 use crate::app::prompt_intent::{
@@ -11,14 +12,16 @@ use crate::app::prompt_intent::{
 use crate::domain::agent::AgentKind;
 use crate::domain::input::InputState;
 use crate::domain::session::SessionId;
-use crate::presentation::app_mode::AppMode;
+use crate::presentation::app_mode::{AppMode, ChatFocus};
 use crate::presentation::prompt::{
     PromptAtMentionState, apply_prompt_delete_range as apply_prompt_delete_range_components,
     current_line_delete_range as prompt_current_line_delete_range, insert_prompt_character,
     insert_prompt_text, prompt_slash_option_count,
 };
 use crate::runtime::EventResult;
+use crate::runtime::mode::chat_scroll::{self, ChatScrollMetrics};
 use crate::runtime::mode::{at_mention, input_key};
+use crate::ui::RenderCacheStore;
 use crate::ui::input_layout::{move_input_cursor_down, move_input_cursor_up};
 
 /// Captures prompt-mode routing flags derived from the current session.
@@ -94,8 +97,14 @@ enum PromptSessionMode {
 }
 
 /// Handles key input while the app is in `AppMode::Prompt`.
-pub(crate) async fn handle<B: Backend>(
+///
+/// `Tab` moves focus between the composer and the chat transcript above it,
+/// unless the `@`-mention dropdown is open and claims the key for completion.
+/// While the transcript holds focus, scroll keys navigate it and the composer
+/// text stays untouched.
+pub(crate) async fn handle_with_cache<B: Backend>(
     app: &mut App,
+    render_cache_store: &RenderCacheStore,
     terminal: &mut Terminal<B>,
     key: KeyEvent,
 ) -> io::Result<EventResult>
@@ -114,9 +123,94 @@ where
         return Ok(EventResult::Continue);
     }
 
+    if handle_focus_toggle(app, key) {
+        return Ok(EventResult::Continue);
+    }
+
+    if handle_chat_focus_key(app, render_cache_store, terminal, &prompt_context, key)? {
+        return Ok(EventResult::Continue);
+    }
+
     handle_editing_key(app, terminal, key, &prompt_context).await?;
 
     Ok(EventResult::Continue)
+}
+
+/// Toggles focus between the composer and the chat transcript on `Tab`.
+///
+/// Returns `true` when the key was consumed as a focus toggle.
+fn handle_focus_toggle(app: &mut App, key: KeyEvent) -> bool {
+    if key.code != KeyCode::Tab {
+        return false;
+    }
+
+    let AppMode::Prompt { focus, .. } = &mut app.mode else {
+        return false;
+    };
+
+    *focus = match *focus {
+        ChatFocus::Input => ChatFocus::Chat,
+        ChatFocus::Chat => ChatFocus::Input,
+    };
+
+    true
+}
+
+/// Handles keys while the chat transcript above the composer holds focus.
+///
+/// Scroll keys navigate the transcript and `Tab` returns focus to the composer.
+/// Every other key is swallowed so the typed draft cannot change while the user
+/// reads back the conversation; only `Ctrl+C` falls through to composer
+/// cancellation. Swallowed keys skip scroll-metric construction, which lays out
+/// the transcript.
+///
+/// Returns `true` when the key was consumed by the focused transcript.
+fn handle_chat_focus_key<B: Backend>(
+    app: &mut App,
+    render_cache_store: &RenderCacheStore,
+    terminal: &Terminal<B>,
+    prompt_context: &PromptContext,
+    key: KeyEvent,
+) -> io::Result<bool>
+where
+    B::Error: std::error::Error + Send + Sync + 'static,
+{
+    if !matches!(
+        &app.mode,
+        AppMode::Prompt {
+            focus: ChatFocus::Chat,
+            ..
+        }
+    ) {
+        return Ok(false);
+    }
+
+    if input_key::is_control_key(key) && key.code == KeyCode::Char('c') {
+        return Ok(false);
+    }
+
+    // Swallow non-scroll keys before building scroll metrics, which lay out and
+    // fingerprint the whole transcript.
+    if !chat_scroll::is_scroll_key(key) {
+        return Ok(true);
+    }
+
+    let terminal_size = terminal.size().map_err(crate::runtime::backend_err)?;
+    let metrics = ChatScrollMetrics::new(
+        app,
+        render_cache_store,
+        &prompt_context.session_id,
+        prompt_context.session_index,
+        Rect::new(0, 0, terminal_size.width, terminal_size.height),
+    );
+
+    let AppMode::Prompt { scroll_offset, .. } = &mut app.mode else {
+        return Ok(false);
+    };
+
+    chat_scroll::apply_scroll_key(scroll_offset, metrics, key);
+
+    Ok(true)
 }
 
 /// Handles keys when the at-mention dropdown is active.
@@ -234,9 +328,20 @@ fn handle_prompt_input(app: &mut App, action: fn(&mut InputState)) {
 
 /// Inserts pasted content into the prompt input while normalizing mixed
 /// line-endings to `\n`.
+///
+/// Pastes are dropped while the chat transcript holds focus so scrolling the
+/// conversation never rewrites the typed draft.
 pub(crate) fn handle_paste(app: &mut App, pasted_text: &str) {
     let normalized_text = input_key::normalize_pasted_text(pasted_text);
     if normalized_text.is_empty() {
+        return;
+    }
+
+    if let AppMode::Prompt {
+        focus: ChatFocus::Chat,
+        ..
+    } = &app.mode
+    {
         return;
     }
 
@@ -1013,6 +1118,7 @@ mod tests {
         app.mode = AppMode::Prompt {
             at_mention_state,
             attachment_state: PromptAttachmentState::default(),
+            focus: ChatFocus::Input,
             history_state: PromptHistoryState::new(Vec::new()),
             slash_state: PromptSlashState::default(),
             session_id: session_id.into(),
@@ -1052,6 +1158,108 @@ mod tests {
                 return next_event;
             }
         }
+    }
+
+    /// Builds a terminal large enough to render the composer and transcript.
+    fn test_terminal() -> Terminal<ratatui::backend::TestBackend> {
+        let backend = ratatui::backend::TestBackend::new(120, 30);
+
+        Terminal::new(backend).expect("failed to create terminal")
+    }
+
+    /// Returns the current composer focus, panicking outside prompt mode.
+    fn prompt_focus(app: &App) -> ChatFocus {
+        let AppMode::Prompt { focus, .. } = &app.mode else {
+            unreachable!("expected AppMode::Prompt");
+        };
+
+        *focus
+    }
+
+    /// Sends one plain key press through the prompt-mode handler.
+    async fn press_prompt_key(app: &mut App, code: KeyCode) {
+        let mut terminal = test_terminal();
+
+        handle_with_cache(
+            app,
+            &RenderCacheStore::default(),
+            &mut terminal,
+            KeyEvent::new(code, event::KeyModifiers::NONE),
+        )
+        .await
+        .expect("prompt key handling failed");
+    }
+
+    #[tokio::test]
+    async fn test_tab_toggles_focus_between_composer_and_chat() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("draft text", None).await;
+
+        // Act
+        press_prompt_key(&mut app, KeyCode::Tab).await;
+        let chat_focus = prompt_focus(&app);
+        press_prompt_key(&mut app, KeyCode::Tab).await;
+
+        // Assert
+        assert_eq!(chat_focus, ChatFocus::Chat);
+        assert_eq!(prompt_focus(&app), ChatFocus::Input);
+    }
+
+    #[tokio::test]
+    async fn test_chat_focused_keys_scroll_transcript_without_editing_draft() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("draft text", None).await;
+        press_prompt_key(&mut app, KeyCode::Tab).await;
+
+        // Act — `g` jumps to the transcript top, and `q` must not reach the
+        // composer as text while the transcript is focused.
+        press_prompt_key(&mut app, KeyCode::Char('g')).await;
+        press_prompt_key(&mut app, KeyCode::Char('q')).await;
+
+        // Assert
+        let AppMode::Prompt {
+            input,
+            scroll_offset,
+            ..
+        } = &app.mode
+        else {
+            unreachable!("expected AppMode::Prompt");
+        };
+        assert_eq!(*scroll_offset, Some(0));
+        assert_eq!(input.text(), "draft text");
+    }
+
+    #[tokio::test]
+    async fn test_esc_keeps_chat_focus_without_canceling_prompt() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("draft text", None).await;
+        press_prompt_key(&mut app, KeyCode::Tab).await;
+
+        // Act
+        press_prompt_key(&mut app, KeyCode::Esc).await;
+
+        // Assert
+        assert_eq!(prompt_focus(&app), ChatFocus::Chat);
+        let AppMode::Prompt { input, .. } = &app.mode else {
+            unreachable!("expected AppMode::Prompt");
+        };
+        assert_eq!(input.text(), "draft text");
+    }
+
+    #[tokio::test]
+    async fn test_handle_paste_is_ignored_while_chat_is_focused() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("draft text", None).await;
+        press_prompt_key(&mut app, KeyCode::Tab).await;
+
+        // Act
+        handle_paste(&mut app, "pasted");
+
+        // Assert
+        let AppMode::Prompt { input, .. } = &app.mode else {
+            unreachable!("expected AppMode::Prompt");
+        };
+        assert_eq!(input.text(), "draft text");
     }
 
     #[test]
@@ -2264,6 +2472,7 @@ mod tests {
         app.mode = AppMode::Prompt {
             at_mention_state: None,
             attachment_state: PromptAttachmentState::default(),
+            focus: ChatFocus::Input,
             history_state: PromptHistoryState::new(Vec::new()),
             input: InputState::with_text("follow up".to_string()),
             session_id: "missing-session".into(),

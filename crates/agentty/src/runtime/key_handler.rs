@@ -78,7 +78,15 @@ where
                 )
                 .await
             }
-            AppMode::Prompt { .. } => mode::prompt::handle(app, terminal, key).await,
+            AppMode::Prompt { .. } => {
+                mode::prompt::handle_with_cache(
+                    app,
+                    presentation.render_cache_store(),
+                    terminal,
+                    key,
+                )
+                .await
+            }
             AppMode::Question { .. } => {
                 let size = terminal.size().map_err(backend_err)?;
                 let terminal_rect = Rect::new(0, 0, size.width, size.height);

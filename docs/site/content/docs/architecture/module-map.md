@@ -66,9 +66,9 @@ For file-level detail, read the module docstrings directly.
   transport internals stay private to `crates/ag-agent/`.
 - `runtime/`: Terminal lifecycle and the event loop — terminal setup, the event-reader
   thread, key dispatch, mode-focused handlers under `runtime/mode/`, and shared handlers
-  for common interactions such as issue/review detail navigation and session-output
-  metrics. Runtime owns `PresentationState`, including the shared `RenderCacheStore`
-  used by input metrics and frame rendering.
+  for common interactions such as issue/review detail navigation, session-output
+  metrics, and transcript scrolling. Runtime owns `PresentationState`, including the
+  shared `RenderCacheStore` used by input metrics and frame rendering.
 - `presentation.rs` and `presentation/`: Frontend-neutral interaction state shared by
   runtime input and UI output. They expose mode, help-action, prompt, editor, scroll,
   viewport, and semantic list-selection contracts without importing Ratatui or `ui/`
