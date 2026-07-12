@@ -5,6 +5,7 @@
 //! in Rust and can be compiled into both PTY executor actions (for semantic
 //! assertions) and VHS tape files (for visual screenshot capture).
 
+use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -140,7 +141,9 @@ impl Scenario {
     /// Execute this scenario in a PTY session with proof collection.
     ///
     /// Returns both the final frame and a [`ProofReport`] containing all
-    /// labeled captures encountered during execution.
+    /// labeled captures encountered during execution. Steps are executed in
+    /// batches ending at each labeled capture so input-only and VHS viewing
+    /// steps do not trigger redundant PTY frame drains.
     ///
     /// # Errors
     ///
@@ -152,17 +155,15 @@ impl Scenario {
         let mut report = ProofReport::new(&self.name);
         let mut last_frame = None;
 
-        for step in &self.steps {
-            match step {
-                Step::CaptureLabeled { label, description } => {
-                    let frame = session.capture_frame();
-                    report.add_capture(label, description, &frame);
-                    last_frame = Some(frame);
-                }
-                _ => {
-                    last_frame = Some(session.execute_steps(std::slice::from_ref(step))?);
-                }
+        for step_range in self.proof_step_ranges() {
+            let final_step_index = *step_range.end();
+            let frame = session.execute_steps(&self.steps[step_range])?;
+
+            if let Step::CaptureLabeled { label, description } = &self.steps[final_step_index] {
+                report.add_capture(label, description, &frame);
             }
+
+            last_frame = Some(frame);
         }
 
         let final_frame = last_frame.unwrap_or_else(|| session.capture_frame());
@@ -232,6 +233,29 @@ impl Scenario {
         tape.write_to(tape_path)?;
 
         Ok(tape_path.to_path_buf())
+    }
+
+    /// Group PTY proof steps so each labeled capture terminates one batch.
+    ///
+    /// Executing a whole batch avoids the implicit final-frame capture that
+    /// [`PtySession::execute_steps`] performs when called with one input-only
+    /// step while still preserving every labeled proof boundary.
+    fn proof_step_ranges(&self) -> Vec<RangeInclusive<usize>> {
+        let mut ranges = Vec::new();
+        let mut range_start = 0;
+
+        for (step_index, step) in self.steps.iter().enumerate() {
+            if matches!(step, Step::CaptureLabeled { .. }) {
+                ranges.push(range_start..=step_index);
+                range_start = step_index + 1;
+            }
+        }
+
+        if range_start < self.steps.len() {
+            ranges.push(range_start..=self.steps.len() - 1);
+        }
+
+        ranges
     }
 }
 
@@ -338,6 +362,24 @@ mod tests {
 
         // Assert
         assert_eq!(scenario.steps.len(), 2);
+    }
+
+    #[test]
+    fn proof_step_ranges_end_at_labeled_captures() {
+        // Arrange
+        let scenario = Scenario::new("proof-batches")
+            .press_key("Tab")
+            .viewing_pause_ms(500)
+            .capture_labeled("first", "First capture")
+            .write_text("hello")
+            .capture_labeled("second", "Second capture")
+            .press_key("Enter");
+
+        // Act
+        let ranges = scenario.proof_step_ranges();
+
+        // Assert
+        assert_eq!(ranges, vec![0..=2, 3..=4, 5..=5]);
     }
 
     #[test]
