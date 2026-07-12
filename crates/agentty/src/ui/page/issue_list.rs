@@ -140,6 +140,7 @@ fn issue_block() -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)
         .title("Assigned GitHub Issues")
+        .border_style(style::border_style())
 }
 
 #[cfg(test)]

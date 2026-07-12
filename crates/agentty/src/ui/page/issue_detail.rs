@@ -191,6 +191,7 @@ fn issue_detail_block(issue: &AssignedIssue) -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)
         .title(format!("Issue {} · {}", issue.display_id, issue.repository))
+        .border_style(style::border_style())
 }
 
 #[cfg(test)]
