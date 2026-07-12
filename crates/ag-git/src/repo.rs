@@ -120,6 +120,10 @@ pub(super) enum SharedRepo {
 pub(super) fn resolve_shared_repo_sync(repo_path: &Path) -> Result<SharedRepo, GitError> {
     let (git_dir, git_common_dir) = git_directory_paths(repo_path)?;
 
+    // NOTE: `to_string_lossy` replaces non-UTF-8 bytes with U+FFFD, which would
+    // produce a path git cannot find on exotic systems. The rest of this file
+    // follows the same String-based convention, so this is consistent, but
+    // callers on non-UTF-8 paths will get a generic git failure.
     let git_common_dir_arg = git_common_dir.to_string_lossy();
     let is_bare = run_git_command_sync(
         repo_path,
