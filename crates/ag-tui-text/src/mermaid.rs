@@ -21,7 +21,8 @@ pub const MAX_SOURCE_BYTE_COUNT: usize = 16 * 1024;
 /// Maximum source lines accepted for one mermaid source preview.
 pub const MAX_SOURCE_LINE_COUNT: usize = 128;
 const NODE_BOX_HEIGHT: usize = 3;
-const SEQUENCE_GAP_COLUMNS: usize = MAX_LABEL_WIDTH + 2;
+const SEQUENCE_MAX_GAP_COLUMNS: usize = MAX_LABEL_WIDTH + 2;
+const SEQUENCE_MIN_GAP_COLUMNS: usize = 8;
 const SEQUENCE_SELF_LOOP_COLUMNS: usize = 3;
 
 /// Rendered mermaid diagram rows plus the widest row width in cells.
@@ -36,9 +37,14 @@ pub struct MermaidDiagram {
 /// lines.
 ///
 /// Supports `graph`/`flowchart` headers with `TD`, `TB`, and `LR` directions,
-/// node statements, and edge chains, `erDiagram` headers with crow's-foot
-/// relationship statements, and simple `sequenceDiagram` participant/message
-/// statements.
+/// node statements (including `&` fan-out groups and common node shapes), and
+/// edge chains with solid, dotted, thick, and bidirectional arrow variants,
+/// plus invisible links that affect layout without being painted,
+/// `erDiagram` headers with crow's-foot relationship statements, and simple
+/// `sequenceDiagram` participant/message statements. Flowchart subgraphs are
+/// flattened, styling statements are skipped, over-long labels are truncated
+/// with an ellipsis, and sequence notes, activations, and control blocks are
+/// skipped rather than drawn.
 /// Returns `None` for unsupported diagram types, unsupported cycles, or
 /// layouts so callers can keep the plain code-block presentation.
 pub fn render_mermaid(source: &str) -> Option<MermaidDiagram> {
@@ -102,6 +108,7 @@ enum NodeShape {
 /// One declared diagram node.
 struct MermaidNode {
     is_hidden: bool,
+    is_visible: bool,
     label: String,
     shape: NodeShape,
 }
@@ -110,6 +117,8 @@ struct MermaidNode {
 struct MermaidEdge {
     from_index: usize,
     has_arrow: bool,
+    has_source_arrow: bool,
+    is_visible: bool,
     label: Option<String>,
     source_marker: Option<char>,
     target_marker: Option<char>,
@@ -157,13 +166,20 @@ fn parse_sequence_diagram(source: &str) -> Option<SequenceDiagram> {
     let mut messages = Vec::new();
 
     for line in lines {
-        if let Some(participant_text) = line.strip_prefix("participant ") {
+        let participant_text = line
+            .strip_prefix("participant ")
+            .or_else(|| line.strip_prefix("actor "));
+        if let Some(participant_text) = participant_text {
             parse_sequence_participant(
                 participant_text,
                 &mut participant_indexes,
                 &mut participants,
             )?;
 
+            continue;
+        }
+
+        if is_ignorable_sequence_statement(line) {
             continue;
         }
 
@@ -183,6 +199,40 @@ fn parse_sequence_diagram(source: &str) -> Option<SequenceDiagram> {
         messages,
         participants,
     })
+}
+
+/// Returns whether a sequence statement is decorative and safe to skip.
+///
+/// Notes, autonumbering, activations, and `alt`/`opt`/`loop`-style control
+/// blocks cannot be drawn by this preview; skipping them keeps the remaining
+/// participant and message lines renderable instead of dropping the diagram.
+fn is_ignorable_sequence_statement(line: &str) -> bool {
+    const IGNORABLE_KEYWORDS: [&str; 16] = [
+        "activate",
+        "alt",
+        "and",
+        "autonumber",
+        "box",
+        "break",
+        "critical",
+        "deactivate",
+        "else",
+        "end",
+        "loop",
+        "note",
+        "opt",
+        "option",
+        "par",
+        "rect",
+    ];
+
+    let Some(first_token) = line.split_whitespace().next() else {
+        return true;
+    };
+
+    IGNORABLE_KEYWORDS
+        .iter()
+        .any(|keyword| first_token.eq_ignore_ascii_case(keyword))
 }
 
 /// Parses one sequence participant declaration.
@@ -218,7 +268,7 @@ fn parse_sequence_message(
 
     let (link_text, label_text) = line.split_once(':')?;
     let (from_identifier, to_identifier) = split_sequence_link(link_text)?;
-    let label = truncated_sequence_label(label_text)?;
+    let label = truncated_renderable_label(label_text)?;
 
     let from_index = sequence_participant_index(
         from_identifier,
@@ -243,24 +293,30 @@ fn parse_sequence_message(
 }
 
 /// Splits the supported sequence message operators into source and target IDs.
+///
+/// Cross (`-x`) and async (`-)`) endings render as plain arrows, and a leading
+/// `+`/`-` activation shorthand on the target identifier is stripped.
 fn split_sequence_link(link_text: &str) -> Option<(&str, &str)> {
-    for operator in ["-->>", "->>", "-->", "->"] {
+    const OPERATORS: [&str; 8] = ["-->>", "->>", "--x", "--)", "-->", "-x", "-)", "->"];
+
+    for operator in OPERATORS {
         let Some((from_identifier, to_identifier)) = link_text.split_once(operator) else {
             continue;
         };
+        let to_identifier = to_identifier.trim().trim_start_matches(['+', '-']).trim();
 
-        return Some((from_identifier.trim(), to_identifier.trim()));
+        return Some((from_identifier.trim(), to_identifier));
     }
 
     None
 }
 
-/// Normalizes one sequence label, truncating labels wider than
+/// Normalizes one node, edge, or sequence label, truncating labels wider than
 /// `MAX_LABEL_WIDTH` to that width with a trailing ellipsis.
 ///
 /// Returns `None` for empty labels and for labels containing zero-width or
-/// double-width glyphs, which would break lifeline column alignment.
-fn truncated_sequence_label(label_text: &str) -> Option<String> {
+/// double-width glyphs, which would break cell-grid column alignment.
+fn truncated_renderable_label(label_text: &str) -> Option<String> {
     let label = normalized_mermaid_label(label_text);
     if label.is_empty()
         || !label
@@ -278,6 +334,38 @@ fn truncated_sequence_label(label_text: &str) -> Option<String> {
     truncated.push('…');
 
     Some(truncated)
+}
+
+/// Normalized edge label, separating an absent label from a present one.
+enum EdgeLabel {
+    Absent,
+    Present(String),
+}
+
+impl EdgeLabel {
+    /// Returns the label text, treating an absent label as no label.
+    fn into_label(self) -> Option<String> {
+        match self {
+            Self::Absent => None,
+            Self::Present(label) => Some(label),
+        }
+    }
+}
+
+/// Normalizes one edge label, separating an absent label from a label that is
+/// present but unrenderable.
+///
+/// Returns `EdgeLabel::Absent` when the text normalizes to nothing, and `None`
+/// when a non-empty label carries glyphs the cell grid cannot paint. Callers
+/// reject the whole diagram in the latter case, matching node and participant
+/// labels, so a meaningful relationship label is never silently dropped from an
+/// otherwise complete drawing.
+fn parsed_edge_label(label_text: &str) -> Option<EdgeLabel> {
+    if normalized_mermaid_label(label_text).is_empty() {
+        return Some(EdgeLabel::Absent);
+    }
+
+    Some(EdgeLabel::Present(truncated_renderable_label(label_text)?))
 }
 
 /// Returns the dense participant index, inserting a participant on first use.
@@ -299,7 +387,7 @@ fn sequence_participant_index(
         return None;
     }
 
-    let label = truncated_sequence_label(label)?;
+    let label = truncated_renderable_label(label)?;
 
     participants.push(SequenceParticipant { label });
     participant_indexes.insert(identifier.to_string(), participants.len() - 1);
@@ -391,7 +479,10 @@ fn parse_er_relationship(
     }
     let target_marker = er_cardinality_marker(operator.get(4..)?)?;
 
-    let label = label_text.and_then(renderable_edge_label);
+    let label = match label_text {
+        Some(label_text) => parsed_edge_label(label_text)?.into_label(),
+        None => None,
+    };
 
     if edges.len() >= MAX_EDGE_COUNT {
         return None;
@@ -400,6 +491,8 @@ fn parse_er_relationship(
     edges.push(MermaidEdge {
         from_index,
         has_arrow: false,
+        has_source_arrow: false,
+        is_visible: true,
         label,
         source_marker: Some(source_marker),
         target_marker: Some(target_marker),
@@ -415,7 +508,7 @@ fn er_entity_index(
     node_indexes: &mut HashMap<String, usize>,
     nodes: &mut Vec<MermaidNode>,
 ) -> Option<usize> {
-    if !is_renderable_identifier(identifier) || !is_renderable_label(identifier) {
+    if !is_renderable_identifier(identifier) {
         return None;
     }
 
@@ -429,7 +522,8 @@ fn er_entity_index(
 
     nodes.push(MermaidNode {
         is_hidden: false,
-        label: identifier.to_string(),
+        is_visible: true,
+        label: truncated_renderable_label(identifier)?,
         shape: NodeShape::Rectangle,
     });
     node_indexes.insert(identifier.to_string(), nodes.len() - 1);
@@ -466,7 +560,7 @@ fn parse_flow_graph<'source>(lines: impl Iterator<Item = &'source str>) -> Optio
 
         for statement in statements {
             let statement = statement.trim();
-            if statement.is_empty() {
+            if statement.is_empty() || is_ignorable_flow_statement(statement) {
                 continue;
             }
 
@@ -477,22 +571,48 @@ fn parse_flow_graph<'source>(lines: impl Iterator<Item = &'source str>) -> Optio
     bounded_graph(direction?, nodes, edges)
 }
 
+/// Returns whether a flowchart statement is decorative and safe to skip.
+///
+/// Styling and interaction statements do not affect the drawn structure, and
+/// skipping `subgraph`, `direction`, and `end` lines flattens subgraphs into
+/// the surrounding graph instead of dropping the diagram.
+fn is_ignorable_flow_statement(statement: &str) -> bool {
+    const IGNORABLE_KEYWORDS: [&str; 8] = [
+        "class",
+        "classDef",
+        "click",
+        "direction",
+        "end",
+        "linkStyle",
+        "style",
+        "subgraph",
+    ];
+
+    let Some(first_token) = statement.split_whitespace().next() else {
+        return true;
+    };
+
+    IGNORABLE_KEYWORDS
+        .iter()
+        .any(|keyword| first_token.eq_ignore_ascii_case(keyword))
+}
+
 /// Builds the graph when node and edge counts stay within preview bounds and
 /// every final node label is renderable.
 ///
 /// Bare identifiers become node labels without upfront validation, so the
-/// label bounds are enforced here on the final labels before layout sizes the
-/// canvas from their widths.
+/// label bounds are enforced here on the final labels — truncating over-long
+/// labels — before layout sizes the canvas from their widths.
 fn bounded_graph(
     direction: FlowDirection,
-    nodes: Vec<MermaidNode>,
+    mut nodes: Vec<MermaidNode>,
     edges: Vec<MermaidEdge>,
 ) -> Option<MermaidGraph> {
     if nodes.is_empty() || nodes.len() > MAX_NODE_COUNT || edges.len() > MAX_EDGE_COUNT {
         return None;
     }
-    if !nodes.iter().all(|node| is_renderable_label(&node.label)) {
-        return None;
+    for node in &mut nodes {
+        node.label = truncated_renderable_label(&node.label)?;
     }
 
     Some(MermaidGraph {
@@ -522,6 +642,7 @@ fn expand_long_edges(mut graph: MermaidGraph) -> Option<MermaidGraph> {
         }
 
         let mut from_index = edge.from_index;
+        let mut has_source_arrow = edge.has_source_arrow;
         let mut source_marker = edge.source_marker;
         let mut label = edge.label;
         for _ in from_layer + 1..to_layer {
@@ -532,6 +653,7 @@ fn expand_long_edges(mut graph: MermaidGraph) -> Option<MermaidGraph> {
             let dummy_index = graph.nodes.len();
             graph.nodes.push(MermaidNode {
                 is_hidden: true,
+                is_visible: edge.is_visible,
                 label: String::new(),
                 shape: NodeShape::Rectangle,
             });
@@ -540,17 +662,22 @@ fn expand_long_edges(mut graph: MermaidGraph) -> Option<MermaidGraph> {
             edges.push(MermaidEdge {
                 from_index,
                 has_arrow: false,
+                has_source_arrow,
+                is_visible: edge.is_visible,
                 label: label.take(),
                 source_marker: source_marker.take(),
                 target_marker: None,
                 to_index: dummy_index,
             });
             from_index = dummy_index;
+            has_source_arrow = false;
         }
 
         edges.push(MermaidEdge {
             from_index,
             has_arrow: edge.has_arrow,
+            has_source_arrow,
+            is_visible: edge.is_visible,
             label,
             source_marker,
             target_marker: edge.target_marker,
@@ -589,6 +716,16 @@ fn parse_direction_header(line: &str) -> Option<FlowDirection> {
 }
 
 /// Parses one statement: a node declaration or an edge chain.
+///
+/// `&` groups on either side of an operator fan out into one edge per
+/// source/target pair, matching mermaid's `A --> B & C` shorthand.
+///
+/// A source-only arrow (`A <-- B`) is a reverse edge, so it is stored with its
+/// endpoints swapped and a target arrow. Layering, long-edge expansion, and
+/// cycle detection all read the stored endpoints, so the swap keeps them on
+/// mermaid's semantic direction instead of the syntactic one. Chains still
+/// continue from the syntactic right-hand group, so `A <-- B --> C` fans both
+/// edges out of `B`.
 fn parse_statement(
     statement: &str,
     node_indexes: &mut HashMap<String, usize>,
@@ -596,7 +733,7 @@ fn parse_statement(
     edges: &mut Vec<MermaidEdge>,
 ) -> Option<()> {
     let mut cursor = StatementCursor { rest: statement };
-    let mut from_index = cursor.parse_node(node_indexes, nodes)?;
+    let mut from_indexes = cursor.parse_node_group(node_indexes, nodes)?;
 
     loop {
         cursor.skip_whitespace();
@@ -604,21 +741,35 @@ fn parse_statement(
             return Some(());
         }
 
-        let (has_arrow, label) = cursor.parse_edge_operator()?;
-        let to_index = cursor.parse_node(node_indexes, nodes)?;
-        if edges.len() >= MAX_EDGE_COUNT {
-            return None;
-        }
+        let (has_source_arrow, has_arrow, is_visible, label) = cursor.parse_edge_operator()?;
+        let to_indexes = cursor.parse_node_group(node_indexes, nodes)?;
+        let is_reversed = has_source_arrow && !has_arrow;
 
-        edges.push(MermaidEdge {
-            from_index,
-            has_arrow,
-            label,
-            source_marker: None,
-            target_marker: None,
-            to_index,
-        });
-        from_index = to_index;
+        for from_index in &from_indexes {
+            for to_index in &to_indexes {
+                if edges.len() >= MAX_EDGE_COUNT {
+                    return None;
+                }
+
+                let (source_index, target_index) = if is_reversed {
+                    (*to_index, *from_index)
+                } else {
+                    (*from_index, *to_index)
+                };
+
+                edges.push(MermaidEdge {
+                    from_index: source_index,
+                    has_arrow: has_arrow || is_reversed,
+                    has_source_arrow: has_source_arrow && !is_reversed,
+                    is_visible,
+                    label: label.clone(),
+                    source_marker: None,
+                    target_marker: None,
+                    to_index: target_index,
+                });
+            }
+        }
+        from_indexes = to_indexes;
     }
 }
 
@@ -628,12 +779,41 @@ enum NodeShapeParse {
     Labeled(NodeShape, String),
 }
 
+/// Successful outcome of probing for an inline edge-label operator.
+enum InlineLabelParse {
+    Absent,
+    Present {
+        has_arrow: bool,
+        label: Option<String>,
+    },
+}
+
 /// Incremental parser over one mermaid statement.
 struct StatementCursor<'a> {
     rest: &'a str,
 }
 
 impl StatementCursor<'_> {
+    /// Parses a `node & node & …` group and returns its dense node indexes.
+    fn parse_node_group(
+        &mut self,
+        node_indexes: &mut HashMap<String, usize>,
+        nodes: &mut Vec<MermaidNode>,
+    ) -> Option<Vec<usize>> {
+        let mut group = vec![self.parse_node(node_indexes, nodes)?];
+
+        loop {
+            self.skip_whitespace();
+            let Some(after_ampersand) = self.rest.strip_prefix('&') else {
+                break;
+            };
+            self.rest = after_ampersand;
+            group.push(self.parse_node(node_indexes, nodes)?);
+        }
+
+        Some(group)
+    }
+
     /// Parses one node reference and returns its dense node index.
     fn parse_node(
         &mut self,
@@ -654,6 +834,7 @@ impl StatementCursor<'_> {
         let (identifier, remaining) = self.rest.split_at(identifier_length);
         self.rest = remaining;
         let shape_parse = self.parse_node_shape()?;
+        self.skip_class_annotation();
 
         let node_index = if let Some(existing_index) = node_indexes.get(identifier) {
             *existing_index
@@ -664,6 +845,7 @@ impl StatementCursor<'_> {
 
             nodes.push(MermaidNode {
                 is_hidden: false,
+                is_visible: true,
                 label: identifier.to_string(),
                 shape: NodeShape::Rectangle,
             });
@@ -673,10 +855,6 @@ impl StatementCursor<'_> {
         };
 
         if let NodeShapeParse::Labeled(shape, label) = shape_parse {
-            if !is_renderable_label(&label) {
-                return None;
-            }
-
             nodes[node_index].label = label;
             nodes[node_index].shape = shape;
         }
@@ -686,12 +864,22 @@ impl StatementCursor<'_> {
 
     /// Parses an optional bracketed node label, returning `None` only for an
     /// unterminated shape delimiter.
+    ///
+    /// Every mermaid shape maps onto the rectangle or rounded outline the
+    /// canvas can draw; longer delimiters come first so composite shapes such
+    /// as stadiums and cylinders win over their plain prefixes.
     fn parse_node_shape(&mut self) -> Option<NodeShapeParse> {
-        let delimiters: [(&str, &str, NodeShape); 4] = [
+        let delimiters: [(&str, &str, NodeShape); 10] = [
+            ("(((", ")))", NodeShape::Rounded),
             ("((", "))", NodeShape::Rounded),
+            ("([", "])", NodeShape::Rounded),
+            ("[[", "]]", NodeShape::Rectangle),
+            ("[(", ")]", NodeShape::Rounded),
+            ("{{", "}}", NodeShape::Rectangle),
             ("(", ")", NodeShape::Rounded),
             ("[", "]", NodeShape::Rectangle),
             ("{", "}", NodeShape::Rectangle),
+            (">", "]", NodeShape::Rectangle),
         ];
 
         for (open_delimiter, close_delimiter, shape) in delimiters {
@@ -708,53 +896,105 @@ impl StatementCursor<'_> {
         Some(NodeShapeParse::Bare)
     }
 
-    /// Parses one edge operator, returning arrow presence and optional label.
-    fn parse_edge_operator(&mut self) -> Option<(bool, Option<String>)> {
+    /// Parses one edge operator, returning source/target arrows, visibility,
+    /// and an optional label.
+    fn parse_edge_operator(&mut self) -> Option<(bool, bool, bool, Option<String>)> {
         self.skip_whitespace();
 
-        if let Some(labeled_operator) = self.parse_inline_label_operator() {
-            return Some(labeled_operator);
+        if let InlineLabelParse::Present { has_arrow, label } =
+            self.parse_inline_label_operator()?
+        {
+            let label = match label {
+                Some(label) => Some(label),
+                None => self.parse_edge_label_suffix()?.into_label(),
+            };
+
+            return Some((false, has_arrow, true, label));
         }
 
-        let operators: [(&str, bool); 8] = [
-            ("--->", true),
-            ("-->", true),
-            ("-.->", true),
-            ("-.-", false),
-            ("==>", true),
-            ("===", false),
-            ("---", false),
-            ("--", false),
-        ];
-        for (operator, has_arrow) in operators {
-            let Some(after_operator) = self.rest.strip_prefix(operator) else {
-                continue;
-            };
-            self.rest = after_operator;
+        let (has_source_arrow, has_arrow, is_visible) = self.parse_plain_edge_operator()?;
+        let label = self.parse_edge_label_suffix()?.into_label();
 
-            let Some(after_pipe) = self.rest.strip_prefix('|') else {
-                return Some((has_arrow, None));
-            };
-            let close_index = after_pipe.find('|')?;
-            let label = renderable_edge_label(&after_pipe[..close_index]);
-            self.rest = &after_pipe[close_index + 1..];
+        Some((has_source_arrow, has_arrow, is_visible, label))
+    }
 
-            return Some((has_arrow, label));
+    /// Parses one plain edge operator as an end marker, a run of at least two
+    /// line characters (`-`, `=`, `.`, `~`), and an optional arrow head.
+    ///
+    /// Circle (`o`) and cross (`x`) ends render as plain line ends. A run made
+    /// entirely of tildes is an invisible layout link. Returns source and
+    /// target arrow presence plus visibility, leaving the cursor untouched
+    /// when no operator starts here.
+    fn parse_plain_edge_operator(&mut self) -> Option<(bool, bool, bool)> {
+        let operator_bytes = self.rest.as_bytes();
+        let mut operator_length = 0;
+        let mut has_source_arrow = false;
+        let mut has_target_arrow = false;
+
+        if let Some(source_end) = operator_bytes.first()
+            && matches!(source_end, b'<' | b'o' | b'x')
+        {
+            operator_length = 1;
+            has_source_arrow = *source_end == b'<';
         }
 
-        None
+        let run_start = operator_length;
+        while matches!(
+            operator_bytes.get(operator_length),
+            Some(b'-' | b'=' | b'.' | b'~')
+        ) {
+            operator_length += 1;
+        }
+        if operator_length - run_start < 2 {
+            return None;
+        }
+        let is_visible = operator_bytes[run_start..operator_length]
+            .iter()
+            .any(|character| *character != b'~');
+
+        match operator_bytes.get(operator_length) {
+            Some(b'>') => {
+                has_target_arrow = true;
+                operator_length += 1;
+            }
+            Some(b'o' | b'x') => {
+                operator_length += 1;
+            }
+            _ => {}
+        }
+        self.rest = &self.rest[operator_length..];
+
+        Some((has_source_arrow, has_target_arrow, is_visible))
+    }
+
+    /// Parses an optional `|label|` suffix after a plain edge operator.
+    ///
+    /// Returns `EdgeLabel::Absent` when no suffix opens here, and `None` for an
+    /// unterminated label delimiter or an unrenderable label.
+    fn parse_edge_label_suffix(&mut self) -> Option<EdgeLabel> {
+        let Some(after_pipe) = self.rest.strip_prefix('|') else {
+            return Some(EdgeLabel::Absent);
+        };
+        let close_index = after_pipe.find('|')?;
+        let label = parsed_edge_label(&after_pipe[..close_index])?;
+        self.rest = &after_pipe[close_index + 1..];
+
+        Some(label)
     }
 
     /// Parses the inline edge-label operator forms `A -- label --> B`,
     /// `A -.label.-> B`, and `A ==label==> B`, plus their arrowless `---`,
     /// `.-`, and `===` endings.
     ///
-    /// Leaves the cursor untouched and returns `None` when the current
-    /// position does not open such a form, so plain operators like `-.->` and
-    /// `==>` still parse through the fixed operator table afterwards.
-    fn parse_inline_label_operator(&mut self) -> Option<(bool, Option<String>)> {
+    /// A label may not start with an operator character, so longer plain
+    /// operators such as `---`, `-.->`, and `====>` stay out of this form.
+    /// Leaves the cursor untouched and returns `InlineLabelParse::Absent` when
+    /// the current position does not open such a form, so plain operators still
+    /// parse through `parse_plain_edge_operator` afterwards. Returns `None`
+    /// when the form opens but carries an unrenderable label.
+    fn parse_inline_label_operator(&mut self) -> Option<InlineLabelParse> {
         let label_operators: [(&str, &str, &str); 3] = [
-            ("-- ", "-->", "---"),
+            ("--", "-->", "---"),
             ("-.", ".->", ".-"),
             ("==", "==>", "==="),
         ];
@@ -762,6 +1002,12 @@ impl StatementCursor<'_> {
             let Some(after_open) = self.rest.strip_prefix(open_operator) else {
                 continue;
             };
+            if matches!(
+                after_open.as_bytes().first(),
+                Some(b'-' | b'=' | b'.' | b'~' | b'>')
+            ) {
+                continue;
+            }
             let (label_text, has_arrow, after_operator) =
                 if let Some(arrow_index) = after_open.find(arrow_ending) {
                     (
@@ -779,29 +1025,34 @@ impl StatementCursor<'_> {
                     continue;
                 };
             self.rest = after_operator;
-            let label = renderable_edge_label(label_text);
+            let label = parsed_edge_label(label_text)?.into_label();
 
-            return Some((has_arrow, label));
+            return Some(InlineLabelParse::Present { has_arrow, label });
         }
 
-        None
+        Some(InlineLabelParse::Absent)
+    }
+
+    /// Advances the cursor past an optional `:::class` styling annotation.
+    fn skip_class_annotation(&mut self) {
+        let Some(after_marker) = self.rest.strip_prefix(":::") else {
+            return;
+        };
+
+        let class_length = after_marker
+            .chars()
+            .take_while(|character| {
+                character.is_alphanumeric() || *character == '_' || *character == '-'
+            })
+            .map(char::len_utf8)
+            .sum::<usize>();
+        self.rest = &after_marker[class_length..];
     }
 
     /// Advances the cursor past leading whitespace.
     fn skip_whitespace(&mut self) {
         self.rest = self.rest.trim_start();
     }
-}
-
-/// Normalizes an optional edge label to the single-line subset that the
-/// terminal preview can paint.
-fn renderable_edge_label(label_text: &str) -> Option<String> {
-    let label = normalized_mermaid_label(label_text);
-    if !is_renderable_label(label) {
-        return None;
-    }
-
-    Some(label.to_string())
 }
 
 /// Normalizes Mermaid label text to the single-line subset this renderer
@@ -822,18 +1073,6 @@ fn first_mermaid_label_line(label_text: &str) -> &str {
     }
 
     label_text
-}
-
-/// Returns whether a label stays within bounds and uses single-cell glyphs.
-///
-/// The canvas assigns one character per cell, so labels with zero-width or
-/// double-width characters would break box alignment and force a fallback.
-fn is_renderable_label(label: &str) -> bool {
-    !label.is_empty()
-        && UnicodeWidthStr::width(label) <= MAX_LABEL_WIDTH
-        && label
-            .chars()
-            .all(|character| UnicodeWidthChar::width(character) == Some(1))
 }
 
 /// Returns whether an identifier uses the preview's supported token syntax.
@@ -885,6 +1124,10 @@ fn draw_left_right_feedback_graph(graph: &MermaidGraph) -> Option<MermaidDiagram
         node_widths[1],
     );
     for (edge_index, edge) in graph.edges.iter().enumerate() {
+        if !edge.is_visible {
+            continue;
+        }
+
         let label_row = NODE_BOX_HEIGHT + edge_index * 2;
         let arrow_row = label_row + 1;
         draw_feedback_edge_label(&mut canvas, edge, left_center, right_center, label_row);
@@ -949,19 +1192,26 @@ fn draw_feedback_edge_arrow(
         canvas.merge_connector(column, row, CONNECT_LEFT | CONNECT_RIGHT);
     }
 
-    if !edge.has_arrow {
-        return;
+    if edge.has_source_arrow {
+        if edge.from_index == 1 {
+            canvas.put_arrow(right_center, row, '▶');
+        } else {
+            canvas.put_arrow(left_center, row, '◀');
+        }
     }
 
-    if edge.to_index == 1 {
-        canvas.put_arrow(right_center, row, '▶');
-    } else {
-        canvas.put_arrow(left_center, row, '◀');
+    if edge.has_arrow {
+        if edge.to_index == 1 {
+            canvas.put_arrow(right_center, row, '▶');
+        } else {
+            canvas.put_arrow(left_center, row, '◀');
+        }
     }
 }
 
 /// Draws a simple sequence diagram with participant boxes and message arrows.
 fn draw_sequence_diagram(diagram: &SequenceDiagram) -> MermaidDiagram {
+    let gap_columns = sequence_gap_columns(diagram);
     let participant_widths: Vec<usize> = diagram
         .participants
         .iter()
@@ -971,14 +1221,14 @@ fn draw_sequence_diagram(diagram: &SequenceDiagram) -> MermaidDiagram {
     let mut next_column = 0;
     for participant_width in &participant_widths {
         participant_columns.push(next_column);
-        next_column += *participant_width + SEQUENCE_GAP_COLUMNS;
+        next_column += *participant_width + gap_columns;
     }
     let lifeline_columns: Vec<usize> = participant_columns
         .iter()
         .zip(&participant_widths)
         .map(|(left_column, width)| left_column + width / 2)
         .collect();
-    let participant_width = next_column.saturating_sub(SEQUENCE_GAP_COLUMNS);
+    let participant_width = next_column.saturating_sub(gap_columns);
     let self_message_width = sequence_self_message_width(diagram, &lifeline_columns);
     let canvas_width = participant_width.max(self_message_width).max(1);
     let canvas_height = NODE_BOX_HEIGHT + 1 + diagram.messages.len() * 2;
@@ -995,6 +1245,7 @@ fn draw_sequence_diagram(diagram: &SequenceDiagram) -> MermaidDiagram {
             &mut canvas,
             &MermaidNode {
                 is_hidden: false,
+                is_visible: true,
                 label: participant.label.clone(),
                 shape: NodeShape::Rectangle,
             },
@@ -1010,6 +1261,21 @@ fn draw_sequence_diagram(diagram: &SequenceDiagram) -> MermaidDiagram {
     }
 
     canvas.into_diagram()
+}
+
+/// Returns the lifeline gap sized to the widest message label.
+///
+/// Any message label fits between adjacent lifelines at this gap, while short
+/// labels keep the whole diagram narrow enough for typical chat pane widths.
+fn sequence_gap_columns(diagram: &SequenceDiagram) -> usize {
+    let widest_label = diagram
+        .messages
+        .iter()
+        .map(|message| UnicodeWidthStr::width(message.label.as_str()))
+        .max()
+        .unwrap_or(0);
+
+    (widest_label + 2).clamp(SEQUENCE_MIN_GAP_COLUMNS, SEQUENCE_MAX_GAP_COLUMNS)
 }
 
 /// Returns the canvas width needed by self-message loops and their labels.
@@ -1191,6 +1457,8 @@ fn assign_node_layers(graph: &MermaidGraph) -> Option<Vec<usize>> {
 struct TopDownEdgePath {
     arrow_row: usize,
     has_arrow: bool,
+    has_source_arrow: bool,
+    is_visible: bool,
     label: Option<String>,
     region_top: usize,
     source_column: usize,
@@ -1309,9 +1577,9 @@ fn draw_top_down_nodes(
         let mut cursor_column = (canvas_width - layer_widths[layer_index]) / 2;
         for node_index in members {
             box_columns[*node_index] = cursor_column;
-            if graph.nodes[*node_index].is_hidden {
+            if graph.nodes[*node_index].is_hidden && graph.nodes[*node_index].is_visible {
                 draw_top_down_hidden_node(canvas, cursor_column, layer_top_rows[layer_index]);
-            } else {
+            } else if graph.nodes[*node_index].is_visible {
                 draw_node_box(
                     canvas,
                     &graph.nodes[*node_index],
@@ -1342,6 +1610,8 @@ fn top_down_edge_paths(
             edge_paths.push(TopDownEdgePath {
                 arrow_row: region_top + edges.len() + 1,
                 has_arrow: edge.has_arrow,
+                has_source_arrow: edge.has_source_arrow,
+                is_visible: edge.is_visible,
                 label: edge.label.clone(),
                 region_top,
                 source_column: box_columns[edge.from_index] + box_widths[edge.from_index] / 2,
@@ -1358,13 +1628,13 @@ fn top_down_edge_paths(
 
 /// Draws routed top-down edge connectors, labels, and markers.
 fn draw_top_down_edge_paths(canvas: &mut Canvas, edge_paths: &[TopDownEdgePath]) {
-    for edge_path in edge_paths {
+    for edge_path in edge_paths.iter().filter(|edge_path| edge_path.is_visible) {
         draw_top_down_edge_connectors(canvas, edge_path);
     }
-    for edge_path in edge_paths {
+    for edge_path in edge_paths.iter().filter(|edge_path| edge_path.is_visible) {
         draw_top_down_edge_label(canvas, edge_path);
     }
-    for edge_path in edge_paths {
+    for edge_path in edge_paths.iter().filter(|edge_path| edge_path.is_visible) {
         canvas.try_put_marker(
             edge_path.source_column,
             edge_path.region_top,
@@ -1423,6 +1693,9 @@ fn draw_top_down_edge_connectors(canvas: &mut Canvas, edge_path: &TopDownEdgePat
             CONNECT_UP | CONNECT_DOWN,
         );
     }
+    if edge_path.has_source_arrow {
+        canvas.put_arrow(edge_path.source_column, edge_path.region_top, '▲');
+    }
 }
 
 /// Writes one top-down edge label onto its horizontal track when it fits.
@@ -1453,6 +1726,8 @@ fn draw_top_down_edge_label(canvas: &mut Canvas, edge_path: &TopDownEdgePath) {
 struct LeftRightEdgePath {
     arrow_column: usize,
     has_arrow: bool,
+    has_source_arrow: bool,
+    is_visible: bool,
     label: Option<String>,
     region_left: usize,
     source_marker: Option<char>,
@@ -1570,14 +1845,14 @@ fn draw_left_right_nodes(
         let mut cursor_row = (canvas_height - layer_heights[layer_index]) / 2;
         for node_index in members {
             box_rows[*node_index] = cursor_row;
-            if graph.nodes[*node_index].is_hidden {
+            if graph.nodes[*node_index].is_hidden && graph.nodes[*node_index].is_visible {
                 draw_left_right_hidden_node(
                     canvas,
                     layer_left_columns[layer_index],
                     cursor_row + 1,
                     layer_widths[layer_index],
                 );
-            } else {
+            } else if graph.nodes[*node_index].is_visible {
                 draw_node_box(
                     canvas,
                     &graph.nodes[*node_index],
@@ -1608,6 +1883,8 @@ fn left_right_edge_paths(
             edge_paths.push(LeftRightEdgePath {
                 arrow_column: region_left + edges.len() + 1,
                 has_arrow: edge.has_arrow,
+                has_source_arrow: edge.has_source_arrow,
+                is_visible: edge.is_visible,
                 label: edge.label.clone(),
                 region_left,
                 source_marker: edge.source_marker,
@@ -1624,13 +1901,13 @@ fn left_right_edge_paths(
 
 /// Draws routed left-right edge connectors, labels, and markers.
 fn draw_left_right_edge_paths(canvas: &mut Canvas, edge_paths: &[LeftRightEdgePath]) {
-    for edge_path in edge_paths {
+    for edge_path in edge_paths.iter().filter(|edge_path| edge_path.is_visible) {
         draw_left_right_edge_connectors(canvas, edge_path);
     }
-    for edge_path in edge_paths {
+    for edge_path in edge_paths.iter().filter(|edge_path| edge_path.is_visible) {
         draw_left_right_edge_label(canvas, edge_path);
     }
-    for edge_path in edge_paths {
+    for edge_path in edge_paths.iter().filter(|edge_path| edge_path.is_visible) {
         canvas.try_put_marker(
             edge_path.region_left,
             edge_path.source_row,
@@ -1688,6 +1965,9 @@ fn draw_left_right_edge_connectors(canvas: &mut Canvas, edge_path: &LeftRightEdg
             edge_path.target_row,
             CONNECT_LEFT | CONNECT_RIGHT,
         );
+    }
+    if edge_path.has_source_arrow {
+        canvas.put_arrow(edge_path.region_left, edge_path.source_row, '◀');
     }
 }
 
@@ -2092,6 +2372,174 @@ mod tests {
     }
 
     #[test]
+    fn test_render_mermaid_maps_extended_node_shapes() {
+        // Arrange
+        let source = concat!(
+            "flowchart TD\n",
+            "    A([Stadium]) --> B[[Subroutine]]\n",
+            "    B --> C[(Cylinder)]\n",
+            "    C --> D{{Hexagon}}\n",
+            "    D --> E(((Core)))\n",
+            "    E --> F>Flag]",
+        );
+
+        // Act
+        let diagram = render_mermaid(source).expect("extended shapes should render");
+        let text = diagram_text(&diagram);
+
+        // Assert
+        assert!(text.contains("Stadium"));
+        assert!(text.contains("Subroutine"));
+        assert!(text.contains("Cylinder"));
+        assert!(text.contains("Hexagon"));
+        assert!(text.contains("Core"));
+        assert!(text.contains("Flag"));
+        assert!(!text.contains('['));
+    }
+
+    #[test]
+    fn test_render_mermaid_expands_ampersand_groups() {
+        // Arrange
+        let source = "flowchart TD\n    A --> B & C\n    B & C --> D";
+
+        // Act
+        let diagram = render_mermaid(source).expect("ampersand groups should render");
+        let text = diagram_text(&diagram);
+
+        // Assert
+        assert!(text.contains('B'));
+        assert!(text.contains('C'));
+        assert_eq!(text.matches('▼').count(), 3);
+    }
+
+    #[test]
+    fn test_render_mermaid_accepts_extended_arrow_variants() {
+        // Arrange
+        let long_arrow = "flowchart TD\n    A ----> B";
+        let source_arrow = "flowchart TD\n    A <-- B";
+        let bidirectional = "flowchart TD\n    A <--> B";
+        let circle_ends = "flowchart TD\n    A o--o B";
+        let cross_ends = "flowchart TD\n    A x--x B";
+        let long_arrow_label = "flowchart TD\n    A[Alpha stage] ---->|later| B[Beta stage]";
+
+        // Act
+        let long_arrow_diagram = render_mermaid(long_arrow).expect("long arrow should render");
+        let source_arrow_diagram =
+            render_mermaid(source_arrow).expect("source arrow should render");
+        let bidirectional_diagram =
+            render_mermaid(bidirectional).expect("bidirectional arrow should render");
+        let labeled_diagram =
+            render_mermaid(long_arrow_label).expect("labeled long arrow should render");
+
+        // Assert
+        assert!(diagram_text(&long_arrow_diagram).contains('▼'));
+        let source_arrow_text = diagram_text(&source_arrow_diagram);
+        assert!(source_arrow_text.contains('▼'));
+        assert!(!source_arrow_text.contains('▲'));
+        let source_position = source_arrow_text.find('B').expect("B should render");
+        let target_position = source_arrow_text.find('A').expect("A should render");
+        assert!(source_position < target_position);
+        let bidirectional_text = diagram_text(&bidirectional_diagram);
+        assert!(bidirectional_text.contains('▲'));
+        assert!(bidirectional_text.contains('▼'));
+        assert!(render_mermaid(circle_ends).is_some());
+        assert!(render_mermaid(cross_ends).is_some());
+        assert!(diagram_text(&labeled_diagram).contains("later"));
+    }
+
+    #[test]
+    fn test_render_mermaid_fans_source_arrow_chain_out_of_shared_source() {
+        // Arrange
+        let source = "flowchart TD\n    A <-- B --> C";
+
+        // Act
+        let diagram = render_mermaid(source).expect("source arrow chain should render");
+        let text = diagram_text(&diagram);
+
+        // Assert
+        let source_position = text.find('B').expect("B should render");
+        let first_target_position = text.find('A').expect("A should render");
+        let second_target_position = text.find('C').expect("C should render");
+        assert!(source_position < first_target_position);
+        assert!(source_position < second_target_position);
+        assert_eq!(text.matches('▼').count(), 2);
+        assert!(!text.contains('▲'));
+    }
+
+    #[test]
+    fn test_render_mermaid_treats_reciprocal_source_arrow_as_cycle() {
+        // Arrange
+        let top_down = "flowchart TD\n    A --> B\n    A <-- B";
+        let left_right = "flowchart LR\n    A --> B\n    A <-- B";
+
+        // Act
+        let feedback_diagram =
+            render_mermaid(left_right).expect("two-node feedback loop should render");
+        let feedback_text = diagram_text(&feedback_diagram);
+
+        // Assert
+        assert!(render_mermaid(top_down).is_none());
+        assert!(feedback_text.contains('▶'));
+        assert!(feedback_text.contains('◀'));
+    }
+
+    #[test]
+    fn test_render_mermaid_hides_invisible_layout_link() {
+        // Arrange
+        let source = "flowchart TD\n    A[Source] ~~~ B[Target]";
+
+        // Act
+        let diagram = render_mermaid(source).expect("invisible layout link should render");
+        let lines: Vec<String> = diagram.lines.iter().map(ToString::to_string).collect();
+        let source_row = lines
+            .iter()
+            .position(|line| line.contains("Source"))
+            .expect("source node should render");
+        let target_row = lines
+            .iter()
+            .position(|line| line.contains("Target"))
+            .expect("target node should render");
+
+        // Assert
+        assert!(source_row + 2 < target_row - 1);
+        assert!(
+            lines[source_row + 2..target_row - 1]
+                .iter()
+                .all(|line| line.trim().is_empty())
+        );
+    }
+
+    #[test]
+    fn test_render_mermaid_keeps_line_operator_before_labeled_arrow_chain() {
+        // Arrange
+        let source = "flowchart TD\n    A --- B --> C";
+
+        // Act
+        let diagram = render_mermaid(source).expect("mixed chain should render");
+        let text = diagram_text(&diagram);
+
+        // Assert
+        assert!(text.contains('A'));
+        assert!(text.contains('B'));
+        assert!(text.contains('C'));
+        assert_eq!(text.matches('▼').count(), 1);
+    }
+
+    #[test]
+    fn test_render_mermaid_renders_unspaced_inline_edge_label() {
+        // Arrange
+        let source = "flowchart TD\n    A[Alpha stage]--send-->B[Beta stage]";
+
+        // Act
+        let diagram = render_mermaid(source).expect("unspaced inline label should render");
+        let text = diagram_text(&diagram);
+
+        // Assert
+        assert!(text.contains("send"));
+        assert!(text.contains('▼'));
+    }
+
+    #[test]
     fn test_render_mermaid_draws_er_diagram_with_cardinality_markers() {
         // Arrange
         let source = concat!(
@@ -2234,6 +2682,112 @@ mod tests {
     }
 
     #[test]
+    fn test_render_mermaid_skips_sequence_notes_blocks_and_activations() {
+        // Arrange
+        let source = concat!(
+            "sequenceDiagram\n",
+            "    autonumber\n",
+            "    actor User\n",
+            "    User->>+Agentty: Start\n",
+            "    activate Agentty\n",
+            "    Note over Agentty: thinking\n",
+            "    alt success\n",
+            "    Agentty-->>-User: Done\n",
+            "    else failure\n",
+            "    Agentty--xUser: Abort\n",
+            "    end\n",
+            "    deactivate Agentty\n",
+            "    Agentty-)User: Async ping",
+        );
+
+        // Act
+        let diagram = render_mermaid(source).expect("tolerant sequence should render");
+        let text = diagram_text(&diagram);
+
+        // Assert
+        assert!(text.contains("User"));
+        assert!(text.contains("Agentty"));
+        assert!(text.contains("Start"));
+        assert!(text.contains("Done"));
+        assert!(text.contains("Abort"));
+        assert!(text.contains("Async ping"));
+        assert!(!text.contains("thinking"));
+        assert!(!text.contains("success"));
+    }
+
+    #[test]
+    fn test_render_mermaid_skips_sequence_critical_option_branches() {
+        // Arrange
+        let source = concat!(
+            "sequenceDiagram\n",
+            "    participant Agentty\n",
+            "    participant Forge\n",
+            "    critical Open review request\n",
+            "    Agentty->>Forge: Push branch\n",
+            "    option Network timeout\n",
+            "    Agentty->>Agentty: Retry push\n",
+            "    option Auth rejected\n",
+            "    Agentty->>Agentty: Report failure\n",
+            "    end\n",
+            "    Forge-->>Agentty: Review URL",
+        );
+
+        // Act
+        let diagram = render_mermaid(source).expect("critical block should render");
+        let text = diagram_text(&diagram);
+
+        // Assert
+        assert!(text.contains("Agentty"));
+        assert!(text.contains("Forge"));
+        assert!(text.contains("Push branch"));
+        assert!(text.contains("Retry push"));
+        assert!(text.contains("Report failure"));
+        assert!(text.contains("Review URL"));
+        assert!(!text.contains("Network timeout"));
+        assert!(!text.contains("Auth rejected"));
+    }
+
+    #[test]
+    fn test_render_mermaid_narrows_sequence_gap_for_short_labels() {
+        // Arrange
+        let source = concat!(
+            "sequenceDiagram\n",
+            "    participant User\n",
+            "    participant Agentty\n",
+            "    participant Git\n",
+            "    User->>Agentty: Start\n",
+            "    Agentty->>Git: Commit\n",
+            "    Git-->>Agentty: Ok\n",
+            "    Agentty-->>User: Done",
+        );
+
+        // Act
+        let diagram = render_mermaid(source).expect("sequence should render");
+        let text = diagram_text(&diagram);
+
+        // Assert
+        assert!(diagram.width <= 50);
+        assert!(text.contains("Commit"));
+    }
+
+    #[test]
+    fn test_render_mermaid_rejects_double_width_edge_labels() {
+        // Arrange
+        let pipe_label = "flowchart TD\n    A -->|你好| B";
+        let inline_label = "flowchart TD\n    A -- 你好 --> B";
+        let er_label = concat!(
+            "erDiagram\n",
+            "    PROJECT ||--o{ SESSION : 你好\n",
+            "    SESSION ||--|| WORKTREE : owns",
+        );
+
+        // Act & Assert
+        assert!(render_mermaid(pipe_label).is_none());
+        assert!(render_mermaid(inline_label).is_none());
+        assert!(render_mermaid(er_label).is_none());
+    }
+
+    #[test]
     fn test_render_mermaid_rejects_unsupported_diagram_types() {
         // Arrange & Act & Assert
         assert!(render_mermaid("graph RL\n    A --> B").is_none());
@@ -2287,12 +2841,48 @@ mod tests {
     }
 
     #[test]
-    fn test_render_mermaid_rejects_subgraph_statements() {
+    fn test_render_mermaid_flattens_subgraph_statements() {
         // Arrange
-        let source = "graph TD\n    subgraph Group\n    A --> B\n    end";
+        let source = concat!(
+            "graph TD\n",
+            "    subgraph Group\n",
+            "    direction LR\n",
+            "    A --> B\n",
+            "    end\n",
+            "    B --> C",
+        );
 
-        // Act & Assert
-        assert!(render_mermaid(source).is_none());
+        // Act
+        let diagram = render_mermaid(source).expect("flattened subgraph should render");
+        let text = diagram_text(&diagram);
+
+        // Assert
+        assert!(text.contains('A'));
+        assert!(text.contains('C'));
+        assert!(!text.contains("Group"));
+    }
+
+    #[test]
+    fn test_render_mermaid_skips_styling_statements() {
+        // Arrange
+        let source = concat!(
+            "flowchart TD\n",
+            "    classDef terminal stroke-width: 1.5px;\n",
+            "    A:::terminal --> B\n",
+            "    style A fill:#f9f\n",
+            "    linkStyle 0 stroke:#f00\n",
+            "    class B terminal\n",
+            "    click A href \"https://example.com\"",
+        );
+
+        // Act
+        let diagram = render_mermaid(source).expect("styled flowchart should render");
+        let text = diagram_text(&diagram);
+
+        // Assert
+        assert!(text.contains('A'));
+        assert!(text.contains('B'));
+        assert!(!text.contains("terminal"));
     }
 
     #[test]
@@ -2305,14 +2895,21 @@ mod tests {
     }
 
     #[test]
-    fn test_render_mermaid_rejects_unbounded_bare_identifiers() {
+    fn test_render_mermaid_truncates_over_long_node_labels() {
         // Arrange
         let long_identifier = "N".repeat(MAX_LABEL_WIDTH + 1);
         let long_bare = format!("graph TD\n    {long_identifier} --> B");
+        let long_labeled =
+            "graph TD\n    A[This label is much longer than thirty-two characters] --> B";
         let wide_bare = "graph TD\n    你好 --> B";
 
-        // Act & Assert
-        assert!(render_mermaid(&long_bare).is_none());
+        // Act
+        let bare_diagram = render_mermaid(&long_bare).expect("long bare id should render");
+        let labeled_diagram = render_mermaid(long_labeled).expect("long label should render");
+
+        // Assert
+        assert!(diagram_text(&bare_diagram).contains('…'));
+        assert!(diagram_text(&labeled_diagram).contains("This label is much longer than …"));
         assert!(render_mermaid(wide_bare).is_none());
     }
 

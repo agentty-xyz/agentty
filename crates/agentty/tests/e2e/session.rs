@@ -203,8 +203,9 @@ fn seed_session_with_inline_markdown_punctuation(
 }
 
 /// Seeds one review-ready session whose transcript contains mermaid flowchart,
-/// entity-relationship, and sequence fenced blocks; the flowchart mixes solid,
-/// thick (`==label==>`), and dotted (`-.label.->`) labeled edges.
+/// entity-relationship, and sequence fenced blocks. The flowchart includes an
+/// extended shape, an `&` fan-out, and bidirectional arrows, while the sequence
+/// diagram includes a skipped control block.
 fn seed_session_with_mermaid_output(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
@@ -226,12 +227,11 @@ Here is the merge flow and the data model:
 
 ```mermaid
 flowchart TD
-    A[User starts session] --> B{Choose action}
-    B ==Ask agent==> C[Send prompt]
-    B -.Review changes.-> D[Open diff view]
-    C --> E[Agent works in worktree]
+    A{{User starts session}} --> B{Choose action}
+    B -->|Route request| C[Send prompt] & D[Open diff view]
+    C <--> E[Agent works in worktree]
     E --> F[Run checks]
-    F --> G[Report result]
+    F <-- G[Report result]
     D --> G
 ```
 
@@ -247,8 +247,10 @@ sequenceDiagram
     participant Agentty
     participant Agent
     User->>Agentty: Start new session
+    alt Agent available
     Agentty->>Agent: Send prompt
     Agent-->>Agentty: Stream result
+    end
 ```
 ",
             )
@@ -2765,8 +2767,10 @@ fn session_view_mermaid_output() -> E2eResult {
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "User starts session", &full);
+                assertion::assert_text_in_region(frame, "Send prompt", &full);
                 assertion::assert_text_in_region(frame, "Report result", &full);
-                assertion::assert_text_in_region(frame, "Ask agent", &full);
+                assertion::assert_text_in_region(frame, "Open diff view", &full);
+                assertion::assert_text_in_region(frame, "▲", &full);
                 assertion::assert_text_in_region(frame, "▼", &full);
                 assertion::assert_text_in_region(frame, "CUSTOMER", &full);
                 assertion::assert_text_in_region(frame, "places", &full);
@@ -2775,6 +2779,7 @@ fn session_view_mermaid_output() -> E2eResult {
                 assertion::assert_not_visible(frame, "flowchart TD");
                 assertion::assert_not_visible(frame, "erDiagram");
                 assertion::assert_not_visible(frame, "sequenceDiagram");
+                assertion::assert_not_visible(frame, "Agent available");
             },
         )?;
 
