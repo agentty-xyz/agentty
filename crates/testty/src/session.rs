@@ -307,29 +307,34 @@ impl PtySession {
     /// Execute a sequence of [`Step`] actions against this session.
     ///
     /// Returns the final [`TerminalFrame`] after all steps have been
-    /// executed. Capture steps record intermediate frames but the last
-    /// frame is always returned.
+    /// executed. Input and sleep steps invalidate earlier frames, causing one
+    /// final capture after the sequence. Wait and capture steps provide a
+    /// reusable current frame unless a later step invalidates it. VHS-only
+    /// viewing pauses neither capture nor invalidate a frame.
     ///
     /// # Errors
     ///
     /// Returns an error if any step fails (e.g., timeout, write failure).
     pub fn execute_steps(&mut self, steps: &[Step]) -> Result<TerminalFrame, PtySessionError> {
-        let mut last_frame = None;
+        let mut current_frame = None;
 
         for step in steps {
             match step {
                 Step::WriteText(text) => {
                     self.write_text(text)?;
+                    current_frame = None;
                 }
                 Step::PressKey(key) => {
                     self.press_key(key)?;
+                    current_frame = None;
                 }
                 Step::Sleep(duration) => {
                     thread::sleep(*duration);
+                    current_frame = None;
                 }
                 Step::WaitForText { needle, timeout_ms } => {
                     let timeout = Duration::from_millis(u64::from(*timeout_ms));
-                    last_frame = Some(self.wait_for_text(needle, timeout)?);
+                    current_frame = Some(self.wait_for_text(needle, timeout)?);
                 }
                 Step::WaitForStableFrame {
                     stable_ms,
@@ -337,17 +342,18 @@ impl PtySession {
                 } => {
                     let stable = Duration::from_millis(u64::from(*stable_ms));
                     let timeout = Duration::from_millis(u64::from(*timeout_ms));
-                    last_frame = Some(self.wait_for_stable_frame(stable, timeout)?);
+                    current_frame = Some(self.wait_for_stable_frame(stable, timeout)?);
                 }
                 Step::Eventually {
                     timeout,
                     poll,
                     predicate,
                 } => {
-                    last_frame = Some(self.run_eventually(*timeout, *poll, predicate.as_ref())?);
+                    current_frame =
+                        Some(self.run_eventually(*timeout, *poll, predicate.as_ref())?);
                 }
                 Step::Capture | Step::CaptureLabeled { .. } => {
-                    last_frame = Some(self.capture_frame());
+                    current_frame = Some(self.capture_frame());
                 }
                 Step::ViewingPause(_) => {
                     // No-op in PTY execution — only affects VHS tape output.
@@ -355,7 +361,12 @@ impl PtySession {
             }
         }
 
-        Ok(last_frame.unwrap_or_else(|| self.capture_frame()))
+        let final_frame = match current_frame {
+            Some(frame) => frame,
+            None => self.capture_frame(),
+        };
+
+        Ok(final_frame)
     }
 
     /// Return the configured number of columns.
@@ -688,6 +699,33 @@ mod tests {
 
         // Assert
         assert_eq!(bytes, vec![b'x']);
+    }
+
+    #[test]
+    fn execute_steps_captures_input_after_an_earlier_wait() {
+        // Arrange
+        let mut session = PtySessionBuilder::new("/bin/sh")
+            .args([
+                "-c",
+                "printf 'ready\\n'; read value; printf 'done:%s\\n' \"$value\"; sleep 60",
+            ])
+            .spawn()
+            .expect("failed to spawn interactive shell script");
+        let steps = [
+            Step::wait_for_text("ready", 3_000),
+            Step::write_text("hello\n"),
+        ];
+
+        // Act
+        let frame = session
+            .execute_steps(&steps)
+            .expect("step execution should succeed");
+
+        // Assert
+        assert!(
+            frame.all_text().contains("done:hello"),
+            "final frame must include output produced after the wait"
+        );
     }
 
     /// Verifies that `wait_for_stable_frame` times out when the spawned
