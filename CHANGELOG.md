@@ -7,11 +7,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-### Fixed
+## [v0.12.9] - 2026-07-11
 
-- agentty: support projects backed by a bare-repository worktree layout (a container
-  folder holding per-branch worktrees). Previously, starting a session turn in such a
-  project failed with a git status `must be run in a work tree` error.
+The `v0.12.8` release was not successful, so `v0.12.9` includes all changes originally
+documented for it.
 
 ### Changed
 
@@ -19,6 +18,28 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   invisible layout links, `&` fan-outs, flattened subgraphs, skipped styling and
   sequence control statements, truncated over-long labels, and adaptive sequence
   lifeline spacing.
+- agentty: render dotted and thick Mermaid edges with inline labels.
+- agentty: preserve pasted prompt indentation.
+- agentty: pin the user prompt block background to a dedicated RGB surface token.
+- agentty: improve session configuration and E2E stability.
+- docs: document that GIF force mode requires an unsandboxed shell.
+
+### Removed
+
+- agentty: remove the `/qe:check` prompt slash command.
+
+### Fixed
+
+- agentty: support projects backed by a bare-repository worktree layout (a container
+  folder holding per-branch worktrees). Previously, starting a session turn in such a
+  project failed with a git status `must be run in a work tree` error.
+
+### Contributors
+
+- @andagaev
+- @artemgoncharuk
+- @dependabot
+- @minev-dev
 
 ## [v0.12.8] - 2026-07-09
 
