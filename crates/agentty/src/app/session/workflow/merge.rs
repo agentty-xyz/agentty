@@ -1968,7 +1968,7 @@ impl SessionManager {
             &input.folder,
             input.rebase_plan.target_label(),
             auto_commit_agent,
-            true,
+            false,
             include_coauthored_by_agentty,
         )
         .await

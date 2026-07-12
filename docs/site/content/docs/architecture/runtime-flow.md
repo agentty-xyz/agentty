@@ -163,7 +163,9 @@ render twice per frame.
 1. Auto-commit keeps one evolving commit on the session branch: the first file-changing
    turn creates it, later turns regenerate the message from the cumulative diff with the
    project's `Default Fast Model` and amend `HEAD`; an empty amend drops the reverted
-   commit. The session title is synced from the commit text.
+   commit. Repositories declaring pre-commit configuration must have an installed,
+   executable Git pre-commit hook; a missing hook fails immediately without entering
+   model-assisted commit recovery. The session title is synced from the commit text.
 1. If the session already tracks a published upstream branch and no chat message or sync
    operation is queued, a per-session branch-operation guard transfers to the detached
    auto-push until it finishes. Every sync request holds the same guard through status

@@ -93,6 +93,37 @@ duration: 283ms
     Ok(())
 }
 
+/// Seeds configured pre-commit validation without installing its Git hook and
+/// installs a Claude stub that leaves one worktree change for auto-commit.
+fn seed_missing_pre_commit_hook_project(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    std::fs::write(env.workdir.join(".pre-commit-config.yaml"), "repos: []\n")?;
+    run_git(&env.workdir, &["add", ".pre-commit-config.yaml"])?;
+    run_git(
+        &env.workdir,
+        &["commit", "-m", "configure pre-commit validation"],
+    )?;
+
+    let claude_path = env.stub_bin.join("claude");
+    let script = r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+cat > /dev/null 2>&1
+printf 'pending change\n' > generated.txt
+printf '%s\n' '{"type":"system","subtype":"init"}'
+printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Created pending worktree change"}]}}'
+printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Created pending worktree change\",\"questions\":[],\"summary\":null}","usage":{"input_tokens":5,"output_tokens":9}}'
+"#;
+    std::fs::write(&claude_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+
+    seed_project_default_model(env, "claude-haiku-4-5-20251001")?;
+
+    Ok(())
+}
+
 /// Seeds one review-ready session whose transcript contains a markdown table.
 fn seed_session_with_markdown_table(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
@@ -1168,6 +1199,47 @@ fn session_list_empty_state() -> E2eResult {
                 assertion::assert_not_visible(frame, "Merge queue");
                 assertion::assert_not_visible(frame, "Archive");
                 assertion::assert_not_visible(frame, "No sessions");
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that configured validation without an installed hook surfaces an
+/// actionable auto-commit error in the session transcript.
+#[test]
+fn test_session_missing_pre_commit_hook_error() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_missing_pre_commit_hook_error")
+        .with_git()
+        .setup(seed_missing_pre_commit_hook_project)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .write_text("Create one worktree change")
+                    .wait_for_text("Create one worktree change", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("Created pending worktree change", 30000)
+                    .wait_for_text("[Commit Error]", 30000)
+                    .capture_labeled(
+                        "missing_hook",
+                        "Session auto-commit reports a missing pre-commit hook",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "[Commit Error]", &full);
+                assertion::assert_text_in_region(
+                    frame,
+                    "pre-commit validation is configured",
+                    &full,
+                );
+                assertion::assert_text_in_region(frame, "not installed or executable", &full);
             },
         )?;
 

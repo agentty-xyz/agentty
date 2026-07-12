@@ -40,7 +40,7 @@ percent-encoding = "2"
 portable-pty = "0.9"
 ratatui = { version = "0.30.1", default-features = false, features = ["crossterm", "layout-cache", "std", "underline-color"] }
 rustc-hash = "2"
-rustix = { version = "1.1", features = ["event", "process"] }
+rustix = { version = "1.1", features = ["event", "fs", "process"] }
 schemars = { version = "1", features = ["derive"] }
 semver = "1"
 serde = { version = "1", features = ["derive"] }

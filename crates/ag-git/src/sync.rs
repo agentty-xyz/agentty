@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
+#[cfg(unix)]
+use rustix::fs::{self as rustix_fs, Access};
 use tokio::task::spawn_blocking;
 
 use super::error::GitError;
@@ -15,6 +17,7 @@ use super::repo::{
 pub type BranchTrackingMap = HashMap<String, Option<(u32, u32)>>;
 
 const COMMIT_ALL_HOOK_RETRY_ATTEMPTS: usize = 5;
+const PRE_COMMIT_CONFIG_FILES: [&str; 2] = [".pre-commit-config.yaml", ".pre-commit-config.yml"];
 
 /// Controls how single-commit session branches treat the commit message when
 /// amending `HEAD`.
@@ -993,6 +996,10 @@ async fn commit_all_with_retry(
     amend_existing_commit: bool,
 ) -> Result<(), GitError> {
     spawn_blocking(move || {
+        if !no_verify {
+            ensure_pre_commit_hook_ready(&repo_path)?;
+        }
+
         stage_all_sync(&repo_path)?;
 
         for _ in 0..COMMIT_ALL_HOOK_RETRY_ATTEMPTS {
@@ -1043,6 +1050,71 @@ async fn commit_all_with_retry(
         })
     })
     .await?
+}
+
+/// Ensures repositories declaring pre-commit validation have an executable
+/// hook.
+fn ensure_pre_commit_hook_ready(repo_path: &Path) -> Result<(), GitError> {
+    let Some(config_file) = PRE_COMMIT_CONFIG_FILES
+        .iter()
+        .find(|config_file| repo_path.join(config_file).is_file())
+    else {
+        return Ok(());
+    };
+    let hook_path = resolve_pre_commit_hook_path(repo_path)?;
+
+    if is_executable_hook(&hook_path) {
+        return Ok(());
+    }
+
+    Err(GitError::PreCommitHookMissing {
+        config_file: (*config_file).to_string(),
+    })
+}
+
+/// Resolves the pre-commit hook using `core.hooksPath` or Git's default path.
+fn resolve_pre_commit_hook_path(repo_path: &Path) -> Result<PathBuf, GitError> {
+    let hooks_path_output =
+        run_git_command_output_sync(repo_path, &["config", "--path", "--get", "core.hooksPath"])?;
+    let hooks_path = if hooks_path_output.status.success() {
+        PathBuf::from(String::from_utf8_lossy(&hooks_path_output.stdout).trim())
+    } else if hooks_path_output.status.code() == Some(1) {
+        let default_hook_path = run_git_command_sync(
+            repo_path,
+            &["rev-parse", "--git-path", "hooks/pre-commit"],
+            "Failed to resolve Git pre-commit hook path",
+        )?;
+
+        return Ok(resolve_repo_path(
+            repo_path,
+            PathBuf::from(default_hook_path.trim()),
+        ));
+    } else {
+        return Err(GitError::CommandFailed {
+            command: "git config --path --get core.hooksPath".to_string(),
+            stderr: command_output_detail(&hooks_path_output.stdout, &hooks_path_output.stderr),
+        });
+    };
+
+    Ok(resolve_repo_path(repo_path, hooks_path).join("pre-commit"))
+}
+
+fn resolve_repo_path(repo_path: &Path, path: PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        return path;
+    }
+
+    repo_path.join(path)
+}
+
+#[cfg(unix)]
+fn is_executable_hook(hook_path: &Path) -> bool {
+    hook_path.is_file() && rustix_fs::access(hook_path, Access::EXEC_OK).is_ok()
+}
+
+#[cfg(not(unix))]
+fn is_executable_hook(hook_path: &Path) -> bool {
+    hook_path.is_file()
 }
 
 /// Returns the canonical git no-changes error used by app auto-commit flows.
@@ -1195,6 +1267,8 @@ pub(super) fn is_no_upstream_error(detail: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
     use std::process::{Command, Output};
 
@@ -1248,6 +1322,161 @@ mod tests {
         fs::write(repo_path.join("README.md"), "base\n").expect("failed to write base file");
         run_git_command(repo_path, &["add", "README.md"]);
         run_git_command(repo_path, &["commit", "-m", "Initial commit"]);
+    }
+
+    #[cfg(unix)]
+    fn write_executable_pre_commit_hook(hook_path: &Path) {
+        fs::create_dir_all(
+            hook_path
+                .parent()
+                .expect("pre-commit hook should have a parent directory"),
+        )
+        .expect("failed to create hooks directory");
+        fs::write(hook_path, "#!/bin/sh\nexit 0\n").expect("failed to write pre-commit hook");
+        let mut permissions = fs::metadata(hook_path)
+            .expect("failed to read pre-commit hook metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(hook_path, permissions)
+            .expect("failed to make pre-commit hook executable");
+    }
+
+    #[test]
+    fn ensure_pre_commit_hook_ready_allows_repositories_without_configuration() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(temp_dir.path());
+
+        // Act
+        let result = ensure_pre_commit_hook_ready(temp_dir.path());
+
+        // Assert
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn ensure_pre_commit_hook_ready_rejects_missing_hook() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(temp_dir.path());
+        fs::write(
+            temp_dir.path().join(".pre-commit-config.yaml"),
+            "repos: []\n",
+        )
+        .expect("failed to write pre-commit configuration");
+
+        // Act
+        let result = ensure_pre_commit_hook_ready(temp_dir.path());
+
+        // Assert
+        assert!(matches!(
+            result,
+            Err(GitError::PreCommitHookMissing { ref config_file })
+                if config_file == ".pre-commit-config.yaml"
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_pre_commit_hook_ready_accepts_default_executable_hook() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(temp_dir.path());
+        fs::write(
+            temp_dir.path().join(".pre-commit-config.yaml"),
+            "repos: []\n",
+        )
+        .expect("failed to write pre-commit configuration");
+        let hook_path = temp_dir.path().join(git_command_stdout(
+            temp_dir.path(),
+            &["rev-parse", "--git-path", "hooks/pre-commit"],
+        ));
+        write_executable_pre_commit_hook(&hook_path);
+
+        // Act
+        let result = ensure_pre_commit_hook_ready(temp_dir.path());
+
+        // Assert
+        assert!(result.is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_pre_commit_hook_ready_accepts_custom_executable_hook() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(temp_dir.path());
+        fs::write(
+            temp_dir.path().join(".pre-commit-config.yaml"),
+            "repos: []\n",
+        )
+        .expect("failed to write pre-commit configuration");
+        run_git_command(
+            temp_dir.path(),
+            &["config", "core.hooksPath", ".custom-hooks"],
+        );
+        write_executable_pre_commit_hook(&temp_dir.path().join(".custom-hooks").join("pre-commit"));
+
+        // Act
+        let result = ensure_pre_commit_hook_ready(temp_dir.path());
+
+        // Assert
+        assert!(result.is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_pre_commit_hook_ready_rejects_hook_inaccessible_to_owner() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(temp_dir.path());
+        fs::write(
+            temp_dir.path().join(".pre-commit-config.yaml"),
+            "repos: []\n",
+        )
+        .expect("failed to write pre-commit configuration");
+        let hook_path = temp_dir.path().join(git_command_stdout(
+            temp_dir.path(),
+            &["rev-parse", "--git-path", "hooks/pre-commit"],
+        ));
+        fs::write(&hook_path, "#!/bin/sh\nexit 0\n").expect("failed to write pre-commit hook");
+        fs::set_permissions(&hook_path, fs::Permissions::from_mode(0o011))
+            .expect("failed to set mismatched execute permissions");
+
+        // Act
+        let result = ensure_pre_commit_hook_ready(temp_dir.path());
+
+        // Assert
+        assert!(matches!(result, Err(GitError::PreCommitHookMissing { .. })));
+    }
+
+    #[tokio::test]
+    async fn commit_all_rejects_configured_validation_without_hook() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(temp_dir.path());
+        fs::write(
+            temp_dir.path().join(".pre-commit-config.yaml"),
+            "repos: []\n",
+        )
+        .expect("failed to write pre-commit configuration");
+        fs::write(temp_dir.path().join("README.md"), "changed\n")
+            .expect("failed to write worktree change");
+
+        // Act
+        let result = commit_all(
+            temp_dir.path().to_path_buf(),
+            "Change README".to_string(),
+            false,
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(result, Err(GitError::PreCommitHookMissing { .. })));
+        assert_eq!(
+            git_command_stdout(temp_dir.path(), &["log", "-1", "--pretty=%s"]),
+            "Initial commit"
+        );
     }
 
     #[test]

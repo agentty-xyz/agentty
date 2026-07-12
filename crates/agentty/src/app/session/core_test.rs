@@ -4729,7 +4729,7 @@ async fn test_rebase_session_auto_commits_uncommitted_changes() {
     mock_git_client
         .expect_commit_all_preserving_single_commit()
         .times(1)
-        .withf(|_, _, _, _, no_verify| *no_verify)
+        .withf(|_, _, _, _, no_verify| !*no_verify)
         .returning(|_, _, _, _, _| Box::pin(async { Ok(()) }));
     mock_git_client
         .expect_head_short_hash()

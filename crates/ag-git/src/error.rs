@@ -21,6 +21,18 @@ pub enum GitError {
     #[error("{0}")]
     Io(#[from] std::io::Error),
 
+    /// A repository declares pre-commit validation but its Git hook is
+    /// unavailable.
+    #[error(
+        "pre-commit validation is configured by `{config_file}`, but the Git pre-commit hook is \
+         not installed or executable; install it with the project's hook manager before committing"
+    )]
+    PreCommitHookMissing {
+        /// Repository-root-relative configuration file that declares
+        /// validation.
+        config_file: String,
+    },
+
     /// A `tokio::task::spawn_blocking` join failed.
     #[error("Join error: {0}")]
     Join(#[from] tokio::task::JoinError),
@@ -78,5 +90,21 @@ mod tests {
         // Assert
         assert!(matches!(error, GitError::Io(_)));
         assert!(error.to_string().contains("file missing"));
+    }
+
+    #[test]
+    fn pre_commit_hook_missing_display_explains_required_setup() {
+        // Arrange
+        let error = GitError::PreCommitHookMissing {
+            config_file: ".pre-commit-config.yaml".to_string(),
+        };
+
+        // Act
+        let display = error.to_string();
+
+        // Assert
+        assert!(display.contains(".pre-commit-config.yaml"));
+        assert!(display.contains("not installed or executable"));
+        assert!(display.contains("project's hook manager"));
     }
 }

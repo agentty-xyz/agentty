@@ -340,8 +340,8 @@ the full suite.
 
 - **Markdown and docs:** Run `mdformat`, then the default hooks for touched paths.
 - **`docs/site/` content:** Add `zola-check`; use `djlint-reformat` for HTML templates.
-- **Rust sources:** Run `rustfmt-fix` while iterating, then `cargo-check`; add focused
-  tests for the changed crate and affected dependents.
+- **Rust sources:** Run `rustfmt-fix` while iterating, then `cargo-check` and `clippy`;
+  add focused tests for the changed crate and affected dependents.
 - **Workspace crate source tests:** Use the narrowest matching member source-test hook.
 - **Cargo manifests and lockfile:** Run `cargo-check`, `clippy`, and affected crate
   tests; use `test-workspace` when dependency impact is broad or uncertain.

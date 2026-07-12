@@ -13,6 +13,7 @@ test-utils = ["dep:mockall"]
 
 [dependencies]
 mockall = { workspace = true, optional = true }
+rustix.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 
