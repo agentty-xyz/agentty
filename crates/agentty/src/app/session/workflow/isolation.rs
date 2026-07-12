@@ -11,16 +11,20 @@ use crate::infra::fs::FsClient;
 /// Validated git metadata for one session worktree.
 #[derive(Debug)]
 pub(super) struct SessionWorktreeValidation {
-    /// Canonical main repository checkout that must remain unchanged.
-    pub(super) main_repo_root: PathBuf,
+    /// Canonical main repository checkout that must remain unchanged, or
+    /// `None` when the shared repository is bare and therefore has no main
+    /// working checkout to guard against.
+    pub(super) main_checkout: Option<PathBuf>,
 }
 
 /// Verifies that `folder` is an isolated linked worktree for `session_id`.
 ///
-/// The guard checks the folder exists, the checked-out branch matches
-/// `wt/<session-id-prefix>`, and git resolves a distinct main repository
-/// checkout. This prevents stale or replaced session directories from being
-/// reused as provider working directories.
+/// The guard checks the folder exists and the checked-out branch matches
+/// `wt/<session-id-prefix>`. When git resolves a main working checkout it must
+/// be distinct from `folder`, preventing stale or replaced session directories
+/// from being reused as provider working directories. When the shared
+/// repository is bare there is no main working checkout, so any valid linked
+/// worktree passes with `main_checkout` set to `None`.
 ///
 /// # Errors
 /// Returns [`SessionError::Workflow`] when the folder is missing, branch
@@ -56,10 +60,15 @@ pub(super) async fn validate_session_worktree(
         )));
     }
 
-    let main_repo_root = git_client
-        .main_repo_root(folder.to_path_buf())
+    let Some(main_repo_root) = git_client
+        .main_checkout_working_tree(folder.to_path_buf())
         .await
-        .map_err(|error| main_repo_root_error(&error))?;
+        .map_err(|error| main_checkout_error(&error))?
+    else {
+        return Ok(SessionWorktreeValidation {
+            main_checkout: None,
+        });
+    };
     ensure_main_repo_root_exists(fs_client, &main_repo_root)?;
     let session_folder = canonicalize_for_isolation(fs_client, folder).await?;
     let main_repo_root = canonicalize_for_isolation(fs_client, &main_repo_root).await?;
@@ -70,7 +79,9 @@ pub(super) async fn validate_session_worktree(
         )));
     }
 
-    Ok(SessionWorktreeValidation { main_repo_root })
+    Ok(SessionWorktreeValidation {
+        main_checkout: Some(main_repo_root),
+    })
 }
 
 /// Verifies git resolved an existing main checkout before canonicalization.
@@ -104,8 +115,8 @@ async fn canonicalize_for_isolation(
         })
 }
 
-/// Converts main-repository resolution failures into workflow errors.
-fn main_repo_root_error(error: &GitError) -> SessionError {
+/// Converts main-checkout resolution failures into workflow errors.
+fn main_checkout_error(error: &GitError) -> SessionError {
     isolation_error(&format!(
         "failed to resolve main repository checkout: {error}"
     ))
@@ -164,9 +175,9 @@ mod tests {
             .once()
             .returning(|_| Box::pin(async { Some("wt/session".to_string()) }));
         git_client
-            .expect_main_repo_root()
+            .expect_main_checkout_working_tree()
             .once()
-            .returning(|_| Box::pin(async { Ok(PathBuf::from("/tmp/project")) }));
+            .returning(|_| Box::pin(async { Ok(Some(PathBuf::from("/tmp/project"))) }));
 
         // Act
         let validation =
@@ -175,7 +186,34 @@ mod tests {
                 .expect("linked worktree should validate");
 
         // Assert
-        assert_eq!(validation.main_repo_root, repo_root);
+        assert_eq!(validation.main_checkout, Some(repo_root));
+    }
+
+    #[tokio::test]
+    async fn validate_session_worktree_accepts_bare_shared_repo_without_main_checkout() {
+        // Arrange
+        let session_folder = PathBuf::from("/tmp/session");
+        let mut fs_client = fs::MockFsClient::new();
+        fs_client.expect_is_dir().once().return_const(true);
+        fs_client.expect_canonicalize().times(0);
+        let mut git_client = git::MockGitClient::new();
+        git_client
+            .expect_detect_git_info()
+            .once()
+            .returning(|_| Box::pin(async { Some("wt/session".to_string()) }));
+        git_client
+            .expect_main_checkout_working_tree()
+            .once()
+            .returning(|_| Box::pin(async { Ok(None) }));
+
+        // Act
+        let validation =
+            validate_session_worktree(&fs_client, &git_client, session_folder.as_path(), "session")
+                .await
+                .expect("bare shared repo worktree should validate");
+
+        // Assert
+        assert_eq!(validation.main_checkout, None);
     }
 
     #[tokio::test]
@@ -189,7 +227,7 @@ mod tests {
             .expect_detect_git_info()
             .once()
             .returning(|_| Box::pin(async { Some("main".to_string()) }));
-        git_client.expect_main_repo_root().times(0);
+        git_client.expect_main_checkout_working_tree().times(0);
 
         // Act
         let error =
@@ -217,9 +255,9 @@ mod tests {
             .once()
             .returning(|_| Box::pin(async { Some("wt/session".to_string()) }));
         git_client
-            .expect_main_repo_root()
+            .expect_main_checkout_working_tree()
             .once()
-            .returning(|_| Box::pin(async { Ok(PathBuf::from("/tmp/project")) }));
+            .returning(|_| Box::pin(async { Ok(Some(PathBuf::from("/tmp/project"))) }));
 
         // Act
         let error =

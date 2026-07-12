@@ -168,6 +168,16 @@ fn allow_detect_git_info_with_head_hash(mock: &mut git::MockGitClient, allow_hea
 
         Box::pin(async move { Ok(repo_root) })
     });
+    mock.expect_main_checkout_working_tree()
+        .times(0..)
+        .returning(|path| {
+            let repo_root = path
+                .parent()
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or(path);
+
+            Box::pin(async move { Ok(Some(repo_root)) })
+        });
     mock.expect_worktree_status()
         .times(0..)
         .returning(|_| Box::pin(async { Ok(String::new()) }));
@@ -348,6 +358,22 @@ fn setup_mock_worktree_expectations(mock: &mut git::MockGitClient, repo_root: Pa
     mock.expect_repo_url()
         .times(0..)
         .returning(|_| Box::pin(async { Ok("https://example.invalid/repo.git".to_string()) }));
+    expect_shared_repo_resolvers(mock, repo_root);
+}
+
+/// Registers the admin-root and main-working-checkout resolver expectations
+/// backed by the same `repo_root`, treating the shared repository as non-bare.
+fn expect_shared_repo_resolvers(mock: &mut git::MockGitClient, repo_root: PathBuf) {
+    mock.expect_main_checkout_working_tree()
+        .times(0..)
+        .returning({
+            let repo_root = repo_root.clone();
+
+            move |_| {
+                let repo_root = repo_root.clone();
+                Box::pin(async move { Ok(Some(repo_root)) })
+            }
+        });
     mock.expect_main_repo_root().times(0..).returning(move |_| {
         let repo_root = repo_root.clone();
         Box::pin(async move { Ok(repo_root) })

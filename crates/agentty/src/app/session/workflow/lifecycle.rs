@@ -3583,9 +3583,9 @@ mod tests {
             .once()
             .returning(|_| Box::pin(async { Some("wt/session-".to_string()) }));
         mock_git_client
-            .expect_main_repo_root()
+            .expect_main_checkout_working_tree()
             .once()
-            .returning(|_| Box::pin(async { Ok(PathBuf::from("/tmp/project")) }));
+            .returning(|_| Box::pin(async { Ok(Some(PathBuf::from("/tmp/project"))) }));
         mock_git_client.expect_create_worktree().times(0);
         mock_git_client.expect_find_git_repo_root().times(0);
         let services = test_services_with_fs_client(
