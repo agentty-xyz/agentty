@@ -23,8 +23,8 @@ For file-level detail, read the module docstrings directly.
   provider availability probes, and crate-private CLI/app-server transport wiring.
 - `crates/ag-forge/`: Shared forge review-request library crate with normalized
   review-request types, GitHub/GitLab remote detection, and the `gh`/`glab` adapters and
-  project-scoped assigned GitHub issue search behind the `ReviewRequestClient` and
-  `ForgeCommandRunner` boundaries.
+  project-scoped assigned GitHub issue list/detail loading behind the
+  `ReviewRequestClient` and `ForgeCommandRunner` boundaries.
 - `crates/ag-git/`: Shared git library crate with worktree creation, repository
   metadata, commit/diff/push/pull sync, rebase/conflict handling, and squash-merge
   workflows behind the `GitClient` boundary.
@@ -65,9 +65,10 @@ For file-level detail, read the module docstrings directly.
   imports the curated `ag-agent` crate-root API; provider registry, router, parser, and
   transport internals stay private to `crates/ag-agent/`.
 - `runtime/`: Terminal lifecycle and the event loop — terminal setup, the event-reader
-  thread, key dispatch, one handler per `AppMode` under `runtime/mode/`, and shared mode
-  helpers for session-output metrics. Runtime owns `PresentationState`, including the
-  shared `RenderCacheStore` used by input metrics and frame rendering.
+  thread, key dispatch, mode-focused handlers under `runtime/mode/`, and shared handlers
+  for common interactions such as issue/review detail navigation and session-output
+  metrics. Runtime owns `PresentationState`, including the shared `RenderCacheStore`
+  used by input metrics and frame rendering.
 - `presentation.rs` and `presentation/`: Frontend-neutral interaction state shared by
   runtime input and UI output. They expose mode, help-action, prompt, editor, scroll,
   viewport, and semantic list-selection contracts without importing Ratatui or `ui/`

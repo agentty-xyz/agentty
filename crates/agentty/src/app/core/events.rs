@@ -55,6 +55,17 @@ pub(crate) enum AppEvent {
         /// GitHub CLI result from the background issue task.
         result: Result<Vec<ag_forge::AssignedIssue>, String>,
     },
+    /// Indicates completion of one selected GitHub issue detail load.
+    IssueDetailLoaded {
+        /// Provider display id such as GitHub `#123`.
+        display_id: String,
+        /// Assigned-issue list generation visible when loading began.
+        generation: u64,
+        /// Project id whose selected issue was loaded.
+        project_id: i64,
+        /// Base issue detail result, excluding comments.
+        result: Result<ag_forge::IssueDetail, String>,
+    },
     /// Indicates background-loaded prompt at-mention entries for one session.
     AtMentionEntriesLoaded {
         entries: Vec<FileEntry>,
@@ -213,6 +224,8 @@ pub(crate) enum AppEvent {
 pub(super) struct AppEventBatch {
     /// Latest assigned-issue task result collected for this reducer batch.
     pub(super) assigned_issues: Option<(u64, i64, Result<Vec<ag_forge::AssignedIssue>, String>)>,
+    /// Ordered selected issue-detail results collected for this reducer batch.
+    pub(super) issue_details: Vec<IssueDetailUpdate>,
     pub(super) applied_turns: HashMap<SessionId, TurnAppliedState>,
     pub(super) agent_cli_updates: Option<Vec<AgentCliInfo>>,
     pub(super) at_mention_entries_updates: HashMap<SessionId, Vec<FileEntry>>,
@@ -254,6 +267,14 @@ pub(super) struct AppEventBatch {
     pub(super) sync_main_conflicted_files: Option<Vec<String>>,
     pub(super) sync_main_result: Option<Result<SyncMainOutcome, SyncSessionStartError>>,
     pub(super) update_status: Option<UpdateStatus>,
+}
+
+/// Completed selected issue-detail load ready for reducer application.
+pub(super) struct IssueDetailUpdate {
+    pub(super) display_id: String,
+    pub(super) generation: u64,
+    pub(super) project_id: i64,
+    pub(super) result: Result<ag_forge::IssueDetail, String>,
 }
 
 /// Optional aggregate git status payload from the latest status event in one
@@ -313,6 +334,17 @@ impl AppEventBatch {
             } => {
                 self.collect_assigned_issues_loaded(generation, project_id, result);
             }
+            AppEvent::IssueDetailLoaded {
+                display_id,
+                generation,
+                project_id,
+                result,
+            } => self.issue_details.push(IssueDetailUpdate {
+                display_id,
+                generation,
+                project_id,
+                result,
+            }),
             AppEvent::AtMentionEntriesLoaded {
                 entries,
                 session_id,
@@ -1088,6 +1120,10 @@ impl App {
             }
         }
 
+        for issue_detail in std::mem::take(&mut event_batch.issue_details) {
+            self.apply_issue_detail_update(issue_detail);
+        }
+
         if let Some((generation, project_id, result)) = event_batch.requested_reviews.take()
             && project_id == self.projects.active_project_id()
             && self
@@ -1119,6 +1155,39 @@ impl App {
             event_batch.latest_available_version_update.as_ref(),
             event_batch.update_status.take(),
         );
+    }
+
+    /// Applies one issue-detail result only to the matching visible page.
+    fn apply_issue_detail_update(&mut self, update: IssueDetailUpdate) {
+        if update.project_id != self.projects.active_project_id()
+            || update.generation != self.assigned_issue_generation
+        {
+            return;
+        }
+
+        let AppMode::IssueDetail {
+            detail,
+            error,
+            issue,
+            ..
+        } = &mut self.mode
+        else {
+            return;
+        };
+        if issue.display_id != update.display_id {
+            return;
+        }
+
+        match update.result {
+            Ok(issue_detail) => {
+                *detail = Some(issue_detail);
+                *error = None;
+            }
+            Err(message) => {
+                *detail = None;
+                *error = Some(format!("Failed to load issue details: {message}"));
+            }
+        }
     }
 
     /// Clears the in-flight marker for one requested-review comment snapshot
@@ -1587,6 +1656,7 @@ impl App {
                 ..
             } => view_id == session_id,
             AppMode::List
+            | AppMode::IssueDetail { .. }
             | AppMode::ReviewDetail { .. }
             | AppMode::SessionCreation { .. }
             | AppMode::ProjectSwitcher { .. }
@@ -2209,5 +2279,32 @@ mod tests {
         assert_eq!(generation, 2);
         assert_eq!(project_id, 42);
         assert_eq!(result.expect("newer result should be successful").len(), 0);
+    }
+
+    #[test]
+    fn test_issue_detail_batch_retains_same_generation_results_in_arrival_order() {
+        // Arrange
+        let mut event_batch = AppEventBatch::default();
+        let visible_issue_event = AppEvent::IssueDetailLoaded {
+            display_id: "#124".to_string(),
+            generation: 1,
+            project_id: 42,
+            result: Err("visible issue result".to_string()),
+        };
+        let previous_issue_event = AppEvent::IssueDetailLoaded {
+            display_id: "#123".to_string(),
+            generation: 1,
+            project_id: 42,
+            result: Err("previous issue result".to_string()),
+        };
+
+        // Act
+        event_batch.collect_event(visible_issue_event);
+        event_batch.collect_event(previous_issue_event);
+
+        // Assert
+        assert_eq!(event_batch.issue_details.len(), 2);
+        assert_eq!(event_batch.issue_details[0].display_id, "#124");
+        assert_eq!(event_batch.issue_details[1].display_id, "#123");
     }
 }

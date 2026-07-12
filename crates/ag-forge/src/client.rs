@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use super::{
     AssignedIssue, CreateReviewRequestInput, ForgeCommandRunner, ForgeFuture, ForgeKind,
-    ForgeRemote, GitHubReviewRequestAdapter, GitLabReviewRequestAdapter, RealForgeCommandRunner,
-    RequestedReview, ReviewCommentSnapshot, ReviewRequestError, ReviewRequestSummary,
-    UpdateReviewRequestInput, detect_remote,
+    ForgeRemote, GitHubReviewRequestAdapter, GitLabReviewRequestAdapter, IssueDetail,
+    RealForgeCommandRunner, RequestedReview, ReviewCommentSnapshot, ReviewRequestError,
+    ReviewRequestSummary, UpdateReviewRequestInput, detect_remote,
 };
 
 /// Async boundary used by app orchestration for forge review requests.
@@ -23,6 +23,16 @@ pub trait ReviewRequestClient: Send + Sync {
         &self,
         remote: ForgeRemote,
     ) -> ForgeFuture<Result<Vec<AssignedIssue>, ReviewRequestError>>;
+
+    /// Fetches base details for one GitHub issue without comments.
+    ///
+    /// # Errors
+    /// Returns a GitHub CLI error when the issue lookup cannot be completed.
+    fn fetch_issue_detail(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+    ) -> ForgeFuture<Result<IssueDetail, ReviewRequestError>>;
 
     /// Detects whether `repo_url` belongs to one supported forge.
     ///
@@ -146,6 +156,24 @@ impl ReviewRequestClient for RealReviewRequestClient {
 
         GitHubReviewRequestAdapter::new(Arc::clone(&self.command_runner))
             .list_assigned_issues(remote)
+    }
+
+    fn fetch_issue_detail(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+    ) -> ForgeFuture<Result<IssueDetail, ReviewRequestError>> {
+        if remote.forge_kind != ForgeKind::GitHub {
+            return Box::pin(async move {
+                Err(ReviewRequestError::OperationFailed {
+                    forge_kind: remote.forge_kind,
+                    message: "issue details require a GitHub project remote".to_string(),
+                })
+            });
+        }
+
+        GitHubReviewRequestAdapter::new(Arc::clone(&self.command_runner))
+            .fetch_issue_detail(remote, display_id)
     }
 
     fn detect_remote(&self, repo_url: String) -> Result<ForgeRemote, ReviewRequestError> {

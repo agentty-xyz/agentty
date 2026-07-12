@@ -55,6 +55,7 @@ impl App {
     pub(crate) fn has_visible_tick_driven_ui(&self) -> bool {
         match &self.mode {
             AppMode::List
+            | AppMode::IssueDetail { .. }
             | AppMode::ReviewDetail { .. }
             | AppMode::SessionCreation { .. }
             | AppMode::ProjectSwitcher { .. }

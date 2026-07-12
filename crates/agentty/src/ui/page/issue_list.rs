@@ -14,14 +14,14 @@ const TABLE_COLUMN_SPACING: u16 = 2;
 /// Maximum assigned issues returned by the GitHub CLI query.
 const ASSIGNED_ISSUE_DISPLAY_LIMIT: usize = 100;
 
-/// List-only page for open GitHub issues assigned to the authenticated user.
-pub struct IssuePage<'a> {
+/// List page for open GitHub issues assigned to the authenticated user.
+pub struct IssueListPage<'a> {
     assigned_issues: &'a AssignedIssueState,
     selected_issue_index: Option<usize>,
     table_state: &'a mut TableState,
 }
 
-impl<'a> IssuePage<'a> {
+impl<'a> IssueListPage<'a> {
     /// Creates an assigned-issue page from the active project's cache.
     pub fn new(
         assigned_issues: &'a AssignedIssueState,
@@ -36,7 +36,7 @@ impl<'a> IssuePage<'a> {
     }
 }
 
-impl Page for IssuePage<'_> {
+impl Page for IssueListPage<'_> {
     fn render(&mut self, frame: &mut Frame, area: Rect) {
         let areas = layout::tab_page_areas(area);
 
@@ -64,12 +64,6 @@ impl Page for IssuePage<'_> {
         }
 
         let mut footer = crate::ui::help_format::footer_line(&help_action::issue_actions());
-        footer
-            .spans
-            .push(crate::ui::help_format::footer_separator_span());
-        footer
-            .spans
-            .push(crate::ui::help_format::footer_muted_span("list only"));
         if matches!(self.assigned_issues, AssignedIssueState::Loaded { items, .. } if items.len() >= ASSIGNED_ISSUE_DISPLAY_LIMIT)
         {
             footer

@@ -113,11 +113,14 @@ to return to the review list.
 | ------------------- | ---------------------------------------------------------------- |
 | `q`                 | Quit                                                             |
 | `j` / `k`           | Navigate assigned issues                                         |
+| `Enter`             | Open base details for the selected issue                         |
 | `s`                 | Refresh open GitHub issues assigned to you in the active project |
 | `Tab` / `Shift+Tab` | Switch to next / previous tab                                    |
 | `?`                 | Help                                                             |
 
-The page is list-only in this iteration, so `Enter` has no action.
+On the read-only detail page, use `j` / `k` or `Up` / `Down` to scroll, `Ctrl+d` /
+`Ctrl+u` to move by half pages, `g` / `G` to jump to the top or bottom, and `q` / `Esc`
+to return to the issue list. Issue comments are not loaded in this iteration.
 
 ## Session View
 

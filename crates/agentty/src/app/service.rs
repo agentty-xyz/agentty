@@ -250,6 +250,7 @@ impl AppServices {
 fn app_event_label(event: &AppEvent) -> &'static str {
     match event {
         AppEvent::AssignedIssuesLoaded { .. } => "AssignedIssuesLoaded",
+        AppEvent::IssueDetailLoaded { .. } => "IssueDetailLoaded",
         AppEvent::AtMentionEntriesLoaded { .. } => "AtMentionEntriesLoaded",
         AppEvent::GitStatusUpdated { .. } => "GitStatusUpdated",
         AppEvent::VersionAvailabilityUpdated { .. } => "VersionAvailabilityUpdated",

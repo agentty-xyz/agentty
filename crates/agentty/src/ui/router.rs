@@ -368,19 +368,8 @@ fn render_list_or_overlay_mode(
         AppMode::ViewInfoPopup { .. } => {
             render_view_info_popup_mode(f, area, mode, shared.sessions, aux);
         }
-        AppMode::ReviewDetail {
-            comment_error,
-            is_loading_comments,
-            review,
-            scroll_offset,
-        } => {
-            page::review_detail::ReviewDetailPage::new(
-                review,
-                aux.markdown_render_cache,
-                *scroll_offset,
-            )
-            .with_comment_status(comment_error.as_deref(), *is_loading_comments)
-            .render(f, area);
+        AppMode::IssueDetail { .. } | AppMode::ReviewDetail { .. } => {
+            render_detail_mode(f, area, mode, aux.markdown_render_cache);
         }
         AppMode::Help {
             context: help_context,
@@ -413,6 +402,43 @@ fn render_list_or_overlay_mode(
     }
 
     true
+}
+
+/// Routes issue and requested-review snapshots to their detail page renderers.
+fn render_detail_mode(
+    f: &mut Frame,
+    area: Rect,
+    mode: &AppMode,
+    markdown_render_cache: &markdown::MarkdownRenderCache,
+) {
+    match mode {
+        AppMode::IssueDetail {
+            detail,
+            error,
+            issue,
+            scroll_offset,
+        } => page::issue_detail::IssueDetailPage::new(
+            issue,
+            detail.as_ref(),
+            error.as_deref(),
+            markdown_render_cache,
+            *scroll_offset,
+        )
+        .render(f, area),
+        AppMode::ReviewDetail {
+            comment_error,
+            is_loading_comments,
+            review,
+            scroll_offset,
+        } => page::review_detail::ReviewDetailPage::new(
+            review,
+            markdown_render_cache,
+            *scroll_offset,
+        )
+        .with_comment_status(comment_error.as_deref(), *is_loading_comments)
+        .render(f, area),
+        _ => {}
+    }
 }
 
 /// Renders confirmation modes, including session-scoped confirmations that
@@ -912,7 +938,7 @@ pub(crate) fn render_list_background(
             .render(f, chunks[1]);
         }
         Tab::Issues => {
-            page::issue::IssuePage::new(
+            page::issue_list::IssueListPage::new(
                 shared.assigned_issues,
                 shared.assigned_issue_selected_index,
                 &mut *shared.assigned_issue_table_state,

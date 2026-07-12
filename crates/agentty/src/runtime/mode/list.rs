@@ -162,7 +162,10 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
         Tab::Review => {
             app.open_selected_requested_review();
         }
-        Tab::Issues | Tab::Logs => {}
+        Tab::Issues => {
+            app.open_selected_assigned_issue();
+        }
+        Tab::Logs => {}
     }
 
     Ok(EventResult::Continue)

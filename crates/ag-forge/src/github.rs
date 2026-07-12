@@ -7,7 +7,7 @@ use serde::Deserialize;
 
 use super::{
     AssignedIssue, CreateReviewRequestInput, ForgeCommand, ForgeCommandRunner, ForgeFuture,
-    ForgeKind, ForgeRemote, RequestedReview, RequestedReviewAudience, ReviewComment,
+    ForgeKind, ForgeRemote, IssueDetail, RequestedReview, RequestedReviewAudience, ReviewComment,
     ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread, ReviewRequestAdapter,
     ReviewRequestError, ReviewRequestOperations, ReviewRequestState, ReviewRequestSummary,
     SyncReviewRequestMetadataConfig, UpdateReviewRequestInput, map_parse_error,
@@ -64,6 +64,32 @@ impl GitHubReviewRequestAdapter {
             map_parse_error(
                 ForgeKind::GitHub,
                 parse_assigned_issues_response(&output.stdout),
+            )
+        })
+    }
+
+    /// Fetches base details for one GitHub issue without requesting comments.
+    pub(crate) fn fetch_issue_detail(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+    ) -> ForgeFuture<Result<IssueDetail, ReviewRequestError>> {
+        let adapter = self.clone();
+
+        Box::pin(async move {
+            adapter.ensure_authenticated(&remote).await?;
+            let output = adapter
+                .operations
+                .run_review_command(
+                    &remote,
+                    issue_detail_command(&remote, &display_id),
+                    "load issue details",
+                )
+                .await?;
+
+            map_parse_error(
+                ForgeKind::GitHub,
+                parse_issue_detail_response(&remote, &output.stdout),
             )
         })
     }
@@ -261,6 +287,22 @@ fn assigned_issues_command(remote: &ForgeRemote) -> ForgeCommand {
             ASSIGNED_ISSUE_LIMIT.to_string(),
             "--json".to_string(),
             "number,title,url,updatedAt,repository".to_string(),
+        ],
+    )
+}
+
+/// Builds the project-scoped `gh issue view` command for base issue details.
+fn issue_detail_command(remote: &ForgeRemote, display_id: &str) -> ForgeCommand {
+    github_command(
+        remote,
+        vec![
+            "issue".to_string(),
+            "view".to_string(),
+            display_id.trim_start_matches('#').to_string(),
+            "--repo".to_string(),
+            remote.project_path(),
+            "--json".to_string(),
+            "assignees,author,body,createdAt,labels,number,state,title,updatedAt,url".to_string(),
         ],
     )
 }
@@ -537,6 +579,28 @@ fn parse_assigned_issues_response(stdout: &str) -> Result<Vec<AssignedIssue>, St
         .collect())
 }
 
+/// Parses one GitHub issue detail response without comment data.
+fn parse_issue_detail_response(remote: &ForgeRemote, stdout: &str) -> Result<IssueDetail, String> {
+    let issue: GitHubIssueDetailResponse = serde_json::from_str(stdout)
+        .map_err(|error| format!("invalid GitHub issue-detail response: {error}"))?;
+
+    Ok(IssueDetail {
+        assignees: issue.assignees.into_iter().map(|user| user.login).collect(),
+        author: issue
+            .author
+            .map_or_else(|| "ghost".to_string(), |author| author.login),
+        body: issue.body,
+        created_at: issue.created_at,
+        display_id: format!("#{}", issue.number),
+        labels: issue.labels.into_iter().map(|label| label.name).collect(),
+        repository: remote.project_path(),
+        state: issue.state,
+        title: issue.title,
+        updated_at: issue.updated_at,
+        web_url: issue.url,
+    })
+}
+
 /// Merges requested-review rows from both GitHub searches, marking rows as
 /// personal when they appear in the `user-review-requested:@me` result and as
 /// group requests otherwise.
@@ -758,6 +822,35 @@ struct GitHubAssignedIssueRepository {
     name_with_owner: String,
 }
 
+/// GitHub issue-detail payload returned by `gh issue view --json`.
+#[derive(Deserialize)]
+struct GitHubIssueDetailResponse {
+    assignees: Vec<GitHubIssueUserResponse>,
+    author: Option<GitHubIssueUserResponse>,
+    body: Option<String>,
+    #[serde(rename = "createdAt")]
+    created_at: Option<String>,
+    labels: Vec<GitHubIssueLabelResponse>,
+    number: u64,
+    state: String,
+    title: String,
+    #[serde(rename = "updatedAt")]
+    updated_at: Option<String>,
+    url: String,
+}
+
+/// GitHub user identity nested in an issue-detail payload.
+#[derive(Deserialize)]
+struct GitHubIssueUserResponse {
+    login: String,
+}
+
+/// GitHub label identity nested in an issue-detail payload.
+#[derive(Deserialize)]
+struct GitHubIssueLabelResponse {
+    name: String,
+}
+
 /// GraphQL response envelope for review-threads queries.
 #[derive(Deserialize)]
 struct GitHubReviewThreadsEnvelope {
@@ -953,6 +1046,59 @@ mod tests {
                 updated_at: Some("2026-07-09T18:30:00Z".to_string()),
                 web_url: "https://github.com/agentty-xyz/agentty/issues/124".to_string(),
             }]
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_issue_detail_omits_comments_and_normalizes_base_fields() {
+        // Arrange
+        let remote = github_remote();
+        let mut sequence = Sequence::new();
+        let mut command_runner = MockForgeCommandRunner::new();
+        command_runner
+            .expect_run()
+            .once()
+            .in_sequence(&mut sequence)
+            .withf({
+                let remote = remote.clone();
+
+                move |command| command == &auth_status_command(&remote)
+            })
+            .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
+        command_runner
+            .expect_run()
+            .once()
+            .in_sequence(&mut sequence)
+            .withf({
+                let remote = remote.clone();
+
+                move |command| command == &issue_detail_command(&remote, "#124")
+            })
+            .returning(|_| Box::pin(async { Ok(success_output(github_issue_detail_json())) }));
+        let adapter = GitHubReviewRequestAdapter::new(Arc::new(command_runner));
+
+        // Act
+        let detail = adapter
+            .fetch_issue_detail(remote, "#124".to_string())
+            .await
+            .expect("issue detail query should succeed");
+
+        // Assert
+        assert_eq!(
+            detail,
+            IssueDetail {
+                assignees: vec!["octocat".to_string()],
+                author: "hubot".to_string(),
+                body: Some("Issue details without comments.".to_string()),
+                created_at: Some("2026-07-01T10:00:00Z".to_string()),
+                display_id: "#124".to_string(),
+                labels: vec!["enhancement".to_string(), "ui".to_string()],
+                repository: "agentty-xyz/agentty".to_string(),
+                state: "OPEN".to_string(),
+                title: "Keep issue list compact".to_string(),
+                updated_at: Some("2026-07-09T18:30:00Z".to_string()),
+                web_url: "https://github.com/agentty-xyz/agentty/issues/124".to_string(),
+            }
         );
     }
 
@@ -1592,6 +1738,22 @@ mod tests {
                 "url": "https://github.com/agentty-xyz/agentty/issues/124"
             }
         ]"#
+        .to_string()
+    }
+
+    fn github_issue_detail_json() -> String {
+        r#"{
+            "assignees": [{"login": "octocat"}],
+            "author": {"login": "hubot"},
+            "body": "Issue details without comments.",
+            "createdAt": "2026-07-01T10:00:00Z",
+            "labels": [{"name": "enhancement"}, {"name": "ui"}],
+            "number": 124,
+            "state": "OPEN",
+            "title": "Keep issue list compact",
+            "updatedAt": "2026-07-09T18:30:00Z",
+            "url": "https://github.com/agentty-xyz/agentty/issues/124"
+        }"#
         .to_string()
     }
 

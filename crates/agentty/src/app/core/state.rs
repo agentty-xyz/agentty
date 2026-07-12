@@ -407,6 +407,31 @@ impl App {
         });
     }
 
+    /// Opens the selected assigned issue and loads its base details in the
+    /// background without requesting comments.
+    pub(crate) fn open_selected_assigned_issue(&mut self) {
+        let Some(issue) = self.selected_assigned_issue().cloned() else {
+            return;
+        };
+
+        let project_id = self.projects.active_project_id();
+        task::TaskService::spawn_issue_detail_task(
+            issue.display_id.clone(),
+            self.assigned_issue_generation,
+            project_id,
+            self.projects.working_dir().to_path_buf(),
+            self.services.event_sender(),
+            self.services.git_client(),
+            self.services.review_request_client(),
+        );
+        self.mode = AppMode::IssueDetail {
+            detail: None,
+            error: None,
+            issue,
+            scroll_offset: 0,
+        };
+    }
+
     /// Moves selection to the next requested review in the `Inbox` tab.
     pub(crate) fn next_requested_review(&mut self) {
         let Some(item_count) = self.requested_review_item_count() else {
@@ -693,6 +718,16 @@ impl App {
         };
 
         (!items.is_empty()).then_some(items.len())
+    }
+
+    /// Returns the selected assigned-issue row when the list is loaded.
+    fn selected_assigned_issue(&self) -> Option<&AssignedIssue> {
+        let AssignedIssueState::Loaded { items, .. } = &self.assigned_issues else {
+            return None;
+        };
+
+        self.assigned_issue_selected_index
+            .and_then(|index| items.get(index))
     }
 
     /// Invalidates pending requested-review comment loads for `project_id`
