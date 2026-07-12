@@ -221,8 +221,9 @@ struct SessionWorkerRebaseAssistClient {
     /// Session worktree folder where the utility prompt runs.
     folder: PathBuf,
     /// Main repository checkout that must remain read-only during assist
-    /// turns.
-    main_checkout_root: PathBuf,
+    /// turns, or `None` when the shared repository is bare and has no main
+    /// working checkout.
+    main_checkout_root: Option<PathBuf>,
     /// Per-app session update versions for targeted refresh events.
     session_update_versions: SessionUpdateVersionMap,
     /// Session identifier whose provider conversation is reused.
@@ -235,7 +236,7 @@ struct SessionWorkerRebaseAssistClient {
 
 impl SessionWorkerRebaseAssistClient {
     /// Clones the worker fields needed to run a rebase-assist utility turn.
-    fn from_context(context: &SessionWorkerContext, main_checkout_root: PathBuf) -> Self {
+    fn from_context(context: &SessionWorkerContext, main_checkout_root: Option<PathBuf>) -> Self {
         Self {
             app_event_tx: context.app_event_tx.clone(),
             cancel_token: Arc::clone(&context.cancel_token),
@@ -276,7 +277,7 @@ impl SessionWorkerRebaseAssistClient {
         let req = TurnRequest {
             folder: self.folder.clone(),
             live_transcript: Some(turn::live_transcript_source(&self.transcript)),
-            main_checkout_root: Some(self.main_checkout_root.clone()),
+            main_checkout_root: self.main_checkout_root.clone(),
             model: self.session_agent.model().provider_model_str().to_string(),
             request_kind: AgentRequestKind::UtilityPrompt,
             replay_transcript: None,
@@ -882,7 +883,7 @@ impl SessionWorkerService {
         .await?;
         let assist_client = Arc::new(SessionWorkerRebaseAssistClient::from_context(
             context,
-            validation.main_repo_root,
+            validation.main_checkout,
         ));
         SessionManager::run_rebase_command(RebaseCommandInput {
             app_event_tx: context.app_event_tx.clone(),
@@ -1095,7 +1096,7 @@ mod tests {
     }
 
     /// Builds one git client mock that detects the `wt/sess1` worktree and
-    /// resolves the given main repository root.
+    /// resolves the given main working checkout.
     fn mock_git_client_detecting_main_repo(main_repo_root: PathBuf) -> MockGitClient {
         let mut mock_git_client = MockGitClient::new();
         mock_git_client
@@ -1103,12 +1104,12 @@ mod tests {
             .once()
             .returning(|_| Box::pin(async { Some("wt/sess1".to_string()) }));
         mock_git_client
-            .expect_main_repo_root()
+            .expect_main_checkout_working_tree()
             .once()
             .returning(move |_| {
                 let main_repo_root = main_repo_root.clone();
 
-                Box::pin(async move { Ok(main_repo_root) })
+                Box::pin(async move { Ok(Some(main_repo_root)) })
             });
 
         mock_git_client
@@ -1156,12 +1157,12 @@ mod tests {
             .once()
             .returning(|_| Box::pin(async { Some("wt/sess1".to_string()) }));
         mock_git_client
-            .expect_main_repo_root()
+            .expect_main_checkout_working_tree()
             .once()
             .returning(move |_| {
                 let main_repo_root = main_repo_root.clone();
 
-                Box::pin(async move { Ok(main_repo_root) })
+                Box::pin(async move { Ok(Some(main_repo_root)) })
             });
         mock_git_client
             .expect_tracked_worktree_status()
@@ -1908,6 +1909,98 @@ mod tests {
         assert!(
             result.is_ok(),
             "unchanged dirty tracked status should complete"
+        );
+        let output_text = transcript_text(&transcript);
+        assert!(!output_text.contains("[Main Checkout Warning]"));
+        assert!(output_text.contains("done"));
+    }
+
+    #[tokio::test]
+    /// Verifies a bare shared repository (no main working checkout) skips the
+    /// main-checkout status snapshot: `tracked_worktree_status` is never called
+    /// and the turn proceeds with `main_checkout_root` set to `None`.
+    async fn test_run_channel_turn_skips_main_checkout_snapshot_for_bare_repo() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let db = AppRepositories::in_memory().await;
+        insert_in_progress_test_session(&db).await;
+
+        let mut mock_channel = MockAgentChannel::new();
+        mock_channel
+            .expect_run_turn()
+            .once()
+            .withf(|_session_id, request, _events| request.main_checkout_root.is_none())
+            .returning(|_session_id, _req, _events| {
+                Box::pin(async {
+                    Ok(TurnResult {
+                        assistant_message: AgentResponse {
+                            answer: "done".to_string(),
+                            questions: Vec::new(),
+                            summary: None,
+                        },
+                        context_reset: false,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        provider_conversation_id: None,
+                    })
+                })
+            });
+
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client
+            .expect_detect_git_info()
+            .once()
+            .returning(|_| Box::pin(async { Some("wt/sess1".to_string()) }));
+        mock_git_client
+            .expect_main_checkout_working_tree()
+            .once()
+            .returning(|_| Box::pin(async { Ok(None) }));
+        mock_git_client.expect_tracked_worktree_status().times(0);
+        mock_git_client
+            .expect_diff()
+            .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+        mock_git_client
+            .expect_is_worktree_clean()
+            .returning(|_| Box::pin(async { Ok(true) }));
+
+        let transcript = empty_transcript();
+        let context = SessionWorkerContext {
+            app_event_tx: mpsc::unbounded_channel().0,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
+            cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+            channel: Arc::new(mock_channel),
+            child_pid: Arc::new(Mutex::new(None)),
+            clock: Arc::new(crate::infra::clock::RealClock),
+            db: db.clone(),
+            folder: base_dir.path().to_path_buf(),
+            fs_client: Arc::new(mock_fs_client_with_existing_directories()),
+            git_client: Arc::new(mock_git_client),
+            transcript: Arc::clone(&transcript),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
+            session_update_versions: Arc::default(),
+            session_id: "sess1".into(),
+            session_agent: AgentSelection::new(
+                crate::domain::agent::AgentKind::Antigravity,
+                AgentModel::Gemini3FlashPreview,
+            ),
+            status: Arc::new(Mutex::new(Status::InProgress)),
+        };
+
+        // Act
+        let result = run_channel_turn(
+            &context,
+            default_turn_metadata(),
+            AgentRequestKind::SessionStart,
+            None,
+            "test prompt".into(),
+        )
+        .await;
+
+        // Assert
+        assert!(
+            result.is_ok(),
+            "bare shared repository turn should complete without a main-checkout snapshot"
         );
         let output_text = transcript_text(&transcript);
         assert!(!output_text.contains("[Main Checkout Warning]"));
@@ -3522,12 +3615,12 @@ mod tests {
             .in_sequence(&mut sequence)
             .returning(|_| Box::pin(async { Some("wt/sess1".to_string()) }));
         mock_git_client
-            .expect_main_repo_root()
+            .expect_main_checkout_working_tree()
             .times(1)
             .in_sequence(&mut sequence)
             .returning(move |_| {
                 let main_checkout_root = main_checkout_root.clone();
-                Box::pin(async move { Ok(main_checkout_root) })
+                Box::pin(async move { Ok(Some(main_checkout_root)) })
             });
         mock_git_client
             .expect_is_worktree_clean()
@@ -4069,6 +4162,17 @@ mod tests {
             .times(0..)
             .returning(|_| Box::pin(async { Some("wt/sess1".to_string()) }));
         mock_git_client
+            .expect_main_checkout_working_tree()
+            .times(0..)
+            .returning({
+                let main_repo_root = main_repo_root.clone();
+
+                move |_| {
+                    let main_repo_root = main_repo_root.clone();
+                    Box::pin(async move { Ok(Some(main_repo_root)) })
+                }
+            });
+        mock_git_client
             .expect_main_repo_root()
             .times(0..)
             .returning(move |_| {
@@ -4254,14 +4358,17 @@ mod tests {
             .expect_detect_git_info()
             .times(2)
             .returning(|_| Box::pin(async { Some("wt/sess1".to_string()) }));
-        mock_git_client.expect_main_repo_root().times(1).returning({
-            let main_repo_root = main_repo_root.clone();
-
-            move |_| {
+        mock_git_client
+            .expect_main_checkout_working_tree()
+            .times(1)
+            .returning({
                 let main_repo_root = main_repo_root.clone();
-                Box::pin(async move { Ok(main_repo_root) })
-            }
-        });
+
+                move |_| {
+                    let main_repo_root = main_repo_root.clone();
+                    Box::pin(async move { Ok(Some(main_repo_root)) })
+                }
+            });
         mock_git_client
             .expect_tracked_worktree_status()
             .times(2)

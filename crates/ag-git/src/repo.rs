@@ -50,15 +50,101 @@ pub(crate) async fn main_repo_root(repo_path: PathBuf) -> Result<PathBuf, GitErr
     spawn_blocking(move || main_repo_root_sync(&repo_path)).await?
 }
 
+/// Resolves the main working checkout for a repository or linked worktree.
+///
+/// Returns `Some(path)` with the main working checkout root for non-bare shared
+/// repositories, and `None` when the shared repository is bare because a bare
+/// repository has no main working checkout.
+///
+/// # Arguments
+/// * `repo_path` - Path to a git repository or worktree
+///
+/// # Returns
+/// Ok(Some(path)) with the main working checkout, Ok(None) when the shared
+/// repository is bare, Err([`GitError`]) on failure.
+///
+/// # Errors
+/// Returns an error if git metadata cannot be queried from `repo_path`.
+pub(crate) async fn main_checkout_working_tree(
+    repo_path: PathBuf,
+) -> Result<Option<PathBuf>, GitError> {
+    spawn_blocking(move || main_checkout_working_tree_sync(&repo_path)).await?
+}
+
 /// Resolves the main repository root for `repo_path` in synchronous code.
+///
+/// Returns the administrative root: the main working checkout for non-bare
+/// shared repositories and the bare common git directory for bare shared
+/// repositories. Both are valid working directories for `git worktree` and
+/// branch administration commands.
 pub(super) fn main_repo_root_sync(repo_path: &Path) -> Result<PathBuf, GitError> {
+    match resolve_shared_repo_sync(repo_path)? {
+        SharedRepo::Working(path) | SharedRepo::Bare(path) => Ok(path),
+    }
+}
+
+/// Resolves the main working checkout for `repo_path` in synchronous code.
+///
+/// Returns `Some(path)` for non-bare shared repositories and `None` for bare
+/// shared repositories, which have no main working checkout.
+pub(super) fn main_checkout_working_tree_sync(
+    repo_path: &Path,
+) -> Result<Option<PathBuf>, GitError> {
+    match resolve_shared_repo_sync(repo_path)? {
+        SharedRepo::Working(path) => Ok(Some(path)),
+        SharedRepo::Bare(_) => Ok(None),
+    }
+}
+
+/// Classifies the shared repository backing a worktree.
+pub(super) enum SharedRepo {
+    /// Non-bare shared repository. The path is the main working checkout root.
+    Working(PathBuf),
+    /// Bare shared repository. The path is the bare common git directory, which
+    /// has no main working checkout but is a valid administrative working
+    /// directory for `git worktree` and branch commands.
+    Bare(PathBuf),
+}
+
+/// Resolves the shared repository backing `repo_path`.
+///
+/// Reads the git and common git directories, detects whether the shared
+/// repository is bare by querying `git --git-dir <common> rev-parse
+/// --is-bare-repository`, and returns [`SharedRepo::Bare`] with the bare common
+/// git directory when bare. Otherwise returns [`SharedRepo::Working`] with the
+/// main working checkout root, matching the historical `main_repo_root_sync`
+/// resolution for non-bare layouts.
+///
+/// # Errors
+/// Returns an error if git metadata cannot be queried from `repo_path`.
+pub(super) fn resolve_shared_repo_sync(repo_path: &Path) -> Result<SharedRepo, GitError> {
     let (git_dir, git_common_dir) = git_directory_paths(repo_path)?;
 
-    if git_dir == git_common_dir {
-        return repo_root_from_git_dir(repo_path, &git_dir);
+    let git_common_dir_arg = git_common_dir.to_string_lossy();
+    let is_bare = run_git_command_sync(
+        repo_path,
+        &[
+            "--git-dir",
+            &git_common_dir_arg,
+            "rev-parse",
+            "--is-bare-repository",
+        ],
+        "Git rev-parse --is-bare-repository failed",
+    )?;
+    if is_bare.trim() == "true" {
+        return Ok(SharedRepo::Bare(git_common_dir));
     }
 
-    repo_root_from_git_dir(repo_path, &git_common_dir)
+    if git_dir == git_common_dir {
+        return Ok(SharedRepo::Working(repo_root_from_git_dir(
+            repo_path, &git_dir,
+        )?));
+    }
+
+    Ok(SharedRepo::Working(repo_root_from_git_dir(
+        repo_path,
+        &git_common_dir,
+    )?))
 }
 
 /// Resolves the git directory path for a repository root or worktree root.
@@ -472,6 +558,118 @@ mod tests {
                 if command.starts_with("git rev-parse")
                     && stderr.contains("Git rev-parse failed")),
             "unexpected error: {error:?}"
+        );
+    }
+
+    /// Runs a setup git command in `cwd`, asserting success and returning
+    /// trimmed stdout.
+    fn run_setup_git(cwd: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .expect("failed to run setup git command");
+        assert!(
+            output.status.success(),
+            "git command {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    #[test]
+    fn test_bare_layout_resolves_bare_admin_root_and_no_working_checkout() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        let root = temp_dir.path();
+        let bare_dir = root.join(".bare");
+        run_setup_git(root, &["init", "--bare", ".bare"]);
+        run_setup_git(&bare_dir, &["config", "user.name", "Test User"]);
+        run_setup_git(&bare_dir, &["config", "user.email", "test@example.com"]);
+        let empty_tree =
+            run_setup_git(&bare_dir, &["hash-object", "-w", "-t", "tree", "/dev/null"]);
+        let commit = run_setup_git(&bare_dir, &["commit-tree", &empty_tree, "-m", "init"]);
+        run_setup_git(&bare_dir, &["update-ref", "refs/heads/main", &commit]);
+        run_setup_git(&bare_dir, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+        let main_worktree = root.join("main");
+        let session_worktree = root.join("session");
+        run_setup_git(
+            &bare_dir,
+            &[
+                "worktree",
+                "add",
+                main_worktree.to_str().expect("main worktree path is utf-8"),
+                "main",
+            ],
+        );
+        run_setup_git(
+            &bare_dir,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "session",
+                session_worktree
+                    .to_str()
+                    .expect("session worktree path is utf-8"),
+                "main",
+            ],
+        );
+
+        // Act
+        let admin_root =
+            main_repo_root_sync(&session_worktree).expect("failed to resolve admin root");
+        let working_checkout = main_checkout_working_tree_sync(&session_worktree)
+            .expect("failed to resolve working checkout");
+
+        // Assert
+        assert_eq!(
+            admin_root,
+            fs::canonicalize(&bare_dir).expect("failed to canonicalize bare dir")
+        );
+        assert_eq!(working_checkout, None);
+    }
+
+    #[test]
+    fn test_non_bare_layout_resolves_main_working_checkout_for_linked_worktree() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        let root = temp_dir.path();
+        let main_checkout = root.join("main");
+        fs::create_dir_all(&main_checkout).expect("failed to create main checkout dir");
+        run_setup_git(&main_checkout, &["init", "-b", "main"]);
+        run_setup_git(&main_checkout, &["config", "user.name", "Test User"]);
+        run_setup_git(
+            &main_checkout,
+            &["config", "user.email", "test@example.com"],
+        );
+        fs::write(main_checkout.join("README.md"), "test repo").expect("failed to write file");
+        run_setup_git(&main_checkout, &["add", "README.md"]);
+        run_setup_git(&main_checkout, &["commit", "-m", "Initial commit"]);
+        let session_worktree = root.join("session");
+        run_setup_git(
+            &main_checkout,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "session",
+                session_worktree
+                    .to_str()
+                    .expect("session worktree path is utf-8"),
+                "main",
+            ],
+        );
+
+        // Act
+        let working_checkout = main_checkout_working_tree_sync(&session_worktree)
+            .expect("failed to resolve working checkout");
+
+        // Assert
+        assert_eq!(
+            working_checkout,
+            Some(fs::canonicalize(&main_checkout).expect("failed to canonicalize main checkout"))
         );
     }
 

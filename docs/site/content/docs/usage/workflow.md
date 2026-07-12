@@ -260,7 +260,9 @@ During normal turns, the agent prompt names the session worktree as the only wri
 root. After a turn, if Agentty detects that the main checkout's tracked-file status
 changed and remains dirty, it appends a `[Main Checkout Warning]` notice to the
 transcript. Clean `HEAD` movement, such as another session landing on the base branch,
-and unchanged pre-existing tracked changes do not emit this warning.
+and unchanged pre-existing tracked changes do not emit this warning. Projects backed by
+a bare repository have no main working checkout, so this main-checkout dirty-state guard
+is skipped there.
 
 ### Continuing a Done Session
 

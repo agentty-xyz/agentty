@@ -61,10 +61,14 @@ struct MainCheckoutSnapshot {
 impl MainCheckoutSnapshot {
     /// Captures the main repository checkout status before a provider turn.
     ///
+    /// Returns `None` when the shared repository is bare and therefore has no
+    /// main working checkout to snapshot; the session worktree is still
+    /// validated in that case.
+    ///
     /// # Errors
     /// Returns a workflow error when the session folder is not a valid linked
     /// worktree or the main-checkout tracked status cannot be read.
-    async fn capture(context: &SessionWorkerContext) -> Result<Self, SessionError> {
+    async fn capture(context: &SessionWorkerContext) -> Result<Option<Self>, SessionError> {
         let validation = isolation::validate_session_worktree(
             context.fs_client.as_ref(),
             context.git_client.as_ref(),
@@ -72,16 +76,19 @@ impl MainCheckoutSnapshot {
             &context.session_id,
         )
         .await?;
+        let Some(main_repo_root) = validation.main_checkout else {
+            return Ok(None);
+        };
         let tracked_status_output = context
             .git_client
-            .tracked_worktree_status(validation.main_repo_root.clone())
+            .tracked_worktree_status(main_repo_root.clone())
             .await
             .map_err(|error| Self::status_error(&error))?;
 
-        Ok(Self {
-            main_repo_root: validation.main_repo_root,
+        Ok(Some(Self {
+            main_repo_root,
             tracked_status_output,
-        })
+        }))
     }
 
     /// Builds a warning when the main checkout tracked-file status changed and
@@ -190,7 +197,9 @@ pub(super) async fn run_channel_turn(
     let req = TurnRequest {
         folder: context.folder.clone(),
         live_transcript: Some(live_transcript_source(&context.transcript)),
-        main_checkout_root: Some(main_checkout_snapshot.main_repo_root.clone()),
+        main_checkout_root: main_checkout_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.main_repo_root.clone()),
         model: turn_metadata
             .session_agent
             .model()
@@ -231,7 +240,7 @@ pub(super) async fn run_channel_turn(
     let _ = consumer.await;
 
     let turn_result =
-        add_main_checkout_warning(context, &main_checkout_snapshot, turn_result).await;
+        add_main_checkout_warning(context, main_checkout_snapshot.as_ref(), turn_result).await;
     let post_turn_context = post_turn::PostTurnContext::from_worker(context);
     let finalizer_context = post_turn::TurnFinalizerContext::from_worker(context);
     let result = post_turn::apply_turn_result(&post_turn_context, turn_metadata, turn_result).await;
@@ -474,12 +483,18 @@ fn set_child_pid(child_pid: &Mutex<Option<u32>>, pid: Option<u32>) {
 
 /// Converts post-turn main-checkout tracked-file changes into transcript
 /// warnings while preserving the successful provider result.
+///
+/// When no main checkout was captured (bare shared repository), the provider
+/// result passes through unchanged because there is no main checkout to guard.
 async fn add_main_checkout_warning(
     context: &SessionWorkerContext,
-    main_checkout_snapshot: &MainCheckoutSnapshot,
+    main_checkout_snapshot: Option<&MainCheckoutSnapshot>,
     turn_result: Result<TurnResult, AgentError>,
 ) -> Result<TurnResult, AgentError> {
     let result = turn_result?;
+    let Some(main_checkout_snapshot) = main_checkout_snapshot else {
+        return Ok(result);
+    };
     match main_checkout_snapshot.dirty_warning(context).await {
         Ok(Some(warning)) => {
             append_main_checkout_warning(context, warning).await;

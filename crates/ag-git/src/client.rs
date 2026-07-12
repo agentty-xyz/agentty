@@ -16,10 +16,11 @@ use super::{
     fetch_remote, find_git_repo_root, get_ahead_behind, get_ref_ahead_behind, has_commits_since,
     has_unmerged_paths, head_commit_message, head_hash, head_short_hash, in_progress_operation,
     is_rebase_in_progress, is_worktree_clean, list_conflicted_files, list_local_commit_titles,
-    list_staged_conflict_marker_files, list_upstream_commit_titles, main_repo_root, pull_rebase,
-    push_current_branch, push_current_branch_to_remote_branch, rebase, rebase_continue,
-    rebase_onto_start, rebase_start, ref_hash, remote_branch_exists, remove_worktree, repo_url,
-    squash_merge, squash_merge_diff, stage_all, tracked_worktree_status, worktree_status,
+    list_staged_conflict_marker_files, list_upstream_commit_titles, main_checkout_working_tree,
+    main_repo_root, pull_rebase, push_current_branch, push_current_branch_to_remote_branch, rebase,
+    rebase_continue, rebase_onto_start, rebase_start, ref_hash, remote_branch_exists,
+    remove_worktree, repo_url, squash_merge, squash_merge_diff, stage_all, tracked_worktree_status,
+    worktree_status,
 };
 
 /// Boxed async result used by [`GitClient`] trait methods.
@@ -397,6 +398,18 @@ pub trait GitClient: Send + Sync {
     /// # Errors
     /// Returns an error when the main repository cannot be resolved.
     fn main_repo_root(&self, repo_path: PathBuf) -> GitFuture<Result<PathBuf, GitError>>;
+
+    /// Resolves the main working checkout for a repository or worktree path.
+    ///
+    /// Returns `None` when the shared repository is bare, because a bare
+    /// repository has no main working checkout.
+    ///
+    /// # Errors
+    /// Returns an error when the shared repository cannot be resolved.
+    fn main_checkout_working_tree(
+        &self,
+        repo_path: PathBuf,
+    ) -> GitFuture<Result<Option<PathBuf>, GitError>>;
 }
 
 /// Production [`GitClient`] implementation backed by real git commands.
@@ -672,6 +685,13 @@ impl GitClient for RealGitClient {
 
     fn main_repo_root(&self, repo_path: PathBuf) -> GitFuture<Result<PathBuf, GitError>> {
         Box::pin(async move { main_repo_root(repo_path).await })
+    }
+
+    fn main_checkout_working_tree(
+        &self,
+        repo_path: PathBuf,
+    ) -> GitFuture<Result<Option<PathBuf>, GitError>> {
+        Box::pin(async move { main_checkout_working_tree(repo_path).await })
     }
 }
 

@@ -30,7 +30,7 @@ pub(crate) use rebase::{
     list_conflicted_files, list_staged_conflict_marker_files, rebase, rebase_continue,
     rebase_onto_start, rebase_start,
 };
-pub(crate) use repo::{main_repo_root, repo_url};
+pub(crate) use repo::{main_checkout_working_tree, main_repo_root, repo_url};
 #[cfg(test)]
 pub(crate) use sleeper::MockSleeper;
 pub(crate) use sleeper::{Sleeper, ThreadSleeper};
