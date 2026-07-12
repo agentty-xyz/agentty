@@ -109,30 +109,25 @@ pub(super) enum SharedRepo {
 /// Resolves the shared repository backing `repo_path`.
 ///
 /// Reads the git and common git directories, detects whether the shared
-/// repository is bare by querying `git --git-dir <common> rev-parse
-/// --is-bare-repository`, and returns [`SharedRepo::Bare`] with the bare common
-/// git directory when bare. Otherwise returns [`SharedRepo::Working`] with the
-/// main working checkout root, matching the historical `main_repo_root_sync`
-/// resolution for non-bare layouts.
+/// repository is bare by running `git rev-parse --is-bare-repository` inside
+/// the common git directory, and returns [`SharedRepo::Bare`] with the bare
+/// common git directory when bare. Otherwise returns [`SharedRepo::Working`]
+/// with the main working checkout root, matching the historical
+/// `main_repo_root_sync` resolution for non-bare layouts.
 ///
 /// # Errors
 /// Returns an error if git metadata cannot be queried from `repo_path`.
 pub(super) fn resolve_shared_repo_sync(repo_path: &Path) -> Result<SharedRepo, GitError> {
     let (git_dir, git_common_dir) = git_directory_paths(repo_path)?;
 
-    // NOTE: `to_string_lossy` replaces non-UTF-8 bytes with U+FFFD, which would
-    // produce a path git cannot find on exotic systems. The rest of this file
-    // follows the same String-based convention, so this is consistent, but
-    // callers on non-UTF-8 paths will get a generic git failure.
-    let git_common_dir_arg = git_common_dir.to_string_lossy();
+    // Probe the common git directory directly by running git there, so the
+    // shared repository's bareness is detected even from a linked worktree
+    // (where `--is-bare-repository` reports the worktree, not the shared repo).
+    // Passing the directory through `current_dir` keeps non-UTF-8 paths intact,
+    // unlike converting it to a `--git-dir` string argument.
     let is_bare = run_git_command_sync(
-        repo_path,
-        &[
-            "--git-dir",
-            &git_common_dir_arg,
-            "rev-parse",
-            "--is-bare-repository",
-        ],
+        &git_common_dir,
+        &["rev-parse", "--is-bare-repository"],
         "Git rev-parse --is-bare-repository failed",
     )?;
     if is_bare.trim() == "true" {
