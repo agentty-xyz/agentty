@@ -22,6 +22,9 @@ pub(crate) trait RuntimeClientProvider: Send + Sync + 'static {
     /// Returns whether prompts should include transport-level schema text.
     fn schema_instruction_mode() -> ProtocolSchemaInstructionMode;
 
+    /// Returns whether successful runtimes remain alive between turns.
+    fn retain_runtime_after_turn() -> bool;
+
     /// Starts and bootstraps one provider runtime for a request.
     fn start_runtime(
         request: AppServerTurnRequest,
@@ -85,6 +88,7 @@ impl<Provider: RuntimeClientProvider> ProviderRuntimeClient<Provider> {
                 matches_request: Self::matches_request,
                 pid: Self::pid,
                 provider_conversation_id: Self::provider_conversation_id,
+                retain_runtime_after_turn: Provider::retain_runtime_after_turn(),
                 restored_context: Self::restored_context,
             },
             Provider::schema_instruction_mode(),
@@ -182,6 +186,10 @@ mod tests {
 
         fn schema_instruction_mode() -> ProtocolSchemaInstructionMode {
             ProtocolSchemaInstructionMode::TransportSchema
+        }
+
+        fn retain_runtime_after_turn() -> bool {
+            true
         }
 
         fn start_runtime(

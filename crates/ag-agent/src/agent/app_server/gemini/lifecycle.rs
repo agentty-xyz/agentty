@@ -50,7 +50,7 @@ pub(super) async fn start_runtime(
     request: &AppServerTurnRequest,
 ) -> Result<
     (
-        tokio::process::Child,
+        app_server_transport::AppServerRuntimeChild,
         AppServerStdioTransport,
         GeminiRuntimeState,
     ),

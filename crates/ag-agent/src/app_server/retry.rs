@@ -23,6 +23,8 @@ pub(crate) struct RuntimeInspector<Runtime> {
     pub(crate) pid: fn(&Runtime) -> Option<u32>,
     /// Returns the provider-native conversation id, when available.
     pub(crate) provider_conversation_id: fn(&Runtime) -> Option<String>,
+    /// Whether successful runtimes remain resident between session turns.
+    pub(crate) retain_runtime_after_turn: bool,
     /// Returns `true` when the runtime bootstrapped by restoring prior context.
     pub(crate) restored_context: fn(&Runtime) -> bool,
 }
@@ -95,7 +97,7 @@ where
     )
     .await;
     if let Ok((assistant_message, input_tokens, output_tokens)) = first_attempt {
-        return store_successful_runtime_response(
+        return complete_successful_runtime_response(
             sessions,
             session_id,
             session_runtime,
@@ -137,7 +139,7 @@ where
     .await
     {
         Ok(attempt_output) => {
-            store_successful_runtime_response(
+            complete_successful_runtime_response(
                 sessions,
                 session_id,
                 restarted,
@@ -191,15 +193,15 @@ where
     Ok(session_runtime)
 }
 
-/// Stores a successful runtime back into the idle registry and builds the
-/// normalized app-server response.
+/// Completes a successful turn, either retaining or shutting down its runtime,
+/// and builds the normalized app-server response.
 ///
 /// If the registry cannot accept the runtime, this shuts the runtime down
 /// before returning the lock error so app-server child processes do not leak.
-async fn store_successful_runtime_response<Runtime, ShutdownRuntime>(
+async fn complete_successful_runtime_response<Runtime, ShutdownRuntime>(
     sessions: &AppServerSessionRegistry<Runtime>,
     session_id: String,
-    session_runtime: Runtime,
+    mut session_runtime: Runtime,
     context_reset: bool,
     attempt_output: (String, u64, u64),
     inspector: &RuntimeInspector<Runtime>,
@@ -211,6 +213,19 @@ where
     let (assistant_message, input_tokens, output_tokens) = attempt_output;
     let pid = (inspector.pid)(&session_runtime);
     let provider_conversation_id = (inspector.provider_conversation_id)(&session_runtime);
+
+    if !inspector.retain_runtime_after_turn {
+        shutdown_runtime(&mut session_runtime).await;
+
+        return Ok(AppServerTurnResponse {
+            assistant_message,
+            context_reset,
+            input_tokens,
+            output_tokens,
+            pid,
+            provider_conversation_id,
+        });
+    }
 
     if let Err((error, mut leaked)) = sessions.store_session_or_recover(session_id, session_runtime)
     {
@@ -603,6 +618,7 @@ mod tests {
                 matches_request: |runtime: &TestRuntime, request| runtime.model == request.model,
                 pid: |_runtime| Some(42),
                 provider_conversation_id: |_runtime| None,
+                retain_runtime_after_turn: true,
                 restored_context: |_runtime| false,
             },
             ProtocolSchemaInstructionMode::PromptSchema,
@@ -655,6 +671,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn successful_turn_shuts_down_runtime_when_retention_is_disabled() {
+        // Arrange
+        let sessions = AppServerSessionRegistry::new("Test");
+        let request = AppServerTurnRequest {
+            folder: PathBuf::from("/tmp"),
+            live_transcript: None,
+            main_checkout_root: None,
+            model: "model-a".to_string(),
+            prompt: "Do work".into(),
+            request_kind: session_start_request_kind(),
+            replay_transcript: None,
+            provider_conversation_id: None,
+            persisted_instruction_conversation_id: None,
+            reasoning_level: ReasoningLevel::default(),
+            session_id: "session-1".to_string(),
+        };
+        let shutdown_count = Arc::new(AtomicUsize::new(0));
+
+        // Act
+        let response = run_turn_with_restart_retry(
+            &sessions,
+            request,
+            RuntimeInspector {
+                matches_request: |runtime: &TestRuntime, request| runtime.model == request.model,
+                pid: |_runtime| Some(42),
+                provider_conversation_id: |_runtime| Some("gemini-session".to_string()),
+                retain_runtime_after_turn: false,
+                restored_context: |_runtime| false,
+            },
+            ProtocolSchemaInstructionMode::PromptSchema,
+            |request: &AppServerTurnRequest| {
+                let model = request.model.clone();
+
+                Box::pin(async move { Ok(TestRuntime { model }) })
+            },
+            |_runtime, _prompt| Box::pin(async { Ok(("done".to_string(), 7, 3)) }),
+            {
+                let shutdown_count = Arc::clone(&shutdown_count);
+                move |_runtime| {
+                    let shutdown_count = Arc::clone(&shutdown_count);
+
+                    Box::pin(async move {
+                        shutdown_count.fetch_add(1, Ordering::SeqCst);
+                    })
+                }
+            },
+        )
+        .await
+        .expect("turn should succeed");
+        let stored_runtime = sessions
+            .take_session("session-1")
+            .expect("session registry should remain available");
+
+        // Assert
+        assert_eq!(response.assistant_message, "done");
+        assert_eq!(
+            response.provider_conversation_id.as_deref(),
+            Some("gemini-session")
+        );
+        assert_eq!(shutdown_count.load(Ordering::SeqCst), 1);
+        assert!(stored_runtime.is_none());
+    }
+
+    #[tokio::test]
     async fn run_turn_with_restart_retry_restarts_once_after_first_failure() {
         // Arrange
         let sessions = AppServerSessionRegistry::new("Test");
@@ -683,6 +763,7 @@ mod tests {
                 matches_request: |runtime: &TestRuntime, request| runtime.model == request.model,
                 pid: |_runtime| Some(42),
                 provider_conversation_id: |_runtime| None,
+                retain_runtime_after_turn: true,
                 restored_context: |_runtime| false,
             },
             ProtocolSchemaInstructionMode::PromptSchema,
@@ -766,6 +847,7 @@ mod tests {
                 matches_request: |runtime: &TestRuntime, request| runtime.model == request.model,
                 pid: |_runtime| Some(42),
                 provider_conversation_id: |_runtime| None,
+                retain_runtime_after_turn: true,
                 restored_context: |_runtime| false,
             },
             ProtocolSchemaInstructionMode::PromptSchema,
@@ -838,6 +920,7 @@ mod tests {
                 matches_request: |runtime: &TestRuntime, request| runtime.model == request.model,
                 pid: |_runtime| Some(24),
                 provider_conversation_id: |_runtime| Some("thread-123".to_string()),
+                retain_runtime_after_turn: true,
                 restored_context: |_runtime| true,
             },
             ProtocolSchemaInstructionMode::PromptSchema,

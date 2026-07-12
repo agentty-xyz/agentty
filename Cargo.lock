@@ -17,6 +17,7 @@ dependencies = [
  "askama",
  "base64",
  "mockall",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",

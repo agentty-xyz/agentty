@@ -47,7 +47,7 @@ pub(super) async fn start_runtime(
     request: &AppServerTurnRequest,
 ) -> Result<
     (
-        tokio::process::Child,
+        app_server_transport::AppServerRuntimeChild,
         AppServerStdioTransport,
         CodexRuntimeState,
     ),
@@ -81,7 +81,7 @@ pub(super) async fn start_runtime_with_built_command(
     request: &AppServerTurnRequest,
 ) -> Result<
     (
-        tokio::process::Child,
+        app_server_transport::AppServerRuntimeChild,
         AppServerStdioTransport,
         CodexRuntimeState,
     ),
