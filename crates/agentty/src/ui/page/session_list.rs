@@ -996,6 +996,18 @@ mod tests {
     }
 
     #[test]
+    fn test_session_list_help_line_includes_project_switcher() {
+        // Arrange
+        let session = crate::test_support::titled_session_fixture("session-1", Status::Review);
+
+        // Act
+        let help_text = session_list_help_line(Some(&session)).to_string();
+
+        // Assert
+        assert!(help_text.contains("p: projects"));
+    }
+
+    #[test]
     fn test_session_list_help_line_hides_cancel_for_regular_new_session() {
         // Arrange
         let session = crate::test_support::titled_session_fixture("session-1", Status::Draft);

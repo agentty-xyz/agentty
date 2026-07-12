@@ -61,6 +61,13 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
                 selected_option_index: 0,
             };
         }
+        KeyCode::Char('p')
+            if app.tabs.current() == Tab::Sessions && key.modifiers == KeyModifiers::NONE =>
+        {
+            app.mode = AppMode::ProjectSwitcher {
+                selected_option_index: 0,
+            };
+        }
         KeyCode::Char('j') | KeyCode::Down => match app.tabs.current() {
             Tab::Projects => app.next_project(),
             Tab::Sessions => app.next(),
@@ -530,6 +537,49 @@ mod tests {
                 selected_option_index: 0,
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_project_switcher_key_opens_switcher_on_sessions_tab() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
+        app.tabs.set(Tab::Sessions);
+
+        // Act
+        let event_result = handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to handle key");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(
+            app.mode,
+            AppMode::ProjectSwitcher {
+                selected_option_index: 0,
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_project_switcher_key_ignored_on_projects_tab() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
+        app.tabs.set(Tab::Projects);
+
+        // Act
+        let event_result = handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to handle key");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(app.mode, AppMode::List));
     }
 
     #[tokio::test]

@@ -201,6 +201,27 @@ pub(crate) fn render_session_creation_overlay(
     .render(f, area);
 }
 
+/// Renders the list background and MRU-ordered project switcher overlay.
+pub(crate) fn render_project_switcher_overlay(
+    f: &mut Frame,
+    area: Rect,
+    list_background: ListBackgroundRenderContext<'_, '_>,
+    selected_option_index: usize,
+    wall_clock_unix_seconds: i64,
+) {
+    let active_project_id = list_background.active_project_id();
+    let mru_project_items = list_background.mru_projects();
+
+    render_list_background(f, area, list_background, wall_clock_unix_seconds);
+
+    component::project_switcher_overlay::ProjectSwitcherOverlay::new(
+        &mru_project_items,
+        active_project_id,
+        selected_option_index,
+    )
+    .render(f, area);
+}
+
 /// Renders the list background and sync informational popup overlay.
 pub(crate) fn render_sync_blocked_popup(
     f: &mut Frame,

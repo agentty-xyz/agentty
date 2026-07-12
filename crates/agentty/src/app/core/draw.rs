@@ -57,6 +57,7 @@ impl App {
             AppMode::List
             | AppMode::ReviewDetail { .. }
             | AppMode::SessionCreation { .. }
+            | AppMode::ProjectSwitcher { .. }
             | AppMode::Confirmation { .. }
             | AppMode::SyncBlockedPopup { .. } => {
                 self.list_background_has_tick_driven_ui()

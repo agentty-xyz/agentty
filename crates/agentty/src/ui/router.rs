@@ -7,7 +7,7 @@ use ratatui::widgets::TableState;
 use crate::app::{AssignedIssueState, RequestedReviewState, SettingsManager, Tab};
 use crate::domain::agent::{AgentCliInfo, ReasoningLevel};
 use crate::domain::input::InputState;
-use crate::domain::project::ProjectListItem;
+use crate::domain::project::{ProjectListItem, ordered_project_items};
 use crate::domain::session::{DailyActivity, Session, SessionId};
 use crate::domain::system_log::SystemLogBuffer;
 use crate::infra::review_comment_cache::ReviewCommentCache;
@@ -27,7 +27,20 @@ pub(crate) struct ListBackgroundRenderContext<'a, 'state> {
     shared: &'a mut RouteSharedContext<'state>,
 }
 
-impl ListBackgroundRenderContext<'_, '_> {
+impl<'state> ListBackgroundRenderContext<'_, 'state> {
+    /// Returns the active project identifier for list-backed overlays.
+    pub(crate) fn active_project_id(&self) -> i64 {
+        self.shared.active_project_id
+    }
+
+    /// Returns the project rows in most-recently-opened order.
+    ///
+    /// The order itself is cached by the app layer, so this only maps the
+    /// cached indices onto the shared rows.
+    pub(crate) fn mru_projects(&self) -> Vec<&'state ProjectListItem> {
+        ordered_project_items(self.shared.projects, self.shared.mru_project_order)
+    }
+
     /// Returns whether the session-creation overlay can offer a stacked
     /// session option for the currently selected session row.
     pub(crate) fn can_create_stacked_session(&self) -> bool {
@@ -62,6 +75,8 @@ pub(crate) struct RouteSharedContext<'a> {
     /// Locally available agent CLI executables and detected versions.
     available_agent_clis: &'a [AgentCliInfo],
     current_tab: Tab,
+    /// Cached most-recently-opened ordering over `projects`.
+    mru_project_order: &'a [usize],
     project_table_state: &'a mut TableState,
     projects: &'a [ProjectListItem],
     requested_review_selected_index: Option<usize>,
@@ -232,6 +247,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         diff_layout_cache,
         markdown_render_cache,
         mode,
+        mru_project_order,
         output_layout_cache,
         project_table_state,
         projects,
@@ -260,6 +276,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         assigned_issues,
         available_agent_clis,
         current_tab,
+        mru_project_order,
         project_table_state,
         projects,
         requested_review_selected_index,
@@ -312,6 +329,15 @@ fn render_list_or_overlay_mode(
         AppMode::SessionCreation {
             selected_option_index,
         } => overlay::render_session_creation_overlay(
+            f,
+            area,
+            shared.list_background(),
+            *selected_option_index,
+            aux.wall_clock_unix_seconds,
+        ),
+        AppMode::ProjectSwitcher {
+            selected_option_index,
+        } => overlay::render_project_switcher_overlay(
             f,
             area,
             shared.list_background(),

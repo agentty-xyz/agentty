@@ -1589,6 +1589,7 @@ impl App {
             AppMode::List
             | AppMode::ReviewDetail { .. }
             | AppMode::SessionCreation { .. }
+            | AppMode::ProjectSwitcher { .. }
             | AppMode::Confirmation { .. }
             | AppMode::SyncBlockedPopup { .. }
             | AppMode::Help { .. } => false,

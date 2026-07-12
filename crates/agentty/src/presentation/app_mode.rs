@@ -158,6 +158,12 @@ pub enum AppMode {
         /// Highlighted session creation option.
         selected_option_index: usize,
     },
+    /// Displays the MRU-ordered project switcher popup above the sessions
+    /// list.
+    ProjectSwitcher {
+        /// Highlighted project row in most-recently-opened order.
+        selected_option_index: usize,
+    },
     /// Displays a generic confirmation overlay with `Yes` and `No` options.
     Confirmation {
         /// Semantic action to execute when users choose `Yes`.
@@ -170,18 +176,21 @@ pub enum AppMode {
         session_id: Option<SessionId>,
         selected_confirmation_index: usize,
     },
-    /// Informational popup displayed for sync outcomes, including success and
-    /// blocked/failed states.
+    /// Informational popup displayed above the list for sync outcomes,
+    /// including success and blocked/failed states, and for other list-level
+    /// action failures such as a failed project switch.
     SyncBlockedPopup {
-        /// Selected project name for which sync was requested.
+        /// Project name the reported action applies to, when the action was
+        /// scoped to one project.
         project_name: Option<String>,
-        /// Repository default branch used as sync target.
+        /// Repository default branch used as sync target. Stays `None` for
+        /// actions that have no branch target, such as a project switch.
         default_branch: Option<String>,
-        /// Whether sync is still running in the background.
+        /// Whether the reported action is still running in the background.
         is_loading: bool,
-        /// Body text describing current sync state or final outcome.
+        /// Body text describing the current action state or final outcome.
         message: String,
-        /// Popup title describing sync state.
+        /// Popup title describing the reported action.
         title: String,
     },
     /// Informational popup rendered above session view for review-request

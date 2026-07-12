@@ -46,6 +46,7 @@ pub(crate) fn render_app(
             markdown_render_cache: render_cache_store.markdown_render_cache(),
             update_status: snapshot.update_status,
             mode: snapshot.mode,
+            mru_project_order: snapshot.mru_project_order,
             output_layout_cache: render_cache_store.session_output_layout_cache(),
             project_table_state,
             projects: snapshot.projects,

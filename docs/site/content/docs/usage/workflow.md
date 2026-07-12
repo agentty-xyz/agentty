@@ -24,7 +24,9 @@ tabs. Press `Tab` to move forward or `Shift+Tab` to move backward:
   show a size marker prefix (for example `[XL]`), the current `agent/model` with its
   reasoning level, and a live active-work `Timer` column. The list shows only populated
   merge queue, active, and archive groups. When there are no sessions, it prompts you to
-  press `a` to start one.
+  press `a` to start one. Press `p` to open a project switcher popup that lists
+  registered projects in most-recently-opened order and switches the active project
+  without leaving the Sessions view.
 - **Inbox**: Read-only list of open GitHub pull requests or GitLab merge requests that
   request your review in the active project, including drafts. Press `s` to refresh and
   `Enter` to open a read-only detail page with the description and comment threads.
