@@ -7,10 +7,11 @@ use crate::domain::input::InputState;
 use crate::domain::question::{QuestionItem, QuestionProgress, default_option_index};
 use crate::domain::session::{SessionId, Status};
 use crate::domain::turn_prompt::TurnPrompt;
-use crate::presentation::app_mode::{AppMode, DiffRightPanel, QuestionFocus, QuestionModeSnapshot};
+use crate::presentation::app_mode::{AppMode, ChatFocus, DiffRightPanel, QuestionModeSnapshot};
 use crate::presentation::prompt::PromptAtMentionState;
 use crate::runtime::EventResult;
-use crate::runtime::mode::{at_mention, input_key, session_output_metric};
+use crate::runtime::mode::chat_scroll::{self, ChatScrollMetrics};
+use crate::runtime::mode::{at_mention, input_key};
 use crate::ui::RenderCacheStore;
 
 /// Default response stored when users skip one model question.
@@ -99,7 +100,7 @@ fn is_plain_q(key: KeyEvent) -> bool {
 /// Returns whether a plain `q` press should exit question mode to the sessions
 /// list.
 ///
-/// `q` exits while reading the chat transcript (`QuestionFocus::Chat`) or while
+/// `q` exits while reading the chat transcript (`ChatFocus::Chat`) or while
 /// navigating predefined options (`selected_option_index` is `Some`). It is
 /// preserved as a free-text character whenever the answer input is focused and
 /// the user is past the option list, so answers can still contain the letter.
@@ -113,7 +114,7 @@ fn should_exit_to_list_on_q(app: &App) -> bool {
         return false;
     };
 
-    *focus == QuestionFocus::Chat || selected_option_index.is_some()
+    *focus == ChatFocus::Chat || selected_option_index.is_some()
 }
 
 /// Saves in-progress clarification answers and returns to the sessions list.
@@ -158,8 +159,8 @@ fn handle_focus_toggle(app: &mut App, key: KeyEvent) -> bool {
     };
 
     *focus = match *focus {
-        QuestionFocus::Answer => QuestionFocus::Chat,
-        QuestionFocus::Chat => QuestionFocus::Answer,
+        ChatFocus::Input => ChatFocus::Chat,
+        ChatFocus::Chat => ChatFocus::Input,
     };
 
     true
@@ -168,25 +169,26 @@ fn handle_focus_toggle(app: &mut App, key: KeyEvent) -> bool {
 /// Applies scroll keys when the chat output area is focused.
 ///
 /// Returns `true` when the key was consumed as a scroll action. `Enter` and
-/// `Esc` switch focus back to `Answer` so they cannot accidentally submit or
-/// end the turn while scrolling. `d` opens the diff preview for the session.
+/// `Esc` switch focus back to the answer input so they cannot accidentally
+/// submit or end the turn while scrolling. `d` opens the diff preview for the
+/// session.
 async fn handle_chat_scroll(
     app: &mut App,
     render_cache_store: &RenderCacheStore,
     terminal_size: Rect,
     key: KeyEvent,
 ) -> bool {
-    if !matches!(
-        &app.mode,
-        AppMode::Question {
-            focus: QuestionFocus::Chat,
-            ..
-        }
-    ) {
+    let Some(metrics) = question_scroll_metrics(app, render_cache_store, terminal_size) else {
         return false;
-    }
+    };
 
-    let metrics = question_view_metrics(app, render_cache_store, terminal_size);
+    if key.code == KeyCode::Char('d') && !key.modifiers.contains(event::KeyModifiers::CONTROL) {
+        if let Some(session_id) = extract_question_session_id(app) {
+            show_question_diff(app, &session_id).await;
+        }
+
+        return true;
+    }
 
     let AppMode::Question {
         focus,
@@ -197,61 +199,32 @@ async fn handle_chat_scroll(
         return false;
     };
 
-    match key.code {
-        KeyCode::Enter | KeyCode::Esc => {
-            *focus = QuestionFocus::Answer;
-        }
-        KeyCode::Char('j') | KeyCode::Down => {
-            *scroll_offset = scroll_offset_down(*scroll_offset, metrics, 1);
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            *scroll_offset = Some(scroll_offset_up(*scroll_offset, metrics, 1));
-        }
-        KeyCode::Char('g') => *scroll_offset = Some(0),
-        KeyCode::Char('G') => *scroll_offset = None,
-        KeyCode::Char('d') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
-            let step = metrics.view_height / 2;
-            *scroll_offset = scroll_offset_down(*scroll_offset, metrics, step);
-        }
-        KeyCode::Char('d') if !key.modifiers.contains(event::KeyModifiers::CONTROL) => {
-            let session_id = extract_question_session_id(app);
-            if let Some(session_id) = session_id {
-                show_question_diff(app, &session_id).await;
-            }
+    if matches!(key.code, KeyCode::Enter | KeyCode::Esc) {
+        *focus = ChatFocus::Input;
 
-            return true;
-        }
-        KeyCode::Char('u') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
-            let step = metrics.view_height / 2;
-            *scroll_offset = Some(scroll_offset_up(*scroll_offset, metrics, step));
-        }
-        _ => return false,
+        return true;
     }
 
-    true
+    chat_scroll::apply_scroll_key(scroll_offset, metrics, key)
 }
 
-/// Scroll metrics for the chat output area in question mode.
-#[derive(Clone, Copy)]
-struct QuestionViewMetrics {
-    total_lines: u16,
-    view_height: u16,
-}
-
-/// Computes scroll metrics for the chat output area above the question panel.
-fn question_view_metrics(
+/// Returns transcript scroll metrics while question mode focuses the chat.
+///
+/// Returns `None` when the answer input holds focus, so scroll keys stay
+/// available as answer text. Questions raised for a session that is not loaded
+/// into the session list scroll over an empty transcript.
+fn question_scroll_metrics(
     app: &App,
     render_cache_store: &RenderCacheStore,
     terminal_size: Rect,
-) -> QuestionViewMetrics {
-    let view_height = terminal_size.height.saturating_sub(5);
-    let output_width = terminal_size.width.saturating_sub(2);
-
-    let AppMode::Question { session_id, .. } = &app.mode else {
-        return QuestionViewMetrics {
-            total_lines: 0,
-            view_height,
-        };
+) -> Option<ChatScrollMetrics> {
+    let AppMode::Question {
+        focus: ChatFocus::Chat,
+        session_id,
+        ..
+    } = &app.mode
+    else {
+        return None;
     };
 
     let session_index = app
@@ -260,47 +233,18 @@ fn question_view_metrics(
         .iter()
         .position(|session| session.id == *session_id);
 
-    let (review_status_message, review_text) = app.review_view_state(session_id);
-    let total_lines = session_index.map_or(0, |index| {
-        session_output_metric::rendered_output_line_count_with_cache(
-            app,
-            render_cache_store,
-            session_id,
-            index,
-            review_status_message.as_deref(),
-            review_text,
-            output_width,
-        )
-    });
-
-    QuestionViewMetrics {
-        total_lines,
-        view_height,
-    }
-}
-
-/// Returns the next scroll offset after scrolling down by `step` lines.
-fn scroll_offset_down(
-    scroll_offset: Option<u16>,
-    metrics: QuestionViewMetrics,
-    step: u16,
-) -> Option<u16> {
-    let current_offset = scroll_offset?;
-    let next_offset = current_offset.saturating_add(step.max(1));
-
-    if next_offset >= metrics.total_lines.saturating_sub(metrics.view_height) {
-        return None;
-    }
-
-    Some(next_offset)
-}
-
-/// Returns the next scroll offset after scrolling up by `step` lines.
-fn scroll_offset_up(scroll_offset: Option<u16>, metrics: QuestionViewMetrics, step: u16) -> u16 {
-    let current_offset =
-        scroll_offset.unwrap_or_else(|| metrics.total_lines.saturating_sub(metrics.view_height));
-
-    current_offset.saturating_sub(step.max(1))
+    Some(session_index.map_or_else(
+        || ChatScrollMetrics::empty(terminal_size),
+        |session_index| {
+            ChatScrollMetrics::new(
+                app,
+                render_cache_store,
+                session_id,
+                session_index,
+                terminal_size,
+            )
+        },
+    ))
 }
 
 /// Extracts the `session_id` from the current question mode, if active.
@@ -883,7 +827,7 @@ fn restore_completed_question_response(
     app.mode = AppMode::Question {
         at_mention_state: None,
         current_index,
-        focus: QuestionFocus::Answer,
+        focus: ChatFocus::Input,
         input,
         questions: completed_response.questions,
         responses: completed_response.responses,
@@ -1056,7 +1000,7 @@ mod tests {
     use super::*;
     use crate::domain::agent::AgentModel;
     use crate::domain::session::Status;
-    use crate::presentation::app_mode::QuestionFocus;
+    use crate::presentation::app_mode::ChatFocus;
     use crate::ui::component::session_output::SessionOutputLineContext;
     use crate::ui::page::session_chat::SessionChatPage;
 
@@ -1064,7 +1008,7 @@ mod tests {
     const TEST_TERMINAL_SIZE: Rect = Rect::new(0, 0, 80, 24);
 
     #[tokio::test]
-    async fn test_question_view_metrics_uses_default_review_model_for_loading_fallback() {
+    async fn test_question_scroll_metrics_uses_default_review_model_for_loading_fallback() {
         // Arrange
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         let session_id = "session-review-model";
@@ -1082,7 +1026,7 @@ mod tests {
         app.mode = AppMode::Question {
             at_mention_state: None,
             current_index: 0,
-            focus: QuestionFocus::Answer,
+            focus: ChatFocus::Chat,
             input: InputState::default(),
             questions: vec![QuestionItem::new("Need a target branch?")],
             responses: Vec::new(),
@@ -1110,10 +1054,14 @@ mod tests {
         );
 
         // Act
-        let metrics = question_view_metrics(&app, &render_cache_store, terminal_size);
+        let metrics = question_scroll_metrics(&app, &render_cache_store, terminal_size);
 
         // Assert
-        assert_eq!(metrics.total_lines, expected);
+        assert_eq!(
+            metrics.map(|metrics| metrics.total_lines),
+            Some(expected),
+            "chat-focused question mode must report transcript line count"
+        );
     }
 
     #[tokio::test]
@@ -1136,7 +1084,7 @@ mod tests {
             ],
             responses: Vec::new(),
             current_index: 0,
-            focus: QuestionFocus::Answer,
+            focus: ChatFocus::Input,
             input: InputState::default(),
             scroll_offset: None,
             selected_option_index: None,
@@ -1189,7 +1137,7 @@ mod tests {
             ],
             responses: Vec::new(),
             current_index: 0,
-            focus: QuestionFocus::Answer,
+            focus: ChatFocus::Input,
             input: InputState::with_text("partial answer".to_string()),
             scroll_offset: None,
             selected_option_index: Some(0),
@@ -1234,7 +1182,7 @@ mod tests {
             }],
             responses: Vec::new(),
             current_index: 0,
-            focus: QuestionFocus::Answer,
+            focus: ChatFocus::Input,
             input: InputState::with_text("partial answer".to_string()),
             scroll_offset: None,
             selected_option_index: None,
@@ -1272,7 +1220,7 @@ mod tests {
             }],
             responses: Vec::new(),
             current_index: 0,
-            focus: QuestionFocus::Chat,
+            focus: ChatFocus::Chat,
             input: InputState::default(),
             scroll_offset: None,
             selected_option_index: None,
@@ -1304,7 +1252,7 @@ mod tests {
             }],
             responses: Vec::new(),
             current_index: 0,
-            focus: QuestionFocus::Answer,
+            focus: ChatFocus::Input,
             input: InputState::default(),
             scroll_offset: None,
             selected_option_index: Some(0),
@@ -1336,7 +1284,7 @@ mod tests {
             ],
             responses: vec!["Yes".to_string()],
             current_index: 1,
-            focus: QuestionFocus::Answer,
+            focus: ChatFocus::Input,
             input: InputState::default(),
             scroll_offset: None,
             selected_option_index: Some(1),
@@ -1375,7 +1323,7 @@ mod tests {
             }],
             responses: Vec::new(),
             current_index: 0,
-            focus: QuestionFocus::Answer,
+            focus: ChatFocus::Input,
             input: InputState::default(),
             scroll_offset: None,
             selected_option_index: None,
@@ -1447,7 +1395,7 @@ mod tests {
             }],
             responses: Vec::new(),
             current_index: 0,
-            focus: QuestionFocus::Answer,
+            focus: ChatFocus::Input,
             input: InputState::default(),
             scroll_offset: None,
             selected_option_index: None,
@@ -1527,7 +1475,7 @@ mod tests {
             }],
             responses: Vec::new(),
             current_index: 0,
-            focus: QuestionFocus::Answer,
+            focus: ChatFocus::Input,
             input: InputState::default(),
             scroll_offset: None,
             selected_option_index: None,
@@ -1591,7 +1539,7 @@ mod tests {
             }],
             responses: Vec::new(),
             current_index: 0,
-            focus: QuestionFocus::Answer,
+            focus: ChatFocus::Input,
             input: InputState::default(),
             scroll_offset: None,
             selected_option_index: None,
@@ -1635,7 +1583,7 @@ mod tests {
             }],
             responses: Vec::new(),
             current_index: 0,
-            focus: QuestionFocus::Answer,
+            focus: ChatFocus::Input,
             input: InputState::with_text("March 4, 2026".to_string()),
             scroll_offset: None,
             selected_option_index: None,
@@ -1738,7 +1686,7 @@ mod tests {
             questions,
             responses: vec!["Yes".to_string()],
             current_index: 1,
-            focus: QuestionFocus::Answer,
+            focus: ChatFocus::Input,
             input: InputState::default(),
             scroll_offset: None,
             selected_option_index: None,
@@ -1785,7 +1733,7 @@ mod tests {
             }],
             responses: Vec::new(),
             current_index: 0,
-            focus: QuestionFocus::Answer,
+            focus: ChatFocus::Input,
             input: InputState::default(),
             scroll_offset: None,
             selected_option_index: None,
@@ -1839,7 +1787,7 @@ mod tests {
             }],
             responses: Vec::new(),
             current_index: 0,
-            focus: QuestionFocus::Answer,
+            focus: ChatFocus::Input,
             input: InputState::default(),
             scroll_offset: None,
             selected_option_index: Some(0),
@@ -2008,7 +1956,7 @@ mod tests {
             ],
             responses: Vec::new(),
             current_index: 0,
-            focus: QuestionFocus::Answer,
+            focus: ChatFocus::Input,
             input: InputState::default(),
             scroll_offset: None,
             selected_option_index: Some(1),
@@ -2267,7 +2215,7 @@ mod tests {
             ],
             responses: Vec::new(),
             current_index: 0,
-            focus: QuestionFocus::Answer,
+            focus: ChatFocus::Input,
             input: InputState::with_text("answer".to_string()),
             scroll_offset: None,
             selected_option_index: None,
@@ -2344,7 +2292,7 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::Question {
-                focus: QuestionFocus::Chat,
+                focus: ChatFocus::Chat,
                 ..
             }
         ));
@@ -2356,7 +2304,7 @@ mod tests {
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = question_mode_with_options();
         if let AppMode::Question { focus, .. } = &mut app.mode {
-            *focus = QuestionFocus::Chat;
+            *focus = ChatFocus::Chat;
         }
 
         // Act
@@ -2371,7 +2319,7 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::Question {
-                focus: QuestionFocus::Answer,
+                focus: ChatFocus::Input,
                 ..
             }
         ));
@@ -2388,7 +2336,7 @@ mod tests {
             ..
         } = &mut app.mode
         {
-            *focus = QuestionFocus::Chat;
+            *focus = ChatFocus::Chat;
             *scroll_offset = Some(0);
         }
 
@@ -2405,7 +2353,7 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::Question {
-                focus: QuestionFocus::Chat,
+                focus: ChatFocus::Chat,
                 ..
             }
         ));
@@ -2429,7 +2377,7 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::Question {
-                focus: QuestionFocus::Answer,
+                focus: ChatFocus::Input,
                 selected_option_index: Some(1),
                 scroll_offset: None,
                 ..
@@ -2448,7 +2396,7 @@ mod tests {
             ..
         } = &mut app.mode
         {
-            *focus = QuestionFocus::Chat;
+            *focus = ChatFocus::Chat;
             *scroll_offset = None;
         }
 
@@ -2464,7 +2412,7 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::Question {
-                focus: QuestionFocus::Chat,
+                focus: ChatFocus::Chat,
                 scroll_offset: Some(0),
                 ..
             }
@@ -2482,7 +2430,7 @@ mod tests {
             ..
         } = &mut app.mode
         {
-            *focus = QuestionFocus::Chat;
+            *focus = ChatFocus::Chat;
             *scroll_offset = Some(5);
         }
 
@@ -2498,7 +2446,7 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::Question {
-                focus: QuestionFocus::Chat,
+                focus: ChatFocus::Chat,
                 scroll_offset: None,
                 ..
             }
@@ -2512,7 +2460,7 @@ mod tests {
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = question_mode_with_options();
         if let AppMode::Question { focus, .. } = &mut app.mode {
-            *focus = QuestionFocus::Chat;
+            *focus = ChatFocus::Chat;
         }
 
         // Act
@@ -2527,7 +2475,7 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::Question {
-                focus: QuestionFocus::Answer,
+                focus: ChatFocus::Input,
                 current_index: 0,
                 ref responses,
                 ..
@@ -2575,7 +2523,7 @@ mod tests {
             }],
             responses: Vec::new(),
             current_index: 0,
-            focus: QuestionFocus::Answer,
+            focus: ChatFocus::Input,
             input,
             scroll_offset: None,
             selected_option_index: None,
@@ -3027,7 +2975,7 @@ mod tests {
             ],
             responses: Vec::new(),
             current_index: 0,
-            focus: QuestionFocus::Answer,
+            focus: ChatFocus::Input,
             input: InputState::default(),
             scroll_offset: None,
             selected_option_index: Some(0),
@@ -3066,7 +3014,7 @@ mod tests {
             }],
             responses: Vec::new(),
             current_index: 0,
-            focus: QuestionFocus::Chat,
+            focus: ChatFocus::Chat,
             input: InputState::default(),
             scroll_offset: None,
             selected_option_index: Some(0),
@@ -3084,7 +3032,7 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::Question {
-                focus: QuestionFocus::Answer,
+                focus: ChatFocus::Input,
                 ref session_id,
                 ..
             } if session_id == "session-esc-chat"
@@ -3145,7 +3093,7 @@ mod tests {
             }],
             responses: Vec::new(),
             current_index: 0,
-            focus: QuestionFocus::Chat,
+            focus: ChatFocus::Chat,
             input: InputState::default(),
             scroll_offset: None,
             selected_option_index: Some(0),

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::widgets::TableState;
 
 use crate::app::session::session_branch;
@@ -14,7 +14,7 @@ use crate::domain::session::{DailyActivity, Session, SessionId};
 use crate::domain::system_log::SystemLogBuffer;
 use crate::infra::review_comment_cache::ReviewCommentCache;
 use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
-use crate::ui::{component, markdown, page, router};
+use crate::ui::{component, layout, markdown, page, router};
 
 /// Focused-review display state projected from the app cache for one visible
 /// session.
@@ -160,18 +160,11 @@ struct FooterBarRenderContext<'a> {
 
 /// Renders a complete frame including status bar, content area, and footer.
 pub fn render(f: &mut Frame, context: RenderContext<'_>) {
-    let area = f.area();
-    let outer_chunks = Layout::default()
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(0),
-            Constraint::Length(1),
-        ])
-        .split(area);
-
-    let status_bar_area = outer_chunks[0];
-    let content_area = outer_chunks[1];
-    let footer_bar_area = outer_chunks[2];
+    let layout::AppFrameAreas {
+        content_area,
+        footer_bar_area,
+        status_bar_area,
+    } = layout::app_frame_areas(f.area());
 
     component::status_bar::StatusBar::new(current_version_display_text())
         .latest_available_version(

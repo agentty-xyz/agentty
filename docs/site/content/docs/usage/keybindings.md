@@ -222,8 +222,14 @@ cached review-request line comments render inline below matching diff lines. See
 | `Option+Backspace`                  | Delete previous word                 |
 | `Cmd+Backspace`                     | Delete current line                  |
 | `Esc`                               | Cancel                               |
+| `Tab`                               | Focus chat output for scrolling      |
 | `@`                                 | Open file picker                     |
 | `/`                                 | Open slash commands                  |
+
+While the chat output is focused, `j` / `k` / `Up` / `Down` scroll the transcript, `g` /
+`G` jump to the top or bottom, `Ctrl+D` / `Ctrl+U` scroll by half a page, and `Tab`
+returns focus to the composer. The typed draft is preserved: keys pressed in chat focus
+never edit it, and `Ctrl+C` still cancels the composer.
 
 Prompt input keeps regular text paste on terminal `Event::Paste`. The dedicated image
 paste shortcuts insert highlighted `[Image #n]` tokens directly in the composer and send

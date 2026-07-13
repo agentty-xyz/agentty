@@ -110,13 +110,13 @@ pub struct QuestionModeSnapshot {
 }
 
 impl QuestionModeSnapshot {
-    /// Restores this snapshot as `AppMode::Question` with `Answer` focus.
+    /// Restores this snapshot as `AppMode::Question` with `Input` focus.
     #[must_use]
     pub fn into_question_mode(self) -> AppMode {
         AppMode::Question {
             at_mention_state: self.at_mention_state,
             current_index: self.current_index,
-            focus: QuestionFocus::Answer,
+            focus: ChatFocus::Input,
             input: self.input,
             questions: self.questions,
             responses: self.responses,
@@ -127,12 +127,17 @@ impl QuestionModeSnapshot {
     }
 }
 
-/// Tracks which panel has input focus during question-answer mode.
+/// Tracks which panel has input focus on the session chat page.
+///
+/// Both the prompt composer and the question panel share this focus model:
+/// `Tab` moves focus to the transcript for scrolling and back to the bottom
+/// input panel.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum QuestionFocus {
-    /// Question panel is focused for option navigation or free-text input.
+pub enum ChatFocus {
+    /// Bottom input panel is focused for typing, option navigation, or
+    /// submission.
     #[default]
-    Answer,
+    Input,
     /// Chat output area is focused for scrolling.
     Chat,
 }
@@ -253,6 +258,9 @@ pub enum AppMode {
         /// Ordered local image attachments referenced by inline placeholders in
         /// `input`.
         attachment_state: PromptAttachmentState,
+        /// Panel that currently receives key input: the composer or the chat
+        /// transcript above it.
+        focus: ChatFocus,
         /// Prompt-history navigation state for `Up`/`Down`.
         history_state: PromptHistoryState,
         /// Slash-command selection state for the current prompt input.
@@ -306,7 +314,7 @@ pub enum AppMode {
         /// Active question index inside `questions`.
         current_index: usize,
         /// Which panel currently owns keyboard focus.
-        focus: QuestionFocus,
+        focus: ChatFocus,
         /// Editable response input for the active question.
         input: InputState,
         /// Scroll position applied to the session transcript above the

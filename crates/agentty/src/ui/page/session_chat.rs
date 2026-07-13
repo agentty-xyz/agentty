@@ -11,7 +11,7 @@ use crate::domain::session::{
     can_start_staged_session_in_stack,
 };
 use crate::domain::{input, review};
-use crate::presentation::app_mode::{AppMode, QuestionFocus};
+use crate::presentation::app_mode::{AppMode, ChatFocus};
 use crate::presentation::help_action::{self, ViewActionAvailability, ViewHelpState};
 use crate::presentation::prompt::PromptAtMentionState;
 use crate::ui::component::chat_input::{ChatInput, SuggestionList};
@@ -19,7 +19,7 @@ use crate::ui::component::session_output::{
     SessionOutput, SessionOutputLayoutCache, SessionOutputLineContext,
 };
 use crate::ui::input_layout::{
-    calculate_input_height, overlay_area_above, suggestion_dropdown_height,
+    calculate_input_height, overlay_area_above, panel_inner_height, suggestion_dropdown_height,
 };
 use crate::ui::{
     Component, Page, layout, markdown, prompt_format, question_format, session_format,
@@ -27,11 +27,19 @@ use crate::ui::{
 
 /// Maximum rendered height of the prompt input panel, including borders.
 const CHAT_INPUT_MAX_PANEL_HEIGHT: u16 = 10;
+/// Header height assumed when the rendered header line count does not fit
+/// `u16`.
+const SESSION_HEADER_FALLBACK_HEIGHT: u16 = 2;
+/// Height of the single-row footer reserved by non-prompt, non-question modes.
+const SINGLE_ROW_FOOTER_HEIGHT: u16 = 1;
 
 /// Prompt-panel data prepared once per render pass so layout and painting use
 /// the same suggestion set.
 struct PreparedPromptPanel {
     footer_text: Line<'static>,
+    /// Whether the transcript above the composer currently holds focus, which
+    /// dims the composer border and hides its cursor.
+    is_chat_focused: bool,
     suggestion_list: Option<SuggestionList>,
     title: String,
     total_height: u16,
@@ -165,70 +173,20 @@ impl<'a> SessionChatPage<'a> {
         )
     }
 
-    /// Prepares prompt-panel layout and suggestion data once for a render
-    /// pass.
-    fn prepare_prompt_panel(&self, area: Rect, session: &Session) -> Option<PreparedPromptPanel> {
-        let AppMode::Prompt {
-            at_mention_state,
-            attachment_state,
-            input,
-            slash_state,
-            ..
-        } = self.mode
-        else {
-            return None;
-        };
-
-        // While the session is `InProgress` the composer queues a leading
-        // `/` as plain text instead of running a slash command, so suppress
-        // the slash dropdown to avoid implying the menu is actionable. The
-        // `@` mention dropdown is still useful for editing queued messages.
-        let suppress_slash_dropdown = session.status == crate::domain::session::Status::InProgress;
-        let allow_apply_command = review::has_actionable_review_suggestions(self.review_text);
-        let suggestion_list = if suppress_slash_dropdown && input.text().starts_with('/') {
-            None
-        } else {
-            prompt_format::prompt_suggestion_list(
-                input,
-                slash_state,
-                at_mention_state.as_ref(),
-                session.agent.kind(),
-                allow_apply_command,
-            )
-        };
-        let dropdown_row_count =
-            prompt_format::prompt_suggestion_dropdown_rows(suggestion_list.as_ref());
-        let input_height = calculate_input_height(area.width.saturating_sub(2), input.text())
-            .min(CHAT_INPUT_MAX_PANEL_HEIGHT);
-        let desired_bottom_height = input_height
-            .saturating_add(u16::try_from(dropdown_row_count).unwrap_or(u16::MAX))
-            .saturating_add(1);
-        let max_bottom_height = area.height.saturating_sub(1);
-
-        Some(PreparedPromptPanel {
-            footer_text: prompt_format::prompt_footer_line(
-                session,
-                attachment_state.attachments.len(),
-            ),
-            suggestion_list,
-            title: format!(" [{}] ", session.agent.model().as_str()),
-            total_height: desired_bottom_height.min(max_bottom_height),
-        })
-    }
-
     /// Renders the session header, output panel, and context-aware bottom
     /// panel.
     fn render_session(&self, f: &mut Frame, area: Rect, session: &Session) {
-        let prepared_prompt_panel = self.prepare_prompt_panel(area, session);
+        let prepared_prompt_panel =
+            prepare_prompt_panel(area, self.mode, self.review_text, session);
         let header_lines = session_format::session_header_lines(
             session,
             area.width.saturating_sub(2),
             self.default_reasoning_level,
             self.wall_clock_unix_seconds,
         );
-        let header_height = u16::try_from(header_lines.len()).unwrap_or(2);
+        let header_height = header_height(&header_lines);
         let bottom_height = prepared_prompt_panel.as_ref().map_or_else(
-            || self.bottom_height(area),
+            || non_prompt_bottom_height(area, self.mode),
             PreparedPromptPanel::panel_height,
         );
         let session_areas = layout::session_chat_areas(area, bottom_height, header_height);
@@ -263,53 +221,6 @@ impl<'a> SessionChatPage<'a> {
         f.render_widget(header, header_area);
     }
 
-    /// Returns the reserved bottom-panel height for the active page mode.
-    ///
-    /// Prompt mode mirrors the render-time prompt panel calculation so layout
-    /// tests and the live view stay in sync. Question mode derives its height
-    /// from the question layout helper and the visible option list. All other
-    /// modes reserve a single footer row.
-    fn bottom_height(&self, area: Rect) -> u16 {
-        if matches!(self.mode, AppMode::Prompt { .. }) {
-            let Some(session) = self.sessions.get(self.session_index) else {
-                return 1;
-            };
-
-            return self
-                .prepare_prompt_panel(area, session)
-                .map_or(1, |prepared_prompt_panel| {
-                    prepared_prompt_panel.panel_height()
-                });
-        }
-
-        if let AppMode::Question {
-            questions,
-            current_index,
-            input,
-            selected_option_index,
-            ..
-        } = self.mode
-        {
-            let question_item = questions.get(*current_index);
-            let question = question_item.map_or("", |item| item.text.as_str());
-            let options = question_item
-                .map(|item| item.options.as_slice())
-                .unwrap_or_default();
-            let is_free_text_mode = selected_option_index.is_none();
-            let input_text = if is_free_text_mode { input.text() } else { "" };
-            return layout::question_panel_reserved_height(
-                area.width,
-                area.height.saturating_sub(1),
-                question,
-                input_text,
-                options.len(),
-                CHAT_INPUT_MAX_PANEL_HEIGHT,
-            );
-        }
-
-        1
-    }
-
     /// Renders the context-aware bottom panel for prompt and question modes.
     fn render_bottom_panel(
         &self,
@@ -325,7 +236,8 @@ impl<'a> SessionChatPage<'a> {
 
             let mut chat_input =
                 ChatInput::new(&prepared_prompt_panel.title, input.text(), input.cursor)
-                    .placeholder("Type your message");
+                    .placeholder("Type your message")
+                    .active(!prepared_prompt_panel.is_chat_focused);
 
             if let Some(suggestion_list) = &prepared_prompt_panel.suggestion_list {
                 chat_input = chat_input.suggestion_list(suggestion_list);
@@ -401,12 +313,158 @@ impl<'a> SessionChatPage<'a> {
     }
 }
 
+/// Session-chat geometry inputs available outside a render pass.
+///
+/// Runtime scroll handlers hold app state instead of a page instance, so the
+/// values the page derives its geometry from are passed explicitly.
+#[derive(Clone, Copy)]
+pub(crate) struct SessionChatLayoutInput<'a> {
+    /// Page area routed to the session chat page, excluding the status and
+    /// footer bars.
+    pub(crate) area: Rect,
+    /// Active project-scoped default reasoning level shown in the header.
+    pub(crate) default_reasoning_level: ReasoningLevel,
+    /// Current UI mode, which determines the reserved bottom-panel height.
+    pub(crate) mode: &'a AppMode,
+    /// Focused-review output for the rendered session.
+    pub(crate) review_text: Option<&'a str>,
+    /// Session whose transcript is rendered.
+    pub(crate) session: &'a Session,
+    /// Render-time clock used for the header's deterministic timers.
+    pub(crate) wall_clock_unix_seconds: i64,
+}
+
+/// Returns the transcript rows the session output panel paints for `input`.
+///
+/// Scroll math routes through the same header, bottom-panel, and border
+/// geometry the renderer uses, so a tall composer or an open suggestion
+/// dropdown shrinks the scroll viewport exactly as it does on screen.
+pub(crate) fn transcript_view_height(input: SessionChatLayoutInput<'_>) -> u16 {
+    let header_lines = session_format::session_header_lines(
+        input.session,
+        input.area.width.saturating_sub(2),
+        input.default_reasoning_level,
+        input.wall_clock_unix_seconds,
+    );
+    let bottom_height =
+        prepare_prompt_panel(input.area, input.mode, input.review_text, input.session).map_or_else(
+            || non_prompt_bottom_height(input.area, input.mode),
+            |prepared_prompt_panel| prepared_prompt_panel.panel_height(),
+        );
+    let session_areas =
+        layout::session_chat_areas(input.area, bottom_height, header_height(&header_lines));
+
+    panel_inner_height(
+        session_areas.output_area,
+        session_format::session_output_panel_borders(),
+    )
+}
+
+/// Returns the header rows reserved above the session output panel.
+fn header_height(header_lines: &[Line<'static>]) -> u16 {
+    u16::try_from(header_lines.len()).unwrap_or(SESSION_HEADER_FALLBACK_HEIGHT)
+}
+
+/// Prepares prompt-panel layout and suggestion data once for a render pass.
+///
+/// Returns `None` outside prompt mode.
+fn prepare_prompt_panel(
+    area: Rect,
+    mode: &AppMode,
+    review_text: Option<&str>,
+    session: &Session,
+) -> Option<PreparedPromptPanel> {
+    let AppMode::Prompt {
+        at_mention_state,
+        attachment_state,
+        focus,
+        input,
+        slash_state,
+        ..
+    } = mode
+    else {
+        return None;
+    };
+
+    // While the session is `InProgress` the composer queues a leading
+    // `/` as plain text instead of running a slash command, so suppress
+    // the slash dropdown to avoid implying the menu is actionable. The
+    // `@` mention dropdown is still useful for editing queued messages.
+    let suppress_slash_dropdown = session.status == crate::domain::session::Status::InProgress;
+    let allow_apply_command = review::has_actionable_review_suggestions(review_text);
+    let suggestion_list = if suppress_slash_dropdown && input.text().starts_with('/') {
+        None
+    } else {
+        prompt_format::prompt_suggestion_list(
+            input,
+            slash_state,
+            at_mention_state.as_ref(),
+            session.agent.kind(),
+            allow_apply_command,
+        )
+    };
+    let dropdown_row_count =
+        prompt_format::prompt_suggestion_dropdown_rows(suggestion_list.as_ref());
+    let input_height = calculate_input_height(area.width.saturating_sub(2), input.text())
+        .min(CHAT_INPUT_MAX_PANEL_HEIGHT);
+    let desired_bottom_height = input_height
+        .saturating_add(u16::try_from(dropdown_row_count).unwrap_or(u16::MAX))
+        .saturating_add(1);
+    let max_bottom_height = area.height.saturating_sub(1);
+
+    Some(PreparedPromptPanel {
+        footer_text: prompt_format::prompt_footer_line(
+            session,
+            attachment_state.attachments.len(),
+            *focus,
+        ),
+        is_chat_focused: *focus == ChatFocus::Chat,
+        suggestion_list,
+        title: format!(" [{}] ", session.agent.model().as_str()),
+        total_height: desired_bottom_height.min(max_bottom_height),
+    })
+}
+
+/// Returns the bottom-panel height reserved for non-prompt page modes.
+///
+/// Question mode derives its height from the question layout helper and the
+/// visible option list. All other modes reserve a single footer row.
+fn non_prompt_bottom_height(area: Rect, mode: &AppMode) -> u16 {
+    let AppMode::Question {
+        questions,
+        current_index,
+        input,
+        selected_option_index,
+        ..
+    } = mode
+    else {
+        return SINGLE_ROW_FOOTER_HEIGHT;
+    };
+
+    let question_item = questions.get(*current_index);
+    let question = question_item.map_or("", |item| item.text.as_str());
+    let options = question_item
+        .map(|item| item.options.as_slice())
+        .unwrap_or_default();
+    let is_free_text_mode = selected_option_index.is_none();
+    let input_text = if is_free_text_mode { input.text() } else { "" };
+
+    layout::question_panel_reserved_height(
+        area.width,
+        area.height.saturating_sub(SINGLE_ROW_FOOTER_HEIGHT),
+        question,
+        input_text,
+        options.len(),
+        CHAT_INPUT_MAX_PANEL_HEIGHT,
+    )
+}
+
 /// Bundled question-mode state passed to the panel renderer.
 #[derive(Clone, Copy)]
 struct QuestionPanelState<'a> {
     at_mention_state: Option<&'a PromptAtMentionState>,
     current_index: usize,
-    focus: QuestionFocus,
+    focus: ChatFocus,
     input: &'a input::InputState,
     questions: &'a [QuestionItem],
     selected_option_index: Option<usize>,
@@ -438,7 +496,7 @@ fn render_question_panel(f: &mut Frame, bottom_area: Rect, state: &QuestionPanel
         CHAT_INPUT_MAX_PANEL_HEIGHT,
     );
 
-    let is_chat_focused = focus == QuestionFocus::Chat;
+    let is_chat_focused = focus == ChatFocus::Chat;
     let question_title = format!("Question {}/{}", current_index + 1, questions.len());
     if panel_areas.question_area.height > 0 {
         let question_para = Paragraph::new(question_format::question_panel_lines(
@@ -515,7 +573,7 @@ fn render_question_help_footer(
     f: &mut Frame,
     area: Rect,
     help_height: u16,
-    focus: QuestionFocus,
+    focus: ChatFocus,
     is_navigating_options: bool,
     is_at_mention_open: bool,
 ) {
@@ -570,7 +628,7 @@ mod tests {
     use crate::domain::question::QuestionItem;
     use crate::domain::session::Status;
     use crate::domain::session_message::SessionTranscript;
-    use crate::presentation::app_mode::QuestionFocus;
+    use crate::presentation::app_mode::ChatFocus;
     use crate::presentation::prompt::{
         PromptAttachmentState, PromptHistoryState, PromptSlashState,
     };
@@ -599,6 +657,74 @@ mod tests {
             sessions: std::slice::from_ref(session),
             wall_clock_unix_seconds: 0,
         })
+    }
+
+    /// Builds prompt mode with `input_text` staged in the composer.
+    fn prompt_mode(input_text: &str) -> AppMode {
+        AppMode::Prompt {
+            at_mention_state: None,
+            attachment_state: PromptAttachmentState::default(),
+            focus: ChatFocus::Chat,
+            history_state: PromptHistoryState::new(Vec::new()),
+            input: InputState::with_text(input_text.to_string()),
+            scroll_offset: None,
+            session_id: "session-id".into(),
+            slash_state: PromptSlashState::default(),
+        }
+    }
+
+    /// Builds page geometry inputs for one session and mode.
+    fn layout_input<'a>(
+        area: Rect,
+        session: &'a Session,
+        mode: &'a AppMode,
+    ) -> SessionChatLayoutInput<'a> {
+        SessionChatLayoutInput {
+            area,
+            default_reasoning_level: ReasoningLevel::default(),
+            mode,
+            review_text: None,
+            session,
+            wall_clock_unix_seconds: 0,
+        }
+    }
+
+    #[test]
+    fn test_transcript_view_height_shrinks_for_multiline_prompt_draft() {
+        // Arrange
+        let session = session_fixture();
+        let area = Rect::new(0, 0, 80, 30);
+        let single_line_mode = prompt_mode("draft");
+        let multiline_mode = prompt_mode("draft\nsecond line\nthird line");
+
+        // Act
+        let single_line_height =
+            transcript_view_height(layout_input(area, &session, &single_line_mode));
+        let multiline_height =
+            transcript_view_height(layout_input(area, &session, &multiline_mode));
+
+        // Assert
+        assert_eq!(multiline_height, single_line_height.saturating_sub(2));
+    }
+
+    #[test]
+    fn test_transcript_view_height_shrinks_for_open_suggestion_dropdown() {
+        // Arrange
+        let session = session_fixture();
+        let area = Rect::new(0, 0, 80, 30);
+        let plain_mode = prompt_mode("draft");
+        let slash_mode = prompt_mode("/");
+
+        // Act
+        let plain_height = transcript_view_height(layout_input(area, &session, &plain_mode));
+        let slash_height = transcript_view_height(layout_input(area, &session, &slash_mode));
+
+        // Assert
+        assert!(
+            slash_height < plain_height,
+            "slash dropdown rows must shrink the transcript viewport: {slash_height} < \
+             {plain_height}"
+        );
     }
 
     /// Returns a leaked markdown cache for test page builders that need a
@@ -793,6 +919,7 @@ mod tests {
         let mode = AppMode::Prompt {
             at_mention_state: None,
             attachment_state: PromptAttachmentState::default(),
+            focus: ChatFocus::Input,
             history_state: PromptHistoryState::default(),
             slash_state: PromptSlashState::default(),
             session_id: "session-id".into(),
@@ -819,7 +946,7 @@ mod tests {
             questions: vec![QuestionItem::new("Need tests?")],
             responses: Vec::new(),
             current_index: 0,
-            focus: QuestionFocus::Answer,
+            focus: ChatFocus::Input,
             input: InputState::default(),
             scroll_offset: None,
             selected_option_index: None,
@@ -894,7 +1021,7 @@ mod tests {
             }],
             responses: Vec::new(),
             current_index: 0,
-            focus: QuestionFocus::Answer,
+            focus: ChatFocus::Input,
             input: InputState::with_text("typed answer".to_string()),
             scroll_offset: None,
             selected_option_index: None,
@@ -930,7 +1057,7 @@ mod tests {
             }],
             responses: Vec::new(),
             current_index: 0,
-            focus: QuestionFocus::Answer,
+            focus: ChatFocus::Input,
             input: InputState::with_text("typed answer".to_string()),
             scroll_offset: None,
             selected_option_index: None,
@@ -951,7 +1078,7 @@ mod tests {
 
         // Assert
         let area = Rect::new(0, 0, width, height);
-        let bottom_height = page.bottom_height(area);
+        let bottom_height = non_prompt_bottom_height(area, &mode);
         let bottom_top = 1 + height.saturating_sub(2).saturating_sub(bottom_height);
         let panel_areas = layout::question_panel_areas(
             Rect::new(1, bottom_top, width.saturating_sub(2), bottom_height),
@@ -978,7 +1105,7 @@ mod tests {
             }],
             responses: Vec::new(),
             current_index: 0,
-            focus: QuestionFocus::Answer,
+            focus: ChatFocus::Input,
             input: InputState::default(),
             scroll_offset: None,
             selected_option_index: Some(0),
@@ -1023,7 +1150,7 @@ mod tests {
             }],
             responses: Vec::new(),
             current_index: 0,
-            focus: QuestionFocus::Answer,
+            focus: ChatFocus::Input,
             input: InputState::default(),
             scroll_offset: None,
             selected_option_index: None,

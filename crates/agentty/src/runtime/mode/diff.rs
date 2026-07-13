@@ -896,7 +896,7 @@ mod tests {
             app.mode,
             AppMode::Question {
                 ref session_id,
-                focus: crate::presentation::app_mode::QuestionFocus::Answer,
+                focus: crate::presentation::app_mode::ChatFocus::Input,
                 ..
             } if session_id == "session-q"
         ));
@@ -987,7 +987,7 @@ mod tests {
             AppMode::Question {
                 ref session_id,
                 current_index: 1,
-                focus: crate::presentation::app_mode::QuestionFocus::Answer,
+                focus: crate::presentation::app_mode::ChatFocus::Input,
                 ..
             } if session_id == "session-q"
         ));

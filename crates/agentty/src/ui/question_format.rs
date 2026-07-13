@@ -4,7 +4,7 @@ use ag_tui_text::text_util;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::presentation::app_mode::QuestionFocus;
+use crate::presentation::app_mode::ChatFocus;
 use crate::presentation::help_action;
 use crate::ui::style;
 
@@ -88,11 +88,11 @@ pub(crate) fn question_option_lines(
 /// at-mention dropdown dismissal, so the end-turn hint drops the `Esc` prefix
 /// and a `Esc: cancel @` hint is surfaced while the dropdown is visible.
 pub fn question_help_footer_line(
-    focus: QuestionFocus,
+    focus: ChatFocus,
     is_navigating_options: bool,
     is_at_mention_open: bool,
 ) -> Line<'static> {
-    let is_chat_focused = focus == QuestionFocus::Chat;
+    let is_chat_focused = focus == ChatFocus::Chat;
     let mut help_actions = Vec::new();
 
     if is_chat_focused {

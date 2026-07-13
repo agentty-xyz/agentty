@@ -1,6 +1,7 @@
 //! `AppMode`-specific key handling modules.
 
 pub(crate) mod at_mention;
+pub(crate) mod chat_scroll;
 pub(crate) mod confirmation;
 pub(crate) mod detail;
 pub(crate) mod diff;

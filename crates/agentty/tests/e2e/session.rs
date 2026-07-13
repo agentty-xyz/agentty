@@ -45,6 +45,9 @@ const SECOND_QUESTION_TEXT: &str = "Which tests should be added?";
 /// Clarification question emitted by the delayed stub while help is open.
 const RECONCILE_QUESTION_TEXT: &str = "Should I add a regression test?";
 
+/// Draft text typed into the composer by the chat-focus toggle test.
+const PROMPT_FOCUS_DRAFT_TEXT: &str = "Draft kept while reading chat";
+
 /// Seeds one review-ready session whose transcript contains a beautified
 /// provider command failure.
 fn seed_session_with_beautified_agent_error(
@@ -1832,6 +1835,111 @@ fn session_question_resume_after_leaving_to_list() -> E2eResult {
                 assertion::assert_text_in_region(frame, "Question 2/2", &full);
                 assertion::assert_text_in_region(frame, SECOND_QUESTION_TEXT, &full);
                 assertion::assert_not_visible(frame, FIRST_QUESTION_TEXT);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Persists the `Sessions` tab as the startup tab.
+///
+/// `Tab` is the composer focus toggle under test, so the scenario cannot spend
+/// a `Tab` press on tab navigation: the seeded startup tab keeps every `Tab` in
+/// the scenario meaningful, and keeps the PTY proof and the VHS replay (which
+/// share this database) starting from the same tab.
+fn seed_sessions_startup_tab(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    let runtime = common::seed_runtime()?;
+
+    runtime.block_on(async {
+        // Opening the database applies the migrations that create `setting`.
+        common::open_database(env).await?;
+
+        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
+        let mut connection = SqliteConnectOptions::new()
+            .filename(&db_path)
+            .connect()
+            .await?;
+        let query = sqlx::query(
+            r"
+INSERT INTO setting (name, value) VALUES ('ActiveTab', 'Sessions')
+ON CONFLICT(name) DO UPDATE SET value = excluded.value
+",
+        );
+        connection.execute(query).await?;
+        connection.close().await?;
+
+        Result::<(), Box<dyn std::error::Error>>::Ok(())
+    })?;
+
+    Ok(())
+}
+
+/// Verify that `Tab` moves focus between the prompt composer and the chat
+/// transcript, and that keys pressed while the transcript is focused scroll it
+/// instead of editing the typed draft.
+#[test]
+fn session_prompt_chat_focus_toggle() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_prompt_chat_focus")
+        .with_git()
+        .setup(seed_sessions_startup_tab)
+        .zola(
+            "Read the chat while composing",
+            "Press Tab to move focus from the message composer to the chat transcript and back \
+             without losing the typed draft.",
+            50,
+        )
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .wait_for_text("new session", 5000)
+                    .viewing_pause_ms(1500)
+                    .press_key("a")
+                    .press_key("Enter")
+                    .wait_for_text("Type your message", 5000)
+                    .write_text(PROMPT_FOCUS_DRAFT_TEXT)
+                    .wait_for_text(PROMPT_FOCUS_DRAFT_TEXT, 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled("composer_focused", "The composer accepts the typed draft")
+                    .press_key("Tab")
+                    .wait_for_text("j/k: scroll", 5000)
+                    .press_key("j")
+                    .press_key("k")
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "chat_focused",
+                        "Tab focuses the chat transcript for scrolling",
+                    )
+                    .press_key("Tab")
+                    .wait_for_text("Enter: submit", 5000)
+                    .viewing_pause_ms(1500)
+            },
+            |frame, report| {
+                let chat_focused_frame = common::frame_from_capture(&report.captures[1]);
+                let chat_focused_full =
+                    Region::full(chat_focused_frame.cols(), chat_focused_frame.rows());
+                assertion::assert_text_in_region(
+                    &chat_focused_frame,
+                    "j/k: scroll",
+                    &chat_focused_full,
+                );
+                assertion::assert_text_in_region(
+                    &chat_focused_frame,
+                    "Ctrl+C: cancel",
+                    &chat_focused_full,
+                );
+                // Scroll keys pressed in chat focus must not reach the draft.
+                assertion::assert_text_in_region(
+                    &chat_focused_frame,
+                    PROMPT_FOCUS_DRAFT_TEXT,
+                    &chat_focused_full,
+                );
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Enter: submit", &full);
+                assertion::assert_text_in_region(frame, PROMPT_FOCUS_DRAFT_TEXT, &full);
+                assertion::assert_not_visible(frame, "j/k: scroll");
             },
         )?;
 

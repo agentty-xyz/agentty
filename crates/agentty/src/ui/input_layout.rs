@@ -125,6 +125,19 @@ pub fn panel_inner_width(area: Rect, borders: Borders) -> usize {
     )
 }
 
+/// Returns the inner text height of a bordered panel area.
+///
+/// Vertical space consumed by top and bottom borders is excluded from the
+/// result so scroll math counts the same rows the panel actually paints.
+pub fn panel_inner_height(area: Rect, borders: Borders) -> u16 {
+    let top_border_height = u16::from(borders.intersects(Borders::TOP));
+    let bottom_border_height = u16::from(borders.intersects(Borders::BOTTOM));
+
+    area.height
+        .saturating_sub(top_border_height)
+        .saturating_sub(bottom_border_height)
+}
+
 /// Returns the bottom-pinned scroll offset for a bordered panel.
 ///
 /// When `scroll_offset` is already set, that explicit value wins. Otherwise

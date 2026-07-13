@@ -37,7 +37,7 @@ use crate::domain::session::{
 };
 use crate::domain::system_log::{SystemLogCategory, SystemLogEvent, SystemLogLevel};
 use crate::domain::transcript_notice::TranscriptNotice;
-use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, QuestionFocus};
+use crate::presentation::app_mode::{AppMode, ChatFocus, ConfirmationViewMode};
 use crate::presentation::prompt::PromptAtMentionState;
 
 /// Internal app events emitted by background workers and workflows.
@@ -1604,7 +1604,7 @@ impl App {
                 questions,
                 responses: Vec::new(),
                 current_index: 0,
-                focus: QuestionFocus::Answer,
+                focus: ChatFocus::Input,
                 input: InputState::default(),
                 scroll_offset: None,
             };

@@ -289,7 +289,7 @@ mod tests {
     use crate::domain::input::InputState;
     use crate::domain::question::QuestionItem;
     use crate::domain::session::{Session, SessionSize, SessionStats, Status};
-    use crate::presentation::app_mode::{AppMode, QuestionFocus};
+    use crate::presentation::app_mode::{AppMode, ChatFocus};
     use crate::presentation::prompt::{
         PromptAttachmentState, PromptHistoryState, PromptSlashState,
     };
@@ -466,6 +466,7 @@ mod tests {
         app.mode = AppMode::Prompt {
             at_mention_state: None,
             attachment_state: PromptAttachmentState::default(),
+            focus: ChatFocus::Input,
             history_state: PromptHistoryState::default(),
             input: InputState::default(),
             scroll_offset: None,
@@ -499,7 +500,7 @@ mod tests {
         app.mode = AppMode::Question {
             at_mention_state: None,
             current_index: 0,
-            focus: QuestionFocus::Answer,
+            focus: ChatFocus::Input,
             input: InputState::default(),
             scroll_offset: None,
             questions: vec![QuestionItem {

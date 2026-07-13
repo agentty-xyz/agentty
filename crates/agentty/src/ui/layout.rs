@@ -3,6 +3,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
 use crate::ui::input_layout;
 
+const APP_FRAME_BAR_HEIGHT: u16 = 1;
 const CHAT_INPUT_MIN_PANEL_HEIGHT: u16 = CHAT_INPUT_BORDER_HEIGHT + 1;
 const CHAT_INPUT_BORDER_HEIGHT: u16 = 2;
 const QUESTION_PANEL_HELP_HEIGHT: u16 = 1;
@@ -59,6 +60,17 @@ pub struct PromptPanelAreas {
     pub input_area: Rect,
 }
 
+/// Vertical bands of one rendered app frame.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AppFrameAreas {
+    /// Area routed to the active page between the two bars.
+    pub content_area: Rect,
+    /// Area used for the bottom footer bar.
+    pub footer_bar_area: Rect,
+    /// Area used for the top status bar.
+    pub status_bar_area: Rect,
+}
+
 /// Content and footer areas used by top-level tab pages.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TabPageAreas {
@@ -91,6 +103,26 @@ pub fn centered_content_rect(area: Rect, width: u16, height: u16) -> Rect {
     let origin_y = area.y + area.height.saturating_sub(height) / 2;
 
     Rect::new(origin_x, origin_y, width, height)
+}
+
+/// Splits the terminal frame into status bar, page content, and footer bar.
+///
+/// Runtime scroll math reuses this split so key handlers derive page geometry
+/// from the same area the renderer paints into.
+pub fn app_frame_areas(area: Rect) -> AppFrameAreas {
+    let vertical_chunks = Layout::default()
+        .constraints([
+            Constraint::Length(APP_FRAME_BAR_HEIGHT),
+            Constraint::Min(0),
+            Constraint::Length(APP_FRAME_BAR_HEIGHT),
+        ])
+        .split(area);
+
+    AppFrameAreas {
+        content_area: vertical_chunks[1],
+        footer_bar_area: vertical_chunks[2],
+        status_bar_area: vertical_chunks[0],
+    }
 }
 
 /// Splits a tab page area so content starts directly below the tab header.
@@ -331,7 +363,7 @@ mod tests {
         COMMITTING_PROGRESS_LABEL, PublishedBranchSyncStatus, Session, Status,
     };
     use crate::domain::theme::ColorTheme;
-    use crate::presentation::app_mode::QuestionFocus;
+    use crate::presentation::app_mode::ChatFocus;
     use crate::presentation::help_action::{self, ViewActionAvailability, ViewHelpState};
     use crate::presentation::prompt::{PromptAtMentionState, PromptSlashStage, PromptSlashState};
     use crate::ui::input_layout::*;
@@ -402,6 +434,20 @@ mod tests {
                 path: "tests/integration.rs".to_string(),
             },
         ]
+    }
+
+    #[test]
+    fn test_app_frame_areas_reserve_status_and_footer_bars() {
+        // Arrange
+        let area = Rect::new(0, 0, 80, 24);
+
+        // Act
+        let frame_areas = app_frame_areas(area);
+
+        // Assert
+        assert_eq!(frame_areas.status_bar_area, Rect::new(0, 0, 80, 1));
+        assert_eq!(frame_areas.content_area, Rect::new(0, 1, 80, 22));
+        assert_eq!(frame_areas.footer_bar_area, Rect::new(0, 23, 80, 1));
     }
 
     #[test]
@@ -625,13 +671,13 @@ mod tests {
         let session = session_fixture();
 
         // Act
-        let footer_line = prompt_footer_line(&session, 2);
+        let footer_line = prompt_footer_line(&session, 2, ChatFocus::Input);
 
         // Assert
         assert_eq!(
             footer_line.to_string(),
-            "Enter: submit | Alt+Enter: newline | Ctrl+V/Alt+V: paste image | Esc: cancel | 2 \
-             images ready"
+            "Enter: submit | Alt+Enter: newline | Ctrl+V/Alt+V: paste image | Esc: cancel | Tab: \
+             focus | 2 images ready"
         );
         assert_eq!(
             footer_line.spans[0].style,
@@ -661,11 +707,26 @@ mod tests {
         session.is_draft = true;
 
         // Act
-        let footer_line = prompt_footer_line(&session, 0);
+        let footer_line = prompt_footer_line(&session, 0, ChatFocus::Input);
 
         // Assert
         assert!(footer_line.to_string().contains("Enter: stage draft"));
         assert!(!footer_line.to_string().contains("Enter: submit"));
+    }
+
+    #[test]
+    fn test_prompt_footer_line_shows_scroll_actions_while_chat_is_focused() {
+        // Arrange
+        let session = session_fixture();
+
+        // Act
+        let footer_line = prompt_footer_line(&session, 0, ChatFocus::Chat);
+
+        // Assert
+        assert_eq!(
+            footer_line.to_string(),
+            "j/k: scroll | Ctrl+C: cancel | Tab: focus"
+        );
     }
 
     #[test]
@@ -1081,8 +1142,8 @@ mod tests {
         // Arrange
 
         // Act
-        let chat_focus_line = question_help_footer_line(QuestionFocus::Chat, false, false);
-        let answer_focus_line = question_help_footer_line(QuestionFocus::Answer, false, false);
+        let chat_focus_line = question_help_footer_line(ChatFocus::Chat, false, false);
+        let answer_focus_line = question_help_footer_line(ChatFocus::Input, false, false);
 
         // Assert
         assert!(chat_focus_line.to_string().contains("j/k: scroll"));
@@ -1108,9 +1169,9 @@ mod tests {
 
         // Act
         let answer_focus_with_options =
-            question_help_footer_line(QuestionFocus::Answer, true, false).to_string();
+            question_help_footer_line(ChatFocus::Input, true, false).to_string();
         let answer_focus_with_overlay =
-            question_help_footer_line(QuestionFocus::Answer, false, true).to_string();
+            question_help_footer_line(ChatFocus::Input, false, true).to_string();
 
         // Assert
         assert!(answer_focus_with_options.contains("q: sessions"));

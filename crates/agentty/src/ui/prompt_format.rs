@@ -4,6 +4,7 @@ use ratatui::text::Line;
 
 use crate::domain::agent::AgentKind;
 use crate::infra::file_index;
+use crate::presentation::app_mode::ChatFocus;
 use crate::presentation::help_action;
 use crate::presentation::prompt::{
     PromptAtMentionState, PromptSlashState, PromptSuggestionList,
@@ -32,13 +33,33 @@ const PROMPT_FOOTER_ACTIONS: [help_action::HelpAction; 4] = [
     ),
     help_action::HelpAction::new("cancel", "Esc", "Cancel prompt"),
 ];
+/// Footer actions shown while the chat transcript above the composer is
+/// focused for scrolling.
+const PROMPT_CHAT_FOCUS_FOOTER_ACTIONS: [help_action::HelpAction; 2] = [
+    help_action::HelpAction::new("scroll", "j/k", "Scroll chat"),
+    help_action::HelpAction::new("cancel", "Ctrl+C", "Cancel prompt"),
+];
 
 /// Builds the prompt-mode footer help line shown below the composer.
+///
+/// The composer and the chat transcript above it share `Tab` as the focus
+/// toggle, so each focus target advertises its own action set: composing shows
+/// submit/newline/cancel, and reading the transcript shows the scroll keys.
 pub fn prompt_footer_line(
     session: &crate::domain::session::Session,
     attachment_count: usize,
+    focus: ChatFocus,
 ) -> Line<'static> {
-    let mut footer_line = crate::ui::help_format::footer_line(prompt_footer_actions(session));
+    let is_chat_focused = focus == ChatFocus::Chat;
+    let mut help_actions = if is_chat_focused {
+        PROMPT_CHAT_FOCUS_FOOTER_ACTIONS.to_vec()
+    } else {
+        prompt_footer_actions(session).to_vec()
+    };
+    let focus_label = if is_chat_focused { "Compose" } else { "Chat" };
+    help_actions.push(help_action::HelpAction::new("focus", "Tab", focus_label));
+
+    let mut footer_line = crate::ui::help_format::footer_line(&help_actions);
 
     if attachment_count > 0 {
         let suffix = if attachment_count == 1 { "" } else { "s" };
