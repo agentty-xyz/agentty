@@ -14,7 +14,7 @@ use crate::app::setting::SettingsManager;
 use crate::app::startup::{AppStartup, StartupProjectContext, StartupSessionLoadContext};
 use crate::app::{AppError, review, sync, task};
 use crate::domain::agent::{AgentCliInfo, AgentKind, AgentModel};
-use crate::infra::clock::{Clock, RealClock};
+use crate::infra::clock::{self, Clock};
 use crate::infra::db;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs::FsClient;
@@ -111,7 +111,7 @@ impl App {
         )
         .await?;
 
-        let clock: Arc<dyn Clock> = Arc::new(RealClock);
+        let clock: Arc<dyn Clock> = clock::from_environment();
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let services = Self::build_services(
             base_path.clone(),

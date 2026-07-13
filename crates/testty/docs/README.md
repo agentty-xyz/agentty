@@ -8,6 +8,8 @@
 - [Snapshots](snapshots.md) — compare a test against a saved baseline
 - [Proof pipeline](proof-pipeline.md) — save what a test saw as text, image, GIF, or
   HTML
+- [Feature GIF workflow](feature-gif-workflow.md) — record a demo GIF per feature and
+  keep it in sync
 - [Journeys](journeys.md) — reusable building blocks for tests
 - [Frame diffing](frame-diffing.md) — see what changed between two screens
 - [Examples](examples.md) — runnable example programs
