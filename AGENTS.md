@@ -437,8 +437,10 @@ Always wrap these code elements in backticks when referenced in prose:
 ### Docs Site Integrity
 
 - Every feature page under `docs/site/content/features/` that declares `[extra].gif`
-  must have the matching GIF committed under `docs/site/static/features/`; if GIF
-  generation is skipped locally, do not add or keep the feature page yet.
+  must have the matching GIF and same-named PNG poster committed under
+  `docs/site/static/features/`. Regenerate and visually inspect the poster whenever the
+  GIF changes. If GIF generation is skipped locally, do not add or keep the feature page
+  yet. Follow `skills/feature-test/SKILL.md` for the poster workflow.
 - Keep feature-page title, description, and weight identical to the owning E2E test's
   `FeatureTest::zola()` declaration; the test metadata is the source of truth.
 - Use checked Zola `@/...` links for internal Markdown targets. Reject relative `.md`

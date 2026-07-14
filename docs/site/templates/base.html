@@ -13,6 +13,13 @@
               href="{% block canonical %}{{ config.base_url }}{% endblock canonical %}">
         <link rel="icon" href="{{ config.base_url }}/favicon.ico">
         <link rel="stylesheet" href="{{ get_url(path='site.css') }}">
+        <noscript>
+            <style>
+                [data-motion-demo] {
+                    display: none !important;
+                }
+            </style>
+        </noscript>
         {# Track aggregate website visits through Umami analytics. #}
         <script defer
                 src="https://cloud.umami.is/script.js"
@@ -31,11 +38,14 @@
             })();
         </script>
     </head>
-    <body class="site-body">
+    <body class="site-body"
+          data-search-index-url="{{ get_url(path='search_index.en.json') }}">
+        <a class="skip-link" href="#main-content">Skip to content</a>
         {# Resolve primary sections once so shared nav links track canonical section permalinks. #}
         {% set docs_section = get_section(path="docs/_index.md") %}
         {% set blog_section = get_section(path="blog/_index.md") %}
-        <nav class="site-nav">
+        {% set features_section = get_section(path="features/_index.md") %}
+        <nav class="site-nav" aria-label="Primary navigation">
             <div class="site-nav-inner">
                 <div class="site-nav-left">
                     <a class="site-brand" href="{{ config.base_url }}">
@@ -56,13 +66,41 @@
                     </a>
                     <div class="site-nav-links">
                         {% block nav_links %}
-                            <a class="site-nav-link" href="{{ config.base_url }}/">home</a>
-                            <a class="site-nav-link" href="{{ blog_section.permalink }}">blog</a>
-                            <a class="site-nav-link" href="{{ docs_section.permalink }}">docs</a>
+                            <a class="site-nav-link"
+                               href="{{ config.base_url }}/"
+                               {% if current_path == "/" %}aria-current="page"{% endif %}>home</a>
+                            <a class="site-nav-link"
+                               href="{{ features_section.permalink }}"
+                               {% if current_path is starting_with("/features/") %}aria-current="page"{% endif %}>features</a>
+                            <a class="site-nav-link"
+                               href="{{ docs_section.permalink }}"
+                               {% if current_path is starting_with("/docs/") %}aria-current="page"{% endif %}>docs</a>
+                            <a class="site-nav-link"
+                               href="{{ blog_section.permalink }}"
+                               {% if current_path is starting_with("/blog/") %}aria-current="page"{% endif %}>blog</a>
                         {% endblock nav_links %}
                     </div>
                 </div>
                 <div class="site-nav-actions">
+                    <button class="site-search-trigger"
+                            type="button"
+                            data-search-open
+                            aria-haspopup="dialog">
+                        <svg xmlns="http://www.w3.org/2000/svg"
+                             width="16"
+                             height="16"
+                             viewBox="0 0 24 24"
+                             fill="none"
+                             stroke="currentColor"
+                             stroke-width="2"
+                             stroke-linecap="round"
+                             aria-hidden="true">
+                            <circle cx="11" cy="11" r="7" />
+                            <line x1="16" y1="16" x2="21" y2="21" />
+                        </svg>
+                        <span>search</span>
+                        <kbd>/</kbd>
+                    </button>
                     {% block extra_nav %}
                         {% set github_repo_slug = config.extra.github_repo_slug | default(value="agentty-xyz/agentty") %}
                         <a class="github-link github-link-rich"
@@ -92,7 +130,8 @@
                             </span>
                         </a>
                     {% endblock extra_nav %}
-                    <div class="site-theme-switch" aria-label="Color theme">
+                    <fieldset class="site-theme-switch">
+                        <legend class="sr-only">Color theme</legend>
                         <button class="theme-btn site-theme-btn"
                                 data-theme="hacker"
                                 aria-pressed="true">hacker</button>
@@ -100,14 +139,47 @@
                         <button class="theme-btn site-theme-btn"
                                 data-theme="dark"
                                 aria-pressed="false">dark</button>
-                    </div>
+                    </fieldset>
                 </div>
             </div>
         </nav>
-        <main class="site-main site-container {% block main_width_class %}site-container{% endblock main_width_class %} {% block main_extra_classes %}{% endblock main_extra_classes %}">
+        <main id="main-content"
+              class="site-main site-container {% block main_width_class %}site-container{% endblock main_width_class %} {% block main_extra_classes %}{% endblock main_extra_classes %}">
             {% block content %}
             {% endblock content %}
         </main>
+        <div class="search-dialog" data-search-dialog hidden>
+            <button class="search-dialog-backdrop"
+                    type="button"
+                    data-search-close
+                    tabindex="-1"
+                    aria-label="Close search"></button>
+            <dialog class="search-dialog-panel"
+                    open
+                    aria-modal="true"
+                    aria-labelledby="search-dialog-title">
+                <div class="search-dialog-header">
+                    <div>
+                        <p class="search-dialog-eyebrow">// find anything</p>
+                        <h2 class="search-dialog-title" id="search-dialog-title">Search Agentty</h2>
+                    </div>
+                    <button class="search-dialog-close"
+                            type="button"
+                            data-search-close
+                            aria-label="Close search">esc</button>
+                </div>
+                <label class="search-field">
+                    <span class="sr-only">Search documentation, features, and blog posts</span>
+                    <span class="search-field-prompt" aria-hidden="true">&gt;</span>
+                    <input type="search"
+                           data-search-input
+                           autocomplete="off"
+                           placeholder="Search docs, features, and posts..." />
+                </label>
+                <p class="search-status" data-search-status aria-live="polite">Type at least two characters to search.</p>
+                <div class="search-results" data-search-results></div>
+            </dialog>
+        </div>
         <script>
     (function () {
       var STORAGE_KEY = 'agentty-theme';
@@ -116,6 +188,16 @@
       var githubLink = document.querySelector('.github-link-rich');
       var githubStars = document.querySelector('[data-github-stars]');
       var githubRelease = document.querySelector('[data-github-release]');
+      var searchDialog = document.querySelector('[data-search-dialog]');
+      var searchInput = document.querySelector('[data-search-input]');
+      var searchResults = document.querySelector('[data-search-results]');
+      var searchStatus = document.querySelector('[data-search-status]');
+      var searchTrigger = document.querySelector('[data-search-open]');
+      var searchItems = [];
+      var searchIndexPromise = null;
+      var searchIndexUrl = document.body.dataset.searchIndexUrl;
+      var mobileDocsQuery = globalThis.matchMedia('(max-width: 860px)');
+      var reducedMotionQuery = globalThis.matchMedia('(prefers-reduced-motion: reduce)');
 
       /**
        * Apply a theme by name (`hacker` or `dark`), update button states,
@@ -186,12 +268,228 @@
         }
       }
 
+      /** Load the Zola-generated search records once, on first use. */
+      function loadSearchIndex() {
+        if (!searchIndexPromise) {
+          searchIndexPromise = fetch(searchIndexUrl)
+            .then(function (response) {
+              if (!response.ok) {
+                throw new Error('Search index request failed.');
+              }
+
+              return response.json();
+            })
+            .then(function (items) {
+              searchItems = items;
+
+              return items;
+            });
+        }
+
+        return searchIndexPromise;
+      }
+
+      /** Score one search item against all query terms. */
+      function scoreSearchItem(item, terms) {
+        var title = (item.title || '').toLowerCase();
+        var description = (item.description || '').toLowerCase();
+        var path = (item.path || '').toLowerCase();
+        var body = (item.body || '').toLowerCase();
+        var combined = [title, description, path, body].join(' ');
+
+        if (!terms.every(function (term) { return combined.includes(term); })) {
+          return 0;
+        }
+
+        return terms.reduce(function (score, term) {
+          if (title.startsWith(term)) score += 12;
+          else if (title.includes(term)) score += 8;
+          if (description.includes(term)) score += 4;
+          if (path.includes(term)) score += 2;
+          if (body.includes(term)) score += 1;
+
+          return score;
+        }, 0);
+      }
+
+      globalThis.agenttySearch = Object.freeze({ scoreItem: scoreSearchItem });
+
+      /** Render search results without injecting index content as HTML. */
+      function renderSearchResults(query) {
+        var normalizedQuery = query.trim().toLowerCase();
+        searchResults.replaceChildren();
+
+        if (normalizedQuery.length < 2) {
+          searchStatus.textContent = 'Type at least two characters to search.';
+          return;
+        }
+
+        var terms = normalizedQuery.split(/\s+/).filter(Boolean);
+        var matches = searchItems
+          .map(function (item) {
+            return { item: item, score: scoreSearchItem(item, terms) };
+          })
+          .filter(function (match) { return match.score > 0; })
+          .sort(function (left, right) { return right.score - left.score; })
+          .slice(0, 8);
+
+        var resultSummary = 'No results. Try a broader phrase.';
+        if (matches.length > 0) {
+          var resultLabel = matches.length === 1 ? ' result' : ' results';
+          resultSummary = matches.length + resultLabel;
+        }
+        searchStatus.textContent = resultSummary;
+
+        matches.forEach(function (match) {
+          var item = match.item;
+          var link = document.createElement('a');
+          var path = document.createElement('span');
+          var title = document.createElement('strong');
+          var description = document.createElement('span');
+
+          link.className = 'search-result';
+          link.href = item.path || item.url;
+          title.className = 'search-result-title';
+          title.textContent = item.title;
+          path.className = 'search-result-path';
+          path.textContent = item.path;
+          description.className = 'search-result-description';
+          description.textContent = item.description || 'Open this Agentty page.';
+
+          link.append(title, description, path);
+          searchResults.appendChild(link);
+        });
+      }
+
+      /** Open search, then focus the field once the panel is visible. */
+      function openSearch() {
+        searchDialog.hidden = false;
+        document.body.classList.add('has-open-dialog');
+        loadSearchIndex().catch(function () {
+          searchStatus.textContent = 'Search is unavailable right now.';
+        });
+        globalThis.requestAnimationFrame(function () { searchInput.focus(); });
+      }
+
+      /** Close search and return focus to its trigger. */
+      function closeSearch() {
+        if (searchDialog.hidden) {
+          return;
+        }
+
+        searchDialog.hidden = true;
+        document.body.classList.remove('has-open-dialog');
+        searchTrigger.focus();
+      }
+
+      /** Keep docs navigation expanded on desktop and compact on small screens. */
+      function syncResponsiveDetails() {
+        document.querySelectorAll('[data-responsive-details]').forEach(function (details) {
+          details.open = !mobileDocsQuery.matches;
+        });
+      }
+
+      /** Mark a motion demo as ready after its selected image finishes loading. */
+      function markMotionDemoLoaded(event) {
+        event.currentTarget.classList.add('is-loaded');
+      }
+
+      /** Load one motion demo immediately and reveal it after decoding. */
+      function loadMotionDemo(demo) {
+        demo.addEventListener('load', markMotionDemoLoaded, { once: true });
+        demo.src = demo.dataset.src;
+      }
+
+      /** Load a visible motion demo and stop observing it. */
+      function loadVisibleMotionDemo(entry, observer) {
+        if (!entry.isIntersecting) {
+          return;
+        }
+
+        loadMotionDemo(entry.target);
+        observer.unobserve(entry.target);
+      }
+
+      /** Process demos that entered the observer's preload margin. */
+      function handleMotionDemoIntersections(entries, observer) {
+        entries.forEach(function (entry) {
+          loadVisibleMotionDemo(entry, observer);
+        });
+      }
+
+      /** Load animated demos near the viewport unless reduced motion is requested. */
+      function hydrateMotionDemos() {
+        var demos = Array.from(document.querySelectorAll('[data-motion-demo]'));
+        if (reducedMotionQuery.matches) {
+          demos.forEach(function (demo) {
+            demo.closest('.feature-demo-frame').classList.add('is-motion-reduced');
+            if (demo.dataset.poster) {
+              demo.src = demo.dataset.poster;
+            }
+            if (demo.complete && demo.naturalWidth > 1) {
+              demo.classList.add('is-loaded');
+            } else {
+              demo.addEventListener('load', markMotionDemoLoaded, { once: true });
+            }
+          });
+          return;
+        }
+
+        if (typeof globalThis.IntersectionObserver !== 'function') {
+          demos.forEach(loadMotionDemo);
+          return;
+        }
+
+        var observer = new globalThis.IntersectionObserver(handleMotionDemoIntersections, {
+          rootMargin: '240px'
+        });
+
+        demos.forEach(function (demo) { observer.observe(demo); });
+      }
+
       // Sync button states with the theme already applied by the <head> script.
       applyTheme(localStorage.getItem(STORAGE_KEY) || 'hacker');
       void loadGithubMetadata();
+      syncResponsiveDetails();
+      hydrateMotionDemos();
 
       themeBtns.forEach(function (btn) {
         btn.addEventListener('click', function () { applyTheme(btn.dataset.theme); });
+      });
+
+      searchTrigger.addEventListener('click', openSearch);
+      document.querySelectorAll('[data-search-close]').forEach(function (button) {
+        button.addEventListener('click', closeSearch);
+      });
+      searchInput.addEventListener('input', function () {
+        loadSearchIndex()
+          .then(function () { renderSearchResults(searchInput.value); })
+          .catch(function () { searchStatus.textContent = 'Search is unavailable right now.'; });
+      });
+      mobileDocsQuery.addEventListener('change', syncResponsiveDetails);
+      document.addEventListener('keydown', function (event) {
+        var target = event.target;
+        var isTyping = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
+
+        if (event.key === '/' && !isTyping && searchDialog.hidden) {
+          event.preventDefault();
+          openSearch();
+        } else if (event.key === 'Escape' && !searchDialog.hidden) {
+          event.preventDefault();
+          closeSearch();
+        } else if (event.key === 'Tab' && !searchDialog.hidden) {
+          var focusable = Array.from(searchDialog.querySelectorAll('.search-dialog-panel a[href], .search-dialog-panel button, .search-dialog-panel input'));
+          var first = focusable[0];
+          var last = focusable[focusable.length - 1];
+
+          if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+          }
+        }
       });
     })();
         </script>

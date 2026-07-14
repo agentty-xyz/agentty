@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}
+    {{ section.title }} | {{ config.title }}
+{% endblock title %}
+{% block canonical %}
+    {{ section.permalink }}
+{% endblock canonical %}
+{% block main_width_class %}
+    site-container
+{% endblock main_width_class %}
+{% block content %}
+    <header class="docs-section-header">
+        <p class="section-eyebrow">
+            {% block section_eyebrow %}
+            {% endblock section_eyebrow %}
+        </p>
+        <h1 class="docs-page-title">{{ section.title }}</h1>
+        <p class="docs-section-intro">{{ section.content | safe }}</p>
+    </header>
+    {% block section_listing %}
+    {% endblock section_listing %}
+{% endblock content %}

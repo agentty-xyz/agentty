@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+{% extends "section.html" %}
 {% macro render_section_listing(section_path, show_heading=false) %}
     {% set docs_listing_section = get_section(path=section_path) %}
     {% if show_heading %}<h2 class="docs-section-title">{{ docs_listing_section.title }}</h2>{% endif %}
@@ -22,19 +22,9 @@
         {{ self::render_section_listing(section_path=subsection_path, show_heading=true) }}
     {% endfor %}
 {% endmacro render_section_listing %}
-{% block title %}
-    {{ section.title }} | {{ config.title }}
-{% endblock title %}
-{% block canonical %}
-    {{ section.permalink }}
-{% endblock canonical %}
-{% block main_width_class %}
-    site-container
-{% endblock main_width_class %}
-{% block content %}
-    <header class="docs-section-header">
-        <h1 class="docs-page-title">{{ section.title }}</h1>
-        <p class="docs-section-intro">{{ section.content | safe }}</p>
-    </header>
+{% block section_eyebrow %}
+    // learn agentty
+{% endblock section_eyebrow %}
+{% block section_listing %}
     {{ self::render_section_listing(section_path="docs/_index.md") }}
-{% endblock content %}
+{% endblock section_listing %}

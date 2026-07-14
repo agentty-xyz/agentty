@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "macros/navigation.html" as navigation %}
 {% macro render_docs_nav(section_path, current_permalink, nested=false) %}
     {% set docs_nav_section = get_section(path=section_path) %}
     {% if nested %}<h3 class="docs-nav-heading">{{ docs_nav_section.title }}</h3>{% endif %}
@@ -11,6 +12,7 @@
                 {% for docs_page in docs_nav_section.pages %}
                     <li>
                         <a class="docs-nav-link {% if docs_page.permalink == current_permalink %}is-active{% endif %}"
+                           {% if docs_page.permalink == current_permalink %}aria-current="page"{% endif %}
                            href="{{ docs_page.permalink }}">{{ docs_page.title }}</a>
                     </li>
                 {% endfor %}
@@ -20,18 +22,6 @@
             {{ self::render_docs_nav(section_path=subsection_path, current_permalink=current_permalink, nested=true) }}
         {% endfor %}
     {% endmacro render_docs_nav %}
-    {% macro render_page_toc(items, nested=false) %}
-        {% if items | length > 0 %}
-            <ul class="docs-outline-list {% if nested %}docs-outline-list--nested{% endif %}">
-                {% for heading in items %}
-                    <li class="docs-outline-item">
-                        <a class="docs-outline-link" href="{{ heading.permalink | safe }}">{{ heading.title }}</a>
-                        {% if heading.children | length > 0 %}{{ self::render_page_toc(items=heading.children, nested=true) }}{% endif %}
-                    </li>
-                {% endfor %}
-            </ul>
-        {% endif %}
-    {% endmacro render_page_toc %}
     {% block title %}
         {{ page.title }} | {{ config.title }} Docs
     {% endblock title %}
@@ -45,17 +35,36 @@
         docs-layout
     {% endblock main_extra_classes %}
     {% block extra_scripts %}
-        <script src="https://cdn.jsdelivr.net/npm/elasticlunr@0.9.5/elasticlunr.min.js"
-                integrity="sha384-OTg7E3c9BrviSAvChL8f8At8KVbHCD59BgIO4jczWREK3SRkF7IHd3PVYwE9tzv3"
-                crossorigin="anonymous"></script>
-        <script src="{{ get_url(path='search_index.en.js') }}"></script>
         <script>
 (function () {
   var input = document.querySelector('[data-docs-search-input]');
   var resultsList = document.querySelector('[data-docs-search-results]');
   var status = document.querySelector('[data-docs-search-status]');
+  var searchIndexUrl = document.body.dataset.searchIndexUrl;
+  var searchDocumentsPromise = null;
   if (!input || !resultsList || !status) {
     return;
+  }
+
+  /** Load documentation records from the shared Zola search index once. */
+  function loadSearchDocuments() {
+    if (!searchDocumentsPromise) {
+      searchDocumentsPromise = fetch(searchIndexUrl)
+        .then(function (response) {
+          if (!response.ok) {
+            throw new Error('Documentation search index request failed.');
+          }
+
+          return response.json();
+        })
+        .then(function (searchDocuments) {
+          return searchDocuments.filter(function (searchDocument) {
+            return searchDocument.path && searchDocument.path.startsWith('/docs/');
+          });
+        });
+    }
+
+    return searchDocumentsPromise;
   }
 
   /** Disable search and explain why navigation remains the fallback. */
@@ -66,22 +75,6 @@
     resultsList.replaceChildren();
     resultsList.hidden = true;
     status.textContent = message;
-  }
-
-  if (!globalThis.elasticlunr || !globalThis.searchIndex) {
-    disableSearch('Search is temporarily unavailable. Use the documentation navigation.');
-
-    return;
-  }
-
-  var index;
-  try {
-    index = globalThis.elasticlunr.Index.load(globalThis.searchIndex);
-  } catch (error) {
-    console.error('Documentation search index failed to load.', error);
-    disableSearch('Search is temporarily unavailable. Use the documentation navigation.');
-
-    return;
   }
 
   /** Clear the current results and announce the supplied search state. */
@@ -117,6 +110,34 @@
     return item;
   }
 
+  /** Render ranked documentation matches for the current query. */
+  function renderResults(query, searchDocuments) {
+    var terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+    var matches = searchDocuments
+      .map(function (searchDocument) {
+        return {
+          document: searchDocument,
+          score: globalThis.agenttySearch.scoreItem(searchDocument, terms),
+        };
+      })
+      .filter(function (match) { return match.score > 0; })
+      .sort(function (left, right) { return right.score - left.score; })
+      .slice(0, 8)
+      .map(function (match) { return match.document; });
+
+    resultsList.replaceChildren();
+    matches.forEach(function (searchDocument) {
+      resultsList.appendChild(createResultItem(searchDocument));
+    });
+    resultsList.hidden = matches.length === 0;
+    var resultSummary = 'No documentation matches.';
+    if (matches.length > 0) {
+      var resultLabel = matches.length === 1 ? 'result' : 'results';
+      resultSummary = matches.length + ' ' + resultLabel + '.';
+    }
+    status.textContent = resultSummary;
+  }
+
   /** Search title, description, and content while keeping results inside `/docs/`. */
   function updateResults() {
     var query = input.value.trim();
@@ -126,34 +147,22 @@
       return;
     }
 
-    var matches = index.search(query, {
-      bool: 'AND',
-      expand: true,
-      fields: {
-        title: { boost: 4 },
-        description: { boost: 2 },
-        body: { boost: 1 },
-      },
-    }).map(function (match) {
-      return index.documentStore.getDoc(match.ref);
-    }).filter(function (searchDocument) {
-      return searchDocument && searchDocument.path && searchDocument.path.startsWith('/docs/');
-    }).slice(0, 8);
+    status.textContent = 'Searching documentation...';
+    loadSearchDocuments()
+      .then(function (searchDocuments) {
+        var currentQuery = input.value.trim();
+        if (currentQuery.length < 2) {
+          clearResults(currentQuery ? 'Type one more character to search.' : '');
 
-    resultsList.replaceChildren();
-    matches.forEach(function (searchDocument) {
-      resultsList.appendChild(createResultItem(searchDocument));
-    });
-    resultsList.hidden = matches.length === 0;
-    var resultSummary = 'No documentation matches.';
-    if (matches.length > 0) {
-      var resultLabel = 'results';
-      if (matches.length === 1) {
-        resultLabel = 'result';
-      }
-      resultSummary = matches.length + ' ' + resultLabel + '.';
-    }
-    status.textContent = resultSummary;
+          return;
+        }
+
+        renderResults(currentQuery, searchDocuments);
+      })
+      .catch(function (error) {
+        console.error('Documentation search index failed to load.', error);
+        disableSearch('Search is temporarily unavailable. Use the documentation navigation.');
+      });
   }
 
   input.addEventListener('input', updateResults);
@@ -804,37 +813,53 @@ var renderCounter = 0;
     {% block content %}
         <aside class="docs-sidebar docs-sidebar--global"
                aria-label="Documentation navigation">
-            <h2 class="docs-sidebar-title">Documentation</h2>
-            <div class="docs-search" role="search">
-                <label class="docs-search__label" for="docs-search-input">Search docs</label>
-                <input id="docs-search-input"
-                       class="docs-search__input"
-                       type="search"
-                       placeholder="Search documentation"
-                       autocomplete="off"
-                       data-docs-search-input>
-                <p class="docs-search__status"
-                   aria-live="polite"
-                   data-docs-search-status></p>
-                <noscript>
-                    <p class="docs-search__status">Search requires JavaScript. Use the documentation navigation.</p>
-                </noscript>
-                <ul class="docs-search__results" data-docs-search-results hidden>
-                </ul>
-            </div>
-            {{ self::render_docs_nav(section_path="docs/_index.md", current_permalink=page.permalink) }}
+            <details class="docs-nav-disclosure" data-responsive-details open>
+                <summary>Documentation</summary>
+                <div class="docs-nav-disclosure-content">
+                    <h2 class="docs-sidebar-title">Documentation</h2>
+                    <div class="docs-search" role="search">
+                        <label class="docs-search__label" for="docs-search-input">Search docs</label>
+                        <input id="docs-search-input"
+                               class="docs-search__input"
+                               type="search"
+                               placeholder="Search documentation"
+                               autocomplete="off"
+                               data-docs-search-input>
+                        <p class="docs-search__status"
+                           aria-live="polite"
+                           data-docs-search-status></p>
+                        <noscript>
+                            <p class="docs-search__status">Search requires JavaScript. Use the documentation navigation.</p>
+                        </noscript>
+                        <ul class="docs-search__results" data-docs-search-results hidden>
+                        </ul>
+                    </div>
+                    {{ self::render_docs_nav(section_path="docs/_index.md", current_permalink=page.permalink) }}
+                </div>
+            </details>
         </aside>
         <article class="docs-content-wrapper">
+            <nav class="docs-breadcrumbs" aria-label="Breadcrumb">
+                <a href="/docs/">docs</a>
+                <span aria-hidden="true">/</span>
+                <span aria-current="page">{{ page.title }}</span>
+            </nav>
             <h1 class="docs-page-title">{{ page.title }}</h1>
+            {% if page.description %}<p class="docs-page-lead">{{ page.description }}</p>{% endif %}
             <div class="docs-content">{{ page.content | safe }}</div>
         </article>
         <aside class="docs-sidebar docs-sidebar--page"
                aria-label="Page table of contents">
-            <h2 class="docs-sidebar-title">On this page</h2>
-            {% if page.toc and page.toc | length > 0 %}
-                {{ self::render_page_toc(items=page.toc) }}
-            {% else %}
-                <p class="docs-outline-empty">No headings in this document.</p>
-            {% endif %}
+            <details class="docs-nav-disclosure" data-responsive-details open>
+                <summary>On this page</summary>
+                <div class="docs-nav-disclosure-content">
+                    <h2 class="docs-sidebar-title">On this page</h2>
+                    {% if page.toc and page.toc | length > 0 %}
+                        {{ navigation::render_page_toc(items=page.toc) }}
+                    {% else %}
+                        <p class="docs-outline-empty">No headings in this document.</p>
+                    {% endif %}
+                </div>
+            </details>
         </aside>
     {% endblock content %}

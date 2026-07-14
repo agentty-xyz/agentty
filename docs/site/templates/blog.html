@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+{% extends "section.html" %}
 {# Render the blog landing page from a section tree so new subsections can list themselves automatically. #}
 {% macro render_blog_listing(section_path, show_heading=false) %}
     {% set blog_listing_section = get_section(path=section_path) %}
@@ -28,19 +28,9 @@
         {{ self::render_blog_listing(section_path=subsection_path, show_heading=true) }}
     {% endfor %}
 {% endmacro render_blog_listing %}
-{% block title %}
-    {{ section.title }} | {{ config.title }}
-{% endblock title %}
-{% block canonical %}
-    {{ section.permalink }}
-{% endblock canonical %}
-{% block main_width_class %}
-    site-container
-{% endblock main_width_class %}
-{% block content %}
-    <header class="docs-section-header">
-        <h1 class="docs-page-title">{{ section.title }}</h1>
-        <p class="docs-section-intro">{{ section.content | safe }}</p>
-    </header>
+{% block section_eyebrow %}
+    // field notes
+{% endblock section_eyebrow %}
+{% block section_listing %}
     {{ self::render_blog_listing(section_path="blog/_index.md") }}
-{% endblock content %}
+{% endblock section_listing %}

@@ -11,20 +11,47 @@
 {% endblock main_width_class %}
 {% block content %}
     <section class="hero-section">
-        <pre class="logo">    _    ____ _____ _   _ _____ _____ __   __
+        <pre class="logo" aria-hidden="true">    _    ____ _____ _   _ _____ _____ __   __
    / \  / ___| ____| \ | |_   _|_   _|\ \ / /
   / _ \| |  _|  _| |  \| | | |   | |   \ V /
  / ___ \ |_| | |___| |\  | | |   | |    | |
 /_/   \_\____|_____|_| \_| |_|   |_|    |_|</pre>
+        <p class="hero-eyebrow">// terminal-first agent workflows</p>
+        <h1 class="hero-title">Ship AI-assisted changes with control.</h1>
         <div class="hero-description">{{ section.content | safe }}</div>
+        <div class="hero-actions">
+            <a class="button button-primary" href="/docs/getting-started/overview/">Get started</a>
+            <a class="button button-secondary"
+               href="{{ config.extra.github_repo }}"
+               target="_blank"
+               rel="noopener">View on GitHub</a>
+        </div>
     </section>
     <section class="site-section">
-        <div class="feature-demo-frame">
-            <img src="/demo/demo.gif"
-                 alt="Agentty end-to-end demo"
-                 width="1600"
-                 height="900"
-                 loading="lazy" />
+        <div class="terminal-window">
+            <div class="terminal-window-bar" aria-hidden="true">
+                <span class="terminal-window-dots"><i></i><i></i><i></i></span>
+                <span>agentty / session workflow</span>
+                <span>live demo</span>
+            </div>
+            <div class="feature-demo-frame">
+                <picture>
+                    <source media="(prefers-reduced-motion: reduce)" srcset="/demo/demo.png">
+                    <img data-motion-demo
+                         src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs="
+                         data-src="/demo/demo.gif"
+                         alt="Agentty end-to-end demo"
+                         width="1600"
+                         height="900"
+                         decoding="async" />
+                </picture>
+                <noscript>
+                    <img src="/demo/demo.png"
+                         alt="Agentty end-to-end demo"
+                         width="1600"
+                         height="900" />
+                </noscript>
+            </div>
         </div>
     </section>
     <section class="site-section">
@@ -32,16 +59,41 @@
         <div class="install-wrapper">
             <!-- Negative bottom margin pulls tabs down so their bottom border overlaps
                  the panel's top border, creating a seamless visual connection -->
-            <div class="install-tabs">
-                <button class="install-tab is-active" data-cmd="npm install -g agentty">npm</button>
-                <button class="install-tab" data-cmd="npx agentty">npx</button>
-                <button class="install-tab" data-cmd="cargo install agentty">cargo</button>
+            <div class="install-tabs" role="tablist" aria-label="Installation method">
+                <button class="install-tab is-active"
+                        type="button"
+                        role="tab"
+                        aria-controls="install-command"
+                        aria-selected="true"
+                        data-cmd="npm install -g agentty">npm</button>
                 <button class="install-tab"
+                        type="button"
+                        role="tab"
+                        aria-controls="install-command"
+                        aria-selected="false"
+                        tabindex="-1"
+                        data-cmd="npx agentty">npx</button>
+                <button class="install-tab"
+                        type="button"
+                        role="tab"
+                        aria-controls="install-command"
+                        aria-selected="false"
+                        tabindex="-1"
+                        data-cmd="cargo install agentty">cargo</button>
+                <button class="install-tab"
+                        type="button"
+                        role="tab"
+                        aria-controls="install-command"
+                        aria-selected="false"
+                        tabindex="-1"
                         data-cmd="curl --proto '=https' --tlsv1.2 -LsSf https://github.com/agentty-xyz/agentty/releases/latest/download/agentty-installer.sh | sh">
                     sh
                 </button>
             </div>
-            <div class="install-command">
+            <div class="install-command"
+                 id="install-command"
+                 role="tabpanel"
+                 aria-live="polite">
                 <span class="install-prompt">$</span>
                 <code class="install-cmd-text">npm install -g agentty</code>
                 <button class="copy-btn" title="Copy to clipboard" aria-label="Copy command">copy</button>
@@ -56,14 +108,31 @@
   function setActive(activeTab) {
     tabs.forEach(function (tab) {
       tab.classList.remove('is-active');
+      tab.setAttribute('aria-selected', 'false');
+      tab.tabIndex = -1;
     });
     activeTab.classList.add('is-active');
+    activeTab.setAttribute('aria-selected', 'true');
+    activeTab.tabIndex = 0;
   }
 
   tabs.forEach(function (tab) {
     tab.addEventListener('click', function () {
       setActive(tab);
       cmdText.textContent = tab.dataset.cmd;
+    });
+    tab.addEventListener('keydown', function (event) {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') {
+        return;
+      }
+
+      event.preventDefault();
+      var currentIndex = Array.from(tabs).indexOf(tab);
+      var direction = event.key === 'ArrowRight' ? 1 : -1;
+      var nextTab = tabs[(currentIndex + direction + tabs.length) % tabs.length];
+      setActive(nextTab);
+      cmdText.textContent = nextTab.dataset.cmd;
+      nextTab.focus();
     });
   });
 
@@ -77,7 +146,13 @@
         </script>
     </section>
     <section class="site-section">
-        <h2 class="section-heading">// features</h2>
+        <div class="section-heading-group">
+            <div>
+                <p class="section-eyebrow">// designed for control</p>
+                <h2 class="section-title">A focused environment for agent-driven work.</h2>
+            </div>
+            <a class="section-link" href="/features/">Explore all features &rarr;</a>
+        </div>
         <div class="feature-grid">
             <article class="feature-card">
                 <div class="feature-icon">
@@ -142,15 +217,29 @@
                     Track sessions across models with color-coded statuses. Active, queued, and archived work at a glance.
                 </p>
                 <div class="feature-demo-frame">
-                    <img src="/features/sessions.gif"
-                         alt="Session management demo"
-                         width="800"
-                         height="400"
-                         loading="lazy" />
+                    <picture>
+                        <source media="(prefers-reduced-motion: reduce)"
+                                srcset="/features/sessions.png">
+                        <img data-motion-demo
+                             src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs="
+                             data-src="/features/sessions.gif"
+                             alt="Session management demo"
+                             width="800"
+                             height="400"
+                             loading="lazy"
+                             decoding="async"
+                             fetchpriority="low" />
+                    </picture>
+                    <noscript>
+                        <img src="/features/sessions.png"
+                             alt="Session management demo"
+                             width="800"
+                             height="400"
+                             loading="lazy" />
+                    </noscript>
                 </div>
             </article>
         </div>
-        <a class="feature-demo-more-link" href="/features/">see more features &rarr;</a>
     </section>
     <footer class="site-footer">
         <p class="site-footer-text">Built for developers who want control over their AI coding sessions.</p>

@@ -6,10 +6,11 @@ description: Guide for creating E2E feature tests with VHS GIF generation and Zo
 # Feature Test Skill
 
 Use this skill when adding a new visible UI feature that is user-facing and demonstrable
-in a PTY scenario. The workflow produces three artifacts from one test:
+in a PTY scenario. The workflow produces four artifacts from one test:
 
 1. An E2E test in `crates/agentty/tests/e2e/`.
 1. A feature GIF in `docs/site/static/features/`.
+1. A static PNG poster in `docs/site/static/features/`.
 1. A Zola content page in `docs/site/content/features/`.
 
 ## When to Use
@@ -34,6 +35,7 @@ A single name flows through the entire pipeline:
 | ------------- | ------------------------------------------------------- |
 | Test function | `test_{name}` in `crates/agentty/tests/e2e/{module}.rs` |
 | GIF file      | `docs/site/static/features/{name}.gif`                  |
+| PNG poster    | `docs/site/static/features/{name}.png`                  |
 | Zola page     | `docs/site/content/features/{name}.md`                  |
 
 Choose a short, descriptive `snake_case` name that describes the feature (e.g.,
@@ -142,7 +144,60 @@ gif = "{name}.gif"
 The `features.html` template auto-discovers all pages in `content/features/` sorted by
 `weight`. No manual template edits are needed.
 
-### 4. Run and verify
+### 4. Create or refresh the PNG poster
+
+Every feature GIF needs a same-named PNG poster for the site's `prefers-reduced-motion`
+and `noscript` fallbacks. Create the poster when adding a GIF, and regenerate it
+whenever the GIF changes. `TESTTY_GIF_MODE=check` verifies GIF freshness but does not
+verify or update the poster.
+
+First inspect the finished GIF and choose a timestamp that clearly communicates the
+feature's result. Prefer a stable end state with the important UI visible. Do not
+automatically use the first or midpoint frame: it may show an empty, loading, or
+transitional state.
+
+Check the GIF duration before choosing a timestamp:
+
+```sh
+ffprobe -v error \
+  -show_entries format=duration \
+  -of default=noprint_wrappers=1 \
+  docs/site/static/features/<name>.gif
+```
+
+Extract exactly one frame with `ffmpeg`, preserving the aspect ratio and capping the
+width at 1600 pixels without upscaling:
+
+```sh
+ffmpeg -y \
+  -i docs/site/static/features/<name>.gif \
+  -ss <timestamp> \
+  -vf "scale=w='min(1600\,iw)':h=-1" \
+  -frames:v 1 \
+  -compression_level 9 \
+  docs/site/static/features/<name>.png
+```
+
+Use a timestamp accepted by `ffmpeg`, such as `00:00:01.500`, that falls within the
+reported duration. Open the resulting PNG and verify that it is sharp, legible, free of
+transitional artifacts, and still represents the current GIF. If it does not, choose a
+better timestamp and rerun the command.
+
+Check that every GIF declared by a feature page has a nonempty poster before finalizing:
+
+```sh
+for feature_page in docs/site/content/features/*.md; do
+  gif_name=$(sed -n 's/^gif = "\(.*\)"/\1/p' "${feature_page}")
+  test -z "${gif_name}" && continue
+  poster_path="docs/site/static/features/${gif_name%.gif}.png"
+  test -s "${poster_path}" || {
+    echo "missing PNG poster: ${poster_path}"
+    exit 1
+  }
+done
+```
+
+### 5. Run and verify
 
 ```sh
 # Run the focused E2E test for the feature.
@@ -228,6 +283,8 @@ When using the legacy pattern, create the Zola page manually at
 - [ ] Test includes `// Arrange`, `// Act`, and `// Assert` comments (or combined
   `// Arrange, Act, Assert` for declarative builders).
 - [ ] Assertions verify visible UI text or state, not internal implementation details.
+- [ ] A same-named PNG poster exists, shows a meaningful stable frame, and was refreshed
+  after the latest GIF change.
 - [ ] Focused E2E workflow passes with
   `TESTTY_GIF_MODE=check cargo nextest run --locked --profile ci -p agentty --test e2e test_{name}`.
 - [ ] Zola site validates with `prek run zola-check --all-files --hook-stage manual`
