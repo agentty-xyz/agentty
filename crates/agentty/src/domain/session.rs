@@ -552,12 +552,7 @@ impl Session {
     pub(crate) fn hydrate_summary_transient(&mut self) {
         if matches!(
             self.status,
-            Status::Draft
-                | Status::InProgress
-                | Status::Queued
-                | Status::Rebasing
-                | Status::Merging
-                | Status::Canceled
+            Status::Draft | Status::InProgress | Status::Queued | Status::Canceled
         ) {
             self.transient_messages
                 .retract(TransientMessageSlot::Summary);
@@ -589,10 +584,8 @@ impl Session {
 
     /// Applies turn-bound lifecycle cleanup after reducer-owned snapshot sync.
     pub(crate) fn reconcile_transient_messages(&mut self) {
-        if matches!(
-            self.status,
-            Status::InProgress | Status::Queued | Status::Rebasing | Status::Merging
-        ) && let Some(active_turn_position) = self.latest_user_prompt_position()
+        if matches!(self.status, Status::InProgress | Status::Queued)
+            && let Some(active_turn_position) = self.latest_user_prompt_position()
         {
             self.transient_messages
                 .clear_for_new_turn(active_turn_position);
@@ -1587,6 +1580,32 @@ pub(crate) mod tests {
 
         // Assert
         assert!(can_transition);
+    }
+
+    #[test]
+    fn test_reconcile_transient_messages_retains_summary_during_branch_workflow() {
+        // Arrange
+        let statuses = [Status::Rebasing, Status::Merging];
+
+        // Act
+        let sessions = statuses.map(|status| {
+            let mut session = SessionFixtureBuilder::new()
+                .status(status)
+                .summary(Some("Completed summary".to_string()))
+                .build();
+            session.reconcile_transient_messages();
+
+            session
+        });
+
+        // Assert
+        for session in sessions {
+            let summary = session
+                .transient_messages
+                .get(TransientMessageSlot::Summary)
+                .expect("branch workflow should retain the completed summary");
+            assert_eq!(summary.body.text(), "Completed summary");
+        }
     }
 
     #[test]

@@ -66,6 +66,22 @@ struct SessionOutputLayoutCacheKey {
     transcript: TranscriptFingerprint,
 }
 
+/// Cache key for the stable transcript body assembled above the dynamic
+/// session-status tail.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SessionOutputBodyCacheKey {
+    draft_prompt: TextFingerprint,
+    has_active_turn: bool,
+    is_stacked_child: bool,
+    markdown_render_version: u64,
+    output_width: u16,
+    queued_messages: TextFingerprint,
+    session_id: SessionId,
+    theme_cache_version: u64,
+    transient_message_version: u64,
+    transcript: TranscriptFingerprint,
+}
+
 /// Compact optional-text identity used by the layout cache key.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct TextFingerprint {
@@ -121,6 +137,7 @@ impl TextFingerprint {
 /// Compact identity for a typed transcript snapshot in the layout cache key.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct TranscriptFingerprint {
+    content_hash: u64,
     content_len: usize,
     is_some: bool,
     last_kind: &'static str,
@@ -134,6 +151,7 @@ impl TranscriptFingerprint {
     fn from_session(session: &Session) -> Self {
         let Some(transcript) = session.transcript.as_ref() else {
             return Self {
+                content_hash: 0,
                 content_len: 0,
                 is_some: false,
                 last_kind: "",
@@ -144,6 +162,7 @@ impl TranscriptFingerprint {
         let messages = transcript.messages();
         let Some(last_message) = messages.last() else {
             return Self {
+                content_hash: 0,
                 content_len: 0,
                 is_some: false,
                 last_kind: "",
@@ -153,6 +172,7 @@ impl TranscriptFingerprint {
         };
 
         Self {
+            content_hash: transcript.content_hash(),
             content_len: transcript.total_content_len(),
             is_some: true,
             last_kind: last_message.kind.as_str(),
@@ -180,6 +200,14 @@ pub(crate) struct SessionOutputLayout {
 struct SessionOutputLines {
     active_loader_line_index: Option<usize>,
     lines: Vec<Line<'static>>,
+    published_loader_line_index: Option<usize>,
+}
+
+/// Cached stable output body shared across status-tail changes such as a
+/// review-ready session entering the rebase workflow.
+#[derive(Clone)]
+struct SessionOutputBody {
+    lines: Arc<[Line<'static>]>,
     published_loader_line_index: Option<usize>,
 }
 
@@ -281,6 +309,23 @@ impl SessionOutputAssembly<'_> {
         }
     }
 
+    /// Appends the stable output body while leaving the status tail for the
+    /// current render state to assemble separately.
+    fn into_output_body(mut self) -> SessionOutputBody {
+        for block in SESSION_OUTPUT_BLOCK_ORDER {
+            if matches!(block, SessionOutputBlock::SessionTail) {
+                continue;
+            }
+
+            self.append_block(block);
+        }
+
+        SessionOutputBody {
+            lines: Arc::from(self.lines),
+            published_loader_line_index: self.published_loader_line_index,
+        }
+    }
+
     /// Appends one optional output block when its current inputs are visible.
     fn append_block(&mut self, block: SessionOutputBlock) {
         match block {
@@ -356,19 +401,11 @@ impl SessionOutputAssembly<'_> {
     }
 
     fn append_session_tail(&mut self) {
-        let review_loading_message = self
-            .session
-            .transient_messages
-            .get(TransientMessageSlot::Review)
-            .and_then(|message| match &message.body {
-                TransientMessageBody::Loading(message) => Some(message.as_str()),
-                TransientMessageBody::Markdown(_) | TransientMessageBody::Plain(_) => None,
-            });
         self.active_loader_line_index = SessionOutput::append_session_tail_lines(
             &mut self.lines,
             self.status,
             self.active_progress,
-            review_loading_message,
+            SessionOutput::review_loading_message(self.session),
         );
     }
 }
@@ -377,6 +414,12 @@ impl SessionOutputAssembly<'_> {
 struct SessionOutputLayoutCacheEntry {
     key: SessionOutputLayoutCacheKey,
     layout: SessionOutputLayout,
+}
+
+/// Cached stable output-body entry.
+struct SessionOutputBodyCacheEntry {
+    body: SessionOutputBody,
+    key: SessionOutputBodyCacheKey,
 }
 
 /// Bounded LRU cache for the fully assembled session output panel.
@@ -390,6 +433,7 @@ struct SessionOutputLayoutCacheEntry {
 /// is bounded by the same layout LRU and is removed once no cached layout
 /// remains for that session.
 pub struct SessionOutputLayoutCache {
+    body_entries: RefCell<VecDeque<SessionOutputBodyCacheEntry>>,
     entries: RefCell<VecDeque<SessionOutputLayoutCacheEntry>>,
     tachyon_loader_effects: RefCell<HashMap<SessionId, TachyonLoaderEffect>>,
 }
@@ -397,6 +441,9 @@ pub struct SessionOutputLayoutCache {
 impl Default for SessionOutputLayoutCache {
     fn default() -> Self {
         Self {
+            body_entries: RefCell::new(VecDeque::with_capacity(
+                SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT,
+            )),
             entries: RefCell::new(VecDeque::with_capacity(
                 SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT,
             )),
@@ -425,14 +472,50 @@ impl SessionOutputLayoutCache {
             return layout;
         }
 
+        let body_key = SessionOutput::body_cache_key(
+            session,
+            output_area,
+            markdown_render_cache.map_or(0, markdown::MarkdownRenderCache::version),
+        );
+        let body = self.cached_body(&body_key).unwrap_or_else(|| {
+            let body =
+                SessionOutput::derive_body(session, output_area, context, markdown_render_cache);
+            self.store_body_entry(SessionOutputBodyCacheEntry {
+                body: body.clone(),
+                key: body_key,
+            });
+
+            body
+        });
         let layout =
-            SessionOutput::derive_layout(session, output_area, context, markdown_render_cache);
+            SessionOutput::derive_layout_from_body(session, context.active_progress, &body);
         self.store_entry(SessionOutputLayoutCacheEntry {
             key,
             layout: layout.clone(),
         });
 
         layout
+    }
+
+    /// Returns a matching stable output body and promotes it in the body LRU.
+    fn cached_body(&self, key: &SessionOutputBodyCacheKey) -> Option<SessionOutputBody> {
+        let mut entries = self.body_entries.borrow_mut();
+        let entry_index = entries.iter().position(|entry| &entry.key == key)?;
+        let entry = entries.remove(entry_index)?;
+        let body = entry.body.clone();
+        entries.push_front(entry);
+
+        Some(body)
+    }
+
+    /// Stores one stable output body within the same bound as full layouts.
+    fn store_body_entry(&self, entry: SessionOutputBodyCacheEntry) {
+        let mut entries = self.body_entries.borrow_mut();
+        entries.push_front(entry);
+
+        while entries.len() > SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT {
+            entries.pop_back();
+        }
     }
 
     /// Returns cached layout for a matching entry and promotes it to the
@@ -649,6 +732,40 @@ impl<'a> SessionOutput<'a> {
         }
     }
 
+    /// Derives the stable transcript body without the dynamic status tail.
+    fn derive_body<'assembly>(
+        session: &'assembly Session,
+        output_area: Rect,
+        context: SessionOutputLineContext<'assembly>,
+        markdown_render_cache: Option<&'assembly markdown::MarkdownRenderCache>,
+    ) -> SessionOutputBody {
+        Self::output_assembly(session, output_area, context, markdown_render_cache)
+            .into_output_body()
+    }
+
+    /// Appends the current status tail to a cached transcript body.
+    fn derive_layout_from_body(
+        session: &Session,
+        active_progress: Option<&str>,
+        body: &SessionOutputBody,
+    ) -> SessionOutputLayout {
+        let mut lines = body.lines.iter().cloned().collect::<Vec<_>>();
+        let active_loader_line_index = Self::append_session_tail_lines(
+            &mut lines,
+            session.status,
+            active_progress,
+            Self::review_loading_message(session),
+        );
+        let line_count = u16::try_from(lines.len()).unwrap_or(u16::MAX);
+
+        SessionOutputLayout {
+            active_loader_line_index,
+            line_count,
+            published_loader_line_index: body.published_loader_line_index,
+            lines: Arc::from(lines),
+        }
+    }
+
     /// Builds the cache key for a fully assembled session-output layout.
     fn layout_cache_key(
         session: &Session,
@@ -673,6 +790,32 @@ impl<'a> SessionOutput<'a> {
             session_update_version: context.session_update_version,
             session_updated_at: session.updated_at,
             status: session.status,
+            theme_cache_version: style::active_theme_cache_version(),
+            transient_message_version: session.transient_messages.version(),
+            transcript: TranscriptFingerprint::from_session(session),
+        }
+    }
+
+    /// Builds the cache key for transcript content that remains stable while
+    /// workflow statuses and progress labels change below it.
+    fn body_cache_key(
+        session: &Session,
+        output_area: Rect,
+        markdown_render_version: u64,
+    ) -> SessionOutputBodyCacheKey {
+        let inner_width =
+            panel_inner_width(output_area, session_format::session_output_panel_borders());
+
+        SessionOutputBodyCacheKey {
+            draft_prompt: Self::draft_prompt_fingerprint(session),
+            has_active_turn: Self::status_has_active_turn(session.status),
+            is_stacked_child: session.is_stacked_child(),
+            markdown_render_version,
+            output_width: u16::try_from(inner_width).unwrap_or(u16::MAX),
+            queued_messages: TextFingerprint::from_texts(
+                session.queued_messages.iter().map(String::as_str),
+            ),
+            session_id: session.id.clone(),
             theme_cache_version: style::active_theme_cache_version(),
             transient_message_version: session.transient_messages.version(),
             transcript: TranscriptFingerprint::from_session(session),
@@ -709,12 +852,24 @@ impl<'a> SessionOutput<'a> {
     /// transcript notices for non-terminal review states, keeping workflow
     /// failures below the completed turn's summary/review content while
     /// terminal views keep their final transcript and summary display stable.
-    fn output_lines_with_metadata(
-        session: &Session,
+    fn output_lines_with_metadata<'assembly>(
+        session: &'assembly Session,
         output_area: Rect,
-        context: SessionOutputLineContext<'_>,
-        markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
+        context: SessionOutputLineContext<'assembly>,
+        markdown_render_cache: Option<&'assembly markdown::MarkdownRenderCache>,
     ) -> SessionOutputLines {
+        Self::output_assembly(session, output_area, context, markdown_render_cache)
+            .into_output_lines()
+    }
+
+    /// Prepares one output assembly shared by full-layout and stable-body
+    /// derivation paths.
+    fn output_assembly<'assembly>(
+        session: &'assembly Session,
+        output_area: Rect,
+        context: SessionOutputLineContext<'assembly>,
+        markdown_render_cache: Option<&'assembly markdown::MarkdownRenderCache>,
+    ) -> SessionOutputAssembly<'assembly> {
         let SessionOutputLineContext {
             active_progress,
             active_prompt_output: _,
@@ -739,7 +894,6 @@ impl<'a> SessionOutput<'a> {
             status,
             trailing_notice_section: transcript_sections.trailing_notice,
         }
-        .into_output_lines()
     }
 
     /// Trims trailing blank rows before appending a block separator.
@@ -790,6 +944,18 @@ impl<'a> SessionOutput<'a> {
         lines.push(Line::from(""));
 
         None
+    }
+
+    /// Returns the focused-review loading label rendered in the shared status
+    /// row rather than in the stable transcript body.
+    fn review_loading_message(session: &Session) -> Option<&str> {
+        session
+            .transient_messages
+            .get(TransientMessageSlot::Review)
+            .and_then(|message| match &message.body {
+                TransientMessageBody::Loading(message) => Some(message.as_str()),
+                TransientMessageBody::Markdown(_) | TransientMessageBody::Plain(_) => None,
+            })
     }
 
     /// Appends one explicitly typed transient message and returns whether it
@@ -900,16 +1066,19 @@ impl<'a> SessionOutput<'a> {
 
     /// Returns the start index for the latest active user prompt message.
     fn active_prompt_message_index(status: Status, messages: &[SessionMessage]) -> Option<usize> {
-        if !matches!(
-            status,
-            Status::InProgress | Status::Queued | Status::Rebasing | Status::Merging
-        ) {
+        if !Self::status_has_active_turn(status) {
             return None;
         }
 
         messages
             .iter()
             .rposition(|message| message.kind == SessionMessageKind::UserPrompt)
+    }
+
+    /// Returns whether one status represents a live or queued agent turn whose
+    /// latest prompt must remain separate from completed transcript content.
+    fn status_has_active_turn(status: Status) -> bool {
+        matches!(status, Status::InProgress | Status::Queued)
     }
 
     /// Returns the first index of the trailing workflow-notice suffix.
@@ -1576,6 +1745,71 @@ mod tests {
         // Assert
         assert_eq!(first_layout.line_count, second_layout.line_count);
         assert!(Arc::ptr_eq(&first_layout.lines, &second_layout.lines));
+    }
+
+    /// Verifies workflow-only status changes reuse the stable transcript body
+    /// and keep completed output ahead of its summary during a rebase.
+    #[test]
+    fn test_output_layout_cache_reuses_completed_body_during_rebase() {
+        // Arrange
+        let mut session = session_fixture();
+        set_conversation_transcript(
+            &mut session,
+            vec![
+                (SessionMessageKind::UserPrompt, "implement cache reuse"),
+                (
+                    SessionMessageKind::AssistantAnswer,
+                    "Completed answer stays stable.",
+                ),
+            ],
+        );
+        session.status = Status::Review;
+        session.summary = Some(summary_fixture());
+        session.reconcile_transient_messages();
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let output_layout_cache = SessionOutputLayoutCache::default();
+        let review_context = SessionOutputLineContext {
+            session_update_version: 7,
+            ..line_context()
+        };
+        let review_layout = output_layout_cache.layout(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            review_context,
+            Some(&markdown_render_cache),
+        );
+
+        // Act
+        session.status = Status::Rebasing;
+        let rebase_layout = output_layout_cache.layout(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            SessionOutputLineContext {
+                active_progress: Some("Rebasing branch"),
+                session_update_version: 8,
+                ..line_context()
+            },
+            Some(&markdown_render_cache),
+        );
+        let rebase_text = rebase_layout
+            .lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let answer_index = rebase_text
+            .find("Completed answer stays stable.")
+            .expect("completed answer should remain visible");
+        let summary_index = rebase_text
+            .find("Change Summary")
+            .expect("completed summary should remain visible");
+
+        // Assert
+        assert!(!Arc::ptr_eq(&review_layout.lines, &rebase_layout.lines));
+        assert_eq!(output_layout_cache.body_entries.borrow().len(), 1);
+        assert_eq!(output_layout_cache.entries.borrow().len(), 2);
+        assert!(answer_index < summary_index);
+        assert!(rebase_text.contains("Rebasing..."));
     }
 
     #[test]
