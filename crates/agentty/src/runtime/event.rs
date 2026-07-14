@@ -13,6 +13,7 @@ use tokio::sync::mpsc;
 use tracing::debug;
 
 use crate::app::{App, AppEvent};
+use crate::domain::input::InputCommand;
 use crate::presentation::app_mode::AppMode;
 use crate::runtime::{EventResult, FRAME_INTERVAL, PresentationState, key_handler, mode};
 
@@ -246,7 +247,7 @@ where
                 return handle_key_event(app, terminal, key).await;
             }
             Event::Paste(pasted_text) => {
-                process_paste_event(app, &pasted_text);
+                process_paste_event(app, &pasted_text).await;
                 app.mark_dirty();
             }
             _ => {}
@@ -265,14 +266,34 @@ fn is_press_key_event(key: KeyEvent) -> bool {
     key.kind == KeyEventKind::Press
 }
 
-/// Applies one pasted-text event to the active prompt or question input.
-fn process_paste_event(app: &mut App, pasted_text: &str) {
+/// Applies one pasted-text event to the active editable input.
+async fn process_paste_event(app: &mut App, pasted_text: &str) {
     if matches!(&app.mode, AppMode::Prompt { .. }) {
-        mode::prompt::handle_paste(app, pasted_text);
+        mode::prompt::handle_paste(app, pasted_text).await;
     }
 
     if matches!(&app.mode, AppMode::Question { .. }) {
         mode::question::handle_paste(app, pasted_text);
+    }
+
+    if let AppMode::PublishBranchInput {
+        input,
+        locked_upstream_ref: None,
+        ..
+    } = &mut app.mode
+    {
+        let text = mode::input_key::normalize_single_line_pasted_text(pasted_text);
+        input.apply(InputCommand::InsertText(text));
+    }
+
+    if matches!(&app.mode, AppMode::List)
+        && app
+            .settings
+            .is_launch_configuration_list_editor_input_active()
+    {
+        let text = mode::input_key::normalize_single_line_pasted_text(pasted_text);
+        app.settings
+            .apply_launch_configuration_input_command(InputCommand::InsertText(text));
     }
 }
 
@@ -531,6 +552,57 @@ mod tests {
                 selected_option_index: None,
                 ..
             } if input.text() == "custom\nanswer"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_process_paste_event_updates_publish_branch_input() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        app.mode = AppMode::PublishBranchInput {
+            default_branch_name: "wt/session".to_string(),
+            input: InputState::default(),
+            locked_upstream_ref: None,
+            publish_branch_action: crate::domain::session::PublishBranchAction::Push,
+            restore_view: crate::presentation::app_mode::ConfirmationViewMode {
+                scroll_offset: None,
+                session_id: "session-1".into(),
+            },
+        };
+
+        // Act
+        process_paste_event(&mut app, "review/shared-input\r\nignored").await;
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::PublishBranchInput { input, .. }
+                if input.text() == "review/shared-input"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_process_paste_event_updates_launch_configuration_input() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        app.tabs.set(crate::app::Tab::Settings);
+        for _ in 0..6 {
+            app.settings.next();
+        }
+        app.settings.handle_enter();
+        app.settings.start_adding_launch_configuration();
+
+        // Act
+        process_paste_event(&mut app, "cargo nextest run\r\nignored").await;
+
+        // Assert
+        let editor = app
+            .settings
+            .launch_configuration_list_editor()
+            .expect("launch-configuration editor should be open");
+        assert!(matches!(
+            editor.input,
+            Some(ref input) if input.text() == "cargo nextest run"
         ));
     }
 

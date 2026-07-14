@@ -413,6 +413,18 @@ unsupported clipboard backends report an inline paste error. Draft image files a
 removed when the composer is canceled, after a submitted turn finishes, and when a
 session is deleted or canceled.
 
+All editable inputs use the same character movement, word movement and deletion,
+line-editing, paste, `Ctrl+Z` undo, and `Ctrl+Y` / `Ctrl+Shift+Z` redo behavior. Prompt
+and clarification inputs extend that shared editor with multiline movement and their own
+completion or option actions. Undoing prompt text also recomputes slash-command and `@`
+lookup state; deleted image metadata remains available while undo history can restore
+its `[Image #n]` placeholder. Typing the same placeholder text manually does not attach
+the deleted image, and Agentty removes archived image files after their restoring edit
+falls out of bounded undo history. Attachment identity follows the exact placeholder
+occurrence, so duplicate lookalike text cannot substitute for the pasted token. Moving
+through prompt history with `Up` and `Down` preserves the attachment membership of the
+captured draft.
+
 `@` file lookups keep the raw `@path/to/file` text visible in the composer and
 transcript; the agent-facing prompt rewrites them to quoted `path/to/file` tokens.
 
@@ -471,7 +483,8 @@ save the highlighted value.
 The `Launch Configurations` row opens a command-list editor instead of a multiline text
 field. Use `a` to add an entry, `e` or `Enter` to edit the selected entry, `d` to delete
 it, and `J` / `K` to reorder entries. Add/edit mode uses a single-line input; `Enter`
-saves the command, and `Esc` cancels the input. Agentty trims commands and drops empty
+saves the command, `Esc` cancels the input, and the shared word-editing, paste,
+undo/redo, and cursor shortcuts remain available. Agentty trims commands and drops empty
 entries when saving. When multiple `Launch Configurations` entries are configured,
 pressing `o` in a session opens a selector popup.
 

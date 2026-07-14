@@ -1,12 +1,22 @@
 //! Shared input key handling utilities used by both prompt and question modes.
 //!
-//! Contains modifier predicates, cursor position queries, word-based cursor
-//! movement, word deletion, and text normalization that are common across
-//! text-input modes.
+//! Contains the canonical `KeyEvent` to semantic input-command mapping plus
+//! paste normalization shared across text-input modes.
 
 use crossterm::event::{self, KeyCode, KeyEvent};
 
-use crate::domain::input::InputState;
+use crate::domain::input::{InputCommand, InputState};
+
+/// Capabilities that differ between single-line and multiline inputs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct InputCapabilities {
+    multiline: bool,
+}
+
+impl InputCapabilities {
+    pub(crate) const MULTILINE: Self = Self { multiline: true };
+    pub(crate) const SINGLE_LINE: Self = Self { multiline: false };
+}
 
 // ---------------------------------------------------------------------------
 // Modifier predicates
@@ -34,7 +44,7 @@ pub(crate) fn is_alt_key(key: KeyEvent) -> bool {
 /// single character.
 ///
 /// `Option`+`Backspace` is reported as `Alt` on macOS terminals. `Shift` is
-/// also accepted for backward compatibility with existing behavior.
+/// also accepted for compatibility with the existing word-delete shortcut.
 /// `Cmd`+`Backspace` is handled separately as a whole-line deletion shortcut.
 pub(crate) fn is_word_delete_backspace(key: KeyEvent) -> bool {
     key.modifiers
@@ -89,6 +99,82 @@ pub(crate) fn is_control_newline_key(key: KeyEvent, character: char) -> bool {
     key.modifiers == event::KeyModifiers::CONTROL && matches!(character, 'j' | 'm' | '\n' | '\r')
 }
 
+/// Maps one terminal key event to the shared semantic input command.
+///
+/// Mode-specific handlers intercept submission, cancellation, completion,
+/// history navigation, and other contextual actions before using this map as
+/// their editing fallback.
+pub(crate) fn command_for_key(
+    key: KeyEvent,
+    capabilities: InputCapabilities,
+) -> Option<InputCommand> {
+    let command = match key.code {
+        KeyCode::Enter | KeyCode::Char('\r' | '\n')
+            if capabilities.multiline && should_insert_newline(key) =>
+        {
+            InputCommand::InsertNewline
+        }
+        KeyCode::Backspace if is_line_delete_backspace(key) => InputCommand::DeleteCurrentLine,
+        KeyCode::Backspace if is_word_delete_backspace(key) => InputCommand::DeleteWordBackward,
+        KeyCode::Backspace => InputCommand::DeleteBackward,
+        KeyCode::Delete => InputCommand::DeleteForward,
+        KeyCode::Left if key.modifiers.contains(event::KeyModifiers::SUPER) => {
+            InputCommand::MoveLineStart
+        }
+        KeyCode::Left
+            if key
+                .modifiers
+                .intersects(event::KeyModifiers::ALT | event::KeyModifiers::SHIFT) =>
+        {
+            InputCommand::MoveWordLeft
+        }
+        KeyCode::Left => InputCommand::MoveLeft,
+        KeyCode::Right if key.modifiers.contains(event::KeyModifiers::SUPER) => {
+            InputCommand::MoveLineEnd
+        }
+        KeyCode::Right
+            if key
+                .modifiers
+                .intersects(event::KeyModifiers::ALT | event::KeyModifiers::SHIFT) =>
+        {
+            InputCommand::MoveWordRight
+        }
+        KeyCode::Right => InputCommand::MoveRight,
+        KeyCode::Up => InputCommand::MoveUp,
+        KeyCode::Down => InputCommand::MoveDown,
+        KeyCode::Home => InputCommand::MoveHome,
+        KeyCode::End => InputCommand::MoveEnd,
+        KeyCode::Char('z' | 'Z')
+            if key.modifiers == event::KeyModifiers::CONTROL | event::KeyModifiers::SHIFT =>
+        {
+            InputCommand::Redo
+        }
+        KeyCode::Char('z') if is_control_key(key) => InputCommand::Undo,
+        KeyCode::Char('y') if is_control_key(key) => InputCommand::Redo,
+        KeyCode::Char('a') if is_control_key(key) => InputCommand::MoveLineStart,
+        KeyCode::Char('e') if is_control_key(key) => InputCommand::MoveLineEnd,
+        KeyCode::Char('f') if is_control_key(key) => InputCommand::MoveRight,
+        KeyCode::Char('b') if is_control_key(key) => InputCommand::MoveLeft,
+        KeyCode::Char('p') if is_control_key(key) => InputCommand::MoveUp,
+        KeyCode::Char('n') if is_control_key(key) => InputCommand::MoveDown,
+        KeyCode::Char('d') if is_control_key(key) => InputCommand::DeleteForward,
+        KeyCode::Char('k') if is_control_key(key) => InputCommand::DeleteToLineEnd,
+        KeyCode::Char('u') if is_control_key(key) => InputCommand::DeleteCurrentLine,
+        KeyCode::Char('w') if is_control_key(key) => InputCommand::DeleteWordBackward,
+        KeyCode::Char('b') if is_alt_key(key) => InputCommand::MoveWordLeft,
+        KeyCode::Char('f') if is_alt_key(key) => InputCommand::MoveWordRight,
+        KeyCode::Char(character)
+            if capabilities.multiline && is_control_newline_key(key, character) =>
+        {
+            InputCommand::InsertNewline
+        }
+        KeyCode::Char(character) if is_insertable_char_key(key) => InputCommand::Insert(character),
+        _ => return None,
+    };
+
+    Some(command)
+}
+
 // ---------------------------------------------------------------------------
 // Cursor position queries
 // ---------------------------------------------------------------------------
@@ -107,91 +193,6 @@ pub(crate) fn is_cursor_on_first_line(input: &InputState) -> bool {
 /// including when the input is empty.
 pub(crate) fn is_cursor_on_last_line(input: &InputState) -> bool {
     input.text().chars().skip(input.cursor).all(|ch| ch != '\n')
-}
-
-// ---------------------------------------------------------------------------
-// Word-based cursor movement
-// ---------------------------------------------------------------------------
-
-/// Moves the cursor to the start of the previous word, skipping adjacent
-/// whitespace separators.
-pub(crate) fn move_cursor_word_left(input: &mut InputState) {
-    if input.cursor == 0 {
-        return;
-    }
-
-    let characters: Vec<char> = input.text().chars().collect();
-    let mut cursor = input.cursor;
-
-    while cursor > 0 && characters[cursor - 1].is_whitespace() {
-        cursor -= 1;
-    }
-
-    while cursor > 0 && !characters[cursor - 1].is_whitespace() {
-        cursor -= 1;
-    }
-
-    input.cursor = cursor;
-}
-
-/// Moves the cursor to the start of the next word, skipping adjacent
-/// whitespace separators.
-pub(crate) fn move_cursor_word_right(input: &mut InputState) {
-    let characters: Vec<char> = input.text().chars().collect();
-    let mut cursor = input.cursor;
-
-    while cursor < characters.len() && !characters[cursor].is_whitespace() {
-        cursor += 1;
-    }
-
-    while cursor < characters.len() && characters[cursor].is_whitespace() {
-        cursor += 1;
-    }
-
-    input.cursor = cursor;
-}
-
-// ---------------------------------------------------------------------------
-// Word-based deletion
-// ---------------------------------------------------------------------------
-
-/// Returns the character range for deleting the previous word plus adjacent
-/// separator whitespace.
-///
-/// The three-step backward scan skips trailing whitespace, then the word body,
-/// then leading whitespace before the word. Returns `None` when the cursor is
-/// already at position zero.
-pub(crate) fn word_delete_range(text: &str, cursor: usize) -> Option<(usize, usize)> {
-    if cursor == 0 {
-        return None;
-    }
-
-    let characters: Vec<char> = text.chars().collect();
-    let mut start = cursor;
-
-    while start > 0 && characters[start - 1].is_whitespace() {
-        start -= 1;
-    }
-
-    while start > 0 && !characters[start - 1].is_whitespace() {
-        start -= 1;
-    }
-
-    while start > 0 && characters[start - 1].is_whitespace() {
-        start -= 1;
-    }
-
-    Some((start, cursor))
-}
-
-/// Deletes the previous word and any preceding whitespace from the input.
-///
-/// Matches the `Ctrl+w` / `Alt+Backspace` behavior: skip trailing whitespace,
-/// skip the word body, then skip leading whitespace before the word.
-pub(crate) fn delete_word_backward(input: &mut InputState) {
-    if let Some((start, end)) = word_delete_range(input.text(), input.cursor) {
-        input.replace_range(start, end, "");
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -221,6 +222,16 @@ pub(crate) fn normalize_pasted_text(pasted_text: &str) -> String {
     }
 
     normalized_text
+}
+
+/// Normalizes pasted text and keeps only its first line for a single-line
+/// input field.
+pub(crate) fn normalize_single_line_pasted_text(pasted_text: &str) -> String {
+    normalize_pasted_text(pasted_text)
+        .split('\n')
+        .next()
+        .unwrap_or_default()
+        .to_string()
 }
 
 #[cfg(test)]
@@ -451,18 +462,6 @@ mod tests {
     }
 
     #[test]
-    fn test_is_word_delete_backspace_accepts_shift_modifier() {
-        // Arrange
-        let key = KeyEvent::new(KeyCode::Backspace, event::KeyModifiers::SHIFT);
-
-        // Act
-        let result = is_word_delete_backspace(key);
-
-        // Assert
-        assert!(result);
-    }
-
-    #[test]
     fn test_is_word_delete_backspace_rejects_plain_backspace() {
         // Arrange
         let key = KeyEvent::new(KeyCode::Backspace, event::KeyModifiers::NONE);
@@ -595,109 +594,88 @@ mod tests {
         assert!(!is_cursor_on_last_line(&input));
     }
 
-    // -----------------------------------------------------------------------
-    // move_cursor_word_left / move_cursor_word_right
-    // -----------------------------------------------------------------------
+    #[test]
+    fn test_command_for_key_maps_shared_editing_shortcuts() {
+        // Arrange
+        let cases = [
+            (
+                KeyEvent::new(KeyCode::Backspace, event::KeyModifiers::ALT),
+                InputCommand::DeleteWordBackward,
+            ),
+            (
+                KeyEvent::new(KeyCode::Backspace, event::KeyModifiers::SHIFT),
+                InputCommand::DeleteWordBackward,
+            ),
+            (
+                KeyEvent::new(KeyCode::Left, event::KeyModifiers::SHIFT),
+                InputCommand::MoveWordLeft,
+            ),
+            (
+                KeyEvent::new(KeyCode::Right, event::KeyModifiers::SHIFT),
+                InputCommand::MoveWordRight,
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('w'), event::KeyModifiers::CONTROL),
+                InputCommand::DeleteWordBackward,
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('z'), event::KeyModifiers::CONTROL),
+                InputCommand::Undo,
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('y'), event::KeyModifiers::CONTROL),
+                InputCommand::Redo,
+            ),
+            (
+                KeyEvent::new(KeyCode::Delete, event::KeyModifiers::NONE),
+                InputCommand::DeleteForward,
+            ),
+            (
+                KeyEvent::new(KeyCode::Right, event::KeyModifiers::NONE),
+                InputCommand::MoveRight,
+            ),
+            (
+                KeyEvent::new(KeyCode::Home, event::KeyModifiers::NONE),
+                InputCommand::MoveHome,
+            ),
+            (
+                KeyEvent::new(KeyCode::End, event::KeyModifiers::NONE),
+                InputCommand::MoveEnd,
+            ),
+            (
+                KeyEvent::new(
+                    KeyCode::Char('Z'),
+                    event::KeyModifiers::CONTROL | event::KeyModifiers::SHIFT,
+                ),
+                InputCommand::Redo,
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('u'), event::KeyModifiers::CONTROL),
+                InputCommand::DeleteCurrentLine,
+            ),
+        ];
+
+        // Act & Assert
+        for (key, expected) in cases {
+            assert_eq!(
+                command_for_key(key, InputCapabilities::SINGLE_LINE),
+                Some(expected)
+            );
+        }
+    }
 
     #[test]
-    fn test_move_cursor_word_left_skips_whitespace_and_word() {
+    fn test_command_for_key_respects_multiline_capability() {
         // Arrange
-        let mut input = InputState::with_text("hello world".to_string());
-        input.cursor = "hello world".chars().count();
+        let key = KeyEvent::new(KeyCode::Enter, event::KeyModifiers::SHIFT);
 
         // Act
-        move_cursor_word_left(&mut input);
+        let multiline_command = command_for_key(key, InputCapabilities::MULTILINE);
+        let single_line_command = command_for_key(key, InputCapabilities::SINGLE_LINE);
 
         // Assert
-        assert_eq!(input.cursor, "hello ".chars().count());
-    }
-
-    #[test]
-    fn test_move_cursor_word_left_at_zero_is_noop() {
-        // Arrange
-        let mut input = InputState::with_text("hello".to_string());
-        input.cursor = 0;
-
-        // Act
-        move_cursor_word_left(&mut input);
-
-        // Assert
-        assert_eq!(input.cursor, 0);
-    }
-
-    #[test]
-    fn test_move_cursor_word_right_skips_word_and_whitespace() {
-        // Arrange
-        let mut input = InputState::with_text("hello world".to_string());
-        input.cursor = 0;
-
-        // Act
-        move_cursor_word_right(&mut input);
-
-        // Assert
-        assert_eq!(input.cursor, "hello ".chars().count());
-    }
-
-    #[test]
-    fn test_move_cursor_word_right_at_end_is_noop() {
-        // Arrange
-        let mut input = InputState::with_text("hello".to_string());
-        input.cursor = "hello".chars().count();
-
-        // Act
-        move_cursor_word_right(&mut input);
-
-        // Assert
-        assert_eq!(input.cursor, "hello".chars().count());
-    }
-
-    // -----------------------------------------------------------------------
-    // word_delete_range / delete_word_backward
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_word_delete_range_returns_none_at_zero() {
-        // Arrange & Act
-        let result = word_delete_range("hello world", 0);
-
-        // Assert
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_word_delete_range_deletes_last_word_and_separator() {
-        // Arrange & Act
-        let result = word_delete_range("hello brave world", "hello brave world".chars().count());
-
-        // Assert — range covers " world" (the trailing word and its preceding
-        // whitespace).
-        assert_eq!(result, Some((11, "hello brave world".chars().count())));
-    }
-
-    #[test]
-    fn test_delete_word_backward_removes_last_word_and_separator() {
-        // Arrange
-        let mut input = InputState::with_text("hello brave world".to_string());
-        input.cursor = "hello brave world".chars().count();
-
-        // Act
-        delete_word_backward(&mut input);
-
-        // Assert
-        assert_eq!(input.text(), "hello brave");
-    }
-
-    #[test]
-    fn test_delete_word_backward_noop_at_zero() {
-        // Arrange
-        let mut input = InputState::with_text("hello".to_string());
-        input.cursor = 0;
-
-        // Act
-        delete_word_backward(&mut input);
-
-        // Assert
-        assert_eq!(input.text(), "hello");
+        assert_eq!(multiline_command, Some(InputCommand::InsertNewline));
+        assert_eq!(single_line_command, None);
     }
 
     // -----------------------------------------------------------------------
@@ -726,5 +704,17 @@ mod tests {
 
         // Assert
         assert_eq!(normalized, pasted_text);
+    }
+
+    #[test]
+    fn test_normalize_single_line_pasted_text_keeps_first_line() {
+        // Arrange
+        let pasted_text = "feature/shared-input\r\nignored";
+
+        // Act
+        let normalized = normalize_single_line_pasted_text(pasted_text);
+
+        // Assert
+        assert_eq!(normalized, "feature/shared-input");
     }
 }

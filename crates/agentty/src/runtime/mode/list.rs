@@ -13,6 +13,7 @@ use crate::presentation::help_action::{
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState};
 use crate::runtime::EventResult;
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
+use crate::runtime::mode::input_key;
 
 /// Handles key input while the app is in list mode.
 ///
@@ -274,37 +275,17 @@ async fn handle_settings_launch_configuration_input(
         KeyCode::Esc => {
             app.settings.cancel_launch_configuration_input();
         }
-        KeyCode::Left => {
-            app.settings.move_launch_configuration_input_cursor_left();
+        _ => {
+            if let Some(command) =
+                input_key::command_for_key(key, input_key::InputCapabilities::SINGLE_LINE)
+            {
+                app.settings
+                    .apply_launch_configuration_input_command(command);
+            }
         }
-        KeyCode::Right => {
-            app.settings.move_launch_configuration_input_cursor_right();
-        }
-        KeyCode::Home => {
-            app.settings.move_launch_configuration_input_cursor_home();
-        }
-        KeyCode::End => {
-            app.settings.move_launch_configuration_input_cursor_end();
-        }
-        KeyCode::Backspace => {
-            app.settings.remove_launch_configuration_input_character();
-        }
-        KeyCode::Delete => {
-            app.settings.delete_launch_configuration_input_character();
-        }
-        KeyCode::Char(character) if is_settings_text_key(key) => {
-            app.settings
-                .append_launch_configuration_input_character(character);
-        }
-        _ => {}
     }
 
     Ok(EventResult::Continue)
-}
-
-/// Returns whether a key event should insert text into a settings string value.
-fn is_settings_text_key(key: KeyEvent) -> bool {
-    key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT
 }
 
 /// Starts the sync action that applies to the visible list tab.

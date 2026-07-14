@@ -1,4 +1,67 @@
-/// Editable text input with a character-based cursor index.
+use std::collections::VecDeque;
+
+/// Maximum number of text snapshots retained by each input's undo or redo
+/// stack.
+pub(crate) const INPUT_HISTORY_LIMIT: usize = 100;
+
+/// Semantic editing command shared by every text input.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InputCommand {
+    DeleteBackward,
+    DeleteCurrentLine,
+    DeleteForward,
+    DeleteToLineEnd,
+    DeleteWordBackward,
+    Insert(char),
+    InsertNewline,
+    InsertText(String),
+    MoveDown,
+    MoveEnd,
+    MoveHome,
+    MoveLeft,
+    MoveLineEnd,
+    MoveLineStart,
+    MoveRight,
+    MoveUp,
+    MoveWordLeft,
+    MoveWordRight,
+    Redo,
+    ReplaceRange {
+        start: usize,
+        end: usize,
+        text: String,
+    },
+    Undo,
+}
+
+/// Observable result of applying one [`InputCommand`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InputEffect {
+    CursorMoved,
+    TextChanged,
+    Unchanged,
+}
+
+/// Text and cursor snapshot stored by bounded undo/redo history.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct InputSnapshot {
+    cursor: usize,
+    revision: u64,
+    text: String,
+}
+
+/// Heap-backed history keeps `InputState` compact when it is embedded in
+/// larger application-mode snapshots.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct InputHistory {
+    next_revision: u64,
+    redo_stack: VecDeque<InputSnapshot>,
+    revision: u64,
+    undo_stack: VecDeque<InputSnapshot>,
+}
+
+/// Editable text input with a character-based cursor index and bounded edit
+/// history.
 ///
 /// The derived `Default` produces an empty input with the cursor at position
 /// `0` and an empty text buffer.
@@ -6,6 +69,7 @@
 pub struct InputState {
     /// Cursor position measured in Unicode scalar values from the start.
     pub cursor: usize,
+    history: Box<InputHistory>,
     text: String,
 }
 
@@ -14,7 +78,11 @@ impl InputState {
     pub fn with_text(text: String) -> Self {
         let cursor = text.chars().count();
 
-        Self { cursor, text }
+        Self {
+            cursor,
+            history: Box::default(),
+            text,
+        }
     }
 
     /// Returns the current text buffer.
@@ -22,9 +90,41 @@ impl InputState {
         &self.text
     }
 
+    /// Returns the stable identity of the current text snapshot.
+    pub fn revision(&self) -> u64 {
+        self.history.revision
+    }
+
+    /// Returns whether `revision` is the current snapshot or remains
+    /// reachable through bounded undo/redo history.
+    pub fn retains_revision(&self, revision: u64) -> bool {
+        self.history.revision == revision
+            || self
+                .history
+                .undo_stack
+                .iter()
+                .chain(&self.history.redo_stack)
+                .any(|snapshot| snapshot.revision == revision)
+    }
+
+    /// Replaces the entire buffer with a fresh revision and clears edit
+    /// history, preserving revision uniqueness for external state tracking.
+    pub fn reset_text(&mut self, text: String) {
+        self.cursor = text.chars().count();
+        self.history.redo_stack.clear();
+        self.history.undo_stack.clear();
+        self.history.next_revision = self.history.next_revision.saturating_add(1);
+        self.history.revision = self.history.next_revision;
+        self.text = text;
+    }
+
     /// Drains and returns the text buffer, then resets the cursor to `0`.
     pub fn take_text(&mut self) -> String {
         self.cursor = 0;
+        self.history.redo_stack.clear();
+        self.history.undo_stack.clear();
+        self.history.next_revision = self.history.next_revision.saturating_add(1);
+        self.history.revision = self.history.next_revision;
 
         std::mem::take(&mut self.text)
     }
@@ -36,9 +136,11 @@ impl InputState {
 
     /// Inserts one character at the cursor and advances the cursor by one.
     pub fn insert_char(&mut self, ch: char) {
+        let snapshot = self.snapshot();
         let byte_offset = self.byte_offset();
         self.text.insert(byte_offset, ch);
         self.cursor += 1;
+        self.record_text_change(snapshot);
     }
 
     /// Inserts `text` at the cursor and moves the cursor to the end of the
@@ -48,9 +150,11 @@ impl InputState {
             return;
         }
 
+        let snapshot = self.snapshot();
         let byte_offset = self.byte_offset();
         self.text.insert_str(byte_offset, text);
         self.cursor += text.chars().count();
+        self.record_text_change(snapshot);
     }
 
     /// Inserts a newline at the cursor position.
@@ -64,10 +168,12 @@ impl InputState {
             return;
         }
 
+        let snapshot = self.snapshot();
         let start = self.byte_offset_at(self.cursor - 1);
         let end = self.byte_offset();
         self.text.replace_range(start..end, "");
         self.cursor -= 1;
+        self.record_text_change(snapshot);
     }
 
     /// Deletes the entire current line including one adjacent newline
@@ -110,9 +216,20 @@ impl InputState {
             return;
         }
 
+        let snapshot = self.snapshot();
         let start = self.byte_offset();
         let end = self.byte_offset_at(self.cursor + 1);
         self.text.replace_range(start..end, "");
+        self.record_text_change(snapshot);
+    }
+
+    /// Deletes the previous word and adjacent separator whitespace.
+    pub fn delete_word_backward(&mut self) {
+        let Some((start, end)) = self.word_delete_range() else {
+            return;
+        };
+
+        self.replace_range(start, end, "");
     }
 
     /// Moves the cursor one character to the left.
@@ -204,6 +321,42 @@ impl InputState {
         self.cursor = self.text.chars().count();
     }
 
+    /// Moves the cursor to the start of the previous word.
+    pub fn move_word_left(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+
+        let characters: Vec<char> = self.text.chars().collect();
+        let mut cursor = self.cursor;
+
+        while cursor > 0 && characters[cursor - 1].is_whitespace() {
+            cursor -= 1;
+        }
+
+        while cursor > 0 && !characters[cursor - 1].is_whitespace() {
+            cursor -= 1;
+        }
+
+        self.cursor = cursor;
+    }
+
+    /// Moves the cursor to the start of the next word.
+    pub fn move_word_right(&mut self) {
+        let characters: Vec<char> = self.text.chars().collect();
+        let mut cursor = self.cursor;
+
+        while cursor < characters.len() && !characters[cursor].is_whitespace() {
+            cursor += 1;
+        }
+
+        while cursor < characters.len() && characters[cursor].is_whitespace() {
+            cursor += 1;
+        }
+
+        self.cursor = cursor;
+    }
+
     /// Moves the cursor to the start of the current line.
     ///
     /// Scans backward from the cursor to the nearest preceding newline (or
@@ -247,10 +400,51 @@ impl InputState {
         }
 
         if line_end > self.cursor {
+            let snapshot = self.snapshot();
             let start_byte = self.byte_offset();
             let end_byte = self.byte_offset_at(line_end);
             self.text.replace_range(start_byte..end_byte, "");
+            self.record_text_change(snapshot);
         }
+    }
+
+    /// Returns the character range removed by [`Self::delete_to_line_end`].
+    #[must_use]
+    pub fn line_end_delete_range(&self) -> Option<(usize, usize)> {
+        let characters: Vec<char> = self.text.chars().collect();
+        let mut line_end = self.cursor;
+
+        while line_end < characters.len() && characters[line_end] != '\n' {
+            line_end += 1;
+        }
+
+        (line_end > self.cursor).then_some((self.cursor, line_end))
+    }
+
+    /// Returns the character range for deleting the previous word and its
+    /// adjacent separator whitespace.
+    #[must_use]
+    pub fn word_delete_range(&self) -> Option<(usize, usize)> {
+        if self.cursor == 0 {
+            return None;
+        }
+
+        let characters: Vec<char> = self.text.chars().collect();
+        let mut start = self.cursor;
+
+        while start > 0 && characters[start - 1].is_whitespace() {
+            start -= 1;
+        }
+
+        while start > 0 && !characters[start - 1].is_whitespace() {
+            start -= 1;
+        }
+
+        while start > 0 && characters[start - 1].is_whitespace() {
+            start -= 1;
+        }
+
+        Some((start, self.cursor))
     }
 
     /// Extracts the `@query` text at the current cursor position.
@@ -264,10 +458,76 @@ impl InputState {
     /// Replaces characters in `[start_char..end_char)` with `replacement`
     /// and moves the cursor to the end of the inserted text.
     pub fn replace_range(&mut self, start_char: usize, end_char: usize, replacement: &str) {
+        let snapshot = self.snapshot();
         let start_byte = self.byte_offset_at(start_char);
         let end_byte = self.byte_offset_at(end_char);
         self.text.replace_range(start_byte..end_byte, replacement);
         self.cursor = start_char + replacement.chars().count();
+        self.record_text_change(snapshot);
+    }
+
+    /// Applies one shared semantic editing command.
+    pub fn apply(&mut self, command: InputCommand) -> InputEffect {
+        let cursor_before = self.cursor;
+        let revision_before = self.history.revision;
+
+        match command {
+            InputCommand::DeleteBackward => self.delete_backward(),
+            InputCommand::DeleteCurrentLine => self.delete_current_line(),
+            InputCommand::DeleteForward => self.delete_forward(),
+            InputCommand::DeleteToLineEnd => self.delete_to_line_end(),
+            InputCommand::DeleteWordBackward => self.delete_word_backward(),
+            InputCommand::Insert(character) => self.insert_char(character),
+            InputCommand::InsertNewline => self.insert_newline(),
+            InputCommand::InsertText(text) => self.insert_text(&text),
+            InputCommand::MoveDown => self.move_down(),
+            InputCommand::MoveEnd => self.move_end(),
+            InputCommand::MoveHome => self.move_home(),
+            InputCommand::MoveLeft => self.move_left(),
+            InputCommand::MoveLineEnd => self.move_line_end(),
+            InputCommand::MoveLineStart => self.move_line_start(),
+            InputCommand::MoveRight => self.move_right(),
+            InputCommand::MoveUp => self.move_up(),
+            InputCommand::MoveWordLeft => self.move_word_left(),
+            InputCommand::MoveWordRight => self.move_word_right(),
+            InputCommand::Redo => self.redo(),
+            InputCommand::ReplaceRange { start, end, text } => {
+                self.replace_range(start, end, &text);
+            }
+            InputCommand::Undo => self.undo(),
+        }
+
+        if self.history.revision != revision_before {
+            return InputEffect::TextChanged;
+        }
+
+        if self.cursor != cursor_before {
+            return InputEffect::CursorMoved;
+        }
+
+        InputEffect::Unchanged
+    }
+
+    /// Restores the most recent text mutation and cursor position.
+    pub fn undo(&mut self) {
+        let Some(snapshot) = self.history.undo_stack.pop_back() else {
+            return;
+        };
+
+        let current = self.snapshot();
+        Self::push_bounded(&mut self.history.redo_stack, current);
+        self.restore(snapshot);
+    }
+
+    /// Reapplies the most recently undone text mutation.
+    pub fn redo(&mut self) {
+        let Some(snapshot) = self.history.redo_stack.pop_back() else {
+            return;
+        };
+
+        let current = self.snapshot();
+        Self::push_bounded(&mut self.history.undo_stack, current);
+        self.restore(snapshot);
     }
 
     fn byte_offset(&self) -> usize {
@@ -298,6 +558,39 @@ impl InputState {
         }
 
         (line, column)
+    }
+
+    fn snapshot(&self) -> InputSnapshot {
+        InputSnapshot {
+            cursor: self.cursor,
+            revision: self.history.revision,
+            text: self.text.clone(),
+        }
+    }
+
+    fn record_text_change(&mut self, snapshot: InputSnapshot) {
+        if self.text == snapshot.text {
+            return;
+        }
+
+        Self::push_bounded(&mut self.history.undo_stack, snapshot);
+        self.history.redo_stack.clear();
+        self.history.next_revision = self.history.next_revision.saturating_add(1);
+        self.history.revision = self.history.next_revision;
+    }
+
+    fn push_bounded(stack: &mut VecDeque<InputSnapshot>, snapshot: InputSnapshot) {
+        if stack.len() == INPUT_HISTORY_LIMIT {
+            let _ = stack.pop_front();
+        }
+
+        stack.push_back(snapshot);
+    }
+
+    fn restore(&mut self, snapshot: InputSnapshot) {
+        self.cursor = snapshot.cursor;
+        self.history.revision = snapshot.revision;
+        self.text = snapshot.text;
     }
 }
 
@@ -557,5 +850,168 @@ mod tests {
         // Assert
         assert_eq!(state.text(), "hello");
         assert_eq!(state.cursor, "hello".chars().count());
+    }
+
+    #[test]
+    fn test_word_movement_and_deletion_share_input_state_behavior() {
+        // Arrange
+        let mut state = InputState::with_text("hello brave world".to_string());
+
+        // Act
+        state.move_word_left();
+        let word_start = state.cursor;
+        state.move_end();
+        state.delete_word_backward();
+
+        // Assert
+        assert_eq!(word_start, "hello brave ".chars().count());
+        assert_eq!(state.text(), "hello brave");
+        assert_eq!(state.cursor, "hello brave".chars().count());
+    }
+
+    #[test]
+    fn test_word_operations_handle_buffer_start_and_trailing_whitespace() {
+        // Arrange
+        let mut state = InputState::with_text("hello  ".to_string());
+
+        // Act
+        state.move_word_left();
+        let word_start = state.cursor;
+        state.move_home();
+        state.move_word_left();
+        state.delete_word_backward();
+
+        // Assert
+        assert_eq!(word_start, 0);
+        assert_eq!(state.cursor, 0);
+        assert_eq!(state.text(), "hello  ");
+    }
+
+    #[test]
+    fn test_delete_ranges_report_line_end_and_whitespace_prefixed_word() {
+        // Arrange
+        let mut state = InputState::with_text("first line\nsecond word  ".to_string());
+        state.cursor = "first ".chars().count();
+
+        // Act
+        let line_end_range = state.line_end_delete_range();
+        state.move_end();
+        let word_range = state.word_delete_range();
+        state.move_home();
+        let empty_word_range = state.word_delete_range();
+
+        // Assert
+        assert_eq!(line_end_range, Some((6, 10)));
+        assert_eq!(word_range, Some((17, 24)));
+        assert_eq!(empty_word_range, None);
+    }
+
+    #[test]
+    fn test_apply_reports_effect_from_revision_and_cursor_changes() {
+        // Arrange
+        let mut state = InputState::with_text("hello".to_string());
+
+        // Act
+        let cursor_effect = state.apply(InputCommand::MoveLeft);
+        let text_effect = state.apply(InputCommand::Insert('!'));
+        let home_effect = state.apply(InputCommand::MoveHome);
+        let end_effect = state.apply(InputCommand::MoveEnd);
+        let unchanged_effect = state.apply(InputCommand::MoveRight);
+
+        // Assert
+        assert_eq!(cursor_effect, InputEffect::CursorMoved);
+        assert_eq!(text_effect, InputEffect::TextChanged);
+        assert_eq!(home_effect, InputEffect::CursorMoved);
+        assert_eq!(end_effect, InputEffect::CursorMoved);
+        assert_eq!(unchanged_effect, InputEffect::Unchanged);
+    }
+
+    #[test]
+    fn test_noop_edit_and_empty_undo_leave_input_unchanged() {
+        // Arrange
+        let mut state = InputState::with_text("hello".to_string());
+        let revision = state.revision();
+
+        // Act
+        state.replace_range(0, 0, "");
+        state.undo();
+
+        // Assert
+        assert_eq!(state.text(), "hello");
+        assert_eq!(state.revision(), revision);
+    }
+
+    #[test]
+    fn test_undo_and_redo_restore_text_and_cursor() {
+        // Arrange
+        let mut state = InputState::with_text("helo".to_string());
+        state.cursor = 3;
+        state.insert_char('l');
+
+        // Act
+        state.undo();
+
+        // Assert
+        assert_eq!(state.text(), "helo");
+        assert_eq!(state.cursor, 3);
+
+        // Act
+        state.redo();
+
+        // Assert
+        assert_eq!(state.text(), "hello");
+        assert_eq!(state.cursor, 4);
+    }
+
+    #[test]
+    fn test_undo_and_redo_restore_stable_revision_identity() {
+        // Arrange
+        let mut state = InputState::with_text("first".to_string());
+        let first_revision = state.revision();
+        state.insert_text(" second");
+        let second_revision = state.revision();
+
+        // Act
+        state.undo();
+
+        // Assert
+        assert_eq!(state.revision(), first_revision);
+        assert!(state.retains_revision(second_revision));
+
+        // Act
+        state.redo();
+
+        // Assert
+        assert_eq!(state.revision(), second_revision);
+        assert!(state.retains_revision(first_revision));
+    }
+
+    #[test]
+    fn test_new_edit_after_undo_clears_redo_history() {
+        // Arrange
+        let mut state = InputState::default();
+        state.insert_text("first");
+        state.undo();
+        state.insert_text("second");
+
+        // Act
+        state.redo();
+
+        // Assert
+        assert_eq!(state.text(), "second");
+    }
+
+    #[test]
+    fn test_pasted_text_is_one_undo_step() {
+        // Arrange
+        let mut state = InputState::with_text("prefix ".to_string());
+        state.insert_text("pasted text");
+
+        // Act
+        state.undo();
+
+        // Assert
+        assert_eq!(state.text(), "prefix ");
+        assert_eq!(state.cursor, "prefix ".chars().count());
     }
 }

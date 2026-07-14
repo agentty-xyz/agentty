@@ -10,13 +10,13 @@ use crate::app::prompt_intent::{
     PromptIntentContext, PromptIntentInputMode, PromptIntentSessionMode,
 };
 use crate::domain::agent::AgentKind;
-use crate::domain::input::InputState;
+use crate::domain::input::{InputCommand, InputEffect, InputState};
 use crate::domain::session::SessionId;
 use crate::presentation::app_mode::{AppMode, ChatFocus};
 use crate::presentation::prompt::{
     PromptAtMentionState, apply_prompt_delete_range as apply_prompt_delete_range_components,
-    current_line_delete_range as prompt_current_line_delete_range, insert_prompt_character,
-    insert_prompt_text, prompt_slash_option_count,
+    current_line_delete_range as prompt_current_line_delete_range, insert_prompt_text,
+    prompt_slash_option_count,
 };
 use crate::runtime::EventResult;
 use crate::runtime::mode::chat_scroll::{self, ChatScrollMetrics};
@@ -119,7 +119,7 @@ where
         reset_prompt_slash_state(app);
     }
 
-    if prompt_context.is_at_mention() && handle_at_mention_key(app, key) {
+    if prompt_context.is_at_mention() && handle_at_mention_key(app, key).await {
         return Ok(EventResult::Continue);
     }
 
@@ -212,11 +212,13 @@ where
 /// Handles keys when the at-mention dropdown is active.
 ///
 /// Returns `true` if the key was consumed by at-mention logic.
-fn handle_at_mention_key(app: &mut App, key: KeyEvent) -> bool {
+async fn handle_at_mention_key(app: &mut App, key: KeyEvent) -> bool {
     match key.code {
         KeyCode::Esc => dismiss_at_mention(app),
-        KeyCode::Enter if !input_key::should_insert_newline(key) => handle_at_mention_select(app),
-        KeyCode::Tab => handle_at_mention_select(app),
+        KeyCode::Enter if !input_key::should_insert_newline(key) => {
+            handle_at_mention_select(app).await;
+        }
+        KeyCode::Tab => handle_at_mention_select(app).await,
         KeyCode::Up => handle_at_mention_up(app),
         KeyCode::Down => handle_at_mention_down(app),
         _ => return false,
@@ -236,18 +238,12 @@ where
     B::Error: std::error::Error + Send + Sync + 'static,
 {
     match key.code {
-        KeyCode::Enter | KeyCode::Char('\r' | '\n') if input_key::should_insert_newline(key) => {
-            reset_prompt_history_navigation(app);
-            if let AppMode::Prompt { input, .. } = &mut app.mode {
-                input.insert_newline();
-            }
+        KeyCode::Enter | KeyCode::Char('\r' | '\n') if !input_key::should_insert_newline(key) => {
+            handle_prompt_submit_key(app, prompt_context).await;
         }
-        KeyCode::Enter => handle_prompt_submit_key(app, prompt_context).await,
         KeyCode::Esc | KeyCode::Char('c') if is_prompt_cancel_key(key) => {
             handle_prompt_cancel_key(app, prompt_context).await;
         }
-        KeyCode::Left => handle_prompt_left(app, key),
-        KeyCode::Right => handle_prompt_right(app, key),
         KeyCode::Up => handle_prompt_up_key(app, terminal, prompt_context)?,
         KeyCode::Down => handle_prompt_down_key(app, terminal, prompt_context)?,
         KeyCode::Char('k') if prompt_context.is_slash_command() && is_plain_char_key(key, 'k') => {
@@ -256,31 +252,8 @@ where
         KeyCode::Char('j') if prompt_context.is_slash_command() && is_plain_char_key(key, 'j') => {
             handle_prompt_down_key(app, terminal, prompt_context)?;
         }
-        KeyCode::Home => handle_prompt_input(app, InputState::move_home),
-        KeyCode::End => handle_prompt_input(app, InputState::move_end),
-        KeyCode::Backspace => handle_prompt_backspace(app, key),
-        KeyCode::Delete => handle_prompt_delete(app),
-        KeyCode::Char(character) if input_key::is_control_newline_key(key, character) => {
-            reset_prompt_history_navigation(app);
-            if let AppMode::Prompt { input, .. } = &mut app.mode {
-                input.insert_newline();
-            }
-        }
-        KeyCode::Char('u') if input_key::is_control_key(key) => handle_prompt_line_delete(app),
         KeyCode::Char('v' | 'V') if is_prompt_image_paste_key(key) => {
             handle_prompt_image_paste(app, prompt_context).await;
-        }
-        KeyCode::Char('a') if input_key::is_control_key(key) => {
-            handle_prompt_input(app, InputState::move_line_start);
-        }
-        KeyCode::Char('e') if input_key::is_control_key(key) => {
-            handle_prompt_input(app, InputState::move_line_end);
-        }
-        KeyCode::Char('f') if input_key::is_control_key(key) => {
-            handle_prompt_input(app, InputState::move_right);
-        }
-        KeyCode::Char('b') if input_key::is_control_key(key) => {
-            handle_prompt_input(app, InputState::move_left);
         }
         KeyCode::Char('p') if input_key::is_control_key(key) => {
             handle_prompt_up_key(app, terminal, prompt_context)?;
@@ -288,38 +261,101 @@ where
         KeyCode::Char('n') if input_key::is_control_key(key) => {
             handle_prompt_down_key(app, terminal, prompt_context)?;
         }
-        KeyCode::Char('d') if input_key::is_control_key(key) => handle_prompt_delete(app),
-        KeyCode::Char('k') if input_key::is_control_key(key) => handle_prompt_kill_to_line_end(app),
-        KeyCode::Char('w') if input_key::is_control_key(key) => handle_prompt_word_delete(app),
-        KeyCode::Char('b') if input_key::is_alt_key(key) => {
-            if let AppMode::Prompt { input, .. } = &mut app.mode {
-                input_key::move_cursor_word_left(input);
+        _ => {
+            if let Some(command) =
+                input_key::command_for_key(key, input_key::InputCapabilities::MULTILINE)
+            {
+                apply_prompt_input_command(app, command).await;
             }
-
-            sync_prompt_at_mention_state(app);
         }
-        KeyCode::Char('f') if input_key::is_alt_key(key) => {
-            if let AppMode::Prompt { input, .. } = &mut app.mode {
-                input_key::move_cursor_word_right(input);
-            }
-
-            sync_prompt_at_mention_state(app);
-        }
-        KeyCode::Char(character) => handle_prompt_char(app, character),
-        _ => {}
     }
 
     Ok(())
 }
 
-/// Applies one `InputState` method to the prompt input and keeps `@` mention
-/// state aligned with the updated cursor location.
-fn handle_prompt_input(app: &mut App, action: fn(&mut InputState)) {
-    if let AppMode::Prompt { input, .. } = &mut app.mode {
-        action(input);
+/// Applies one shared input command while preserving prompt-specific
+/// attachment, history, slash-command, and `@`-mention behavior.
+async fn apply_prompt_input_command(app: &mut App, command: InputCommand) {
+    let delete_range = if let AppMode::Prompt { input, .. } = &app.mode {
+        prompt_command_delete_range(input, &command)
+    } else {
+        None
+    };
+
+    if let Some((start, end)) = delete_range {
+        apply_prompt_delete_range(app, start, end).await;
+
+        return;
     }
 
+    let is_history_restore = matches!(command, InputCommand::Undo | InputCommand::Redo);
+    let mut unreachable_attachments = Vec::new();
+    if let AppMode::Prompt {
+        attachment_state,
+        history_state,
+        input,
+        slash_state,
+        ..
+    } = &mut app.mode
+    {
+        attachment_state.remember_current_revision(input);
+        let edit_span = prompt_command_edit_span(input, &command);
+        let effect = input.apply(command);
+        if effect == InputEffect::TextChanged {
+            if is_history_restore {
+                attachment_state.sync_after_history_restore(input);
+            } else if let Some((old_start, old_end, new_end)) = edit_span {
+                attachment_state.sync_after_edit(input, old_start, old_end, new_end);
+            }
+            unreachable_attachments = attachment_state.prune_unreachable(input);
+            history_state.reset_navigation();
+            slash_state.reset();
+        }
+    }
+
+    app.cleanup_prompt_attachments(unreachable_attachments)
+        .await;
     sync_prompt_at_mention_state(app);
+}
+
+/// Returns the prompt-aware range for shared deletion commands.
+fn prompt_command_delete_range(
+    input: &InputState,
+    command: &InputCommand,
+) -> Option<(usize, usize)> {
+    match command {
+        InputCommand::DeleteBackward => {
+            (input.cursor > 0).then_some((input.cursor - 1, input.cursor))
+        }
+        InputCommand::DeleteCurrentLine => prompt_current_line_delete_range(input),
+        InputCommand::DeleteForward => (input.cursor < input.text().chars().count())
+            .then_some((input.cursor, input.cursor + 1)),
+        InputCommand::DeleteToLineEnd => input.line_end_delete_range(),
+        InputCommand::DeleteWordBackward => input.word_delete_range(),
+        _ => None,
+    }
+}
+
+/// Returns the exact character span replaced by one non-deletion text
+/// command before that command mutates the input.
+fn prompt_command_edit_span(
+    input: &InputState,
+    command: &InputCommand,
+) -> Option<(usize, usize, usize)> {
+    match command {
+        InputCommand::Insert(_) | InputCommand::InsertNewline => {
+            Some((input.cursor, input.cursor, input.cursor + 1))
+        }
+        InputCommand::InsertText(text) => Some((
+            input.cursor,
+            input.cursor,
+            input.cursor + text.chars().count(),
+        )),
+        InputCommand::ReplaceRange { start, end, text } => {
+            Some((*start, *end, *start + text.chars().count()))
+        }
+        _ => None,
+    }
 }
 
 /// Inserts pasted content into the prompt input while normalizing mixed
@@ -327,7 +363,7 @@ fn handle_prompt_input(app: &mut App, action: fn(&mut InputState)) {
 ///
 /// Pastes are dropped while the chat transcript holds focus so scrolling the
 /// conversation never rewrites the typed draft.
-pub(crate) fn handle_paste(app: &mut App, pasted_text: &str) {
+pub(crate) async fn handle_paste(app: &mut App, pasted_text: &str) {
     let normalized_text = input_key::normalize_pasted_text(pasted_text);
     if normalized_text.is_empty() {
         return;
@@ -341,16 +377,24 @@ pub(crate) fn handle_paste(app: &mut App, pasted_text: &str) {
         return;
     }
 
+    let mut unreachable_attachments = Vec::new();
     if let AppMode::Prompt {
+        attachment_state,
         history_state,
         input,
         slash_state,
         ..
     } = &mut app.mode
     {
+        attachment_state.remember_current_revision(input);
+        let insert_start = input.cursor;
         insert_prompt_text(input, history_state, slash_state, &normalized_text);
+        attachment_state.sync_after_edit(input, insert_start, insert_start, input.cursor);
+        unreachable_attachments = attachment_state.prune_unreachable(input);
     }
 
+    app.cleanup_prompt_attachments(unreachable_attachments)
+        .await;
     sync_prompt_at_mention_state(app);
 }
 
@@ -469,12 +513,6 @@ fn reset_prompt_slash_state(app: &mut App) {
     }
 }
 
-fn reset_prompt_history_navigation(app: &mut App) {
-    if let AppMode::Prompt { history_state, .. } = &mut app.mode {
-        history_state.reset_navigation();
-    }
-}
-
 fn is_prompt_cancel_key(key: KeyEvent) -> bool {
     key.code == KeyCode::Esc || key.modifiers.contains(event::KeyModifiers::CONTROL)
 }
@@ -562,6 +600,7 @@ where
 
 fn navigate_prompt_history_up(app: &mut App) {
     if let AppMode::Prompt {
+        attachment_state,
         history_state,
         input,
         ..
@@ -575,17 +614,21 @@ fn navigate_prompt_history_up(app: &mut App) {
             selected_index.saturating_sub(1)
         } else {
             history_state.draft_text = Some(input.text().to_string());
+            attachment_state.remember_current_revision(input);
+            history_state.draft_input_revision = Some(input.revision());
 
             history_state.entries.len().saturating_sub(1)
         };
 
         history_state.selected_index = Some(next_index);
-        *input = InputState::with_text(history_state.entries[next_index].clone());
+        attachment_state.archive_current();
+        input.reset_text(history_state.entries[next_index].clone());
     }
 }
 
 fn navigate_prompt_history_down(app: &mut App) {
     if let AppMode::Prompt {
+        attachment_state,
         history_state,
         input,
         ..
@@ -599,13 +642,20 @@ fn navigate_prompt_history_down(app: &mut App) {
             let next_index = selected_index + 1;
 
             history_state.selected_index = Some(next_index);
-            *input = InputState::with_text(history_state.entries[next_index].clone());
+            attachment_state.archive_current();
+            input.reset_text(history_state.entries[next_index].clone());
 
             return;
         }
 
         history_state.selected_index = None;
-        *input = InputState::with_text(history_state.draft_text.take().unwrap_or_default());
+        let draft_input_revision = history_state.draft_input_revision.take();
+        input.reset_text(history_state.draft_text.take().unwrap_or_default());
+        if let Some(draft_input_revision) = draft_input_revision {
+            attachment_state.restore_draft_revision(draft_input_revision, input);
+        } else {
+            attachment_state.archive_current();
+        }
     }
 }
 
@@ -687,139 +737,10 @@ where
     Ok(terminal_width.saturating_sub(2))
 }
 
-/// Moves the prompt cursor left with modifier-aware behavior.
-///
-/// `Cmd`+`Left` (`SUPER`) moves to the start of the current line,
-/// `Option`+`Left` (`ALT`) and `Shift`+`Left` move to the previous word
-/// start, and a plain `Left` moves one character. When the move lands inside
-/// an existing `@path` token, the file dropdown is reopened.
-fn handle_prompt_left(app: &mut App, key: KeyEvent) {
-    if let AppMode::Prompt { input, .. } = &mut app.mode {
-        if key.modifiers.contains(event::KeyModifiers::SUPER) {
-            input.move_line_start();
-        } else if key
-            .modifiers
-            .intersects(event::KeyModifiers::ALT | event::KeyModifiers::SHIFT)
-        {
-            input_key::move_cursor_word_left(input);
-        } else {
-            input.move_left();
-        }
-    }
-
-    sync_prompt_at_mention_state(app);
-}
-
-/// Moves the prompt cursor right with modifier-aware behavior.
-///
-/// `Cmd`+`Right` (`SUPER`) moves to the end of the current line,
-/// `Option`+`Right` (`ALT`) and `Shift`+`Right` move to the next word
-/// start, and a plain `Right` moves one character. When the move lands inside
-/// an existing `@path` token, the file dropdown is reopened.
-fn handle_prompt_right(app: &mut App, key: KeyEvent) {
-    if let AppMode::Prompt { input, .. } = &mut app.mode {
-        if key.modifiers.contains(event::KeyModifiers::SUPER) {
-            input.move_line_end();
-        } else if key
-            .modifiers
-            .intersects(event::KeyModifiers::ALT | event::KeyModifiers::SHIFT)
-        {
-            input_key::move_cursor_word_right(input);
-        } else {
-            input.move_right();
-        }
-    }
-
-    sync_prompt_at_mention_state(app);
-}
-
-/// Handles `Ctrl+u` line deletion by clearing the current line content.
-///
-/// This is the standard Unix "kill line" binding and also the sequence macOS
-/// terminals send for `Cmd`+`Backspace`.
-fn handle_prompt_line_delete(app: &mut App) {
-    if let AppMode::Prompt { input, .. } = &app.mode
-        && let Some((start, end)) = prompt_current_line_delete_range(input)
-    {
-        apply_prompt_delete_range(app, start, end);
-    }
-}
-
-/// Handles `Ctrl+k` kill-to-end-of-line by deleting text from the cursor to
-/// the end of the current line (stopping before the newline).
-fn handle_prompt_kill_to_line_end(app: &mut App) {
-    if let AppMode::Prompt { input, .. } = &mut app.mode {
-        input.delete_to_line_end();
-    }
-}
-
-/// Handles `Ctrl+w` word deletion by deleting the previous word.
-fn handle_prompt_word_delete(app: &mut App) {
-    if let AppMode::Prompt { input, .. } = &app.mode
-        && let Some((start, end)) = input_key::word_delete_range(input.text(), input.cursor)
-    {
-        apply_prompt_delete_range(app, start, end);
-    }
-}
-
-/// Handles prompt backspace by deleting one character or one whole word when
-/// `Option`/`Alt` (or `Shift` for compatibility) is pressed.
-///
-/// `Cmd`+`Backspace` takes precedence and clears the current line content.
-fn handle_prompt_backspace(app: &mut App, key: KeyEvent) {
-    let Some(delete_range) = prompt_backspace_range(app, key) else {
-        return;
-    };
-
-    apply_prompt_delete_range(app, delete_range.0, delete_range.1);
-}
-
-/// Returns the character range deleted by one prompt backspace key press.
-fn prompt_backspace_range(app: &App, key: KeyEvent) -> Option<(usize, usize)> {
-    let AppMode::Prompt { input, .. } = &app.mode else {
-        return None;
-    };
-
-    if input_key::is_line_delete_backspace(key) {
-        return prompt_current_line_delete_range(input);
-    }
-
-    if input_key::is_word_delete_backspace(key) {
-        return input_key::word_delete_range(input.text(), input.cursor);
-    }
-
-    if input.cursor == 0 {
-        return None;
-    }
-
-    Some((input.cursor - 1, input.cursor))
-}
-
-fn handle_prompt_delete(app: &mut App) {
-    let Some(delete_range) = prompt_delete_range(app) else {
-        return;
-    };
-
-    apply_prompt_delete_range(app, delete_range.0, delete_range.1);
-}
-
-/// Returns the character range deleted by one prompt forward-delete key press.
-fn prompt_delete_range(app: &App) -> Option<(usize, usize)> {
-    let AppMode::Prompt { input, .. } = &app.mode else {
-        return None;
-    };
-
-    let char_count = input.text().chars().count();
-    if input.cursor >= char_count {
-        return None;
-    }
-
-    Some((input.cursor, input.cursor + 1))
-}
-
 /// Applies one prompt deletion range, expanding it to cover full image
 /// placeholder tokens and removing orphaned attachments from prompt state.
-fn apply_prompt_delete_range(app: &mut App, start: usize, end: usize) {
+async fn apply_prompt_delete_range(app: &mut App, start: usize, end: usize) {
+    let mut unreachable_attachments = Vec::new();
     if let AppMode::Prompt {
         attachment_state,
         history_state,
@@ -836,24 +757,11 @@ fn apply_prompt_delete_range(app: &mut App, start: usize, end: usize) {
             start,
             end,
         );
+        unreachable_attachments = attachment_state.prune_unreachable(input);
     }
 
-    sync_prompt_at_mention_state(app);
-}
-
-/// Inserts one typed character into prompt input and keeps at-mention state
-/// in sync.
-fn handle_prompt_char(app: &mut App, character: char) {
-    if let AppMode::Prompt {
-        input,
-        history_state,
-        slash_state,
-        ..
-    } = &mut app.mode
-    {
-        insert_prompt_character(input, history_state, slash_state, character);
-    }
-
+    app.cleanup_prompt_attachments(unreachable_attachments)
+        .await;
     sync_prompt_at_mention_state(app);
 }
 
@@ -920,7 +828,7 @@ fn handle_at_mention_down(app: &mut App) {
 }
 
 /// Selects the currently highlighted file and inserts it into the input.
-fn handle_at_mention_select(app: &mut App) {
+async fn handle_at_mention_select(app: &mut App) {
     let replacement = match &app.mode {
         AppMode::Prompt {
             at_mention_state: Some(state),
@@ -930,17 +838,21 @@ fn handle_at_mention_select(app: &mut App) {
         _ => return,
     };
 
-    if replacement.is_none() {
+    let Some(selection) = replacement else {
         dismiss_at_mention(app);
 
         return;
-    }
+    };
 
-    if let Some(selection) = replacement
-        && let AppMode::Prompt { input, .. } = &mut app.mode
-    {
-        input.replace_range(selection.at_start, selection.cursor, &selection.text);
-    }
+    apply_prompt_input_command(
+        app,
+        InputCommand::ReplaceRange {
+            start: selection.at_start,
+            end: selection.cursor,
+            text: selection.text,
+        },
+    )
+    .await;
 
     dismiss_at_mention(app);
 }
@@ -956,6 +868,7 @@ mod tests {
     use crate::app::prompt_intent::build_apply_review_prompt;
     use crate::domain::agent::ReasoningLevel;
     use crate::domain::file_entry::FileEntry;
+    use crate::domain::input::INPUT_HISTORY_LIMIT;
     use crate::domain::session_message::SessionTranscript;
     use crate::infra::db::Database;
     use crate::presentation::prompt::{
@@ -1191,6 +1104,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_prompt_mode_handler_edits_and_submits_input() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("draft", None).await;
+
+        // Act
+        press_prompt_key(&mut app, KeyCode::Char('!')).await;
+        press_prompt_key(&mut app, KeyCode::Enter).await;
+
+        // Assert
+        assert!(matches!(app.mode, AppMode::View { .. }));
+        assert_eq!(app.sessions.sessions()[0].prompt, "draft!");
+    }
+
+    #[tokio::test]
     async fn test_tab_toggles_focus_between_composer_and_chat() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("draft text", None).await;
@@ -1278,7 +1205,7 @@ mod tests {
         press_prompt_key(&mut app, KeyCode::Tab).await;
 
         // Act
-        handle_paste(&mut app, "pasted");
+        handle_paste(&mut app, "pasted").await;
 
         // Assert
         let AppMode::Prompt { input, .. } = &app.mode else {
@@ -1380,7 +1307,7 @@ mod tests {
         let (mut app, _base_dir) = new_test_prompt_app("prefix ", None).await;
 
         // Act
-        handle_paste(&mut app, "line 1\r\nline 2\rline 3");
+        handle_paste(&mut app, "line 1\r\nline 2\rline 3").await;
 
         // Assert
         if let AppMode::Prompt { input, .. } = &app.mode {
@@ -1390,6 +1317,38 @@ mod tests {
                 "prefix line 1\nline 2\nline 3".chars().count()
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_prompt_shared_commands_insert_text_and_delete_to_line_end() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("first\nsecond", None).await;
+        if let AppMode::Prompt { input, .. } = &mut app.mode {
+            input.cursor = "first\nse".chars().count();
+        }
+
+        // Act
+        apply_prompt_input_command(&mut app, InputCommand::InsertText("X".to_string())).await;
+        apply_prompt_input_command(&mut app, InputCommand::DeleteToLineEnd).await;
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Prompt { input, .. } if input.text() == "first\nseX"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_prompt_input_command_ignores_non_prompt_mode() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("draft", None).await;
+        app.mode = AppMode::List;
+
+        // Act
+        apply_prompt_input_command(&mut app, InputCommand::Insert('x')).await;
+
+        // Assert
+        assert!(matches!(app.mode, AppMode::List));
     }
 
     #[tokio::test]
@@ -1592,8 +1551,9 @@ mod tests {
         app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
         app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-2.png"));
         if let AppMode::Prompt { input, .. } = &mut app.mode {
-            *input = InputState::with_text("Review [Image #2]".to_string());
+            input.cursor = "Review ".chars().count();
         }
+        apply_prompt_input_command(&mut app, InputCommand::DeleteForward).await;
 
         // Act
         let prompt = app.take_submitted_turn_prompt();
@@ -1623,10 +1583,11 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("", None).await;
         app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
-        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-2.png"));
         if let AppMode::Prompt { input, .. } = &mut app.mode {
-            *input = InputState::with_text("[Image #2] then [Image #1]".to_string());
+            input.cursor = 0;
         }
+        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-2.png"));
+        handle_paste(&mut app, " then ").await;
 
         // Act
         let prompt = app.take_submitted_turn_prompt();
@@ -1800,6 +1761,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_navigate_prompt_history_down_selects_next_entry() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("first", None).await;
+        if let AppMode::Prompt { history_state, .. } = &mut app.mode {
+            history_state.entries = vec![
+                "first".to_string(),
+                "second".to_string(),
+                "third".to_string(),
+            ];
+            history_state.selected_index = Some(0);
+        }
+
+        // Act
+        navigate_prompt_history_down(&mut app);
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Prompt {
+                history_state,
+                input,
+                ..
+            } if input.text() == "second" && history_state.selected_index == Some(1)
+        ));
+    }
+
+    #[tokio::test]
     async fn test_navigate_prompt_history_down_restores_draft_after_latest_entry() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("draft", None).await;
@@ -1822,6 +1810,54 @@ mod tests {
             assert_eq!(history_state.selected_index, None);
             assert_eq!(history_state.draft_text, None);
         }
+    }
+
+    #[tokio::test]
+    async fn test_navigate_prompt_history_down_restores_draft_without_attachment_revision() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("earlier", None).await;
+        if let AppMode::Prompt { history_state, .. } = &mut app.mode {
+            history_state.draft_text = Some("draft".to_string());
+            history_state.entries = vec!["earlier".to_string()];
+            history_state.selected_index = Some(0);
+        }
+
+        // Act
+        navigate_prompt_history_down(&mut app);
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Prompt {
+                attachment_state,
+                history_state,
+                input,
+                ..
+            } if input.text() == "draft"
+                && history_state.selected_index.is_none()
+                && attachment_state.attachments.is_empty()
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_prompt_history_round_trip_restores_image_draft_attachment() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
+        let image_path = std::path::PathBuf::from("/tmp/image-1.png");
+        app.insert_pasted_image_placeholder(image_path.clone());
+        if let AppMode::Prompt { history_state, .. } = &mut app.mode {
+            history_state.entries = vec!["Earlier prompt".to_string()];
+        }
+
+        // Act
+        navigate_prompt_history_up(&mut app);
+        navigate_prompt_history_down(&mut app);
+        let prompt = app.take_submitted_turn_prompt();
+
+        // Assert
+        assert_eq!(prompt.text, "Review [Image #1]");
+        assert_eq!(prompt.attachments.len(), 1);
+        assert_eq!(prompt.attachments[0].local_image_path, image_path);
     }
 
     #[tokio::test]
@@ -1960,6 +1996,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_model_slash_submit_discards_pasted_image_before_normal_submission() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
+        app.insert_pasted_image_placeholder(std::path::PathBuf::from(
+            "/tmp/nonexistent-test-attachment.png",
+        ));
+        if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+            slash_state.stage = PromptSlashStage::Model;
+            slash_state.selected_agent = Some(AgentKind::Claude);
+            slash_state.selected_index = 0;
+        }
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
+            .await;
+        if let AppMode::Prompt { input, .. } = &mut app.mode {
+            input.reset_text("normal prompt".to_string());
+        }
+        let prompt = app.take_submitted_turn_prompt();
+
+        // Assert
+        assert_eq!(prompt.text, "normal prompt");
+        assert!(prompt.attachments.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_reasoning_slash_submit_sets_level_and_resets_input() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/reasoning", None).await;
+        if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+            slash_state.stage = PromptSlashStage::Reasoning;
+            slash_state.selected_index = 2;
+        }
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
+            .await;
+        app.process_pending_app_events().await;
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Prompt { input, slash_state, .. }
+                if input.is_empty() && *slash_state == PromptSlashState::default()
+        ));
+        assert_eq!(
+            app.sessions.sessions()[0].reasoning_level_override,
+            Some(ReasoningLevel::High)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_canceling_slash_input_discards_pasted_attachment() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
+        app.insert_pasted_image_placeholder(std::path::PathBuf::from(
+            "/tmp/nonexistent-test-attachment.png",
+        ));
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_prompt_cancel_key(&mut app, &prompt_context).await;
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Prompt {
+                attachment_state,
+                input,
+                ..
+            } if input.is_empty() && attachment_state.attachments.is_empty()
+        ));
+    }
+
+    #[tokio::test]
     async fn test_handle_prompt_slash_submit_prefills_reasoning_selection_from_session_value() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("/reasoning", None).await;
@@ -2042,60 +2155,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_prompt_left_with_shift_moves_cursor_to_previous_word_start() {
-        // Arrange
-        let (mut app, _base_dir) = new_test_prompt_app("hello brave world", None).await;
-        if let AppMode::Prompt { input, .. } = &mut app.mode {
-            input.cursor = "hello brave world".chars().count();
-        }
-
-        // Act
-        let key = KeyEvent::new(KeyCode::Left, event::KeyModifiers::SHIFT);
-        handle_prompt_left(&mut app, key);
-
-        // Assert
-        if let AppMode::Prompt { input, .. } = &app.mode {
-            assert_eq!(input.cursor, "hello brave ".chars().count());
-        }
-    }
-
-    #[tokio::test]
-    async fn test_handle_prompt_left_with_shift_skips_whitespace_separators() {
-        // Arrange
-        let (mut app, _base_dir) = new_test_prompt_app("hello\t \nworld", None).await;
-        if let AppMode::Prompt { input, .. } = &mut app.mode {
-            input.cursor = "hello\t \nworld".chars().count();
-        }
-
-        // Act
-        let key = KeyEvent::new(KeyCode::Left, event::KeyModifiers::SHIFT);
-        handle_prompt_left(&mut app, key);
-
-        // Assert
-        if let AppMode::Prompt { input, .. } = &app.mode {
-            assert_eq!(input.cursor, "hello\t \n".chars().count());
-        }
-    }
-
-    #[tokio::test]
-    async fn test_handle_prompt_right_with_shift_moves_cursor_to_next_word_start() {
-        // Arrange
-        let (mut app, _base_dir) = new_test_prompt_app("hello brave world", None).await;
-        if let AppMode::Prompt { input, .. } = &mut app.mode {
-            input.cursor = 0;
-        }
-
-        // Act
-        let key = KeyEvent::new(KeyCode::Right, event::KeyModifiers::SHIFT);
-        handle_prompt_right(&mut app, key);
-
-        // Assert
-        if let AppMode::Prompt { input, .. } = &app.mode {
-            assert_eq!(input.cursor, "hello ".chars().count());
-        }
-    }
-
-    #[tokio::test]
     async fn test_handle_prompt_left_with_alt_moves_cursor_to_previous_word_start() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("hello brave world", None).await;
@@ -2104,8 +2163,7 @@ mod tests {
         }
 
         // Act
-        let key = KeyEvent::new(KeyCode::Left, event::KeyModifiers::ALT);
-        handle_prompt_left(&mut app, key);
+        apply_prompt_input_command(&mut app, InputCommand::MoveWordLeft).await;
 
         // Assert
         if let AppMode::Prompt { input, .. } = &app.mode {
@@ -2122,8 +2180,7 @@ mod tests {
         }
 
         // Act
-        let key = KeyEvent::new(KeyCode::Right, event::KeyModifiers::ALT);
-        handle_prompt_right(&mut app, key);
+        apply_prompt_input_command(&mut app, InputCommand::MoveWordRight).await;
 
         // Assert
         if let AppMode::Prompt { input, .. } = &app.mode {
@@ -2140,8 +2197,7 @@ mod tests {
         }
 
         // Act
-        let key = KeyEvent::new(KeyCode::Left, event::KeyModifiers::SUPER);
-        handle_prompt_left(&mut app, key);
+        apply_prompt_input_command(&mut app, InputCommand::MoveLineStart).await;
 
         // Assert
         if let AppMode::Prompt { input, .. } = &app.mode {
@@ -2158,8 +2214,7 @@ mod tests {
         }
 
         // Act
-        let key = KeyEvent::new(KeyCode::Right, event::KeyModifiers::SUPER);
-        handle_prompt_right(&mut app, key);
+        apply_prompt_input_command(&mut app, InputCommand::MoveLineEnd).await;
 
         // Assert
         if let AppMode::Prompt { input, .. } = &app.mode {
@@ -2178,8 +2233,7 @@ mod tests {
         }
 
         // Act
-        let key = KeyEvent::new(KeyCode::Backspace, event::KeyModifiers::NONE);
-        handle_prompt_backspace(&mut app, key);
+        apply_prompt_input_command(&mut app, InputCommand::DeleteBackward).await;
 
         // Assert
         if let AppMode::Prompt {
@@ -2211,8 +2265,7 @@ mod tests {
         }
 
         // Act
-        let key = KeyEvent::new(KeyCode::Backspace, event::KeyModifiers::NONE);
-        handle_prompt_backspace(&mut app, key);
+        apply_prompt_input_command(&mut app, InputCommand::DeleteBackward).await;
 
         // Assert
         if let AppMode::Prompt {
@@ -2224,34 +2277,7 @@ mod tests {
         {
             assert_eq!(input.text(), "Review ");
             assert!(attachment_state.attachments.is_empty());
-            assert_eq!(attachment_state.next_attachment_number, 1);
-            assert_eq!(history_state.selected_index, None);
-            assert_eq!(history_state.draft_text, None);
-        }
-    }
-
-    #[tokio::test]
-    async fn test_handle_prompt_backspace_with_shift_removes_whole_word() {
-        // Arrange
-        let (mut app, _base_dir) = new_test_prompt_app("hello brave world", None).await;
-        if let AppMode::Prompt { history_state, .. } = &mut app.mode {
-            history_state.draft_text = Some("draft".to_string());
-            history_state.entries = vec!["first".to_string(), "second".to_string()];
-            history_state.selected_index = Some(1);
-        }
-
-        // Act
-        let key = KeyEvent::new(KeyCode::Backspace, event::KeyModifiers::SHIFT);
-        handle_prompt_backspace(&mut app, key);
-
-        // Assert
-        if let AppMode::Prompt {
-            history_state,
-            input,
-            ..
-        } = &app.mode
-        {
-            assert_eq!(input.text(), "hello brave");
+            assert_eq!(attachment_state.next_attachment_number, 2);
             assert_eq!(history_state.selected_index, None);
             assert_eq!(history_state.draft_text, None);
         }
@@ -2274,7 +2300,7 @@ mod tests {
         }
 
         // Act
-        handle_prompt_delete(&mut app);
+        apply_prompt_input_command(&mut app, InputCommand::DeleteForward).await;
 
         // Assert
         if let AppMode::Prompt {
@@ -2286,14 +2312,121 @@ mod tests {
         {
             assert_eq!(input.text(), "Review ");
             assert!(attachment_state.attachments.is_empty());
-            assert_eq!(attachment_state.next_attachment_number, 1);
+            assert_eq!(attachment_state.next_attachment_number, 2);
             assert_eq!(history_state.selected_index, None);
             assert_eq!(history_state.draft_text, None);
         }
     }
 
     #[tokio::test]
-    async fn test_handle_prompt_delete_reuses_deleted_image_number_on_next_paste() {
+    async fn test_prompt_undo_restores_deleted_image_attachment() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
+        let image_path = std::path::PathBuf::from("/tmp/image-1.png");
+        app.insert_pasted_image_placeholder(image_path.clone());
+
+        // Act
+        apply_prompt_input_command(&mut app, InputCommand::DeleteBackward).await;
+        apply_prompt_input_command(&mut app, InputCommand::Undo).await;
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Prompt {
+                attachment_state,
+                input,
+                ..
+            } if input.text() == "Review [Image #1]"
+                && attachment_state.attachments.len() == 1
+                && attachment_state.attachments[0].local_image_path == image_path
+                && attachment_state.archived_attachments.is_empty()
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_manually_entered_image_placeholder_does_not_restore_attachment() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
+        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
+        apply_prompt_input_command(&mut app, InputCommand::DeleteBackward).await;
+
+        // Act
+        handle_paste(&mut app, "[Image #1]").await;
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Prompt {
+                attachment_state,
+                input,
+                ..
+            } if input.text() == "Review [Image #1]"
+                && attachment_state.attachments.is_empty()
+                && attachment_state.archived_attachments.len() == 1
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_deleting_original_duplicate_placeholder_does_not_submit_image() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("", None).await;
+        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
+        handle_paste(&mut app, "[Image #1]").await;
+        if let AppMode::Prompt { input, .. } = &mut app.mode {
+            input.cursor = 0;
+        }
+
+        // Act
+        apply_prompt_input_command(&mut app, InputCommand::DeleteForward).await;
+        let prompt = app.take_submitted_turn_prompt();
+
+        // Assert
+        assert_eq!(prompt.text, "[Image #1]");
+        assert!(prompt.attachments.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_deleting_duplicate_lookalike_keeps_original_image() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("", None).await;
+        let image_path = std::path::PathBuf::from("/tmp/image-1.png");
+        app.insert_pasted_image_placeholder(image_path.clone());
+        handle_paste(&mut app, "[Image #1]").await;
+
+        // Act
+        apply_prompt_input_command(&mut app, InputCommand::DeleteBackward).await;
+        let prompt = app.take_submitted_turn_prompt();
+
+        // Assert
+        assert_eq!(prompt.text, "[Image #1]");
+        assert_eq!(prompt.attachments.len(), 1);
+        assert_eq!(prompt.attachments[0].local_image_path, image_path);
+    }
+
+    #[tokio::test]
+    async fn test_prompt_edit_prunes_attachment_after_undo_revision_eviction() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("", None).await;
+        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
+        apply_prompt_input_command(&mut app, InputCommand::DeleteBackward).await;
+
+        // Act
+        for _ in 0..INPUT_HISTORY_LIMIT {
+            apply_prompt_input_command(&mut app, InputCommand::Insert('x')).await;
+        }
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Prompt {
+                attachment_state, ..
+            } if attachment_state.attachments.is_empty()
+                && attachment_state.archived_attachments.is_empty()
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_prompt_delete_keeps_new_image_number_unique_for_undo() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("", None).await;
         app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
@@ -2304,7 +2437,7 @@ mod tests {
         }
 
         // Act
-        handle_prompt_delete(&mut app);
+        apply_prompt_input_command(&mut app, InputCommand::DeleteForward).await;
         app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-4.png"));
 
         // Assert
@@ -2314,10 +2447,10 @@ mod tests {
             ..
         } = &app.mode
         {
-            assert_eq!(input.text(), "[Image #1][Image #2][Image #3]");
+            assert_eq!(input.text(), "[Image #1][Image #2][Image #4]");
             assert_eq!(attachment_state.attachments.len(), 3);
-            assert_eq!(attachment_state.next_attachment_number, 4);
-            assert_eq!(attachment_state.attachments[2].placeholder, "[Image #3]");
+            assert_eq!(attachment_state.next_attachment_number, 5);
+            assert_eq!(attachment_state.attachments[2].placeholder, "[Image #4]");
             assert_eq!(
                 attachment_state.attachments[2].local_image_path,
                 std::path::PathBuf::from("/tmp/image-4.png")
@@ -2336,8 +2469,7 @@ mod tests {
         }
 
         // Act
-        let key = KeyEvent::new(KeyCode::Backspace, event::KeyModifiers::ALT);
-        handle_prompt_backspace(&mut app, key);
+        apply_prompt_input_command(&mut app, InputCommand::DeleteWordBackward).await;
 
         // Assert
         if let AppMode::Prompt {
@@ -2366,8 +2498,7 @@ mod tests {
         }
 
         // Act
-        let key = KeyEvent::new(KeyCode::Backspace, event::KeyModifiers::SUPER);
-        handle_prompt_backspace(&mut app, key);
+        apply_prompt_input_command(&mut app, InputCommand::DeleteCurrentLine).await;
 
         // Assert
         if let AppMode::Prompt {
@@ -2396,7 +2527,7 @@ mod tests {
         }
 
         // Act
-        handle_prompt_line_delete(&mut app);
+        apply_prompt_input_command(&mut app, InputCommand::DeleteCurrentLine).await;
 
         // Assert
         if let AppMode::Prompt {
@@ -2406,33 +2537,6 @@ mod tests {
         } = &app.mode
         {
             assert_eq!(input.text(), "first line");
-            assert_eq!(history_state.selected_index, None);
-            assert_eq!(history_state.draft_text, None);
-        }
-    }
-
-    #[tokio::test]
-    async fn test_handle_prompt_backspace_with_shift_removes_whitespace_separators() {
-        // Arrange
-        let (mut app, _base_dir) = new_test_prompt_app("hello\t \nworld", None).await;
-        if let AppMode::Prompt { history_state, .. } = &mut app.mode {
-            history_state.draft_text = Some("draft".to_string());
-            history_state.entries = vec!["first".to_string(), "second".to_string()];
-            history_state.selected_index = Some(1);
-        }
-
-        // Act
-        let key = KeyEvent::new(KeyCode::Backspace, event::KeyModifiers::SHIFT);
-        handle_prompt_backspace(&mut app, key);
-
-        // Assert
-        if let AppMode::Prompt {
-            history_state,
-            input,
-            ..
-        } = &app.mode
-        {
-            assert_eq!(input.text(), "hello");
             assert_eq!(history_state.selected_index, None);
             assert_eq!(history_state.draft_text, None);
         }
@@ -2523,7 +2627,7 @@ mod tests {
         let (mut app, _base_dir) = new_test_prompt_app("email@test", Some(state)).await;
 
         // Act
-        handle_at_mention_select(&mut app);
+        handle_at_mention_select(&mut app).await;
 
         // Assert
         assert!(matches!(app.mode, AppMode::Prompt { .. }));
@@ -2539,6 +2643,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_handle_at_mention_key_supports_enter_tab_and_unhandled_keys() {
+        // Arrange
+        let entry = FileEntry {
+            is_dir: false,
+            path: "src/main.rs".to_string(),
+        };
+        let (mut enter_app, _enter_base_dir) =
+            new_test_prompt_app("@src", Some(PromptAtMentionState::new(vec![entry.clone()]))).await;
+        let (mut tab_app, _tab_base_dir) =
+            new_test_prompt_app("@src", Some(PromptAtMentionState::new(vec![entry]))).await;
+        let (mut ignored_app, _ignored_base_dir) =
+            new_test_prompt_app("@src", Some(PromptAtMentionState::new(Vec::new()))).await;
+
+        // Act
+        let enter_handled = handle_at_mention_key(
+            &mut enter_app,
+            KeyEvent::new(KeyCode::Enter, event::KeyModifiers::NONE),
+        )
+        .await;
+        let tab_handled = handle_at_mention_key(
+            &mut tab_app,
+            KeyEvent::new(KeyCode::Tab, event::KeyModifiers::NONE),
+        )
+        .await;
+        let character_handled = handle_at_mention_key(
+            &mut ignored_app,
+            KeyEvent::new(KeyCode::Char('x'), event::KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert
+        assert!(enter_handled);
+        assert!(tab_handled);
+        assert!(!character_handled);
+        assert!(matches!(
+            &enter_app.mode,
+            AppMode::Prompt { input, .. } if input.text() == "@src/main.rs "
+        ));
+        assert!(matches!(
+            &tab_app.mode,
+            AppMode::Prompt { input, .. } if input.text() == "@src/main.rs "
+        ));
+    }
+
+    #[tokio::test]
     async fn test_handle_at_mention_select_inserts_directory_with_trailing_slash() {
         // Arrange
         let state = PromptAtMentionState::new(vec![FileEntry {
@@ -2548,13 +2697,47 @@ mod tests {
         let (mut app, _base_dir) = new_test_prompt_app("@src", Some(state)).await;
 
         // Act
-        handle_at_mention_select(&mut app);
+        handle_at_mention_select(&mut app).await;
 
         // Assert
         assert!(matches!(app.mode, AppMode::Prompt { .. }));
         if let AppMode::Prompt { input, .. } = &app.mode {
             assert_eq!(input.text(), "@src/ ");
         }
+    }
+
+    #[tokio::test]
+    async fn test_at_mention_completion_keeps_following_image_occurrence_synchronized() {
+        // Arrange
+        let selected_path = "very/long/path/to/main.rs";
+        let at_mention_state = PromptAtMentionState::new(vec![FileEntry {
+            is_dir: false,
+            path: selected_path.to_string(),
+        }]);
+        let (mut app, _base_dir) = new_test_prompt_app("@v", None).await;
+        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
+        if let AppMode::Prompt {
+            at_mention_state: state,
+            input,
+            ..
+        } = &mut app.mode
+        {
+            *state = Some(at_mention_state);
+            input.cursor = "@v".chars().count();
+        }
+
+        // Act
+        handle_at_mention_select(&mut app).await;
+        let completed_mention = format!("@{selected_path} ");
+        if let AppMode::Prompt { input, .. } = &mut app.mode {
+            input.cursor = completed_mention.chars().count();
+        }
+        apply_prompt_input_command(&mut app, InputCommand::DeleteForward).await;
+        let prompt = app.take_submitted_turn_prompt();
+
+        // Assert
+        assert_eq!(prompt.text, completed_mention);
+        assert!(prompt.attachments.is_empty());
     }
 
     /// Verifies stale at-mention selections are clamped to the filtered entry
@@ -2576,7 +2759,7 @@ mod tests {
         let (mut app, _base_dir) = new_test_prompt_app("@src/ma", Some(state)).await;
 
         // Act
-        handle_at_mention_select(&mut app);
+        handle_at_mention_select(&mut app).await;
 
         // Assert
         if let AppMode::Prompt {
@@ -2591,12 +2774,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_prompt_char_activates_and_clears_at_mention_state() {
+    async fn test_prompt_input_edit_and_undo_resync_at_mention_state() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("", None).await;
 
         // Act
-        handle_prompt_char(&mut app, '@');
+        apply_prompt_input_command(&mut app, InputCommand::Insert('@')).await;
 
         // Assert
         assert!(matches!(app.mode, AppMode::Prompt { .. }));
@@ -2608,7 +2791,7 @@ mod tests {
         }
 
         // Act
-        handle_prompt_char(&mut app, ' ');
+        apply_prompt_input_command(&mut app, InputCommand::Insert(' ')).await;
 
         // Assert
         assert!(matches!(app.mode, AppMode::Prompt { .. }));
@@ -2618,6 +2801,39 @@ mod tests {
         {
             assert!(at_mention_state.is_none());
         }
+
+        // Act
+        apply_prompt_input_command(&mut app, InputCommand::Undo).await;
+
+        // Assert
+        if let AppMode::Prompt {
+            at_mention_state,
+            input,
+            ..
+        } = &app.mode
+        {
+            assert_eq!(input.text(), "@");
+            assert!(at_mention_state.is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_prompt_undo_restores_slash_command_context() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("", None).await;
+        apply_prompt_input_command(&mut app, InputCommand::Insert('/')).await;
+        apply_prompt_input_command(&mut app, InputCommand::Insert('x')).await;
+
+        // Act
+        apply_prompt_input_command(&mut app, InputCommand::Undo).await;
+
+        // Assert
+        let context = prompt_context(&mut app).expect("prompt context should remain available");
+        assert!(context.is_slash_command());
+        assert!(matches!(
+            &app.mode,
+            AppMode::Prompt { input, .. } if input.text() == "/"
+        ));
     }
 
     #[tokio::test]
@@ -2631,7 +2847,7 @@ mod tests {
         assert!(!app.sessions.sessions()[0].folder.exists());
 
         // Act
-        handle_prompt_char(&mut app, '@');
+        apply_prompt_input_command(&mut app, InputCommand::Insert('@')).await;
         let next_event = wait_for_at_mention_entries_event(&mut app).await;
 
         // Assert
@@ -2659,10 +2875,7 @@ mod tests {
 
         // Act
         for _ in 0..moves_back_into_mention {
-            handle_prompt_left(
-                &mut app,
-                KeyEvent::new(KeyCode::Left, event::KeyModifiers::NONE),
-            );
+            apply_prompt_input_command(&mut app, InputCommand::MoveLeft).await;
         }
 
         // Assert
@@ -2728,6 +2941,25 @@ mod tests {
         assert!(matches!(app.mode, AppMode::Prompt { .. }));
         assert_eq!(app.sessions.sessions().len(), 1);
         assert_eq!(app.sessions.sessions()[0].prompt, "");
+    }
+
+    #[tokio::test]
+    async fn test_handle_prompt_submit_key_cleans_archived_attachment() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_draft_prompt_app("Review ", None).await;
+        app.insert_pasted_image_placeholder(std::path::PathBuf::from(
+            "/tmp/nonexistent-test-attachment.png",
+        ));
+        apply_prompt_input_command(&mut app, InputCommand::DeleteBackward).await;
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_prompt_submit_key(&mut app, &prompt_context).await;
+
+        // Assert
+        assert!(matches!(app.mode, AppMode::View { .. }));
+        assert_eq!(app.sessions.sessions()[0].prompt, "Review ");
+        assert!(app.sessions.sessions()[0].draft_attachments.is_empty());
     }
 
     #[tokio::test]

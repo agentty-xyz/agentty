@@ -11,6 +11,32 @@ For session states and transition behavior, see [Workflow](@/docs/usage/workflow
 
 <!-- more -->
 
+## Shared Text Editing
+
+Prompt, question, publish-branch, and launch-configuration inputs share the same basic
+editing shortcuts. Context-specific actions such as prompt submission, slash commands,
+`@` completion, and question-option navigation run before these common fallbacks.
+
+| Key                                      | Action                              |
+| ---------------------------------------- | ----------------------------------- |
+| `Left` / `Right`                         | Move one character                  |
+| `Option+Left` / `Shift+Left` / `Alt+B`   | Move to previous word               |
+| `Option+Right` / `Shift+Right` / `Alt+F` | Move to next word                   |
+| `Home` / `End`                           | Move to start / end of input        |
+| `Ctrl+A` / `Ctrl+E`                      | Move to start / end of current line |
+| `Backspace` / `Delete`                   | Delete backward / forward           |
+| `Option+Backspace` / `Shift+Backspace`   | Delete previous word                |
+| `Ctrl+W`                                 | Delete previous word                |
+| `Cmd+Backspace` / `Ctrl+U`               | Delete current line                 |
+| `Ctrl+K`                                 | Delete to end of current line       |
+| `Ctrl+Z`                                 | Undo                                |
+| `Ctrl+Y` / `Ctrl+Shift+Z`                | Redo                                |
+| paste                                    | Insert text at the cursor           |
+
+Multiline prompt and question inputs also share vertical cursor movement and newline
+insertion. Single-line publish and launch-configuration inputs keep only the first line
+of pasted text.
+
 ## Session List
 
 | Key                 | Action                                               |
@@ -69,8 +95,7 @@ highlighted in the table with a `* ` prefix and accented row text.
 <tr><td><code>e</code></td><td>Edit the selected entry in the <code>Launch Configurations</code> browser</td></tr>
 <tr><td><code>d</code></td><td>Delete the selected entry in the <code>Launch Configurations</code> browser</td></tr>
 <tr><td><code>J</code> / <code>K</code></td><td>Move the selected <code>Launch Configurations</code> entry down or up</td></tr>
-<tr><td><code>Left</code> / <code>Right</code> / <code>Home</code> / <code>End</code></td><td>Move cursor while adding or editing one <code>Launch Configurations</code> entry</td></tr>
-<tr><td><code>Backspace</code> / <code>Delete</code></td><td>Delete characters while adding or editing one <code>Launch Configurations</code> entry</td></tr>
+<tr><td>shared text-editing keys</td><td>Edit, move by character or word, paste, undo, or redo while adding or editing one <code>Launch Configurations</code> entry</td></tr>
 <tr><td><code>Tab</code> / <code>Shift+Tab</code></td><td>Switch to next / previous tab</td></tr>
 <tr><td><code>?</code></td><td>Help</td></tr>
 </tbody>
@@ -167,14 +192,12 @@ Publish (`p`), sync (`r`), and stacked behavior are described in
 
 ## Publish Popup
 
-| Key                               | Action                             |
-| --------------------------------- | ---------------------------------- |
-| `Enter`                           | Start publishing in the background |
-| `Esc` / `q`                       | Cancel and return to session view  |
-| `Left` / `Right` / `Home` / `End` | Move cursor                        |
-| `Up` / `Down`                     | Move cursor across wrapped lines   |
-| `Backspace` / `Delete`            | Delete character                   |
-| text keys                         | Edit remote branch name            |
+| Key                      | Action                                             |
+| ------------------------ | -------------------------------------------------- |
+| `Enter`                  | Publish typed or default target in the background  |
+| `Esc`                    | Cancel and return to session view                  |
+| shared text-editing keys | Edit, paste, move, delete, undo, or redo           |
+| text keys                | Edit remote branch name, including the character q |
 
 ## Launch Configuration Selector
 
@@ -211,6 +234,8 @@ diff.
 | `Option+Left` / `Option+Right`      | Move to previous / next word        |
 | `Option+Backspace`                  | Delete previous word                |
 | `Cmd+Backspace`                     | Delete current line                 |
+| `Ctrl+Z`                            | Undo                                |
+| `Ctrl+Y` / `Ctrl+Shift+Z`           | Redo                                |
 | `Esc`                               | Cancel                              |
 | `Tab`                               | Focus chat output for scrolling     |
 | `@`                                 | Open file picker                    |
@@ -267,6 +292,8 @@ exist:
 | `Cmd+Backspace`                  | Delete current line                  |
 | `Ctrl+K`                         | Delete to end of current line        |
 | `Ctrl+D`                         | Delete character forward             |
+| `Ctrl+Z`                         | Undo                                 |
+| `Ctrl+Y` / `Ctrl+Shift+Z`        | Redo                                 |
 | `Tab`                            | Focus chat output for scrolling      |
 
 In free-text mode every other printable character — including `q` — is inserted into the

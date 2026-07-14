@@ -1,6 +1,6 @@
 use std::io;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Terminal;
 use ratatui::backend::Backend;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -402,40 +402,17 @@ fn handle_publish_branch_input_key(app: &mut App, key: KeyEvent) -> EventResult 
                 remote_branch_name,
             );
         }
-        KeyCode::Left if !input_locked => {
-            app.mode =
-                publish_branch_input.apply_input_edit(crate::domain::input::InputState::move_left);
-        }
-        KeyCode::Right if !input_locked => {
-            app.mode =
-                publish_branch_input.apply_input_edit(crate::domain::input::InputState::move_right);
-        }
-        KeyCode::Up if !input_locked => {
-            app.mode =
-                publish_branch_input.apply_input_edit(crate::domain::input::InputState::move_up);
-        }
-        KeyCode::Down if !input_locked => {
-            app.mode =
-                publish_branch_input.apply_input_edit(crate::domain::input::InputState::move_down);
-        }
-        KeyCode::Home if !input_locked => {
-            app.mode =
-                publish_branch_input.apply_input_edit(crate::domain::input::InputState::move_home);
-        }
-        KeyCode::End if !input_locked => {
-            app.mode =
-                publish_branch_input.apply_input_edit(crate::domain::input::InputState::move_end);
-        }
-        KeyCode::Backspace if !input_locked => {
-            app.mode = publish_branch_input
-                .apply_input_edit(crate::domain::input::InputState::delete_backward);
-        }
-        KeyCode::Delete if !input_locked => {
-            app.mode = publish_branch_input
-                .apply_input_edit(crate::domain::input::InputState::delete_forward);
-        }
-        KeyCode::Char(character) if !input_locked && is_publish_branch_input_text_key(key) => {
-            app.mode = publish_branch_input.apply_input_edit(|input| input.insert_char(character));
+        _ if !input_locked => {
+            app.mode = if let Some(command) = mode::input_key::command_for_key(
+                key,
+                mode::input_key::InputCapabilities::SINGLE_LINE,
+            ) {
+                publish_branch_input.apply_input_edit(|input| {
+                    input.apply(command);
+                })
+            } else {
+                publish_branch_input.into_mode()
+            };
         }
         _ => {
             app.mode = publish_branch_input.into_mode();
@@ -443,15 +420,6 @@ fn handle_publish_branch_input_key(app: &mut App, key: KeyEvent) -> EventResult 
     }
 
     EventResult::Continue
-}
-
-/// Returns whether one key event should insert text into the publish-branch
-/// input field.
-///
-/// Matches the prompt/question input policy: only plain and shifted
-/// characters are treated as text input.
-fn is_publish_branch_input_text_key(key: KeyEvent) -> bool {
-    key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT
 }
 
 /// Captures `AppMode::PublishBranchInput` fields so key handlers can rebuild
@@ -1728,6 +1696,75 @@ mod tests {
         };
         assert_eq!(input.text(), "review/custom");
         assert_eq!(input.cursor, "review/custom".chars().count() - 1);
+    }
+
+    #[tokio::test]
+    async fn test_handle_publish_branch_input_key_supports_word_delete_undo_and_redo() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
+        app.mode = AppMode::PublishBranchInput {
+            default_branch_name: "wt/session".to_string(),
+            input: crate::domain::input::InputState::with_text("review custom".to_string()),
+            locked_upstream_ref: None,
+            publish_branch_action: crate::domain::session::PublishBranchAction::Push,
+            restore_view: ConfirmationViewMode {
+                scroll_offset: None,
+                session_id: "session-id".into(),
+            },
+        };
+
+        // Act
+        handle_publish_branch_input_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
+        );
+        handle_publish_branch_input_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL),
+        );
+        assert!(matches!(
+            &app.mode,
+            AppMode::PublishBranchInput { input, .. } if input.text() == "review custom"
+        ));
+        handle_publish_branch_input_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL),
+        );
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::PublishBranchInput { input, .. } if input.text() == "review"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_publish_branch_input_key_preserves_mode_for_unmapped_key() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
+        app.mode = AppMode::PublishBranchInput {
+            default_branch_name: "wt/session".to_string(),
+            input: crate::domain::input::InputState::with_text("review/custom".to_string()),
+            locked_upstream_ref: None,
+            publish_branch_action: crate::domain::session::PublishBranchAction::Push,
+            restore_view: ConfirmationViewMode {
+                scroll_offset: None,
+                session_id: "session-id".into(),
+            },
+        };
+
+        // Act
+        let result = handle_publish_branch_input_key(
+            &mut app,
+            KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE),
+        );
+
+        // Assert
+        assert!(matches!(result, EventResult::Continue));
+        assert!(matches!(
+            &app.mode,
+            AppMode::PublishBranchInput { input, .. } if input.text() == "review/custom"
+        ));
     }
 
     #[tokio::test]
