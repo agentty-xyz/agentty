@@ -41,14 +41,6 @@ impl ChatScrollMetrics {
         let page_area = layout::app_frame_areas(terminal_size).content_area;
         let output_width = page_area.width.saturating_sub(2);
         let (_, review_text) = app.review_view_state(session_id);
-
-        let total_lines = session_output_metric::rendered_output_line_count_with_cache(
-            app,
-            render_cache_store,
-            session_id,
-            session_index,
-            output_width,
-        );
         let view_height = app.sessions.session_at(session_index).map_or_else(
             || Self::footer_only_view_height(page_area),
             |session| {
@@ -61,6 +53,14 @@ impl ChatScrollMetrics {
                     wall_clock_unix_seconds: app.wall_clock_unix_seconds(),
                 })
             },
+        );
+        let total_lines = session_output_metric::rendered_output_line_count_with_cache(
+            app,
+            render_cache_store,
+            session_id,
+            session_index,
+            output_width,
+            view_height,
         );
 
         Self {

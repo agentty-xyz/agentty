@@ -18,6 +18,9 @@ use crate::domain::transient_message::{
     TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageSlot,
 };
 use crate::ui::component::tachyon_loader::TachyonLoaderEffect;
+use crate::ui::component::vertical_scrollbar::VerticalScrollbar;
+#[cfg(test)]
+use crate::ui::component::vertical_scrollbar::{SCROLLBAR_THUMB_SYMBOL, SCROLLBAR_TRACK_SYMBOL};
 use crate::ui::icon::{Icon, TACHYON_LOADER_WIDTH};
 use crate::ui::input_layout::{bottom_pinned_scroll_offset, panel_inner_width};
 use crate::ui::markdown::{self, render_markdown};
@@ -36,6 +39,7 @@ const DRAFT_PREVIEW_STAGED_NOTE: &str =
 const DRAFT_PREVIEW_STACKED_STAGED_NOTE: &str =
     "Draft messages stay local until the parent is review-ready and you press `s` in session view \
      to start the stacked bundle from its parent branch.";
+const SCROLLBAR_WIDTH: u16 = 1;
 const SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT: usize = 16;
 const USER_PROMPT_TAB_WIDTH: usize = 4;
 
@@ -194,6 +198,13 @@ pub(crate) struct SessionOutputLayout {
     pub(crate) published_loader_line_index: Option<usize>,
     /// Rendered lines shared between scroll metrics and frame painting.
     pub(crate) lines: Arc<[Line<'static>]>,
+}
+
+/// Final session-output layout selected for the current viewport and
+/// scrollbar state.
+struct SessionOutputResolvedLayout {
+    layout: SessionOutputLayout,
+    show_scrollbar: bool,
 }
 
 /// Fully assembled session-output lines plus metadata derived during assembly.
@@ -676,24 +687,66 @@ impl<'a> SessionOutput<'a> {
     /// width.
     ///
     /// This mirrors the exact wrapping and footer line rules used during
-    /// rendering so scroll math can stay in sync with what users see.
+    /// rendering, including conditional scrollbar gutter reservation, so
+    /// scroll math can stay in sync with what users see.
     pub(crate) fn rendered_line_count(
         session: &Session,
         output_width: u16,
+        viewport_height: u16,
         context: SessionOutputLineContext<'_>,
         markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
         output_layout_cache: Option<&SessionOutputLayoutCache>,
     ) -> u16 {
-        let output_area = Rect::new(0, 0, output_width, 0);
+        Self::resolved_layout(
+            session,
+            Rect::new(0, 0, output_width, 0),
+            viewport_height,
+            context,
+            markdown_render_cache,
+            output_layout_cache,
+        )
+        .layout
+        .line_count
+    }
 
-        Self::rendered_layout(
+    /// Returns the full-width layout when it fits, or derives a second layout
+    /// with the scrollbar gutter reserved when the viewport overflows.
+    fn resolved_layout(
+        session: &Session,
+        output_area: Rect,
+        viewport_height: u16,
+        context: SessionOutputLineContext<'_>,
+        markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
+        output_layout_cache: Option<&SessionOutputLayoutCache>,
+    ) -> SessionOutputResolvedLayout {
+        let layout_without_scrollbar = Self::rendered_layout(
             session,
             output_area,
             context,
             markdown_render_cache,
             output_layout_cache,
-        )
-        .line_count
+        );
+        if !Self::has_scrollable_overflow(layout_without_scrollbar.lines.len(), viewport_height) {
+            return SessionOutputResolvedLayout {
+                layout: layout_without_scrollbar,
+                show_scrollbar: false,
+            };
+        }
+
+        let layout_with_scrollbar = Self::rendered_layout(
+            session,
+            Self::scrollbar_layout_area(output_area),
+            context,
+            markdown_render_cache,
+            output_layout_cache,
+        );
+        let show_scrollbar =
+            Self::has_scrollable_overflow(layout_with_scrollbar.lines.len(), viewport_height);
+
+        SessionOutputResolvedLayout {
+            layout: layout_with_scrollbar,
+            show_scrollbar,
+        }
     }
 
     /// Returns the rendered output layout for the current session state,
@@ -1499,6 +1552,20 @@ impl<'a> SessionOutput<'a> {
         )
     }
 
+    /// Returns the width used to wrap output while leaving the final panel
+    /// column available for the scrollbar.
+    fn scrollbar_layout_area(output_area: Rect) -> Rect {
+        Rect {
+            width: output_area.width.saturating_sub(SCROLLBAR_WIDTH),
+            ..output_area
+        }
+    }
+
+    /// Returns whether the output extends beyond the visible transcript rows.
+    fn has_scrollable_overflow(line_count: usize, viewport_height: u16) -> bool {
+        viewport_height > 0 && line_count > usize::from(viewport_height)
+    }
+
     /// Returns whether a status row should receive the Tachyonfx loader
     /// treatment.
     fn status_uses_tachyon_loader(status: Status) -> bool {
@@ -1534,9 +1601,11 @@ impl Component for SessionOutput<'_> {
     fn render(&self, f: &mut Frame, output_area: Rect) {
         let status = self.session.status;
         let spinner_frame = Icon::current_spinner_frame();
-        let layout = Self::rendered_layout(
+        let viewport_height = Self::session_output_inner_area(output_area).height;
+        let resolved_layout = Self::resolved_layout(
             self.session,
             output_area,
+            viewport_height,
             SessionOutputLineContext {
                 active_prompt_output: self.active_prompt_output,
                 active_progress: self.active_progress,
@@ -1545,6 +1614,7 @@ impl Component for SessionOutput<'_> {
             self.markdown_render_cache,
             self.output_layout_cache,
         );
+        let layout = resolved_layout.layout;
         let final_scroll = bottom_pinned_scroll_offset(
             output_area,
             session_format::session_output_panel_borders(),
@@ -1572,6 +1642,19 @@ impl Component for SessionOutput<'_> {
             .scroll((final_scroll, 0));
 
         f.render_widget(paragraph, output_area);
+
+        if resolved_layout.show_scrollbar {
+            let scrollbar_area = Rect::new(
+                output_area
+                    .x
+                    .saturating_add(output_area.width.saturating_sub(SCROLLBAR_WIDTH)),
+                output_area.y.saturating_add(1),
+                SCROLLBAR_WIDTH,
+                viewport_height,
+            );
+
+            VerticalScrollbar::new(final_scroll, layout.lines.len()).render(f, scrollbar_area);
+        }
 
         if let Some(loader_area) = active_loader_area {
             self.apply_tachyon_loader_effect(f.buffer_mut(), loader_area, spinner_frame);
@@ -1686,6 +1769,80 @@ mod tests {
     }
 
     #[test]
+    fn test_render_shows_scrollbar_for_overflowing_output() {
+        // Arrange
+        let mut session = session_fixture();
+        let output = (0..40)
+            .map(|line_index| format!("output line {line_index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        set_assistant_transcript(&mut session, &output);
+        let backend = ratatui::backend::TestBackend::new(40, 10);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let output = SessionOutput::new(&session).scroll_offset(12);
+                output.render(frame, frame.area());
+            })
+            .expect("failed to draw session output");
+
+        // Assert
+        let rendered_text = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+        assert!(rendered_text.contains(SCROLLBAR_TRACK_SYMBOL));
+        assert!(rendered_text.contains(SCROLLBAR_THUMB_SYMBOL));
+    }
+
+    #[test]
+    fn test_resolved_layout_keeps_full_width_when_output_fits() {
+        // Arrange
+        let mut session = session_fixture();
+        set_assistant_transcript(&mut session, "word word");
+        let output_area = Rect::new(0, 0, 9, 3);
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let output_layout_cache = SessionOutputLayoutCache::default();
+        let context = line_context();
+        let full_width_layout = SessionOutput::rendered_layout(
+            &session,
+            output_area,
+            context,
+            Some(&markdown_render_cache),
+            Some(&output_layout_cache),
+        );
+        let gutter_layout = SessionOutput::rendered_layout(
+            &session,
+            SessionOutput::scrollbar_layout_area(output_area),
+            context,
+            Some(&markdown_render_cache),
+            Some(&output_layout_cache),
+        );
+        // Act
+        let resolved_layout = SessionOutput::resolved_layout(
+            &session,
+            output_area,
+            full_width_layout.line_count,
+            context,
+            Some(&markdown_render_cache),
+            Some(&output_layout_cache),
+        );
+
+        // Assert
+        assert!(gutter_layout.line_count > full_width_layout.line_count);
+        assert!(!resolved_layout.show_scrollbar);
+        assert!(Arc::ptr_eq(
+            &resolved_layout.layout.lines,
+            &full_width_layout.lines
+        ));
+    }
+
+    #[test]
     fn test_rendered_line_count_counts_wrapped_content() {
         // Arrange
         let mut session = session_fixture();
@@ -1707,6 +1864,7 @@ mod tests {
         let rendered_line_count = SessionOutput::rendered_line_count(
             &session,
             20,
+            5,
             line_context(),
             Some(&markdown_render_cache),
             Some(&output_layout_cache),

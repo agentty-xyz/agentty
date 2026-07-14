@@ -178,7 +178,8 @@ only and is discarded if `agentty` restarts.
 While the composer is open, `Tab` moves focus to the chat transcript above it so the
 conversation can be scrolled with `j` / `k`, `g` / `G`, and `Ctrl+D` / `Ctrl+U` without
 losing the typed draft. Pressing `Tab` again returns focus to the composer. The same
-focus toggle is available while answering clarification questions.
+focus toggle is available while answering clarification questions. Long transcripts show
+a slim scrollbar on the right side of the output panel to indicate the current position.
 
 Pressing `r` during a running turn queues session sync on the same session worker. The
 session stays **InProgress** while the active turn runs, then moves to **Rebasing** when

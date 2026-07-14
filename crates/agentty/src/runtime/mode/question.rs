@@ -1037,10 +1037,15 @@ mod tests {
         let terminal_size = Rect::new(0, 0, 16, 24);
         let output_width = terminal_size.width.saturating_sub(2);
         let render_cache_store = RenderCacheStore::default();
+        // Act
+        let metrics = question_scroll_metrics(&app, &render_cache_store, terminal_size)
+            .expect("chat-focused question mode should have scroll metrics");
+
         let session = &app.sessions.sessions()[0];
         let expected = SessionChatPage::rendered_output_line_count(
             session,
             output_width,
+            metrics.view_height,
             SessionOutputLineContext {
                 active_prompt_output: None,
                 active_progress: None,
@@ -1050,13 +1055,9 @@ mod tests {
             render_cache_store.session_output_layout_cache(),
         );
 
-        // Act
-        let metrics = question_scroll_metrics(&app, &render_cache_store, terminal_size);
-
         // Assert
         assert_eq!(
-            metrics.map(|metrics| metrics.total_lines),
-            Some(expected),
+            metrics.total_lines, expected,
             "chat-focused question mode must report transcript line count"
         );
     }

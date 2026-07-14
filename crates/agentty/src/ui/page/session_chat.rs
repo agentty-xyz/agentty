@@ -147,14 +147,16 @@ impl<'a> SessionChatPage<'a> {
     }
 
     /// Returns the rendered output line count for chat content at a given
-    /// width.
+    /// width and viewport height.
     ///
     /// This mirrors the exact wrapping and footer line rules used during
-    /// rendering, including review text and generic active-status loaders, so
-    /// scroll math can stay in sync with what users see.
+    /// rendering, including review text, generic active-status loaders, and
+    /// conditional scrollbar gutter reservation, so scroll math can stay in
+    /// sync with what users see.
     pub(crate) fn rendered_output_line_count(
         session: &Session,
         output_width: u16,
+        viewport_height: u16,
         context: SessionOutputLineContext<'_>,
         markdown_render_cache: &markdown::MarkdownRenderCache,
         output_layout_cache: &SessionOutputLayoutCache,
@@ -162,6 +164,7 @@ impl<'a> SessionChatPage<'a> {
         SessionOutput::rendered_line_count(
             session,
             output_width,
+            viewport_height,
             context,
             Some(markdown_render_cache),
             Some(output_layout_cache),
@@ -888,6 +891,7 @@ mod tests {
         let rendered_line_count = SessionChatPage::rendered_output_line_count(
             &session,
             20,
+            5,
             SessionOutputLineContext {
                 active_prompt_output: None,
                 active_progress: None,
@@ -959,6 +963,7 @@ mod tests {
         let without_review = SessionChatPage::rendered_output_line_count(
             &session,
             40,
+            5,
             SessionOutputLineContext {
                 active_prompt_output: None,
                 active_progress: None,
@@ -985,6 +990,7 @@ mod tests {
         let with_review = SessionChatPage::rendered_output_line_count(
             &session,
             40,
+            5,
             SessionOutputLineContext {
                 active_prompt_output: None,
                 active_progress: None,
