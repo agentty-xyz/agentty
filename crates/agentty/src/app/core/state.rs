@@ -20,8 +20,8 @@ use app::branch_publish::{BranchPublishTaskSession, run_branch_publish_action};
 use app::merge_queue::{MergeQueue, MergeQueueProgress};
 use app::project::ProjectManager;
 use app::review::{
-    ReviewCacheEntry, mark_session_agent_review, review_loading_message, review_view_text,
-    start_review_assist as spawn_review_assist,
+    ReviewCacheEntry, mark_session_agent_review, review_failure_message, review_loading_message,
+    review_view_text, start_review_assist as spawn_review_assist,
 };
 use app::service::AppServices;
 use app::session::SessionManager;
@@ -1043,9 +1043,7 @@ impl App {
             Some(ReviewCacheEntry::Loading { .. }) => Some(review_loading_message(
                 self.settings.default_review_selection.model(),
             )),
-            Some(ReviewCacheEntry::Failed { error, .. }) => {
-                Some(format!("Review assist unavailable: {}", error.trim()))
-            }
+            Some(ReviewCacheEntry::Failed { error, .. }) => Some(review_failure_message(error)),
             Some(ReviewCacheEntry::Ready { .. } | ReviewCacheEntry::Suppressed) | None => None,
         };
 
@@ -1569,9 +1567,19 @@ impl App {
     /// Returns `true` when the fallback poll refreshed render-visible session
     /// state.
     pub async fn refresh_sessions_if_needed(&mut self) -> bool {
-        self.sessions
+        let refreshed = self
+            .sessions
             .refresh_sessions_if_needed(&mut self.mode, &self.projects, &self.services)
-            .await
+            .await;
+        if refreshed {
+            app::review::hydrate_review_transients(
+                &self.review_cache,
+                self.sessions.state_mut(),
+                self.settings.default_review_selection.model(),
+            );
+        }
+
+        refreshed
     }
 
     /// Forces immediate session list reload.
@@ -1579,6 +1587,11 @@ impl App {
         self.sessions
             .refresh_sessions_now(&mut self.mode, &self.projects, &self.services)
             .await;
+        app::review::hydrate_review_transients(
+            &self.review_cache,
+            self.sessions.state_mut(),
+            self.settings.default_review_selection.model(),
+        );
         self.restart_git_status_task();
     }
 

@@ -1097,42 +1097,50 @@ mod tests {
     }
 
     #[test]
-    fn test_annotate_review_suggestions_header_appends_apply_hint_to_exact_header() {
+    fn test_format_review_markdown_compacts_sections_and_appends_apply_hint() {
         // Arrange
-        let review_markdown = "## Review\n### Project Impact\n- None\n### Suggestions\n- Fix typo.";
+        let review_markdown =
+            "## Review\n\n### Project Impact\n\n- None\n\n### Suggestions\n\n- Fix typo.";
 
         // Act
-        let annotated = annotate_review_suggestions_header(review_markdown);
+        let formatted = format_review_markdown(review_markdown);
 
         // Assert
-        assert!(annotated.contains("### Suggestions (type \"/apply\" to verify and apply)"));
-        assert!(!annotated.contains("### Suggestions\n"));
-        assert!(annotated.contains("- Fix typo."));
+        assert!(formatted.starts_with("## Review\n\n### Project Impact\n- None"));
+        assert!(
+            formatted
+                .contains("### Suggestions (type \"/apply\" to verify and apply)\n- Fix typo.")
+        );
+        assert!(!formatted.contains("### Suggestions\n"));
     }
 
     #[test]
-    fn test_annotate_review_suggestions_header_leaves_non_matching_lines_untouched() {
+    fn test_format_review_markdown_leaves_non_matching_lines_untouched() {
         // Arrange
         let review_markdown = "### Suggestions extra\n- keep as-is";
 
         // Act
-        let annotated = annotate_review_suggestions_header(review_markdown);
+        let formatted = format_review_markdown(review_markdown);
 
         // Assert
-        assert_eq!(annotated, review_markdown);
+        assert_eq!(formatted, review_markdown);
     }
 
     #[test]
-    fn test_annotate_review_suggestions_header_skips_empty_suggestions() {
+    fn test_format_review_markdown_compacts_empty_suggestions_without_hint() {
         // Arrange
-        let review_markdown = "## Review\n### Suggestions\n- None\n### Project Impact\n- None";
+        let review_markdown =
+            "## Review\n\n### Suggestions\n\n- None\n\n### Project Impact\n\n- None";
 
         // Act
-        let annotated = annotate_review_suggestions_header(review_markdown);
+        let formatted = format_review_markdown(review_markdown);
 
         // Assert
-        assert_eq!(annotated, review_markdown);
-        assert!(!annotated.contains("(type \"/apply\" to verify and apply)"));
+        assert_eq!(
+            formatted,
+            "## Review\n\n### Suggestions\n- None\n\n### Project Impact\n- None"
+        );
+        assert!(!formatted.contains("(type \"/apply\" to verify and apply)"));
     }
 
     #[test]

@@ -13,6 +13,7 @@ use crate::presentation::help_action::{self, ViewHelpState};
 use crate::ui::icon::Icon;
 use crate::ui::{markdown, style};
 
+const REVIEW_PROJECT_IMPACT_HEADER: &str = "### Project Impact";
 const REVIEW_SUGGESTIONS_HEADER: &str = "### Suggestions";
 const REVIEW_SUGGESTIONS_HEADER_WITH_HINT: &str =
     "### Suggestions (type \"/apply\" to verify and apply)";
@@ -189,23 +190,40 @@ pub(crate) fn session_output_summary_markdown(summary_text: &str) -> String {
     )
 }
 
-/// Adds the verification-gated `/apply` hint to an actionable focused-review
-/// suggestions header.
-pub(crate) fn annotate_review_suggestions_header(review_markdown: &str) -> String {
-    if !review::has_actionable_review_suggestions(Some(review_markdown)) {
-        return review_markdown.to_string();
-    }
+/// Formats focused-review section headings with compact spacing and adds the
+/// verification-gated `/apply` hint when suggestions are actionable.
+pub(crate) fn format_review_markdown(review_markdown: &str) -> String {
+    let has_actionable_suggestions =
+        review::has_actionable_review_suggestions(Some(review_markdown));
+    let mut formatted_lines = Vec::with_capacity(review_markdown.lines().count());
+    let mut skip_section_spacing = false;
 
-    let mut annotated_lines = Vec::with_capacity(review_markdown.lines().count());
     for line in review_markdown.lines() {
-        if line.trim_end() == REVIEW_SUGGESTIONS_HEADER {
-            annotated_lines.push(REVIEW_SUGGESTIONS_HEADER_WITH_HINT.to_string());
+        if skip_section_spacing && line.trim().is_empty() {
+            continue;
+        }
+        skip_section_spacing = false;
+
+        let trimmed_line = line.trim_end();
+        if trimmed_line == REVIEW_PROJECT_IMPACT_HEADER {
+            formatted_lines.push(line.to_string());
+            skip_section_spacing = true;
+        } else if matches!(
+            trimmed_line,
+            REVIEW_SUGGESTIONS_HEADER | REVIEW_SUGGESTIONS_HEADER_WITH_HINT
+        ) {
+            if has_actionable_suggestions {
+                formatted_lines.push(REVIEW_SUGGESTIONS_HEADER_WITH_HINT.to_string());
+            } else {
+                formatted_lines.push(line.to_string());
+            }
+            skip_section_spacing = true;
         } else {
-            annotated_lines.push(line.to_string());
+            formatted_lines.push(line.to_string());
         }
     }
 
-    annotated_lines.join("\n")
+    formatted_lines.join("\n")
 }
 
 /// Returns borders used for the session output panel.

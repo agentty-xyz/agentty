@@ -115,6 +115,11 @@ pub(crate) fn review_loading_message(review_model: AgentModel) -> String {
     format!("{REVIEW_LOADING_MESSAGE_PREFIX} {}", review_model.as_str())
 }
 
+/// Formats a focused-review failure for the session output panel.
+pub(crate) fn review_failure_message(error: &str) -> String {
+    format!("Review assist unavailable: {}", error.trim())
+}
+
 /// Returns focused-review markdown available to prompt actions for one
 /// session.
 pub(crate) fn review_view_text<'a>(
@@ -131,10 +136,11 @@ pub(crate) fn review_view_text<'a>(
     }
 }
 
-/// Rehydrates persisted focused-review markdown into explicit display slots.
+/// Rehydrates cached focused-review states into explicit display slots.
 pub(crate) fn hydrate_review_transients(
     review_cache: &HashMap<SessionId, ReviewCacheEntry>,
     session_state: &mut SessionState,
+    review_model: AgentModel,
 ) {
     for session in session_state.sessions_mut() {
         if !matches!(
@@ -147,13 +153,28 @@ pub(crate) fn hydrate_review_transients(
 
             continue;
         }
-        let Some(ReviewCacheEntry::Ready { text, .. }) = review_cache.get(&session.id) else {
+        let Some(cache_entry) = review_cache.get(&session.id) else {
             continue;
+        };
+        let (anchor, body) = match cache_entry {
+            ReviewCacheEntry::Loading { .. } => (
+                TransientMessageAnchor::Tail,
+                TransientMessageBody::Loading(review_loading_message(review_model)),
+            ),
+            ReviewCacheEntry::Ready { text, .. } => (
+                TransientMessageAnchor::AfterCompletedTurn,
+                TransientMessageBody::Markdown(text.clone()),
+            ),
+            ReviewCacheEntry::Failed { error, .. } => (
+                TransientMessageAnchor::AfterCompletedTurn,
+                TransientMessageBody::Plain(review_failure_message(error)),
+            ),
+            ReviewCacheEntry::Suppressed => continue,
         };
 
         session.transient_messages.upsert(TransientMessage {
-            anchor: TransientMessageAnchor::AfterCompletedTurn,
-            body: TransientMessageBody::Markdown(text.clone()),
+            anchor,
+            body,
             lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
             slot: TransientMessageSlot::Review,
             turn_position: session.latest_user_prompt_position(),
@@ -381,9 +402,7 @@ fn apply_review_update(
     {
         let body = match &result {
             Ok(review_text) => TransientMessageBody::Markdown(review_text.clone()),
-            Err(error) => {
-                TransientMessageBody::Plain(format!("Review assist unavailable: {}", error.trim()))
-            }
+            Err(error) => TransientMessageBody::Plain(review_failure_message(error)),
         };
         session.transient_messages.upsert(TransientMessage {
             anchor: TransientMessageAnchor::AfterCompletedTurn,
@@ -574,7 +593,7 @@ mod tests {
         );
 
         // Act
-        hydrate_review_transients(&review_cache, &mut session_state);
+        hydrate_review_transients(&review_cache, &mut session_state, AgentModel::Gpt55);
 
         // Assert
         assert!(
