@@ -421,8 +421,6 @@ runtime flow:
   startup.
 - Session snapshots in memory are authoritative for rendering; DB is authoritative for
   restart recovery.
-- System logs are process-local only: a bounded in-memory buffer, never written to
-  SQLite or disk.
 - Shared session handles provide low-latency updates between DB reloads.
 - Event-driven refresh is primary; metadata polling is fallback safety only.
 - External integrations (`GitClient`, `ReviewRequestClient`, `AppServerClient`,

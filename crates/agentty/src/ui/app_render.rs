@@ -63,8 +63,6 @@ pub(crate) fn render_app(
             session_update_versions: snapshot.session_update_versions,
             session_worktree_availability: snapshot.session_worktree_availability,
             settings: snapshot.settings,
-            system_log_tail_offset: snapshot.system_log_tail_offset,
-            system_logs: snapshot.system_logs,
             stats_activity: snapshot.stats_activity,
             sessions: snapshot.sessions,
             status_bar_fyi_rotation_index: snapshot.status_bar_fyi_rotation_index,

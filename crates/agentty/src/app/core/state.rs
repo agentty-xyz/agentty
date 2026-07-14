@@ -49,9 +49,6 @@ use crate::domain::question::{QuestionItem, QuestionProgress, default_option_ind
 use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, Session, SessionId, Status};
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::setting::SettingName;
-use crate::domain::system_log::{
-    SystemLogBuffer, SystemLogCategory, SystemLogEvent, SystemLogLevel,
-};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::turn_prompt::TurnPrompt;
 #[cfg(test)]
@@ -229,9 +226,6 @@ pub struct App {
     pub(crate) sessions: SessionManager,
     /// Runs sync-to-main workflows behind an injectable boundary.
     pub(crate) sync_main_runner: Arc<dyn SyncMainRunner>,
-    /// Process-local system log buffer retained only for this `agentty`
-    /// runtime.
-    pub(crate) system_logs: SystemLogBuffer,
     /// Owns the active-project sync orchestrator command and context
     /// channels.
     pub(crate) sync_handle: sync::SyncHandle,
@@ -247,9 +241,6 @@ pub struct App {
     pub(crate) requested_review_selected_index: Option<usize>,
     /// Caches requested PR/MR reviews for the active project's `Review` tab.
     pub(crate) requested_reviews: RequestedReviewState,
-    /// Number of log output lines between the visible window and the newest
-    /// log lines. `0` keeps the logs page tailed to the newest events.
-    pub(crate) system_log_tail_offset: u16,
     /// Receives app events emitted by background tasks and workflows.
     pub(super) event_rx: mpsc::UnboundedReceiver<AppEvent>,
     /// Stores the latest available stable `agentty` version when one is
@@ -318,34 +309,6 @@ impl App {
     /// Refreshes assigned GitHub issues when the `Issues` tab is visible.
     pub fn refresh_assigned_issues(&mut self) {
         self.refresh_assigned_issues_if_issues_tab(true);
-    }
-
-    /// Scrolls the system log view one line toward newer entries.
-    pub(crate) fn scroll_system_logs_down(&mut self) {
-        self.system_log_tail_offset = self.system_log_tail_offset.saturating_sub(1);
-    }
-
-    /// Scrolls the system log view one line toward older entries.
-    pub(crate) fn scroll_system_logs_up(&mut self) {
-        self.system_log_tail_offset = self.system_log_tail_offset.saturating_add(1);
-    }
-
-    /// Scrolls the system log view to the newest entries.
-    pub(crate) fn scroll_system_logs_to_bottom(&mut self) {
-        self.system_log_tail_offset = 0;
-    }
-
-    /// Scrolls the system log view to the oldest retained entries.
-    pub(crate) fn scroll_system_logs_to_top(&mut self) {
-        self.system_log_tail_offset = u16::MAX;
-    }
-
-    /// Records one local system log event immediately.
-    pub(crate) fn record_system_log_event(&mut self, event: SystemLogEvent) {
-        let timestamp_unix_seconds =
-            session::unix_timestamp_from_system_time(self.services.clock().now_system_time());
-        self.system_logs.push(timestamp_unix_seconds, event);
-        self.mark_dirty();
     }
 
     /// Replaces the requested-review list for `project_id`, normalizes rows to
@@ -660,17 +623,6 @@ impl App {
             generation,
             project_id,
         };
-        let refresh_source = if force { "manual" } else { "background" };
-        self.record_system_log_event(
-            SystemLogEvent::new(
-                SystemLogLevel::Info,
-                SystemLogCategory::Forge,
-                "Requested review refresh started",
-            )
-            .with_detail(format!(
-                "{refresh_source} refresh for project #{project_id}"
-            )),
-        );
         task::TaskService::spawn_requested_reviews_task(
             generation,
             project_id,
@@ -1460,17 +1412,6 @@ impl App {
     /// opens a loading popup with project and branch context.
     pub(crate) fn start_sync_main(&mut self) {
         let sync_popup_context = self.sync_popup_context();
-        self.record_system_log_event(
-            SystemLogEvent::new(
-                SystemLogLevel::Info,
-                SystemLogCategory::Sync,
-                "Manual project sync started",
-            )
-            .with_detail(format!(
-                "{} on {}",
-                sync_popup_context.project_name, sync_popup_context.default_branch
-            )),
-        );
         self.mode = AppMode::SyncBlockedPopup {
             project_name: Some(sync_popup_context.project_name.clone()),
             default_branch: Some(sync_popup_context.default_branch),

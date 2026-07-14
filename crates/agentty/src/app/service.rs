@@ -256,7 +256,6 @@ fn app_event_label(event: &AppEvent) -> &'static str {
         AppEvent::VersionAvailabilityUpdated { .. } => "VersionAvailabilityUpdated",
         AppEvent::AgentCliVersionsUpdated { .. } => "AgentCliVersionsUpdated",
         AppEvent::UpdateStatusChanged { .. } => "UpdateStatusChanged",
-        AppEvent::SystemLog { .. } => "SystemLog",
         AppEvent::SessionModelUpdated { .. } => "SessionModelUpdated",
         AppEvent::SessionReasoningLevelUpdated { .. } => "SessionReasoningLevelUpdated",
         AppEvent::RefreshSessions => "RefreshSessions",
