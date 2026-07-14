@@ -7,15 +7,69 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-### Changed
-
-- agentty: rename the green color theme's internal and persisted name from `hacker` to
-  `green`, migrating existing settings so users keep their selected theme.
+## [v0.13.0] - 2026-07-14
 
 ### Added
 
-- agentty: add a `p` project switcher popup to the Sessions view that lists registered
+- agentty: add a `p` project switcher popup to the `Sessions` view that lists registered
   projects in most-recently-opened order and switches the active project in place.
+- agentty: display assigned GitHub issue details, group issues by assignment, and style
+  assigned issue borders.
+- agentty: let `Tab` move prompt composer focus to the chat transcript for scrolling
+  without losing the current draft.
+- agentty: show a shared vertical scrollbar for overflowing session and `Diff` output,
+  including padding that keeps wrapped content clear of the scrollbar.
+- docs: add a homepage roadmap covering the Harness, Orchestrator, Assistant, and Cloud
+  tracks through 2027.
+- docs: add SonarCloud quality badges to `README.md`.
+
+### Changed
+
+- agentty: serialize running-session sync through the active worker so queued sync runs
+  after the current turn and before later chat messages.
+- agentty: represent summaries, reviews, workflow notices, and published-branch sync
+  output with typed transient slots, explicit lifecycles, and content-keyed caches.
+- agentty: keep completed transcripts and summaries visible while branch workflows
+  update their transient status.
+- agentty: refine focused review output with compact sections, verification-gated
+  `/apply` hints, and loading, ready, and failure states that survive session refreshes.
+- agentty: run manual branch and review-request publishing in the background, preserve
+  durable PR and MR creation notices, and serialize publishing with auto-push work.
+- agentty: enforce timeouts for forge and cleanup-critical git commands, and run merged
+  session cleanup as bounded background work.
+- agentty: require Clippy checks and installed pre-commit hooks in commit workflows, and
+  warn without blocking when configured hooks are missing during session workflows.
+- agentty: report stacked child sync failures as transient session notices.
+- agentty: rename the green color theme's internal and persisted name from `hacker` to
+  `green`, migrating existing settings so users keep their selected theme.
+- ag-agent: apply provider-specific structured-output schema requirements, remove raw
+  provider payloads from errors, and bound long CLI and transcript error details.
+- ag-tui-text: bound grouped Mermaid edge generation.
+- testty: make feature GIF recording opt-in, stabilize deterministic recording, batch
+  PTY proof steps, and run parallel E2E feature validation in presubmit.
+- docs: refresh the website and documentation experience with responsive layouts,
+  accessibility improvements, static feature posters, and shared search.
+- deps: bump `tachyonfx` from `0.25.0` to `0.25.1`.
+- ci: bump `taiki-e/install-action` from `2.82.8` to `2.82.10`.
+- release: bump workspace crate metadata and lockfile package versions to `0.13.0`.
+
+### Removed
+
+- agentty: remove the review-comments preview from the `Diff` view.
+- agentty: remove the process-local `Logs` tab and its in-memory logging pipeline.
+
+### Fixed
+
+- agentty: refresh assigned issue views when observable issue state changes.
+- agentty: prevent stale `InProgress` session state from starting a duplicate worker.
+- agentty: treat punctuated empty focused-review suggestions as empty.
+- agentty: align session-output wrapping and scroll metrics with the scrollbar gutter.
+
+### Contributors
+
+- @andagaev
+- @dependabot
+- @minev-dev
 
 ## [v0.12.9] - 2026-07-11
 
