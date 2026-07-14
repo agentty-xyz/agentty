@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use tokio::task::spawn_blocking;
 
 use super::error::GitError;
-use super::repo::{main_repo_root_sync, resolve_git_dir, run_git_command_sync};
+use super::repo::{
+    main_repo_root, resolve_git_dir, run_git_command_cancellable, run_git_command_sync,
+};
 
 /// Detects git repository information for the given directory.
 /// Returns the current branch name if in a git repository, None otherwise.
@@ -77,21 +79,25 @@ pub(crate) async fn create_worktree(
 /// Ok(()) on success, Err([`GitError`]) on failure.
 ///
 /// # Errors
-/// Returns [`GitError::CommandFailed`] if spawning fails or the worktree
-/// remove command exits with a non-zero status.
+/// Returns [`GitError::CommandTimedOut`] when repository inspection or
+/// worktree removal exceeds its runtime bound, or [`GitError::CommandFailed`]
+/// if spawning fails or the command exits with a non-zero status.
 pub(crate) async fn remove_worktree(worktree_path: PathBuf) -> Result<(), GitError> {
-    spawn_blocking(move || {
-        let repo_root = main_repo_root_sync(&worktree_path)?;
-        let worktree_path = worktree_path.to_string_lossy().to_string();
-        run_git_command_sync(
-            &repo_root,
-            &["worktree", "remove", "--force", worktree_path.as_str()],
-            "Git worktree command failed",
-        )?;
+    let repo_root = main_repo_root(worktree_path.clone()).await?;
+    let worktree_path = worktree_path.to_string_lossy().to_string();
+    run_git_command_cancellable(
+        repo_root,
+        vec![
+            "worktree".to_string(),
+            "remove".to_string(),
+            "--force".to_string(),
+            worktree_path,
+        ],
+        "Git worktree command failed".to_string(),
+    )
+    .await?;
 
-        Ok(())
-    })
-    .await?
+    Ok(())
 }
 
 /// Returns branch information for a repository directory in synchronous code.

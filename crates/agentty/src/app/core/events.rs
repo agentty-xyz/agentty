@@ -3,6 +3,7 @@
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use app::branch_publish::{
     BranchPublishActionUpdate, BranchPublishTaskResult, BranchPublishTaskSuccess,
@@ -24,7 +25,7 @@ use super::state::{
     UpdateStatus,
 };
 use crate::app::session::{
-    StatusTransition, SyncMainOutcome, SyncSessionStartError, TurnAppliedState,
+    SessionTaskService, StatusTransition, SyncMainOutcome, SyncSessionStartError, TurnAppliedState,
 };
 use crate::app::session_state::SessionGitStatus;
 use crate::app::{self, sync_message};
@@ -33,7 +34,7 @@ use crate::domain::file_entry::{FileEntry, at_mention_lookup_root};
 use crate::domain::input::InputState;
 use crate::domain::question::default_option_index;
 use crate::domain::session::{
-    PublishBranchAction, PublishedBranchSyncStatus, SessionId, SessionSize, Status,
+    PublishBranchAction, PublishedBranchSyncStatus, SessionHandles, SessionId, SessionSize, Status,
 };
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::presentation::app_mode::{AppMode, ChatFocus, ConfirmationViewMode};
@@ -1747,6 +1748,10 @@ impl App {
         let Ok(handles) = self.sessions.session_handles_or_err(session_id) else {
             return None;
         };
+        let should_schedule_cleanup = handles
+            .status
+            .lock()
+            .is_ok_and(|status| *status != Status::Done);
 
         let mut warnings = Vec::new();
 
@@ -1769,17 +1774,6 @@ impl App {
         let source_branch = crate::app::session::session_branch(session_id);
         let app_event_tx = self.services.event_sender();
 
-        if let Err(error) = crate::app::session::SessionManager::cleanup_merged_session_worktree(
-            folder,
-            self.services.fs_client(),
-            self.services.git_client(),
-            source_branch,
-            None,
-        )
-        .await
-        {
-            warnings.push(format!("Worktree cleanup failed: {error}"));
-        }
         match crate::app::session::SessionManager::restack_child_sessions_after_parent_merge(
             self.services.db(),
             session_id,
@@ -1801,9 +1795,61 @@ impl App {
 
         let status_transition =
             StatusTransition::from_services(&self.services, handles, session_id);
-        let _ = status_transition.apply(Status::Done).await;
+        let status_applied = status_transition.apply(Status::Done).await;
+        if should_schedule_cleanup && status_applied {
+            self.spawn_externally_merged_session_cleanup(
+                session_id,
+                folder,
+                source_branch,
+                handles,
+            );
+        }
 
         (!warnings.is_empty()).then(|| warnings.join("\n"))
+    }
+
+    /// Removes an externally merged session worktree without delaying terminal
+    /// input or redraws, persisting any cleanup warning after the task
+    /// finishes.
+    fn spawn_externally_merged_session_cleanup(
+        &self,
+        session_id: &str,
+        folder: PathBuf,
+        source_branch: String,
+        handles: &SessionHandles,
+    ) {
+        let app_event_tx = self.services.event_sender();
+        let db = self.services.db().clone();
+        let fs_client = self.services.fs_client();
+        let git_client = self.services.git_client();
+        let session_id = SessionId::from(session_id);
+        let session_update_versions = self.services.session_update_versions();
+        let transcript = Arc::clone(&handles.transcript);
+        let cleanup_task = tokio::spawn(async move {
+            if let Err(error) =
+                crate::app::session::SessionManager::cleanup_merged_session_worktree(
+                    folder,
+                    fs_client,
+                    git_client,
+                    source_branch,
+                    None,
+                )
+                .await
+            {
+                let warning = TranscriptNotice::ReviewRequestSyncWarning
+                    .format(format!("Worktree cleanup failed: {error}"));
+                SessionTaskService::append_workflow_notice(
+                    &transcript,
+                    &db,
+                    &app_event_tx,
+                    &session_update_versions,
+                    session_id.as_str(),
+                    &warning,
+                )
+                .await;
+            }
+        });
+        self.services.track_cleanup_task(cleanup_task);
     }
 
     /// Transitions one externally closed review session to `Canceled`.

@@ -5056,7 +5056,7 @@ async fn test_apply_review_request_status_update_closed_cancels_stacked_child() 
 }
 
 #[tokio::test]
-async fn test_apply_review_request_status_update_merged_marks_session_done() {
+async fn test_apply_review_request_status_update_merged_schedules_cleanup_once() {
     // Arrange
     let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
         Arc::new(MockTmuxClient::new()),
@@ -5084,27 +5084,63 @@ async fn test_apply_review_request_status_update_merged_marks_session_done() {
         .join(SESSION_DATA_DIR);
     fs::create_dir_all(session_data_dir).expect("failed to create session data dir");
     app.refresh_sessions_now().await;
+    let (cleanup_started_tx, mut cleanup_started_rx) = tokio::sync::mpsc::unbounded_channel();
+    let cleanup_release = Arc::new(tokio::sync::Notify::new());
+    let mut mock_git_client = ag_git::MockGitClient::new();
+    mock_git_client.expect_main_repo_root().times(1).returning({
+        let cleanup_release = Arc::clone(&cleanup_release);
 
-    let task_result = SyncReviewRequestTaskResult {
-        outcome: session::SyncReviewRequestOutcome::Merged {
-            display_id: "#9".to_string(),
-            session_head_hash: Some("abc1234".to_string()),
-        },
-        summary: Some(test_review_request_summary(
-            "#9",
-            ReviewRequestState::Merged,
-        )),
-    };
+        move |_| {
+            let cleanup_release = Arc::clone(&cleanup_release);
+            let cleanup_started_tx = cleanup_started_tx.clone();
 
-    let update = ReviewRequestStatusUpdate {
+            Box::pin(async move {
+                let _ = cleanup_started_tx.send(());
+                cleanup_release.notified().await;
+
+                Ok(PathBuf::from("/tmp/repo"))
+            })
+        }
+    });
+    mock_git_client
+        .expect_remove_worktree()
+        .times(1)
+        .returning(|_| Box::pin(async { Ok(()) }));
+    mock_git_client
+        .expect_delete_branch()
+        .times(1)
+        .returning(|_, _| Box::pin(async { Ok(()) }));
+    install_mock_git_client(&mut app, mock_git_client);
+
+    let merged_update = || ReviewRequestStatusUpdate {
         generation: 0,
-        result: Ok(task_result),
+        result: Ok(SyncReviewRequestTaskResult {
+            outcome: session::SyncReviewRequestOutcome::Merged {
+                display_id: "#9".to_string(),
+                session_head_hash: Some("abc1234".to_string()),
+            },
+            summary: Some(test_review_request_summary(
+                "#9",
+                ReviewRequestState::Merged,
+            )),
+        }),
         session_id: session_id.into(),
     };
 
     // Act
-    app.apply_review_request_status_update(update).await;
+    tokio::time::timeout(
+        Duration::from_millis(250),
+        app.apply_review_request_status_update(merged_update()),
+    )
+    .await
+    .expect("foreground status update should not wait for worktree cleanup");
     app.process_pending_app_events().await;
+    tokio::time::timeout(Duration::from_secs(1), cleanup_started_rx.recv())
+        .await
+        .expect("cleanup task should start")
+        .expect("cleanup task should report startup");
+    app.apply_review_request_status_update(merged_update())
+        .await;
 
     // Assert
     let session = app
@@ -5121,6 +5157,16 @@ async fn test_apply_review_request_status_update_merged_marks_session_done() {
         .expect("failed to load merged commit hash")
         .expect("expected persisted merged commit hash");
     assert_eq!(merged_commit_hash, "abc1234");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), cleanup_started_rx.recv())
+            .await
+            .is_err(),
+        "duplicate merged updates should not schedule another cleanup task"
+    );
+
+    // Cleanup
+    cleanup_release.notify_one();
+    app.services.wait_for_cleanup_tasks().await;
 }
 
 #[tokio::test]

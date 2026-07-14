@@ -3,12 +3,14 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use ag_agent::AppServerClient;
 use ag_forge::ReviewRequestClient;
 use ag_git::GitClient;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use tokio::time::{self, Instant};
 use tracing::{debug, warn};
 
 use crate::app::AppEvent;
@@ -22,6 +24,9 @@ use crate::infra::review_comment_cache::ReviewCommentCache;
 
 /// Shared per-app session redraw version counters keyed by session id.
 pub(crate) type SessionUpdateVersionMap = Arc<Mutex<HashMap<SessionId, u64>>>;
+
+/// Maximum graceful-shutdown wait shared by all background cleanup tasks.
+const CLEANUP_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// External clients and cached machine-scoped availability injected into
 /// [`AppServices`].
@@ -184,28 +189,14 @@ impl AppServices {
     ///
     /// The task list is drained before awaiting so the synchronous mutex guard
     /// is never held across an `.await`. The loop repeats in case a cleanup
-    /// task registers additional cleanup work before it exits.
+    /// task registers additional cleanup work before it exits. All tasks share
+    /// one shutdown deadline; unfinished tasks are canceled after it expires.
     pub(crate) async fn wait_for_cleanup_tasks(&self) {
-        loop {
-            let cleanup_task_handles = self
-                .cleanup_task_handles
-                .lock()
-                .map(|mut task_handles| task_handles.drain(..).collect::<Vec<_>>())
-                .unwrap_or_default();
-
-            if cleanup_task_handles.is_empty() {
-                break;
-            }
-
-            for cleanup_task_handle in cleanup_task_handles {
-                if let Err(error) = cleanup_task_handle.await {
-                    warn!(
-                        error = %error,
-                        "background cleanup task failed during shutdown"
-                    );
-                }
-            }
-        }
+        wait_for_cleanup_task_handles(
+            self.cleanup_task_handles.as_ref(),
+            CLEANUP_TASK_SHUTDOWN_TIMEOUT,
+        )
+        .await;
     }
 
     /// Returns a clone of the app event sender.
@@ -246,6 +237,54 @@ impl AppServices {
     }
 }
 
+/// Waits for tracked cleanup tasks until one shared deadline, then cancels
+/// every unfinished task so terminal shutdown can continue.
+async fn wait_for_cleanup_task_handles(
+    cleanup_task_handles: &Mutex<Vec<JoinHandle<()>>>,
+    timeout: Duration,
+) {
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        let task_handles = cleanup_task_handles
+            .lock()
+            .map(|mut task_handles| task_handles.drain(..).collect::<Vec<_>>())
+            .unwrap_or_default();
+
+        if task_handles.is_empty() {
+            break;
+        }
+
+        for mut task_handle in task_handles {
+            match time::timeout_at(deadline, &mut task_handle).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    warn!(
+                        error = %error,
+                        "background cleanup task failed during shutdown"
+                    );
+                }
+                Err(_) => {
+                    task_handle.abort();
+                    warn!(
+                        timeout_seconds = timeout.as_secs(),
+                        "background cleanup task exceeded the shutdown deadline and was canceled"
+                    );
+
+                    if let Err(error) = task_handle.await
+                        && !error.is_cancelled()
+                    {
+                        warn!(
+                            error = %error,
+                            "background cleanup task failed while being canceled"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Returns a stable instrumentation label for one app event variant.
 fn app_event_label(event: &AppEvent) -> &'static str {
     match event {
@@ -282,5 +321,40 @@ fn app_event_label(event: &AppEvent) -> &'static str {
         AppEvent::PublishedBranchSyncUpdated { .. } => "PublishedBranchSyncUpdated",
         AppEvent::ReviewRequestStatusUpdated { .. } => "ReviewRequestStatusUpdated",
         AppEvent::ReviewCommentsUpdated { .. } => "ReviewCommentsUpdated",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn cleanup_task_wait_cancels_work_after_shared_deadline() {
+        // Arrange
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let task_handle = tokio::spawn(async move {
+            let _ = started_tx.send(());
+            future::pending::<()>().await;
+        });
+        let cleanup_task_handles = Mutex::new(vec![task_handle]);
+        started_rx.await.expect("cleanup task should start");
+
+        // Act
+        time::timeout(
+            Duration::from_secs(1),
+            wait_for_cleanup_task_handles(&cleanup_task_handles, Duration::from_millis(25)),
+        )
+        .await
+        .expect("cleanup wait should honor its shared deadline");
+
+        // Assert
+        assert!(
+            cleanup_task_handles
+                .lock()
+                .expect("cleanup task mutex should remain available")
+                .is_empty()
+        );
     }
 }

@@ -9,6 +9,7 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
+use std::time::Duration;
 
 use agentty::db::{DB_DIR, DB_FILE, Database};
 use agentty::domain::agent::ReasoningLevel;
@@ -1064,6 +1065,66 @@ esac
     )?;
     #[cfg(unix)]
     std::fs::set_permissions(&gh_path, std::fs::Permissions::from_mode(0o755))?;
+
+    Ok(())
+}
+
+/// Seeds a merged GitHub review response and delays runtime worktree removal
+/// so the feature scenario can prove terminal rendering stays responsive.
+fn seed_slow_merged_review_request_status(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session_with_review_request(env)?;
+
+    let gh_path = env.stub_bin.join("gh");
+    std::fs::write(
+        &gh_path,
+        r#"#!/bin/sh
+case "$*" in
+  *"auth status"*)
+    exit 0
+    ;;
+  *"pr view"*)
+    printf '%s\n' '{"number":42,"title":"Review-ready session shortcuts","state":"MERGED","url":"https://github.com/agentty-xyz/agentty/pull/42","baseRefName":"main","headRefName":"wt/review-s","isDraft":false,"mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","mergedAt":"2026-01-01T00:00:00Z"}'
+    ;;
+  *)
+    echo "unexpected gh invocation: $*" >&2
+    exit 1
+    ;;
+esac
+"#,
+    )?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&gh_path, std::fs::Permissions::from_mode(0o755))?;
+
+    install_delayed_worktree_remove_stub(env, 4)
+}
+
+/// Installs a git wrapper that delays worktree removal while forwarding all
+/// other commands to the real executable.
+fn install_delayed_worktree_remove_stub(
+    env: &BuilderEnv,
+    delay_seconds: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let real_git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|path| path.join("git"))
+        .find(|path| path.is_file())
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "git not found"))?;
+    let real_git = real_git.to_string_lossy().replace('\'', "'\"'\"'");
+    let git_path = env.stub_bin.join("git");
+    std::fs::write(
+        &git_path,
+        format!(
+            r#"#!/bin/sh
+if [ "$1" = "worktree" ] && [ "$2" = "remove" ]; then
+  exec sleep {delay_seconds}
+fi
+exec '{real_git}' "$@"
+"#
+        ),
+    )?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&git_path, std::fs::Permissions::from_mode(0o755))?;
 
     Ok(())
 }
@@ -2950,6 +3011,72 @@ fn review_request_sync_runs_in_background() -> E2eResult {
                 );
             },
         )?;
+
+    Ok(())
+}
+
+/// Verify that externally merged status updates reach `Done` without waiting
+/// for slow worktree cleanup and the terminal remains navigable.
+#[test]
+fn test_merged_review_request_cleanup_responsive() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("merged_review_request_cleanup_responsive")
+        .with_git()
+        .setup(seed_slow_merged_review_request_status)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .wait_for_text("Done", 2500)
+                    .capture_labeled(
+                        "merged_status",
+                        "Merged session reaches Done before worktree cleanup finishes",
+                    )
+                    .press_key("Tab")
+                    .wait_for_text("Review Requests", 1000)
+                    .capture_labeled(
+                        "responsive_navigation",
+                        "Tab navigation remains responsive during worktree cleanup",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Review Requests", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that confirming quit does not wait indefinitely for externally
+/// merged worktree cleanup.
+#[test]
+fn merged_review_request_cleanup_does_not_block_quit() -> E2eResult {
+    // Arrange
+    let _test_guard = common::acquire_e2e_test_lock();
+    let temp = tempfile::TempDir::new()?;
+    let env = BuilderEnv::new(temp.path())?;
+    env.init_git()?;
+    seed_slow_merged_review_request_status(&env)?;
+    install_delayed_worktree_remove_stub(&env, 30)?;
+    let mut session = env.builder().spawn()?;
+    let scenario = Scenario::new("merged_cleanup_quit")
+        .compose(&common::wait_for_agentty_startup())
+        .compose(&common::switch_to_tab("Sessions"))
+        .wait_for_text("Done", 2500)
+        .compose(&common::open_quit_dialog())
+        .press_key("y");
+
+    // Act
+    scenario.execute_in_pty(&mut session)?;
+    let exited_successfully = session.wait_for_exit(Duration::from_secs(8))?;
+
+    // Assert
+    assert!(
+        exited_successfully,
+        "confirmed quit should cancel cleanup after the shutdown deadline"
+    );
 
     Ok(())
 }
