@@ -16,6 +16,10 @@ use tokio_util::sync::CancellationToken;
 use super::agent::{AgentSelection, ReasoningLevel};
 use super::session_message::SessionTranscript;
 use crate::domain::question::QuestionItem;
+use crate::domain::transient_message::{
+    TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
+    TransientMessageSlot, TransientMessageStore,
+};
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment};
 
 /// Folder name under a project root that stores Agentty session metadata.
@@ -503,8 +507,6 @@ pub struct Session {
     /// Upstream reference recorded after the latest successful branch publish,
     /// for example `origin/wt/session-id`.
     pub published_upstream_ref: Option<String>,
-    /// Background auto-push state for the already-published upstream branch.
-    pub published_branch_sync_status: PublishedBranchSyncStatus,
     /// Model clarification questions emitted by the agent.
     pub questions: Vec<QuestionItem>,
     /// Persisted forge review-request link for this session, when available.
@@ -527,12 +529,78 @@ pub struct Session {
     pub transcript: Option<SessionTranscript>,
     /// Last update timestamp (Unix seconds).
     pub updated_at: i64,
-    /// Transient workflow notice block shown in the output panel without
-    /// being appended to the persisted transcript.
-    pub workflow_notice: Option<String>,
+    /// Explicit non-durable output slots and their render lifecycle.
+    pub(crate) transient_messages: TransientMessageStore,
 }
 
 impl Session {
+    /// Returns the latest persisted user-prompt position for transient-message
+    /// lifecycle binding.
+    pub(crate) fn latest_user_prompt_position(&self) -> Option<i64> {
+        self.transcript
+            .as_ref()?
+            .messages()
+            .iter()
+            .rev()
+            .find_map(|message| {
+                (message.kind == crate::domain::session_message::SessionMessageKind::UserPrompt)
+                    .then_some(message.position)
+            })
+    }
+
+    /// Rebuilds the visible summary slot from the latest persisted summary.
+    pub(crate) fn hydrate_summary_transient(&mut self) {
+        if matches!(
+            self.status,
+            Status::Draft
+                | Status::InProgress
+                | Status::Queued
+                | Status::Rebasing
+                | Status::Merging
+                | Status::Canceled
+        ) {
+            self.transient_messages
+                .retract(TransientMessageSlot::Summary);
+
+            return;
+        }
+
+        let Some(summary) = self
+            .summary
+            .as_deref()
+            .map(str::trim)
+            .filter(|summary| !summary.is_empty())
+            .map(ToString::to_string)
+        else {
+            self.transient_messages
+                .retract(TransientMessageSlot::Summary);
+
+            return;
+        };
+
+        self.transient_messages.upsert(TransientMessage {
+            anchor: TransientMessageAnchor::AfterCompletedTurn,
+            body: TransientMessageBody::Markdown(summary),
+            lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
+            slot: TransientMessageSlot::Summary,
+            turn_position: self.latest_user_prompt_position(),
+        });
+    }
+
+    /// Applies turn-bound lifecycle cleanup after reducer-owned snapshot sync.
+    pub(crate) fn reconcile_transient_messages(&mut self) {
+        if matches!(
+            self.status,
+            Status::InProgress | Status::Queued | Status::Rebasing | Status::Merging
+        ) && let Some(active_turn_position) = self.latest_user_prompt_position()
+        {
+            self.transient_messages
+                .clear_for_new_turn(active_turn_position);
+        }
+
+        self.hydrate_summary_transient();
+    }
+
     /// Returns the display title for this session.
     pub fn display_title(&self) -> &str {
         self.title.as_deref().unwrap_or("No title")
@@ -684,21 +752,6 @@ impl Session {
             self.published_upstream_ref.is_some() || self.review_request.is_some();
 
         has_forge_context && matches!(self.status, Status::Review | Status::AgentReview)
-    }
-
-    /// Returns one transient UI message describing an active
-    /// published-branch sync when the session tracks an upstream branch.
-    pub fn published_branch_sync_message(&self) -> Option<&'static str> {
-        self.published_upstream_ref.as_ref()?;
-
-        match self.published_branch_sync_status {
-            PublishedBranchSyncStatus::Idle
-            | PublishedBranchSyncStatus::Succeeded
-            | PublishedBranchSyncStatus::Failed => None,
-            PublishedBranchSyncStatus::InProgress => {
-                Some("Auto-pushing published branch after completed turn...")
-            }
-        }
     }
 
     /// Returns the review-request publish action currently available in session
@@ -1811,7 +1864,6 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: None,
-            published_branch_sync_status: PublishedBranchSyncStatus::Idle,
             questions: Vec::new(),
             review_request: None,
             size: SessionSize::Xs,
@@ -1821,7 +1873,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             title: None,
             transcript: None,
             updated_at: 0,
-            workflow_notice: None,
+            transient_messages: TransientMessageStore::default(),
         };
 
         // Act
@@ -1854,7 +1906,6 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: None,
-            published_branch_sync_status: PublishedBranchSyncStatus::Idle,
             questions: Vec::new(),
             review_request: None,
             size: SessionSize::Xs,
@@ -1864,7 +1915,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             title: None,
             transcript: None,
             updated_at: 0,
-            workflow_notice: None,
+            transient_messages: TransientMessageStore::default(),
         };
 
         // Act
@@ -1897,7 +1948,6 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: Some("origin/wt/session-id".to_string()),
-            published_branch_sync_status: PublishedBranchSyncStatus::Idle,
             questions: Vec::new(),
             review_request: None,
             size: SessionSize::Xs,
@@ -1907,7 +1957,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             title: None,
             transcript: None,
             updated_at: 0,
-            workflow_notice: None,
+            transient_messages: TransientMessageStore::default(),
         };
 
         // Act
@@ -1940,7 +1990,6 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: Some("origin/wt/session-id".to_string()),
-            published_branch_sync_status: PublishedBranchSyncStatus::Idle,
             questions: Vec::new(),
             review_request: None,
             size: SessionSize::Xs,
@@ -1950,7 +1999,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             title: None,
             transcript: None,
             updated_at: 0,
-            workflow_notice: None,
+            transient_messages: TransientMessageStore::default(),
         };
 
         // Act
@@ -1983,7 +2032,6 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: None,
-            published_branch_sync_status: PublishedBranchSyncStatus::Idle,
             questions: Vec::new(),
             review_request: None,
             size: SessionSize::Xs,
@@ -1993,7 +2041,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             title: None,
             transcript: None,
             updated_at: 0,
-            workflow_notice: None,
+            transient_messages: TransientMessageStore::default(),
         };
 
         // Act
@@ -2026,7 +2074,6 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: None,
-            published_branch_sync_status: PublishedBranchSyncStatus::Idle,
             questions: Vec::new(),
             review_request: None,
             size: SessionSize::Xs,
@@ -2036,7 +2083,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             title: None,
             transcript: None,
             updated_at: 0,
-            workflow_notice: None,
+            transient_messages: TransientMessageStore::default(),
         };
 
         // Act
@@ -2251,51 +2298,6 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
 
         // Act / Assert
         assert!(!session.can_sync_review_request());
-    }
-
-    #[test]
-    fn test_published_branch_sync_message_returns_in_progress_copy() {
-        // Arrange
-        let mut session = test_session(None);
-        session.published_upstream_ref = Some("origin/wt/session-id".to_string());
-        session.published_branch_sync_status = PublishedBranchSyncStatus::InProgress;
-
-        // Act
-        let sync_message = session.published_branch_sync_message();
-
-        // Assert
-        assert_eq!(
-            sync_message,
-            Some("Auto-pushing published branch after completed turn...")
-        );
-    }
-
-    #[test]
-    fn test_published_branch_sync_message_omits_succeeded_copy() {
-        // Arrange
-        let mut session = test_session(None);
-        session.published_upstream_ref = Some("origin/wt/session-id".to_string());
-        session.published_branch_sync_status = PublishedBranchSyncStatus::Succeeded;
-
-        // Act
-        let sync_message = session.published_branch_sync_message();
-
-        // Assert
-        assert_eq!(sync_message, None);
-    }
-
-    #[test]
-    fn test_published_branch_sync_message_omits_failed_copy() {
-        // Arrange
-        let mut session = test_session(None);
-        session.published_upstream_ref = Some("origin/wt/session-id".to_string());
-        session.published_branch_sync_status = PublishedBranchSyncStatus::Failed;
-
-        // Act
-        let sync_message = session.published_branch_sync_message();
-
-        // Assert
-        assert_eq!(sync_message, None);
     }
 
     #[test]

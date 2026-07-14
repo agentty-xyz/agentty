@@ -13,6 +13,7 @@ pub mod session_order;
 pub mod setting;
 pub mod theme;
 pub(crate) mod transcript_notice;
+pub(crate) mod transient_message;
 
 /// Agent provider and model metadata used by the domain layer.
 pub mod agent {

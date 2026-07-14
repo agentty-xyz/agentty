@@ -197,6 +197,9 @@ pub(crate) enum AppEvent {
     /// Indicates that one published session branch started or finished a
     /// background auto-push after a completed turn.
     PublishedBranchSyncUpdated {
+        /// Durable transcript notice promoted into place for a terminal
+        /// operation, or `None` for progress-only updates.
+        persistent_notice: Option<String>,
         session_id: SessionId,
         sync_operation_id: String,
         sync_status: PublishedBranchSyncStatus,
@@ -290,6 +293,8 @@ pub(super) struct LatestAvailableVersionUpdate {
 
 /// One ordered published-branch sync update queued for one session.
 pub(super) struct PublishedBranchSyncUpdate {
+    /// Durable notice promoted while retracting the matching loading slot.
+    persistent_notice: Option<String>,
     /// Operation identifier used to ignore stale terminal auto-push updates.
     sync_operation_id: String,
     /// Auto-push state carried by this update.
@@ -451,6 +456,7 @@ impl AppEventBatch {
                 self.collect_session_workflow_notice_updated(session_id, notice);
             }
             AppEvent::PublishedBranchSyncUpdated {
+                persistent_notice,
                 session_id,
                 sync_operation_id,
                 sync_status,
@@ -458,6 +464,7 @@ impl AppEventBatch {
                 session_id,
                 sync_operation_id,
                 sync_status,
+                persistent_notice,
             ),
             AppEvent::ReviewRequestStatusUpdated {
                 generation,
@@ -703,6 +710,7 @@ impl AppEventBatch {
         session_id: SessionId,
         sync_operation_id: String,
         sync_status: PublishedBranchSyncStatus,
+        persistent_notice: Option<String>,
     ) {
         if matches!(
             sync_status,
@@ -711,9 +719,11 @@ impl AppEventBatch {
             self.should_refresh_git_status = true;
         }
 
+        self.session_ids.insert(session_id.clone());
         self.published_branch_sync_updates.push((
             session_id,
             PublishedBranchSyncUpdate {
+                persistent_notice,
                 sync_operation_id,
                 sync_status,
             },
@@ -879,7 +889,8 @@ impl App {
             self.apply_agent_response_received(&session_id, &turn_applied_state);
         }
         for (session_id, sync_update) in event_batch.published_branch_sync_updates {
-            self.apply_published_branch_sync_update(&session_id, sync_update);
+            self.apply_published_branch_sync_update(&session_id, sync_update)
+                .await;
         }
 
         if let Some(conflicted_files) = event_batch.sync_main_conflicted_files.as_deref() {
@@ -914,6 +925,7 @@ impl App {
             self.settings.default_review_selection,
         )
         .await;
+        app::review::hydrate_review_transients(&self.review_cache, self.sessions.state_mut());
 
         if let Some(sync_main_result) = event_batch.sync_main_result {
             let sync_popup_context = self.sync_popup_context();
@@ -1486,12 +1498,13 @@ impl App {
 
     /// Routes one published-branch auto-push update to the matching in-memory
     /// session snapshot.
-    fn apply_published_branch_sync_update(
+    async fn apply_published_branch_sync_update(
         &mut self,
         session_id: &str,
         sync_update: PublishedBranchSyncUpdate,
     ) {
         let PublishedBranchSyncUpdate {
+            persistent_notice,
             sync_operation_id,
             sync_status,
         } = sync_update;
@@ -1504,11 +1517,19 @@ impl App {
             PublishedBranchSyncStatus::Idle
             | PublishedBranchSyncStatus::Succeeded
             | PublishedBranchSyncStatus::Failed => {
-                self.sessions.finish_published_branch_sync(
+                let was_applied = self.sessions.finish_published_branch_sync(
                     session_id,
                     &sync_operation_id,
-                    sync_status,
+                    persistent_notice.as_deref(),
                 );
+                if was_applied && let Some(persistent_notice) = persistent_notice {
+                    SessionTaskService::persist_workflow_notice(
+                        self.services.db(),
+                        session_id,
+                        &persistent_notice,
+                    )
+                    .await;
+                }
             }
         }
     }

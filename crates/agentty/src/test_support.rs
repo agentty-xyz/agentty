@@ -30,12 +30,13 @@ use crate::domain::question::QuestionItem;
 use crate::domain::selection::SelectionState;
 #[cfg(test)]
 use crate::domain::session::{
-    PublishedBranchSyncStatus, ReviewRequest, Session, SessionHandles, SessionId, SessionSize,
-    SessionStats, Status,
+    ReviewRequest, Session, SessionHandles, SessionId, SessionSize, SessionStats, Status,
 };
 #[cfg(test)]
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use crate::domain::setting::SettingName;
+#[cfg(test)]
+use crate::domain::transient_message::TransientMessageStore;
 #[cfg(test)]
 use crate::presentation::app_mode::AppMode;
 
@@ -162,7 +163,6 @@ impl SessionFixtureBuilder {
                 queued_messages: Vec::new(),
                 reasoning_level_override: None,
                 published_upstream_ref: None,
-                published_branch_sync_status: PublishedBranchSyncStatus::Idle,
                 questions: Vec::new(),
                 review_request: None,
                 size: SessionSize::Xs,
@@ -172,7 +172,7 @@ impl SessionFixtureBuilder {
                 title: None,
                 transcript: None,
                 updated_at: 0,
-                workflow_notice: None,
+                transient_messages: TransientMessageStore::default(),
             },
         }
     }
@@ -286,7 +286,9 @@ impl SessionFixtureBuilder {
     }
 
     /// Consumes the builder and returns the fully populated fixture.
-    pub(crate) fn build(self) -> Session {
+    pub(crate) fn build(mut self) -> Session {
+        self.session.hydrate_summary_transient();
+
         self.session
     }
 }

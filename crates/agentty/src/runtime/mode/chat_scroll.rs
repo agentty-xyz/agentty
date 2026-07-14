@@ -40,15 +40,13 @@ impl ChatScrollMetrics {
     ) -> Self {
         let page_area = layout::app_frame_areas(terminal_size).content_area;
         let output_width = page_area.width.saturating_sub(2);
-        let (review_status_message, review_text) = app.review_view_state(session_id);
+        let (_, review_text) = app.review_view_state(session_id);
 
         let total_lines = session_output_metric::rendered_output_line_count_with_cache(
             app,
             render_cache_store,
             session_id,
             session_index,
-            review_status_message.as_deref(),
-            review_text,
             output_width,
         );
         let view_height = app.sessions.session_at(session_index).map_or_else(

@@ -6,12 +6,9 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Borders;
 
-use crate::app;
-use crate::domain::agent::{AgentModel, ReasoningLevel};
+use crate::domain::agent::ReasoningLevel;
 use crate::domain::review;
-use crate::domain::session::{
-    COMMITTING_PROGRESS_LABEL, PublishedBranchSyncStatus, Session, Status,
-};
+use crate::domain::session::{COMMITTING_PROGRESS_LABEL, Session, Status};
 use crate::presentation::help_action::{self, ViewHelpState};
 use crate::ui::icon::Icon;
 use crate::ui::{markdown, style};
@@ -242,7 +239,6 @@ pub fn session_output_status_line(
     status: Status,
     active_progress: Option<&str>,
     review_status_message: Option<&str>,
-    review_model: AgentModel,
 ) -> Option<Line<'static>> {
     if !matches!(
         status,
@@ -256,7 +252,7 @@ pub fn session_output_status_line(
     }
 
     let status_message =
-        session_output_status_message(status, active_progress, review_status_message, review_model);
+        session_output_status_message(status, active_progress, review_status_message);
 
     Some(Line::from(vec![Span::styled(
         format!("{} {status_message}", session_output_status_icon(status)),
@@ -264,20 +260,12 @@ pub fn session_output_status_line(
     )]))
 }
 
-/// Builds the published-branch sync status line appended after transcript
-/// content while an auto-push is in progress.
-pub fn session_output_published_branch_sync_line(session: &Session) -> Option<Line<'static>> {
-    let sync_message = session.published_branch_sync_message()?;
-
-    Some(Line::from(vec![Span::styled(
-        format!(
-            "{} {sync_message}",
-            session_output_published_branch_sync_icon(session.published_branch_sync_status)
-        ),
-        Style::default().fg(session_output_published_branch_sync_color(
-            session.published_branch_sync_status,
-        )),
-    )]))
+/// Builds one animated loading row for an explicit transient workflow slot.
+pub(crate) fn session_output_transient_loading_line(message: &str) -> Line<'static> {
+    Line::from(vec![Span::styled(
+        format!("{} {}", Icon::Spinner, message.trim()),
+        Style::default().fg(style::palette::warning()),
+    )])
 }
 
 /// Returns one rendered summary section or the shared empty placeholder.
@@ -299,7 +287,6 @@ fn session_output_status_message(
     status: Status,
     active_progress: Option<&str>,
     review_status_message: Option<&str>,
-    review_model: AgentModel,
 ) -> String {
     match status {
         Status::InProgress => active_progress
@@ -318,10 +305,8 @@ fn session_output_status_message(
         Status::AgentReview => review_status_message
             .map(str::trim)
             .filter(|status_message| !status_message.is_empty())
-            .map_or_else(
-                || app::review_loading_message(review_model),
-                ToString::to_string,
-            ),
+            .unwrap_or("Reviewing changes...")
+            .to_string(),
         Status::Queued => "Waiting in merge queue...".to_string(),
         Status::Rebasing => "Rebasing...".to_string(),
         Status::Merging => "Merging...".to_string(),
@@ -346,32 +331,10 @@ fn session_output_status_icon(status: Status) -> Icon {
     }
 }
 
-/// Returns the icon used for published-branch sync status lines.
-fn session_output_published_branch_sync_icon(sync_status: PublishedBranchSyncStatus) -> Icon {
-    match sync_status {
-        PublishedBranchSyncStatus::Idle => Icon::Pending,
-        PublishedBranchSyncStatus::InProgress => Icon::Spinner,
-        PublishedBranchSyncStatus::Succeeded => Icon::Check,
-        PublishedBranchSyncStatus::Failed => Icon::Warn,
-    }
-}
-
-/// Returns the color used for published-branch sync status lines.
-fn session_output_published_branch_sync_color(
-    sync_status: PublishedBranchSyncStatus,
-) -> ratatui::style::Color {
-    match sync_status {
-        PublishedBranchSyncStatus::Idle => style::palette::text_muted(),
-        PublishedBranchSyncStatus::InProgress | PublishedBranchSyncStatus::Failed => {
-            style::palette::warning()
-        }
-        PublishedBranchSyncStatus::Succeeded => style::palette::success(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::agent::AgentModel;
     use crate::domain::session::{
         ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
     };

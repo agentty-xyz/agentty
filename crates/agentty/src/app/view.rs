@@ -6,7 +6,6 @@ use std::path::Path;
 use crate::app::session_state::SessionGitStatus;
 use crate::app::{
     App, AssignedIssueState, RequestedReviewState, SettingsManager, Tab, UpdateStatus,
-    review_view_state,
 };
 use crate::domain::agent::AgentCliInfo;
 use crate::domain::project::ProjectListItem;
@@ -17,7 +16,6 @@ use crate::presentation::app_mode::{AppMode, HelpContext};
 /// Focused-review display state for the visible session.
 pub(crate) struct SessionReviewView<'a> {
     pub(crate) session_id: &'a str,
-    pub(crate) status_message: Option<String>,
     pub(crate) text: Option<&'a str>,
 }
 
@@ -65,17 +63,9 @@ impl App {
             u64::try_from(wall_clock_unix_seconds.div_euclid(60)).unwrap_or_default();
         let visible_session_id = visible_review_session_id(&self.mode);
         let session_review = visible_session_id.map(|session_id| {
-            let (status_message, text) = review_view_state(
-                &self.review_cache,
-                session_id,
-                self.settings.default_review_selection.model(),
-            );
+            let (_, text) = self.review_view_state(session_id);
 
-            SessionReviewView {
-                session_id,
-                status_message,
-                text,
-            }
+            SessionReviewView { session_id, text }
         });
         let project = self.projects.render_parts();
         let sessions = self.sessions.render_parts();

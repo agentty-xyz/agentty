@@ -148,6 +148,7 @@ impl SessionState {
         };
 
         Self::sync_session_with_handles(session, session_handles);
+        session.reconcile_transient_messages();
     }
 
     /// Copies current values from runtime handles into plain `Session` fields.
@@ -164,6 +165,7 @@ impl SessionState {
             };
 
             Self::sync_session_with_handles(session, session_handles);
+            session.reconcile_transient_messages();
         }
     }
 
@@ -407,6 +409,7 @@ mod tests {
     use crate::domain::selection::SelectionState;
     use crate::domain::session::{Session, SessionHandles, SessionSize, SessionStats, Status};
     use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
+    use crate::domain::transient_message::TransientMessageStore;
     use crate::test_support::SessionFixtureBuilder;
 
     struct FixedClock {
@@ -466,7 +469,6 @@ mod tests {
             queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: None,
-            published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
             questions: Vec::new(),
             review_request: None,
             size: SessionSize::Xs,
@@ -476,7 +478,7 @@ mod tests {
             title: None,
             transcript: Some(crate::test_support::assistant_transcript("old")),
             updated_at: 0,
-            workflow_notice: None,
+            transient_messages: TransientMessageStore::default(),
         };
         let handles: HashMap<SessionId, SessionHandles> = HashMap::from([(
             session_id.into(),
@@ -526,7 +528,6 @@ mod tests {
             queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: None,
-            published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
             questions: Vec::new(),
             review_request: None,
             size: SessionSize::Xs,
@@ -536,7 +537,7 @@ mod tests {
             title: None,
             transcript: Some(crate::test_support::assistant_transcript("Old")),
             updated_at: 0,
-            workflow_notice: None,
+            transient_messages: TransientMessageStore::default(),
         };
         let handles = SessionHandles::new_with_transcript(
             Status::InProgress,
@@ -575,7 +576,6 @@ mod tests {
             queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: None,
-            published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
             questions: Vec::new(),
             review_request: None,
             size: SessionSize::Xs,
@@ -585,7 +585,7 @@ mod tests {
             title: None,
             transcript: Some(crate::test_support::assistant_transcript("first line\n")),
             updated_at: 0,
-            workflow_notice: None,
+            transient_messages: TransientMessageStore::default(),
         };
         let handles = SessionHandles::new_with_transcript(
             Status::InProgress,
@@ -648,7 +648,6 @@ mod tests {
             queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: None,
-            published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
             questions: Vec::new(),
             review_request: None,
             size: SessionSize::Xs,
@@ -658,7 +657,7 @@ mod tests {
             title: None,
             transcript: None,
             updated_at: 0,
-            workflow_notice: None,
+            transient_messages: TransientMessageStore::default(),
         };
         let mut state = SessionState::new(
             HashMap::new(),
@@ -702,7 +701,6 @@ mod tests {
             queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: None,
-            published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
             questions: Vec::new(),
             review_request: None,
             size: SessionSize::Xs,
@@ -712,7 +710,7 @@ mod tests {
             title: None,
             transcript: None,
             updated_at: 0,
-            workflow_notice: None,
+            transient_messages: TransientMessageStore::default(),
         };
         let replacement_session = Session {
             base_branch: "main".to_string(),
@@ -734,7 +732,6 @@ mod tests {
             queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: None,
-            published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
             questions: Vec::new(),
             review_request: None,
             size: SessionSize::Xs,
@@ -744,7 +741,7 @@ mod tests {
             title: None,
             transcript: None,
             updated_at: 0,
-            workflow_notice: None,
+            transient_messages: TransientMessageStore::default(),
         };
         let mut state = SessionState::new(
             HashMap::new(),
@@ -788,7 +785,6 @@ mod tests {
             queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: None,
-            published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
             questions: Vec::new(),
             review_request: None,
             size: SessionSize::Xs,
@@ -798,7 +794,7 @@ mod tests {
             title: None,
             transcript: None,
             updated_at: 0,
-            workflow_notice: None,
+            transient_messages: TransientMessageStore::default(),
         };
         let second_session = Session {
             base_branch: "main".to_string(),
@@ -820,7 +816,6 @@ mod tests {
             queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: None,
-            published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
             questions: Vec::new(),
             review_request: None,
             size: SessionSize::Xs,
@@ -830,7 +825,7 @@ mod tests {
             title: None,
             transcript: None,
             updated_at: 0,
-            workflow_notice: None,
+            transient_messages: TransientMessageStore::default(),
         };
         let mut state = SessionState::new(
             HashMap::new(),
@@ -877,7 +872,6 @@ mod tests {
             queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: None,
-            published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
             questions: Vec::new(),
             review_request: None,
             size: SessionSize::Xs,
@@ -887,7 +881,7 @@ mod tests {
             title: None,
             transcript: Some(crate::test_support::assistant_transcript("abc")),
             updated_at: 0,
-            workflow_notice: None,
+            transient_messages: TransientMessageStore::default(),
         };
         let handles = SessionHandles::new_with_transcript(
             Status::Review,
@@ -978,7 +972,6 @@ mod tests {
             queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: None,
-            published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
             questions: Vec::new(),
             review_request: None,
             size: SessionSize::Xs,
@@ -988,7 +981,7 @@ mod tests {
             title: None,
             transcript: None,
             updated_at: 0,
-            workflow_notice: None,
+            transient_messages: TransientMessageStore::default(),
         };
         surviving_session
             .follow_up_tasks
@@ -1018,7 +1011,6 @@ mod tests {
             queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: None,
-            published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
             questions: Vec::new(),
             review_request: None,
             size: SessionSize::Xs,
@@ -1028,7 +1020,7 @@ mod tests {
             title: None,
             transcript: None,
             updated_at: 0,
-            workflow_notice: None,
+            transient_messages: TransientMessageStore::default(),
         };
         let mut state = SessionState::new(
             HashMap::new(),

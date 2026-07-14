@@ -24,7 +24,6 @@ pub(crate) fn render_app(
             .as_ref()
             .map(|review| SessionReviewSnapshot {
                 session_id: review.session_id,
-                status_message: review.status_message.clone(),
                 text: review.text,
             });
     let _theme_scope = style::scoped_active_theme(snapshot.settings.theme);

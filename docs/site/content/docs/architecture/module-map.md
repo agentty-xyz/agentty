@@ -54,9 +54,10 @@ For file-level detail, read the module docstrings directly.
   direct process, filesystem, or clock calls — everything external goes through `infra/`
   traits.
 - `domain/`: Pure business entities and logic — sessions and statuses, projects,
-  settings keys, themes, structured questions, typed transcript messages,
-  prompt-composer logic, and thin re-export modules for `ag-agent` provider models plus
-  shared protocol question and turn prompt payloads. No I/O.
+  settings keys, themes, structured questions, typed transcript messages, explicit
+  transient-message slots and lifecycles, prompt-composer logic, and thin re-export
+  modules for `ag-agent` provider models plus shared protocol question and turn prompt
+  payloads. No I/O.
 - `infra/`: External integrations behind traits — Agentty data-root resolution, SQLite
   persistence (`infra/db/` repositories), git (`GitClient`, backed by `ag-git`),
   filesystem (`FsClient`), tmux, clipboard images, version checks, project discovery,

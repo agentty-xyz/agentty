@@ -2182,6 +2182,7 @@ impl SessionManager {
 
         if app_event_tx
             .send(AppEvent::PublishedBranchSyncUpdated {
+                persistent_notice: None,
                 session_id: SessionId::from(session_id),
                 sync_operation_id: sync_operation_id.clone(),
                 sync_status: PublishedBranchSyncStatus::InProgress,
@@ -4933,6 +4934,7 @@ mod tests {
                     session_id,
                     sync_operation_id,
                     sync_status,
+                    ..
                 } = event
                 {
                     sync_events.push((session_id, sync_operation_id, sync_status));

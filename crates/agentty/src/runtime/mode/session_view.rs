@@ -10,9 +10,7 @@ use crate::app::prompt_intent::{
     PromptIntentContext, PromptIntentInputMode, PromptIntentSessionMode,
 };
 use crate::app::session::{SessionTaskService, remote_branch_name_from_upstream_ref};
-use crate::app::{
-    self, App, AppEvent, ReviewCacheEntry, diff_content_hash, is_review_loading_status_message,
-};
+use crate::app::{self, App, AppEvent, ReviewCacheEntry, diff_content_hash};
 use crate::domain::input::InputState;
 use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, SessionId, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -537,10 +535,7 @@ async fn open_or_regenerate_review(
     pending_update: &mut ViewPendingUpdate,
 ) {
     let (review_status_message, review_text) = app.review_view_state(&view_context.session_id);
-    let is_loading = review_status_message
-        .as_deref()
-        .is_some_and(is_review_loading_status_message);
-    if is_loading {
+    if app.review_is_loading(&view_context.session_id) {
         return;
     }
 
@@ -848,10 +843,7 @@ async fn cancel_in_progress_turn(app: &mut App, session_id: &str) {
 /// the cache, and pressing `f` still starts manual focused review because
 /// view-mode review handling replaces suppressed entries.
 fn suppress_auto_review_for_stopped_turn(app: &mut App, session_id: &str) {
-    app.review_cache.insert(
-        SessionId::from(session_id),
-        ReviewCacheEntry::Suppressed { diff_hash: 0 },
-    );
+    app.suppress_review_output(session_id);
 }
 
 /// Switches the TUI mode from session view to the prompt input.
@@ -1067,7 +1059,7 @@ fn session_prompt_history_entries(session: &crate::domain::session::Session) -> 
 /// persisted for restart hydration.
 async fn open_review_output_mode(app: &mut App, view_context: &ViewContext) {
     if let Some(cached) = app.review_cache.get(view_context.session_id.as_str())
-        && !matches!(cached, ReviewCacheEntry::Suppressed { .. })
+        && !matches!(cached, ReviewCacheEntry::Suppressed)
     {
         return;
     }
@@ -1078,12 +1070,10 @@ async fn open_review_output_mode(app: &mut App, view_context: &ViewContext) {
     let session_folder = session.folder.clone();
     let diff = load_view_session_diff(app, view_context).await;
     if diff.trim().is_empty() {
-        app.review_cache.insert(
-            view_context.session_id.clone(),
-            ReviewCacheEntry::Ready {
-                diff_hash: diff_content_hash(&diff),
-                text: REVIEW_NO_DIFF_MESSAGE.to_string(),
-            },
+        app.set_review_ready_output(
+            &view_context.session_id,
+            diff_content_hash(&diff),
+            REVIEW_NO_DIFF_MESSAGE.to_string(),
         );
 
         return;
@@ -1091,22 +1081,12 @@ async fn open_review_output_mode(app: &mut App, view_context: &ViewContext) {
 
     if diff.starts_with("Failed to run git diff:") {
         let diff_hash = diff_content_hash(&diff);
-        app.review_cache.insert(
-            view_context.session_id.clone(),
-            ReviewCacheEntry::Ready {
-                diff_hash,
-                text: diff,
-            },
-        );
+        app.set_review_ready_output(&view_context.session_id, diff_hash, diff);
 
         return;
     }
 
     let diff_hash = diff_content_hash(&diff);
-    app.review_cache.insert(
-        view_context.session_id.clone(),
-        ReviewCacheEntry::Loading { diff_hash },
-    );
     let _ = app
         .services
         .db()
@@ -1785,7 +1765,7 @@ mod tests {
 
         // Act
         let total_lines =
-            session_output_metric::rendered_output_line_count(&app, &session_id, 0, None, None, 20);
+            session_output_metric::rendered_output_line_count(&app, &session_id, 0, 20);
 
         // Assert
         assert!(total_lines > raw_line_count);
@@ -1854,8 +1834,6 @@ mod tests {
                 &app,
                 &session_id,
                 0,
-                None,
-                None,
                 20,
             ),
             view_height: 5,
@@ -1890,30 +1868,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn test_is_review_loading_status_message_matches_model_aware_message() {
-        // Arrange
-        let status_message = review_loading_message(AgentModel::ClaudeOpus48);
-
-        // Act
-        let is_loading = is_review_loading_status_message(&status_message);
-
-        // Assert
-        assert!(is_loading);
-    }
-
-    #[test]
-    fn test_is_review_loading_status_message_rejects_unrelated_message() {
-        // Arrange
-        let status_message = "Review complete.";
-
-        // Act
-        let is_loading = is_review_loading_status_message(status_message);
-
-        // Assert
-        assert!(!is_loading);
-    }
-
     #[tokio::test]
     async fn test_view_total_lines_uses_default_review_model_for_loading_fallback() {
         // Arrange
@@ -1936,9 +1890,6 @@ mod tests {
             SessionOutputLineContext {
                 active_prompt_output: None,
                 active_progress: None,
-                review_model: AgentModel::ClaudeHaiku4520251001,
-                review_status_message: None,
-                review_text: None,
                 session_update_version: app.session_update_version(&session_id),
             },
             render_cache_store.markdown_render_cache(),
@@ -1946,14 +1897,8 @@ mod tests {
         );
 
         // Act
-        let total_lines = session_output_metric::rendered_output_line_count(
-            &app,
-            &session_id,
-            0,
-            None,
-            None,
-            output_width,
-        );
+        let total_lines =
+            session_output_metric::rendered_output_line_count(&app, &session_id, 0, output_width);
 
         // Assert
         assert_eq!(total_lines, expected);

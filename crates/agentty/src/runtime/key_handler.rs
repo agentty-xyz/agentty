@@ -6,7 +6,9 @@ use ratatui::backend::Backend;
 use ratatui::layout::{Constraint, Layout, Rect};
 use tracing::warn;
 
-use crate::app::{App, ReviewCacheEntry, diff_content_hash};
+#[cfg(test)]
+use crate::app::ReviewCacheEntry;
+use crate::app::{App, diff_content_hash};
 use crate::domain::session::SessionId;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::presentation::app_mode::{AppMode, ConfirmationIntent, ConfirmationViewMode};
@@ -740,7 +742,7 @@ async fn handle_regenerate_review_confirmation(
         return Ok(EventResult::Continue);
     };
 
-    app.review_cache.remove(session_id.as_str());
+    app.clear_review_output(session_id.as_str());
 
     let session = app
         .sessions
@@ -774,21 +776,13 @@ async fn handle_regenerate_review_confirmation(
         } else {
             diff
         };
-        app.review_cache.insert(
-            session_id,
-            ReviewCacheEntry::Ready {
-                diff_hash,
-                text: review_text,
-            },
-        );
+        app.set_review_ready_output(&session_id, diff_hash, review_text);
         app.mode = view_mode.into_view_mode();
 
         return Ok(EventResult::Continue);
     }
 
     let diff_hash = diff_content_hash(&diff);
-    app.review_cache
-        .insert(session_id.clone(), ReviewCacheEntry::Loading { diff_hash });
     let _ = app
         .services
         .db()

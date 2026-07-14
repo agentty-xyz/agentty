@@ -555,7 +555,7 @@ impl App {
         let current_hash = diff_content_hash(&current_diff);
 
         if current_hash != cached_hash {
-            self.review_cache.remove(context.session_id.as_str());
+            self.clear_review_output(context.session_id.as_str());
             self.append_prompt_status_line(
                 &context.session_id,
                 TranscriptNotice::Apply,
@@ -581,7 +581,6 @@ impl App {
         let prompt = build_apply_review_prompt(&suggestions);
 
         self.cleanup_prompt_attachment_state().await;
-        self.review_cache.remove(context.session_id.as_str());
         self.reply(&context.session_id, prompt).await;
 
         self.mode = AppMode::View {

@@ -2446,7 +2446,10 @@ async fn apply_app_events_session_workflow_notice_updates_session_state() {
         .find(|session| session.id == "session-1")
         .expect("session should exist");
     assert_eq!(
-        session.workflow_notice.as_deref(),
+        session
+            .transient_messages
+            .get(crate::domain::transient_message::TransientMessageSlot::WorkflowNotice)
+            .map(|message| message.body.text()),
         Some(
             "[Commit] No changes to commit.\n\n[Merge] Successfully merged wt/session-1 into main"
         )
@@ -3219,18 +3222,21 @@ async fn apply_app_events_ignores_stale_published_branch_sync_updates() {
 
     // Act
     app.apply_app_events(AppEvent::PublishedBranchSyncUpdated {
+        persistent_notice: None,
         session_id: "session-1".into(),
         sync_operation_id: "sync-1".to_string(),
         sync_status: PublishedBranchSyncStatus::InProgress,
     })
     .await;
     app.apply_app_events(AppEvent::PublishedBranchSyncUpdated {
+        persistent_notice: None,
         session_id: "session-1".into(),
         sync_operation_id: "sync-2".to_string(),
         sync_status: PublishedBranchSyncStatus::InProgress,
     })
     .await;
     app.apply_app_events(AppEvent::PublishedBranchSyncUpdated {
+        persistent_notice: Some("[Branch Push Error] stale failure".to_string()),
         session_id: "session-1".into(),
         sync_operation_id: "sync-1".to_string(),
         sync_status: PublishedBranchSyncStatus::Failed,
@@ -3239,8 +3245,17 @@ async fn apply_app_events_ignores_stale_published_branch_sync_updates() {
 
     // Assert
     assert_eq!(
-        app.sessions.sessions()[0].published_branch_sync_status,
-        PublishedBranchSyncStatus::InProgress
+        app.sessions.sessions()[0]
+            .transient_messages
+            .get(crate::domain::transient_message::TransientMessageSlot::PublishedBranchSync)
+            .map(|message| message.body.text()),
+        Some("Auto-pushing published branch after completed turn...")
+    );
+    assert!(
+        app.sessions.sessions()[0]
+            .transcript
+            .as_ref()
+            .is_none_or(|transcript| transcript.messages().is_empty())
     );
 }
 
@@ -3261,6 +3276,9 @@ async fn apply_app_events_preserves_completed_published_branch_sync_updates() {
 
     event_sender
         .send(AppEvent::PublishedBranchSyncUpdated {
+            persistent_notice: Some(
+                "[Branch Push] Auto-pushed published branch after completed turn.".to_string(),
+            ),
             session_id: "session-1".into(),
             sync_operation_id: "sync-1".to_string(),
             sync_status: PublishedBranchSyncStatus::Succeeded,
@@ -3269,6 +3287,7 @@ async fn apply_app_events_preserves_completed_published_branch_sync_updates() {
 
     // Act
     app.apply_app_events(AppEvent::PublishedBranchSyncUpdated {
+        persistent_notice: None,
         session_id: "session-1".into(),
         sync_operation_id: "sync-1".to_string(),
         sync_status: PublishedBranchSyncStatus::InProgress,
@@ -3276,9 +3295,25 @@ async fn apply_app_events_preserves_completed_published_branch_sync_updates() {
     .await;
 
     // Assert
+    let session = &app.sessions.sessions()[0];
+    assert!(
+        session
+            .transient_messages
+            .get(crate::domain::transient_message::TransientMessageSlot::PublishedBranchSync)
+            .is_none()
+    );
     assert_eq!(
-        app.sessions.sessions()[0].published_branch_sync_status,
-        PublishedBranchSyncStatus::Succeeded
+        session
+            .transcript
+            .as_ref()
+            .expect("promoted notice should update transcript")
+            .messages()
+            .iter()
+            .filter(|message| {
+                message.kind == crate::domain::session_message::SessionMessageKind::WorkflowNotice
+            })
+            .count(),
+        1
     );
 }
 
@@ -4622,13 +4657,7 @@ async fn auto_start_reviews_clears_cache_on_in_progress_transition() {
             PathBuf::from("/tmp/session-cache-clear"),
         ));
     app.sessions.sessions_mut()[0].status = Status::InProgress;
-    app.review_cache.insert(
-        session_id.to_string().into(),
-        ReviewCacheEntry::Ready {
-            diff_hash: 789,
-            text: "old review".to_string(),
-        },
-    );
+    app.set_review_ready_output(session_id, 789, "old review".to_string());
     let session_ids = HashSet::from([session_id.into()]);
 
     // Act
@@ -4636,6 +4665,12 @@ async fn auto_start_reviews_clears_cache_on_in_progress_transition() {
 
     // Assert
     assert!(!app.review_cache.contains_key(session_id));
+    assert!(
+        app.sessions.sessions()[0]
+            .transient_messages
+            .messages()
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -4735,18 +4770,12 @@ async fn auto_start_reviews_skips_when_auto_review_is_suppressed() {
         ));
     app.sessions.sessions_mut()[0].status = Status::Review;
 
-    let diff_text = "diff --git a/file.rs b/file.rs\n+stopped turn";
-    let hash = diff_content_hash(diff_text);
-    app.review_cache.insert(
-        session_id.to_string().into(),
-        ReviewCacheEntry::Suppressed { diff_hash: hash },
-    );
+    app.review_cache
+        .insert(session_id.to_string().into(), ReviewCacheEntry::Suppressed);
     let session_ids = HashSet::from([session_id.into()]);
 
     let mut mock_git_client = ag_git::MockGitClient::new();
-    mock_git_client
-        .expect_diff()
-        .returning(move |_, _| Box::pin(async move { Ok(diff_text.to_string()) }));
+    mock_git_client.expect_diff().times(0);
     install_mock_git_client(&mut app, mock_git_client);
 
     // Act
@@ -4755,7 +4784,7 @@ async fn auto_start_reviews_skips_when_auto_review_is_suppressed() {
     // Assert
     assert!(matches!(
         app.review_cache.get(session_id),
-        Some(ReviewCacheEntry::Suppressed { diff_hash }) if *diff_hash == hash
+        Some(ReviewCacheEntry::Suppressed)
     ));
     assert_eq!(app.sessions.sessions()[0].status, Status::Review);
 }

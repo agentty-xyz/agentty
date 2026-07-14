@@ -237,6 +237,7 @@ mod tests {
     use crate::domain::agent::AgentModel;
     use crate::domain::selection::SelectionState;
     use crate::domain::session::{Session, SessionHandles, SessionSize, SessionStats, Status};
+    use crate::domain::transient_message::TransientMessageStore;
     use crate::infra::clock::RealClock;
 
     #[test]
@@ -509,8 +510,6 @@ mod tests {
                 queued_messages: Vec::new(),
                 reasoning_level_override: None,
                 published_upstream_ref: None,
-                published_branch_sync_status:
-                    crate::domain::session::PublishedBranchSyncStatus::Idle,
                 questions: Vec::new(),
                 review_request: None,
                 size: SessionSize::Xs,
@@ -520,7 +519,7 @@ mod tests {
                 title: Some("Title".to_string()),
                 transcript: None,
                 updated_at: 0,
-                workflow_notice: None,
+                transient_messages: TransientMessageStore::default(),
             }],
             SelectionState::default(),
             Arc::new(RealClock),

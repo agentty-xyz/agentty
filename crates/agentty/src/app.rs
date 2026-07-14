@@ -36,10 +36,9 @@ pub(crate) use assigned_issue::AssignedIssueState;
 pub use error::AppError;
 pub use project::ProjectManager;
 pub(crate) use requested_review::RequestedReviewState;
-pub(crate) use review::{
-    ReviewCacheEntry, diff_content_hash, is_review_loading_status_message, review_loading_message,
-    review_view_state,
-};
+#[cfg(test)]
+pub(crate) use review::review_loading_message;
+pub(crate) use review::{ReviewCacheEntry, diff_content_hash};
 #[cfg(test)]
 pub(crate) use service::AppServiceDeps;
 pub use service::AppServices;

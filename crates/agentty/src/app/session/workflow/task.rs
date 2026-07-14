@@ -1076,6 +1076,24 @@ impl SessionTaskService {
         Self::emit_session_updated(app_event_tx, session_update_versions, id);
     }
 
+    /// Persists one workflow notice without exposing it to the live transcript.
+    ///
+    /// Reducer events use this when a transient status and its durable result
+    /// must be swapped in one observable state transition.
+    pub(crate) async fn persist_workflow_notice(db: &AppRepositories, id: &str, message: &str) {
+        if let Err(error) = db
+            .sessions()
+            .append_session_message(id, SessionMessageKind::WorkflowNotice, message)
+            .await
+        {
+            warn!(
+                session_id = id,
+                error = %error,
+                "failed to persist workflow notice"
+            );
+        }
+    }
+
     /// Appends one raw user/assistant message to the in-memory transcript and
     /// durable message store.
     pub(crate) async fn append_session_transcript_message(

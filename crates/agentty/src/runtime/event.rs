@@ -289,6 +289,7 @@ mod tests {
     use crate::domain::input::InputState;
     use crate::domain::question::QuestionItem;
     use crate::domain::session::{Session, SessionSize, SessionStats, Status};
+    use crate::domain::transient_message::TransientMessageStore;
     use crate::presentation::app_mode::{AppMode, ChatFocus};
     use crate::presentation::prompt::{
         PromptAttachmentState, PromptHistoryState, PromptSlashState,
@@ -451,7 +452,6 @@ mod tests {
             queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: None,
-            published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
             questions: Vec::new(),
             review_request: None,
             size: SessionSize::Xs,
@@ -461,7 +461,7 @@ mod tests {
             title: None,
             transcript: None,
             updated_at: 0,
-            workflow_notice: None,
+            transient_messages: TransientMessageStore::default(),
         });
         app.mode = AppMode::Prompt {
             at_mention_state: None,
