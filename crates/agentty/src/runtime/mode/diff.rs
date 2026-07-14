@@ -27,10 +27,6 @@ pub(crate) fn handle_with_cache(
         return EventResult::Continue;
     }
 
-    if handle_toggle_panel_key(app, key) {
-        return EventResult::Continue;
-    }
-
     handle_navigation_key(app, render_cache_store, content_area, key);
 
     EventResult::Continue
@@ -39,21 +35,6 @@ pub(crate) fn handle_with_cache(
 #[cfg(test)]
 fn handle(app: &mut App, content_area: Rect, key: KeyEvent) -> EventResult {
     handle_with_cache(app, &RenderCacheStore::default(), content_area, key)
-}
-
-/// Toggles the diff-mode right-hand panel between diff and comments.
-fn handle_toggle_panel_key(app: &mut App, key: KeyEvent) -> bool {
-    if !is_plain_char_key(key, 'c') {
-        return false;
-    }
-
-    if let AppMode::Diff { right_panel, .. } = &mut app.mode {
-        *right_panel = right_panel.toggled();
-
-        return true;
-    }
-
-    false
 }
 
 /// Opens diff help while preserving the current diff-mode snapshot.
@@ -67,7 +48,6 @@ fn handle_help_key(app: &mut App, key: KeyEvent) -> bool {
         diff,
         file_explorer_selected_index,
         restore_question,
-        right_panel,
         session_id,
         scroll_offset,
         ..
@@ -78,7 +58,6 @@ fn handle_help_key(app: &mut App, key: KeyEvent) -> bool {
                 diff,
                 file_explorer_selected_index,
                 restore_question,
-                right_panel,
                 session_id,
                 scroll_offset,
             },
@@ -131,7 +110,6 @@ fn handle_navigation_key(
         diff,
         mut file_explorer_selected_index,
         restore_question,
-        right_panel,
         mut scroll_cache,
         mut scroll_offset,
         session_id,
@@ -172,14 +150,11 @@ fn handle_navigation_key(
         KeyCode::Down | KeyCode::Char('J' | 'j')
             if key.code == KeyCode::Down || is_shift_char_key(key, 'j') =>
         {
-            let review_comment_snapshot = app.services.review_comment_cache().snapshot(&session_id);
             let max_scroll_offset = diff_max_scroll_offset(
                 &diff,
                 content_area,
                 file_explorer_selected_index,
                 &mut scroll_cache,
-                review_comment_snapshot.as_ref(),
-                render_cache_store.markdown_render_cache(),
                 render_cache_store.diff_layout_cache(),
             );
             let clamped_scroll_offset = scroll_offset.min(max_scroll_offset);
@@ -191,14 +166,11 @@ fn handle_navigation_key(
         KeyCode::Up | KeyCode::Char('K' | 'k')
             if key.code == KeyCode::Up || is_shift_char_key(key, 'k') =>
         {
-            let review_comment_snapshot = app.services.review_comment_cache().snapshot(&session_id);
             let max_scroll_offset = diff_max_scroll_offset(
                 &diff,
                 content_area,
                 file_explorer_selected_index,
                 &mut scroll_cache,
-                review_comment_snapshot.as_ref(),
-                render_cache_store.markdown_render_cache(),
                 render_cache_store.diff_layout_cache(),
             );
             let clamped_scroll_offset = scroll_offset.min(max_scroll_offset);
@@ -212,7 +184,6 @@ fn handle_navigation_key(
         diff,
         file_explorer_selected_index,
         restore_question,
-        right_panel,
         scroll_cache,
         scroll_offset,
         session_id,
@@ -245,10 +216,6 @@ fn diff_max_scroll_offset(
     content_area: Rect,
     selected_index: usize,
     scroll_cache: &mut Option<DiffScrollCache>,
-    review_comment_snapshot: Option<
-        &crate::infra::review_comment_cache::CachedReviewCommentSnapshot,
-    >,
-    markdown_render_cache: &crate::ui::markdown::MarkdownRenderCache,
     diff_layout_cache: &page::diff::DiffLayoutCache,
 ) -> u16 {
     if let Some(cached_scroll_limit) = scroll_cache
@@ -258,12 +225,10 @@ fn diff_max_scroll_offset(
         return cached_scroll_limit.max_scroll_offset;
     }
 
-    let max_scroll_offset = page::diff::diff_view_max_scroll_offset_with_comments(
+    let max_scroll_offset = page::diff::diff_view_max_scroll_offset(
         diff,
         selected_index,
         content_area,
-        review_comment_snapshot,
-        markdown_render_cache,
         diff_layout_cache,
     );
 
@@ -288,14 +253,10 @@ fn viewport_rect(content_area: Rect) -> ViewportRect {
 
 #[cfg(test)]
 mod tests {
-    use ag_forge::{
-        ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread,
-    };
     use crossterm::event::KeyModifiers;
     use ratatui::layout::Rect;
 
     use super::*;
-    use crate::ui::markdown;
 
     const TEST_TERMINAL_SIZE: Rect = Rect::new(0, 0, 80, 12);
 
@@ -305,40 +266,6 @@ mod tests {
             .map(|index| format!("+line {index}"))
             .collect::<Vec<_>>()
             .join("\n")
-    }
-
-    /// Returns one cached inline review thread for scroll-bound tests.
-    fn review_comment_snapshot() -> ReviewCommentSnapshot {
-        ReviewCommentSnapshot {
-            pr_level_comments: Vec::new(),
-            threads: vec![ReviewCommentThread {
-                anchor_side: ReviewCommentAnchorSide::New,
-                comments: vec![ReviewComment {
-                    author: "alice".to_string(),
-                    body: "This inline comment adds extra rendered rows.".to_string(),
-                }],
-                is_outdated: Some(false),
-                is_resolved: false,
-                line: Some(1),
-                path: "src/main.rs".to_string(),
-                start_line: None,
-            }],
-        }
-    }
-
-    /// Stores a review-comment snapshot in the production cache wrapper so
-    /// scroll-bound tests exercise the versioned render input.
-    fn cached_review_comment_snapshot(
-        snapshot: ReviewCommentSnapshot,
-    ) -> crate::infra::review_comment_cache::CachedReviewCommentSnapshot {
-        let cache = crate::infra::review_comment_cache::ReviewCommentCache::default();
-        let session_id: crate::domain::session::SessionId = "scroll-comments".into();
-
-        cache.record_snapshot(session_id.clone(), snapshot);
-
-        cache
-            .snapshot(&session_id)
-            .expect("test snapshot should be cached")
     }
 
     #[tokio::test]
@@ -352,7 +279,6 @@ mod tests {
             file_explorer_selected_index: 0,
             restore_question: None,
             scroll_cache: None,
-            right_panel: crate::presentation::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -392,7 +318,6 @@ mod tests {
             file_explorer_selected_index: 0,
             restore_question: None,
             scroll_cache: None,
-            right_panel: crate::presentation::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -425,7 +350,6 @@ mod tests {
             file_explorer_selected_index: 0,
             restore_question: None,
             scroll_cache: None,
-            right_panel: crate::presentation::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -457,7 +381,6 @@ mod tests {
             file_explorer_selected_index: 2,
             restore_question: None,
             scroll_cache: None,
-            right_panel: crate::presentation::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -490,7 +413,6 @@ mod tests {
             file_explorer_selected_index: 0,
             restore_question: None,
             scroll_cache: None,
-            right_panel: crate::presentation::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -522,7 +444,6 @@ mod tests {
             file_explorer_selected_index: 2,
             restore_question: None,
             scroll_cache: None,
-            right_panel: crate::presentation::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -573,7 +494,6 @@ mod tests {
             file_explorer_selected_index: 0,
             restore_question: None,
             scroll_cache: None,
-            right_panel: crate::presentation::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -605,7 +525,6 @@ mod tests {
             file_explorer_selected_index: 1,
             restore_question: None,
             scroll_cache: None,
-            right_panel: crate::presentation::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -637,7 +556,6 @@ mod tests {
             file_explorer_selected_index: 1,
             restore_question: None,
             scroll_cache: None,
-            right_panel: crate::presentation::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -669,7 +587,6 @@ mod tests {
             file_explorer_selected_index: 0,
             restore_question: None,
             scroll_cache: None,
-            right_panel: crate::presentation::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -701,7 +618,6 @@ mod tests {
             file_explorer_selected_index: 3,
             restore_question: None,
             scroll_cache: None,
-            right_panel: crate::presentation::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -733,17 +649,9 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         let diff = scrollable_diff_fixture();
-        let markdown_render_cache = markdown::MarkdownRenderCache::default();
         let diff_layout_cache = page::diff::DiffLayoutCache::default();
-        let max_scroll_offset = diff_max_scroll_offset(
-            &diff,
-            TEST_TERMINAL_SIZE,
-            0,
-            &mut None,
-            None,
-            &markdown_render_cache,
-            &diff_layout_cache,
-        );
+        let max_scroll_offset =
+            diff_max_scroll_offset(&diff, TEST_TERMINAL_SIZE, 0, &mut None, &diff_layout_cache);
         app.mode = AppMode::Diff {
             session_id: "session-id".into(),
             diff,
@@ -751,7 +659,6 @@ mod tests {
             file_explorer_selected_index: 0,
             restore_question: None,
             scroll_cache: None,
-            right_panel: crate::presentation::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -777,17 +684,9 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         let diff = scrollable_diff_fixture();
-        let markdown_render_cache = markdown::MarkdownRenderCache::default();
         let diff_layout_cache = page::diff::DiffLayoutCache::default();
-        let max_scroll_offset = diff_max_scroll_offset(
-            &diff,
-            TEST_TERMINAL_SIZE,
-            0,
-            &mut None,
-            None,
-            &markdown_render_cache,
-            &diff_layout_cache,
-        );
+        let max_scroll_offset =
+            diff_max_scroll_offset(&diff, TEST_TERMINAL_SIZE, 0, &mut None, &diff_layout_cache);
         app.mode = AppMode::Diff {
             session_id: "session-id".into(),
             diff,
@@ -795,7 +694,6 @@ mod tests {
             file_explorer_selected_index: 0,
             restore_question: None,
             scroll_cache: None,
-            right_panel: crate::presentation::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -814,43 +712,6 @@ mod tests {
                 ..
             } if scroll_offset == max_scroll_offset.saturating_sub(1)
         ));
-    }
-
-    #[test]
-    fn test_diff_max_scroll_offset_includes_inline_review_comments() {
-        // Arrange
-        let diff = concat!(
-            "diff --git a/src/main.rs b/src/main.rs\n",
-            "@@ -1 +1 @@\n",
-            "+new content\n"
-        );
-        let snapshot = cached_review_comment_snapshot(review_comment_snapshot());
-        let markdown_render_cache = markdown::MarkdownRenderCache::default();
-        let diff_layout_cache = page::diff::DiffLayoutCache::default();
-
-        // Act
-        let terminal_size = Rect::new(0, 0, 80, 6);
-        let without_comments = diff_max_scroll_offset(
-            diff,
-            terminal_size,
-            0,
-            &mut None,
-            None,
-            &markdown_render_cache,
-            &diff_layout_cache,
-        );
-        let with_comments = diff_max_scroll_offset(
-            diff,
-            terminal_size,
-            0,
-            &mut None,
-            Some(&snapshot),
-            &markdown_render_cache,
-            &diff_layout_cache,
-        );
-
-        // Assert
-        assert!(with_comments > without_comments);
     }
 
     #[tokio::test]
@@ -880,7 +741,6 @@ mod tests {
                 session_id: "session-q".into(),
             }),
             scroll_cache: None,
-            right_panel: crate::presentation::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -937,7 +797,6 @@ mod tests {
             file_explorer_selected_index: 1,
             restore_question: Some(snapshot),
             scroll_cache: None,
-            right_panel: crate::presentation::app_mode::DiffRightPanel::Diff,
         };
 
         // Act — open help overlay.
@@ -991,56 +850,5 @@ mod tests {
                 ..
             } if session_id == "session-q"
         ));
-    }
-
-    #[tokio::test]
-    async fn test_handle_c_toggles_diff_right_panel() {
-        use crate::presentation::app_mode::DiffRightPanel;
-
-        // Arrange
-        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
-        app.mode = AppMode::Diff {
-            session_id: "session-id".into(),
-            diff: "diff output".to_string(),
-            scroll_offset: 0,
-            file_explorer_selected_index: 0,
-            restore_question: None,
-            scroll_cache: None,
-            right_panel: DiffRightPanel::Diff,
-        };
-
-        // Act — first `c` flips Diff → Comments.
-        handle(
-            &mut app,
-            TEST_TERMINAL_SIZE,
-            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
-        );
-
-        // Intermediate assert
-        let first_panel_is_comments = matches!(
-            app.mode,
-            AppMode::Diff {
-                right_panel: DiffRightPanel::Comments,
-                ..
-            }
-        );
-        assert!(first_panel_is_comments);
-
-        // Act — second `c` flips Comments → Diff.
-        handle(
-            &mut app,
-            TEST_TERMINAL_SIZE,
-            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
-        );
-
-        // Assert
-        let second_panel_is_diff = matches!(
-            app.mode,
-            AppMode::Diff {
-                right_panel: DiffRightPanel::Diff,
-                ..
-            }
-        );
-        assert!(second_panel_is_diff);
     }
 }

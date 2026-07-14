@@ -361,12 +361,6 @@ sessions. The session list shows forge indicators next to the status label:
 When a sync detects that the review request was merged, the session moves straight to
 **Done**; a closed request moves it to **Canceled**.
 
-<a id="usage-review-comments-preview"></a> In **Review** or **AgentReview**, press `d`
-to open the diff page. Cached pull-request or merge-request line comments render below
-matching diff lines, and `c` toggles the right panel between the annotated diff and a
-comments overview grouped by file. Resolved threads are hidden. The panel is read-only —
-replies happen on the forge web UI.
-
 ## Clarification Interaction Loop
 
 <a id="usage-clarification-loop"></a> If an agent emits structured clarification

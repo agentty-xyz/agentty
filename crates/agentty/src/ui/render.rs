@@ -11,7 +11,6 @@ use crate::app::{AssignedIssueState, RequestedReviewState, SettingsManager, Tab,
 use crate::domain::agent::AgentCliInfo;
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session, SessionId};
-use crate::infra::review_comment_cache::ReviewCommentCache;
 use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
 use crate::ui::{component, layout, markdown, page, router};
 
@@ -73,8 +72,6 @@ pub struct RenderContext<'a> {
     pub project_table_state: &'a mut TableState,
     /// Project rows available for rendering.
     pub projects: &'a [ProjectListItem],
-    /// Shared cache of inline review-request comments keyed by session id.
-    pub review_comment_cache: &'a ReviewCommentCache,
     /// Focused-review state for the visible session, projected from the app
     /// cache for this render pass.
     pub session_review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
