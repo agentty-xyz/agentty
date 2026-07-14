@@ -34,6 +34,9 @@ const LOADER_SESSION_ID: &str = "loader-session-0001";
 /// Stable id for the seeded running session used by stop-turn tests.
 const RUNNING_STOP_SESSION_ID: &str = "running-stop-0001";
 
+/// Stable id for the seeded rebasing session used by message-queue tests.
+const REBASING_QUEUE_SESSION_ID: &str = "rebasing-queue-0001";
+
 /// Stable id for the seeded clarification-question session used by the
 /// question-resume test.
 const QUESTION_RESUME_SESSION_ID: &str = "question-resume-0001";
@@ -900,6 +903,21 @@ fn seed_running_stop_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
             .update_session_reasoning_level(RUNNING_STOP_SESSION_ID, ReasoningLevel::High)
             .await
     })?;
+
+    Ok(())
+}
+
+/// Seeds one rebasing session so message queueing can be exercised without a
+/// live git operation or agent backend.
+fn seed_rebasing_queue_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    common::seed_session(
+        env,
+        SessionSeed::regular(REBASING_QUEUE_SESSION_ID, "gpt-5.5", "main", "Rebasing")
+            .with_title("Rebasing message queue"),
+    )?;
+
+    let worktree_name = &REBASING_QUEUE_SESSION_ID[..8];
+    std::fs::create_dir_all(env.agentty_root.join("wt").join(worktree_name))?;
 
     Ok(())
 }
@@ -2127,6 +2145,46 @@ fn session_queue_chat_messages_during_in_progress_turn() -> E2eResult {
                 assertion::assert_text_in_region(frame, "Enter: reply", &cleared_full);
                 assertion::assert_not_visible(frame, "Ctrl+c: stop");
                 assertion::assert_not_visible(frame, "queued ›");
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify `Enter` opens the composer while a session is `Rebasing` and the
+/// submitted follow-up renders inline as queued work without replacing the
+/// active rebase status.
+#[test]
+fn session_queue_chat_message_during_rebase() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_queue_chat_message_during_rebase")
+        .with_git()
+        .setup(seed_rebasing_queue_session)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_text("Rebasing...", 5000)
+                    .wait_for_text("Enter: queue message", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Type your message", 5000)
+                    .write_text("follow up after sync")
+                    .wait_for_text("follow up after sync", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("queued ›", 5000)
+                    .viewing_pause_ms(1000)
+                    .capture_labeled(
+                        "message_queued_during_rebase",
+                        "Follow-up message queued inline while session sync remains active",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Rebasing...", &full);
+                assertion::assert_text_in_region(frame, "queued ›", &full);
+                assertion::assert_text_in_region(frame, "follow up after sync", &full);
             },
         )?;
 

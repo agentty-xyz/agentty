@@ -397,14 +397,18 @@ fn prompt_context(app: &mut App) -> Option<PromptContext> {
             (false, _, _) => PromptSessionMode::Existing,
         }
     });
-    // While the session is `InProgress` the composer queues the next chat
-    // message instead of dispatching it. Demote a leading `/` to plain text
-    // so slash commands cannot run while the active turn is still in flight
-    // and so arrow-key navigation behaves as text editing rather than slash
-    // menu selection.
-    let session_is_in_progress =
-        session.is_some_and(|session| session.status == crate::domain::session::Status::InProgress);
-    let input_mode = match (is_at_mention, is_slash_command, session_is_in_progress) {
+    // While the session is `InProgress` or `Rebasing` the composer queues the
+    // next chat message instead of dispatching it. Demote a leading `/` to
+    // plain text so slash commands cannot run while the active operation is
+    // still in flight and so arrow-key navigation behaves as text editing
+    // rather than slash-menu selection.
+    let session_queues_messages = session.is_some_and(|session| {
+        matches!(
+            session.status,
+            crate::domain::session::Status::InProgress | crate::domain::session::Status::Rebasing
+        )
+    });
+    let input_mode = match (is_at_mention, is_slash_command, session_queues_messages) {
         (true, _, _) => PromptInputMode::AtMention,
         (false, true, false) => PromptInputMode::SlashCommand,
         (false, _, _) => PromptInputMode::Text,
@@ -655,9 +659,9 @@ fn advance_prompt_slash_selection(app: &mut App) {
 ///
 /// A submitted prompt clears any cached focused-review output for the session
 /// so the next turn starts from the raw transcript again. While the session
-/// is `InProgress`, slash command mode is already demoted to text in
-/// [`prompt_context`], so any leading `/` falls through to the queue path
-/// instead of executing a slash command against the running turn.
+/// is `InProgress` or `Rebasing`, slash command mode is already demoted to
+/// text in [`prompt_context`], so any leading `/` falls through to the queue
+/// path instead of executing a slash command against the active operation.
 async fn handle_prompt_submit_key(app: &mut App, prompt_context: &PromptContext) {
     app.handle_prompt_submit_intent(&prompt_context.to_intent_context())
         .await;
@@ -3030,9 +3034,29 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies that the slash-command gate only fires for `InProgress`
-    /// sessions: when status is `Review`, a leading `/` is still recognized
-    /// as a slash command so the existing slash submit path keeps working.
+    /// Verifies that when the active session is `Rebasing`, a leading `/`
+    /// is demoted from slash-command mode to plain text so submission queues
+    /// the prompt behind the rebase.
+    async fn test_prompt_context_demotes_slash_command_to_text_when_session_is_rebasing() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
+        app.sessions.sessions_mut()[0].status = crate::domain::session::Status::Rebasing;
+
+        // Act
+        let context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Assert
+        assert!(
+            !context.is_slash_command(),
+            "slash command mode must be demoted while session is Rebasing"
+        );
+        assert_eq!(context.input_mode, PromptInputMode::Text);
+    }
+
+    #[tokio::test]
+    /// Verifies that the slash-command gate only fires for queueing statuses:
+    /// when status is `Review`, a leading `/` is still recognized as a slash
+    /// command so the existing slash submit path keeps working.
     async fn test_prompt_context_keeps_slash_command_when_session_is_review() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
@@ -3044,7 +3068,7 @@ mod tests {
         // Assert
         assert!(
             context.is_slash_command(),
-            "slash command mode must remain active when session is not InProgress"
+            "slash command mode must remain active when the session is not queueing messages"
         );
         assert_eq!(context.input_mode, PromptInputMode::SlashCommand);
     }
@@ -3086,6 +3110,41 @@ mod tests {
             app.sessions.sessions()[0].queued_messages[0],
             "/model gpt-5",
             "queued message preserves the original slash-prefixed text"
+        );
+    }
+
+    #[tokio::test]
+    /// Verifies that submitting a prompt while the session is `Rebasing`
+    /// queues it via [`App::enqueue_message`] instead of trying to start a
+    /// concurrent reply turn.
+    async fn test_handle_prompt_submit_key_queues_text_when_session_is_rebasing() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("queued after rebase", None).await;
+        let session_id = app.sessions.sessions()[0].id.clone();
+        app.sessions.session_handles_mut().insert(
+            session_id.clone(),
+            crate::domain::session::SessionHandles::new(crate::domain::session::Status::Rebasing),
+        );
+        app.sessions.sessions_mut()[0].status = crate::domain::session::Status::Rebasing;
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_prompt_submit_key(&mut app, &prompt_context).await;
+
+        // Assert
+        let queued_messages = app
+            .sessions
+            .session_handles()
+            .get(session_id.as_str())
+            .expect("handles for rebasing session")
+            .queued_messages
+            .lock()
+            .expect("queue lock");
+        assert_eq!(queued_messages.len(), 1);
+        assert_eq!(queued_messages[0].text, "queued after rebase");
+        assert_eq!(
+            app.sessions.sessions()[0].queued_messages,
+            vec!["queued after rebase".to_string()]
         );
     }
 

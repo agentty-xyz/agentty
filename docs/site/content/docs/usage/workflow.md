@@ -82,7 +82,7 @@ to the assist agent.
 | **AgentReview** | Focused review is generating; `r` cancels it before syncing.     |
 | **Question**    | Agent requested clarification before continuing.                 |
 | **Queued**      | Waiting in the merge queue.                                      |
-| **Rebasing**    | Session branch is rebasing onto its base branch.                 |
+| **Rebasing**    | Session is syncing; follow-up messages queue behind the sync.    |
 | **Merging**     | Changes are being merged into the base branch.                   |
 | **Done**        | Completed and merged; the worktree was removed.                  |
 | **Canceled**    | Canceled by the user; the worktree was removed.                  |
@@ -168,12 +168,13 @@ While a session is **InProgress**, an animated loader row shows transient provid
 thought and tool-status text; the transcript itself updates only after the final turn
 result is parsed and persisted.
 
-Pressing `Enter` during a running turn opens the composer and queues the message inline
-with a `queued ›` prefix. Queued messages dispatch one-by-one as new turns after the
-running turn finishes. Each `Ctrl+c` press retracts the most recently queued message
-(LIFO) without interrupting the running turn; once the queue is empty, the next `Ctrl+c`
-stops the current turn and returns the session to **Review**. The queue is in-memory
-only and is discarded if `agentty` restarts.
+Pressing `Enter` during a running turn or session sync opens the composer and queues the
+message inline with a `queued ›` prefix. Queued messages dispatch one-by-one as new
+turns after the active turn or sync finishes. During **InProgress**, each `Ctrl+c` press
+retracts the most recently queued message (LIFO) without interrupting the running turn;
+once the queue is empty, the next `Ctrl+c` stops the current turn and returns the
+session to **Review**. **Rebasing** keeps cancellation unavailable while still accepting
+queued messages. The queue is in-memory only and is discarded if `agentty` restarts.
 
 While the composer is open, `Tab` moves focus to the chat transcript above it so the
 conversation can be scrolled with `j` / `k`, `g` / `G`, and `Ctrl+D` / `Ctrl+U` without

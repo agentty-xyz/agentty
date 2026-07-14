@@ -333,7 +333,7 @@ impl App {
                 )
                 .await;
             }
-        } else if self.session_is_in_progress(&context.session_id) {
+        } else if self.session_queues_messages(&context.session_id) {
             if let Err(error) = self.enqueue_message(&context.session_id, prompt) {
                 self.append_output_for_session(
                     &context.session_id,
@@ -354,15 +354,15 @@ impl App {
         };
     }
 
-    /// Returns whether the targeted session is currently `InProgress`, used
+    /// Returns whether the targeted session is running a turn or rebase, used
     /// to route non-slash submissions into the in-memory message queue
     /// instead of the live reply path.
-    fn session_is_in_progress(&self, session_id: &str) -> bool {
+    fn session_queues_messages(&self, session_id: &str) -> bool {
         self.sessions
             .sessions()
             .iter()
             .find(|session| session.id == session_id)
-            .is_some_and(|session| session.status == Status::InProgress)
+            .is_some_and(|session| matches!(session.status, Status::InProgress | Status::Rebasing))
     }
 
     /// Clears the slash-command buffer after one prompt slash action is

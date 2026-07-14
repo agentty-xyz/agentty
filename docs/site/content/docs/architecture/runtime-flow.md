@@ -175,9 +175,11 @@ derived data instead of recomputing the render twice per frame.
 1. The worker marks the operation `running`, checks cancel flags, verifies worktree
    isolation, and delegates to `workflow/turn.rs` or the queued session-sync workflow.
    An **InProgress** sync request can enqueue only through the sender already owned by
-   that worker; it cannot lazily create another worker. The receiver is checked between
-   every pair of retractable queued-chat turns, so a command received during one chat
-   turn waits for that turn and then runs before the remaining chat queue.
+   that worker; it cannot lazily create another worker. The same in-memory chat queue
+   accepts follow-up prompts while the worker is **InProgress** or **Rebasing**, and
+   drains them after the active operation. The receiver is checked between every pair of
+   retractable queued-chat turns, so a command received during one chat turn waits for
+   that turn and then runs before the remaining chat queue.
 1. `workflow/turn.rs` builds a `TurnRequest` and calls `AgentChannel::run_turn()`, which
    streams `TurnEvent` values (loader updates) and returns a `TurnResult`.
 1. `workflow/post_turn.rs` appends the final assistant transcript output, then

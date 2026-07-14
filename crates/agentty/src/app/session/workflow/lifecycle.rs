@@ -1189,7 +1189,8 @@ impl SessionManager {
             .await
     }
 
-    /// Stages one chat prompt into the in-memory queue for the running turn.
+    /// Stages one chat prompt into the in-memory queue for the active turn or
+    /// rebase.
     ///
     /// The queue is owned by [`SessionHandles::queued_messages`] and lives
     /// only for the active app session, so queued prompts are discarded on

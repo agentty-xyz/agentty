@@ -71,8 +71,8 @@ pub enum ViewSessionState {
     /// Session is currently running; queued replies, queued sync, and stop
     /// remain available while worktree-open and diff shortcuts are hidden.
     InProgress,
-    /// Session is syncing through the rebase workflow; worktree-open, reply,
-    /// and diff shortcuts are hidden until sync finishes.
+    /// Session is syncing through the rebase workflow; queued replies remain
+    /// available while worktree-open and diff shortcuts are hidden.
     Rebasing,
     /// Session is in merge-queue processing; only read-only navigation
     /// shortcuts are available.
@@ -508,7 +508,8 @@ fn can_open_view_prompt(
     reply_to_session.is_enabled()
         && matches!(
             session_state,
-            ViewSessionState::Interactive
+            ViewSessionState::Rebasing
+                | ViewSessionState::Interactive
                 | ViewSessionState::Review
                 | ViewSessionState::AgentReview
         )
@@ -667,6 +668,9 @@ fn prompt_action_help_action(session_state: ViewSessionState) -> HelpAction {
         ViewSessionState::NewSession | ViewSessionState::StackedDraft
     ) {
         return HelpAction::new("add draft", "Enter", "Add draft");
+    }
+    if matches!(session_state, ViewSessionState::Rebasing) {
+        return HelpAction::new("queue message", "Enter", "Queue message");
     }
 
     HelpAction::new("reply", "Enter", "Reply")
@@ -851,7 +855,7 @@ mod tests {
     }
 
     #[test]
-    fn test_view_actions_rebasing_hides_open_and_stop() {
+    fn test_view_actions_rebasing_shows_queue_and_hides_open_and_stop() {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
@@ -869,7 +873,11 @@ mod tests {
         let actions = view_actions(state);
 
         // Assert
-        assert!(!actions.iter().any(|action| action.key == "Enter"));
+        assert!(
+            actions
+                .iter()
+                .any(|action| { action.key == "Enter" && action.popup_label == "Queue message" })
+        );
         assert!(!actions.iter().any(|action| action.key == "o"));
         assert!(!actions.iter().any(|action| action.key == "Ctrl+c"));
         assert!(!actions.iter().any(|action| action.key == "d"));
@@ -1327,7 +1335,7 @@ mod tests {
     }
 
     #[test]
-    fn test_view_footer_actions_rebasing_hides_open_and_stop() {
+    fn test_view_footer_actions_rebasing_shows_queue_and_hides_open_and_stop() {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
@@ -1348,7 +1356,11 @@ mod tests {
         assert!(!actions.iter().any(|action| action.key == "o"));
         assert!(!actions.iter().any(|action| action.key == "p"));
         assert!(!actions.iter().any(|action| action.key == "Ctrl+c"));
-        assert!(!actions.iter().any(|action| action.key == "Enter"));
+        assert!(
+            actions
+                .iter()
+                .any(|action| { action.key == "Enter" && action.footer_label == "queue message" })
+        );
     }
 
     #[test]

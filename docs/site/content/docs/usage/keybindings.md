@@ -144,6 +144,9 @@ State-specific differences:
 - **InProgress** sessions use `Enter` to queue a follow-up message and keep `r`
   available to queue session sync behind the running turn. Each `Ctrl+c` retracts the
   newest queued message; when the queue is empty, `Ctrl+c` stops the active turn.
+- **Rebasing** sessions use `Enter` to queue a follow-up message behind the active
+  session sync. Slash commands and branch actions remain unavailable until sync
+  finishes.
 - Root **Review** and **AgentReview** sessions offer `F` to fork the current branch and
   copied transcript history into a new independent session; stacked children hide `F`.
 - **Draft** sessions use `Enter` to add a staged message and `s` to start the staged
@@ -154,8 +157,7 @@ State-specific differences:
 - Review-ready stacked parents with a materialized child keep `Enter`, `m`, and `r`
   while the stack is idle, but hide `/` until the child is terminal or no longer linked.
 - **Done** sessions offer `c` to start a continuation draft (confirmation popup).
-- **Canceled**, **Queued**, **Rebasing**, and **Merging** sessions are read-only (`q`,
-  scroll, help).
+- **Canceled**, **Queued**, and **Merging** sessions are read-only (`q`, scroll, help).
 
 `o` runs the configured `Launch Configurations` entry, or opens a selector popup when
 several are configured. Run Agentty inside `tmux` when you rely on
