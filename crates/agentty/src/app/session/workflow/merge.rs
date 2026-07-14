@@ -835,7 +835,8 @@ impl SessionMergeService {
             }
 
             manager
-                .enqueue_session_command(services, &persisted_session_id, command)
+                .worker_service_mut()
+                .enqueue_existing_session_command(services, &persisted_session_id, command)
                 .await?;
             SessionTaskService::emit_session_workflow_notice(
                 &services.event_sender(),
