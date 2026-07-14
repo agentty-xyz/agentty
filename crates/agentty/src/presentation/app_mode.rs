@@ -145,6 +145,12 @@ pub enum AppMode {
         /// Highlighted session creation option.
         selected_option_index: usize,
     },
+    /// Displays an advisory before opening the session creation selector.
+    PreCommitHookWarning {
+        /// Full warning text, installation commands, and future-enforcement
+        /// guidance.
+        message: String,
+    },
     /// Displays the MRU-ordered project switcher popup above the sessions
     /// list.
     ProjectSwitcher {

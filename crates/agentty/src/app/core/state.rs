@@ -11,7 +11,7 @@ use ag_forge::{
     AssignedIssue, RealReviewRequestClient, RequestedReview, RequestedReviewAudience,
     ReviewCommentSnapshot, ReviewRequestClient,
 };
-use ag_git::{GitClient, RealGitClient};
+use ag_git::{GitClient, GitError, RealGitClient};
 #[cfg(test)]
 use app::branch_publish::detected_forge_kind_from_git_push_error;
 #[cfg(test)]
@@ -33,6 +33,7 @@ use session::StatusTransition;
 #[cfg(test)]
 use session::{SyncMainOutcome, SyncSessionStartError, TurnAppliedState};
 use tokio::sync::mpsc;
+use tracing::warn;
 
 use super::events::AppEvent;
 #[cfg(test)]
@@ -266,6 +267,27 @@ pub struct App {
 }
 
 impl App {
+    /// Returns an advisory message when the active project declares
+    /// pre-commit validation without an executable Git hook.
+    pub(crate) async fn pre_commit_hook_warning(&self) -> Option<String> {
+        let git_client = self.services.git_client();
+        let working_dir = self.projects.working_dir().to_path_buf();
+        let repo_root = git_client.find_git_repo_root(working_dir).await?;
+
+        match git_client.check_pre_commit_hook_ready(repo_root).await {
+            Ok(()) => None,
+            Err(error @ GitError::PreCommitHookMissing { .. }) => Some(error.to_string()),
+            Err(error) => {
+                warn!(
+                    error = %error,
+                    "failed to inspect pre-commit hook readiness before session creation"
+                );
+
+                None
+            }
+        }
+    }
+
     /// Marks the app as needing one fresh terminal frame.
     pub(crate) fn mark_dirty(&mut self) {
         self.needs_redraw = true;

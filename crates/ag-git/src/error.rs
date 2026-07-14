@@ -36,7 +36,9 @@ pub enum GitError {
     /// unavailable.
     #[error(
         "pre-commit validation is configured by `{config_file}`, but the Git pre-commit hook is \
-         not installed or executable; install it with the project's hook manager before committing"
+         not installed or executable. Install it with one of these commands:\n\n  prek install\n  \
+         pre-commit install\n\nAgentty will continue for now, but missing configured hooks will \
+         become an error in a future release."
     )]
     PreCommitHookMissing {
         /// Repository-root-relative configuration file that declares
@@ -134,6 +136,8 @@ mod tests {
         // Assert
         assert!(display.contains(".pre-commit-config.yaml"));
         assert!(display.contains("not installed or executable"));
-        assert!(display.contains("project's hook manager"));
+        assert!(display.contains("prek install"));
+        assert!(display.contains("pre-commit install"));
+        assert!(display.contains("will become an error in a future release"));
     }
 }

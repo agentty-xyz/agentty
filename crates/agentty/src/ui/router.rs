@@ -322,6 +322,13 @@ fn render_list_or_overlay_mode(
             *selected_option_index,
             aux.wall_clock_unix_seconds,
         ),
+        AppMode::PreCommitHookWarning { message } => overlay::render_pre_commit_hook_warning(
+            f,
+            area,
+            shared.list_background(),
+            message,
+            aux.wall_clock_unix_seconds,
+        ),
         AppMode::ProjectSwitcher {
             selected_option_index,
         } => overlay::render_project_switcher_overlay(

@@ -453,7 +453,6 @@ impl SessionManager {
             .ok_or_else(|| {
                 SessionError::Workflow("Failed to find git repository root".to_string())
             })?;
-
         self.create_session_worktree(
             services,
             &session_id,

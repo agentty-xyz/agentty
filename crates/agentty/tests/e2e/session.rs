@@ -116,8 +116,7 @@ duration: 283ms
     Ok(())
 }
 
-/// Seeds configured pre-commit validation without installing its Git hook and
-/// installs a Claude stub that leaves one worktree change for auto-commit.
+/// Seeds configured pre-commit validation without installing its Git hook.
 fn seed_missing_pre_commit_hook_project(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -126,6 +125,10 @@ fn seed_missing_pre_commit_hook_project(
     run_git(
         &env.workdir,
         &["commit", "-m", "configure pre-commit validation"],
+    )?;
+    run_git(
+        &env.workdir,
+        &["config", "core.hooksPath", ".missing-hooks"],
     )?;
 
     let claude_path = env.stub_bin.join("claude");
@@ -1471,42 +1474,77 @@ fn test_session_invalid_protocol_output_is_bounded() -> E2eResult {
     Ok(())
 }
 
-/// Verify that configured validation without an installed hook surfaces an
-/// actionable auto-commit error in the session transcript.
+/// Verify that configured validation without an installed hook warns before
+/// session selection and after a successful normal commit.
 #[test]
-fn test_session_missing_pre_commit_hook_error() -> E2eResult {
+fn test_session_pre_commit_hook_warning() -> E2eResult {
     // Arrange, Act, Assert
-    FeatureTest::new("session_missing_pre_commit_hook_error")
+    FeatureTest::new("session_pre_commit_hook_warning")
         .with_git()
         .setup(seed_missing_pre_commit_hook_project)
+        .zola(
+            "Pre-commit hook warning",
+            "Warn about missing pre-commit hooks without blocking session creation.",
+            32,
+        )
         .run(
             |scenario| {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("a")
+                    .wait_for_text("Pre-commit hook warning", 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "missing_hook_warning",
+                        "Session creation warns about the missing pre-commit hook",
+                    )
+                    .press_key("Enter")
+                    .wait_for_text("Select session type", 5000)
                     .press_key("Enter")
                     .wait_for_stable_frame(300, 5000)
                     .write_text("Create one worktree change")
                     .wait_for_text("Create one worktree change", 3000)
                     .press_key("Enter")
                     .wait_for_text("Created pending worktree change", 30000)
-                    .wait_for_text("[Commit Error]", 30000)
+                    .wait_for_text("[Commit Warning]", 30000)
+                    .viewing_pause_ms(1500)
                     .capture_labeled(
-                        "missing_hook",
-                        "Session auto-commit reports a missing pre-commit hook",
+                        "commit_warning",
+                        "Auto-commit succeeds and prints the missing-hook warning",
                     )
             },
-            |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "[Commit Error]", &full);
+            |frame, report| {
+                let warning_frame = common::frame_from_capture(&report.captures[0]);
+                let warning_full = Region::full(warning_frame.cols(), warning_frame.rows());
                 assertion::assert_text_in_region(
-                    frame,
-                    "pre-commit validation is configured",
-                    &full,
+                    &warning_frame,
+                    "Pre-commit hook warning",
+                    &warning_full,
                 );
-                assertion::assert_text_in_region(frame, "not installed or", &full);
-                assertion::assert_text_in_region(frame, "executable; install it", &full);
+                assertion::assert_text_in_region(
+                    &warning_frame,
+                    "not installed or executable.",
+                    &warning_full,
+                );
+                assertion::assert_text_in_region(&warning_frame, "Install it", &warning_full);
+                assertion::assert_text_in_region(
+                    &warning_frame,
+                    "become an error in a future release.",
+                    &warning_full,
+                );
+                assertion::assert_text_in_region(&warning_frame, "prek install", &warning_full);
+                assertion::assert_text_in_region(
+                    &warning_frame,
+                    "pre-commit install",
+                    &warning_full,
+                );
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "[Commit Warning]", &full);
+                assertion::assert_text_in_region(frame, "Created pending worktree change", &full);
+                assertion::assert_text_in_region(frame, "prek install", &full);
+                assertion::assert_text_in_region(frame, "pre-commit install", &full);
             },
         )?;
 

@@ -1453,6 +1453,7 @@ impl App {
             | AppMode::IssueDetail { .. }
             | AppMode::ReviewDetail { .. }
             | AppMode::SessionCreation { .. }
+            | AppMode::PreCommitHookWarning { .. }
             | AppMode::ProjectSwitcher { .. }
             | AppMode::Confirmation { .. }
             | AppMode::SyncBlockedPopup { .. }

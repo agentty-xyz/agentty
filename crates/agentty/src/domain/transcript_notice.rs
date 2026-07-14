@@ -20,6 +20,8 @@ pub(crate) enum TranscriptNotice {
     CommitAssist,
     /// Session auto-commit failure.
     CommitError,
+    /// Advisory for a commit that ran without a configured pre-commit hook.
+    CommitWarning,
     /// Follow-on session creation failure.
     ContinueError,
     /// Generic prompt submission failure.
@@ -64,6 +66,7 @@ impl TranscriptNotice {
             Self::Commit => "[Commit]",
             Self::CommitAssist => "[Commit Assist]",
             Self::CommitError => "[Commit Error]",
+            Self::CommitWarning => "[Commit Warning]",
             Self::ContinueError => "[Continue Error]",
             Self::Error => "[Error]",
             Self::ForkError => "[Fork Error]",
