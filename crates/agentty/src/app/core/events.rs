@@ -1234,7 +1234,9 @@ impl App {
         event_batch.should_reload_sessions
             || event_batch.should_reload_projects
             || event_batch.agent_cli_updates.is_some()
+            || event_batch.assigned_issues.is_some()
             || event_batch.git_status_update.is_some()
+            || !event_batch.issue_details.is_empty()
             || event_batch.latest_available_version_update.is_some()
             || event_batch.update_status.is_some()
             || !event_batch.applied_turns.is_empty()
@@ -2148,5 +2150,38 @@ mod tests {
         assert_eq!(event_batch.issue_details.len(), 2);
         assert_eq!(event_batch.issue_details[0].display_id, "#124");
         assert_eq!(event_batch.issue_details[1].display_id, "#123");
+    }
+
+    #[test]
+    fn test_assigned_issues_batch_changes_observable_state() {
+        // Arrange
+        let mut event_batch = AppEventBatch::default();
+
+        // Act
+        event_batch.collect_event(AppEvent::AssignedIssuesLoaded {
+            generation: 1,
+            project_id: 42,
+            result: Ok(Vec::new()),
+        });
+
+        // Assert
+        assert!(App::app_event_batch_changes_observable_state(&event_batch));
+    }
+
+    #[test]
+    fn test_issue_detail_batch_changes_observable_state() {
+        // Arrange
+        let mut event_batch = AppEventBatch::default();
+
+        // Act
+        event_batch.collect_event(AppEvent::IssueDetailLoaded {
+            display_id: "#124".to_string(),
+            generation: 1,
+            project_id: 42,
+            result: Err("issue detail failure".to_string()),
+        });
+
+        // Assert
+        assert!(App::app_event_batch_changes_observable_state(&event_batch));
     }
 }

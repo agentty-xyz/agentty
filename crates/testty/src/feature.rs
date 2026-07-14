@@ -468,7 +468,9 @@ fn generate_gif(
         return GifStatus::CacheHit(gif_path);
     }
 
-    let hash_string = current_hash.to_string();
+    // Trailing newline so the sidecar is a well-formed text file and
+    // end-of-file fixers do not rewrite it after every regeneration.
+    let hash_string = format!("{current_hash}\n");
     let screenshot_path = output_dir.join(format!("{name}.png"));
 
     let tape = VhsTape::from_scenario_with_settings(

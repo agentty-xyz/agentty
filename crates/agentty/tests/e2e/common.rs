@@ -421,29 +421,47 @@ pub(crate) fn acquire_e2e_test_lock() -> MutexGuard<'static, ()> {
 /// Return the feature GIF output directory as a pure path.
 ///
 /// Derives the path from `CARGO_MANIFEST_DIR` →
-/// `../../docs/site/static/features/`. This resolver intentionally does
-/// not create the directory: `GifMode::CheckOnly` is a read-only path
-/// that must work on read-only mounts and against a missing output
-/// directory. Generation modes create the directory themselves inside
-/// `testty::feature::generate_gif` only when they actually need to write.
+/// `../../docs/site/static/features/`. This resolver intentionally does not
+/// create the directory: runs without VHS installed never write a GIF, and
+/// must not leave an empty directory behind. testty creates the directory
+/// itself only when it actually records.
 fn feature_output_dir() -> PathBuf {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
 
     Path::new(manifest_dir).join("../../docs/site/static/features")
 }
 
-/// Environment variable that selects the GIF freshness mode for
-/// [`FeatureTest`] runs.
+/// Environment variable that opts a [`FeatureTest`] run into GIF recording.
 ///
 /// Recognized values:
 ///
-/// - unset / `generate` / `generate-if-stale` → [`GifMode::GenerateIfStale`]
-/// - `check` / `check-only` → [`GifMode::CheckOnly`]
+/// - `generate` / `generate-if-stale` → [`GifMode::GenerateIfStale`]
 /// - `force` / `always` / `always-generate` → [`GifMode::AlwaysGenerate`]
 ///
-/// Unknown values fall back to the default. The variable is parsed once
-/// per test run.
+/// Recording is **off** unless the variable names one of those modes, so an
+/// ordinary local test run never shells out to VHS and never touches the docs
+/// tree. CI opts in explicitly and is the only committer of GIFs.
+///
+/// When recording is on, the frame hash is a staleness signal rather than a
+/// gate: it decides whether VHS re-records a GIF, and never fails a test.
 pub(crate) const TESTTY_GIF_MODE_ENV_VAR: &str = "TESTTY_GIF_MODE";
+/// Environment variable that pins the agentty wall clock for feature runs.
+///
+/// Mirrors `agentty::infra::clock::CLOCK_UNIX_ENV_VAR`, which is private to
+/// the binary crate and therefore not importable from this integration test.
+const PINNED_CLOCK_ENV_VAR: &str = "AGENTTY_CLOCK_UNIX";
+/// Wall-clock time every feature run is pinned to: `2026-07-01T00:00:00Z`.
+///
+/// Captured frames are hashed to decide whether a GIF needs re-recording, so
+/// anything derived from the wall clock must not drift between runs. The
+/// status bar rotates its `FYI:` hint once per minute, which alone would make
+/// the same UI hash differently every minute.
+///
+/// This instant is a whole number of minutes past the epoch and its minute
+/// count divides evenly by both rotating hint-set lengths, so every page shows
+/// the first hint of its set. Any fixed value yields stable hashes; this one
+/// also keeps the recorded hint predictable.
+const PINNED_CLOCK_UNIX_SECONDS: u64 = 1_782_864_000;
 /// Default PTY width used by feature tests unless a scenario requests a
 /// wider responsive layout.
 const DEFAULT_TERMINAL_COLS: u16 = 80;
@@ -451,28 +469,26 @@ const DEFAULT_TERMINAL_COLS: u16 = 80;
 /// taller responsive layout.
 const DEFAULT_TERMINAL_ROWS: u16 = 24;
 
-/// Resolve the GIF freshness mode from [`TESTTY_GIF_MODE_ENV_VAR`].
+/// Resolve the GIF recording mode from [`TESTTY_GIF_MODE_ENV_VAR`].
 ///
-/// Returns [`GifMode::GenerateIfStale`] when the variable is unset.
+/// Returns `None` when the variable is unset, which leaves recording off.
 /// Otherwise delegates to [`parse_gif_mode`] for value parsing.
-fn resolve_gif_mode() -> GifMode {
-    let Ok(raw) = std::env::var(TESTTY_GIF_MODE_ENV_VAR) else {
-        return GifMode::GenerateIfStale;
-    };
+fn resolve_gif_mode() -> Option<GifMode> {
+    let raw = std::env::var(TESTTY_GIF_MODE_ENV_VAR).ok()?;
 
     parse_gif_mode(&raw)
 }
 
 /// Pure parser that maps a raw `TESTTY_GIF_MODE` value to a [`GifMode`].
 ///
-/// Returns [`GifMode::GenerateIfStale`] for empty input or unrecognized
-/// values via the catch-all arm. Comparison is case-insensitive and ignores
-/// surrounding whitespace.
-fn parse_gif_mode(raw: &str) -> GifMode {
+/// Returns `None` for empty input and unrecognized values, leaving recording
+/// off rather than guessing at an expensive VHS run. Comparison is
+/// case-insensitive and ignores surrounding whitespace.
+fn parse_gif_mode(raw: &str) -> Option<GifMode> {
     match raw.trim().to_ascii_lowercase().as_str() {
-        "check" | "check-only" => GifMode::CheckOnly,
-        "force" | "always" | "always-generate" => GifMode::AlwaysGenerate,
-        _ => GifMode::GenerateIfStale,
+        "generate" | "generate-if-stale" => Some(GifMode::GenerateIfStale),
+        "force" | "always" | "always-generate" => Some(GifMode::AlwaysGenerate),
+        _ => None,
     }
 }
 
@@ -506,30 +522,13 @@ fn feature_content_dir() -> PathBuf {
     content_dir
 }
 
-/// Return whether a Zola feature page is already published in the docs tree.
-fn feature_page_exists(name: &str) -> bool {
-    feature_content_dir_path()
-        .join(format!("{name}.md"))
-        .is_file()
-}
-
-/// Return whether a stale GIF freshness verdict should fail this feature run.
+/// Return whether the run left a GIF on disk for this feature.
 ///
-/// Check-only mode temporarily accepts an existing legacy GIF without a hash
-/// sidecar until that feature is regenerated. A published page with no GIF is
-/// always an error. Unpublished feature tests have no documentation artifact
-/// contract, so their stale status is intentionally ignored.
-fn stale_gif_status_is_error(
-    gif_mode: GifMode,
-    published_feature_page_exists: bool,
-    gif_exists: bool,
-    committed_hash: Option<u64>,
-) -> bool {
-    if !matches!(gif_mode, GifMode::CheckOnly) {
-        return true;
-    }
-
-    published_feature_page_exists && (!gif_exists || committed_hash.is_some())
+/// True for a freshly recorded GIF and for a cache hit against an already
+/// committed one; false when VHS was unavailable or no output directory was
+/// configured.
+fn gif_exists_on_disk(gif_status: &GifStatus) -> bool {
+    gif_status.gif_path().is_some_and(Path::is_file)
 }
 
 /// Metadata for generating a Zola feature content page.
@@ -634,7 +633,10 @@ impl FeatureTest {
     /// The name is used as the GIF filename stem and Zola page filename.
     pub(crate) fn new(name: impl Into<String>) -> Self {
         Self {
-            child_env: Vec::new(),
+            child_env: vec![(
+                PINNED_CLOCK_ENV_VAR.to_string(),
+                PINNED_CLOCK_UNIX_SECONDS.to_string(),
+            )],
             inherit_system_path: true,
             name: name.into(),
             setup: None,
@@ -762,19 +764,27 @@ impl FeatureTest {
             .map(|(key, value)| (key.as_str(), value.as_str()))
             .collect();
 
-        let gif_mode = resolve_gif_mode();
-        let published_feature_page_exists = feature_page_exists(&self.name);
-        let result = FeatureDemo::new(&self.name)
-            .gif_output_dir(feature_output_dir())
-            .gif_mode(gif_mode)
+        // Without an output directory testty reports `NoOutputDir` and skips
+        // VHS altogether, so an opt-out run costs nothing and cannot dirty
+        // the docs tree.
+        let mut demo = FeatureDemo::new(&self.name);
+        if let Some(gif_mode) = resolve_gif_mode() {
+            demo = demo.gif_output_dir(feature_output_dir()).gif_mode(gif_mode);
+        }
+
+        let result = demo
             .run(&scenario, builder, &cargo_bin("agentty"), &env_pairs)
             .map_err(|error| std::io::Error::other(format!("feature demo failed: {error}")))?;
 
-        self.validate_gif_status(&result.gif_status, gif_mode, published_feature_page_exists)?;
+        self.validate_gif_status(&result.gif_status)?;
 
         assert(&result.frame, &result.report);
 
-        if !matches!(gif_mode, GifMode::CheckOnly)
+        // A published feature page must always have its GIF committed
+        // alongside it, so the page is only written once a GIF exists on
+        // disk. Runs without VHS installed skip GIF work entirely and must
+        // not leave a page pointing at a missing asset.
+        if gif_exists_on_disk(&result.gif_status)
             && let Some(zola_page) = self.zola_page
         {
             zola_page.ensure(&self.name);
@@ -783,12 +793,13 @@ impl FeatureTest {
         Ok(())
     }
 
-    /// Validates the GIF generation or freshness result for this feature.
+    /// Validates the GIF generation result for this feature.
+    ///
+    /// A stale GIF is never an error: the harness only ever asks testty to
+    /// regenerate, so the surviving failures are genuine I/O and VHS faults.
     fn validate_gif_status(
         &self,
         gif_status: &GifStatus,
-        gif_mode: GifMode,
-        published_feature_page_exists: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Explicitly whitelist benign variants and fail on every error-like
         // variant. The wildcard is intentionally an error so a new variant
@@ -796,7 +807,6 @@ impl FeatureTest {
         match gif_status {
             GifStatus::Generated(_)
             | GifStatus::CacheHit(_)
-            | GifStatus::Fresh { .. }
             | GifStatus::VhsNotInstalled
             | GifStatus::NoOutputDir => Ok(()),
             GifStatus::DirCreateFailed(err) => Err(std::io::Error::other(format!(
@@ -809,29 +819,6 @@ impl FeatureTest {
                 self.name
             ))
             .into()),
-            GifStatus::Stale {
-                gif_path,
-                current,
-                committed,
-            } => {
-                if stale_gif_status_is_error(
-                    gif_mode,
-                    published_feature_page_exists,
-                    gif_path.is_file(),
-                    *committed,
-                ) {
-                    Err(std::io::Error::other(format!(
-                        "Feature GIF is stale for {} (gif: {}, current hash: {current}, committed \
-                         hash: {committed:?}). Re-run with `{TESTTY_GIF_MODE_ENV_VAR}=force` (or \
-                         unset to default) to regenerate.",
-                        self.name,
-                        gif_path.display(),
-                    ))
-                    .into())
-                } else {
-                    Ok(())
-                }
-            }
             other => Err(std::io::Error::other(format!(
                 "Feature GIF generation returned an unrecognized status for {}: {other:?}. Update \
                  the FeatureTest harness to handle the new GifStatus variant.",
@@ -1066,98 +1053,55 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_gif_mode_empty_falls_back_to_default() {
-        // Arrange / Act / Assert
-        assert_eq!(parse_gif_mode(""), GifMode::GenerateIfStale);
-    }
-
-    #[test]
-    fn parse_gif_mode_recognizes_check_only_aliases() {
-        // Arrange / Act / Assert
-        assert_eq!(parse_gif_mode("check"), GifMode::CheckOnly);
-        assert_eq!(parse_gif_mode("check-only"), GifMode::CheckOnly);
-        assert_eq!(parse_gif_mode("CHECK"), GifMode::CheckOnly);
-        assert_eq!(parse_gif_mode("  check  "), GifMode::CheckOnly);
-    }
-
-    #[test]
     fn parse_gif_mode_recognizes_always_generate_aliases() {
         // Arrange / Act / Assert
-        assert_eq!(parse_gif_mode("force"), GifMode::AlwaysGenerate);
-        assert_eq!(parse_gif_mode("always"), GifMode::AlwaysGenerate);
-        assert_eq!(parse_gif_mode("always-generate"), GifMode::AlwaysGenerate);
-        assert_eq!(parse_gif_mode("Force"), GifMode::AlwaysGenerate);
+        assert_eq!(parse_gif_mode("force"), Some(GifMode::AlwaysGenerate));
+        assert_eq!(parse_gif_mode("always"), Some(GifMode::AlwaysGenerate));
+        assert_eq!(
+            parse_gif_mode("always-generate"),
+            Some(GifMode::AlwaysGenerate),
+        );
+        assert_eq!(parse_gif_mode("Force"), Some(GifMode::AlwaysGenerate));
     }
 
     #[test]
     fn parse_gif_mode_recognizes_generate_if_stale_aliases() {
         // Arrange / Act / Assert
-        assert_eq!(parse_gif_mode("generate"), GifMode::GenerateIfStale);
+        assert_eq!(parse_gif_mode("generate"), Some(GifMode::GenerateIfStale));
         assert_eq!(
-            parse_gif_mode("generate-if-stale"),
-            GifMode::GenerateIfStale,
+            parse_gif_mode("  generate-if-stale  "),
+            Some(GifMode::GenerateIfStale),
         );
     }
 
     #[test]
-    fn parse_gif_mode_unknown_value_falls_back_to_default() {
+    fn parse_gif_mode_leaves_recording_off_for_unrecognized_values() {
         // Arrange / Act / Assert
-        assert_eq!(parse_gif_mode("nonsense"), GifMode::GenerateIfStale);
-        assert_eq!(parse_gif_mode("checkk"), GifMode::GenerateIfStale);
+        assert_eq!(parse_gif_mode(""), None);
+        assert_eq!(parse_gif_mode("nonsense"), None);
     }
 
     #[test]
-    fn stale_gif_status_is_error_for_hash_backed_published_feature() {
-        // Arrange / Act / Assert
-        assert!(stale_gif_status_is_error(
-            GifMode::CheckOnly,
-            true,
-            true,
-            Some(42),
-        ));
+    fn gif_exists_on_disk_reports_recorded_gif() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let gif_path = temp.path().join("feature.gif");
+        std::fs::write(&gif_path, b"gif").expect("write gif");
+
+        // Act / Assert
+        assert!(gif_exists_on_disk(&GifStatus::Generated(gif_path.clone())));
+        assert!(gif_exists_on_disk(&GifStatus::CacheHit(gif_path)));
     }
 
     #[test]
-    fn stale_gif_status_is_skipped_for_existing_legacy_feature_without_hash() {
-        // Arrange / Act / Assert
-        assert!(!stale_gif_status_is_error(
-            GifMode::CheckOnly,
-            true,
-            true,
-            None,
-        ));
-    }
+    fn gif_exists_on_disk_reports_skipped_and_missing_gifs() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let missing_gif_path = temp.path().join("absent.gif");
 
-    #[test]
-    fn stale_gif_status_is_error_for_missing_published_feature_gif() {
-        // Arrange / Act / Assert
-        assert!(stale_gif_status_is_error(
-            GifMode::CheckOnly,
-            true,
-            false,
-            None,
-        ));
-    }
-
-    #[test]
-    fn stale_gif_status_is_skipped_for_unpublished_feature_in_check_mode() {
-        // Arrange / Act / Assert
-        assert!(!stale_gif_status_is_error(
-            GifMode::CheckOnly,
-            false,
-            false,
-            Some(42),
-        ));
-    }
-
-    #[test]
-    fn stale_gif_status_is_error_outside_check_mode() {
-        // Arrange / Act / Assert
-        assert!(stale_gif_status_is_error(
-            GifMode::GenerateIfStale,
-            false,
-            false,
-            None,
-        ));
+        // Act / Assert
+        assert!(!gif_exists_on_disk(&GifStatus::Generated(missing_gif_path)));
+        assert!(!gif_exists_on_disk(&GifStatus::VhsNotInstalled));
+        assert!(!gif_exists_on_disk(&GifStatus::NoOutputDir));
     }
 }
