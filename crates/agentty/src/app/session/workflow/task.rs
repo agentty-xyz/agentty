@@ -493,6 +493,11 @@ impl SessionTaskService {
                 Err(commit_error) if commit_error.to_string().contains("Nothing to commit") => {
                     return Ok(None);
                 }
+                Err(
+                    commit_error @ SessionError::Git(git::GitError::PreCommitHookMissing { .. }),
+                ) => {
+                    return Err(commit_error);
+                }
                 Err(commit_error) => {
                     // Keep test execution deterministic and offline by skipping
                     // model-assisted commit retries.

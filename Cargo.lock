@@ -58,6 +58,7 @@ name = "ag-git"
 version = "0.12.9"
 dependencies = [
  "mockall",
+ "rustix",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

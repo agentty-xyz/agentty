@@ -261,6 +261,12 @@ amends `HEAD`, and refreshes the session title from the commit text. If a later 
 reverts every change, the empty session commit is dropped. Commit and merge notices
 appear as transient status rows rather than persisted transcript messages.
 
+When a project contains `.pre-commit-config.yaml` or `.pre-commit-config.yml`, Agentty
+requires the Git pre-commit hook to be installed and executable before auto-commit. A
+missing hook stops the commit with an actionable error instead of allowing validation to
+surface for the first time in CI. Install it with the project's configured hook manager,
+such as `prek install` for `prek`.
+
 When a session merges, Agentty reuses the session branch `HEAD` commit message for the
 final squash commit on the base branch. Merging requires a clean main checkout and
 returns the session to **Review** if the preparatory rebase or squash-merge fails.
