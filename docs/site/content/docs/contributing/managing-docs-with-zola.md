@@ -39,7 +39,7 @@ documentation maintainable as it grows.
 - Use `--color-text` for primary content, `--color-muted` for supporting prose, and
   `--color-dim` only for short metadata. Interactive boundaries should use
   `--color-border-strong`, and keyboard focus should use `--color-focus`.
-- Preserve the shared `:focus-visible` treatment and test both the `hacker` and `dark`
+- Preserve the shared `:focus-visible` treatment and test both the `green` and `dark`
   themes when adding controls.
 - Keep animated feature images behind the `data-motion-demo` loader so off-screen media
   remains deferred. Pair each GIF with a same-named PNG poster so

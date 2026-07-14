@@ -2011,7 +2011,7 @@ mod tests {
         services
             .db()
             .settings()
-            .upsert_setting(SettingName::Theme, ColorTheme::Hacker.as_str())
+            .upsert_setting(SettingName::Theme, ColorTheme::Green.as_str())
             .await
             .expect("failed to persist theme setting");
 
@@ -2033,7 +2033,7 @@ mod tests {
         );
         assert_eq!(manager.launch_configuration, "nvim .");
         assert_eq!(manager.reasoning_level, ReasoningLevel::Low);
-        assert_eq!(manager.theme, ColorTheme::Hacker);
+        assert_eq!(manager.theme, ColorTheme::Green);
         assert!(!manager.include_coauthored_by_agentty);
         assert!(manager.use_last_used_model_as_default);
     }
@@ -2416,7 +2416,7 @@ mod tests {
     fn settings_rows_show_theme_value() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.theme = ColorTheme::Hacker;
+        manager.theme = ColorTheme::Green;
 
         // Act
         let rows = manager.settings_rows();
@@ -2707,10 +2707,10 @@ mod tests {
             .expect("failed to load theme setting");
 
         // Assert
-        assert_eq!(selected_theme, ColorTheme::Hacker);
+        assert_eq!(selected_theme, ColorTheme::Green);
         assert_eq!(
             persisted_theme,
-            Some(ColorTheme::Hacker.as_str().to_string())
+            Some(ColorTheme::Green.as_str().to_string())
         );
     }
 

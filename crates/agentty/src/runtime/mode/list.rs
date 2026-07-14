@@ -981,7 +981,7 @@ mod tests {
 
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
-        assert_eq!(app.settings.theme, ColorTheme::Hacker);
+        assert_eq!(app.settings.theme, ColorTheme::Green);
         assert!(!app.settings.is_selector_dropdown_open());
     }
 

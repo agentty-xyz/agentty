@@ -33,8 +33,8 @@
         <!-- Apply saved theme before paint to avoid flash of unstyled content -->
         <script>
             (function () {
-                var t = localStorage.getItem('agentty-theme') || 'hacker';
-                if (t === 'dark') document.documentElement.classList.add('theme-dark');
+                var theme = localStorage.getItem('agentty-theme') || 'green';
+                if (theme === 'dark') document.documentElement.classList.add('theme-dark');
             })();
         </script>
     </head>
@@ -133,8 +133,8 @@
                     <fieldset class="site-theme-switch">
                         <legend class="sr-only">Color theme</legend>
                         <button class="theme-btn site-theme-btn"
-                                data-theme="hacker"
-                                aria-pressed="true">hacker</button>
+                                data-theme="green"
+                                aria-pressed="true">green</button>
                         <span class="site-theme-separator">/</span>
                         <button class="theme-btn site-theme-btn"
                                 data-theme="dark"
@@ -200,7 +200,7 @@
       var reducedMotionQuery = globalThis.matchMedia('(prefers-reduced-motion: reduce)');
 
       /**
-       * Apply a theme by name (`hacker` or `dark`), update button states,
+       * Apply a theme by name (`green` or `dark`), update button states,
        * persist the choice, and notify any page-level renderers that depend on
        * theme colors.
        */
@@ -448,7 +448,8 @@
       }
 
       // Sync button states with the theme already applied by the <head> script.
-      applyTheme(localStorage.getItem(STORAGE_KEY) || 'hacker');
+      var savedTheme = localStorage.getItem(STORAGE_KEY);
+      applyTheme(savedTheme === 'dark' ? 'dark' : 'green');
       void loadGithubMetadata();
       syncResponsiveDetails();
       hydrateMotionDemos();

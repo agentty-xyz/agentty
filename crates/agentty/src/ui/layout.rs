@@ -526,7 +526,7 @@ mod tests {
     #[test]
     fn test_session_header_lines_use_theme_status_color() {
         // Arrange
-        let _theme_scope = style::scoped_active_theme(ColorTheme::Hacker);
+        let _theme_scope = style::scoped_active_theme(ColorTheme::Green);
         let mut session = session_fixture();
         session.status = Status::Canceled;
         session.title = Some("Canceled session".to_string());

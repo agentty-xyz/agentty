@@ -7,6 +7,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- agentty: rename the green color theme's internal and persisted name from `hacker` to
+  `green`, migrating existing settings so users keep their selected theme.
+
 ### Added
 
 - agentty: add a `p` project switcher popup to the Sessions view that lists registered

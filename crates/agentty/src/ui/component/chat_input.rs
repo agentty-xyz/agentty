@@ -441,9 +441,9 @@ mod tests {
     }
 
     #[test]
-    fn test_render_hacker_theme_uses_session_list_text_color_for_input_text() {
+    fn test_render_green_theme_uses_session_list_text_color_for_input_text() {
         // Arrange
-        let _theme_scope = style::scoped_active_theme(ColorTheme::Hacker);
+        let _theme_scope = style::scoped_active_theme(ColorTheme::Green);
         let width = 48;
         let backend = ratatui::backend::TestBackend::new(width, 5);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
