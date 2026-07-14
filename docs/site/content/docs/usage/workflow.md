@@ -182,11 +182,15 @@ focus toggle is available while answering clarification questions.
 
 Pressing `r` during a running turn queues session sync on the same session worker. The
 session stays **InProgress** while the active turn runs, then moves to **Rebasing** when
-the queued sync command starts. Agentty shows a `[Sync]` notice in the session output
-while the rebase is queued, and repeated `r` presses keep the single queued rebase
-instead of adding duplicates. Session sync reserves branch-publish ownership before it
-queues or starts, and retains that ownership through its post-rebase push. A completed
-turn or subsequent sync therefore cannot start a competing published-branch auto-push.
+the queued sync command starts. The existing worker must accept the request; Agentty
+never creates a second worker from an **InProgress** status just to start sync. If sync
+arrives while Agentty is draining queued chat, the active chat turn finishes before sync
+runs, and sync runs before the remaining queued messages. Agentty shows a `[Sync]`
+notice in the session output while the rebase is queued, and repeated `r` presses keep
+the single queued rebase instead of adding duplicates. Session sync reserves
+branch-publish ownership before it queues or starts, and retains that ownership through
+its post-rebase push. A completed turn or subsequent sync therefore cannot start a
+competing published-branch auto-push.
 
 ### Focused Review
 

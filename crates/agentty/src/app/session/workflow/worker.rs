@@ -595,29 +595,38 @@ impl SessionWorkerService {
         runtime: SessionWorkerRuntime,
         command: SessionCommand,
     ) -> Result<(), SessionError> {
-        let operation_id = command.operation_id().to_string();
         let session_id = runtime.session_id.clone();
-        services
-            .db()
-            .operations()
-            .insert_session_operation(&operation_id, &session_id, command.kind())
-            .await?;
-
         let sender = self.ensure_session_worker(services, &runtime);
-        if sender.send(command).is_err() {
-            // Best-effort: operation tracking metadata is non-critical.
-            let _ = services
-                .db()
-                .operations()
-                .mark_session_operation_failed(&operation_id, "Session worker is not available")
-                .await;
 
-            return Err(SessionError::Workflow(
-                "Session worker is not available".to_string(),
-            ));
-        }
+        self.persist_and_send_command(services, &session_id, sender, command)
+            .await
+    }
 
-        Ok(())
+    /// Persists and enqueues a command only when the session already owns a
+    /// worker sender.
+    ///
+    /// Running-session actions use this path so a stale `InProgress` status
+    /// can never create a second worker that executes concurrently with the
+    /// original turn.
+    ///
+    /// # Errors
+    /// Returns an error without persisting the operation when the active
+    /// worker sender is unavailable, or when persistence or delivery fails.
+    pub(super) async fn enqueue_existing_session_command(
+        &mut self,
+        services: &AppServices,
+        session_id: &SessionId,
+        command: SessionCommand,
+    ) -> Result<(), SessionError> {
+        let sender = self.workers.get(session_id).cloned().ok_or_else(|| {
+            SessionError::Workflow(
+                "Cannot queue session sync because the active session worker is unavailable"
+                    .to_string(),
+            )
+        })?;
+
+        self.persist_and_send_command(services, session_id, sender, command)
+            .await
     }
 
     /// Drops the in-memory worker sender for a session.
@@ -680,6 +689,38 @@ impl SessionWorkerService {
         sender
     }
 
+    /// Persists one operation and sends its command to the selected worker.
+    async fn persist_and_send_command(
+        &mut self,
+        services: &AppServices,
+        session_id: &SessionId,
+        sender: mpsc::UnboundedSender<SessionCommand>,
+        command: SessionCommand,
+    ) -> Result<(), SessionError> {
+        let operation_id = command.operation_id().to_string();
+        services
+            .db()
+            .operations()
+            .insert_session_operation(&operation_id, session_id, command.kind())
+            .await?;
+
+        if sender.send(command).is_err() {
+            self.workers.remove(session_id);
+            // Best-effort: operation tracking metadata is non-critical.
+            let _ = services
+                .db()
+                .operations()
+                .mark_session_operation_failed(&operation_id, "Session worker is not available")
+                .await;
+
+            return Err(SessionError::Workflow(
+                "Session worker is not available".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
     /// Spawns the background loop that executes queued session commands.
     ///
     /// After each command completes the worker drains
@@ -696,14 +737,23 @@ impl SessionWorkerService {
     ) {
         tokio::spawn(async move {
             while let Some(command) = receiver.recv().await {
-                let result = Self::process_session_command(&context, command).await;
-                if matches!(result, Some(Err(SessionError::StoppedByUser(_)))) {
-                    context.clear_queued_messages();
-                    Self::emit_queue_session_updated(&context);
-                    continue;
-                }
+                let mut next_command = Some(command);
+                while let Some(command) = next_command.take() {
+                    let result = Self::process_session_command(&context, command).await;
+                    if matches!(result, Some(Err(SessionError::StoppedByUser(_)))) {
+                        context.clear_queued_messages();
+                        Self::emit_queue_session_updated(&context);
 
-                Self::drain_queued_messages(&context).await;
+                        break;
+                    }
+
+                    next_command = receiver.try_recv().ok();
+                    if next_command.is_some() {
+                        continue;
+                    }
+
+                    next_command = Self::drain_queued_messages(&context, &mut receiver).await;
+                }
             }
 
             // Best-effort: session transport may already be torn down.
@@ -766,22 +816,28 @@ impl SessionWorkerService {
     }
 
     /// Pops queued prompts and dispatches them as follow-up `SessionResume`
-    /// turns until the queue is empty or the session enters `Question`
-    /// state.
+    /// turns until the queue is empty, the session enters `Question` state,
+    /// or a worker command is pending.
     ///
     /// Each drained turn is persisted as its own `reply` operation with a
     /// fresh identifier so cancellation, retry, and operation tracking
-    /// behave the same as a normal reply. The drain stops on the first
-    /// user-stopped turn and clears the remaining queue so `Ctrl+C` cancels
-    /// the queued work cleanly.
-    async fn drain_queued_messages(context: &SessionWorkerContext) {
+    /// behave the same as a normal reply. Worker commands are checked before
+    /// every queued turn, so a command received during an active turn waits
+    /// for that turn to finish and then preempts the remaining chat queue.
+    /// The drain stops on the first user-stopped turn and clears the remaining
+    /// queue so `Ctrl+C` cancels the queued work cleanly.
+    async fn drain_queued_messages(
+        context: &SessionWorkerContext,
+        receiver: &mut mpsc::UnboundedReceiver<SessionCommand>,
+    ) -> Option<SessionCommand> {
         loop {
             if matches!(context.current_status(), Status::Question) {
-                return;
+                return None;
             }
-            let Some(prompt) = context.pop_queued_prompt() else {
-                return;
-            };
+            if let Ok(command) = receiver.try_recv() {
+                return Some(command);
+            }
+            let prompt = context.pop_queued_prompt()?;
 
             // Mirror the queue change into render snapshots so the inline
             // "queued" rows disappear as soon as drainage starts the
@@ -814,7 +870,7 @@ impl SessionWorkerService {
                 context.clear_queued_messages();
                 Self::emit_queue_session_updated(context);
 
-                return;
+                return None;
             }
         }
     }
@@ -1067,6 +1123,7 @@ mod tests {
     use mockall::Sequence;
     use serde_json;
     use tempfile::tempdir;
+    use tokio::sync::Notify;
 
     use super::super::post_turn::{
         PostTurnContext, apply_turn_result, build_assistant_message_content,
@@ -4313,15 +4370,79 @@ mod tests {
         let queued = VecDeque::from([TurnPrompt::from_text("queued reply".to_string())]);
         let (context, _db, queue_handle, _base_dir) =
             queue_test_context(mock_channel, queued, Status::Question).await;
+        let (_command_tx, mut command_rx) = mpsc::unbounded_channel();
 
         // Act
-        SessionWorkerService::drain_queued_messages(&context).await;
+        let next_command =
+            SessionWorkerService::drain_queued_messages(&context, &mut command_rx).await;
 
         // Assert — queued prompt remains untouched until status becomes
         // runnable again.
+        assert!(next_command.is_none());
         let queue = queue_handle.lock().expect("queue lock");
         assert_eq!(queue.len(), 1);
         assert_eq!(queue.front().expect("queued head").text, "queued reply");
+    }
+
+    #[tokio::test]
+    /// Verifies a worker command received during one drained chat turn runs
+    /// before the remaining queued chat instead of waiting for the full batch.
+    async fn test_drain_queued_messages_yields_to_command_between_turns() {
+        // Arrange
+        let turn_started = Arc::new(Notify::new());
+        let turn_started_for_channel = Arc::clone(&turn_started);
+        let release_turn = Arc::new(Notify::new());
+        let release_turn_for_channel = Arc::clone(&release_turn);
+        let mut mock_channel = MockAgentChannel::new();
+        mock_channel
+            .expect_run_turn()
+            .times(1)
+            .withf(|_, request, _| request.prompt.text == "queued first")
+            .returning(move |_, _, _| {
+                let turn_started = Arc::clone(&turn_started_for_channel);
+                let release_turn = Arc::clone(&release_turn_for_channel);
+
+                Box::pin(async move {
+                    turn_started.notify_one();
+                    release_turn.notified().await;
+
+                    Ok(successful_turn_result("First queued turn completed."))
+                })
+            });
+        let queued = VecDeque::from([
+            TurnPrompt::from_text("queued first".to_string()),
+            TurnPrompt::from_text("queued second".to_string()),
+        ]);
+        let (context, _db, queue_handle, _base_dir) =
+            queue_test_context(mock_channel, queued, Status::InProgress).await;
+        let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+
+        // Act
+        let drain_future = SessionWorkerService::drain_queued_messages(&context, &mut command_rx);
+        let enqueue_command_future = async {
+            turn_started.notified().await;
+            command_tx
+                .send(SessionCommand::Rebase {
+                    base_branch: "main".to_string(),
+                    operation_id: "queued-rebase".to_string(),
+                })
+                .expect("worker command receiver should remain available");
+            release_turn.notify_one();
+        };
+        let (next_command, ()) = tokio::join!(drain_future, enqueue_command_future);
+
+        // Assert
+        assert!(matches!(
+            next_command,
+            Some(SessionCommand::Rebase { operation_id, .. })
+                if operation_id == "queued-rebase"
+        ));
+        let queue = queue_handle.lock().expect("queue lock");
+        assert_eq!(queue.len(), 1);
+        assert_eq!(
+            queue.front().expect("remaining queued prompt").text,
+            "queued second"
+        );
     }
 
     #[tokio::test]
@@ -4340,6 +4461,7 @@ mod tests {
         let queued = VecDeque::from([TurnPrompt::from_text("queued reply".to_string())]);
         let (mut context, db, queue_handle, base_dir) =
             queue_test_context(mock_channel, queued, Status::InProgress).await;
+        let (_command_tx, mut command_rx) = mpsc::unbounded_channel();
         db.sessions()
             .update_session_published_upstream_ref(
                 "sess1",
@@ -4391,7 +4513,8 @@ mod tests {
         context.git_client = Arc::new(mock_git_client);
 
         // Act
-        SessionWorkerService::drain_queued_messages(&context).await;
+        let next_command =
+            SessionWorkerService::drain_queued_messages(&context, &mut command_rx).await;
         let sync_events = tokio::time::timeout(Duration::from_secs(1), async {
             let mut sync_events = Vec::new();
             while sync_events.len() < 2 {
@@ -4413,6 +4536,7 @@ mod tests {
         .expect("timed out waiting for sync events");
 
         // Assert
+        assert!(next_command.is_none());
         assert!(queue_handle.lock().expect("queue lock").is_empty());
         assert_eq!(sync_events[0].2, PublishedBranchSyncStatus::InProgress);
         assert_eq!(sync_events[1].2, PublishedBranchSyncStatus::Succeeded);
@@ -4448,12 +4572,15 @@ mod tests {
         ]);
         let (context, _db, queue_handle, _base_dir) =
             queue_test_context(mock_channel, queued, Status::InProgress).await;
+        let (_command_tx, mut command_rx) = mpsc::unbounded_channel();
 
         // Act
-        SessionWorkerService::drain_queued_messages(&context).await;
+        let next_command =
+            SessionWorkerService::drain_queued_messages(&context, &mut command_rx).await;
 
         // Assert — first prompt was dispatched, the StoppedByUser result
         // propagated, and the remaining queued prompt was cleared.
+        assert!(next_command.is_none());
         let queue = queue_handle.lock().expect("queue lock");
         assert!(queue.is_empty(), "queue should be cleared on Ctrl+C");
     }

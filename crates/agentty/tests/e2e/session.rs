@@ -860,6 +860,32 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"Ne
     seed_project_default_model(env, "claude-haiku-4-5-20251001")
 }
 
+/// Answer emitted before the queued session sync is allowed to start.
+const QUEUED_SYNC_TURN_ANSWER: &str = "Running turn completed before sync";
+
+/// Installs a delayed Claude turn so the scenario can queue sync while the
+/// worker is still active, then observe the answer before the rebase result.
+fn install_delayed_sync_claude_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    let claude_path = env.stub_bin.join("claude");
+    let script = format!(
+        r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+cat > /dev/null 2>&1
+sleep 10
+printf '%s\n' '{{"type":"system","subtype":"init"}}'
+printf '%s\n' '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{QUEUED_SYNC_TURN_ANSWER}"}}]}}}}'
+printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{QUEUED_SYNC_TURN_ANSWER}\",\"questions\":[],\"summary\":null}}","usage":{{"input_tokens":5,"output_tokens":9}}}}'
+"#
+    );
+
+    std::fs::write(&claude_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+
+    seed_project_default_model(env, "claude-haiku-4-5-20251001")
+}
+
 /// Installs a Claude stub that reports whether Agentty passed web-capable
 /// Claude Code tools to the non-interactive session launch.
 fn install_web_tool_reporting_claude_stub(
@@ -1854,27 +1880,27 @@ fn session_queue_chat_messages_during_in_progress_turn() -> E2eResult {
     Ok(())
 }
 
-/// Verify running sessions advertise `r` sync as a queued action alongside
-/// the stop shortcut.
+/// Verify running sessions queue `r` sync without interrupting the active
+/// turn, then rebase before returning to review.
 #[test]
 fn session_running_turn_shows_sync_shortcut() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_running_sync_shortcut")
         .with_git()
-        .setup(seed_running_stop_session)
+        .setup(install_delayed_sync_claude_stub)
         .run(
             |scenario| {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .write_text("Keep the active turn running")
+                    .wait_for_text("Keep the active turn running", 3000)
                     .press_key("Enter")
                     .wait_for_text("Ctrl+c: stop", 5000)
                     .wait_for_text("r: sync", 5000)
-                    .viewing_pause_ms(1000)
-                    .capture_labeled(
-                        "running_sync_shortcut",
-                        "Running session view with queued sync shortcut",
-                    )
                     .press_key("r")
                     .wait_for_text("will rebase after the current turn finishes", 5000)
                     .viewing_pause_ms(1000)
@@ -1882,24 +1908,43 @@ fn session_running_turn_shows_sync_shortcut() -> E2eResult {
                         "running_sync_queued",
                         "Running session view after queueing sync",
                     )
+                    .wait_for_text(QUEUED_SYNC_TURN_ANSWER, 30000)
+                    .wait_for_text("[Sync] Successfully synced", 10000)
+                    .wait_for_text("Enter: reply", 5000)
+                    .capture_labeled(
+                        "running_sync_completed",
+                        "Running turn completes before queued sync",
+                    )
             },
             |frame, report| {
-                let shortcut_frame = common::frame_from_capture(&report.captures[0]);
-                let shortcut_full = Region::full(shortcut_frame.cols(), shortcut_frame.rows());
+                let queued_frame = common::frame_from_capture(&report.captures[0]);
+                let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
                 assertion::assert_text_in_region(
-                    &shortcut_frame,
-                    "Running session stop",
-                    &shortcut_full,
+                    &queued_frame,
+                    "will rebase after the current turn finishes",
+                    &queued_full,
                 );
-                assertion::assert_text_in_region(&shortcut_frame, "Ctrl+c: stop", &shortcut_full);
-                assertion::assert_text_in_region(&shortcut_frame, "r: sync", &shortcut_full);
+                assertion::assert_text_in_region(&queued_frame, "Ctrl+c: stop", &queued_full);
 
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(
-                    frame,
-                    "will rebase after the current turn finishes",
-                    &full,
-                );
+                assertion::assert_text_in_region(frame, QUEUED_SYNC_TURN_ANSWER, &full);
+                assertion::assert_text_in_region(frame, "[Sync] Successfully synced", &full);
+                assertion::assert_text_in_region(frame, "Enter: reply", &full);
+                assertion::assert_not_visible(frame, "[Stopped]");
+
+                let answer_row = frame
+                    .find_text(QUEUED_SYNC_TURN_ANSWER)
+                    .first()
+                    .expect("missing completed turn answer")
+                    .rect
+                    .row;
+                let sync_row = frame
+                    .find_text("[Sync] Successfully synced")
+                    .first()
+                    .expect("missing queued sync result")
+                    .rect
+                    .row;
+                assert!(answer_row < sync_row);
             },
         )?;
 

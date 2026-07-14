@@ -16,7 +16,7 @@ use ag_protocol::{
     parse_agent_response_strict,
 };
 use tempfile::tempdir;
-use tokio::sync::Barrier;
+use tokio::sync::{Barrier, Notify};
 
 use super::*;
 use crate::app::{App, AppEvent, ReviewCacheEntry, SyncSessionStartError, Tab};
@@ -3561,6 +3561,123 @@ async fn test_spawn_integration() {
     }
 }
 
+/// Verifies sync requested during a running turn stays on the existing
+/// worker, does not cancel that turn, and runs before later queued chat.
+#[tokio::test]
+async fn test_running_turn_finishes_before_queued_sync_and_later_chat() {
+    // Arrange
+    let dir = tempdir().expect("failed to create temp dir");
+    let mut app = new_test_app_with_git(dir.path()).await;
+    let release_first_turn = Arc::new(Notify::new());
+    let release_first_turn_for_channel = Arc::clone(&release_first_turn);
+    let turn_count = Arc::new(Mutex::new(0usize));
+    let turn_count_for_channel = Arc::clone(&turn_count);
+    let (turn_started_tx, mut turn_started_rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut mock_channel = MockAgentChannel::new();
+    mock_channel
+        .expect_run_turn()
+        .times(2)
+        .returning(move |_, request, _| {
+            let turn_index = {
+                let mut turn_count = turn_count_for_channel
+                    .lock()
+                    .expect("turn count lock should not be poisoned");
+                let turn_index = *turn_count;
+                *turn_count += 1;
+
+                turn_index
+            };
+            let release_first_turn = Arc::clone(&release_first_turn_for_channel);
+            let turn_started_tx = turn_started_tx.clone();
+
+            Box::pin(async move {
+                turn_started_tx
+                    .send(turn_index)
+                    .expect("turn start receiver should remain available");
+                if turn_index == 0 {
+                    assert_eq!(request.prompt.text, "Initial running turn");
+                    release_first_turn.notified().await;
+
+                    return Ok(TurnResult {
+                        assistant_message: AgentResponse::plain("Initial turn completed"),
+                        context_reset: false,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        provider_conversation_id: None,
+                    });
+                }
+
+                assert_eq!(request.prompt.text, "Queued after sync");
+
+                Ok(TurnResult {
+                    assistant_message: AgentResponse::plain("Queued turn completed"),
+                    context_reset: false,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    provider_conversation_id: None,
+                })
+            })
+        });
+    mock_channel
+        .expect_shutdown_session()
+        .returning(|_| Box::pin(async { Ok(()) }));
+    let session_id = app
+        .create_session()
+        .await
+        .expect("failed to create session");
+    app.sessions
+        .worker_service
+        .test_agent_channels
+        .insert(session_id.clone().into(), Arc::new(mock_channel));
+    app.sessions
+        .reply(&app.services, &session_id, "Initial running turn")
+        .await;
+    assert_eq!(turn_started_rx.recv().await, Some(0));
+    app.sessions.sync_from_handles();
+
+    // Act
+    app.rebase_session(&session_id)
+        .await
+        .expect("running sync should queue on the active worker");
+    app.enqueue_message(&session_id, "Queued after sync")
+        .expect("later chat message should queue");
+
+    // Assert
+    app.sessions.sync_from_handles();
+    assert_eq!(app.sessions.sessions()[0].status, Status::InProgress);
+    let active_turn_was_cancelled = app
+        .sessions
+        .session_handles()
+        .get(session_id.as_str())
+        .expect("missing session handles")
+        .cancel_token
+        .lock()
+        .expect("cancel token lock should not be poisoned")
+        .is_cancelled();
+    assert!(!active_turn_was_cancelled);
+    assert!(!session_replay_text(&app.sessions.sessions()[0]).contains("Successfully synced"));
+
+    // Act
+    release_first_turn.notify_one();
+    assert_eq!(turn_started_rx.recv().await, Some(1));
+    wait_for_output_contains(&mut app, &session_id, "Queued turn completed", 300).await;
+
+    // Assert
+    app.sessions.sync_from_handles();
+    let transcript = session_replay_text(&app.sessions.sessions()[0]);
+    let initial_answer_index = transcript
+        .find("Initial turn completed")
+        .expect("missing completed initial turn");
+    let sync_completion_index = transcript
+        .find("[Sync] Successfully synced")
+        .expect("missing queued sync completion");
+    let queued_prompt_index = transcript
+        .find("Queued after sync")
+        .expect("missing later queued prompt");
+    assert!(initial_answer_index < sync_completion_index);
+    assert!(sync_completion_index < queued_prompt_index);
+}
+
 #[tokio::test]
 /// Verifies that the first reply after a model switch replays the full
 /// session transcript and subsequent replies omit the replay snapshot.
@@ -4486,6 +4603,43 @@ async fn test_rebase_session_accepts_in_progress_status_before_worktree_validati
             .expect_err("should be error")
             .to_string()
             .contains("No git worktree")
+    );
+}
+
+/// Verifies stale `InProgress` state cannot create a new worker and start
+/// session sync without an active turn owner.
+#[tokio::test]
+async fn test_rebase_in_progress_requires_existing_session_worker() {
+    // Arrange
+    let dir = tempdir().expect("failed to create temp dir");
+    let mut app = new_test_app_with_git(dir.path()).await;
+    let session_id = app
+        .create_session()
+        .await
+        .expect("failed to create session");
+    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::InProgress);
+
+    // Act
+    let result = app.rebase_session(&session_id).await;
+
+    // Assert
+    let error = result.expect_err("sync should reject stale in-progress state");
+    assert!(
+        error
+            .to_string()
+            .contains("active session worker is unavailable")
+    );
+    let unfinished_operations = app
+        .services
+        .db()
+        .operations()
+        .load_unfinished_session_operations()
+        .await
+        .expect("failed to load session operations");
+    assert!(
+        unfinished_operations
+            .iter()
+            .all(|operation| operation.kind != "rebase")
     );
 }
 
