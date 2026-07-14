@@ -807,7 +807,7 @@ impl<'a> SessionOutput<'a> {
                         session_format::session_output_summary_markdown(markdown)
                     }
                     TransientMessageSlot::Review => {
-                        session_format::annotate_review_suggestions_header(markdown)
+                        session_format::format_review_markdown(markdown)
                     }
                     TransientMessageSlot::WorkflowNotice
                     | TransientMessageSlot::PublishedBranchSync => markdown.clone(),
@@ -2396,7 +2396,8 @@ mod tests {
         );
         session.summary = Some(summary_fixture());
         session.status = Status::Review;
-        let review_text = "## Review\n\n### Project Impact\n\n- Documentation-only change.";
+        let review_text = "## Review\n\n### Project Impact\n\n- Documentation-only change.\n\n### \
+                           Suggestions\n\n- None.";
         session.reconcile_transient_messages();
         set_review_transient(
             &mut session,
@@ -2425,6 +2426,9 @@ mod tests {
         assert!(output_index < summary_index);
         assert!(summary_index < review_index);
         assert!(review_index < merge_error_index);
+        assert!(text.contains("Project Impact\n- Documentation-only change."));
+        assert!(text.contains("Suggestions\n- None."));
+        assert!(!text.contains("type \"/apply\" to verify and apply"));
     }
 
     /// Verifies focused-review failures remain visible after the transient

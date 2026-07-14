@@ -721,7 +721,11 @@ fn seed_review_ready_session_with_persisted_focused_review(
             .update_session_focused_review(
                 "review-shortcut-0001",
                 Some("42".to_string()),
-                Some("## Review\nPersisted focused review finding.".to_string()),
+                Some(
+                    "## Review\n\n### Project Impact\n\n- Persisted focused review \
+                     finding.\n\n### Suggestions\n\n- None."
+                        .to_string(),
+                ),
             )
             .await
     })?;
@@ -3329,6 +3333,30 @@ fn persisted_focused_review_survives_reload() -> E2eResult {
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Persisted focused review finding.", &full);
+                let impact_header = frame
+                    .find_text("Project Impact")
+                    .into_iter()
+                    .next()
+                    .expect("project impact header should render");
+                let impact_finding = frame
+                    .find_text("Persisted focused review finding.")
+                    .into_iter()
+                    .next()
+                    .expect("project impact finding should render");
+                let suggestions_header = frame
+                    .find_text("Suggestions")
+                    .into_iter()
+                    .next()
+                    .expect("suggestions header should render");
+                let empty_suggestion = frame
+                    .find_text("- None.")
+                    .into_iter()
+                    .next()
+                    .expect("empty suggestion should render");
+
+                assert_eq!(impact_finding.rect.row, impact_header.rect.row + 1);
+                assert_eq!(empty_suggestion.rect.row, suggestions_header.rect.row + 1);
+                assertion::assert_not_visible(frame, "type \"/apply\" to verify and apply");
             },
         )?;
 

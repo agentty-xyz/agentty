@@ -151,7 +151,11 @@ impl App {
         )
         .await;
         let review_cache = Self::load_focused_review_cache(&repositories, active_project_id).await;
-        review::hydrate_review_transients(&review_cache, sessions.state_mut());
+        review::hydrate_review_transients(
+            &review_cache,
+            sessions.state_mut(),
+            settings.default_review_selection.model(),
+        );
 
         let sync_context = Self::sync_context_for(&projects, &services, &sessions);
         let sync_handle = sync::SyncHandle::spawn(event_tx.clone(), sync_context);

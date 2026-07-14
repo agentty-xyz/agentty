@@ -904,7 +904,11 @@ impl App {
             self.settings.default_review_selection,
         )
         .await;
-        app::review::hydrate_review_transients(&self.review_cache, self.sessions.state_mut());
+        app::review::hydrate_review_transients(
+            &self.review_cache,
+            self.sessions.state_mut(),
+            self.settings.default_review_selection.model(),
+        );
 
         if let Some(sync_main_result) = event_batch.sync_main_result {
             let sync_popup_context = self.sync_popup_context();

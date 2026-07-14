@@ -19,6 +19,7 @@ use tempfile::tempdir;
 use tokio::sync::{Barrier, Notify};
 
 use super::*;
+use crate::app::review::{review_failure_message, review_loading_message};
 use crate::app::{App, AppEvent, ReviewCacheEntry, SyncSessionStartError, Tab};
 use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ReasoningLevel,
@@ -29,7 +30,9 @@ use crate::domain::session::{
 };
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::setting::SettingName;
-use crate::domain::transient_message::{TransientMessageSlot, TransientMessageStore};
+use crate::domain::transient_message::{
+    TransientMessageBody, TransientMessageSlot, TransientMessageStore,
+};
 use crate::infra::clock::RealClock;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs::{self as fs, FsClient};
@@ -3114,6 +3117,103 @@ async fn test_refresh_sessions_if_needed_reloads_and_preserves_selection() {
         .selected_session_index()
         .expect("missing selection");
     assert_eq!(app.sessions.sessions()[selected_index].id, "alpha000");
+}
+
+#[tokio::test]
+async fn test_periodic_session_refresh_preserves_focused_review_states() {
+    // Arrange
+    let dir = tempdir().expect("failed to create temp dir");
+    let db = AppRepositories::in_memory().await;
+    let project_id = db
+        .projects()
+        .upsert_project("/tmp/test", None)
+        .await
+        .expect("failed to upsert project");
+    let ready_session_id = "ready000";
+    let loading_session_id = "loading0";
+    let failed_session_id = "failed00";
+    let review_text = "## Review\nPersisted focused review finding.";
+    let review_error = "empty provider response";
+    for session_id in [ready_session_id, loading_session_id, failed_session_id] {
+        db.sessions()
+            .insert_session(
+                session_id,
+                "gemini-3-flash-preview",
+                "main",
+                &Status::Review.to_string(),
+                project_id,
+            )
+            .await
+            .expect("failed to insert review session");
+        let data_dir = session_folder(dir.path(), session_id).join(SESSION_DATA_DIR);
+        std::fs::create_dir_all(data_dir).expect("failed to create session data dir");
+    }
+    db.sessions()
+        .update_session_focused_review(
+            ready_session_id,
+            Some("42".to_string()),
+            Some(review_text.to_string()),
+        )
+        .await
+        .expect("failed to persist focused review");
+    let mut app = new_test_app_with_db(
+        dir.path().to_path_buf(),
+        PathBuf::from("/tmp/test"),
+        None,
+        db.clone(),
+    )
+    .await;
+    app.review_cache.insert(
+        loading_session_id.into(),
+        ReviewCacheEntry::Loading { diff_hash: 43 },
+    );
+    app.review_cache.insert(
+        failed_session_id.into(),
+        ReviewCacheEntry::Failed {
+            diff_hash: 44,
+            error: review_error.to_string(),
+        },
+    );
+    let review_model = app.settings.default_review_selection.model();
+    crate::app::review::hydrate_review_transients(
+        &app.review_cache,
+        app.sessions.state_mut(),
+        review_model,
+    );
+    let clock = Arc::new(TestClock::new(Instant::now(), SystemTime::now()));
+    app.sessions.state_mut().clock = clock.clone();
+    app.sessions.state_mut().refresh_deadline = clock.now_instant() + SESSION_REFRESH_INTERVAL;
+    db.sessions()
+        .update_session_updated_at(ready_session_id, 4_000_000_000)
+        .await
+        .expect("failed to update session timestamp");
+    clock.advance(SESSION_REFRESH_INTERVAL);
+
+    // Act
+    let refreshed = app.refresh_sessions_if_needed().await;
+
+    // Assert
+    assert!(refreshed);
+    let ready_message = review_message_body(&app, ready_session_id);
+    assert_eq!(ready_message.text(), review_text);
+
+    let loading_message = review_message_body(&app, loading_session_id);
+    assert!(matches!(loading_message, TransientMessageBody::Loading(_)));
+    assert_eq!(loading_message.text(), review_loading_message(review_model));
+
+    let failed_message = review_message_body(&app, failed_session_id);
+    assert!(matches!(failed_message, TransientMessageBody::Plain(_)));
+    assert_eq!(failed_message.text(), review_failure_message(review_error));
+}
+
+fn review_message_body<'a>(app: &'a App, session_id: &str) -> &'a TransientMessageBody {
+    &app.sessions
+        .session_or_err(session_id)
+        .expect("review session should remain loaded")
+        .transient_messages
+        .get(TransientMessageSlot::Review)
+        .expect("review output should remain visible after refresh")
+        .body
 }
 
 #[tokio::test]

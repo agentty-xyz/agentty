@@ -197,14 +197,16 @@ competing published-branch auto-push.
 When a session enters **Review**, Agentty starts generating a focused review in the
 background and temporarily shows **AgentReview**. Press `f` to append the cached review
 into the session output, or to see a loading message while generation is still running.
-The appended review stays visible across diff mode and question mode, and is cleared
-when you submit the next prompt. Focused review includes the saved user and agent chat
-history for context. It uses inspection-only context: it may read files, search, inspect
-git history, and browse when needed, but it recommends verification commands instead of
-running checks itself. `Project Impact` renders as concise bullets, and `Suggestions`
-renders as bullets formatted `[Severity]: Issue details`, using `[High]` or `[Medium]`
-when follow-up work is needed. A turn stopped with `Ctrl+c` does not start a focused
-review automatically; press `f` for a manual one.
+The appended review stays visible across diff mode, question mode, and background
+session metadata refreshes, and is cleared when you submit the next prompt. Focused
+review includes the saved user and agent chat history for context. It uses
+inspection-only context: it may read files, search, inspect git history, and browse when
+needed, but it recommends verification commands instead of running checks itself.
+`Project Impact` renders concise bullets directly beneath its heading. `Suggestions`
+uses the same compact spacing and formats its bullets as `[Severity]: Issue details`,
+using `[High]` or `[Medium]` when follow-up work is needed. Empty `Suggestions` output
+does not offer the `/apply` action. A turn stopped with `Ctrl+c` does not start a
+focused review automatically; press `f` for a manual one.
 
 ### Session Output Markdown
 

@@ -3,7 +3,7 @@
 /// Extracts actionable suggestion content from focused-review markdown.
 ///
 /// Returns `None` when the `### Suggestions` section is missing, empty, or
-/// explicitly reports `- None`.
+/// reports `- None` with optional trailing punctuation.
 #[must_use]
 pub fn review_suggestions(review_text: &str) -> Option<String> {
     let suggestions_header = "### Suggestions";
@@ -13,11 +13,21 @@ pub fn review_suggestions(review_text: &str) -> Option<String> {
     let section_end = content.find("\n### ").unwrap_or(content.len());
     let suggestions = content[..section_end].trim();
 
-    if suggestions.is_empty() || suggestions == "- None" {
+    if suggestions.is_empty() || is_no_suggestions_sentinel(suggestions) {
         return None;
     }
 
     Some(suggestions.to_string())
+}
+
+/// Returns whether a suggestions section contains only the required `None`
+/// sentinel plus optional trailing punctuation.
+fn is_no_suggestions_sentinel(suggestions: &str) -> bool {
+    suggestions.strip_prefix("- None").is_some_and(|suffix| {
+        suffix
+            .chars()
+            .all(|character| character.is_ascii_punctuation())
+    })
 }
 
 /// Returns whether focused-review markdown contains suggestions that `/apply`
@@ -64,6 +74,18 @@ mod tests {
 ### Suggestions
 
 - None";
+
+        // Act
+        let suggestions = review_suggestions(review_text);
+
+        // Assert
+        assert_eq!(suggestions, None);
+    }
+
+    #[test]
+    fn test_review_suggestions_returns_none_for_punctuated_no_suggestions() {
+        // Arrange
+        let review_text = "## Review\n\n### Suggestions\n\n- None.";
 
         // Act
         let suggestions = review_suggestions(review_text);
