@@ -25,7 +25,6 @@ use crate::domain::setting::SettingName;
 use crate::infra::db::AppRepositories;
 use crate::infra::project_discovery::{HOME_PROJECT_SCAN_MAX_RESULTS, RealProjectDiscoveryClient};
 use crate::infra::tmux::{MockTmuxClient, TmuxClient};
-use crate::presentation::app_mode::ConfirmationViewMode;
 
 /// Builds one reducer-ready turn projection for tests.
 fn test_turn_applied_state(
@@ -48,15 +47,6 @@ fn test_turn_applied_state(
         questions,
         summary: summary.and_then(|summary| serde_json::to_string(&summary).ok()),
         token_usage_delta,
-    }
-}
-
-/// Builds a restore-view snapshot used by branch-publish event-batch
-/// tests.
-fn test_confirmation_view_mode(session_id: &str) -> ConfirmationViewMode {
-    ConfirmationViewMode {
-        scroll_offset: None,
-        session_id: session_id.into(),
     }
 }
 
@@ -1006,20 +996,8 @@ async fn new_test_app_with_selected_session(
 }
 
 #[test]
-fn branch_publish_popup_helpers_format_copy() {
-    // Arrange
-    let expected_restore_view = ConfirmationViewMode {
-        scroll_offset: Some(2),
-        session_id: "session-1".into(),
-    };
-
+fn branch_publish_inline_helpers_format_copy() {
     // Act
-    let loading_title = App::branch_publish_loading_title(PublishBranchAction::Push);
-    let loading_message = App::branch_publish_loading_message(PublishBranchAction::Push, None);
-    let custom_loading_message = App::branch_publish_loading_message(
-        PublishBranchAction::Push,
-        Some("review/custom-branch"),
-    );
     let loading_label = App::branch_publish_loading_label(PublishBranchAction::Push);
     let success_title = App::branch_publish_success_title(PublishBranchAction::Push);
     let success_message = App::branch_publish_success_message(
@@ -1032,32 +1010,12 @@ fn branch_publish_popup_helpers_format_copy() {
         }),
     );
     let fallback_success_message = App::branch_publish_success_message("wt/session-1", None);
-    let pull_request_loading_title =
-        App::branch_publish_loading_title(PublishBranchAction::PublishPullRequest);
-    let pull_request_loading_message =
-        App::branch_publish_loading_message(PublishBranchAction::PublishPullRequest, None);
     let pull_request_loading_label =
         App::branch_publish_loading_label(PublishBranchAction::PublishPullRequest);
     let pull_request_success_title =
         App::branch_publish_success_title(PublishBranchAction::PublishPullRequest);
-    let popup_mode = App::view_info_popup_mode(
-        "Working".to_string(),
-        "Publishing branch".to_string(),
-        true,
-        "Pushing branch...".to_string(),
-        expected_restore_view.clone(),
-    );
 
     // Assert
-    assert_eq!(loading_title, "Pushing branch");
-    assert_eq!(
-        loading_message,
-        "Publishing the session branch to the configured Git remote."
-    );
-    assert_eq!(
-        custom_loading_message,
-        "Publishing the session branch to `review/custom-branch` on the configured Git remote."
-    );
     assert_eq!(loading_label, "Pushing branch...");
     assert_eq!(success_title, "Branch pushed");
     assert!(success_message.contains("Pushed session branch `wt/session-1`."));
@@ -1067,26 +1025,8 @@ fn branch_publish_popup_helpers_format_copy() {
             .contains("https://github.com/org/repo/compare/main...wt%2Fsession-1?expand=1")
     );
     assert!(fallback_success_message.contains("Create the review request manually"));
-    assert_eq!(pull_request_loading_title, "Publishing review request");
-    assert_eq!(
-        pull_request_loading_message,
-        "Pushing the session branch and creating or refreshing the active forge review request."
-    );
     assert_eq!(pull_request_loading_label, "Publishing review request...");
     assert_eq!(pull_request_success_title, "Review request published");
-    assert!(matches!(
-        popup_mode,
-        AppMode::ViewInfoPopup {
-            is_loading: true,
-            ref loading_label,
-            ref message,
-            ref restore_view,
-            ref title,
-        } if title == "Working"
-            && message == "Publishing branch"
-            && loading_label == "Pushing branch..."
-            && restore_view == &expected_restore_view
-    ));
 }
 
 /// Verifies generic and authentication-related branch-push failures map
@@ -1274,7 +1214,10 @@ async fn branch_publish_task_helpers_reject_unsupported_session_states() {
     // Act
     let push_result = run_branch_publish_action(
         PublishBranchAction::Push,
-        done_snapshot.clone(),
+        BranchPublishTaskContext {
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
+            session: done_snapshot.clone(),
+        },
         app.services.db().clone(),
         app.services.clock(),
         app.services.git_client(),
@@ -1309,7 +1252,61 @@ async fn branch_publish_task_helpers_reject_unsupported_session_states() {
 }
 
 #[tokio::test]
-async fn branch_publish_task_session_targets_stacked_parent_review_source_branch() {
+async fn manual_branch_publish_waits_for_existing_branch_operation() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+        Arc::new(MockTmuxClient::new()),
+    )
+    .await;
+    let mut review_session =
+        crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/review-session"));
+    review_session.status = Status::Done;
+    app.sessions.push_session(review_session);
+    app.sessions
+        .session_handles_mut()
+        .insert("session-1".into(), SessionHandles::new(Status::Done));
+    let branch_operation_lock = Arc::clone(
+        &app.sessions
+            .session_handles_or_err("session-1")
+            .expect("expected session handles")
+            .branch_operation_lock,
+    );
+    let existing_operation_guard = Arc::clone(&branch_operation_lock).lock_owned().await;
+    let branch_publish_context = app
+        .branch_publish_task_context("session-1")
+        .expect("expected branch-publish context");
+
+    // Act
+    let publish_task = tokio::spawn(run_branch_publish_action(
+        PublishBranchAction::Push,
+        branch_publish_context,
+        app.services.db().clone(),
+        app.services.clock(),
+        app.services.git_client(),
+        app.services.review_request_client(),
+        None,
+    ));
+    tokio::task::yield_now().await;
+    let waited_for_existing_operation = !publish_task.is_finished();
+    drop(existing_operation_guard);
+    let result = tokio::time::timeout(Duration::from_secs(1), publish_task)
+        .await
+        .expect("manual publish should resume after the existing branch operation")
+        .expect("manual publish task should not panic");
+
+    // Assert
+    assert!(waited_for_existing_operation);
+    assert_eq!(
+        result,
+        Err(BranchPublishTaskFailure::failed(
+            PublishBranchAction::Push,
+            "Session must be in review to push the branch.".to_string(),
+        ))
+    );
+}
+
+#[tokio::test]
+async fn branch_publish_task_context_targets_stacked_parent_review_source_branch() {
     // Arrange
     let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
         Arc::new(MockTmuxClient::new()),
@@ -1338,18 +1335,33 @@ async fn branch_publish_task_session_targets_stacked_parent_review_source_branch
     child_session.parent_session_id = Some("parent-session".into());
     app.sessions.push_session(parent_session);
     app.sessions.push_session(child_session);
+    app.sessions
+        .session_handles_mut()
+        .insert("child-session".into(), SessionHandles::new(Status::Review));
 
     // Act
-    let branch_publish_session = app
-        .branch_publish_task_session("child-session")
-        .expect("expected branch-publish snapshot");
+    let branch_publish_context = app
+        .branch_publish_task_context("child-session")
+        .expect("expected branch-publish context");
 
     // Assert
-    assert_eq!(branch_publish_session.base_branch, "review/parent-session");
+    assert_eq!(
+        branch_publish_context.session.base_branch,
+        "review/parent-session"
+    );
+    let session_lock = &app
+        .sessions
+        .session_handles_or_err("child-session")
+        .expect("expected child session handles")
+        .branch_operation_lock;
+    assert!(Arc::ptr_eq(
+        &branch_publish_context.branch_operation_lock,
+        session_lock
+    ));
 }
 
 #[tokio::test]
-async fn branch_publish_task_session_targets_stacked_parent_upstream_branch() {
+async fn branch_publish_task_context_targets_stacked_parent_upstream_branch() {
     // Arrange
     let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
         Arc::new(MockTmuxClient::new()),
@@ -1366,14 +1378,20 @@ async fn branch_publish_task_session_targets_stacked_parent_upstream_branch() {
     child_session.parent_session_id = Some("parent-session".into());
     app.sessions.push_session(parent_session);
     app.sessions.push_session(child_session);
+    app.sessions
+        .session_handles_mut()
+        .insert("child-session".into(), SessionHandles::new(Status::Review));
 
     // Act
-    let branch_publish_session = app
-        .branch_publish_task_session("child-session")
-        .expect("expected branch-publish snapshot");
+    let branch_publish_context = app
+        .branch_publish_task_context("child-session")
+        .expect("expected branch-publish context");
 
     // Assert
-    assert_eq!(branch_publish_session.base_branch, "review/parent-custom");
+    assert_eq!(
+        branch_publish_context.session.base_branch,
+        "review/parent-custom"
+    );
 }
 
 #[tokio::test]
@@ -1493,7 +1511,7 @@ async fn push_session_branch_succeeds_without_review_request_link_for_unsupporte
 }
 
 #[tokio::test]
-async fn apply_branch_publish_action_update_sets_success_popup() {
+async fn apply_branch_publish_action_update_sets_inline_success() {
     // Arrange
     let session_folder = tempdir().expect("failed to create temp dir");
     let mut app = new_test_app_with_selected_session(
@@ -1502,14 +1520,10 @@ async fn apply_branch_publish_action_update_sets_success_popup() {
         Arc::new(MockTmuxClient::new()),
     )
     .await;
-    let expected_restore_view = ConfirmationViewMode {
-        scroll_offset: Some(1),
-        session_id: "session-1".into(),
-    };
+    app.mode = AppMode::List;
 
     // Act
     app.apply_branch_publish_action_update(BranchPublishActionUpdate {
-        restore_view: expected_restore_view.clone(),
         result: Ok(BranchPublishTaskSuccess::Pushed {
             branch_name: "wt/session-1".to_string(),
             review_request_creation: Some(crate::app::branch_publish::ReviewRequestCreationInfo {
@@ -1525,19 +1539,20 @@ async fn apply_branch_publish_action_update_sets_success_popup() {
     });
 
     // Assert
-    assert!(matches!(
-        app.mode,
-        AppMode::ViewInfoPopup {
-            is_loading: false,
-            ref message,
-            ref restore_view,
-            ref title,
-            ..
-        } if title == "Branch pushed"
-            && message.contains("Pushed session branch `wt/session-1`.")
-            && message.contains("https://github.com/agentty-xyz/agentty/compare/main...wt%2Fsession-1?expand=1")
-            && restore_view == &expected_restore_view
-    ));
+    assert!(matches!(app.mode, AppMode::List));
+    let publish_message = app.sessions.state().sessions()[0]
+        .transient_messages
+        .get(crate::domain::transient_message::TransientMessageSlot::BranchPublish)
+        .expect("branch publish result should be visible inline")
+        .body
+        .text();
+    assert!(publish_message.contains("Branch pushed"));
+    assert!(publish_message.contains("Pushed session branch `wt/session-1`."));
+    assert!(
+        publish_message.contains(
+            "https://github.com/agentty-xyz/agentty/compare/main...wt%2Fsession-1?expand=1"
+        )
+    );
     assert_eq!(
         app.sessions
             .state()
@@ -1549,7 +1564,7 @@ async fn apply_branch_publish_action_update_sets_success_popup() {
 }
 
 #[tokio::test]
-async fn apply_branch_publish_action_update_sets_pull_request_success_popup() {
+async fn apply_branch_publish_action_update_sets_inline_pull_request_success() {
     // Arrange
     let session_folder = tempdir().expect("failed to create temp dir");
     let mut app = new_test_app_with_selected_session(
@@ -1558,10 +1573,7 @@ async fn apply_branch_publish_action_update_sets_pull_request_success_popup() {
         Arc::new(MockTmuxClient::new()),
     )
     .await;
-    let expected_restore_view = ConfirmationViewMode {
-        scroll_offset: Some(1),
-        session_id: "session-1".into(),
-    };
+    app.mode = AppMode::List;
     let review_request = crate::domain::session::ReviewRequest {
         last_refreshed_at: 55,
         summary: crate::domain::session::ReviewRequestSummary {
@@ -1572,7 +1584,6 @@ async fn apply_branch_publish_action_update_sets_pull_request_success_popup() {
 
     // Act
     app.apply_branch_publish_action_update(BranchPublishActionUpdate {
-        restore_view: expected_restore_view.clone(),
         result: Ok(BranchPublishTaskSuccess::PullRequestPublished {
             branch_name: "wt/session-1".to_string(),
             review_request: review_request.clone(),
@@ -1582,20 +1593,17 @@ async fn apply_branch_publish_action_update_sets_pull_request_success_popup() {
     });
 
     // Assert
-    assert!(matches!(
-        app.mode,
-        AppMode::ViewInfoPopup {
-            is_loading: false,
-            ref message,
-            ref restore_view,
-            ref title,
-            ..
-        } if title == "GitHub pull request published"
-            && message.contains("Published session branch `wt/session-1`.")
-            && message.contains("GitHub pull request #42 is ready")
-            && message.contains("https://github.com/agentty-xyz/agentty/pull/42")
-            && restore_view == &expected_restore_view
-    ));
+    assert!(matches!(app.mode, AppMode::List));
+    let publish_message = app.sessions.state().sessions()[0]
+        .transient_messages
+        .get(crate::domain::transient_message::TransientMessageSlot::BranchPublish)
+        .expect("review request publish result should be visible inline")
+        .body
+        .text();
+    assert!(publish_message.contains("GitHub pull request published"));
+    assert!(publish_message.contains("Successfully published session branch `wt/session-1`."));
+    assert!(publish_message.contains("GitHub pull request #42"));
+    assert!(publish_message.contains("https://github.com/agentty-xyz/agentty/pull/42"));
     assert_eq!(
         app.sessions
             .state()
@@ -1607,7 +1615,7 @@ async fn apply_branch_publish_action_update_sets_pull_request_success_popup() {
 }
 
 #[tokio::test]
-async fn apply_branch_publish_action_update_sets_gitlab_merge_request_success_popup() {
+async fn apply_branch_publish_action_update_sets_inline_gitlab_merge_request_success() {
     // Arrange
     let session_folder = tempdir().expect("failed to create temp dir");
     let mut app = new_test_app_with_selected_session(
@@ -1616,10 +1624,7 @@ async fn apply_branch_publish_action_update_sets_gitlab_merge_request_success_po
         Arc::new(MockTmuxClient::new()),
     )
     .await;
-    let expected_restore_view = ConfirmationViewMode {
-        scroll_offset: Some(2),
-        session_id: "session-1".into(),
-    };
+    app.mode = AppMode::List;
     let review_request = crate::domain::session::ReviewRequest {
         last_refreshed_at: 77,
         summary: crate::domain::session::ReviewRequestSummary {
@@ -1636,7 +1641,6 @@ async fn apply_branch_publish_action_update_sets_gitlab_merge_request_success_po
 
     // Act
     app.apply_branch_publish_action_update(BranchPublishActionUpdate {
-        restore_view: expected_restore_view.clone(),
         result: Ok(BranchPublishTaskSuccess::PullRequestPublished {
             branch_name: "wt/session-1".to_string(),
             review_request,
@@ -1646,20 +1650,52 @@ async fn apply_branch_publish_action_update_sets_gitlab_merge_request_success_po
     });
 
     // Assert
-    assert!(matches!(
-        app.mode,
-        AppMode::ViewInfoPopup {
-            is_loading: false,
-            ref message,
-            ref restore_view,
-            ref title,
-            ..
-        } if title == "GitLab merge request published"
-            && message.contains("Published session branch `wt/session-1`.")
-            && message.contains("GitLab merge request !24 is ready")
-            && message.contains("https://gitlab.com/agentty-xyz/agentty/-/merge_requests/24")
-            && restore_view == &expected_restore_view
-    ));
+    assert!(matches!(app.mode, AppMode::List));
+    let publish_message = app.sessions.state().sessions()[0]
+        .transient_messages
+        .get(crate::domain::transient_message::TransientMessageSlot::BranchPublish)
+        .expect("merge request publish result should be visible inline")
+        .body
+        .text();
+    assert!(publish_message.contains("GitLab merge request published"));
+    assert!(publish_message.contains("Successfully published session branch `wt/session-1`."));
+    assert!(publish_message.contains("GitLab merge request !24"));
+    assert!(publish_message.contains("https://gitlab.com/agentty-xyz/agentty/-/merge_requests/24"));
+}
+
+#[tokio::test]
+async fn apply_branch_publish_action_update_keeps_active_mode_on_failure() {
+    // Arrange
+    let session_folder = tempdir().expect("failed to create temp dir");
+    let mut app = new_test_app_with_selected_session(
+        session_folder.path().to_path_buf(),
+        "",
+        Arc::new(MockTmuxClient::new()),
+    )
+    .await;
+    app.mode = AppMode::List;
+
+    // Act
+    app.apply_branch_publish_action_update(BranchPublishActionUpdate {
+        result: Err(BranchPublishTaskFailure::failed(
+            PublishBranchAction::PublishPullRequest,
+            "remote rejected".to_string(),
+        )),
+        session_id: "session-1".into(),
+    });
+
+    // Assert
+    assert!(matches!(app.mode, AppMode::List));
+    let publish_message = app.sessions.state().sessions()[0]
+        .transient_messages
+        .get(crate::domain::transient_message::TransientMessageSlot::BranchPublish)
+        .expect("review request publish failure should be visible inline");
+    assert_eq!(
+        publish_message.body,
+        TransientMessageBody::Markdown(
+            "**Review request publish failed**\n\nremote rejected".to_string()
+        )
+    );
 }
 
 #[tokio::test]
@@ -2256,7 +2292,7 @@ fn app_event_batch_collect_event_keeps_latest_same_session_updates() {
 }
 
 #[test]
-fn app_event_batch_collect_event_uses_final_wins_for_review_and_branch_publish() {
+fn app_event_batch_collect_event_keeps_publish_results_and_latest_reviews() {
     // Arrange
     let mut event_batch = AppEventBatch::default();
 
@@ -2277,12 +2313,10 @@ fn app_event_batch_collect_event_uses_final_wins_for_review_and_branch_publish()
         session_id: "session-b".into(),
     });
     event_batch.collect_event(AppEvent::BranchPublishActionCompleted {
-        restore_view: test_confirmation_view_mode("session-a"),
         result: Box::new(Ok(test_pushed_branch_result("feature/first"))),
         session_id: "session-a".into(),
     });
     event_batch.collect_event(AppEvent::BranchPublishActionCompleted {
-        restore_view: test_confirmation_view_mode("session-b"),
         result: Box::new(Ok(test_pushed_branch_result("feature/final"))),
         session_id: "session-b".into(),
     });
@@ -2303,12 +2337,17 @@ fn app_event_batch_collect_event_uses_final_wins_for_review_and_branch_publish()
         })
     );
     assert_eq!(
-        event_batch.branch_publish_action_update,
-        Some(BranchPublishActionUpdate {
-            restore_view: test_confirmation_view_mode("session-b"),
-            result: Ok(test_pushed_branch_result("feature/final")),
-            session_id: "session-b".into(),
-        })
+        event_batch.branch_publish_action_updates,
+        vec![
+            BranchPublishActionUpdate {
+                result: Ok(test_pushed_branch_result("feature/first")),
+                session_id: "session-a".into(),
+            },
+            BranchPublishActionUpdate {
+                result: Ok(test_pushed_branch_result("feature/final")),
+                session_id: "session-b".into(),
+            },
+        ]
     );
     assert!(event_batch.should_refresh_git_status);
 }

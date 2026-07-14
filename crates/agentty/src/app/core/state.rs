@@ -14,9 +14,11 @@ use ag_forge::{
 use ag_git::{GitClient, GitError, RealGitClient};
 #[cfg(test)]
 use app::branch_publish::detected_forge_kind_from_git_push_error;
+use app::branch_publish::{
+    BranchPublishTaskContext, BranchPublishTaskSession, run_branch_publish_action,
+};
 #[cfg(test)]
 use app::branch_publish::{BranchPublishTaskFailure, branch_push_failure, push_session_branch};
-use app::branch_publish::{BranchPublishTaskSession, run_branch_publish_action};
 use app::merge_queue::{MergeQueue, MergeQueueProgress};
 use app::project::ProjectManager;
 use app::review::{
@@ -1369,7 +1371,7 @@ impl App {
         publish_branch_action: PublishBranchAction,
         remote_branch_name: Option<String>,
     ) {
-        let Some(branch_publish_session) = self.branch_publish_task_session(session_id) else {
+        let Some(branch_publish_context) = self.branch_publish_task_context(session_id) else {
             self.mode = Self::view_info_popup_mode(
                 "Branch push failed".to_string(),
                 "Session is no longer available.".to_string(),
@@ -1381,32 +1383,22 @@ impl App {
             return;
         };
 
-        let loading_title = Self::branch_publish_loading_title(publish_branch_action);
-        let loading_message = Self::branch_publish_loading_message(
-            publish_branch_action,
-            remote_branch_name.as_deref(),
-        );
         let loading_label = Self::branch_publish_loading_label(publish_branch_action);
         let clock = self.services.clock();
         let db = self.services.db().clone();
         let event_sender = self.services.event_sender();
         let git_client = self.services.git_client();
         let review_request_client = self.services.review_request_client();
-        let background_restore_view = restore_view.clone();
-        let event_session_id = branch_publish_session.id.clone();
+        let event_session_id = branch_publish_context.session.id.clone();
 
-        self.mode = Self::view_info_popup_mode(
-            loading_title,
-            loading_message,
-            true,
-            loading_label,
-            restore_view,
-        );
+        self.sessions
+            .start_branch_publish(session_id, loading_label);
+        self.mode = restore_view.into_view_mode();
 
         tokio::spawn(async move {
             let result = run_branch_publish_action(
                 publish_branch_action,
-                branch_publish_session,
+                branch_publish_context,
                 db,
                 clock,
                 git_client,
@@ -1416,7 +1408,6 @@ impl App {
             .await;
             // Fire-and-forget: receiver may be dropped during shutdown.
             let _ = event_sender.send(AppEvent::BranchPublishActionCompleted {
-                restore_view: background_restore_view,
                 result: Box::new(result),
                 session_id: event_session_id,
             });
@@ -2072,17 +2063,16 @@ impl App {
         });
     }
 
-    /// Builds one background-task snapshot for a branch-publish action.
-    fn branch_publish_task_session(&self, session_id: &str) -> Option<BranchPublishTaskSession> {
-        let session = self
-            .sessions
-            .sessions()
-            .iter()
-            .find(|session| session.id == session_id)?;
+    /// Builds one branch-publish task snapshot with its shared operation lock.
+    fn branch_publish_task_context(&self, session_id: &str) -> Option<BranchPublishTaskContext> {
+        let (session, handles) = self.sessions.session_and_handles_or_err(session_id).ok()?;
         let mut branch_publish_session = BranchPublishTaskSession::from_session(session);
         branch_publish_session.base_branch = self.review_target_branch_for_session(session);
 
-        Some(branch_publish_session)
+        Some(BranchPublishTaskContext {
+            branch_operation_lock: Arc::clone(&handles.branch_operation_lock),
+            session: branch_publish_session,
+        })
     }
 
     /// Resolves the forge review-request target branch for one session.

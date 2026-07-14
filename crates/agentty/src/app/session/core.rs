@@ -442,6 +442,42 @@ impl SessionManager {
         }
     }
 
+    /// Shows one manual branch-publish action as an inline session-chat task.
+    pub(crate) fn start_branch_publish(&mut self, session_id: &str, loading_label: String) {
+        if let Some(session) = self
+            .state
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            session.transient_messages.upsert(TransientMessage {
+                anchor: TransientMessageAnchor::Tail,
+                body: TransientMessageBody::Loading(loading_label),
+                lifecycle: TransientMessageLifecycle::UntilResolved,
+                slot: TransientMessageSlot::BranchPublish,
+                turn_position: session.latest_user_prompt_position(),
+            });
+        }
+    }
+
+    /// Replaces manual branch-publish progress with its inline final result.
+    pub(crate) fn finish_branch_publish(&mut self, session_id: &str, body: TransientMessageBody) {
+        if let Some(session) = self
+            .state
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            session.transient_messages.upsert(TransientMessage {
+                anchor: TransientMessageAnchor::AfterCompletedTurn,
+                body,
+                lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
+                slot: TransientMessageSlot::BranchPublish,
+                turn_position: session.latest_user_prompt_position(),
+            });
+        }
+    }
+
     /// Marks one session branch as currently auto-syncing to its published
     /// upstream reference.
     pub(crate) fn start_published_branch_sync(

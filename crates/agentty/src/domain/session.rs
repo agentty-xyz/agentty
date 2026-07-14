@@ -750,8 +750,12 @@ impl Session {
     /// Returns the review-request publish action currently available in session
     /// view.
     pub fn publish_pull_request_action(&self) -> Option<PublishBranchAction> {
-        self.status
-            .allows_review_actions()
+        let is_publish_active = self
+            .transient_messages
+            .get(TransientMessageSlot::BranchPublish)
+            .is_some_and(|message| matches!(&message.body, TransientMessageBody::Loading(_)));
+
+        (self.status.allows_review_actions() && !is_publish_active)
             .then_some(PublishBranchAction::PublishPullRequest)
     }
 
@@ -1942,6 +1946,25 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
 
         // Assert
         assert_eq!(action, Some(PublishBranchAction::PublishPullRequest));
+    }
+
+    #[test]
+    fn test_publish_pull_request_action_returns_none_while_publish_is_active() {
+        // Arrange
+        let mut session = crate::test_support::session_fixture("session-id", Status::Review);
+        session.transient_messages.upsert(TransientMessage {
+            anchor: TransientMessageAnchor::Tail,
+            body: TransientMessageBody::Loading("Publishing review request...".to_string()),
+            lifecycle: TransientMessageLifecycle::UntilResolved,
+            slot: TransientMessageSlot::BranchPublish,
+            turn_position: None,
+        });
+
+        // Act
+        let action = session.publish_pull_request_action();
+
+        // Assert
+        assert_eq!(action, None);
     }
 
     #[test]

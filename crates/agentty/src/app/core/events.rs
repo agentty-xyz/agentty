@@ -8,8 +8,6 @@ use std::sync::Arc;
 use app::branch_publish::{
     BranchPublishActionUpdate, BranchPublishTaskResult, BranchPublishTaskSuccess,
     branch_publish_loading_label as branch_publish_loading_label_text,
-    branch_publish_loading_message as branch_publish_loading_message_text,
-    branch_publish_loading_title as branch_publish_loading_title_text,
     branch_publish_success_title as branch_publish_success_title_text,
     detected_forge_kind_from_git_push_error, git_push_authentication_message,
     is_git_push_authentication_error,
@@ -37,6 +35,7 @@ use crate::domain::session::{
     PublishBranchAction, PublishedBranchSyncStatus, SessionHandles, SessionId, SessionSize, Status,
 };
 use crate::domain::transcript_notice::TranscriptNotice;
+use crate::domain::transient_message::TransientMessageBody;
 use crate::presentation::app_mode::{AppMode, ChatFocus, ConfirmationViewMode};
 use crate::presentation::prompt::PromptAtMentionState;
 
@@ -155,7 +154,6 @@ pub(crate) enum AppEvent {
     },
     /// Indicates completion of a session-view branch-publish action.
     BranchPublishActionCompleted {
-        restore_view: ConfirmationViewMode,
         result: Box<BranchPublishTaskResult>,
         session_id: SessionId,
     },
@@ -223,7 +221,7 @@ pub(super) struct AppEventBatch {
     pub(super) applied_turns: HashMap<SessionId, TurnAppliedState>,
     pub(super) agent_cli_updates: Option<Vec<AgentCliInfo>>,
     pub(super) at_mention_entries_updates: HashMap<SessionId, Vec<FileEntry>>,
-    pub(super) branch_publish_action_update: Option<BranchPublishActionUpdate>,
+    pub(super) branch_publish_action_updates: Vec<BranchPublishActionUpdate>,
     pub(super) git_status_update: Option<GitStatusBatchUpdate>,
     pub(super) latest_available_version_update: Option<LatestAvailableVersionUpdate>,
     pub(super) published_branch_sync_updates: Vec<(SessionId, PublishedBranchSyncUpdate)>,
@@ -412,11 +410,9 @@ impl AppEventBatch {
                 self.session_title_generation_finished
                     .insert(session_id, generation);
             }
-            AppEvent::BranchPublishActionCompleted {
-                restore_view,
-                result,
-                session_id,
-            } => self.collect_branch_publish_action_completed(restore_view, *result, session_id),
+            AppEvent::BranchPublishActionCompleted { result, session_id } => {
+                self.collect_branch_publish_action_completed(*result, session_id);
+            }
             AppEvent::ReviewPrepared {
                 diff_hash,
                 review_text,
@@ -636,10 +632,9 @@ impl AppEventBatch {
         self.sync_main_conflicted_files = Some(conflicted_files);
     }
 
-    /// Stores the latest branch-publish action result for this reducer batch.
+    /// Stores one branch-publish action result for this reducer batch.
     fn collect_branch_publish_action_completed(
         &mut self,
-        restore_view: ConfirmationViewMode,
         result: BranchPublishTaskResult,
         session_id: SessionId,
     ) {
@@ -647,11 +642,8 @@ impl AppEventBatch {
             self.should_refresh_git_status = true;
         }
 
-        self.branch_publish_action_update = Some(BranchPublishActionUpdate {
-            restore_view,
-            result,
-            session_id,
-        });
+        self.branch_publish_action_updates
+            .push(BranchPublishActionUpdate { result, session_id });
     }
 
     /// Stores a successful focused-review preparation result.
@@ -841,7 +833,7 @@ impl App {
         self.persist_focused_review_updates(focused_review_persistence)
             .await;
 
-        if let Some(branch_publish_action_update) = event_batch.branch_publish_action_update {
+        for branch_publish_action_update in event_batch.branch_publish_action_updates {
             self.apply_branch_publish_action_update(branch_publish_action_update);
         }
 
@@ -1245,7 +1237,7 @@ impl App {
             || event_batch.update_status.is_some()
             || !event_batch.applied_turns.is_empty()
             || !event_batch.at_mention_entries_updates.is_empty()
-            || event_batch.branch_publish_action_update.is_some()
+            || !event_batch.branch_publish_action_updates.is_empty()
             || !event_batch.published_branch_sync_updates.is_empty()
             || !event_batch.review_request_status_updates.is_empty()
             || event_batch.requested_reviews.is_some()
@@ -1611,18 +1603,14 @@ impl App {
         .await;
     }
 
-    /// Applies one completed branch-publish action and updates the popup.
+    /// Applies one completed branch-publish action to the session chat.
     pub(super) fn apply_branch_publish_action_update(
         &mut self,
         branch_publish_action_update: BranchPublishActionUpdate,
     ) {
-        let BranchPublishActionUpdate {
-            restore_view,
-            result,
-            session_id,
-        } = branch_publish_action_update;
+        let BranchPublishActionUpdate { result, session_id } = branch_publish_action_update;
 
-        let popup_mode = match result {
+        let result_message = match result {
             Ok(BranchPublishTaskSuccess::Pushed {
                 branch_name,
                 review_request_creation,
@@ -1631,16 +1619,14 @@ impl App {
                 self.sessions
                     .apply_published_upstream_ref(&session_id, upstream_reference);
 
-                Self::view_info_popup_mode(
+                TransientMessageBody::Markdown(format!(
+                    "**{}**\n\n{}",
                     Self::branch_publish_success_title(PublishBranchAction::Push),
                     Self::branch_publish_success_message(
                         &branch_name,
                         review_request_creation.as_ref(),
-                    ),
-                    false,
-                    String::new(),
-                    restore_view,
-                )
+                    )
+                ))
             }
             Ok(BranchPublishTaskSuccess::PullRequestPublished {
                 branch_name,
@@ -1652,23 +1638,19 @@ impl App {
                 self.sessions
                     .apply_review_request(&session_id, review_request.clone());
 
-                Self::view_info_popup_mode(
+                TransientMessageBody::Markdown(format!(
+                    "**{}**\n\n{}",
                     Self::review_request_publish_success_title(&review_request),
-                    Self::pull_request_publish_success_message(&branch_name, &review_request),
-                    false,
-                    String::new(),
-                    restore_view,
-                )
+                    Self::pull_request_publish_success_message(&branch_name, &review_request)
+                ))
             }
-            Err(failure) => Self::view_info_popup_mode(
-                failure.title,
-                failure.message,
-                false,
-                String::new(),
-                restore_view,
-            ),
+            Err(failure) => TransientMessageBody::Markdown(format!(
+                "**{}**\n\n{}",
+                failure.title, failure.message
+            )),
         };
-        self.mode = popup_mode;
+        self.sessions
+            .finish_branch_publish(&session_id, result_message);
     }
 
     /// Applies one background review-request status refresh.
@@ -1869,29 +1851,14 @@ impl App {
         }
     }
 
-    /// Returns the loading popup title for one branch-publish action.
-    pub(super) fn branch_publish_loading_title(
-        publish_branch_action: PublishBranchAction,
-    ) -> String {
-        branch_publish_loading_title_text(publish_branch_action)
-    }
-
-    /// Returns the loading popup body for one branch-publish action.
-    pub(super) fn branch_publish_loading_message(
-        publish_branch_action: PublishBranchAction,
-        remote_branch_name: Option<&str>,
-    ) -> String {
-        branch_publish_loading_message_text(publish_branch_action, remote_branch_name)
-    }
-
-    /// Returns the loading spinner label for one branch-publish action.
+    /// Returns the inline loading label for one branch-publish action.
     pub(super) fn branch_publish_loading_label(
         publish_branch_action: PublishBranchAction,
     ) -> String {
         branch_publish_loading_label_text(publish_branch_action)
     }
 
-    /// Returns the success popup title for a completed branch-publish action.
+    /// Returns the inline success title for a completed branch-publish action.
     pub(super) fn branch_publish_success_title(
         publish_branch_action: PublishBranchAction,
     ) -> String {

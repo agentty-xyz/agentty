@@ -132,8 +132,15 @@ ordered `session_message` rows (typed `UserPrompt`, `AssistantAnswer`, `Workflow
 rows). Replaceable output lives in the session's typed transient-message slots instead
 of render-time visibility predicates. Each slot has stable identity, typed content, an
 output anchor, and an explicit lifecycle. Reducer paths upsert or retract summary,
-focused-review, workflow-feedback, and published-branch-sync slots; starting a later
-turn clears older turn-scoped slots in one place.
+focused-review, workflow-feedback, manual-branch-publish, and published-branch-sync
+slots; starting a later turn clears older turn-scoped slots in one place.
+
+Manual branch and review-request publishing returns from its branch-name popup to
+`AppMode::View` before spawning the task. Its session-scoped transient slot renders the
+animated progress row, then the terminal reducer event replaces that row with inline
+success or failure output without changing whichever app mode is active at completion.
+The manual task holds the same per-session branch-operation lock as completed-turn
+auto-push for its full push and forge-metadata workflow.
 
 Published-branch auto-push completion sends one terminal reducer event carrying its
 `WorkflowNotice`. After accepting the current operation identifier, the reducer persists
@@ -406,8 +413,10 @@ their triggers:
   for the mention picker, falling back to the project root for unstarted drafts.
 - **Session-size refresh** (`Enter` on a session in list mode): recomputes the diff-size
   bucket off the key-handling path.
-- **Branch-publish action** (session view `p`): pushes with `--force-with-lease` and
-  creates or refreshes the forge review request.
+- **Branch-publish action** (session view `p`): returns to interactive session chat,
+  then pushes with `--force-with-lease` and creates or refreshes the forge review
+  request in the background; progress and completion render inline for that session,
+  while the shared per-session branch-operation lock serializes it with auto-push.
 - **Deferred session cleanup** (session delete): removes the worktree folder and branch
   after database deletion.
 - **Session fork** (root session view `F`): creates a new worktree branch from the
@@ -441,7 +450,9 @@ orchestration paths:
   owns staging and `git rebase --continue`.
 - Review-request publish: push with `--force-with-lease`, then create or refresh the
   forge review request through `ReviewRequestClient`; only open same-branch requests are
-  reused.
+  reused. The task does not own the active app mode, so its completion cannot interrupt
+  later navigation. It holds the same branch-operation lock as post-turn auto-push, so
+  overlapping requests queue rather than running concurrent force-pushes.
 - Background review-request sync: review-ready sessions with a published branch or
   linked request are polled; merged requests move the session to `Done`, closed requests
   to `Canceled`. Externally merged worktree and branch cleanup runs as a tracked

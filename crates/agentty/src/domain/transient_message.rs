@@ -9,6 +9,8 @@ pub(crate) enum TransientMessageSlot {
     Review,
     /// Short-lived workflow feedback produced while finalizing a turn.
     WorkflowNotice,
+    /// Manual branch or review-request publish progress and result.
+    BranchPublish,
     /// Published-branch auto-push progress replaced by its durable result.
     PublishedBranchSync,
 }
@@ -190,7 +192,7 @@ mod tests {
             anchor: TransientMessageAnchor::AfterCompletedTurn,
             body: TransientMessageBody::Loading("Pushing...".to_string()),
             lifecycle: TransientMessageLifecycle::UntilResolved,
-            slot: TransientMessageSlot::PublishedBranchSync,
+            slot: TransientMessageSlot::BranchPublish,
             turn_position: Some(2),
         });
 
@@ -201,10 +203,6 @@ mod tests {
         assert!(store.get(TransientMessageSlot::Summary).is_none());
         assert!(store.get(TransientMessageSlot::Review).is_some());
         assert!(store.get(TransientMessageSlot::WorkflowNotice).is_none());
-        assert!(
-            store
-                .get(TransientMessageSlot::PublishedBranchSync)
-                .is_some()
-        );
+        assert!(store.get(TransientMessageSlot::BranchPublish).is_some());
     }
 }

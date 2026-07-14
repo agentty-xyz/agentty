@@ -165,14 +165,14 @@ Publish (`p`), sync (`r`), and stacked behavior are described in
 
 ## Publish Popup
 
-| Key                               | Action                                 |
-| --------------------------------- | -------------------------------------- |
-| `Enter`                           | Publish typed or default branch target |
-| `Esc` / `q`                       | Cancel and return to session view      |
-| `Left` / `Right` / `Home` / `End` | Move cursor                            |
-| `Up` / `Down`                     | Move cursor across wrapped lines       |
-| `Backspace` / `Delete`            | Delete character                       |
-| text keys                         | Edit remote branch name                |
+| Key                               | Action                             |
+| --------------------------------- | ---------------------------------- |
+| `Enter`                           | Start publishing in the background |
+| `Esc` / `q`                       | Cancel and return to session view  |
+| `Left` / `Right` / `Home` / `End` | Move cursor                        |
+| `Up` / `Down`                     | Move cursor across wrapped lines   |
+| `Backspace` / `Delete`            | Delete character                   |
+| text keys                         | Edit remote branch name            |
 
 ## Launch Configuration Selector
 

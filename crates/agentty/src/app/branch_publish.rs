@@ -11,7 +11,6 @@ use crate::app::review_request;
 use crate::domain::session::{PublishBranchAction, ReviewRequest, Session, SessionId, Status};
 use crate::infra::clock::Clock;
 use crate::infra::db;
-use crate::presentation::app_mode::ConfirmationViewMode;
 
 /// Session snapshot cloned into a branch-publish background task.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -49,27 +48,33 @@ impl BranchPublishTaskSession {
     }
 }
 
+/// Session snapshot and shared operation lock moved into one publish task.
+pub(crate) struct BranchPublishTaskContext {
+    /// Serializes manual publishing with other branch mutations for the same
+    /// session.
+    pub(crate) branch_operation_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Immutable session data used throughout the background workflow.
+    pub(crate) session: BranchPublishTaskSession,
+}
+
 /// Final reducer payload for a completed branch-publish background action.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BranchPublishActionUpdate {
-    /// Restore-view payload used to rebuild the previous session UI.
-    pub(crate) restore_view: ConfirmationViewMode,
     /// Branch-publish task result routed through the reducer.
     pub(crate) result: BranchPublishTaskResult,
     /// Session id targeted by the completed action.
     pub(crate) session_id: SessionId,
 }
 
-/// Error payload shown inside the session-view info popup for branch-publish
-/// failures.
+/// Error payload shown inline in session chat for branch-publish failures.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BranchPublishTaskFailure {
     /// Whether the failure represents a blocked state (e.g. auth required)
     /// rather than an execution error.
     pub(crate) is_blocked: bool,
-    /// Popup body text describing the failure.
+    /// Inline body text describing the failure.
     pub(crate) message: String,
-    /// Popup title shown for the failure.
+    /// Inline title shown for the failure.
     pub(crate) title: String,
 }
 
@@ -153,38 +158,7 @@ pub(crate) struct ReviewRequestCreationInfo {
     pub(crate) web_url: Option<String>,
 }
 
-/// Returns the loading popup title for one branch-publish action.
-pub(crate) fn branch_publish_loading_title(publish_branch_action: PublishBranchAction) -> String {
-    match publish_branch_action {
-        PublishBranchAction::Push => "Pushing branch".to_string(),
-        PublishBranchAction::PublishPullRequest => "Publishing review request".to_string(),
-    }
-}
-
-/// Returns the loading popup body for one branch-publish action.
-pub(crate) fn branch_publish_loading_message(
-    publish_branch_action: PublishBranchAction,
-    remote_branch_name: Option<&str>,
-) -> String {
-    match (publish_branch_action, remote_branch_name) {
-        (PublishBranchAction::Push, Some(remote_branch_name)) => format!(
-            "Publishing the session branch to `{remote_branch_name}` on the configured Git remote."
-        ),
-        (PublishBranchAction::Push, None) => {
-            "Publishing the session branch to the configured Git remote.".to_string()
-        }
-        (PublishBranchAction::PublishPullRequest, Some(remote_branch_name)) => format!(
-            "Pushing the session branch to `{remote_branch_name}` and creating or refreshing the \
-             active forge review request."
-        ),
-        (PublishBranchAction::PublishPullRequest, None) => {
-            "Pushing the session branch and creating or refreshing the active forge review request."
-                .to_string()
-        }
-    }
-}
-
-/// Returns the loading spinner label for one branch-publish action.
+/// Returns the inline loading label for one branch-publish action.
 pub(crate) fn branch_publish_loading_label(publish_branch_action: PublishBranchAction) -> String {
     match publish_branch_action {
         PublishBranchAction::Push => "Pushing branch...".to_string(),
@@ -192,7 +166,7 @@ pub(crate) fn branch_publish_loading_label(publish_branch_action: PublishBranchA
     }
 }
 
-/// Returns the success popup title for a completed branch-publish action.
+/// Returns the inline success title for a completed branch-publish action.
 pub(crate) fn branch_publish_success_title(publish_branch_action: PublishBranchAction) -> String {
     match publish_branch_action {
         PublishBranchAction::Push => "Branch pushed".to_string(),
@@ -228,7 +202,7 @@ pub(crate) fn branch_push_success_message(
     }
 }
 
-/// Returns the success popup title for one completed review-request publish.
+/// Returns the inline success title for one completed review-request publish.
 pub(crate) fn review_request_publish_success_title(review_request: &ReviewRequest) -> String {
     format!(
         "{} published",
@@ -239,13 +213,13 @@ pub(crate) fn review_request_publish_success_title(review_request: &ReviewReques
     )
 }
 
-/// Returns the success popup body for one completed review-request publish.
+/// Returns the inline success body for one completed review-request publish.
 pub(crate) fn pull_request_publish_success_message(
     branch_name: &str,
     review_request: &ReviewRequest,
 ) -> String {
     format!(
-        "Published session branch `{branch_name}`.\n\n{} {} is ready:\n{}",
+        "Successfully published session branch `{branch_name}`.\n\n{} {}:\n{}",
         review_request
             .summary
             .forge_kind
@@ -255,16 +229,23 @@ pub(crate) fn pull_request_publish_success_message(
     )
 }
 
-/// Executes one background branch-publish action for a session snapshot.
+/// Executes one background branch-publish action while holding the session's
+/// shared branch-operation lock.
 pub(crate) async fn run_branch_publish_action(
     publish_branch_action: PublishBranchAction,
-    branch_publish_session: BranchPublishTaskSession,
+    branch_publish_context: BranchPublishTaskContext,
     db: db::AppRepositories,
     clock: Arc<dyn Clock>,
     git_client: Arc<dyn GitClient>,
     review_request_client: Arc<dyn forge::ReviewRequestClient>,
     remote_branch_name: Option<String>,
 ) -> BranchPublishTaskResult {
+    let BranchPublishTaskContext {
+        branch_operation_lock,
+        session: branch_publish_session,
+    } = branch_publish_context;
+    let _branch_operation_guard = branch_operation_lock.lock_owned().await;
+
     match publish_branch_action {
         PublishBranchAction::Push => {
             push_session_branch(
@@ -1218,7 +1199,8 @@ mod tests {
 
         // Assert
         assert_eq!(title, "GitLab merge request published");
-        assert!(message.contains("GitLab merge request !24 is ready"));
+        assert!(message.contains("Successfully published session branch `wt/session-1`."));
+        assert!(message.contains("GitLab merge request !24"));
     }
 
     #[tokio::test]
