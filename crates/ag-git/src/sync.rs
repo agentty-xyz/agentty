@@ -7,7 +7,8 @@ use tokio::task::spawn_blocking;
 use super::error::GitError;
 use super::rebase::{is_rebase_conflict, run_git_command_with_index_lock_retry};
 use super::repo::{
-    command_output_detail, run_git_command, run_git_command_output_sync, run_git_command_sync,
+    command_output_detail, run_git_command, run_git_command_cancellable,
+    run_git_command_output_sync, run_git_command_sync,
 };
 
 /// Map of local branch names to their ahead/behind counts relative to their
@@ -227,9 +228,10 @@ pub(crate) async fn head_commit_message(repo_path: PathBuf) -> Result<Option<Str
 /// Ok(()) on success.
 ///
 /// # Errors
-/// Returns a [`GitError`] if the branch delete command fails.
+/// Returns a [`GitError`] if the branch delete command fails or exceeds its
+/// runtime bound.
 pub(crate) async fn delete_branch(repo_path: PathBuf, branch_name: String) -> Result<(), GitError> {
-    run_git_command(
+    run_git_command_cancellable(
         repo_path,
         vec!["branch".to_string(), "-D".to_string(), branch_name],
         "Git branch deletion failed".to_string(),

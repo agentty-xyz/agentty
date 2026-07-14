@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 /// Typed error returned by git infrastructure operations.
 ///
 /// Wraps command execution failures, output parsing issues, and I/O errors so
@@ -11,6 +13,15 @@ pub enum GitError {
         command: String,
         /// Human-readable detail extracted from stderr/stdout.
         stderr: String,
+    },
+
+    /// A git subprocess exceeded its configured runtime bound.
+    #[error("{command} timed out after {timeout:?}")]
+    CommandTimedOut {
+        /// Git invocation that exceeded the timeout.
+        command: String,
+        /// Configured command timeout.
+        timeout: Duration,
     },
 
     /// Git command output could not be parsed into the expected structure.
@@ -52,6 +63,24 @@ mod tests {
         assert_eq!(
             display,
             "git push origin main: fatal: could not read Username"
+        );
+    }
+
+    #[test]
+    fn command_timed_out_display_includes_command_and_timeout() {
+        // Arrange
+        let error = GitError::CommandTimedOut {
+            command: "git worktree remove --force /tmp/worktree".to_string(),
+            timeout: Duration::from_secs(30),
+        };
+
+        // Act
+        let display = error.to_string();
+
+        // Assert
+        assert_eq!(
+            display,
+            "git worktree remove --force /tmp/worktree timed out after 30s"
         );
     }
 

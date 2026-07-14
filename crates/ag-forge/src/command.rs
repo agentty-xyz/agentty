@@ -2,10 +2,15 @@
 
 use std::io::ErrorKind;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use tokio::process::Command;
+use tokio::time;
 
 use super::ForgeFuture;
+
+/// Maximum time one forge CLI command may run before it is canceled.
+const FORGE_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// One forge CLI invocation.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -87,6 +92,13 @@ pub(crate) enum ForgeCommandError {
         /// Human-readable spawn error detail.
         message: String,
     },
+    /// The process exceeded the bounded forge-command runtime.
+    TimedOut {
+        /// Executable whose process exceeded the timeout.
+        executable: String,
+        /// Configured command timeout.
+        timeout: Duration,
+    },
 }
 
 /// Async command boundary used by forge adapters.
@@ -113,8 +125,17 @@ impl ForgeCommandRunner for RealForgeCommandRunner {
 
 /// Runs one forge CLI command and captures stdout, stderr, and exit status.
 async fn run_command(command: ForgeCommand) -> Result<ForgeCommandOutput, ForgeCommandError> {
+    run_command_with_timeout(command, FORGE_COMMAND_TIMEOUT).await
+}
+
+/// Runs one forge CLI command with an explicit upper bound.
+async fn run_command_with_timeout(
+    command: ForgeCommand,
+    timeout: Duration,
+) -> Result<ForgeCommandOutput, ForgeCommandError> {
     let mut process = Command::new(command.executable);
     process.args(&command.arguments);
+    process.kill_on_drop(true);
 
     for (key, value) in &command.environment {
         process.env(key, value);
@@ -124,18 +145,24 @@ async fn run_command(command: ForgeCommand) -> Result<ForgeCommandOutput, ForgeC
         process.current_dir(working_directory);
     }
 
-    let output = process.output().await.map_err(|error| {
-        if error.kind() == ErrorKind::NotFound {
-            return ForgeCommandError::ExecutableNotFound {
-                executable: command.executable.to_string(),
-            };
-        }
-
-        ForgeCommandError::SpawnFailed {
+    let output = time::timeout(timeout, process.output())
+        .await
+        .map_err(|_| ForgeCommandError::TimedOut {
             executable: command.executable.to_string(),
-            message: error.to_string(),
-        }
-    })?;
+            timeout,
+        })?
+        .map_err(|error| {
+            if error.kind() == ErrorKind::NotFound {
+                return ForgeCommandError::ExecutableNotFound {
+                    executable: command.executable.to_string(),
+                };
+            }
+
+            ForgeCommandError::SpawnFailed {
+                executable: command.executable.to_string(),
+                message: error.to_string(),
+            }
+        })?;
 
     Ok(ForgeCommandOutput {
         exit_code: output.status.code(),
@@ -277,6 +304,27 @@ mod tests {
             error,
             ForgeCommandError::ExecutableNotFound {
                 executable: "agentty-definitely-missing-forge-command".to_string(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn command_timeout_cancels_long_running_process() {
+        // Arrange
+        let command = ForgeCommand::new("sh", vec!["-c".to_string(), "exec sleep 5".to_string()]);
+        let timeout = Duration::from_millis(25);
+
+        // Act
+        let error = run_command_with_timeout(command, timeout)
+            .await
+            .expect_err("long-running command should time out");
+
+        // Assert
+        assert_eq!(
+            error,
+            ForgeCommandError::TimedOut {
+                executable: "sh".to_string(),
+                timeout,
             }
         );
     }

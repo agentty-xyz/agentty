@@ -489,6 +489,17 @@ pub(crate) fn map_spawn_error(
                 message: format!("failed to execute `{}`: {message}", forge_kind.cli_name()),
             }
         }
+        ForgeCommandError::TimedOut {
+            executable,
+            timeout,
+        } => ReviewRequestError::OperationFailed {
+            forge_kind,
+            message: format!(
+                "`{executable}` timed out after {} seconds while contacting {}",
+                timeout.as_secs(),
+                remote.host
+            ),
+        },
     }
 }
 
@@ -689,6 +700,28 @@ mod tests {
             ReviewRequestError::OperationFailed {
                 forge_kind: ForgeKind::GitHub,
                 message: "failed to execute `gh`: permission denied".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn map_spawn_error_reports_command_timeout() {
+        // Arrange
+        let remote = sample_remote(ForgeKind::GitHub);
+        let error = ForgeCommandError::TimedOut {
+            executable: "gh".to_string(),
+            timeout: std::time::Duration::from_secs(30),
+        };
+
+        // Act
+        let review_request_error = map_spawn_error(&remote, error);
+
+        // Assert
+        assert_eq!(
+            review_request_error,
+            ReviewRequestError::OperationFailed {
+                forge_kind: ForgeKind::GitHub,
+                message: "`gh` timed out after 30 seconds while contacting github.com".to_string(),
             }
         );
     }

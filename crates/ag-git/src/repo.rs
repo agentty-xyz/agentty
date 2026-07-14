@@ -1,10 +1,16 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::time::Duration;
 
+use tokio::process::Command as AsyncCommand;
 use tokio::task::spawn_blocking;
+use tokio::time;
 
 use super::error::GitError;
+
+/// Maximum time one asynchronous git subprocess may run.
+const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Returns the origin repository URL normalized to HTTPS form when possible.
 ///
@@ -47,7 +53,9 @@ pub(crate) async fn repo_url(repo_path: PathBuf) -> Result<String, GitError> {
 /// # Errors
 /// Returns an error if git metadata cannot be queried from `repo_path`.
 pub(crate) async fn main_repo_root(repo_path: PathBuf) -> Result<PathBuf, GitError> {
-    spawn_blocking(move || main_repo_root_sync(&repo_path)).await?
+    match resolve_shared_repo(&repo_path).await? {
+        SharedRepo::Working(path) | SharedRepo::Bare(path) => Ok(path),
+    }
 }
 
 /// Resolves the main working checkout for a repository or linked worktree.
@@ -69,18 +77,6 @@ pub(crate) async fn main_checkout_working_tree(
     repo_path: PathBuf,
 ) -> Result<Option<PathBuf>, GitError> {
     spawn_blocking(move || main_checkout_working_tree_sync(&repo_path)).await?
-}
-
-/// Resolves the main repository root for `repo_path` in synchronous code.
-///
-/// Returns the administrative root: the main working checkout for non-bare
-/// shared repositories and the bare common git directory for bare shared
-/// repositories. Both are valid working directories for `git worktree` and
-/// branch administration commands.
-pub(super) fn main_repo_root_sync(repo_path: &Path) -> Result<PathBuf, GitError> {
-    match resolve_shared_repo_sync(repo_path)? {
-        SharedRepo::Working(path) | SharedRepo::Bare(path) => Ok(path),
-    }
 }
 
 /// Resolves the main working checkout for `repo_path` in synchronous code.
@@ -112,8 +108,8 @@ pub(super) enum SharedRepo {
 /// repository is bare by running `git rev-parse --is-bare-repository` inside
 /// the common git directory, and returns [`SharedRepo::Bare`] with the bare
 /// common git directory when bare. Otherwise returns [`SharedRepo::Working`]
-/// with the main working checkout root, matching the historical
-/// `main_repo_root_sync` resolution for non-bare layouts.
+/// with the main working checkout root, matching the async administrative-root
+/// resolution for non-bare layouts.
 ///
 /// # Errors
 /// Returns an error if git metadata cannot be queried from `repo_path`.
@@ -194,6 +190,54 @@ pub(super) async fn run_git_command(
         run_git_command_sync(&repo_path, &argument_refs, &error_context)
     })
     .await?
+}
+
+/// Runs a cancellable git subprocess with the cleanup-safe runtime bound.
+pub(super) async fn run_git_command_cancellable(
+    repo_path: PathBuf,
+    args: Vec<String>,
+    error_context: String,
+) -> Result<String, GitError> {
+    run_git_command_with_timeout(repo_path, args, error_context, GIT_COMMAND_TIMEOUT).await
+}
+
+/// Runs a cancellable git subprocess with an explicit runtime bound.
+async fn run_git_command_with_timeout(
+    repo_path: PathBuf,
+    args: Vec<String>,
+    error_context: String,
+    timeout: Duration,
+) -> Result<String, GitError> {
+    let argument_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    let git_invocation = format_git_invocation(&argument_refs);
+    let mut command = AsyncCommand::new("git");
+    command
+        .args(&args)
+        .current_dir(repo_path)
+        .stdin(Stdio::null())
+        .kill_on_drop(true);
+    apply_non_interactive_environment_async(&mut command);
+
+    let output = time::timeout(timeout, command.output())
+        .await
+        .map_err(|_| GitError::CommandTimedOut {
+            command: git_invocation.clone(),
+            timeout,
+        })?
+        .map_err(|error| GitError::CommandFailed {
+            command: git_invocation.clone(),
+            stderr: error.to_string(),
+        })?;
+    if !output.status.success() {
+        let detail = command_output_detail(&output.stdout, &output.stderr);
+
+        return Err(GitError::CommandFailed {
+            command: git_invocation,
+            stderr: format!("{error_context}: {detail}"),
+        });
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// Runs a git command in `repo_path` and returns stdout text.
@@ -311,6 +355,19 @@ fn apply_non_interactive_environment(command: &mut Command) {
         .env("GIT_SSH_COMMAND", git_ssh_command);
 }
 
+/// Applies non-interactive defaults to one async git subprocess.
+fn apply_non_interactive_environment_async(command: &mut AsyncCommand) {
+    let git_ssh_command = std::env::var("GIT_SSH_COMMAND").map_or_else(
+        |_| "ssh -o BatchMode=yes".to_string(),
+        |configured_command| format!("{configured_command} -o BatchMode=yes"),
+    );
+
+    command
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never")
+        .env("GIT_SSH_COMMAND", git_ssh_command);
+}
+
 /// Extracts the best human-readable error detail from command output.
 pub(super) fn command_output_detail(stdout: &[u8], stderr: &[u8]) -> String {
     let stderr_text = String::from_utf8_lossy(stderr).trim().to_string();
@@ -324,6 +381,29 @@ pub(super) fn command_output_detail(stdout: &[u8], stderr: &[u8]) -> String {
     }
 
     "Unknown git error".to_string()
+}
+
+/// Resolves the shared repository through cancellable async git commands.
+async fn resolve_shared_repo(repo_path: &Path) -> Result<SharedRepo, GitError> {
+    let (git_dir, git_common_dir) = git_directory_paths_async(repo_path).await?;
+    let is_bare = run_git_command_cancellable(
+        git_common_dir.clone(),
+        vec!["rev-parse".to_string(), "--is-bare-repository".to_string()],
+        "Git rev-parse --is-bare-repository failed".to_string(),
+    )
+    .await?;
+    if is_bare.trim() == "true" {
+        return Ok(SharedRepo::Bare(git_common_dir));
+    }
+
+    let shared_git_dir = if git_dir == git_common_dir {
+        git_dir
+    } else {
+        git_common_dir
+    };
+    let repo_root = repo_root_from_git_dir_async(repo_path, &shared_git_dir).await?;
+
+    Ok(SharedRepo::Working(repo_root))
 }
 
 /// Converts SSH-style GitHub remotes into HTTPS while preserving other URLs.
@@ -341,12 +421,37 @@ fn normalize_repo_url(remote: &str) -> String {
 }
 
 /// Reads absolute git and common git directory paths for `repo_path`.
+async fn git_directory_paths_async(repo_path: &Path) -> Result<(PathBuf, PathBuf), GitError> {
+    let stdout = run_git_command_cancellable(
+        repo_path.to_path_buf(),
+        vec![
+            "rev-parse".to_string(),
+            "--git-dir".to_string(),
+            "--git-common-dir".to_string(),
+        ],
+        "Git rev-parse failed".to_string(),
+    )
+    .await?;
+
+    parse_git_directory_paths(repo_path, &stdout)
+}
+
+/// Reads absolute git and common git directory paths synchronously.
 fn git_directory_paths(repo_path: &Path) -> Result<(PathBuf, PathBuf), GitError> {
     let stdout = run_git_command_sync(
         repo_path,
         &["rev-parse", "--git-dir", "--git-common-dir"],
         "Git rev-parse failed",
     )?;
+
+    parse_git_directory_paths(repo_path, &stdout)
+}
+
+/// Parses the two paths emitted by `git rev-parse`.
+fn parse_git_directory_paths(
+    repo_path: &Path,
+    stdout: &str,
+) -> Result<(PathBuf, PathBuf), GitError> {
     let mut lines = stdout
         .lines()
         .map(str::trim)
@@ -365,18 +470,28 @@ fn git_directory_paths(repo_path: &Path) -> Result<(PathBuf, PathBuf), GitError>
 }
 
 /// Converts a git directory path (typically `.git`) into repository root.
+async fn repo_root_from_git_dir_async(
+    repo_path: &Path,
+    git_dir: &Path,
+) -> Result<PathBuf, GitError> {
+    if let Some(repo_root) = repo_root_from_dot_git_dir(git_dir)? {
+        return Ok(repo_root);
+    }
+
+    let root = run_git_command_cancellable(
+        repo_path.to_path_buf(),
+        vec!["rev-parse".to_string(), "--show-toplevel".to_string()],
+        "Git rev-parse --show-toplevel failed".to_string(),
+    )
+    .await?;
+
+    parse_repo_root(&root)
+}
+
+/// Converts a git directory path into a repository root synchronously.
 fn repo_root_from_git_dir(repo_path: &Path, git_dir: &Path) -> Result<PathBuf, GitError> {
-    if git_dir
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name == ".git")
-    {
-        return git_dir.parent().map(Path::to_path_buf).ok_or_else(|| {
-            GitError::OutputParse(format!(
-                "Git directory has no parent: {}",
-                git_dir.display()
-            ))
-        });
+    if let Some(repo_root) = repo_root_from_dot_git_dir(git_dir)? {
+        return Ok(repo_root);
     }
 
     let root = run_git_command_sync(
@@ -384,6 +499,34 @@ fn repo_root_from_git_dir(repo_path: &Path, git_dir: &Path) -> Result<PathBuf, G
         &["rev-parse", "--show-toplevel"],
         "Git rev-parse --show-toplevel failed",
     )?;
+
+    parse_repo_root(&root)
+}
+
+/// Returns the parent of a conventional `.git` directory when applicable.
+fn repo_root_from_dot_git_dir(git_dir: &Path) -> Result<Option<PathBuf>, GitError> {
+    if git_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_none_or(|name| name != ".git")
+    {
+        return Ok(None);
+    }
+
+    git_dir
+        .parent()
+        .map(Path::to_path_buf)
+        .map(Some)
+        .ok_or_else(|| {
+            GitError::OutputParse(format!(
+                "Git directory has no parent: {}",
+                git_dir.display()
+            ))
+        })
+}
+
+/// Parses a non-empty `git rev-parse --show-toplevel` response.
+fn parse_repo_root(root: &str) -> Result<PathBuf, GitError> {
     let root = root.trim().to_string();
     if root.is_empty() {
         return Err(GitError::OutputParse(
@@ -447,6 +590,43 @@ mod tests {
                 .iter()
                 .any(|(key, value)| key == "GIT_SSH_COMMAND" && value.contains("BatchMode=yes"))
         );
+    }
+
+    #[tokio::test]
+    async fn test_async_git_command_timeout_cancels_process() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temporary repository");
+        let init_output = Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(temp_dir.path())
+            .output()
+            .expect("failed to initialize temporary repository");
+        assert!(init_output.status.success());
+        let timeout = Duration::from_millis(25);
+
+        // Act
+        let error = run_git_command_with_timeout(
+            temp_dir.path().to_path_buf(),
+            vec![
+                "-c".to_string(),
+                "alias.agentty-hang=!exec sleep 1".to_string(),
+                "agentty-hang".to_string(),
+            ],
+            "Git timeout test failed".to_string(),
+            timeout,
+        )
+        .await
+        .expect_err("long-running git command should time out");
+
+        // Assert
+        assert!(matches!(
+            error,
+            GitError::CommandTimedOut {
+                ref command,
+                timeout: actual_timeout,
+            } if command == "git -c alias.agentty-hang=!exec sleep 1 agentty-hang"
+                && actual_timeout == timeout
+        ));
     }
 
     #[test]
@@ -542,13 +722,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_main_repo_root_sync_returns_command_failed_outside_git_repository() {
+    #[tokio::test]
+    async fn test_main_repo_root_returns_command_failed_outside_git_repository() {
         // Arrange
         let temp_dir = tempdir().expect("failed to create temp dir");
 
         // Act
-        let result = main_repo_root_sync(temp_dir.path());
+        let result = main_repo_root(temp_dir.path().to_path_buf()).await;
 
         // Assert
         let error = result.expect_err("non-repo should fail");
@@ -577,8 +757,8 @@ mod tests {
         String::from_utf8_lossy(&output.stdout).trim().to_string()
     }
 
-    #[test]
-    fn test_bare_layout_resolves_bare_admin_root_and_no_working_checkout() {
+    #[tokio::test]
+    async fn test_bare_layout_resolves_bare_admin_root_and_no_working_checkout() {
         // Arrange
         let temp_dir = tempdir().expect("failed to create temp dir");
         let root = temp_dir.path();
@@ -617,8 +797,9 @@ mod tests {
         );
 
         // Act
-        let admin_root =
-            main_repo_root_sync(&session_worktree).expect("failed to resolve admin root");
+        let admin_root = main_repo_root(session_worktree.clone())
+            .await
+            .expect("failed to resolve admin root");
         let working_checkout = main_checkout_working_tree_sync(&session_worktree)
             .expect("failed to resolve working checkout");
 

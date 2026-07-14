@@ -345,7 +345,8 @@ their triggers:
 - **Project sync orchestrator** (startup, project switch, ticks, list-mode `s`): owns
   one command queue per active project that serializes read-only `git fetch`,
   ahead/behind snapshots, review-request refreshes, and manual pull/rebase/push
-  commands.
+  commands. Forge CLI calls are bounded to 30 seconds and cancel their subprocess on
+  timeout so one unavailable provider cannot retain the queue indefinitely.
 - **Version check** (startup): reports npm update availability.
 - **Per-session worker loop** (first command enqueue): serializes all turn commands per
   session and manages channel lifecycle.
@@ -404,8 +405,13 @@ orchestration paths:
   reused.
 - Background review-request sync: review-ready sessions with a published branch or
   linked request are polled; merged requests move the session to `Done`, closed requests
-  to `Canceled`. The Inbox tab loads comment snapshots on demand with generation-scoped
-  deduplication.
+  to `Canceled`. Externally merged worktree and branch cleanup runs as a tracked
+  background task after the terminal transition so input and redraws do not wait for git
+  or filesystem removal. Repeated merged results for an already-`Done` session do not
+  schedule cleanup again. Cleanup-critical git subprocesses are cancellable and bounded
+  to 30 seconds; confirmed shutdown shares a five-second grace period across all tracked
+  cleanup tasks before canceling unfinished work. The Inbox tab loads comment snapshots
+  on demand with generation-scoped deduplication.
 - Assigned-issue refresh: the Issues tab resolves the active project remote and runs a
   repository-scoped, generation-scoped `gh search issues` task through
   `ReviewRequestClient`; stale completions are discarded before the list cache is
