@@ -147,7 +147,7 @@ mod tests {
         // Assert
         assert_eq!(
             rendered_tabs,
-            " Projects | Project: None | Sessions | Inbox | Issues | Settings | Logs "
+            " Projects | Project: None | Sessions | Inbox | Issues | Settings "
         );
     }
 
@@ -190,7 +190,7 @@ mod tests {
         // Assert
         assert_eq!(
             rendered_tabs,
-            " Projects | Project: Primary | Sessions | Inbox | Issues | Settings | Logs "
+            " Projects | Project: Primary | Sessions | Inbox | Issues | Settings "
         );
         assert_eq!(spans[2].style.fg, Some(style::palette::accent_soft()));
         assert!(spans[2].style.add_modifier.contains(Modifier::BOLD));
@@ -212,13 +212,11 @@ mod tests {
         assert_eq!(spans[5].content.as_ref(), "|");
         assert_eq!(spans[7].content.as_ref(), "|");
         assert_eq!(spans[9].content.as_ref(), "|");
-        assert_eq!(spans[11].content.as_ref(), "|");
         assert_eq!(spans[1].style.fg, Some(style::palette::border()));
         assert_eq!(spans[3].style.fg, Some(style::palette::border()));
         assert_eq!(spans[5].style.fg, Some(style::palette::border()));
         assert_eq!(spans[7].style.fg, Some(style::palette::border()));
         assert_eq!(spans[9].style.fg, Some(style::palette::border()));
-        assert_eq!(spans[11].style.fg, Some(style::palette::border()));
     }
 
     #[test]

@@ -10,4 +10,3 @@ pub mod review_detail;
 pub mod session_chat;
 pub mod session_list;
 pub mod setting;
-pub mod system_log;

@@ -38,8 +38,6 @@ tabs. Press `Tab` to move forward or `Shift+Tab` to move backward:
 - **Settings**: Configure the color theme, default reasoning level, smart/fast/review
   model defaults, the optional `Last used model as default` mode, the session commit
   coauthor trailer, and `Launch Configurations` for the active project.
-- **Logs**: Inspect process-local system log events. Logs are not persisted; Agentty
-  keeps the newest `1000` entries in memory.
 
 On startup, Agentty restores the last active list tab. If no tab has been saved yet but
 an active project is already persisted, Agentty opens on **Sessions** so you can resume
@@ -310,7 +308,9 @@ queueing, and `r` sync but hides slash commands. Syncing the parent (or completi
 parent turn) rebases review-ready children onto the refreshed parent branch
 automatically. When the parent merges, children are retargeted onto the parent's base
 branch and review-ready children are synced with `git rebase --onto` so they keep only
-their own commits. When the parent is canceled, its stacked child is canceled too.
+their own commits. If an automatic child sync cannot start or complete, the affected
+child session shows a `[Sync Error]` notice with the failure. When the parent is
+canceled, its stacked child is canceled too.
 
 ## Branch Publish Flow
 

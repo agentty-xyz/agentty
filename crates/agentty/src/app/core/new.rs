@@ -12,11 +12,8 @@ use crate::app::service::{AppServiceDeps, AppServices};
 use crate::app::session::SessionManager;
 use crate::app::setting::SettingsManager;
 use crate::app::startup::{AppStartup, StartupProjectContext, StartupSessionLoadContext};
-use crate::app::{AppError, review, session, sync, task};
+use crate::app::{AppError, review, sync, task};
 use crate::domain::agent::{AgentCliInfo, AgentKind, AgentModel};
-use crate::domain::system_log::{
-    SystemLogBuffer, SystemLogCategory, SystemLogEvent, SystemLogLevel,
-};
 use crate::infra::clock::{Clock, RealClock};
 use crate::infra::db;
 use crate::infra::db::AppRepositories;
@@ -148,7 +145,6 @@ impl App {
         .await;
         let sessions = Self::load_and_restack_startup_sessions(
             &services,
-            &event_tx,
             active_project_id,
             default_session_model,
             startup_working_dir.as_path(),
@@ -162,8 +158,6 @@ impl App {
         let sync_main_runner = clients
             .sync_main_runner
             .unwrap_or_else(|| sync_handle.sync_main_runner());
-        let system_logs = Self::startup_system_logs(clock.as_ref(), projects.project_name());
-
         Ok(Self {
             mode: crate::presentation::app_mode::AppMode::List,
             needs_redraw: true,
@@ -187,8 +181,6 @@ impl App {
             last_seen_session_update_versions: std::collections::HashMap::new(),
             merge_queue: crate::app::merge_queue::MergeQueue::default(),
             session_progress_messages: std::collections::HashMap::new(),
-            system_log_tail_offset: 0,
-            system_logs,
             update_status: None,
             sync_handle,
             sync_main_runner,
@@ -216,7 +208,6 @@ impl App {
     /// that were interrupted after persistence had recorded the stack base.
     async fn load_and_restack_startup_sessions(
         services: &AppServices,
-        event_tx: &mpsc::UnboundedSender<AppEvent>,
         active_project_id: i64,
         default_session_model: AgentModel,
         startup_working_dir: &Path,
@@ -230,29 +221,13 @@ impl App {
             },
         )
         .await;
-        let pending_stack_restack_failures = sessions
+        let failures = sessions
             .rebase_pending_stack_restacks_for_project(services, active_project_id)
             .await;
-        Self::emit_pending_stack_restack_failures(event_tx, pending_stack_restack_failures);
+        sessions
+            .append_stacked_rebase_failure_notices(failures, "Pending stacked child sync failed");
 
         sessions
-    }
-
-    /// Emits startup system-log entries for pending stack restacks that could
-    /// not be re-enqueued.
-    fn emit_pending_stack_restack_failures(
-        event_tx: &mpsc::UnboundedSender<AppEvent>,
-        failures: Vec<(crate::domain::session::SessionId, session::SessionError)>,
-    ) {
-        for (session_id, error) in failures {
-            let event = SystemLogEvent::new(
-                SystemLogLevel::Warning,
-                SystemLogCategory::Session,
-                "Pending stacked child sync failed",
-            )
-            .with_detail(format!("{session_id}: {error}"));
-            let _ = event_tx.send(AppEvent::SystemLog { event });
-        }
     }
 
     /// Returns the optional agent availability probe used by the background
@@ -348,23 +323,6 @@ impl App {
             },
             available_agent_clis,
         ))
-    }
-
-    /// Builds the process-local startup log buffer with the first visible
-    /// lifecycle event.
-    fn startup_system_logs(clock: &dyn Clock, project_name: &str) -> SystemLogBuffer {
-        let mut system_logs = SystemLogBuffer::default();
-        system_logs.push(
-            session::unix_timestamp_from_system_time(clock.now_system_time()),
-            SystemLogEvent::new(
-                SystemLogLevel::Info,
-                SystemLogCategory::System,
-                "Agentty started",
-            )
-            .with_detail(format!("active project: {project_name}")),
-        );
-
-        system_logs
     }
 
     /// Resolves the configured upstream reference for one project branch.

@@ -98,24 +98,6 @@ fn test_pushed_branch_result(branch_name: &str) -> BranchPublishTaskSuccess {
     }
 }
 
-/// Verifies app startup seeds the first process-local system log entry.
-#[tokio::test]
-async fn new_with_clients_records_startup_system_log() {
-    // Arrange, Act
-    let app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
-        Arc::new(MockTmuxClient::new()),
-    )
-    .await;
-
-    // Assert
-    assert!(
-        app.system_logs
-            .entries()
-            .iter()
-            .any(|entry| entry.message == "Agentty started")
-    );
-}
-
 #[tokio::test]
 async fn test_new_with_clients_fails_when_no_backend_cli_is_available() {
     // Arrange
@@ -2168,34 +2150,6 @@ fn app_event_batch_collect_event_stores_agent_cli_versions() {
     );
 }
 
-/// Verifies system log events are retained in reducer batch order.
-#[test]
-fn app_event_batch_collect_event_keeps_system_log_events_ordered() {
-    // Arrange
-    let mut event_batch = AppEventBatch::default();
-
-    // Act
-    event_batch.collect_event(AppEvent::SystemLog {
-        event: SystemLogEvent::new(
-            SystemLogLevel::Info,
-            SystemLogCategory::System,
-            "First event",
-        ),
-    });
-    event_batch.collect_event(AppEvent::SystemLog {
-        event: SystemLogEvent::new(
-            SystemLogLevel::Warning,
-            SystemLogCategory::Forge,
-            "Second event",
-        ),
-    });
-
-    // Assert
-    assert_eq!(event_batch.system_log_events.len(), 2);
-    assert_eq!(event_batch.system_log_events[0].message, "First event");
-    assert_eq!(event_batch.system_log_events[1].message, "Second event");
-}
-
 #[test]
 fn app_event_batch_collect_event_keeps_latest_same_session_updates() {
     // Arrange
@@ -2452,42 +2406,6 @@ async fn apply_app_events_agent_cli_versions_updates_app_services() {
     assert!(app.needs_redraw());
 }
 
-/// Verifies direct system log events append to the process-local buffer.
-#[tokio::test]
-async fn apply_app_events_records_system_log_events() {
-    // Arrange
-    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
-        Arc::new(MockTmuxClient::new()),
-    )
-    .await;
-    let initial_log_count = app.system_logs.len();
-    app.clear_redraw();
-
-    // Act
-    app.apply_app_events(AppEvent::SystemLog {
-        event: SystemLogEvent::new(
-            SystemLogLevel::Success,
-            SystemLogCategory::Sync,
-            "Manual sync completed",
-        )
-        .with_detail("main"),
-    })
-    .await;
-
-    // Assert
-    assert_eq!(app.system_logs.len(), initial_log_count + 1);
-    let entry = app
-        .system_logs
-        .entries()
-        .back()
-        .expect("system log event should be recorded");
-    assert_eq!(entry.level, SystemLogLevel::Success);
-    assert_eq!(entry.category, SystemLogCategory::Sync);
-    assert_eq!(entry.message, "Manual sync completed");
-    assert_eq!(entry.detail.as_deref(), Some("main"));
-    assert!(app.needs_redraw());
-}
-
 #[tokio::test]
 /// Verifies workflow notices append to in-memory session state without
 /// changing persisted transcript messages.
@@ -2677,17 +2595,17 @@ async fn apply_app_events_review_request_status_updated_ignores_stale_generation
     assert_eq!(session.status, Status::Review);
 }
 
-/// Verifies reducer-applied session status transitions are recorded in
-/// the process-local system log.
+/// Verifies reducer-applied review-request status transitions update the
+/// session state.
 #[tokio::test]
-async fn apply_app_events_review_request_status_transition_records_system_log() {
+async fn apply_app_events_review_request_status_transition_updates_session() {
     // Arrange
     let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
         Arc::new(MockTmuxClient::new()),
     )
     .await;
     let project_id = app.active_project_id();
-    let session_id = "session-log-transition";
+    let session_id = "session-status-transition";
     app.services
         .db()
         .sessions()
@@ -2709,8 +2627,6 @@ async fn apply_app_events_review_request_status_transition_records_system_log() 
     fs::create_dir_all(session_data_dir).expect("failed to create session data dir");
     app.refresh_sessions_now().await;
     let generation = app.sync_handle.current_generation();
-    let initial_log_count = app.system_logs.len();
-
     // Act
     app.apply_app_events(AppEvent::ReviewRequestStatusUpdated {
         generation,
@@ -2733,21 +2649,6 @@ async fn apply_app_events_review_request_status_transition_records_system_log() 
         .find(|session| session.id == session_id)
         .expect("session should remain loaded");
     assert_eq!(session.status, Status::Canceled);
-    let status_log_entry = app
-        .system_logs
-        .entries()
-        .iter()
-        .skip(initial_log_count)
-        .find(|entry| entry.message == "Session status changed")
-        .expect("status transition should be logged");
-    assert_eq!(status_log_entry.category, SystemLogCategory::Session);
-    assert_eq!(status_log_entry.level, SystemLogLevel::Info);
-    assert!(
-        status_log_entry
-            .detail
-            .as_deref()
-            .is_some_and(|detail| detail.contains("Review -> Canceled"))
-    );
 }
 
 #[tokio::test]

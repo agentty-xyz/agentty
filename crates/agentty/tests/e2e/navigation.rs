@@ -276,7 +276,7 @@ fn tab_key_switches_tabs() -> E2eResult {
 /// Verify that pressing Tab cycles through all primary tabs in order.
 ///
 /// Starts on Projects and asserts each successive tab becomes selected:
-/// Sessions, Inbox, Issues, Settings, Logs.
+/// Sessions, Inbox, Issues, Settings.
 #[test]
 fn tab_cycles_through_all_tabs() -> E2eResult {
     // Arrange, Act, Assert
@@ -304,18 +304,15 @@ fn tab_cycles_through_all_tabs() -> E2eResult {
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(2500)
                     .capture_labeled("settings", "Settings tab selected")
-                    .compose(&common::switch_to_tab("Logs"))
-                    .viewing_pause_ms(2500)
-                    .capture_labeled("logs", "Logs tab selected")
             },
             |frame, report| {
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Agentty started", &full);
+                assertion::assert_text_in_region(frame, "Reasoning Level", &full);
 
                 assert_eq!(
                     report.captures.len(),
-                    5,
-                    "Expected 5 captures (sessions, inbox, issues, settings, logs)"
+                    4,
+                    "Expected 4 captures (sessions, inbox, issues, settings)"
                 );
 
                 let sessions_frame = common::frame_from_capture(&report.captures[0]);
@@ -343,33 +340,6 @@ fn tab_cycles_through_all_tabs() -> E2eResult {
                 );
             },
         )?;
-
-    Ok(())
-}
-
-/// Verify that the Logs tab renders process-local system log entries.
-#[test]
-fn logs_tab_shows_process_system_logs() -> E2eResult {
-    // Arrange, Act, Assert
-    FeatureTest::new("system_logs_page").with_git().run(
-        |scenario| {
-            scenario
-                .compose(&common::wait_for_agentty_startup())
-                .compose(&common::switch_to_tab("Sessions"))
-                .compose(&common::switch_to_tab("Inbox"))
-                .compose(&common::switch_to_tab("Issues"))
-                .compose(&common::switch_to_tab("Settings"))
-                .compose(&common::switch_to_tab("Logs"))
-                .viewing_pause_ms(1500)
-                .capture_labeled("logs", "Logs tab selected")
-        },
-        |frame, _report| {
-            let full = Region::full(frame.cols(), frame.rows());
-            assertion::assert_text_in_region(frame, "Logs", &full);
-            assertion::assert_text_in_region(frame, "Agentty started", &full);
-            assertion::assert_text_in_region(frame, "system", &full);
-        },
-    )?;
 
     Ok(())
 }
@@ -593,9 +563,8 @@ fn startup_shows_footer_hints() -> E2eResult {
 
 /// Verify that `BackTab` (Shift+Tab) cycles tabs in reverse order.
 ///
-/// Starts on Projects (first tab), navigates forward to Logs (last tab),
-/// then presses `BackTab` to cycle back through Settings, Issues, Inbox,
-/// Sessions, and Projects.
+/// Starts on Projects (first tab), then presses `BackTab` to cycle back
+/// through Settings, Issues, Inbox, Sessions, and Projects.
 #[test]
 fn backtab_cycles_tabs_reverse() -> E2eResult {
     // Arrange, Act, Assert
@@ -610,15 +579,8 @@ fn backtab_cycles_tabs_reverse() -> E2eResult {
             |scenario| {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::switch_to_tab("Inbox"))
-                    .compose(&common::switch_to_tab("Issues"))
-                    .compose(&common::switch_to_tab("Settings"))
-                    .compose(&common::switch_to_tab("Logs"))
-                    .viewing_pause_ms(2000)
-                    .capture_labeled("at_logs", "Logs tab selected before reverse")
                     .compose(&common::switch_to_tab_reverse("Settings"))
-                    .viewing_pause_ms(1500)
+                    .viewing_pause_ms(2000)
                     .capture_labeled("back_to_settings", "Settings tab after first BackTab")
                     .compose(&common::switch_to_tab_reverse("Issues"))
                     .viewing_pause_ms(1500)
@@ -637,7 +599,7 @@ fn backtab_cycles_tabs_reverse() -> E2eResult {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "test-project", &full);
 
-                let settings_frame = common::frame_from_capture(&report.captures[1]);
+                let settings_frame = common::frame_from_capture(&report.captures[0]);
                 let settings_full = Region::full(settings_frame.cols(), settings_frame.rows());
                 assertion::assert_text_in_region(
                     &settings_frame,
@@ -645,7 +607,7 @@ fn backtab_cycles_tabs_reverse() -> E2eResult {
                     &settings_full,
                 );
 
-                let issues_frame = common::frame_from_capture(&report.captures[2]);
+                let issues_frame = common::frame_from_capture(&report.captures[1]);
                 let issues_full = Region::full(issues_frame.cols(), issues_frame.rows());
                 assertion::assert_text_in_region(
                     &issues_frame,
@@ -653,15 +615,15 @@ fn backtab_cycles_tabs_reverse() -> E2eResult {
                     &issues_full,
                 );
 
-                let inbox_frame = common::frame_from_capture(&report.captures[3]);
+                let inbox_frame = common::frame_from_capture(&report.captures[2]);
                 let inbox_full = Region::full(inbox_frame.cols(), inbox_frame.rows());
                 assertion::assert_text_in_region(&inbox_frame, "Review Requests", &inbox_full);
 
-                let sessions_frame = common::frame_from_capture(&report.captures[4]);
+                let sessions_frame = common::frame_from_capture(&report.captures[3]);
                 let sessions_full = Region::full(sessions_frame.cols(), sessions_frame.rows());
                 assertion::assert_text_in_region(&sessions_frame, "No sessions", &sessions_full);
 
-                let projects_frame = common::frame_from_capture(&report.captures[5]);
+                let projects_frame = common::frame_from_capture(&report.captures[4]);
                 let projects_full = Region::full(projects_frame.cols(), projects_frame.rows());
                 assertion::assert_text_in_region(&projects_frame, "test-project", &projects_full);
             },

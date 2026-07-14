@@ -27,7 +27,7 @@ use crate::app::session::{
     StatusTransition, SyncMainOutcome, SyncSessionStartError, TurnAppliedState,
 };
 use crate::app::session_state::SessionGitStatus;
-use crate::app::{self, session, sync_message};
+use crate::app::{self, sync_message};
 use crate::domain::agent::AgentCliInfo;
 use crate::domain::file_entry::{FileEntry, at_mention_lookup_root};
 use crate::domain::input::InputState;
@@ -35,7 +35,6 @@ use crate::domain::question::default_option_index;
 use crate::domain::session::{
     PublishBranchAction, PublishedBranchSyncStatus, SessionId, SessionSize, Status,
 };
-use crate::domain::system_log::{SystemLogCategory, SystemLogEvent, SystemLogLevel};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::presentation::app_mode::{AppMode, ChatFocus, ConfirmationViewMode};
 use crate::presentation::prompt::PromptAtMentionState;
@@ -87,8 +86,6 @@ pub(crate) enum AppEvent {
     AgentCliVersionsUpdated { agent_clis: Vec<AgentCliInfo> },
     /// Indicates progress of the background auto-update.
     UpdateStatusChanged { update_status: UpdateStatus },
-    /// Records one process-local system log event.
-    SystemLog { event: SystemLogEvent },
     /// Indicates a session agent/model selection has been persisted.
     SessionModelUpdated {
         session_id: SessionId,
@@ -254,9 +251,6 @@ pub(super) struct AppEventBatch {
     /// Whether this batch should reload session list snapshots from
     /// persistence.
     pub(super) should_reload_sessions: bool,
-    /// Ordered process-local system log events to append during this reducer
-    /// batch.
-    pub(super) system_log_events: Vec<SystemLogEvent>,
     pub(super) review_request_status_updates: Vec<ReviewRequestStatusUpdate>,
     pub(super) review_comment_session_ids: HashSet<SessionId>,
     /// Latest requested-review task result collected for this reducer batch,
@@ -363,7 +357,6 @@ impl AppEventBatch {
             AppEvent::UpdateStatusChanged { update_status } => {
                 self.collect_update_status_changed(update_status);
             }
-            AppEvent::SystemLog { event } => self.collect_system_log(event),
             AppEvent::SessionModelUpdated {
                 session_id,
                 session_agent,
@@ -789,12 +782,6 @@ impl AppEventBatch {
         self.stacked_parent_merge_child_rebases
             .extend(child_session_ids);
     }
-
-    /// Collects one structured system log event for ordered reducer
-    /// application.
-    fn collect_system_log(&mut self, event: SystemLogEvent) {
-        self.system_log_events.push(event);
-    }
 }
 
 impl App {
@@ -844,8 +831,6 @@ impl App {
         let sync_generation_for_review_updates = self.sync_handle.current_generation();
         let mut should_mark_dirty = Self::app_event_batch_changes_observable_state(&event_batch);
         let previous_session_states = self.previous_session_states(&event_batch.session_ids);
-
-        self.apply_system_log_events(std::mem::take(&mut event_batch.system_log_events));
 
         should_mark_dirty |=
             self.update_session_redraw_versions(&event_batch.session_update_versions);
@@ -908,16 +893,16 @@ impl App {
                 self.sessions.append_workflow_notice(&session_id, notice);
             }
         }
-        should_mark_dirty |= self
-            .apply_stacked_parent_merge_child_rebases(std::mem::take(
-                &mut event_batch.stacked_parent_merge_child_rebases,
-            ))
-            .await;
-        should_mark_dirty |= self
-            .apply_stacked_parent_turn_child_rebases(
-                std::mem::take(&mut event_batch.stacked_parent_syncs_completed),
-                std::mem::take(&mut event_batch.stacked_parent_turns_completed),
-            )
+        self.start_stacked_child_rebases_after_parent_merge(std::mem::take(
+            &mut event_batch.stacked_parent_merge_child_rebases,
+        ))
+        .await;
+        let mut turned_parent_session_ids =
+            std::mem::take(&mut event_batch.stacked_parent_turns_completed);
+        turned_parent_session_ids.extend(std::mem::take(
+            &mut event_batch.stacked_parent_syncs_completed,
+        ));
+        self.start_stacked_child_rebases_after_parent_turns(turned_parent_session_ids)
             .await;
         auto_start_reviews(
             &mut self.review_cache,
@@ -931,19 +916,7 @@ impl App {
 
         if let Some(sync_main_result) = event_batch.sync_main_result {
             let sync_popup_context = self.sync_popup_context();
-            self.apply_system_log_events(vec![Self::sync_main_result_log_event(
-                &sync_main_result,
-                &sync_popup_context,
-            )]);
-
             self.mode = Self::sync_main_popup_mode(sync_main_result, &sync_popup_context);
-        }
-
-        let session_status_log_events =
-            self.session_status_transition_log_events(&previous_session_states);
-        if !session_status_log_events.is_empty() {
-            should_mark_dirty = true;
-            self.apply_system_log_events(session_status_log_events);
         }
 
         self.handle_merge_queue_progress(&event_batch.session_ids, &previous_session_states)
@@ -956,51 +929,12 @@ impl App {
         }
     }
 
-    /// Applies queued stacked-parent sync and turn completion events, then
-    /// records warnings for children that could not be auto-synced.
-    async fn apply_stacked_parent_turn_child_rebases(
-        &mut self,
-        synced_parent_session_ids: HashSet<SessionId>,
-        mut turned_parent_session_ids: HashSet<SessionId>,
-    ) -> bool {
-        turned_parent_session_ids.extend(synced_parent_session_ids);
-        let auto_rebase_log_events = self
-            .start_stacked_child_rebases_after_parent_turns(turned_parent_session_ids)
-            .await;
-        if auto_rebase_log_events.is_empty() {
-            return false;
-        }
-
-        self.apply_system_log_events(auto_rebase_log_events);
-
-        true
-    }
-
-    /// Applies queued post-merge stacked-child rebase events and records
-    /// warnings for children that could not be enqueued.
-    async fn apply_stacked_parent_merge_child_rebases(
-        &mut self,
-        child_session_ids: HashSet<SessionId>,
-    ) -> bool {
-        let post_merge_rebase_log_events = self
-            .start_stacked_child_rebases_after_parent_merge(child_session_ids)
-            .await;
-        if post_merge_rebase_log_events.is_empty() {
-            return false;
-        }
-
-        self.apply_system_log_events(post_merge_rebase_log_events);
-
-        true
-    }
-
     /// Starts automatic sync rebases for stacked children after their parent
     /// has returned to a review-ready state.
     async fn start_stacked_child_rebases_after_parent_turns(
         &mut self,
         parent_session_ids: HashSet<SessionId>,
-    ) -> Vec<SystemLogEvent> {
-        let mut events = Vec::new();
+    ) {
         for parent_session_id in parent_session_ids {
             let failures = self
                 .sessions
@@ -1009,19 +943,9 @@ impl App {
                     parent_session_id.as_str(),
                 )
                 .await;
-            for (child_session_id, error) in failures {
-                events.push(
-                    SystemLogEvent::new(
-                        SystemLogLevel::Warning,
-                        SystemLogCategory::Session,
-                        "Stacked child auto-sync failed",
-                    )
-                    .with_detail(format!("{child_session_id}: {error}")),
-                );
-            }
+            self.sessions
+                .append_stacked_rebase_failure_notices(failures, "Stacked child auto-sync failed");
         }
-
-        events
     }
 
     /// Starts deterministic sync rebases for children retargeted by a parent
@@ -1029,9 +953,9 @@ impl App {
     async fn start_stacked_child_rebases_after_parent_merge(
         &mut self,
         child_session_ids: HashSet<SessionId>,
-    ) -> Vec<SystemLogEvent> {
+    ) {
         if child_session_ids.is_empty() {
-            return Vec::new();
+            return;
         }
 
         let mut child_session_ids = child_session_ids.into_iter().collect::<Vec<_>>();
@@ -1041,18 +965,10 @@ impl App {
             .sessions
             .rebase_sessions_after_parent_merge(&self.services, child_session_ids)
             .await;
-
-        failures
-            .into_iter()
-            .map(|(child_session_id, error)| {
-                SystemLogEvent::new(
-                    SystemLogLevel::Warning,
-                    SystemLogCategory::Session,
-                    "Stacked child post-merge sync failed",
-                )
-                .with_detail(format!("{child_session_id}: {error}"))
-            })
-            .collect()
+        self.sessions.append_stacked_rebase_failure_notices(
+            failures,
+            "Stacked child post-merge sync failed",
+        );
     }
 
     /// Clears the diff scroll limit cache when review comments change for the
@@ -1369,65 +1285,6 @@ impl App {
             || !event_batch.stacked_parent_turns_completed.is_empty()
             || event_batch.sync_main_conflicted_files.is_some()
             || event_batch.sync_main_result.is_some()
-            || !event_batch.system_log_events.is_empty()
-    }
-
-    /// Records reducer-batched system log events with the current app clock.
-    fn apply_system_log_events(&mut self, system_log_events: Vec<SystemLogEvent>) {
-        if system_log_events.is_empty() {
-            return;
-        }
-
-        let timestamp_unix_seconds =
-            session::unix_timestamp_from_system_time(self.services.clock().now_system_time());
-        for system_log_event in system_log_events {
-            self.system_logs
-                .push(timestamp_unix_seconds, system_log_event);
-        }
-    }
-
-    /// Builds the system log event for one completed manual sync workflow.
-    fn sync_main_result_log_event(
-        sync_main_result: &Result<SyncMainOutcome, SyncSessionStartError>,
-        sync_popup_context: &SyncPopupContext,
-    ) -> SystemLogEvent {
-        match sync_main_result {
-            Ok(sync_main_outcome) => SystemLogEvent::new(
-                SystemLogLevel::Success,
-                SystemLogCategory::Sync,
-                "Manual project sync completed",
-            )
-            .with_detail(format!(
-                "{} on {}: pulled {}, pushed {}, resolved {} conflicts",
-                sync_popup_context.project_name,
-                sync_popup_context.default_branch,
-                sync_main_outcome.pulled_commits.unwrap_or(0),
-                sync_main_outcome.pushed_commits.unwrap_or(0),
-                sync_main_outcome.resolved_conflict_files.len(),
-            )),
-            Err(SyncSessionStartError::MainHasUncommittedChanges { default_branch }) => {
-                SystemLogEvent::new(
-                    SystemLogLevel::Warning,
-                    SystemLogCategory::Sync,
-                    "Manual project sync blocked",
-                )
-                .with_detail(format!(
-                    "{} on {default_branch}: uncommitted changes",
-                    sync_popup_context.project_name
-                ))
-            }
-            Err(sync_error @ SyncSessionStartError::Other(_)) => SystemLogEvent::new(
-                SystemLogLevel::Error,
-                SystemLogCategory::Sync,
-                "Manual project sync failed",
-            )
-            .with_detail(format!(
-                "{} on {}: {}",
-                sync_popup_context.project_name,
-                sync_popup_context.default_branch,
-                sync_error.detail_message()
-            )),
-        }
     }
 
     /// Updates the loading sync popup with the current conflict-resolution
@@ -1446,46 +1303,6 @@ impl App {
         let sync_popup_context = self.sync_popup_context();
         self.mode =
             Self::sync_main_conflict_resolution_popup_mode(conflicted_files, &sync_popup_context);
-    }
-
-    /// Builds system log events for sessions whose rendered status changed
-    /// during the current reducer batch.
-    fn session_status_transition_log_events(
-        &self,
-        previous_session_states: &HashMap<SessionId, Status>,
-    ) -> Vec<SystemLogEvent> {
-        let mut events = Vec::new();
-
-        for (session_id, previous_status) in previous_session_states {
-            let Some(session) = self
-                .sessions
-                .sessions()
-                .iter()
-                .find(|session| session.id == *session_id)
-            else {
-                continue;
-            };
-            if session.status == *previous_status {
-                continue;
-            }
-
-            events.push(
-                SystemLogEvent::new(
-                    SystemLogLevel::Info,
-                    SystemLogCategory::Session,
-                    "Session status changed",
-                )
-                .with_detail(format!(
-                    "{}: {} -> {} ({})",
-                    session.id,
-                    previous_status,
-                    session.status,
-                    session.display_title()
-                )),
-            );
-        }
-
-        events
     }
 
     /// Updates the last-seen session-handle versions and returns whether any

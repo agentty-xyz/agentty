@@ -481,6 +481,35 @@ fn seed_pending_post_merge_restack_child(
     Ok(())
 }
 
+/// Seeds a pending post-merge restack with an invalid old parent tip so the
+/// automatic startup sync reports its failure in the child session view.
+fn seed_failing_pending_post_merge_restack_child(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let child_worktree = env.agentty_root.join("wt").join("stack-re");
+    let _parent_tip = seed_child_worktree_for_onto_rebase(&env.workdir, &child_worktree)?;
+    common::seed_session(
+        env,
+        SessionSeed::regular("stack-restack-failure-0001", "gpt-5.5", "main", "Review")
+            .with_title("Blocked post-merge child sync"),
+    )?;
+
+    let runtime = common::seed_runtime()?;
+
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .update_session_stack_base_commit_hash(
+                "stack-restack-failure-0001",
+                Some("missing-parent-tip".to_string()),
+            )
+            .await
+    })?;
+
+    Ok(())
+}
+
 /// Creates a child branch with one parent commit and one child commit so the
 /// app can recover it using `git rebase --onto main <parent-tip>`.
 fn seed_child_worktree_for_onto_rebase(
@@ -1314,7 +1343,6 @@ fn session_list_selected_row_remains_readable_under_dark_horizon() -> E2eResult 
                     .wait_for_stable_frame(200, 3000)
                     .press_key("Enter")
                     .wait_for_text("Dark Horizon", 5000)
-                    .compose(&common::switch_to_tab("Logs"))
                     .compose(&common::switch_to_tab("Projects"))
                     .compose(&common::switch_to_tab("Sessions"))
                     .wait_for_text("Review-ready session shortcuts", 5000)
@@ -1500,7 +1528,6 @@ fn session_view_theme_switch_repaints_cached_messages() -> E2eResult {
                     .wait_for_stable_frame(200, 3000)
                     .press_key("Enter")
                     .wait_for_text("Dark Horizon", 5000)
-                    .compose(&common::switch_to_tab("Logs"))
                     .compose(&common::switch_to_tab("Projects"))
                     .compose(&common::switch_to_tab("Sessions"))
                     .wait_for_text("User markdown prompt", 5000)
@@ -2290,6 +2317,38 @@ fn stacked_pending_post_merge_restack_recovers_on_startup() -> E2eResult {
                 assertion::assert_text_in_region(frame, "Pending post-merge child sync", &full);
                 assertion::assert_text_in_region(frame, "Successfully synced", &full);
                 assertion::assert_not_visible(frame, "[Sync Error]");
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that an automatic post-merge child sync failure remains visible in
+/// the affected child session after startup.
+#[test]
+fn stacked_pending_post_merge_restack_failure_is_visible() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("stacked_pending_post_merge_restack_failure_is_visible")
+        .with_git()
+        .setup(seed_failing_pending_post_merge_restack_child)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .wait_for_text("Blocked post-merge child sync", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("[Sync Error]", 10000)
+                    .capture_labeled(
+                        "pending_restack_failure",
+                        "Pending post-merge stacked child sync failure after startup",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Blocked post-merge child sync", &full);
+                assertion::assert_text_in_region(frame, "[Sync Error]", &full);
+                assertion::assert_text_in_region(frame, "Failed to sync", &full);
             },
         )?;
 

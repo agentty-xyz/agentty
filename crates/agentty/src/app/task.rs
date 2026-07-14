@@ -20,7 +20,6 @@ use crate::app::error::AppError;
 use crate::app::{AppEvent, UpdateStatus};
 use crate::domain::agent::{AgentCliInfo, AgentKind, AgentSelection, ReasoningLevel};
 use crate::domain::session::SessionId;
-use crate::domain::system_log::{SystemLogCategory, SystemLogEvent, SystemLogLevel};
 use crate::infra::version;
 
 /// Stateless helpers for app-scoped one-shot background tasks and app-server
@@ -82,21 +81,6 @@ impl TaskService {
                 review_request_client.as_ref(),
             )
             .await;
-            let event = match &result {
-                Ok(items) => SystemLogEvent::new(
-                    SystemLogLevel::Success,
-                    SystemLogCategory::Forge,
-                    "Assigned issues query completed",
-                )
-                .with_detail(format!("{} issues", items.len())),
-                Err(error) => SystemLogEvent::new(
-                    SystemLogLevel::Warning,
-                    SystemLogCategory::Forge,
-                    "Assigned issues query failed",
-                )
-                .with_detail(error.clone()),
-            };
-            let _ = app_event_tx.send(AppEvent::SystemLog { event });
             let _ = app_event_tx.send(AppEvent::AssignedIssuesLoaded {
                 generation,
                 project_id,
@@ -123,21 +107,6 @@ impl TaskService {
                 review_request_client.as_ref(),
             )
             .await;
-            let event = match &result {
-                Ok(_) => SystemLogEvent::new(
-                    SystemLogLevel::Success,
-                    SystemLogCategory::Forge,
-                    "Issue details loaded",
-                )
-                .with_detail(display_id.clone()),
-                Err(error) => SystemLogEvent::new(
-                    SystemLogLevel::Warning,
-                    SystemLogCategory::Forge,
-                    "Issue detail query failed",
-                )
-                .with_detail(error.clone()),
-            };
-            let _ = app_event_tx.send(AppEvent::SystemLog { event });
             let _ = app_event_tx.send(AppEvent::IssueDetailLoaded {
                 display_id,
                 generation,
@@ -199,35 +168,12 @@ impl TaskService {
         review_request_client: Arc<dyn ReviewRequestClient>,
     ) {
         tokio::spawn(async move {
-            let _ = app_event_tx.send(AppEvent::SystemLog {
-                event: SystemLogEvent::new(
-                    SystemLogLevel::Info,
-                    SystemLogCategory::Forge,
-                    "Requested reviews forge query started",
-                )
-                .with_detail(format!("project #{project_id}")),
-            });
             let result = load_requested_reviews(
                 working_dir,
                 git_client.as_ref(),
                 review_request_client.as_ref(),
             )
             .await;
-            let event = match &result {
-                Ok(items) => SystemLogEvent::new(
-                    SystemLogLevel::Success,
-                    SystemLogCategory::Forge,
-                    "Requested reviews forge query completed",
-                )
-                .with_detail(format!("project #{project_id}: {} reviews", items.len())),
-                Err(error) => SystemLogEvent::new(
-                    SystemLogLevel::Warning,
-                    SystemLogCategory::Forge,
-                    "Requested reviews forge query failed",
-                )
-                .with_detail(format!("project #{project_id}: {error}")),
-            };
-            let _ = app_event_tx.send(AppEvent::SystemLog { event });
             let _ = app_event_tx.send(AppEvent::RequestedReviewsLoaded {
                 generation,
                 project_id,

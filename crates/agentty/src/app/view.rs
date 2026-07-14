@@ -11,7 +11,6 @@ use crate::app::{
 use crate::domain::agent::AgentCliInfo;
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session, SessionId};
-use crate::domain::system_log::SystemLogBuffer;
 use crate::infra::review_comment_cache::ReviewCommentCache;
 use crate::presentation::app_mode::{AppMode, HelpContext};
 
@@ -53,8 +52,6 @@ pub(crate) struct AppViewSnapshot<'a> {
     pub(crate) settings: &'a SettingsManager,
     pub(crate) stats_activity: &'a [DailyActivity],
     pub(crate) status_bar_fyi_rotation_index: u64,
-    pub(crate) system_log_tail_offset: u16,
-    pub(crate) system_logs: &'a SystemLogBuffer,
     pub(crate) update_status: Option<&'a UpdateStatus>,
     pub(crate) wall_clock_unix_seconds: i64,
     pub(crate) working_dir: &'a Path,
@@ -113,8 +110,6 @@ impl App {
             settings: &self.settings,
             stats_activity: sessions.stats_activity,
             status_bar_fyi_rotation_index,
-            system_log_tail_offset: self.system_log_tail_offset,
-            system_logs: &self.system_logs,
             update_status: self.update_status.as_ref(),
             wall_clock_unix_seconds,
             working_dir: project.working_dir,

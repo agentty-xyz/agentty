@@ -11,7 +11,6 @@ pub mod session;
 pub mod session_message;
 pub mod session_order;
 pub mod setting;
-pub mod system_log;
 pub mod theme;
 pub(crate) mod transcript_notice;
 

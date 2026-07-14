@@ -9,7 +9,6 @@ use crate::domain::agent::{AgentCliInfo, ReasoningLevel};
 use crate::domain::input::InputState;
 use crate::domain::project::{ProjectListItem, ordered_project_items};
 use crate::domain::session::{DailyActivity, Session, SessionId};
-use crate::domain::system_log::SystemLogBuffer;
 use crate::infra::review_comment_cache::ReviewCommentCache;
 use crate::presentation::app_mode::{
     AppMode, ConfirmationIntent, ConfirmationViewMode, DiffRightPanel,
@@ -85,8 +84,6 @@ pub(crate) struct RouteSharedContext<'a> {
     sessions: &'a [Session],
     settings: &'a SettingsManager,
     stats_activity: &'a [DailyActivity],
-    system_log_tail_offset: u16,
-    system_logs: &'a SystemLogBuffer,
     table_state: &'a mut TableState,
 }
 
@@ -264,8 +261,6 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         sessions,
         table_state,
         wall_clock_unix_seconds,
-        system_log_tail_offset,
-        system_logs,
         ..
     } = context;
 
@@ -285,8 +280,6 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         sessions,
         settings,
         stats_activity,
-        system_log_tail_offset,
-        system_logs,
         table_state,
     };
 
@@ -949,10 +942,6 @@ pub(crate) fn render_list_background(
             let active_project_name =
                 active_project_name(shared.active_project_id, shared.projects);
             page::setting::SettingsPage::new(shared.settings, active_project_name)
-                .render(f, chunks[1]);
-        }
-        Tab::Logs => {
-            page::system_log::SystemLogPage::new(shared.system_logs, shared.system_log_tail_offset)
                 .render(f, chunks[1]);
         }
     }

@@ -761,6 +761,31 @@ fn test_session_manager_with_clock(
 }
 
 #[test]
+fn test_append_stacked_rebase_failure_notices_updates_affected_child() {
+    // Arrange
+    let mut session_manager = test_session_manager("child-session", None);
+    let failures = vec![(
+        SessionId::from("child-session"),
+        SessionError::HandlesNotFound,
+    )];
+
+    // Act
+    session_manager
+        .append_stacked_rebase_failure_notices(failures, "Stacked child auto-sync failed");
+
+    // Assert
+    let child_session = session_manager
+        .sessions()
+        .iter()
+        .find(|session| session.id.as_str() == "child-session")
+        .expect("expected affected child session");
+    assert_eq!(
+        child_session.workflow_notice.as_deref(),
+        Some("[Sync Error] Stacked child auto-sync failed: Session handles not found")
+    );
+}
+
+#[test]
 fn test_set_and_get_at_mention_index_for_root_cache() {
     // Arrange
     let mut session_manager = test_session_manager("session-id", None);
@@ -4043,8 +4068,6 @@ async fn test_next_tab() {
     app.next_tab();
     assert_eq!(app.tabs.current(), Tab::Settings);
     app.next_tab();
-    assert_eq!(app.tabs.current(), Tab::Logs);
-    app.next_tab();
     assert_eq!(app.tabs.current(), Tab::Projects);
 }
 
@@ -4071,8 +4094,6 @@ async fn test_next_tab_includes_tasks_when_active_project_has_roadmap() {
     assert_eq!(app.tabs.current(), Tab::Issues);
     app.next_tab();
     assert_eq!(app.tabs.current(), Tab::Settings);
-    app.next_tab();
-    assert_eq!(app.tabs.current(), Tab::Logs);
     app.next_tab();
     assert_eq!(app.tabs.current(), Tab::Projects);
 }

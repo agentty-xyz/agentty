@@ -9,6 +9,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use ag_git as git;
 use tokio::task::{JoinHandle, JoinSet};
 
+use super::SessionError;
 use super::workflow::merge::SessionMergeService;
 pub(crate) use super::workflow::merge::{SyncMainOutcome, SyncSessionStartError};
 pub(crate) use super::workflow::task::{
@@ -24,6 +25,7 @@ use crate::domain::session::{
     DailyActivity, FollowUpTaskAction, PublishedBranchSyncStatus, ReviewRequest, Session,
     SessionFollowUpTask, SessionId, SessionStats,
 };
+use crate::domain::transcript_notice::TranscriptNotice;
 
 /// Low-frequency fallback interval for metadata-based session refresh.
 pub(crate) const SESSION_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
@@ -480,6 +482,20 @@ impl SessionManager {
             .find(|session| session.id == session_id)
         {
             session.published_branch_sync_status = sync_status;
+        }
+    }
+
+    /// Appends transient sync-error notices to stacked children whose
+    /// automatic rebase could not be enqueued.
+    pub(crate) fn append_stacked_rebase_failure_notices(
+        &mut self,
+        failures: Vec<(SessionId, SessionError)>,
+        failure_context: &str,
+    ) {
+        for (child_session_id, error) in failures {
+            let notice =
+                TranscriptNotice::RebaseError.format_line(format!("{failure_context}: {error}"));
+            self.append_workflow_notice(child_session_id.as_str(), notice);
         }
     }
 

@@ -80,18 +80,6 @@ Selector rows open dropdowns; use `j` / `k` to move through the dropdown and `En
 save the highlighted value. The `Launch Configurations` row opens a list browser where
 each command is added, edited, deleted, or reordered as its own entry.
 
-## Logs
-
-| Key                 | Action                        |
-| ------------------- | ----------------------------- |
-| `q`                 | Quit                          |
-| `s`                 | Sync active project branch    |
-| `j` / `k`           | Scroll logs                   |
-| `g`                 | Jump to oldest retained entry |
-| `G`                 | Jump to newest retained entry |
-| `Tab` / `Shift+Tab` | Switch to next / previous tab |
-| `?`                 | Help                          |
-
 ## Inbox
 
 | Key                 | Action                                 |
