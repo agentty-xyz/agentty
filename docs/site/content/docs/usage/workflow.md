@@ -281,7 +281,8 @@ first and rebase onto the remote base ref, unpublished sessions rebase onto the 
 local base branch. In **InProgress**, the sync request is queued behind the running turn
 before the session enters **Rebasing**. If the rebase stops on conflicts, Agentty asks
 the existing agent session to resolve only the conflicted files, then stages the edits
-and continues the rebase itself.
+and continues the rebase itself. The completed conversation and summary remain in their
+existing order while the rebase or merge status animates below them.
 
 During normal turns, the agent prompt names the session worktree as the only writable
 root. After a turn, if Agentty detects that the main checkout's tracked-file status

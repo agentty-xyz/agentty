@@ -371,6 +371,54 @@ fn seed_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+/// Seeds a review-ready transcript and delays its Git rebase long enough to
+/// inspect the in-progress session output ordering.
+fn seed_rebase_transcript_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session(env)?;
+    seed_review_worktree_with_diff(env)?;
+
+    let runtime = common::seed_runtime()?;
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .append_session_message(
+                "review-shortcut-0001",
+                SessionMessageKind::UserPrompt,
+                "keep completed transcript stable",
+            )
+            .await?;
+        database
+            .sessions()
+            .append_session_message(
+                "review-shortcut-0001",
+                SessionMessageKind::AssistantAnswer,
+                "Completed answer before rebase summary.",
+            )
+            .await?;
+        database
+            .sessions()
+            .update_session_summary(
+                "review-shortcut-0001",
+                r#"{"turn":"Preserved transcript ordering.","session":"Rebase keeps completed output stable."}"#,
+            )
+            .await
+    })?;
+
+    let pre_rebase_hook = env
+        .agentty_root
+        .join("wt")
+        .join("review-s")
+        .join(".git")
+        .join("hooks")
+        .join("pre-rebase");
+    std::fs::write(&pre_rebase_hook, "#!/bin/sh\nsleep 5\n")?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&pre_rebase_hook, std::fs::Permissions::from_mode(0o755))?;
+
+    Ok(())
+}
+
 /// Seeds one published review-ready session whose latest auto-push completion
 /// is persisted as transcript output.
 fn seed_session_with_published_branch_push_notice(
@@ -1945,6 +1993,58 @@ fn session_running_turn_shows_sync_shortcut() -> E2eResult {
                     .rect
                     .row;
                 assert!(answer_row < sync_row);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify a manual rebase keeps the completed answer ahead of its summary
+/// while only the workflow status tail animates.
+#[test]
+fn session_rebase_keeps_completed_transcript_before_summary() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_rebase_transcript_stability")
+        .with_git()
+        .setup(seed_rebase_transcript_session)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_text("Completed answer before rebase summary.", 5000)
+                    .wait_for_text("Change Summary", 5000)
+                    .press_key("r")
+                    .wait_for_text("Rebasing...", 5000)
+                    .capture_labeled(
+                        "rebase_transcript_stable",
+                        "Completed transcript remains stable during rebase",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(
+                    frame,
+                    "Completed answer before rebase summary.",
+                    &full,
+                );
+                assertion::assert_text_in_region(frame, "Change Summary", &full);
+                assertion::assert_text_in_region(frame, "Rebasing...", &full);
+
+                let answer_row = frame
+                    .find_text("Completed answer before rebase summary.")
+                    .first()
+                    .expect("missing completed answer")
+                    .rect
+                    .row;
+                let summary_row = frame
+                    .find_text("Change Summary")
+                    .first()
+                    .expect("missing change summary")
+                    .rect
+                    .row;
+                assert!(answer_row < summary_row);
             },
         )?;
 

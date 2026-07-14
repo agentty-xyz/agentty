@@ -144,10 +144,13 @@ keys the transient-store version rather than maintaining a separate fingerprint 
 every temporary channel. Structured clarification questions render in the bottom
 question panel (`AppMode::Question`), not inside the output component.
 
-`App` owns one shared `RenderCacheStore` for markdown, diff, and session-output layout
-caches. Changes in this area should keep caches bounded and route layout/count helpers
-and the final paint path through the same cached derived data instead of recomputing the
-render twice per frame.
+Runtime owns one shared `RenderCacheStore` for markdown, diff, and session-output layout
+caches. The session-output cache keeps a bounded stable-body layer keyed by the typed
+transcript's cached content hash, width, theme, queued input, and transient-message
+version. Workflow-only status changes such as `Review` entering `Rebasing` reuse that
+body and append only the dynamic status tail. Changes in this area should keep caches
+bounded and route layout/count helpers and the final paint path through the same cached
+derived data instead of recomputing the render twice per frame.
 
 ## Session Turn Data Flow
 

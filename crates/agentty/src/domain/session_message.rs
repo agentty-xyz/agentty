@@ -1,5 +1,8 @@
 use std::fmt;
+use std::hash::Hasher;
 use std::str::FromStr;
+
+use rustc_hash::FxHasher;
 
 const CLARIFICATION_HEADER: &str = "Clarifications:";
 const USER_PROMPT_CONTINUATION_PREFIX: &str = "   ";
@@ -103,6 +106,7 @@ impl SessionMessage {
 /// Ordered transcript view assembled from persisted session messages.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SessionTranscript {
+    content_hash: u64,
     messages: Vec<SessionMessage>,
     total_content_len: usize,
 }
@@ -112,9 +116,11 @@ impl SessionTranscript {
     pub fn new(mut messages: Vec<SessionMessage>) -> Self {
         messages.sort_by_key(|message| message.position);
 
+        let content_hash = transcript_content_hash(&messages);
         let total_content_len = messages.iter().map(|message| message.content.len()).sum();
 
         Self {
+            content_hash,
             messages,
             total_content_len,
         }
@@ -130,13 +136,22 @@ impl SessionTranscript {
         &self.messages
     }
 
+    /// Returns the cached content identity for render and projection caches.
+    pub fn content_hash(&self) -> u64 {
+        self.content_hash
+    }
+
     /// Returns the total byte length of message content in this transcript.
     pub fn total_content_len(&self) -> usize {
         self.total_content_len
     }
 
-    /// Appends one message to the in-memory transcript snapshot using the
-    /// same content normalization as durable storage.
+    /// Appends one message after the ordered transcript tail using the same
+    /// content normalization as durable storage.
+    ///
+    /// [`Self::new`] sorts persisted input before this method derives the next
+    /// position, so the message slice and its cached content hash retain the
+    /// same ordering as a newly reconstructed transcript.
     pub fn append_message(&mut self, kind: SessionMessageKind, content: &str) {
         let content = stored_message_content(kind, content);
         if content.trim().is_empty() {
@@ -150,6 +165,7 @@ impl SessionTranscript {
         self.total_content_len = self.total_content_len.saturating_add(content.len());
         self.messages
             .push(SessionMessage::new(position, kind, content));
+        self.content_hash = transcript_content_hash(&self.messages);
     }
 
     /// Returns formatted transcript text for replay when content exists.
@@ -195,6 +211,23 @@ impl SessionTranscript {
 
         output
     }
+}
+
+/// Computes one ordered identity across message positions, kinds, and raw
+/// content so render caches can compare transcripts without rescanning them on
+/// every frame.
+fn transcript_content_hash(messages: &[SessionMessage]) -> u64 {
+    let mut hasher = FxHasher::default();
+
+    for message in messages {
+        hasher.write_i64(message.position);
+        hasher.write(message.kind.as_str().as_bytes());
+        hasher.write_u8(0xff);
+        hasher.write(message.content.as_bytes());
+        hasher.write_u8(0xfe);
+    }
+
+    hasher.finish()
 }
 
 /// Returns the durable message content for one kind.
@@ -339,6 +372,32 @@ mod tests {
     }
 
     #[test]
+    fn test_session_transcript_content_hash_tracks_exact_message_content() {
+        // Arrange
+        let original = SessionTranscript::new(vec![SessionMessage::conversation(
+            0,
+            SessionMessageKind::AssistantAnswer,
+            "alpha",
+        )]);
+        let replacement = SessionTranscript::new(vec![SessionMessage::conversation(
+            0,
+            SessionMessageKind::AssistantAnswer,
+            "bravo",
+        )]);
+
+        // Act
+        let original_hash = original.content_hash();
+        let replacement_hash = replacement.content_hash();
+
+        // Assert
+        assert_eq!(
+            original.total_content_len(),
+            replacement.total_content_len()
+        );
+        assert_ne!(original_hash, replacement_hash);
+    }
+
+    #[test]
     fn test_session_transcript_formats_multiline_user_prompt() {
         // Arrange
         let messages = vec![SessionMessage::conversation(
@@ -435,25 +494,31 @@ mod tests {
     }
 
     #[test]
-    fn test_session_transcript_append_message_uses_next_position() {
+    fn test_session_transcript_append_message_preserves_constructor_ordering() {
         // Arrange
-        let mut transcript = SessionTranscript::new(vec![SessionMessage::conversation(
-            4,
-            SessionMessageKind::UserPrompt,
-            "prompt",
-        )]);
+        let mut transcript = SessionTranscript::new(vec![
+            SessionMessage::conversation(4, SessionMessageKind::AssistantAnswer, "first answer"),
+            SessionMessage::conversation(1, SessionMessageKind::UserPrompt, "prompt"),
+        ]);
 
         // Act
-        transcript.append_message(SessionMessageKind::AssistantAnswer, " answer\n");
+        transcript.append_message(SessionMessageKind::WorkflowNotice, "[Sync] Complete.\n");
+        let reconstructed = SessionTranscript::new(transcript.messages().to_vec());
 
         // Assert
         assert_eq!(
             transcript.messages(),
             &[
-                SessionMessage::conversation(4, SessionMessageKind::UserPrompt, "prompt"),
-                SessionMessage::conversation(5, SessionMessageKind::AssistantAnswer, "answer"),
+                SessionMessage::conversation(1, SessionMessageKind::UserPrompt, "prompt"),
+                SessionMessage::conversation(
+                    4,
+                    SessionMessageKind::AssistantAnswer,
+                    "first answer",
+                ),
+                SessionMessage::new(5, SessionMessageKind::WorkflowNotice, "[Sync] Complete.\n",),
             ]
         );
+        assert_eq!(transcript.content_hash(), reconstructed.content_hash());
     }
 
     #[test]
