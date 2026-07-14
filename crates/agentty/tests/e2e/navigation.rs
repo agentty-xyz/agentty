@@ -325,11 +325,7 @@ fn tab_cycles_through_all_tabs() -> E2eResult {
 
                 let issues_frame = common::frame_from_capture(&report.captures[2]);
                 let issues_full = Region::full(issues_frame.cols(), issues_frame.rows());
-                assertion::assert_text_in_region(
-                    &issues_frame,
-                    "Assigned GitHub Issues",
-                    &issues_full,
-                );
+                assertion::assert_text_in_region(&issues_frame, "Issues", &issues_full);
 
                 let settings_frame = common::frame_from_capture(&report.captures[3]);
                 let settings_full = Region::full(settings_frame.cols(), settings_frame.rows());
@@ -471,11 +467,8 @@ fn test_assigned_github_issues() -> E2eResult {
                 assert_eq!(report.captures.len(), 2);
                 let issues_frame = common::frame_from_capture(&report.captures[0]);
                 let issues_full = Region::full(issues_frame.cols(), issues_frame.rows());
-                assertion::assert_text_in_region(
-                    &issues_frame,
-                    "Assigned GitHub Issues",
-                    &issues_full,
-                );
+                assertion::assert_text_in_region(&issues_frame, "Issues", &issues_full);
+                assertion::assert_text_in_region(&issues_frame, "Assigned to you", &issues_full);
                 assertion::assert_text_in_region(
                     &issues_frame,
                     "#124 Keep issue list compact",
@@ -609,11 +602,7 @@ fn backtab_cycles_tabs_reverse() -> E2eResult {
 
                 let issues_frame = common::frame_from_capture(&report.captures[1]);
                 let issues_full = Region::full(issues_frame.cols(), issues_frame.rows());
-                assertion::assert_text_in_region(
-                    &issues_frame,
-                    "Assigned GitHub Issues",
-                    &issues_full,
-                );
+                assertion::assert_text_in_region(&issues_frame, "Issues", &issues_full);
 
                 let inbox_frame = common::frame_from_capture(&report.captures[2]);
                 let inbox_full = Region::full(inbox_frame.cols(), inbox_frame.rows());
