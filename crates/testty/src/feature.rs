@@ -21,8 +21,15 @@
 //!   detect drift without paying VHS cost.
 //! - [`GifMode::AlwaysGenerate`] — bypasses the hash cache and always re-runs
 //!   VHS.
+//!
+//! # Redaction
+//!
+//! The freshness hash only works when the same UI hashes the same way on every
+//! run. Temp roots are normalized for free, but an application that paints its
+//! own generated identifiers — session hashes, worktree names, short commit
+//! ids — must declare them with [`FeatureDemo::redact`] so they stop counting
+//! as UI drift.
 
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use crate::frame::TerminalFrame;
@@ -45,6 +52,148 @@ pub struct FeatureMeta {
     pub title: String,
     /// Short description of the demonstrated behavior.
     pub description: String,
+}
+
+/// Caller-supplied rule that rewrites a generated hash before hashing a frame.
+///
+/// Applications under test often paint identifiers they generate at runtime —
+/// a session hash, a worktree name, a short commit id. Those tokens change on
+/// every run, so an unredacted frame hashes differently every time and the
+/// committed GIF always looks stale. A [`Redaction`] replaces the volatile
+/// token with a fixed placeholder, leaving the surrounding UI to drive the
+/// hash.
+///
+/// Redaction affects only the freshness hash. Captured frames, assertions, and
+/// the recorded GIF still show the real token.
+///
+/// # Example
+///
+/// ```
+/// use testty::feature::Redaction;
+///
+/// // `wt/4175e5af` and `wt/9c0b17ff` hash identically.
+/// let redaction = Redaction::hex_after("wt/", 8, "<hash>");
+///
+/// assert_eq!(redaction.apply("branch wt/4175e5af"), "branch wt/<hash>");
+///
+/// // A token the terminal cut off at the right edge is still redacted.
+/// assert_eq!(redaction.apply("path .../wt/4175"), "path .../wt/<hash>");
+///
+/// // A known-volatile literal, such as the version the app paints in its
+/// // header, hashes as its placeholder so releases do not stale every GIF.
+/// let version = Redaction::literal("Agentty v0.13.0", "Agentty <version>");
+///
+/// assert_eq!(version.apply("Agentty v0.13.0 | FYI"), "Agentty <version> | FYI");
+/// ```
+#[derive(Debug, Clone)]
+pub struct Redaction {
+    placeholder: String,
+    rule: RedactionRule,
+}
+
+/// Matching strategy backing one [`Redaction`].
+#[derive(Debug, Clone)]
+enum RedactionRule {
+    /// Replace a bounded ASCII hex run that directly follows a prefix.
+    HexAfter { prefix: String, max_hex_len: usize },
+    /// Replace every occurrence of one exact string.
+    Literal { needle: String },
+}
+
+impl Redaction {
+    /// Redact a run of up to `max_hex_len` ASCII hex digits following `prefix`.
+    ///
+    /// The prefix anchors the rule: only hex runs that directly follow it are
+    /// rewritten. A run longer than `max_hex_len` is left alone, so a rule for
+    /// an 8-digit short hash never clips a full 40-digit one.
+    ///
+    /// Shorter runs are redacted because a TUI truncates: a hash painted at the
+    /// right edge of the terminal shows however many digits happen to fit, and
+    /// that count shifts with everything printed before it. Matching only the
+    /// full-length token would leave those frames volatile.
+    pub fn hex_after(
+        prefix: impl Into<String>,
+        max_hex_len: usize,
+        placeholder: impl Into<String>,
+    ) -> Self {
+        Self {
+            placeholder: placeholder.into(),
+            rule: RedactionRule::HexAfter {
+                prefix: prefix.into(),
+                max_hex_len,
+            },
+        }
+    }
+
+    /// Redact every occurrence of the exact string `needle`.
+    ///
+    /// Use this for volatile text the caller can spell out ahead of time —
+    /// typically a version string the application paints, which would
+    /// otherwise stale every committed GIF hash on each release. The caller
+    /// usually builds the needle from its own compile-time version so the
+    /// rule tracks releases automatically.
+    pub fn literal(needle: impl Into<String>, placeholder: impl Into<String>) -> Self {
+        Self {
+            placeholder: placeholder.into(),
+            rule: RedactionRule::Literal {
+                needle: needle.into(),
+            },
+        }
+    }
+
+    /// Apply this rule to `text`, replacing every matching token.
+    ///
+    /// For [`Redaction::hex_after`] the prefix is preserved and only the hex
+    /// token is replaced. An empty prefix or needle matches nothing and
+    /// returns `text` unchanged.
+    #[must_use]
+    pub fn apply(&self, text: &str) -> String {
+        match &self.rule {
+            RedactionRule::HexAfter {
+                prefix,
+                max_hex_len,
+            } => Self::apply_hex_after(text, prefix, *max_hex_len, &self.placeholder),
+            RedactionRule::Literal { needle } => {
+                if needle.is_empty() {
+                    return text.to_string();
+                }
+
+                text.replace(needle, &self.placeholder)
+            }
+        }
+    }
+
+    /// Replaces bounded hex runs following `prefix` with `placeholder`.
+    fn apply_hex_after(text: &str, prefix: &str, max_hex_len: usize, placeholder: &str) -> String {
+        if prefix.is_empty() {
+            return text.to_string();
+        }
+
+        let mut redacted = String::with_capacity(text.len());
+        let mut remainder = text;
+
+        while let Some(prefix_index) = remainder.find(prefix) {
+            let after_prefix_index = prefix_index + prefix.len();
+            let after_prefix = &remainder[after_prefix_index..];
+            let token_len = after_prefix
+                .chars()
+                .take_while(char::is_ascii_hexdigit)
+                .count();
+
+            redacted.push_str(&remainder[..after_prefix_index]);
+
+            if (1..=max_hex_len).contains(&token_len) {
+                redacted.push_str(placeholder);
+                remainder = &after_prefix[token_len..];
+            } else {
+                remainder = after_prefix;
+            }
+        }
+
+        redacted.push_str(remainder);
+
+        redacted
+    }
 }
 
 /// Selects how [`FeatureDemo::run`] handles GIF artifacts.
@@ -112,8 +261,10 @@ pub enum GifStatus {
         gif_path: PathBuf,
         /// Hash computed from the current scenario captures.
         current: u64,
-        /// Hash recorded in the on-disk sidecar, if any.
+        /// Hash recorded in the on-disk sidecar, if it exists and parses.
         committed: Option<u64>,
+        /// Error found while reading or parsing the committed sidecar, if any.
+        committed_error: Option<String>,
     },
 }
 
@@ -190,6 +341,7 @@ pub struct FeatureDemo {
     gif_output_dir: Option<PathBuf>,
     gif_settings: VhsTapeSettings,
     gif_mode: GifMode,
+    redactions: Vec<Redaction>,
 }
 
 impl FeatureDemo {
@@ -208,6 +360,7 @@ impl FeatureDemo {
             gif_output_dir: None,
             gif_settings: VhsTapeSettings::feature_demo(),
             gif_mode: GifMode::default(),
+            redactions: Vec::new(),
         }
     }
 
@@ -248,6 +401,16 @@ impl FeatureDemo {
         self
     }
 
+    /// Declare a generated token the freshness hash must ignore.
+    ///
+    /// Rules apply in the order they are added, after the built-in temp-root
+    /// normalization. See [`Redaction`] for what a rule matches.
+    pub fn redact(mut self, redaction: Redaction) -> Self {
+        self.redactions.push(redaction);
+
+        self
+    }
+
     /// Run the feature demo: execute the scenario, collect proof, and
     /// optionally generate a hash-cached GIF.
     ///
@@ -273,7 +436,10 @@ impl FeatureDemo {
                 &report,
                 &self.meta.name,
                 output_dir,
-                self.gif_mode,
+                GifContext {
+                    mode: self.gif_mode,
+                    redactions: &self.redactions,
+                },
                 VhsContext {
                     settings: &self.gif_settings,
                     binary_path,
@@ -294,40 +460,49 @@ impl FeatureDemo {
 
 /// Compute a content hash from all proof capture frame bytes.
 ///
-/// Uses [`DefaultHasher`] to produce a deterministic `u64` hash from the
-/// concatenated frame bytes of every capture in the report. Exposed as
-/// public API so external tooling (xtasks, CI freshness reports) can
-/// reproduce the same hash that [`FeatureDemo::run`] writes to the on-disk
-/// sidecar.
-///
-/// Note: `DefaultHasher` is not stable across Rust releases. Hashes
-/// computed by one toolchain version should not be compared with hashes
-/// produced by another. Within a single workspace toolchain pin this is
-/// fine — and that is the contract testty assumes.
-pub fn compute_frame_hash(report: &ProofReport) -> u64 {
-    let mut hasher = DefaultHasher::new();
+/// Uses a fixed FNV-1a `u64` hash over the concatenated frame bytes of every
+/// capture in the report, after applying the built-in temp-root normalization
+/// and the caller's `redactions`.
+/// Exposed as public API so external tooling (xtasks, CI freshness reports)
+/// can reproduce the same hash that [`FeatureDemo::run`] writes to the
+/// on-disk sidecar — pass the same rules the demo was built with, or the
+/// hashes will not line up.
+pub fn compute_frame_hash(report: &ProofReport, redactions: &[Redaction]) -> u64 {
+    const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
+    let mut hash = FNV_OFFSET_BASIS;
     for capture in &report.captures {
-        normalized_frame_bytes_for_hash(&capture.frame_bytes).hash(&mut hasher);
+        for byte in normalized_frame_bytes_for_hash(&capture.frame_bytes, redactions) {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(FNV_PRIME);
+        }
     }
 
-    hasher.finish()
+    hash
 }
 
-/// Returns frame bytes with volatile temp roots normalized for hashing.
+/// Returns frame bytes with volatile text normalized for hashing.
 ///
 /// Feature tests often run inside fresh [`tempfile::TempDir`] directories,
 /// while the captured TUI footer may display the absolute working directory.
 /// Normalizing those paths keeps freshness sidecars tied to visible UI state
-/// instead of one random temp directory name.
-fn normalized_frame_bytes_for_hash(frame_bytes: &[u8]) -> Vec<u8> {
+/// instead of one random temp directory name. Generated tokens the application
+/// itself paints are the caller's to declare, through `redactions`.
+fn normalized_frame_bytes_for_hash(frame_bytes: &[u8], redactions: &[Redaction]) -> Vec<u8> {
     let mut frame_text = String::from_utf8_lossy(frame_bytes).into_owned();
 
     for temp_root in temp_root_strings() {
         frame_text = frame_text.replace(&temp_root, "<tmp>");
     }
 
-    normalize_tempfile_segments(&frame_text).into_bytes()
+    frame_text = normalize_tempfile_segments(&frame_text);
+
+    for redaction in redactions {
+        frame_text = redaction.apply(&frame_text);
+    }
+
+    frame_text.into_bytes()
 }
 
 /// Returns temp root spellings that may appear in captured terminal frames.
@@ -392,6 +567,16 @@ pub fn hash_sidecar_path(output_dir: &Path, name: &str) -> PathBuf {
     output_dir.join(format!(".{name}.hash"))
 }
 
+/// Bundle of freshness inputs threaded through [`generate_gif`].
+///
+/// Pairs the caller's [`GifMode`] with the redaction rules that decide what
+/// counts as UI drift, so both travel together into the hash comparison.
+#[derive(Clone, Copy)]
+struct GifContext<'a> {
+    mode: GifMode,
+    redactions: &'a [Redaction],
+}
+
 /// Bundle of VHS-execution inputs threaded through [`generate_gif`].
 ///
 /// Grouped so the function signature stays small while still exposing the
@@ -401,6 +586,36 @@ struct VhsContext<'a> {
     settings: &'a VhsTapeSettings,
     binary_path: &'a Path,
     env_pairs: &'a [(&'a str, &'a str)],
+}
+
+/// Parsed state of a committed feature-GIF hash sidecar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CommittedHash {
+    /// The sidecar file does not exist yet.
+    Missing,
+    /// The sidecar exists but cannot be read or parsed as a `u64`.
+    Invalid(String),
+    /// The sidecar contains a valid committed hash.
+    Value(u64),
+}
+
+impl CommittedHash {
+    /// Return the committed hash value when the sidecar parsed successfully.
+    fn value(&self) -> Option<u64> {
+        match self {
+            Self::Value(hash) => Some(*hash),
+            Self::Missing | Self::Invalid(_) => None,
+        }
+    }
+
+    /// Return the sidecar read/parse error when the sidecar exists but is
+    /// invalid.
+    fn error(&self) -> Option<String> {
+        match self {
+            Self::Invalid(err) => Some(err.clone()),
+            Self::Missing | Self::Value(_) => None,
+        }
+    }
 }
 
 /// Generate a GIF with content-hash caching, returning a typed status.
@@ -414,13 +629,15 @@ fn generate_gif(
     report: &ProofReport,
     name: &str,
     output_dir: &Path,
-    mode: GifMode,
+    gif: GifContext<'_>,
     vhs: VhsContext<'_>,
 ) -> GifStatus {
+    let GifContext { mode, redactions } = gif;
+
     let hash_path = hash_sidecar_path(output_dir, name);
     let gif_path = output_dir.join(format!("{name}.gif"));
 
-    let current_hash = compute_frame_hash(report);
+    let current_hash = compute_frame_hash(report, redactions);
     let committed_hash = read_committed_hash(&hash_path);
 
     // CheckOnly is a read-only verification path: never mutate the
@@ -429,7 +646,7 @@ fn generate_gif(
     // means the GIF is missing, which is `Stale`.
     if matches!(mode, GifMode::CheckOnly) {
         let gif_present = gif_path.exists();
-        let hash_matches = committed_hash == Some(current_hash);
+        let hash_matches = committed_hash.value() == Some(current_hash);
 
         return if gif_present && hash_matches {
             GifStatus::Fresh {
@@ -440,7 +657,8 @@ fn generate_gif(
             GifStatus::Stale {
                 gif_path,
                 current: current_hash,
-                committed: committed_hash,
+                committed: committed_hash.value(),
+                committed_error: committed_hash.error(),
             }
         };
     }
@@ -463,7 +681,7 @@ fn generate_gif(
 
     if matches!(mode, GifMode::GenerateIfStale)
         && gif_path.exists()
-        && committed_hash == Some(current_hash)
+        && committed_hash.value() == Some(current_hash)
     {
         return GifStatus::CacheHit(gif_path);
     }
@@ -513,12 +731,20 @@ fn vhs_missing_status(mode: GifMode, err: VhsError) -> GifStatus {
     }
 }
 
-/// Read the cached hash from an on-disk sidecar, returning `None` when the
-/// file is missing or the contents do not parse as a `u64`.
-fn read_committed_hash(hash_path: &Path) -> Option<u64> {
-    let raw = std::fs::read_to_string(hash_path).ok()?;
+/// Read the cached hash from an on-disk sidecar.
+fn read_committed_hash(hash_path: &Path) -> CommittedHash {
+    let raw = match std::fs::read_to_string(hash_path) {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return CommittedHash::Missing,
+        Err(err) => {
+            return CommittedHash::Invalid(format!("failed to read hash sidecar: {err}"));
+        }
+    };
 
-    raw.trim().parse::<u64>().ok()
+    match raw.trim().parse::<u64>() {
+        Ok(hash) => CommittedHash::Value(hash),
+        Err(err) => CommittedHash::Invalid(format!("failed to parse hash sidecar as u64: {err}")),
+    }
 }
 
 #[cfg(test)]
@@ -598,6 +824,29 @@ mod tests {
     }
 
     #[test]
+    fn feature_demo_collects_redactions_in_declaration_order() {
+        // Arrange / Act
+        let demo = FeatureDemo::new("redaction_check")
+            .redact(Redaction::hex_after("wt/", 8, "<hash>"))
+            .redact(Redaction::hex_after("commit ", 7, "<commit>"));
+
+        // Assert
+        let redacted: Vec<String> = demo
+            .redactions
+            .iter()
+            .map(|redaction| redaction.apply("wt/4175e5af commit 9c0b17f"))
+            .collect();
+
+        assert_eq!(
+            redacted,
+            vec![
+                "wt/<hash> commit 9c0b17f".to_string(),
+                "wt/4175e5af commit <commit>".to_string(),
+            ],
+        );
+    }
+
+    #[test]
     fn vhs_missing_status_always_generate_is_hard_failure() {
         // Arrange
         let err = VhsError::NotInstalled("missing".to_string());
@@ -650,8 +899,8 @@ mod tests {
         report.add_capture("snap", "Snapshot", &frame);
 
         // Act
-        let hash_a = compute_frame_hash(&report);
-        let hash_b = compute_frame_hash(&report);
+        let hash_a = compute_frame_hash(&report, &[]);
+        let hash_b = compute_frame_hash(&report, &[]);
 
         // Assert
         assert_eq!(hash_a, hash_b);
@@ -670,8 +919,8 @@ mod tests {
         report_b.add_capture("snap", "B", &frame_b);
 
         // Act
-        let hash_a = compute_frame_hash(&report_a);
-        let hash_b = compute_frame_hash(&report_b);
+        let hash_a = compute_frame_hash(&report_a, &[]);
+        let hash_b = compute_frame_hash(&report_b, &[]);
 
         // Assert
         assert_ne!(hash_a, hash_b);
@@ -683,10 +932,118 @@ mod tests {
         let report = ProofReport::new("empty");
 
         // Act
-        let hash = compute_frame_hash(&report);
+        let hash = compute_frame_hash(&report, &[]);
 
-        // Assert — should produce a consistent hash even with no captures.
-        assert_eq!(hash, compute_frame_hash(&report));
+        // Assert — empty reports use the stable FNV-1a offset basis.
+        assert_eq!(hash, 0xcbf2_9ce4_8422_2325);
+    }
+
+    #[test]
+    fn compute_frame_hash_ignores_redacted_tokens() {
+        // Arrange — the same UI showing two different generated hashes.
+        let frame_a = TerminalFrame::new(80, 24, b"branch wt/4175e5af");
+        let frame_b = TerminalFrame::new(80, 24, b"branch wt/9c0b17ff");
+
+        let mut report_a = ProofReport::new("a");
+        report_a.add_capture("snap", "A", &frame_a);
+
+        let mut report_b = ProofReport::new("b");
+        report_b.add_capture("snap", "B", &frame_b);
+
+        let redactions = [Redaction::hex_after("wt/", 8, "<hash>")];
+
+        // Act
+        let hash_a = compute_frame_hash(&report_a, &redactions);
+        let hash_b = compute_frame_hash(&report_b, &redactions);
+
+        // Assert — with the token redacted the two frames hash alike.
+        assert_eq!(hash_a, hash_b);
+        assert_ne!(
+            compute_frame_hash(&report_a, &[]),
+            compute_frame_hash(&report_b, &[]),
+            "without the redaction the same UI must still hash differently",
+        );
+    }
+
+    #[test]
+    fn redaction_replaces_every_matching_token() {
+        // Arrange — the worktree path and the branch label both carry the hash.
+        let redaction = Redaction::hex_after("wt/", 8, "<hash>");
+        let frame_text = "<tmp>/<tempdir>/wt/4175e5af  wt/4175e5af";
+
+        // Act
+        let redacted = redaction.apply(frame_text);
+
+        // Assert
+        assert_eq!(redacted, "<tmp>/<tempdir>/wt/<hash>  wt/<hash>");
+    }
+
+    #[test]
+    fn redaction_replaces_a_token_cut_off_by_the_terminal_edge() {
+        // Arrange — the footer path runs past the right edge, so the frame
+        // keeps only the leading digits of the hash.
+        let redaction = Redaction::hex_after("wt/", 8, "<hash>");
+
+        // Act
+        let short = redaction.apply("<tmp>/<tempdir>/agentty_root/wt/53a");
+        let shorter = redaction.apply("<tmp>/<tempdir>/agentty_root/wt/5");
+
+        // Assert — however many digits survive, the frame reads the same.
+        assert_eq!(short, "<tmp>/<tempdir>/agentty_root/wt/<hash>");
+        assert_eq!(shorter, short);
+    }
+
+    #[test]
+    fn redaction_preserves_runs_longer_than_the_rule() {
+        // Arrange — an 8-digit rule must not clip a full-length hash, and a
+        // non-hex label after the prefix is not a hash at all.
+        let redaction = Redaction::hex_after("wt/", 8, "<hash>");
+        let frame_text = "wt/4175e5afff  wt/topic";
+
+        // Act
+        let redacted = redaction.apply(frame_text);
+
+        // Assert
+        assert_eq!(redacted, frame_text);
+    }
+
+    #[test]
+    fn redaction_with_empty_prefix_is_inert() {
+        // Arrange
+        let redaction = Redaction::hex_after("", 8, "<hash>");
+        let frame_text = "wt/4175e5af";
+
+        // Act
+        let redacted = redaction.apply(frame_text);
+
+        // Assert
+        assert_eq!(redacted, frame_text);
+    }
+
+    #[test]
+    fn redaction_literal_replaces_every_occurrence() {
+        // Arrange — the header paints the version once per captured frame.
+        let redaction = Redaction::literal("Agentty v0.13.0", "Agentty <version>");
+        let frame_text = "Agentty v0.13.0 | FYI\nAgentty v0.13.0";
+
+        // Act
+        let redacted = redaction.apply(frame_text);
+
+        // Assert
+        assert_eq!(redacted, "Agentty <version> | FYI\nAgentty <version>");
+    }
+
+    #[test]
+    fn redaction_literal_with_empty_needle_is_inert() {
+        // Arrange
+        let redaction = Redaction::literal("", "<version>");
+        let frame_text = "Agentty v0.13.0";
+
+        // Act
+        let redacted = redaction.apply(frame_text);
+
+        // Assert
+        assert_eq!(redacted, frame_text);
     }
 
     #[test]
@@ -702,8 +1059,8 @@ mod tests {
         let second_frame = format!("{temp_root}/.tmpBeta456/test-project");
 
         // Act
-        let first_normalized = normalized_frame_bytes_for_hash(first_frame.as_bytes());
-        let second_normalized = normalized_frame_bytes_for_hash(second_frame.as_bytes());
+        let first_normalized = normalized_frame_bytes_for_hash(first_frame.as_bytes(), &[]);
+        let second_normalized = normalized_frame_bytes_for_hash(second_frame.as_bytes(), &[]);
 
         // Assert
         assert_eq!(first_normalized, second_normalized);
@@ -738,7 +1095,7 @@ mod tests {
     }
 
     #[test]
-    fn read_committed_hash_returns_none_for_missing_file() {
+    fn read_committed_hash_returns_missing_for_missing_file() {
         // Arrange
         let dir = tempfile::TempDir::new().expect("failed to create temp dir");
         let missing = dir.path().join(".missing.hash");
@@ -747,7 +1104,7 @@ mod tests {
         let parsed = read_committed_hash(&missing);
 
         // Assert
-        assert!(parsed.is_none());
+        assert_eq!(parsed, CommittedHash::Missing);
     }
 
     #[test]
@@ -761,7 +1118,7 @@ mod tests {
         let parsed = read_committed_hash(&path);
 
         // Assert
-        assert_eq!(parsed, Some(12345));
+        assert_eq!(parsed, CommittedHash::Value(12345));
     }
 
     #[test]
@@ -786,12 +1143,26 @@ mod tests {
             &report,
             "check_only_readonly",
             &missing_dir,
-            GifMode::CheckOnly,
+            GifContext {
+                mode: GifMode::CheckOnly,
+                redactions: &[],
+            },
             vhs,
         );
 
-        // Assert — verdict is Stale and the output directory is untouched.
-        assert!(status.is_stale(), "expected stale verdict, got {status:?}");
+        // Assert — verdict is Stale with a missing sidecar and the output
+        // directory is untouched.
+        let GifStatus::Stale {
+            committed,
+            committed_error,
+            ..
+        } = status
+        else {
+            unreachable!("expected Stale verdict, got {status:?}");
+        };
+
+        assert!(committed.is_none());
+        assert!(committed_error.is_none());
         assert!(
             !missing_dir.exists(),
             "CheckOnly must not create the output directory",
@@ -810,7 +1181,7 @@ mod tests {
         let mut report = ProofReport::new(name);
         report.add_capture("snap", "Snapshot", &frame);
 
-        let expected_hash = compute_frame_hash(&report);
+        let expected_hash = compute_frame_hash(&report, &[]);
 
         let gif_path = output_dir.join(format!("{name}.gif"));
         std::fs::write(&gif_path, b"fake-gif-bytes").expect("write fake gif");
@@ -834,7 +1205,10 @@ mod tests {
             &report,
             name,
             output_dir,
-            GifMode::CheckOnly,
+            GifContext {
+                mode: GifMode::CheckOnly,
+                redactions: &[],
+            },
             vhs,
         );
 
@@ -853,7 +1227,68 @@ mod tests {
     }
 
     #[test]
-    fn read_committed_hash_returns_none_for_garbage() {
+    fn generate_gif_check_only_reports_invalid_sidecar() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let output_dir = temp.path();
+        let name = "check_only_invalid_sidecar";
+
+        let frame = TerminalFrame::new(80, 24, b"Hello");
+        let mut report = ProofReport::new(name);
+        report.add_capture("snap", "Snapshot", &frame);
+
+        let gif_path = output_dir.join(format!("{name}.gif"));
+        std::fs::write(&gif_path, b"fake-gif-bytes").expect("write fake gif");
+
+        let sidecar = hash_sidecar_path(output_dir, name);
+        std::fs::write(&sidecar, "not-a-number").expect("write invalid sidecar");
+
+        let scenario = Scenario::new(name);
+        let settings = VhsTapeSettings::feature_demo();
+        let binary = Path::new("/usr/bin/true");
+        let env_pairs: &[(&str, &str)] = &[];
+        let vhs = VhsContext {
+            settings: &settings,
+            binary_path: binary,
+            env_pairs,
+        };
+
+        // Act
+        let status = generate_gif(
+            &scenario,
+            &report,
+            name,
+            output_dir,
+            GifContext {
+                mode: GifMode::CheckOnly,
+                redactions: &[],
+            },
+            vhs,
+        );
+
+        // Assert
+        let GifStatus::Stale {
+            gif_path: returned_path,
+            committed,
+            committed_error,
+            ..
+        } = status
+        else {
+            unreachable!("expected Stale verdict, got {status:?}");
+        };
+
+        assert_eq!(returned_path, gif_path);
+        assert!(committed.is_none());
+        assert!(
+            committed_error
+                .as_deref()
+                .is_some_and(|err| err.contains("failed to parse hash sidecar")),
+            "expected parse error, got {committed_error:?}",
+        );
+    }
+
+    #[test]
+    fn read_committed_hash_returns_invalid_for_garbage() {
         // Arrange
         let dir = tempfile::TempDir::new().expect("failed to create temp dir");
         let path = dir.path().join(".garbage.hash");
@@ -863,7 +1298,11 @@ mod tests {
         let parsed = read_committed_hash(&path);
 
         // Assert
-        assert!(parsed.is_none());
+        let CommittedHash::Invalid(err) = parsed else {
+            unreachable!("expected invalid hash sidecar, got {parsed:?}");
+        };
+
+        assert!(err.contains("failed to parse hash sidecar"));
     }
 
     #[test]
@@ -955,6 +1394,7 @@ mod tests {
             gif_path: PathBuf::from("/tmp/feature.gif"),
             current: 42,
             committed: Some(7),
+            committed_error: None,
         };
 
         // Act / Assert

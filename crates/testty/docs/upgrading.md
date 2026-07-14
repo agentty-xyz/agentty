@@ -75,11 +75,28 @@ items (`testty::recipe`, `testty::snapshot::DEFAULT_UPDATE_ENV_VAR`,
   destructuring needs `..`. `MissingBaseline` now carries `update_env_var`.
 
 - `feature::GifStatus` is `#[non_exhaustive]` and gained `Fresh { gif_path, hash }` and
-  `Stale { gif_path, current, committed }` for
+  `Stale { gif_path, current, committed, committed_error }` for
   `FeatureDemo::gif_mode(GifMode::CheckOnly)`. `CheckOnly` is read-only — never invokes
-  VHS, never mutates the filesystem. `feature::compute_frame_hash` and
-  `feature::hash_sidecar_path` are public so external tooling can reproduce the on-disk
-  sidecar hash.
+  VHS, never mutates the filesystem. `committed_error` distinguishes a truly missing
+  sidecar from a sidecar that exists but cannot be read or parsed.
+  `feature::compute_frame_hash` and `feature::hash_sidecar_path` are public so external
+  tooling can reproduce the on-disk sidecar hash.
 
 - The feature-demo surface (`FeatureDemo`, `FeatureMeta`, `FeatureResult`, `GifMode`,
   `GifStatus`) is reached through `testty::feature::*`.
+
+- `feature::compute_frame_hash` now takes the caller's redaction rules as a second
+  argument: `compute_frame_hash(&report, &[])` reproduces the old behavior. Pass the
+  same rules the `FeatureDemo` was built with, or the reproduced hash will not match the
+  committed sidecar.
+
+  ```rust
+  // Before
+  let hash = feature::compute_frame_hash(&report);
+
+  // After — declare whatever generated tokens the app paints into its frames.
+  let redactions = [Redaction::hex_after("wt/", 8, "<hash>")];
+  let hash = feature::compute_frame_hash(&report, &redactions);
+
+  let demo = FeatureDemo::new("session_creation").redact(Redaction::hex_after("wt/", 8, "<hash>"));
+  ```

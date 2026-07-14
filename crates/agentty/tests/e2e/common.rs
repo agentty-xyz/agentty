@@ -11,7 +11,7 @@ use std::time::Duration;
 use agentty::db::{DB_DIR, DB_FILE, Database, DbError};
 use assert_cmd::cargo::cargo_bin;
 use testty::assertion;
-use testty::feature::{FeatureDemo, GifMode, GifStatus};
+use testty::feature::{FeatureDemo, GifMode, GifStatus, Redaction};
 use testty::frame::TerminalFrame;
 use testty::journey::Journey;
 use testty::proof::report::{ProofCapture, ProofReport};
@@ -19,6 +19,15 @@ use testty::region::Region;
 use testty::scenario::Scenario;
 use testty::session::PtySessionBuilder;
 use testty::step::Step;
+
+/// CLI executable names stubbed into every [`BuilderEnv`] `PATH`.
+///
+/// Mirrors `AgentKind::ALL` executable names in `ag-agent`. All supported
+/// CLIs are stubbed — not just `claude` — so agent availability does not
+/// depend on which real CLIs a machine happens to have installed. A partial
+/// stub set would let the machine decide the default agent a new session
+/// resolves, painting different frames locally and on CI.
+const STUB_AGENT_EXECUTABLES: [&str; 4] = ["agy", "claude", "codex", "gemini"];
 
 /// Isolated test environment carrying `agentty_root` and `workdir` paths.
 ///
@@ -45,13 +54,23 @@ impl BuilderEnv {
     /// Creates `agentty_root` and `test-project` subdirectories so each test
     /// gets a fresh database and deterministic project name.
     ///
+    /// Every directory the UI can paint lives under `home_dir`, so the app
+    /// renders it home-collapsed (`~/test-project`, `~/.agentty/wt/<hash>`).
+    /// An absolute temp path would be truncated differently per platform —
+    /// macOS temp roots are far longer than Linux's `/tmp` — which made the
+    /// same UI paint different frames and defeat GIF freshness hashing. The
+    /// temp root is canonicalized first because the app registers its physical
+    /// working directory (`getcwd`), and the home-prefix collapse only fires
+    /// when `HOME` is spelled the same way.
+    ///
     /// # Errors
     ///
     /// Returns an error if directory creation fails.
     pub(crate) fn new(temp_root: &Path) -> std::io::Result<Self> {
-        let agentty_root = temp_root.join("agentty_root");
+        let temp_root = temp_root.canonicalize()?;
         let home_dir = temp_root.join("home");
-        let workdir = temp_root.join("test-project");
+        let agentty_root = home_dir.join(".agentty");
+        let workdir = home_dir.join("test-project");
         let stub_bin = temp_root.join("stub-bin");
 
         std::fs::create_dir_all(&agentty_root)?;
@@ -59,25 +78,31 @@ impl BuilderEnv {
         std::fs::create_dir_all(&workdir)?;
         std::fs::create_dir_all(&stub_bin)?;
 
-        // Create a stub `claude` executable so the app passes startup agent
-        // availability validation and exercises the background CLI update
-        // refresh on machines without real agent CLIs (CI).
-        let stub_agent_path = stub_bin.join("claude");
-        let stub_version_path = stub_bin.join("claude.version");
-        let stub_script = format!(
-            "#!/bin/sh\nif [ \"$1\" = \"update\" ]; then printf '0.0.1-updated\\n' > \"{}\"; exit \
-             0; fi\nif [ \"$1\" = \"--version\" ]; then if [ -f \"{}\" ]; then read version < \
-             \"{}\"; else version='0.0.0-test'; fi; printf 'claude %s\\n' \"$version\"; exit 0; \
-             fi\nexit 1\n",
-            stub_version_path.display(),
-            stub_version_path.display(),
-            stub_version_path.display(),
-        );
-        std::fs::write(&stub_agent_path, stub_script)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&stub_agent_path, std::fs::Permissions::from_mode(0o755))?;
+        // Create a stub executable for every supported agent CLI. The stubs
+        // are prepended to `PATH`, so they shadow any real CLI installed on
+        // the machine. That keeps agent availability — and everything derived
+        // from it, like the default agent a new session resolves — identical
+        // on developer machines and CI, so the same scenario paints the same
+        // frames everywhere and GIF freshness hashes stay reproducible.
+        for executable_name in STUB_AGENT_EXECUTABLES {
+            let stub_agent_path = stub_bin.join(executable_name);
+            let stub_version_path = stub_bin.join(format!("{executable_name}.version"));
+            let stub_script = format!(
+                "#!/bin/sh\nif [ \"$1\" = \"update\" ]; then printf '0.0.1-updated\\n' > \"{}\"; \
+                 exit 0; fi\nif [ \"$1\" = \"--version\" ]; then if [ -f \"{}\" ]; then read \
+                 version < \"{}\"; else version='0.0.0-test'; fi; printf '{} %s\\n' \"$version\"; \
+                 exit 0; fi\nexit 1\n",
+                stub_version_path.display(),
+                stub_version_path.display(),
+                stub_version_path.display(),
+                executable_name,
+            );
+            std::fs::write(&stub_agent_path, stub_script)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&stub_agent_path, std::fs::Permissions::from_mode(0o755))?;
+            }
         }
 
         Ok(Self {
@@ -431,19 +456,22 @@ fn feature_output_dir() -> PathBuf {
     Path::new(manifest_dir).join("../../docs/site/static/features")
 }
 
-/// Environment variable that opts a [`FeatureTest`] run into GIF recording.
+/// Environment variable that opts a [`FeatureTest`] run into GIF work.
 ///
 /// Recognized values:
 ///
 /// - `generate` / `generate-if-stale` → [`GifMode::GenerateIfStale`]
+/// - `check` / `check-only` → [`GifMode::CheckOnly`]
 /// - `force` / `always` / `always-generate` → [`GifMode::AlwaysGenerate`]
 ///
-/// Recording is **off** unless the variable names one of those modes, so an
+/// GIF work is **off** unless the variable names one of those modes and the
+/// test declares a published feature page with [`FeatureTest::zola`], so an
 /// ordinary local test run never shells out to VHS and never touches the docs
 /// tree. CI opts in explicitly and is the only committer of GIFs.
 ///
-/// When recording is on, the frame hash is a staleness signal rather than a
-/// gate: it decides whether VHS re-records a GIF, and never fails a test.
+/// Generate mode uses the frame hash as a cache key for VHS recording.
+/// Check mode uses the same hash as a read-only freshness gate and fails when
+/// an existing committed sidecar is stale or the GIF itself is missing.
 pub(crate) const TESTTY_GIF_MODE_ENV_VAR: &str = "TESTTY_GIF_MODE";
 /// Environment variable that pins the agentty wall clock for feature runs.
 ///
@@ -462,6 +490,23 @@ const PINNED_CLOCK_ENV_VAR: &str = "AGENTTY_CLOCK_UNIX";
 /// the first hint of its set. Any fixed value yields stable hashes; this one
 /// also keeps the recorded hint predictable.
 const PINNED_CLOCK_UNIX_SECONDS: u64 = 1_782_864_000;
+/// Prefix agentty prints in front of a session's generated worktree hash.
+///
+/// Mirrors `agentty::app::session::SESSION_BRANCH_PREFIX`, which is private to
+/// the binary crate and therefore not importable from this integration test.
+/// The footer bar shows it twice per session frame: once inside the worktree
+/// path (`…/wt/4175e5af`) and once as the branch label (`wt/4175e5af`).
+pub(crate) const SESSION_WORKTREE_PREFIX: &str = "wt/";
+/// Longest run of session-UUID hex digits agentty can paint after `wt/`.
+///
+/// Mirrors the `session_id[..8]` truncation in `session_folder` and
+/// `session_branch`. The UUID is generated per session, so those digits differ
+/// on every run and must be redacted out of the freshness hash. Fewer than
+/// eight reach the frame when the footer path runs past the right edge, which
+/// is why the rule matches short runs too.
+const SESSION_WORKTREE_MAX_HEX_LEN: usize = 8;
+/// Placeholder substituted for a session's worktree hash while hashing frames.
+pub(crate) const SESSION_WORKTREE_PLACEHOLDER: &str = "<session>";
 /// Default PTY width used by feature tests unless a scenario requests a
 /// wider responsive layout.
 const DEFAULT_TERMINAL_COLS: u16 = 80;
@@ -471,7 +516,7 @@ const DEFAULT_TERMINAL_ROWS: u16 = 24;
 
 /// Resolve the GIF recording mode from [`TESTTY_GIF_MODE_ENV_VAR`].
 ///
-/// Returns `None` when the variable is unset, which leaves recording off.
+/// Returns `None` when the variable is unset, which leaves GIF work off.
 /// Otherwise delegates to [`parse_gif_mode`] for value parsing.
 fn resolve_gif_mode() -> Option<GifMode> {
     let raw = std::env::var(TESTTY_GIF_MODE_ENV_VAR).ok()?;
@@ -481,15 +526,85 @@ fn resolve_gif_mode() -> Option<GifMode> {
 
 /// Pure parser that maps a raw `TESTTY_GIF_MODE` value to a [`GifMode`].
 ///
-/// Returns `None` for empty input and unrecognized values, leaving recording
+/// Returns `None` for empty input and unrecognized values, leaving GIF work
 /// off rather than guessing at an expensive VHS run. Comparison is
 /// case-insensitive and ignores surrounding whitespace.
 fn parse_gif_mode(raw: &str) -> Option<GifMode> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "generate" | "generate-if-stale" => Some(GifMode::GenerateIfStale),
+        "check" | "check-only" => Some(GifMode::CheckOnly),
         "force" | "always" | "always-generate" => Some(GifMode::AlwaysGenerate),
         _ => None,
     }
+}
+
+/// Return the GIF mode for a [`FeatureTest`] run.
+///
+/// Only tests that declare a Zola feature page participate in docs GIF
+/// generation. Check mode is narrower: it validates only demos with a
+/// committed page, GIF, or hash sidecar. Other [`FeatureTest`] uses are
+/// regression tests that should still run under `TESTTY_GIF_MODE=check`, but
+/// they do not have committed GIF artifacts to validate.
+fn feature_gif_mode_for_run(
+    gif_mode: Option<GifMode>,
+    name: &str,
+    has_zola_page: bool,
+) -> Option<GifMode> {
+    feature_gif_mode_for_artifacts(gif_mode, has_zola_page, feature_artifact_exists(name))
+}
+
+/// Pure policy for deciding whether a run should enable GIF work.
+fn feature_gif_mode_for_artifacts(
+    gif_mode: Option<GifMode>,
+    has_zola_page: bool,
+    has_committed_artifact: bool,
+) -> Option<GifMode> {
+    match gif_mode {
+        Some(GifMode::CheckOnly) if has_zola_page && has_committed_artifact => {
+            Some(GifMode::CheckOnly)
+        }
+        Some(GifMode::GenerateIfStale | GifMode::AlwaysGenerate) if has_zola_page => gif_mode,
+        _ => None,
+    }
+}
+
+/// Return whether this feature has committed docs artifacts to validate.
+///
+/// A Zola page is the publication marker. GIF and sidecar checks cover the
+/// historical transition period and orphaned artifacts.
+fn feature_artifact_exists(name: &str) -> bool {
+    feature_content_dir_path()
+        .join(format!("{name}.md"))
+        .exists()
+        || feature_output_dir().join(format!("{name}.gif")).exists()
+        || feature_output_dir().join(format!(".{name}.hash")).exists()
+}
+
+/// Return the redaction that hides a session's generated worktree hash.
+///
+/// Every [`FeatureTest`] applies it, because any frame showing a live session
+/// carries a worktree name derived from a fresh UUID. Exposed so a feature test
+/// can also assert the rule still matches the footer agentty actually paints.
+pub(crate) fn session_worktree_redaction() -> Redaction {
+    Redaction::hex_after(
+        SESSION_WORKTREE_PREFIX,
+        SESSION_WORKTREE_MAX_HEX_LEN,
+        SESSION_WORKTREE_PLACEHOLDER,
+    )
+}
+
+/// Return the redaction that hides the version painted in the header bar.
+///
+/// The header shows `Agentty v{CARGO_PKG_VERSION}`, so without this rule
+/// every release bump would change every captured frame and stale every
+/// committed GIF hash at once. The needle comes from this test binary's own
+/// compile-time version, which matches the `agentty` binary under test
+/// because both build from the same package.
+fn agentty_version_redaction() -> Redaction {
+    Redaction::literal(
+        concat!("Agentty v", env!("CARGO_PKG_VERSION")),
+        "Agentty <version>",
+    )
 }
 
 /// Reconstruct a [`TerminalFrame`] from a [`ProofCapture`] so full cell-level
@@ -767,8 +882,17 @@ impl FeatureTest {
         // Without an output directory testty reports `NoOutputDir` and skips
         // VHS altogether, so an opt-out run costs nothing and cannot dirty
         // the docs tree.
-        let mut demo = FeatureDemo::new(&self.name);
-        if let Some(gif_mode) = resolve_gif_mode() {
+        //
+        // Any frame showing a live session carries that session's generated
+        // worktree hash, which is fresh on every run. Redacting it keeps the
+        // freshness hash tied to the UI instead of the UUID, so a committed GIF
+        // stays valid until the UI itself moves.
+        let mut demo = FeatureDemo::new(&self.name)
+            .redact(session_worktree_redaction())
+            .redact(agentty_version_redaction());
+        if let Some(gif_mode) =
+            feature_gif_mode_for_run(resolve_gif_mode(), &self.name, self.zola_page.is_some())
+        {
             demo = demo.gif_output_dir(feature_output_dir()).gif_mode(gif_mode);
         }
 
@@ -795,8 +919,10 @@ impl FeatureTest {
 
     /// Validates the GIF generation result for this feature.
     ///
-    /// A stale GIF is never an error: the harness only ever asks testty to
-    /// regenerate, so the surviving failures are genuine I/O and VHS faults.
+    /// A stale GIF is an error in check mode when a committed sidecar drifted
+    /// or the GIF itself is missing. Existing GIFs without sidecars are
+    /// tolerated so the check gate can be enabled before every historical GIF
+    /// has been re-recorded with a hash baseline.
     fn validate_gif_status(
         &self,
         gif_status: &GifStatus,
@@ -807,8 +933,34 @@ impl FeatureTest {
         match gif_status {
             GifStatus::Generated(_)
             | GifStatus::CacheHit(_)
+            | GifStatus::Fresh { .. }
             | GifStatus::VhsNotInstalled
             | GifStatus::NoOutputDir => Ok(()),
+            GifStatus::Stale {
+                gif_path,
+                committed: None,
+                committed_error: None,
+                ..
+            } if gif_path.is_file() => Ok(()),
+            GifStatus::Stale {
+                gif_path,
+                current,
+                committed,
+                committed_error,
+            } => {
+                let committed_error_detail = committed_error
+                    .as_ref()
+                    .map(|err| format!(", committed sidecar error: {err}"))
+                    .unwrap_or_default();
+
+                Err(std::io::Error::other(format!(
+                    "Feature GIF is stale for {}: {} has current hash {current}, committed hash \
+                     {committed:?}{committed_error_detail}",
+                    self.name,
+                    gif_path.display(),
+                ))
+                .into())
+            }
             GifStatus::DirCreateFailed(err) => Err(std::io::Error::other(format!(
                 "Feature GIF dir creation failed for {}: {err}",
                 self.name
@@ -1065,6 +1217,36 @@ mod tests {
     }
 
     #[test]
+    fn builder_env_keeps_painted_paths_under_home() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("failed to create temporary directory");
+
+        // Act
+        let env = BuilderEnv::new(temp.path()).expect("failed to create builder environment");
+
+        // Assert
+        assert_eq!(env.agentty_root, env.home_dir.join(".agentty"));
+        assert!(env.workdir.starts_with(&env.home_dir));
+    }
+
+    #[test]
+    fn builder_env_stubs_every_supported_agent_cli() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("failed to create temporary directory");
+
+        // Act
+        let env = BuilderEnv::new(temp.path()).expect("failed to create builder environment");
+
+        // Assert
+        for executable_name in STUB_AGENT_EXECUTABLES {
+            assert!(
+                env.stub_bin.join(executable_name).is_file(),
+                "missing {executable_name} test stub",
+            );
+        }
+    }
+
+    #[test]
     fn parse_gif_mode_recognizes_generate_if_stale_aliases() {
         // Arrange / Act / Assert
         assert_eq!(parse_gif_mode("generate"), Some(GifMode::GenerateIfStale));
@@ -1075,10 +1257,54 @@ mod tests {
     }
 
     #[test]
+    fn parse_gif_mode_recognizes_check_only_aliases() {
+        // Arrange / Act / Assert
+        assert_eq!(parse_gif_mode("check"), Some(GifMode::CheckOnly));
+        assert_eq!(parse_gif_mode("  check-only  "), Some(GifMode::CheckOnly));
+        assert_eq!(parse_gif_mode("Check"), Some(GifMode::CheckOnly));
+    }
+
+    #[test]
     fn parse_gif_mode_leaves_recording_off_for_unrecognized_values() {
         // Arrange / Act / Assert
         assert_eq!(parse_gif_mode(""), None);
         assert_eq!(parse_gif_mode("nonsense"), None);
+    }
+
+    #[test]
+    fn feature_gif_mode_for_run_keeps_zola_feature_mode() {
+        // Arrange / Act / Assert
+        assert_eq!(
+            feature_gif_mode_for_artifacts(Some(GifMode::CheckOnly), true, true),
+            Some(GifMode::CheckOnly),
+        );
+    }
+
+    #[test]
+    fn feature_gif_mode_for_run_skips_regression_only_tests() {
+        // Arrange / Act / Assert
+        assert_eq!(
+            feature_gif_mode_for_artifacts(Some(GifMode::CheckOnly), false, true),
+            None,
+        );
+    }
+
+    #[test]
+    fn feature_gif_mode_for_run_skips_unpublished_check_only_features() {
+        // Arrange / Act / Assert
+        assert_eq!(
+            feature_gif_mode_for_artifacts(Some(GifMode::CheckOnly), true, false),
+            None,
+        );
+    }
+
+    #[test]
+    fn feature_gif_mode_for_run_keeps_generate_for_unpublished_zola_features() {
+        // Arrange / Act / Assert
+        assert_eq!(
+            feature_gif_mode_for_artifacts(Some(GifMode::GenerateIfStale), true, false),
+            Some(GifMode::GenerateIfStale),
+        );
     }
 
     #[test]
@@ -1103,5 +1329,116 @@ mod tests {
         assert!(!gif_exists_on_disk(&GifStatus::Generated(missing_gif_path)));
         assert!(!gif_exists_on_disk(&GifStatus::VhsNotInstalled));
         assert!(!gif_exists_on_disk(&GifStatus::NoOutputDir));
+    }
+
+    #[test]
+    fn validate_gif_status_accepts_fresh_check_result() {
+        // Arrange
+        let feature_test = FeatureTest::new("fresh_feature");
+        let gif_status = GifStatus::Fresh {
+            gif_path: PathBuf::from("docs/site/static/features/fresh_feature.gif"),
+            hash: 42,
+        };
+
+        // Act
+        let result = feature_test.validate_gif_status(&gif_status);
+
+        // Assert
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_gif_status_rejects_stale_check_result() {
+        // Arrange
+        let feature_test = FeatureTest::new("stale_feature");
+        let gif_status = GifStatus::Stale {
+            gif_path: PathBuf::from("docs/site/static/features/stale_feature.gif"),
+            current: 42,
+            committed: Some(7),
+            committed_error: None,
+        };
+
+        // Act
+        let result = feature_test.validate_gif_status(&gif_status);
+
+        // Assert
+        let error = result.expect_err("stale GIF status should fail validation");
+        let message = error.to_string();
+
+        assert!(message.contains("Feature GIF is stale for stale_feature"));
+        assert!(message.contains("current hash 42"));
+        assert!(message.contains("committed hash Some(7)"));
+    }
+
+    #[test]
+    fn validate_gif_status_accepts_existing_gif_without_sidecar() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let gif_path = temp.path().join("legacy_feature.gif");
+        std::fs::write(&gif_path, b"gif").expect("write gif");
+
+        let feature_test = FeatureTest::new("legacy_feature");
+        let gif_status = GifStatus::Stale {
+            gif_path,
+            current: 42,
+            committed: None,
+            committed_error: None,
+        };
+
+        // Act
+        let result = feature_test.validate_gif_status(&gif_status);
+
+        // Assert
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_gif_status_rejects_missing_gif_without_sidecar() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let feature_test = FeatureTest::new("missing_feature");
+        let gif_status = GifStatus::Stale {
+            gif_path: temp.path().join("missing_feature.gif"),
+            current: 42,
+            committed: None,
+            committed_error: None,
+        };
+
+        // Act
+        let result = feature_test.validate_gif_status(&gif_status);
+
+        // Assert
+        let error = result.expect_err("missing GIF should fail validation");
+        let message = error.to_string();
+
+        assert!(message.contains("Feature GIF is stale for missing_feature"));
+        assert!(message.contains("committed hash None"));
+    }
+
+    #[test]
+    fn validate_gif_status_rejects_invalid_sidecar_for_existing_gif() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let gif_path = temp.path().join("invalid_sidecar.gif");
+        std::fs::write(&gif_path, b"gif").expect("write gif");
+
+        let feature_test = FeatureTest::new("invalid_sidecar");
+        let gif_status = GifStatus::Stale {
+            gif_path,
+            current: 42,
+            committed: None,
+            committed_error: Some("failed to parse hash sidecar as u64".to_string()),
+        };
+
+        // Act
+        let result = feature_test.validate_gif_status(&gif_status);
+
+        // Assert
+        let error = result.expect_err("invalid sidecar should fail validation");
+        let message = error.to_string();
+
+        assert!(message.contains("Feature GIF is stale for invalid_sidecar"));
+        assert!(message.contains("committed hash None"));
+        assert!(message.contains("committed sidecar error"));
     }
 }

@@ -228,8 +228,12 @@ The `TESTTY_GIF_MODE` env var selects the freshness mode used by `FeatureTest`:
   sidecar is missing or stale, otherwise reuse the committed GIF.
 - `check` / `check-only` — compute the would-be hash and compare it to the on-disk
   sidecar without invoking VHS or touching the GIF output directory. The harness fails
-  the test on `GifStatus::Stale` and surfaces the current/committed hashes in the error
-  so CI catches drift.
+  the test when a committed sidecar has drifted, an existing sidecar is invalid, or the
+  GIF itself is missing, and surfaces the current/committed hashes plus sidecar errors
+  so CI catches drift. Existing GIFs that predate sidecars are tolerated until a
+  recording run creates their baseline. `.zola(...)` tests without any committed docs
+  page, GIF, or sidecar are treated as unpublished and skipped by check mode until a
+  recording run publishes their artifacts.
 - `force` / `always` / `always-generate` — bypass the hash cache and re-run VHS
   unconditionally. VHS must be installed: a missing VHS binary fails the test instead of
   being silently skipped, because regeneration was explicitly requested.
@@ -237,6 +241,25 @@ The `TESTTY_GIF_MODE` env var selects the freshness mode used by `FeatureTest`:
 Run `prek run zola-check --all-files --hook-stage manual` after the test to catch broken
 frontmatter or template integration before the page reaches CI. This requires Zola to be
 installed locally — if unavailable, CI catches it via the `pages.yml` workflow.
+
+### Freshness hash determinism
+
+The hash only means "the UI moved" if the same UI hashes the same way every run — and on
+every machine, because sidecars are committed locally and checked on Linux CI. The
+harness already neutralizes the known variance:
+
+- Temp paths are normalized by testty, and `BuilderEnv` keeps every painted directory
+  under the test `HOME` so paths render home-collapsed (`~/test-project`,
+  `~/.agentty/wt/<hash>`) with a platform-independent length.
+- `FeatureTest` pins the wall clock, redacts the `wt/<hash>` worktree name a session
+  derives from its generated UUID (see `common::session_worktree_redaction`), and
+  redacts the `Agentty v<version>` header so release bumps do not stale every GIF.
+- `BuilderEnv` stubs every supported agent CLI, so agent availability — and the default
+  agent a new session resolves — does not depend on which real CLIs a machine has.
+
+Anything else volatile a scenario puts on screen — another generated id, a live
+duration, a random port — makes every run look stale and re-records the GIF for nothing.
+Freeze it in the app under test, or declare it with `FeatureDemo::redact`.
 
 ## Legacy Pattern
 
