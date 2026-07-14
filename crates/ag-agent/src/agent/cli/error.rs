@@ -103,10 +103,36 @@ fn cli_stream_section(label: &str, output: &str) -> String {
     format!("{label}:\n```text\n{formatted_output}\n```")
 }
 
+/// Maximum stream lines kept in one CLI exit error section.
+///
+/// Turn errors are appended to the session transcript, so an unbounded stream
+/// section paints a screenful of provider event lines into the chat. The tail
+/// carries the failure, so the newest lines are the ones worth keeping.
+const CLI_STREAM_DETAIL_MAX_LINES: usize = 12;
+
 /// Formats one captured stream, summarizing JSONL provider event lines while
 /// preserving plain-text provider diagnostics.
+///
+/// Only the last [`CLI_STREAM_DETAIL_MAX_LINES`] lines are kept, prefixed with
+/// a note when earlier lines were dropped.
 fn format_cli_stream_output(output: &str) -> String {
-    format_json_line_stream(output).unwrap_or_else(|| output.to_string())
+    let formatted_output =
+        format_json_line_stream(output).unwrap_or_else(|| output.trim_end().to_string());
+
+    truncate_stream_detail_to_tail(&formatted_output)
+}
+
+/// Keeps only the trailing stream lines that fit the error-detail budget.
+fn truncate_stream_detail_to_tail(formatted_output: &str) -> String {
+    let lines: Vec<&str> = formatted_output.lines().collect();
+    let dropped_line_count = lines.len().saturating_sub(CLI_STREAM_DETAIL_MAX_LINES);
+    if dropped_line_count == 0 {
+        return formatted_output.to_string();
+    }
+
+    let tail = lines[dropped_line_count..].join("\n");
+
+    format!("[{dropped_line_count} earlier lines omitted]\n{tail}")
 }
 
 /// Converts each JSON object line in a provider stream into readable text.
@@ -291,6 +317,26 @@ fn format_cli_stream_detail(detail: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    /// A long provider stream is reduced to its tail so a failing turn cannot
+    /// paint every event line into the session transcript.
+    fn test_format_agent_cli_exit_error_bounds_long_stream_detail() {
+        // Arrange
+        let stdout = (0..40)
+            .map(|index| format!(r#"{{"type":"system","subtype":"event_{index}"}}"#))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Act
+        let error =
+            format_agent_cli_exit_error(AgentKind::Claude, "Agent command", Some(1), &stdout, "");
+
+        // Assert
+        assert!(error.contains("earlier lines omitted"));
+        assert!(!error.contains("system | event_0"));
+        assert!(error.contains("system | event_39"));
+    }
 
     // --- format_agent_cli_exit_error ---
 

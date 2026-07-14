@@ -328,10 +328,23 @@ one structured response protocol (`answer`, `questions`, optional `summary`):
    envelopes, repair prompts, and turn prompt payloads.
 1. Channels emit transient loader updates as `TurnEvent::ThoughtDelta` values while the
    turn runs; assistant transcript output is appended once from the final parsed result.
+1. Transports that enforce the schema natively receive it through
+   `SchemaRequiredPolicy`. Codex needs every property listed in `required`; validators
+   that enforce `required` literally, such as Claude's `--json-schema`, receive
+   `MinimumProtocolKeys` so only `answer` is mandatory and a reply that omits
+   `questions` or `summary` still validates.
 1. Final output must parse as the shared protocol JSON object. Claude, Gemini, and Codex
    session turns fail closed on invalid output; Antigravity tries one protocol-repair
-   retry and then preserves non-empty plain text as `answer`. Rejected payloads surface
-   parse diagnostics (response sizing, parser location, visible top-level keys).
+   retry and then preserves non-empty plain text as `answer`.
+1. Turn errors are rendered into the session transcript, so no failure surface
+   reproduces provider output. A rejected payload surfaces the parse reason plus
+   *derived* diagnostics only (response sizing, parser location, visible top-level
+   keys); the payload text itself is never quoted. Live `TurnEvent::ThoughtDelta`
+   updates carry no provider output either. The transcript notice is length-capped as a
+   backstop. The one deliberate exception is a CLI process that exits non-zero: its
+   error keeps a bounded tail of the provider stream, because a crashed provider's own
+   stderr (authentication failure, missing binary) is the only thing that explains the
+   exit.
 1. Provider-specific transport, stdin-vs-argv prompt delivery, strict parsing policy,
    and thought-phase handling are centralized in the provider registry
    (`crates/ag-agent/src/agent/provider.rs`).

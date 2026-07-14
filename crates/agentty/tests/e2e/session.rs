@@ -646,6 +646,47 @@ WHERE id IN ('a-older', 'z-newer')
     Ok(())
 }
 
+/// Filler repeated through the stub's non-protocol payload.
+const PROTOCOL_FAILURE_PAYLOAD_FILLER: &str = "not-json-filler";
+
+/// Marker placed at the far end of the stub's non-protocol payload.
+///
+/// Neither this nor the filler may reach the chat: a protocol failure must
+/// report why the payload was rejected without reproducing the payload.
+const PROTOCOL_FAILURE_TAIL_MARKER: &str = "TAILOFPAYLOAD";
+
+/// Installs a Claude stub whose final payload is not protocol JSON.
+///
+/// The payload is far longer than the excerpt budget and carries a marker at
+/// each end, so the resulting transcript notice can be checked for a bounded
+/// failure message instead of a raw provider dump.
+fn seed_invalid_protocol_output_project(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let payload = format!(
+        "{} {PROTOCOL_FAILURE_TAIL_MARKER}",
+        format!("{PROTOCOL_FAILURE_PAYLOAD_FILLER} ").repeat(40)
+    );
+    let claude_path = env.stub_bin.join("claude");
+    let script = format!(
+        r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+cat > /dev/null 2>&1
+printf '%s\n' '{{"type":"system","subtype":"init"}}'
+printf '%s\n' '{{"type":"result","subtype":"success","result":"{payload}"}}'
+"#
+    );
+    std::fs::write(&claude_path, script)?;
+
+    #[cfg(unix)]
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+
+    seed_project_default_model(env, "claude-haiku-4-5-20251001")?;
+
+    Ok(())
+}
+
 /// Adds a Gemini CLI stub that intentionally exits with failure.
 ///
 /// Picker tests only need the executable to exist on `PATH`; using a failing
@@ -1282,6 +1323,42 @@ fn session_list_empty_state() -> E2eResult {
                 assertion::assert_not_visible(frame, "Merge queue");
                 assertion::assert_not_visible(frame, "Archive");
                 assertion::assert_not_visible(frame, "No sessions");
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that provider output which fails protocol validation surfaces a
+/// bounded failure notice instead of dumping the raw payload into the chat.
+#[test]
+fn test_session_invalid_protocol_output_is_bounded() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_invalid_protocol_output_is_bounded")
+        .with_git()
+        .setup(seed_invalid_protocol_output_project)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .write_text("Return invalid protocol output")
+                    .wait_for_text("Return invalid protocol output", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("embedded_json_candidate", 60000)
+                    .capture_labeled(
+                        "invalid_protocol_output",
+                        "Invalid provider output reports a failure without raw payload",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "embedded_json_candidate", &full);
+                assertion::assert_not_visible(frame, PROTOCOL_FAILURE_TAIL_MARKER);
+                assertion::assert_not_visible(frame, PROTOCOL_FAILURE_PAYLOAD_FILLER);
             },
         )?;
 

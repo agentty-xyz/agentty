@@ -273,8 +273,7 @@ async fn parse_or_repair_cli_response(
             }
 
             Err(AgentError::Backend(format!(
-                "{parse_error}\nprotocol repair retry also failed: \
-                 {repair_error}\nrepair_response:\n{repair_content}"
+                "{parse_error}\nprotocol repair retry also failed: {repair_error}"
             )))
         }
     }
@@ -884,7 +883,7 @@ mod tests {
         // Assert
         let error_message = error.to_string();
         assert!(error_message.contains("did not match the required JSON schema"));
-        assert!(error_message.contains("response:\nplain non-json response"));
+        assert!(!error_message.contains("plain non-json response"));
     }
 
     #[tokio::test]

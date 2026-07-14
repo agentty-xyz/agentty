@@ -100,6 +100,11 @@ pub fn parse_agent_response_strict(raw: &str) -> Result<AgentResponse, AgentResp
 /// The report summarizes response sizing, markdown wrapping, JSON parse
 /// diagnostics, and any visible top-level keys so schema mismatch errors
 /// include enough context to diagnose malformed provider output quickly.
+///
+/// Every line is *derived* metadata: sizes, parser locations, and key names.
+/// No provider payload text is reproduced. Turn errors are rendered into the
+/// session transcript, so quoting the payload here would print raw provider
+/// output into the chat.
 pub fn format_protocol_parse_debug_details(raw: &str) -> String {
     let trimmed = raw.trim();
     let mut detail_lines = vec![
@@ -133,11 +138,6 @@ pub fn format_protocol_parse_debug_details(raw: &str) -> String {
     } else {
         detail_lines.push("embedded_json_candidate: none".to_string());
     }
-
-    detail_lines.push(format!(
-        "response_preview:\n{}",
-        format_debug_preview(trimmed, 240)
-    ));
 
     detail_lines.join("\n")
 }
@@ -359,23 +359,26 @@ fn format_debug_list(items: &[String]) -> String {
     items.join(", ")
 }
 
-/// Truncates a debug preview while preserving the original leading content.
-fn format_debug_preview(raw: &str, max_chars: usize) -> String {
-    let preview = raw.chars().take(max_chars).collect::<String>();
-    let total_chars = raw.chars().count();
-    if total_chars <= max_chars {
-        return preview;
-    }
-
-    format!(
-        "{preview}\n... [truncated {} chars]",
-        total_chars - max_chars
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    /// The debug report describes the payload without reproducing any of it,
+    /// so a turn error cannot print raw provider output into the transcript.
+    fn test_format_protocol_parse_debug_details_never_quotes_payload() {
+        // Arrange
+        let raw = format!("{} SECRETTAIL", "payload-filler ".repeat(40));
+
+        // Act
+        let details = format_protocol_parse_debug_details(&raw);
+
+        // Assert
+        assert!(!details.contains("payload-filler"));
+        assert!(!details.contains("SECRETTAIL"));
+        assert!(details.contains(&format!("response_len: {} chars", raw.chars().count())));
+        assert!(details.contains("direct_json_error"));
+    }
 
     #[test]
     /// Strict parsing accepts a complete schema payload.

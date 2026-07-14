@@ -77,8 +77,9 @@ pub(crate) fn protocol_schema_instruction_mode(kind: AgentKind) -> ProtocolSchem
 ///
 /// # Errors
 /// Returns a descriptive error when provider output does not match the
-/// required protocol JSON, including parse diagnostics that help explain why
-/// the payload was rejected.
+/// required protocol JSON. The error carries the parse reason and derived
+/// diagnostics only: turn errors are rendered into the session transcript, so
+/// quoting the payload would print raw provider output into the chat.
 pub(crate) fn parse_turn_response(
     kind: AgentKind,
     response_text: &str,
@@ -87,8 +88,7 @@ pub(crate) fn parse_turn_response(
     let response = parse_agent_response_strict(response_text).map_err(|error| {
         format!(
             "Agent output did not match the required JSON schema from {kind}: \
-             {error}\nprotocol_profile: \
-             {protocol_profile:?}\ndebug_details:\n{}\nresponse:\n{response_text}",
+             {error}\nprotocol_profile: {protocol_profile:?}\ndebug_details:\n{}",
             format_protocol_parse_debug_details(response_text)
         )
     })?;

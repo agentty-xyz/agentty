@@ -194,8 +194,10 @@ struct AppServerParsedTurnResult {
 /// the returned metadata reflects the repair turn's provider conversation id
 /// and token usage so the caller can propagate them correctly.
 ///
-/// When repair is attempted, a [`TurnEvent::ThoughtDelta`] is emitted with
-/// the original parse error so the user can see what went wrong.
+/// When repair is attempted, a concise [`TurnEvent::ThoughtDelta`] is emitted
+/// so the user can see that schema repair is in progress. The parse error is
+/// deliberately excluded: thought updates render as live loader lines, and the
+/// error carries provider diagnostics that must not reach the UI.
 async fn parse_or_repair_app_server_response(
     kind: AgentKind,
     response: &crate::app_server::AppServerTurnResponse,
@@ -218,7 +220,7 @@ async fn parse_or_repair_app_server_response(
         };
 
     let _ = events.send(TurnEvent::ThoughtDelta(format!(
-        "Protocol parse error — retrying: {parse_error}"
+        "Protocol parse error; retrying schema repair for {kind}."
     )));
 
     let repair_prompt = build_protocol_repair_prompt(&parse_error, &response.assistant_message);
@@ -255,9 +257,7 @@ async fn parse_or_repair_app_server_response(
         agent::parse_turn_response(kind, &repair_result.assistant_message, protocol_profile)
             .map_err(|error| {
                 AgentError::Backend(format!(
-                    "{parse_error}\nprotocol repair retry also failed: \
-                     {error}\nrepair_response:\n{}",
-                    repair_result.assistant_message
+                    "{parse_error}\nprotocol repair retry also failed: {error}"
                 ))
             })?;
 
@@ -725,7 +725,7 @@ mod tests {
         // Assert
         let error_message = error.to_string();
         assert!(error_message.contains("did not match the required JSON schema"));
-        assert!(error_message.contains("response:\nplain non-json response"));
+        assert!(!error_message.contains("plain non-json response"));
     }
 
     #[tokio::test]
@@ -813,7 +813,9 @@ mod tests {
         mock_client
             .expect_run_turn()
             .times(2)
-            .returning(|_request, _stream_tx| Box::pin(async { Ok(make_ok_response("plain")) }));
+            .returning(|_request, _stream_tx| {
+                Box::pin(async { Ok(make_ok_response("plain-text-payload")) })
+            });
         let channel = AppServerAgentChannel::new(Arc::new(mock_client), AgentKind::Codex);
         let (events_tx, _events_rx) = mpsc::unbounded_channel();
 
@@ -826,7 +828,7 @@ mod tests {
         // Assert
         let error_message = error.to_string();
         assert!(error_message.contains("did not match the required JSON schema"));
-        assert!(error_message.contains("response:\nplain"));
+        assert!(!error_message.contains("plain-text-payload"));
     }
 
     #[tokio::test]
