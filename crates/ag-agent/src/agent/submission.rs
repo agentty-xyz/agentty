@@ -236,13 +236,14 @@ pub async fn submit_one_shot_with_backend(
 /// Parses one one-shot response strictly against the shared protocol schema.
 ///
 /// # Errors
-/// Returns an error when the response is empty or not valid protocol JSON,
-/// including parse diagnostics that help explain the mismatch.
+/// Returns an error when the response is empty or not valid protocol JSON. The
+/// error carries the parse reason and derived diagnostics only, never the
+/// provider payload itself.
 fn parse_one_shot_response(content: &str) -> Result<AgentResponse, String> {
     parse_agent_response_strict(content).map_err(|error| {
         format!(
             "One-shot agent output did not match the required JSON schema: \
-             {error}\ndebug_details:\n{}\nresponse:\n{content}",
+             {error}\ndebug_details:\n{}",
             format_protocol_parse_debug_details(content)
         )
     })

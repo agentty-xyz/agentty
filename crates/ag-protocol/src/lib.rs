@@ -29,6 +29,6 @@ pub use prompt::{
 };
 pub use question::QuestionItem;
 pub use schema::{
-    agent_response_json_schema_json, agent_response_output_schema,
+    SchemaRequiredPolicy, agent_response_json_schema_json, agent_response_output_schema,
     agent_response_output_schema_json,
 };

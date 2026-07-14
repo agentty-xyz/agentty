@@ -318,9 +318,19 @@ pub(super) fn status_update_after_turn_result(
     }
 }
 
+/// Maximum characters of one turn error kept in the session transcript.
+///
+/// Transcript notices are rendered as chat content, so an unbounded error text
+/// paints raw provider output into the session. Providers already bound their
+/// own failure messages; this is the backstop that holds for every error path.
+const TURN_ERROR_NOTICE_MAX_CHARS: usize = 800;
+
 /// Appends one terminal turn error to the live and persisted transcript.
+///
+/// The notice is truncated to [`TURN_ERROR_NOTICE_MAX_CHARS`] so no failure can
+/// dump a screenful of provider diagnostics into the chat.
 async fn append_turn_error(context: &PostTurnContext, error_text: &str) {
-    let message = format!("\n{}\n", error_text.trim());
+    let message = format!("\n{}\n", truncate_turn_error_notice(error_text));
     SessionTaskService::append_workflow_notice(
         &context.transcript,
         &context.db,
@@ -330,6 +340,21 @@ async fn append_turn_error(context: &PostTurnContext, error_text: &str) {
         &message,
     )
     .await;
+}
+
+/// Truncates one turn error to the transcript notice budget.
+fn truncate_turn_error_notice(error_text: &str) -> String {
+    let mut characters = error_text.trim().chars();
+    let mut notice: String = characters
+        .by_ref()
+        .take(TURN_ERROR_NOTICE_MAX_CHARS)
+        .collect();
+
+    if characters.next().is_some() {
+        notice.push_str("\n[error truncated]");
+    }
+
+    notice
 }
 
 /// Persists the successful turn payload, emits the reducer projection, and
@@ -562,6 +587,34 @@ mod tests {
 
     use super::*;
     use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
+
+    #[test]
+    fn test_truncate_turn_error_notice_keeps_short_errors_intact() {
+        // Arrange
+        let error_text = "  Agent command failed with exit code 1.  ";
+
+        // Act
+        let notice = truncate_turn_error_notice(error_text);
+
+        // Assert
+        assert_eq!(notice, "Agent command failed with exit code 1.");
+    }
+
+    #[test]
+    fn test_truncate_turn_error_notice_bounds_long_provider_dumps() {
+        // Arrange
+        let error_text = "x".repeat(TURN_ERROR_NOTICE_MAX_CHARS + 50);
+
+        // Act
+        let notice = truncate_turn_error_notice(&error_text);
+
+        // Assert
+        assert_eq!(
+            notice.chars().count(),
+            TURN_ERROR_NOTICE_MAX_CHARS + "\n[error truncated]".chars().count()
+        );
+        assert!(notice.ends_with("\n[error truncated]"));
+    }
 
     #[tokio::test]
     async fn test_unfinished_rebase_check_fails_closed_when_operation_query_fails() {

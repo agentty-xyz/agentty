@@ -3,7 +3,9 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use ag_protocol::{TurnPrompt, TurnPromptContentPart, agent_response_output_schema};
+use ag_protocol::{
+    SchemaRequiredPolicy, TurnPrompt, TurnPromptContentPart, agent_response_output_schema,
+};
 use serde_json::Value;
 use tokio::sync::mpsc;
 
@@ -703,7 +705,7 @@ pub(super) fn build_turn_start_payload(
             "effort": reasoning_level.codex(),
             "summary": Value::Null,
             "personality": Value::Null,
-            "outputSchema": agent_response_output_schema()
+            "outputSchema": agent_response_output_schema(SchemaRequiredPolicy::AllProperties)
         }
     })
 }

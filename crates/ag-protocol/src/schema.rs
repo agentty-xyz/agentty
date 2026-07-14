@@ -5,14 +5,31 @@ use serde_json::Value;
 
 use super::model::{AgentResponse, questions_field_description};
 
+/// Selects how a provider transport lists `required` schema properties.
+///
+/// Providers disagree on what a valid schema looks like. Codex rejects schemas
+/// whose `properties` contain keys missing from `required`, so it needs every
+/// key listed. Validators that enforce `required` literally, such as Claude,
+/// must only demand `answer`; listing optional keys there rejects ordinary
+/// replies that omit `questions` or `summary`, even though the parser accepts
+/// them through `#[serde(default)]`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SchemaRequiredPolicy {
+    /// Lists every `properties` key in `required` for Codex compatibility.
+    AllProperties,
+    /// Lists only the minimum protocol keys the parser insists on.
+    MinimumProtocolKeys,
+}
+
 /// Returns the JSON Schema used for structured assistant output.
 ///
 /// The returned value is passed directly to providers that support enforced
 /// output schemas. It starts from the self-descriptive response schema and then
 /// applies compatibility normalization required by schema-enforcing agents.
-pub fn agent_response_output_schema() -> Value {
+/// `required_policy` selects how strictly optional protocol keys are demanded.
+pub fn agent_response_output_schema(required_policy: SchemaRequiredPolicy) -> Value {
     let mut value = agent_response_json_schema();
-    normalize_schema_for_transport(&mut value);
+    normalize_schema_for_transport(&mut value, required_policy);
 
     value
 }
@@ -35,8 +52,8 @@ pub fn agent_response_json_schema_json() -> String {
 /// `outputSchema` at transport level and must be guided by in-prompt schema
 /// text instead, or by native schema-validation flags that accept a serialized
 /// schema document.
-pub fn agent_response_output_schema_json() -> String {
-    let schema = agent_response_output_schema();
+pub fn agent_response_output_schema_json(required_policy: SchemaRequiredPolicy) -> String {
+    let schema = agent_response_output_schema(required_policy);
 
     stringify_schema_json(&schema)
 }
@@ -149,18 +166,21 @@ fn stringify_schema_json(schema: &Value) -> String {
 /// cannot resolve that meta-schema. Codex rejects schemas that use `oneOf` for
 /// enum-like constants. Schemars can emit both shapes, so this normalizer
 /// strips transport-only metadata and rewrites enum fragments to string `enum`
-/// definitions.
-fn normalize_schema_for_transport(value: &mut Value) {
+/// definitions. `required_policy` decides whether optional properties are also
+/// forced into `required`.
+fn normalize_schema_for_transport(value: &mut Value, required_policy: SchemaRequiredPolicy) {
     match value {
         Value::Object(object) => {
             object.remove("$schema");
 
             for nested_value in object.values_mut() {
-                normalize_schema_for_transport(nested_value);
+                normalize_schema_for_transport(nested_value, required_policy);
             }
 
             normalize_ref_object_for_codex(object);
-            normalize_required_for_codex(object);
+            if required_policy == SchemaRequiredPolicy::AllProperties {
+                normalize_required_for_codex(object);
+            }
 
             let one_of_values = object
                 .get("oneOf")
@@ -192,7 +212,7 @@ fn normalize_schema_for_transport(value: &mut Value) {
         }
         Value::Array(array) => {
             for nested_value in array {
-                normalize_schema_for_transport(nested_value);
+                normalize_schema_for_transport(nested_value, required_policy);
             }
         }
         _ => {}
@@ -255,7 +275,7 @@ mod tests {
     /// Builds a schema object with required top-level response fields.
     fn test_agent_response_output_schema_contains_required_fields() {
         // Arrange / Act
-        let schema = agent_response_output_schema();
+        let schema = agent_response_output_schema(SchemaRequiredPolicy::AllProperties);
         let required_fields = schema
             .get("required")
             .and_then(Value::as_array)
@@ -291,7 +311,7 @@ mod tests {
     /// `required`.
     fn test_agent_response_output_schema_all_properties_are_required() {
         // Arrange / Act
-        let schema = agent_response_output_schema();
+        let schema = agent_response_output_schema(SchemaRequiredPolicy::AllProperties);
 
         // Assert
         assert!(
@@ -301,11 +321,32 @@ mod tests {
     }
 
     #[test]
+    /// Ensures the minimum-key policy demands only `answer`, so validators that
+    /// enforce `required` literally still accept replies that omit optional
+    /// protocol keys.
+    fn test_agent_response_output_schema_minimum_policy_requires_only_answer() {
+        // Arrange / Act
+        let schema = agent_response_output_schema(SchemaRequiredPolicy::MinimumProtocolKeys);
+        let required_fields = schema
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("schema required fields should exist");
+
+        // Assert
+        assert_eq!(
+            required_fields,
+            &vec![Value::String("answer".to_string())],
+            "only `answer` should be required; demanding `questions` or `summary` rejects \
+             ordinary replies that omit them"
+        );
+    }
+
+    #[test]
     /// Ensures generated schema avoids `oneOf` so Codex `outputSchema`
     /// validation accepts the payload.
     fn test_agent_response_output_schema_does_not_contain_one_of() {
         // Arrange / Act
-        let schema = agent_response_output_schema();
+        let schema = agent_response_output_schema(SchemaRequiredPolicy::AllProperties);
 
         // Assert
         assert!(!contains_schema_key(&schema, "oneOf"));
@@ -316,7 +357,7 @@ mod tests {
     /// native schema validation does not need a bundled meta-schema resolver.
     fn test_agent_response_output_schema_does_not_contain_schema_metadata() {
         // Arrange / Act
-        let schema = agent_response_output_schema();
+        let schema = agent_response_output_schema(SchemaRequiredPolicy::MinimumProtocolKeys);
 
         // Assert
         assert!(!contains_schema_key(&schema, "$schema"));
@@ -385,7 +426,7 @@ mod tests {
     /// Ensures no schema object uses `$ref` with sibling keys.
     fn test_agent_response_output_schema_ref_objects_have_no_sibling_keywords() {
         // Arrange / Act
-        let schema = agent_response_output_schema();
+        let schema = agent_response_output_schema(SchemaRequiredPolicy::AllProperties);
 
         // Assert
         assert!(!contains_ref_with_sibling_keywords(&schema));
@@ -569,10 +610,11 @@ mod tests {
     /// schema enforcement.
     fn test_agent_response_output_schema_json_is_parseable_value() {
         // Arrange / Act
-        let schema_json = agent_response_output_schema_json();
+        let schema_json =
+            agent_response_output_schema_json(SchemaRequiredPolicy::MinimumProtocolKeys);
         let parsed_schema: Value =
             serde_json::from_str(&schema_json).expect("schema string should parse as JSON");
-        let schema_value = agent_response_output_schema();
+        let schema_value = agent_response_output_schema(SchemaRequiredPolicy::MinimumProtocolKeys);
 
         // Assert
         assert_eq!(parsed_schema, schema_value);
