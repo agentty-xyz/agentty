@@ -66,6 +66,7 @@ pub(super) fn start_published_branch_auto_push(input: PublishedBranchAutoPushSta
     let _ = input
         .app_event_tx
         .send(AppEvent::PublishedBranchSyncUpdated {
+            persistent_notice: None,
             session_id: input.session_id.clone(),
             sync_operation_id: sync_operation_id.clone(),
             sync_status: PublishedBranchSyncStatus::InProgress,
@@ -152,19 +153,11 @@ async fn run_published_branch_auto_push_task(input: PublishedBranchAutoPushInput
 
             let message = TranscriptNotice::BranchPush
                 .format("Auto-pushed published branch after completed turn.");
-            SessionTaskService::append_workflow_notice(
-                &input.transcript,
-                &input.db,
-                &input.app_event_tx,
-                &input.session_update_versions,
-                &input.session_id,
-                &message,
-            )
-            .await;
 
             let _ = input
                 .app_event_tx
                 .send(AppEvent::PublishedBranchSyncUpdated {
+                    persistent_notice: Some(message),
                     session_id: input.session_id,
                     sync_operation_id: input.sync_operation_id,
                     sync_status: PublishedBranchSyncStatus::Succeeded,
@@ -172,19 +165,11 @@ async fn run_published_branch_auto_push_task(input: PublishedBranchAutoPushInput
         }
         Err(failure) => {
             let message = TranscriptNotice::BranchPushError.format(failure.message);
-            SessionTaskService::append_workflow_notice(
-                &input.transcript,
-                &input.db,
-                &input.app_event_tx,
-                &input.session_update_versions,
-                &input.session_id,
-                &message,
-            )
-            .await;
 
             let _ = input
                 .app_event_tx
                 .send(AppEvent::PublishedBranchSyncUpdated {
+                    persistent_notice: Some(message),
                     session_id: input.session_id,
                     sync_operation_id: input.sync_operation_id,
                     sync_status: PublishedBranchSyncStatus::Failed,

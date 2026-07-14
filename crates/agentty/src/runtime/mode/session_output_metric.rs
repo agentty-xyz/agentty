@@ -9,8 +9,6 @@ pub(crate) fn rendered_output_line_count_with_cache(
     render_cache_store: &RenderCacheStore,
     session_id: &str,
     session_index: usize,
-    review_status_message: Option<&str>,
-    review_text: Option<&str>,
     output_width: u16,
 ) -> u16 {
     let active_progress = app.session_progress_message(session_id);
@@ -27,9 +25,6 @@ pub(crate) fn rendered_output_line_count_with_cache(
             SessionOutputLineContext {
                 active_prompt_output,
                 active_progress,
-                review_model: app.settings.default_review_selection.model(),
-                review_status_message,
-                review_text,
                 session_update_version: app.session_update_version(session_id),
             },
             render_cache_store.markdown_render_cache(),
@@ -43,8 +38,6 @@ pub(crate) fn rendered_output_line_count(
     app: &App,
     session_id: &str,
     session_index: usize,
-    review_status_message: Option<&str>,
-    review_text: Option<&str>,
     output_width: u16,
 ) -> u16 {
     rendered_output_line_count_with_cache(
@@ -52,8 +45,6 @@ pub(crate) fn rendered_output_line_count(
         &RenderCacheStore::default(),
         session_id,
         session_index,
-        review_status_message,
-        review_text,
         output_width,
     )
 }

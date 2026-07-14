@@ -2919,6 +2919,7 @@ mod tests {
                     session_id,
                     sync_operation_id,
                     sync_status,
+                    ..
                 } = event
                 {
                     sync_events.push((session_id, sync_operation_id, sync_status));
@@ -3127,8 +3128,8 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies failed background auto-push attempts append a visible error
-    /// and keep the session marked as failed for the latest sync attempt.
+    /// Verifies failed background auto-push attempts emit one durable notice
+    /// for atomic reducer promotion.
     async fn test_apply_turn_result_reports_background_push_failures() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
@@ -3190,17 +3191,7 @@ mod tests {
             session_agent,
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
-        let turn_result = Ok(TurnResult {
-            assistant_message: AgentResponse {
-                answer: "Implemented the change.".to_string(),
-                questions: Vec::new(),
-                summary: None,
-            },
-            context_reset: false,
-            input_tokens: 0,
-            output_tokens: 0,
-            provider_conversation_id: None,
-        });
+        let turn_result = Ok(successful_turn_result("Implemented the change."));
 
         // Act
         let turn_metadata = TurnMetadata {
@@ -3214,8 +3205,13 @@ mod tests {
             let mut sync_events = Vec::new();
             while sync_events.len() < 2 {
                 let event = app_event_rx.recv().await.expect("missing app event");
-                if let AppEvent::PublishedBranchSyncUpdated { sync_status, .. } = event {
-                    sync_events.push(sync_status);
+                if let AppEvent::PublishedBranchSyncUpdated {
+                    persistent_notice,
+                    sync_status,
+                    ..
+                } = event
+                {
+                    sync_events.push((sync_status, persistent_notice));
                 }
             }
 
@@ -3223,19 +3219,22 @@ mod tests {
         })
         .await
         .expect("timed out waiting for sync events");
-        let output = transcript_text(&transcript);
 
         // Assert
         assert_eq!(status, Status::Review);
-        assert_eq!(
-            sync_events,
-            vec![
-                PublishedBranchSyncStatus::InProgress,
-                PublishedBranchSyncStatus::Failed,
+        assert!(matches!(
+            sync_events.as_slice(),
+            [
+                (PublishedBranchSyncStatus::InProgress, None),
+                (PublishedBranchSyncStatus::Failed, Some(_))
             ]
-        );
-        assert!(output.contains("[Branch Push Error]"));
-        assert!(output.contains("gh auth login"));
+        ));
+        let failure_notice = sync_events[1]
+            .1
+            .as_deref()
+            .expect("failed sync should promote one durable notice");
+        assert!(failure_notice.contains("[Branch Push Error]"));
+        assert!(failure_notice.contains("gh auth login"));
     }
 
     #[tokio::test]
@@ -4401,6 +4400,7 @@ mod tests {
                     session_id,
                     sync_operation_id,
                     sync_status,
+                    ..
                 } = event
                 {
                     sync_events.push((session_id, sync_operation_id, sync_status));

@@ -20,7 +20,7 @@ use app::branch_publish::{BranchPublishTaskSession, run_branch_publish_action};
 use app::merge_queue::{MergeQueue, MergeQueueProgress};
 use app::project::ProjectManager;
 use app::review::{
-    ReviewCacheEntry, cancel_pending_review, mark_session_agent_review, review_view_state,
+    ReviewCacheEntry, mark_session_agent_review, review_loading_message, review_view_text,
     start_review_assist as spawn_review_assist,
 };
 use app::service::AppServices;
@@ -50,6 +50,10 @@ use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, Session, S
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::setting::SettingName;
 use crate::domain::transcript_notice::TranscriptNotice;
+use crate::domain::transient_message::{
+    TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
+    TransientMessageSlot,
+};
 use crate::domain::turn_prompt::TurnPrompt;
 #[cfg(test)]
 use crate::infra::db;
@@ -940,7 +944,7 @@ impl App {
         session_id: &str,
         prompt: impl Into<TurnPrompt>,
     ) -> Result<(), AppError> {
-        self.review_cache.remove(session_id);
+        self.clear_review_output(session_id);
         self.services
             .db()
             .sessions()
@@ -978,7 +982,7 @@ impl App {
     /// Returns an error if the session is missing, has no staged drafts, or
     /// stack consistency or launch enqueueing fails.
     pub async fn start_staged_session(&mut self, session_id: &str) -> Result<(), AppError> {
-        self.review_cache.remove(session_id);
+        self.clear_review_output(session_id);
         self.services
             .db()
             .sessions()
@@ -998,7 +1002,7 @@ impl App {
     /// submission. Returns `true` when the reply command was enqueued on the
     /// session worker.
     pub async fn reply(&mut self, session_id: &str, prompt: impl Into<TurnPrompt>) -> bool {
-        self.review_cache.remove(session_id);
+        self.clear_review_output(session_id);
         let _ = self
             .services
             .db()
@@ -1035,11 +1039,77 @@ impl App {
     /// Returns the focused-review output state that should be shown when one
     /// session view is reopened.
     pub(crate) fn review_view_state(&self, session_id: &str) -> (Option<String>, Option<&str>) {
-        review_view_state(
-            &self.review_cache,
-            session_id,
-            self.settings.default_review_selection.model(),
+        let status_message = match self.review_cache.get(session_id) {
+            Some(ReviewCacheEntry::Loading { .. }) => Some(review_loading_message(
+                self.settings.default_review_selection.model(),
+            )),
+            Some(ReviewCacheEntry::Failed { error, .. }) => {
+                Some(format!("Review assist unavailable: {}", error.trim()))
+            }
+            Some(ReviewCacheEntry::Ready { .. } | ReviewCacheEntry::Suppressed) | None => None,
+        };
+
+        (
+            status_message,
+            review_view_text(&self.review_cache, session_id),
         )
+    }
+
+    /// Returns whether focused-review generation is already running for one
+    /// session without inspecting user-visible status copy.
+    pub(crate) fn review_is_loading(&self, session_id: &str) -> bool {
+        matches!(
+            self.review_cache.get(session_id),
+            Some(ReviewCacheEntry::Loading { .. })
+        )
+    }
+
+    /// Clears cached focused-review state and retracts its display slot.
+    pub(crate) fn clear_review_output(&mut self, session_id: &str) {
+        self.review_cache.remove(session_id);
+        if let Some(session) = self.sessions.state_mut().session_mut_for_id(session_id) {
+            session
+                .transient_messages
+                .retract(TransientMessageSlot::Review);
+        }
+    }
+
+    /// Stores completed focused-review text and posts it to the stable review
+    /// display slot.
+    pub(crate) fn set_review_ready_output(
+        &mut self,
+        session_id: &str,
+        diff_hash: u64,
+        text: String,
+    ) {
+        self.review_cache.insert(
+            SessionId::from(session_id),
+            ReviewCacheEntry::Ready {
+                diff_hash,
+                text: text.clone(),
+            },
+        );
+        if let Some(session) = self.sessions.state_mut().session_mut_for_id(session_id) {
+            session.transient_messages.upsert(TransientMessage {
+                anchor: TransientMessageAnchor::AfterCompletedTurn,
+                body: TransientMessageBody::Markdown(text),
+                lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
+                slot: TransientMessageSlot::Review,
+                turn_position: session.latest_user_prompt_position(),
+            });
+        }
+    }
+
+    /// Suppresses automatic focused review and removes any previous review
+    /// display slot for the stopped turn.
+    pub(crate) fn suppress_review_output(&mut self, session_id: &str) {
+        self.review_cache
+            .insert(SessionId::from(session_id), ReviewCacheEntry::Suppressed);
+        if let Some(session) = self.sessions.state_mut().session_mut_for_id(session_id) {
+            session
+                .transient_messages
+                .retract(TransientMessageSlot::Review);
+        }
     }
 
     /// Persists and applies an agent/model selection for a session.
@@ -1398,7 +1468,7 @@ impl App {
                 .sessions()
                 .update_session_focused_review(session_id, None, None)
                 .await?;
-            cancel_pending_review(&mut self.review_cache, session_id);
+            self.clear_review_output(session_id);
         }
 
         self.sessions
@@ -1447,6 +1517,10 @@ impl App {
         diff_hash: u64,
         review_diff: &str,
     ) {
+        self.review_cache.insert(
+            SessionId::from(session_id),
+            ReviewCacheEntry::Loading { diff_hash },
+        );
         let session_chat_history = self
             .sessions
             .session_handles()
@@ -1467,6 +1541,17 @@ impl App {
             });
 
         mark_session_agent_review(self.sessions.state_mut(), session_id);
+        if let Some(session) = self.sessions.state_mut().session_mut_for_id(session_id) {
+            session.transient_messages.upsert(TransientMessage {
+                anchor: TransientMessageAnchor::Tail,
+                body: TransientMessageBody::Loading(review_loading_message(
+                    self.settings.default_review_selection.model(),
+                )),
+                lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
+                slot: TransientMessageSlot::Review,
+                turn_position: session.latest_user_prompt_position(),
+            });
+        }
 
         spawn_review_assist(
             self.services.event_sender(),

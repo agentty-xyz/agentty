@@ -129,12 +129,20 @@ loader updates), and applies side effects in stable order. Key behaviors:
 by `crates/agentty/src/ui/page/session_chat.rs` and
 `crates/agentty/src/ui/component/session_output.rs`. The durable transcript is the
 ordered `session_message` rows (typed `UserPrompt`, `AssistantAnswer`, `WorkflowNotice`,
-rows); the component layers synthetic content on top at render time: the
-`session.summary` block, focused review text, the in-progress published-branch sync row,
-and the animated loader row. Completed published-branch auto-push results are persisted
-as `WorkflowNotice` transcript rows instead of synthetic render rows. Structured
-clarification questions render in the bottom question panel (`AppMode::Question`), not
-inside the output component.
+rows). Replaceable output lives in the session's typed transient-message slots instead
+of render-time visibility predicates. Each slot has stable identity, typed content, an
+output anchor, and an explicit lifecycle. Reducer paths upsert or retract summary,
+focused-review, workflow-feedback, and published-branch-sync slots; starting a later
+turn clears older turn-scoped slots in one place.
+
+Published-branch auto-push completion sends one terminal reducer event carrying its
+`WorkflowNotice`. After accepting the current operation identifier, the reducer persists
+the notice, retracts the matching loading slot, and projects the durable transcript
+message in the same batch. Stale completions therefore cannot write a notice, and no
+frame can contain both the progress row and completed notice. The output-layout cache
+keys the transient-store version rather than maintaining a separate fingerprint for
+every temporary channel. Structured clarification questions render in the bottom
+question panel (`AppMode::Question`), not inside the output component.
 
 `App` owns one shared `RenderCacheStore` for markdown, diff, and session-output layout
 caches. Changes in this area should keep caches bounded and route layout/count helpers
@@ -172,7 +180,9 @@ render twice per frame.
    guard again, preventing a subsequent sync from starting until that publish finishes.
    After a successful push, linked review-request and commit metadata are resolved and
    refreshed; lookup failures append the existing warning notice instead of being
-   discarded. The push result is appended as a durable transcript notice.
+   discarded. The push result is persisted as a durable transcript notice and atomically
+   replaces the matching transient progress row when the reducer applies the terminal
+   sync event.
 1. Completed stacked-parent turns fan out `SessionCommand::Rebase` to review-ready
    materialized children so child branches replay onto the latest parent branch.
 1. The session size is refreshed and the final status becomes `Review` or `Question`

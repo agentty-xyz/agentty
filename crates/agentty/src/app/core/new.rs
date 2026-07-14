@@ -143,7 +143,7 @@ impl App {
             AgentKind::Antigravity.default_model(),
         )
         .await;
-        let sessions = Self::load_and_restack_startup_sessions(
+        let mut sessions = Self::load_and_restack_startup_sessions(
             &services,
             active_project_id,
             default_session_model,
@@ -151,6 +151,7 @@ impl App {
         )
         .await;
         let review_cache = Self::load_focused_review_cache(&repositories, active_project_id).await;
+        review::hydrate_review_transients(&review_cache, sessions.state_mut());
 
         let sync_context = Self::sync_context_for(&projects, &services, &sessions);
         let sync_handle = sync::SyncHandle::spawn(event_tx.clone(), sync_context);

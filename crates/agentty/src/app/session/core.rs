@@ -22,10 +22,15 @@ use crate::domain::agent::{AgentModel, ReasoningLevel};
 use crate::domain::file_entry::FileEntry;
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
-    DailyActivity, FollowUpTaskAction, PublishedBranchSyncStatus, ReviewRequest, Session,
-    SessionFollowUpTask, SessionId, SessionStats,
+    DailyActivity, FollowUpTaskAction, ReviewRequest, Session, SessionFollowUpTask, SessionId,
+    SessionStats,
 };
+use crate::domain::session_message::SessionMessageKind;
 use crate::domain::transcript_notice::TranscriptNotice;
+use crate::domain::transient_message::{
+    TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
+    TransientMessageSlot,
+};
 
 /// Low-frequency fallback interval for metadata-based session refresh.
 pub(crate) const SESSION_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
@@ -453,7 +458,15 @@ impl SessionManager {
             .iter_mut()
             .find(|session| session.id == session_id)
         {
-            session.published_branch_sync_status = PublishedBranchSyncStatus::InProgress;
+            session.transient_messages.upsert(TransientMessage {
+                anchor: TransientMessageAnchor::AfterCompletedTurn,
+                body: TransientMessageBody::Loading(
+                    "Auto-pushing published branch after completed turn...".to_string(),
+                ),
+                lifecycle: TransientMessageLifecycle::UntilResolved,
+                slot: TransientMessageSlot::PublishedBranchSync,
+                turn_position: session.latest_user_prompt_position(),
+            });
         }
     }
 
@@ -463,26 +476,50 @@ impl SessionManager {
         &mut self,
         session_id: &str,
         sync_operation_id: &str,
-        sync_status: PublishedBranchSyncStatus,
-    ) {
+        persistent_notice: Option<&str>,
+    ) -> bool {
         let Some(current_operation_id) = self.published_branch_sync_operations.get(session_id)
         else {
-            return;
+            return false;
         };
         if current_operation_id != sync_operation_id {
-            return;
+            return false;
         }
 
         self.published_branch_sync_operations.remove(session_id);
 
-        if let Some(session) = self
+        let appended_to_handle = persistent_notice.is_some_and(|persistent_notice| {
+            let Some(handles) = self.state.handles.get(session_id) else {
+                return false;
+            };
+            let Ok(mut transcript) = handles.transcript.lock() else {
+                return false;
+            };
+
+            transcript.append_message(SessionMessageKind::WorkflowNotice, persistent_notice);
+
+            true
+        });
+
+        let Some(session) = self
             .state
             .sessions
             .iter_mut()
             .find(|session| session.id == session_id)
-        {
-            session.published_branch_sync_status = sync_status;
+        else {
+            return false;
+        };
+        if !appended_to_handle && let Some(persistent_notice) = persistent_notice {
+            session
+                .transcript
+                .get_or_insert_default()
+                .append_message(SessionMessageKind::WorkflowNotice, persistent_notice);
         }
+        session
+            .transient_messages
+            .retract(TransientMessageSlot::PublishedBranchSync);
+
+        true
     }
 
     /// Appends transient sync-error notices to stacked children whose
@@ -507,12 +544,18 @@ impl SessionManager {
             .iter_mut()
             .find(|session| session.id == session_id)
         {
-            if let Some(workflow_notice) = &mut session.workflow_notice {
-                workflow_notice.push_str("\n\n");
-                workflow_notice.push_str(&notice);
-            } else {
-                session.workflow_notice = Some(notice);
-            }
+            let notice = session
+                .transient_messages
+                .get(TransientMessageSlot::WorkflowNotice)
+                .map(|message| format!("{}\n\n{notice}", message.body.text()))
+                .unwrap_or(notice);
+            session.transient_messages.upsert(TransientMessage {
+                anchor: TransientMessageAnchor::AfterCompletedTurn,
+                body: TransientMessageBody::Markdown(notice),
+                lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
+                slot: TransientMessageSlot::WorkflowNotice,
+                turn_position: session.latest_user_prompt_position(),
+            });
         }
     }
 
@@ -537,6 +580,7 @@ impl SessionManager {
             .clone_from(&turn_applied_state.follow_up_tasks);
         session.questions.clone_from(&turn_applied_state.questions);
         session.summary.clone_from(&turn_applied_state.summary);
+        session.hydrate_summary_transient();
         session.stats.input_tokens = session
             .stats
             .input_tokens

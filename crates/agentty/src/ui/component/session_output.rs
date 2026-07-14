@@ -12,10 +12,11 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Paragraph};
 use rustc_hash::FxHasher;
 
-use crate::app;
-use crate::domain::agent::AgentModel;
 use crate::domain::session::{Session, SessionId, Status};
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
+use crate::domain::transient_message::{
+    TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageSlot,
+};
 use crate::ui::component::tachyon_loader::TachyonLoaderEffect;
 use crate::ui::icon::{Icon, TACHYON_LOADER_WIDTH};
 use crate::ui::input_layout::{bottom_pinned_scroll_offset, panel_inner_width};
@@ -56,18 +57,13 @@ struct SessionOutputLayoutCacheKey {
     markdown_render_version: u64,
     output_width: u16,
     queued_messages: TextFingerprint,
-    /// Review model identity included so fallback loading text invalidates
-    /// correctly when the selected model changes.
-    review_model_name: &'static str,
-    review_status_message: TextFingerprint,
-    review_text: TextFingerprint,
     session_id: SessionId,
     session_update_version: u64,
     session_updated_at: i64,
     status: Status,
     theme_cache_version: u64,
+    transient_message_version: u64,
     transcript: TranscriptFingerprint,
-    workflow_notice: TextFingerprint,
 }
 
 /// Compact optional-text identity used by the layout cache key.
@@ -192,13 +188,10 @@ struct SessionOutputLines {
 enum SessionOutputBlock {
     ActiveTurn,
     CompletedTranscript,
-    PublishedBranchSync,
     QueuedMessage,
-    Review,
     SessionTail,
-    Summary,
+    Transient(TransientMessageAnchor),
     TrailingTranscriptNotice(TrailingTranscriptNoticePlacement),
-    WorkflowNotice,
 }
 
 /// Render placement for trailing transcript notices split from persisted
@@ -217,18 +210,16 @@ enum SessionOutputSeparator {
     AfterPreviousContent,
 }
 
-const SESSION_OUTPUT_BLOCK_ORDER: [SessionOutputBlock; 10] = [
+const SESSION_OUTPUT_BLOCK_ORDER: [SessionOutputBlock; 8] = [
     SessionOutputBlock::CompletedTranscript,
     SessionOutputBlock::TrailingTranscriptNotice(
         TrailingTranscriptNoticePlacement::BeforeActiveTurn,
     ),
-    SessionOutputBlock::Summary,
+    SessionOutputBlock::Transient(TransientMessageAnchor::AfterCompletedTurn),
     SessionOutputBlock::ActiveTurn,
     SessionOutputBlock::QueuedMessage,
-    SessionOutputBlock::Review,
     SessionOutputBlock::TrailingTranscriptNotice(TrailingTranscriptNoticePlacement::AfterReview),
-    SessionOutputBlock::WorkflowNotice,
-    SessionOutputBlock::PublishedBranchSync,
+    SessionOutputBlock::Transient(TransientMessageAnchor::Tail),
     SessionOutputBlock::SessionTail,
 ];
 
@@ -236,7 +227,6 @@ const SESSION_OUTPUT_BLOCK_ORDER: [SessionOutputBlock; 10] = [
 struct SessionOutputAssembly<'a> {
     active_loader_line_index: Option<usize>,
     active_progress: Option<&'a str>,
-    active_prompt_output: Option<&'a str>,
     active_turn_has_visible_text: bool,
     active_turn_section: SessionOutputTranscriptSection<'a>,
     completed_turn_section: SessionOutputTranscriptSection<'a>,
@@ -244,9 +234,6 @@ struct SessionOutputAssembly<'a> {
     lines: Vec<Line<'static>>,
     markdown_render_cache: Option<&'a markdown::MarkdownRenderCache>,
     published_loader_line_index: Option<usize>,
-    review_model: AgentModel,
-    review_status_message: Option<&'a str>,
-    review_text: Option<&'a str>,
     session: &'a Session,
     status: Status,
     trailing_notice_section: SessionOutputTranscriptSection<'a>,
@@ -301,12 +288,9 @@ impl SessionOutputAssembly<'_> {
             SessionOutputBlock::TrailingTranscriptNotice(placement) => {
                 self.append_trailing_transcript_notice(placement);
             }
-            SessionOutputBlock::Summary => self.append_summary(),
+            SessionOutputBlock::Transient(anchor) => self.append_transient_messages(anchor),
             SessionOutputBlock::ActiveTurn => self.append_active_turn(),
             SessionOutputBlock::QueuedMessage => self.append_queued_messages(),
-            SessionOutputBlock::Review => self.append_review(),
-            SessionOutputBlock::WorkflowNotice => self.append_workflow_notice(),
-            SessionOutputBlock::PublishedBranchSync => self.append_published_branch_sync(),
             SessionOutputBlock::SessionTail => self.append_session_tail(),
         }
     }
@@ -339,21 +323,23 @@ impl SessionOutputAssembly<'_> {
         );
     }
 
-    fn append_summary(&mut self) {
-        if !SessionOutput::shows_summary_block(
-            self.status,
-            self.active_prompt_output,
-            &self.active_turn_section,
-        ) {
-            return;
+    fn append_transient_messages(&mut self, anchor: TransientMessageAnchor) {
+        for message in self
+            .session
+            .transient_messages
+            .messages()
+            .iter()
+            .filter(|message| message.anchor == anchor)
+        {
+            if SessionOutput::append_transient_message_lines(
+                &mut self.lines,
+                message,
+                self.inner_width,
+                self.markdown_render_cache,
+            ) {
+                self.published_loader_line_index = Some(self.lines.len().saturating_sub(1));
+            }
         }
-
-        SessionOutput::append_summary_lines(
-            &mut self.lines,
-            self.session.summary.as_deref(),
-            self.inner_width,
-            self.markdown_render_cache,
-        );
     }
 
     fn append_active_turn(&mut self) {
@@ -369,46 +355,20 @@ impl SessionOutputAssembly<'_> {
         SessionOutput::append_queued_message_lines(&mut self.lines, &self.session.queued_messages);
     }
 
-    fn append_review(&mut self) {
-        if !SessionOutput::shows_review_lines(
-            self.status,
-            self.review_status_message,
-            self.review_text,
-        ) {
-            return;
-        }
-
-        SessionOutput::append_review_lines(
-            &mut self.lines,
-            self.review_status_message,
-            self.review_text,
-            self.inner_width,
-            self.markdown_render_cache,
-        );
-    }
-
-    fn append_workflow_notice(&mut self) {
-        SessionOutput::append_workflow_notice_lines(
-            &mut self.lines,
-            self.session.workflow_notice.as_deref(),
-            self.inner_width,
-            self.markdown_render_cache,
-        );
-    }
-
-    fn append_published_branch_sync(&mut self) {
-        if SessionOutput::append_published_branch_sync_lines(&mut self.lines, self.session) {
-            self.published_loader_line_index = Some(self.lines.len().saturating_sub(1));
-        }
-    }
-
     fn append_session_tail(&mut self) {
+        let review_loading_message = self
+            .session
+            .transient_messages
+            .get(TransientMessageSlot::Review)
+            .and_then(|message| match &message.body {
+                TransientMessageBody::Loading(message) => Some(message.as_str()),
+                TransientMessageBody::Markdown(_) | TransientMessageBody::Plain(_) => None,
+            });
         self.active_loader_line_index = SessionOutput::append_session_tail_lines(
             &mut self.lines,
             self.status,
             self.active_progress,
-            self.review_status_message,
-            self.review_model,
+            review_loading_message,
         );
     }
 }
@@ -552,10 +512,6 @@ pub struct SessionOutput<'a> {
     /// for scroll metrics and frame painting within the same session/update
     /// version.
     output_layout_cache: Option<&'a SessionOutputLayoutCache>,
-    /// Model used when an `AgentReview` session needs fallback loading text.
-    review_model: AgentModel,
-    review_status_message: Option<&'a str>,
-    review_text: Option<&'a str>,
     scroll_offset: Option<u16>,
     session: &'a Session,
     session_update_version: u64,
@@ -570,13 +526,6 @@ pub(crate) struct SessionOutputLineContext<'a> {
     pub(crate) active_prompt_output: Option<&'a str>,
     /// Transient progress text rendered in the active-status loader row.
     pub(crate) active_progress: Option<&'a str>,
-    /// Review fallback text shown while review output is unavailable.
-    pub(crate) review_status_message: Option<&'a str>,
-    /// Model used for fallback loading text when no explicit review status
-    /// exists.
-    pub(crate) review_model: AgentModel,
-    /// Review markdown generated by the agent, when available.
-    pub(crate) review_text: Option<&'a str>,
     /// Current observable update version for this session snapshot.
     pub(crate) session_update_version: u64,
 }
@@ -589,9 +538,6 @@ impl<'a> SessionOutput<'a> {
             active_progress: None,
             markdown_render_cache: None,
             output_layout_cache: None,
-            review_model: session.agent.model(),
-            review_status_message: None,
-            review_text: None,
             scroll_offset: None,
             session,
             session_update_version: 0,
@@ -625,28 +571,6 @@ impl<'a> SessionOutput<'a> {
     #[must_use]
     pub fn output_layout_cache(mut self, cache: &'a SessionOutputLayoutCache) -> Self {
         self.output_layout_cache = Some(cache);
-        self
-    }
-
-    /// Sets the review status message rendered when review text is not
-    /// available.
-    #[must_use]
-    pub fn review_status_message(mut self, status_message: Option<&'a str>) -> Self {
-        self.review_status_message = status_message;
-        self
-    }
-
-    /// Sets the review model used by fallback loading text.
-    #[must_use]
-    pub fn review_model(mut self, review_model: AgentModel) -> Self {
-        self.review_model = review_model;
-        self
-    }
-
-    /// Sets review text generated by an agent.
-    #[must_use]
-    pub fn review_text(mut self, review_text: Option<&'a str>) -> Self {
-        self.review_text = review_text;
         self
     }
 
@@ -745,16 +669,13 @@ impl<'a> SessionOutput<'a> {
             queued_messages: TextFingerprint::from_texts(
                 session.queued_messages.iter().map(String::as_str),
             ),
-            review_model_name: context.review_model.as_str(),
-            review_status_message: TextFingerprint::from_text(context.review_status_message),
-            review_text: TextFingerprint::from_text(context.review_text),
             session_id: session.id.clone(),
             session_update_version: context.session_update_version,
             session_updated_at: session.updated_at,
             status: session.status,
             theme_cache_version: style::active_theme_cache_version(),
+            transient_message_version: session.transient_messages.version(),
             transcript: TranscriptFingerprint::from_session(session),
-            workflow_notice: TextFingerprint::from_text(session.workflow_notice.as_deref()),
         }
     }
 
@@ -795,11 +716,8 @@ impl<'a> SessionOutput<'a> {
         markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
     ) -> SessionOutputLines {
         let SessionOutputLineContext {
-            active_prompt_output,
             active_progress,
-            review_model,
-            review_status_message,
-            review_text,
+            active_prompt_output: _,
             session_update_version: _,
         } = context;
         let status = session.status;
@@ -810,7 +728,6 @@ impl<'a> SessionOutput<'a> {
         SessionOutputAssembly {
             active_loader_line_index: None,
             active_progress,
-            active_prompt_output,
             active_turn_has_visible_text,
             active_turn_section: transcript_sections.active_turn,
             completed_turn_section: transcript_sections.completed_turn,
@@ -818,9 +735,6 @@ impl<'a> SessionOutput<'a> {
             lines: Vec::new(),
             markdown_render_cache,
             published_loader_line_index: None,
-            review_model,
-            review_status_message,
-            review_text,
             session,
             status,
             trailing_notice_section: transcript_sections.trailing_notice,
@@ -851,13 +765,11 @@ impl<'a> SessionOutput<'a> {
         status: Status,
         active_progress: Option<&str>,
         review_status_message: Option<&str>,
-        review_model: AgentModel,
     ) -> Option<usize> {
         if let Some(status_line) = session_format::session_output_status_line(
             status,
             active_progress,
             review_status_message,
-            review_model,
         ) {
             Self::append_block_separator(lines, SessionOutputSeparator::Always);
             let active_loader_line_index =
@@ -880,39 +792,50 @@ impl<'a> SessionOutput<'a> {
         None
     }
 
-    /// Appends one automatic published-branch sync status row while the latest
-    /// completed turn is auto-pushing to a published branch.
-    fn append_published_branch_sync_lines(
+    /// Appends one explicitly typed transient message and returns whether it
+    /// owns the published-branch loader row.
+    fn append_transient_message_lines(
         lines: &mut Vec<Line<'static>>,
-        session: &Session,
-    ) -> bool {
-        let Some(sync_line) = session_format::session_output_published_branch_sync_line(session)
-        else {
-            return false;
-        };
-
-        Self::append_block_separator(lines, SessionOutputSeparator::Always);
-        lines.push(sync_line);
-
-        true
-    }
-
-    /// Appends the latest transient workflow notice without reading from or
-    /// mutating the persisted transcript text.
-    fn append_workflow_notice_lines(
-        lines: &mut Vec<Line<'static>>,
-        workflow_notice: Option<&str>,
+        message: &TransientMessage,
         inner_width: usize,
         markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
-    ) {
-        let Some(workflow_notice) = workflow_notice.map(str::trim) else {
-            return;
-        };
-        if workflow_notice.is_empty() {
-            return;
+    ) -> bool {
+        match &message.body {
+            TransientMessageBody::Markdown(markdown) => {
+                let markdown = match message.slot {
+                    TransientMessageSlot::Summary => {
+                        session_format::session_output_summary_markdown(markdown)
+                    }
+                    TransientMessageSlot::Review => {
+                        session_format::annotate_review_suggestions_header(markdown)
+                    }
+                    TransientMessageSlot::WorkflowNotice
+                    | TransientMessageSlot::PublishedBranchSync => markdown.clone(),
+                };
+                Self::append_markdown_lines(lines, &markdown, inner_width, markdown_render_cache);
+            }
+            TransientMessageBody::Plain(status_message) => {
+                Self::append_block_separator(lines, SessionOutputSeparator::AfterPreviousContent);
+                Self::append_plain_status_lines(lines, status_message, inner_width);
+            }
+            TransientMessageBody::Loading(status_message) => {
+                if message.slot == TransientMessageSlot::Review {
+                    // Review loading is painted by `append_session_tail()` so
+                    // it shares the status row's tachyon animation. The Tail
+                    // anchor classifies its placement but this pass must skip
+                    // it to avoid rendering a duplicate static loading row.
+                    return false;
+                }
+
+                Self::append_block_separator(lines, SessionOutputSeparator::Always);
+                lines.push(session_format::session_output_transient_loading_line(
+                    status_message,
+                ));
+            }
         }
 
-        Self::append_markdown_lines(lines, workflow_notice, inner_width, markdown_render_cache);
+        message.slot == TransientMessageSlot::PublishedBranchSync
+            && matches!(message.body, TransientMessageBody::Loading(_))
     }
 
     /// Returns transcript sections from draft-preview text or typed message
@@ -1061,98 +984,12 @@ impl<'a> SessionOutput<'a> {
         format!("{}\n\n", formatted_lines.join("\n"))
     }
 
-    /// Returns whether the output panel should append the structured summary
-    /// block outside the persisted transcript string.
-    ///
-    /// Summary markdown is rendered alongside transcript output for completed
-    /// turns. Once a new prompt is active, the old summary is hidden until the
-    /// next turn finishes and produces fresh summary metadata.
-    /// Canceled sessions keep the raw transcript visible so interrupted turns
-    /// do not render synthetic summary content that was never finalized.
-    fn shows_summary_block(
-        status: Status,
-        active_prompt_output: Option<&str>,
-        active_turn_section: &SessionOutputTranscriptSection<'_>,
-    ) -> bool {
-        if status == Status::Canceled {
-            return false;
-        }
-
-        active_prompt_output.is_none() && active_turn_section.is_empty()
-    }
-
-    /// Returns whether focused-review output belongs in a non-terminal session
-    /// view.
-    ///
-    /// Terminal session views own their final summary or transcript display, so
-    /// they intentionally avoid appending transient focused-review summaries.
-    fn shows_review_lines(
-        status: Status,
-        review_status_message: Option<&str>,
-        review_text: Option<&str>,
-    ) -> bool {
-        if matches!(status, Status::Done | Status::Canceled) {
-            return false;
-        }
-
-        review_status_message
-            .map(str::trim)
-            .is_some_and(|status_message| !status_message.is_empty())
-            || review_text
-                .map(str::trim)
-                .is_some_and(|review_text| !review_text.is_empty())
-    }
-
-    /// Appends focused-review output or non-loading fallback text to the
-    /// transcript for the current session view.
-    ///
-    /// The `### Suggestions` header is annotated with a `/apply` hint at
-    /// render time only when the review contains actionable suggestions, so
-    /// users discover available apply behavior without polluting the persisted
-    /// review markdown consumed by suggestion extraction.
-    fn append_review_lines(
-        lines: &mut Vec<Line<'static>>,
-        review_status_message: Option<&str>,
-        review_text: Option<&str>,
-        inner_width: usize,
-        markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
-    ) {
-        if let Some(review_markdown) = review_text
-            .map(str::trim)
-            .filter(|review_text| !review_text.is_empty())
-            .map(session_format::annotate_review_suggestions_header)
-        {
-            Self::append_markdown_lines(
-                lines,
-                &review_markdown,
-                inner_width,
-                markdown_render_cache,
-            );
-
-            return;
-        }
-
-        if let Some(status_message) = Self::visible_review_status_message(review_status_message) {
-            Self::append_block_separator(lines, SessionOutputSeparator::AfterPreviousContent);
-            Self::append_plain_review_status_lines(lines, status_message, inner_width);
-        }
-    }
-
-    /// Returns non-loading focused-review fallback text suitable for plain
-    /// rendering.
-    fn visible_review_status_message(review_status_message: Option<&str>) -> Option<&str> {
-        review_status_message
-            .map(str::trim)
-            .filter(|status_message| !status_message.is_empty())
-            .filter(|status_message| !app::is_review_loading_status_message(status_message))
-    }
-
-    /// Appends review fallback text without interpreting markdown
+    /// Appends transient fallback text without interpreting markdown
     /// metacharacters in status strings.
     ///
     /// The caller owns separator trimming and spacing so this helper remains
     /// purely additive.
-    fn append_plain_review_status_lines(
+    fn append_plain_status_lines(
         lines: &mut Vec<Line<'static>>,
         status_message: &str,
         inner_width: usize,
@@ -1162,29 +999,6 @@ impl<'a> SessionOutput<'a> {
             .map(|line| Line::from(line.to_string()));
 
         lines.extend(rendered_lines);
-    }
-
-    /// Appends a rendered structured-summary section without mutating the
-    /// persisted transcript string.
-    fn append_summary_lines(
-        lines: &mut Vec<Line<'static>>,
-        summary_text: Option<&str>,
-        inner_width: usize,
-        markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
-    ) {
-        let Some(summary_text) = summary_text else {
-            return;
-        };
-        if summary_text.trim().is_empty() {
-            return;
-        }
-
-        Self::append_markdown_lines(
-            lines,
-            &session_format::session_output_summary_markdown(summary_text),
-            inner_width,
-            markdown_render_cache,
-        );
     }
 
     /// Appends one split transcript section while preserving typed message
@@ -1557,9 +1371,6 @@ impl Component for SessionOutput<'_> {
             SessionOutputLineContext {
                 active_prompt_output: self.active_prompt_output,
                 active_progress: self.active_progress,
-                review_model: self.review_model,
-                review_status_message: self.review_status_message,
-                review_text: self.review_text,
                 session_update_version: self.session_update_version,
             },
             self.markdown_render_cache,
@@ -1613,23 +1424,26 @@ mod tests {
     use serde_json;
 
     use super::*;
-    use crate::domain::session::PublishedBranchSyncStatus;
     use crate::domain::theme::ColorTheme;
 
     /// Builds one output-line context with defaults suitable for tests.
-    fn line_context<'a>(
-        review_status_message: Option<&'a str>,
-        review_text: Option<&'a str>,
-        active_progress: Option<&'a str>,
-    ) -> SessionOutputLineContext<'a> {
+    fn line_context() -> SessionOutputLineContext<'static> {
         SessionOutputLineContext {
             active_prompt_output: None,
-            active_progress,
-            review_model: AgentModel::Gpt55,
-            review_status_message,
-            review_text,
+            active_progress: None,
             session_update_version: 0,
         }
+    }
+
+    /// Posts one focused-review slot for renderer tests.
+    fn set_review_transient(session: &mut Session, body: TransientMessageBody) {
+        session.transient_messages.upsert(TransientMessage {
+            anchor: TransientMessageAnchor::AfterCompletedTurn,
+            body,
+            lifecycle: crate::domain::transient_message::TransientMessageLifecycle::ClearOnNewTurn,
+            slot: TransientMessageSlot::Review,
+            turn_position: session.latest_user_prompt_position(),
+        });
     }
 
     fn summary_fixture() -> String {
@@ -1724,7 +1538,7 @@ mod tests {
         let rendered_line_count = SessionOutput::rendered_line_count(
             &session,
             20,
-            line_context(None, None, None),
+            line_context(),
             Some(&markdown_render_cache),
             Some(&output_layout_cache),
         );
@@ -1742,7 +1556,7 @@ mod tests {
         let output_layout_cache = SessionOutputLayoutCache::default();
         let context = SessionOutputLineContext {
             session_update_version: 7,
-            ..line_context(None, None, None)
+            ..line_context()
         };
 
         // Act
@@ -1783,7 +1597,7 @@ mod tests {
         );
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
         let output_layout_cache = SessionOutputLayoutCache::default();
-        let context = line_context(None, None, None);
+        let context = line_context();
 
         // Act
         let current_layout = {
@@ -1823,7 +1637,7 @@ mod tests {
         session.is_draft = true;
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
         let output_layout_cache = SessionOutputLayoutCache::default();
-        let context = line_context(None, None, None);
+        let context = line_context();
 
         // Act
         let empty_layout = output_layout_cache.layout(
@@ -1859,7 +1673,7 @@ mod tests {
         session.prompt = "First staged draft".to_string();
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
         let output_layout_cache = SessionOutputLayoutCache::default();
-        let context = line_context(None, None, None);
+        let context = line_context();
 
         // Act
         let root_layout = output_layout_cache.layout(
@@ -1899,7 +1713,7 @@ mod tests {
         set_assistant_transcript(&mut session, " › running prompt");
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
         let output_layout_cache = SessionOutputLayoutCache::default();
-        let context = line_context(None, None, None);
+        let context = line_context();
 
         // Act
         let empty_layout = output_layout_cache.layout(
@@ -1937,7 +1751,7 @@ mod tests {
         session.status = Status::Review;
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
         let output_layout_cache = SessionOutputLayoutCache::default();
-        let context = line_context(None, None, None);
+        let context = line_context();
 
         // Act
         let base_layout = output_layout_cache.layout(
@@ -1946,7 +1760,13 @@ mod tests {
             context,
             Some(&markdown_render_cache),
         );
-        session.workflow_notice = Some("[Commit] No changes to commit.".to_string());
+        session.transient_messages.upsert(TransientMessage {
+            anchor: TransientMessageAnchor::AfterCompletedTurn,
+            body: TransientMessageBody::Markdown("[Commit] No changes to commit.".to_string()),
+            lifecycle: crate::domain::transient_message::TransientMessageLifecycle::ClearOnNewTurn,
+            slot: TransientMessageSlot::WorkflowNotice,
+            turn_position: None,
+        });
         let notice_layout = output_layout_cache.layout(
             &session,
             Rect::new(0, 0, 80, 8),
@@ -1974,18 +1794,13 @@ mod tests {
     #[test]
     fn test_output_layout_cache_keys_review_text() {
         // Arrange
-        let session = session_fixture();
+        let mut session = session_fixture();
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
         let output_layout_cache = SessionOutputLayoutCache::default();
         let base_context = SessionOutputLineContext {
             session_update_version: 7,
-            ..line_context(None, None, None)
+            ..line_context()
         };
-        let review_context = SessionOutputLineContext {
-            review_text: Some("## Review\n\n- Cached finding"),
-            ..base_context
-        };
-
         // Act
         let base_layout = output_layout_cache.layout(
             &session,
@@ -1993,10 +1808,17 @@ mod tests {
             base_context,
             Some(&markdown_render_cache),
         );
+        session.transient_messages.upsert(TransientMessage {
+            anchor: TransientMessageAnchor::AfterCompletedTurn,
+            body: TransientMessageBody::Markdown("## Review\n\n- Cached finding".to_string()),
+            lifecycle: crate::domain::transient_message::TransientMessageLifecycle::ClearOnNewTurn,
+            slot: TransientMessageSlot::Review,
+            turn_position: None,
+        });
         let review_layout = output_layout_cache.layout(
             &session,
             Rect::new(0, 0, 80, 8),
-            review_context,
+            base_context,
             Some(&markdown_render_cache),
         );
 
@@ -2013,7 +1835,7 @@ mod tests {
         session.status = Status::InProgress;
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
         let output_layout_cache = SessionOutputLayoutCache::default();
-        let first_frame_context = line_context(None, None, None);
+        let first_frame_context = line_context();
 
         // Act
         let first_layout = output_layout_cache.layout(
@@ -2109,7 +1931,7 @@ mod tests {
             output_layout_cache.layout(
                 &session,
                 Rect::new(0, 0, 80, 8),
-                line_context(None, None, None),
+                line_context(),
                 Some(&markdown_render_cache),
             );
 
@@ -2139,7 +1961,7 @@ mod tests {
             &format!("{} pasted transcript glyph", Icon::TachyonLoader),
         );
         session.status = Status::InProgress;
-        let context = line_context(None, None, None);
+        let context = line_context();
 
         // Act
         let output_lines = SessionOutput::output_lines_with_metadata(
@@ -2247,14 +2069,9 @@ mod tests {
         set_assistant_transcript(&mut session, "streamed output");
         session.summary = Some(summary_fixture());
         session.status = Status::Done;
-
+        session.reconcile_transient_messages();
         // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 5),
-            line_context(None, None, None),
-            None,
-        );
+        let lines = output_lines(&session, Rect::new(0, 0, 80, 5), line_context(), None);
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -2275,12 +2092,7 @@ mod tests {
         session.prompt = "First draft\n\nSecond draft".to_string();
 
         // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 12),
-            line_context(None, None, None),
-            None,
-        );
+        let lines = output_lines(&session, Rect::new(0, 0, 80, 12), line_context(), None);
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -2306,12 +2118,7 @@ mod tests {
         session.prompt = "First draft".to_string();
 
         // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 12),
-            line_context(None, None, None),
-            None,
-        );
+        let lines = output_lines(&session, Rect::new(0, 0, 80, 12), line_context(), None);
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -2334,12 +2141,7 @@ mod tests {
         session.prompt = "Stacked draft".to_string();
 
         // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 12),
-            line_context(None, None, None),
-            None,
-        );
+        let lines = output_lines(&session, Rect::new(0, 0, 80, 12), line_context(), None);
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -2361,12 +2163,7 @@ mod tests {
         session.is_draft = true;
 
         // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 8),
-            line_context(None, None, None),
-            None,
-        );
+        let lines = output_lines(&session, Rect::new(0, 0, 80, 8), line_context(), None);
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -2387,12 +2184,7 @@ mod tests {
         session.parent_session_id = Some(SessionId::from("parent-session"));
 
         // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 8),
-            line_context(None, None, None),
-            None,
-        );
+        let lines = output_lines(&session, Rect::new(0, 0, 80, 8), line_context(), None);
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -2421,14 +2213,9 @@ mod tests {
         );
         session.summary = Some(summary_fixture());
         session.status = Status::Done;
-
+        session.reconcile_transient_messages();
         // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 5),
-            line_context(None, None, None),
-            None,
-        );
+        let lines = output_lines(&session, Rect::new(0, 0, 80, 5), line_context(), None);
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -2475,14 +2262,9 @@ mod tests {
         );
         session.summary = Some(summary_fixture());
         session.status = Status::Review;
-
+        session.reconcile_transient_messages();
         // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 5),
-            line_context(None, None, None),
-            None,
-        );
+        let lines = output_lines(&session, Rect::new(0, 0, 80, 5), line_context(), None);
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -2525,14 +2307,9 @@ mod tests {
         session.summary = Some(summary_fixture());
         session.transcript = Some(transcript);
         session.status = Status::Review;
-
+        session.reconcile_transient_messages();
         // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 8),
-            line_context(None, None, None),
-            None,
-        );
+        let lines = output_lines(&session, Rect::new(0, 0, 80, 8), line_context(), None);
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -2620,14 +2397,14 @@ mod tests {
         session.summary = Some(summary_fixture());
         session.status = Status::Review;
         let review_text = "## Review\n\n### Project Impact\n\n- Documentation-only change.";
+        session.reconcile_transient_messages();
+        set_review_transient(
+            &mut session,
+            TransientMessageBody::Markdown(review_text.to_string()),
+        );
 
         // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 8),
-            line_context(None, Some(review_text), None),
-            None,
-        );
+        let lines = output_lines(&session, Rect::new(0, 0, 80, 8), line_context(), None);
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -2650,72 +2427,6 @@ mod tests {
         assert!(review_index < merge_error_index);
     }
 
-    /// Verifies a terminal `Done` session keeps its final summary without
-    /// appending transient focused-review output.
-    #[test]
-    fn test_output_lines_done_session_hides_review_text_when_available() {
-        // Arrange
-        let mut session = session_fixture();
-        session.summary = Some("# Summary\n\nMerged session work.".to_string());
-        session.status = Status::Done;
-        let assisted_review = "## Review\n\n- Focused finding";
-
-        // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 8),
-            line_context(
-                Some("Reviewing changes with gpt-5.5"),
-                Some(assisted_review),
-                None,
-            ),
-            None,
-        );
-        let text = lines
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Assert
-        assert!(text.contains("Merged session work."));
-        assert!(!text.contains("Focused finding"));
-        assert!(!text.contains("Reviewing changes with gpt-5.5"));
-    }
-
-    /// Verifies a terminal `Canceled` session keeps its interrupted transcript
-    /// without appending transient focused-review output.
-    #[test]
-    fn test_output_lines_canceled_session_hides_review_text_when_available() {
-        // Arrange
-        let mut session = session_fixture();
-        set_assistant_transcript(&mut session, "interrupted transcript");
-        session.status = Status::Canceled;
-        let assisted_review = "## Review\n\n- Focused finding";
-
-        // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 8),
-            line_context(
-                Some("Reviewing changes with gpt-5.5"),
-                Some(assisted_review),
-                None,
-            ),
-            None,
-        );
-        let text = lines
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Assert
-        assert!(text.contains("interrupted transcript"));
-        assert!(!text.contains("Focused finding"));
-        assert!(!text.contains("Reviewing changes with gpt-5.5"));
-    }
-
     /// Verifies focused-review failures remain visible after the transient
     /// loading status returns to `Review`.
     #[test]
@@ -2724,14 +2435,13 @@ mod tests {
         let mut session = session_fixture();
         session.status = Status::Review;
         let review_status_message = "Review assist unavailable: empty provider response";
+        set_review_transient(
+            &mut session,
+            TransientMessageBody::Plain(review_status_message.to_string()),
+        );
 
         // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 8),
-            line_context(Some(review_status_message), None, None),
-            None,
-        );
+        let lines = output_lines(&session, Rect::new(0, 0, 80, 8), line_context(), None);
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -2755,15 +2465,14 @@ mod tests {
                 "\n[Branch Push] Auto-pushed published branch after completed turn.\n",
             )],
         );
-        session.published_branch_sync_status = PublishedBranchSyncStatus::Succeeded;
         session.published_upstream_ref = Some("origin/wt/session-id".to_string());
         session.status = Status::Review;
-
+        session.reconcile_transient_messages();
         // Act
         let lines = SessionOutput::output_lines_with_metadata(
             &session,
             Rect::new(0, 0, 80, 8),
-            line_context(None, None, None),
+            line_context(),
             None,
         );
         let text = lines
@@ -2791,14 +2500,13 @@ mod tests {
         let mut session = session_fixture();
         session.status = Status::Review;
         let review_status_message = "# Review *failed* for `tool`";
+        set_review_transient(
+            &mut session,
+            TransientMessageBody::Plain(review_status_message.to_string()),
+        );
 
         // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 8),
-            line_context(Some(review_status_message), None, None),
-            None,
-        );
+        let lines = output_lines(&session, Rect::new(0, 0, 80, 8), line_context(), None);
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -2816,14 +2524,9 @@ mod tests {
         set_assistant_transcript(&mut session, "implemented the feature");
         session.summary = Some(summary_fixture());
         session.status = Status::Review;
-
+        session.reconcile_transient_messages();
         // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 5),
-            line_context(None, None, None),
-            None,
-        );
+        let lines = output_lines(&session, Rect::new(0, 0, 80, 5), line_context(), None);
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -2844,14 +2547,9 @@ mod tests {
         let mut session = session_fixture();
         session.summary = Some(summary_fixture());
         session.status = Status::Review;
-
+        session.reconcile_transient_messages();
         // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 8),
-            line_context(None, None, None),
-            None,
-        );
+        let lines = output_lines(&session, Rect::new(0, 0, 80, 8), line_context(), None);
         let rendered_lines = lines.iter().map(ToString::to_string).collect::<Vec<_>>();
         let summary_header_index = rendered_lines
             .iter()
@@ -2898,7 +2596,7 @@ mod tests {
             Rect::new(0, 0, 80, 8),
             SessionOutputLineContext {
                 active_prompt_output: Some("\n › add hello world\n\n"),
-                ..line_context(None, None, None)
+                ..line_context()
             },
             None,
         );
@@ -2947,7 +2645,7 @@ mod tests {
             Rect::new(0, 0, 80, 8),
             SessionOutputLineContext {
                 active_prompt_output: Some("\n › add hello world\n\n"),
-                ..line_context(None, None, None)
+                ..line_context()
             },
             None,
         );
@@ -2998,7 +2696,7 @@ mod tests {
             Rect::new(0, 0, 80, 8),
             SessionOutputLineContext {
                 active_prompt_output: Some(" › add hello world\n\n"),
-                ..line_context(None, None, None)
+                ..line_context()
             },
             None,
         );
@@ -3041,12 +2739,7 @@ mod tests {
         session.status = Status::InProgress;
 
         // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 8),
-            line_context(None, None, None),
-            None,
-        );
+        let lines = output_lines(&session, Rect::new(0, 0, 80, 8), line_context(), None);
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -3091,7 +2784,7 @@ mod tests {
             Rect::new(0, 0, 80, 8),
             SessionOutputLineContext {
                 active_prompt_output: Some("\n › actual prompt\n\n"),
-                ..line_context(None, None, None)
+                ..line_context()
             },
             None,
         );
@@ -3118,14 +2811,9 @@ mod tests {
         let mut session = session_fixture();
         set_assistant_transcript(&mut session, "implemented the feature");
         session.status = Status::Review;
-
+        session.reconcile_transient_messages();
         // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 5),
-            line_context(None, None, None),
-            None,
-        );
+        let lines = output_lines(&session, Rect::new(0, 0, 80, 5), line_context(), None);
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -3159,14 +2847,9 @@ mod tests {
             ],
         );
         session.status = Status::Review;
-
+        session.reconcile_transient_messages();
         // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 12),
-            line_context(None, None, None),
-            None,
-        );
+        let lines = output_lines(&session, Rect::new(0, 0, 80, 12), line_context(), None);
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -3213,14 +2896,9 @@ mod tests {
             )],
         );
         session.status = Status::Review;
-
+        session.reconcile_transient_messages();
         // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 8),
-            line_context(None, None, None),
-            None,
-        );
+        let lines = output_lines(&session, Rect::new(0, 0, 80, 8), line_context(), None);
         let rendered_lines = lines
             .iter()
             .map(|line| line.to_string().trim_end().to_string())
@@ -3253,14 +2931,9 @@ mod tests {
             )],
         );
         session.status = Status::Review;
-
+        session.reconcile_transient_messages();
         // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 8),
-            line_context(None, None, None),
-            None,
-        );
+        let lines = output_lines(&session, Rect::new(0, 0, 80, 8), line_context(), None);
         let rendered_lines = lines
             .iter()
             .map(|line| line.to_string().trim_end().to_string())
@@ -3287,14 +2960,9 @@ mod tests {
         let mut session = session_fixture();
         set_conversation_transcript(&mut session, vec![(SessionMessageKind::UserPrompt, prompt)]);
         session.status = Status::Review;
-
+        session.reconcile_transient_messages();
         // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 6),
-            line_context(None, None, None),
-            None,
-        );
+        let lines = output_lines(&session, Rect::new(0, 0, 80, 6), line_context(), None);
         let rendered_text = lines
             .iter()
             .map(|line| line.to_string().trim_end().to_string())
@@ -3323,14 +2991,9 @@ mod tests {
             )],
         );
         session.status = Status::Review;
-
+        session.reconcile_transient_messages();
         // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 12),
-            line_context(None, None, None),
-            None,
-        );
+        let lines = output_lines(&session, Rect::new(0, 0, 80, 12), line_context(), None);
         let rendered_lines = lines
             .iter()
             .map(|line| line.to_string().trim_end().to_string())
@@ -3429,14 +3092,9 @@ mod tests {
             vec![(SessionMessageKind::UserPrompt, "alpha beta")],
         );
         session.status = Status::Review;
-
+        session.reconcile_transient_messages();
         // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 3, 8),
-            line_context(None, None, None),
-            None,
-        );
+        let lines = output_lines(&session, Rect::new(0, 0, 3, 8), line_context(), None);
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -3465,14 +3123,9 @@ mod tests {
             )],
         );
         session.status = Status::Review;
-
+        session.reconcile_transient_messages();
         // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 12),
-            line_context(None, None, None),
-            None,
-        );
+        let lines = output_lines(&session, Rect::new(0, 0, 80, 12), line_context(), None);
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -3538,14 +3191,9 @@ mod tests {
             )],
         );
         session.status = Status::Review;
-
+        session.reconcile_transient_messages();
         // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 12),
-            line_context(None, None, None),
-            None,
-        );
+        let lines = output_lines(&session, Rect::new(0, 0, 80, 12), line_context(), None);
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -3582,14 +3230,9 @@ mod tests {
             ),
         );
         session.status = Status::Review;
-
+        session.reconcile_transient_messages();
         // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 8),
-            line_context(None, None, None),
-            None,
-        );
+        let lines = output_lines(&session, Rect::new(0, 0, 80, 8), line_context(), None);
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -3619,14 +3262,9 @@ mod tests {
             ),
         );
         session.status = Status::Review;
-
+        session.reconcile_transient_messages();
         // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 12),
-            line_context(None, None, None),
-            None,
-        );
+        let lines = output_lines(&session, Rect::new(0, 0, 80, 12), line_context(), None);
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -3650,12 +3288,8 @@ mod tests {
         set_assistant_transcript(&mut session, "streamed output");
         session.summary = Some(summary_fixture());
         session.status = Status::Review;
-        let review_lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 8),
-            line_context(None, None, None),
-            None,
-        );
+        session.reconcile_transient_messages();
+        let review_lines = output_lines(&session, Rect::new(0, 0, 80, 8), line_context(), None);
         let review_text = review_lines
             .iter()
             .map(ToString::to_string)
@@ -3667,14 +3301,9 @@ mod tests {
                 .to_string(),
         );
         session.status = Status::Done;
-
+        session.reconcile_transient_messages();
         // Act
-        let done_lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 8),
-            line_context(None, None, None),
-            None,
-        );
+        let done_lines = output_lines(&session, Rect::new(0, 0, 80, 8), line_context(), None);
         let done_text = done_lines
             .iter()
             .map(ToString::to_string)
@@ -3697,18 +3326,13 @@ mod tests {
         let mut session = session_fixture();
         session.status = Status::AgentReview;
         let assisted_text = "## Review\n\n- Focused finding";
+        set_review_transient(
+            &mut session,
+            TransientMessageBody::Markdown(assisted_text.to_string()),
+        );
 
         // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 5),
-            line_context(
-                Some("Reviewing changes with gpt-5.5"),
-                Some(assisted_text),
-                None,
-            ),
-            None,
-        );
+        let lines = output_lines(&session, Rect::new(0, 0, 80, 5), line_context(), None);
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -3727,14 +3351,9 @@ mod tests {
         set_assistant_transcript(&mut session, "streamed output");
         session.summary = Some(summary_fixture());
         session.status = Status::Canceled;
-
+        session.reconcile_transient_messages();
         // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 5),
-            line_context(None, None, None),
-            None,
-        );
+        let lines = output_lines(&session, Rect::new(0, 0, 80, 5), line_context(), None);
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -3754,12 +3373,7 @@ mod tests {
         session.status = Status::InProgress;
 
         // Act
-        let lines = output_lines(
-            &session,
-            Rect::new(0, 0, 80, 5),
-            line_context(None, None, None),
-            None,
-        );
+        let lines = output_lines(&session, Rect::new(0, 0, 80, 5), line_context(), None);
         let text = lines
             .iter()
             .map(ToString::to_string)

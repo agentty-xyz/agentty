@@ -10,10 +10,11 @@ use crate::app::SessionManager;
 use crate::domain::agent::{AgentSelection, ReasoningLevel, parse_persisted_session_agent_model};
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
-    DailyActivity, PublishedBranchSyncStatus, ReviewRequest, ReviewRequestSummary, Session,
-    SessionFollowUpTask, SessionHandles, SessionId, SessionSize, SessionStats, Status,
+    DailyActivity, ReviewRequest, ReviewRequestSummary, Session, SessionFollowUpTask,
+    SessionHandles, SessionId, SessionSize, SessionStats, Status,
 };
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
+use crate::domain::transient_message::TransientMessageStore;
 use crate::infra::db::{
     AppRepositories, DbError, SessionDetailRow, SessionListRow, SessionMessageRow,
 };
@@ -289,7 +290,7 @@ impl SessionManager {
     /// Builds one in-memory session snapshot from a database row plus the
     /// transient fields computed during reload.
     fn build_loaded_session(input: LoadedSessionInput) -> Session {
-        Session {
+        let mut session = Session {
             agent: input.session_agent,
             base_branch: input.row.base_branch,
             created_at: input.row.created_at,
@@ -306,7 +307,6 @@ impl SessionManager {
             queued_messages: input.session_queued_messages,
             reasoning_level_override: input.reasoning_level_override,
             published_upstream_ref: input.row.published_upstream_ref,
-            published_branch_sync_status: PublishedBranchSyncStatus::Idle,
             questions: input.session_questions,
             review_request: input.review_request,
             size: input.size,
@@ -321,8 +321,11 @@ impl SessionManager {
             title: input.row.title,
             transcript: input.session_transcript,
             updated_at: input.row.updated_at,
-            workflow_notice: None,
-        }
+            transient_messages: TransientMessageStore::default(),
+        };
+        session.hydrate_summary_transient();
+
+        session
     }
 
     /// Applies one lazily loaded detail row and message transcript to the
@@ -351,6 +354,7 @@ impl SessionManager {
         }
         session.summary = detail.summary;
         session.transcript = session_transcript;
+        session.hydrate_summary_transient();
     }
 }
 

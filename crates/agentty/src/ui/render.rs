@@ -19,7 +19,6 @@ use crate::ui::{component, layout, markdown, page, router};
 /// session.
 pub struct SessionReviewSnapshot<'a> {
     pub session_id: &'a str,
-    pub status_message: Option<String>,
     pub text: Option<&'a str>,
 }
 

@@ -64,7 +64,6 @@ pub struct SessionChatPage<'a> {
     /// Shared fully assembled output-layout cache for scroll metrics and
     /// frame rendering.
     pub output_layout_cache: &'a SessionOutputLayoutCache,
-    pub review_status_message: Option<&'a str>,
     pub review_text: Option<&'a str>,
     pub scroll_offset: Option<u16>,
     pub session_index: usize,
@@ -90,8 +89,6 @@ pub struct SessionChatPageInput<'a> {
     pub mode: &'a AppMode,
     /// Shared output-layout cache for this render pass.
     pub output_layout_cache: &'a SessionOutputLayoutCache,
-    /// Focused-review status text for the rendered session.
-    pub review_status_message: Option<&'a str>,
     /// Focused-review output for the rendered session.
     pub review_text: Option<&'a str>,
     /// Current vertical output scroll offset.
@@ -116,7 +113,6 @@ impl<'a> SessionChatPage<'a> {
             markdown_render_cache,
             mode,
             output_layout_cache,
-            review_status_message,
             review_text,
             scroll_offset,
             session_index,
@@ -133,7 +129,6 @@ impl<'a> SessionChatPage<'a> {
             markdown_render_cache,
             mode,
             output_layout_cache,
-            review_status_message,
             review_text,
             scroll_offset,
             session_index,
@@ -196,8 +191,6 @@ impl<'a> SessionChatPage<'a> {
             .output_layout_cache(self.output_layout_cache)
             .session_update_version(self.session_update_version);
         output = output.active_prompt_output(self.active_prompt_output);
-        output = output.review_status_message(self.review_status_message);
-        output = output.review_text(self.review_text);
         if let Some(scroll_offset) = self.scroll_offset {
             output = output.scroll_offset(scroll_offset);
         }
@@ -623,7 +616,7 @@ impl Page for SessionChatPage<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::agent::{AgentModel, ReasoningLevel};
+    use crate::domain::agent::ReasoningLevel;
     use crate::domain::input::InputState;
     use crate::domain::question::QuestionItem;
     use crate::domain::session::Status;
@@ -649,7 +642,6 @@ mod tests {
             markdown_render_cache: test_markdown_render_cache(),
             mode,
             output_layout_cache: test_output_layout_cache(),
-            review_status_message: None,
             review_text: None,
             scroll_offset: None,
             session_index: 0,
@@ -899,9 +891,6 @@ mod tests {
             SessionOutputLineContext {
                 active_prompt_output: None,
                 active_progress: None,
-                review_model: AgentModel::Gpt55,
-                review_status_message: None,
-                review_text: None,
                 session_update_version: 0,
             },
             &markdown_render_cache,
@@ -952,25 +941,19 @@ mod tests {
             selected_option_index: None,
         };
         let mut page = test_session_chat_page(&session, &mode);
-        page.review_status_message = Some("Reviewing changes with gpt-5.5");
         page.review_text = Some("Focused review");
 
         // Act
         let review_text = page.review_text;
-        let review_status_message = page.review_status_message;
 
         // Assert
         assert_eq!(review_text, Some("Focused review"));
-        assert_eq!(
-            review_status_message,
-            Some("Reviewing changes with gpt-5.5")
-        );
     }
 
     #[test]
     fn test_rendered_output_line_count_includes_question_review_output() {
         // Arrange
-        let session = session_fixture();
+        let mut session = session_fixture();
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
         let output_layout_cache = SessionOutputLayoutCache::default();
         let without_review = SessionChatPage::rendered_output_line_count(
@@ -979,14 +962,24 @@ mod tests {
             SessionOutputLineContext {
                 active_prompt_output: None,
                 active_progress: None,
-                review_model: AgentModel::Gpt55,
-                review_status_message: None,
-                review_text: None,
                 session_update_version: 0,
             },
             &markdown_render_cache,
             &output_layout_cache,
         );
+        session
+            .transient_messages
+            .upsert(crate::domain::transient_message::TransientMessage {
+                anchor:
+                    crate::domain::transient_message::TransientMessageAnchor::AfterCompletedTurn,
+                body: crate::domain::transient_message::TransientMessageBody::Markdown(
+                    "## Review\n\n- Finding".to_string(),
+                ),
+                lifecycle:
+                    crate::domain::transient_message::TransientMessageLifecycle::ClearOnNewTurn,
+                slot: crate::domain::transient_message::TransientMessageSlot::Review,
+                turn_position: None,
+            });
 
         // Act
         let with_review = SessionChatPage::rendered_output_line_count(
@@ -995,9 +988,6 @@ mod tests {
             SessionOutputLineContext {
                 active_prompt_output: None,
                 active_progress: None,
-                review_model: AgentModel::Gpt55,
-                review_status_message: None,
-                review_text: Some("## Review\n\n- Finding"),
                 session_update_version: 0,
             },
             &markdown_render_cache,
