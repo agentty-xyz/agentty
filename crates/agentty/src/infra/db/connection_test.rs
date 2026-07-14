@@ -10,6 +10,7 @@ use crate::domain::session::{
 };
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::setting::SettingName;
+use crate::domain::theme::ColorTheme;
 use crate::infra::db::{
     SessionFocusedReviewRow, SessionOperationRow, SessionRow, SessionTurnMetadata,
 };
@@ -1499,6 +1500,35 @@ async fn test_setting_round_trip_supports_default_smart_fast_and_review_models()
         default_review_model,
         Some(AgentModel::ClaudeOpus48.as_str().to_string())
     );
+}
+
+#[tokio::test]
+async fn test_migrate_hacker_theme_to_green_preserves_theme_selection() {
+    // Arrange
+    let database = Database::open_in_memory()
+        .await
+        .expect("failed to open in-memory db");
+    database
+        .settings()
+        .upsert_setting(SettingName::Theme, "hacker")
+        .await
+        .expect("failed to persist legacy theme setting");
+
+    // Act
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/060_migrate_hacker_theme_to_green.sql"
+    ))
+    .execute(database.pool())
+    .await
+    .expect("failed to run theme setting migration");
+    let theme = database
+        .settings()
+        .get_setting(SettingName::Theme)
+        .await
+        .expect("failed to load migrated theme setting");
+
+    // Assert
+    assert_eq!(theme, Some(ColorTheme::Green.as_str().to_string()));
 }
 
 #[tokio::test]

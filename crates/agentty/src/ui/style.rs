@@ -252,7 +252,7 @@ const CURRENT_PALETTE: ThemePalette = ThemePalette {
 
 /// Green phosphor terminal palette with restrained surfaces and muted status
 /// tones.
-const HACKER_PALETTE: ThemePalette = ThemePalette {
+const GREEN_PALETTE: ThemePalette = ThemePalette {
     accent: Color::Rgb(86, 184, 105),
     accent_soft: Color::Rgb(68, 145, 80),
     border: Color::Rgb(74, 132, 78),
@@ -421,7 +421,7 @@ pub fn forge_indicator_color(state: Option<ReviewRequestState>) -> Color {
 #[must_use]
 fn active_palette() -> ThemePalette {
     match active_theme() {
-        ColorTheme::Hacker => HACKER_PALETTE,
+        ColorTheme::Green => GREEN_PALETTE,
         ColorTheme::DarkHorizon => DARK_HORIZON_PALETTE,
         ColorTheme::Current => CURRENT_PALETTE,
     }
@@ -431,7 +431,7 @@ fn active_palette() -> ThemePalette {
 #[must_use]
 fn active_theme() -> ColorTheme {
     match ACTIVE_THEME.load(Ordering::Relaxed) {
-        1 => ColorTheme::Hacker,
+        1 => ColorTheme::Green,
         2 => ColorTheme::DarkHorizon,
         _ => ColorTheme::Current,
     }
@@ -452,7 +452,7 @@ fn token_color(selector: impl FnOnce(ThemePalette) -> Color) -> Color {
 const fn theme_index(theme: ColorTheme) -> u8 {
     match theme {
         ColorTheme::Current => 0,
-        ColorTheme::Hacker => 1,
+        ColorTheme::Green => 1,
         ColorTheme::DarkHorizon => 2,
     }
 }
@@ -534,15 +534,15 @@ mod tests {
     }
 
     #[test]
-    fn status_color_uses_hacker_palette_when_active() {
+    fn status_color_uses_green_palette_when_active() {
         // Arrange
-        let _theme_scope = scoped_active_theme(ColorTheme::Hacker);
+        let _theme_scope = scoped_active_theme(ColorTheme::Green);
 
         // Act
         let color = status_color(Status::Merging);
 
         // Assert
-        assert_eq!(color, HACKER_PALETTE.accent);
+        assert_eq!(color, GREEN_PALETTE.accent);
     }
 
     #[test]
@@ -562,9 +562,9 @@ mod tests {
     }
 
     #[test]
-    fn active_palette_returns_hacker_terminal_green_tones() {
+    fn active_palette_returns_green_terminal_tones() {
         // Arrange
-        let _theme_scope = scoped_active_theme(ColorTheme::Hacker);
+        let _theme_scope = scoped_active_theme(ColorTheme::Green);
 
         // Act
         let palette = palette::active();
@@ -579,9 +579,9 @@ mod tests {
     }
 
     #[test]
-    fn active_palette_returns_muted_hacker_status_tones() {
+    fn active_palette_returns_muted_green_status_tones() {
         // Arrange
-        let _theme_scope = scoped_active_theme(ColorTheme::Hacker);
+        let _theme_scope = scoped_active_theme(ColorTheme::Green);
 
         // Act
         let palette = palette::active();
@@ -706,13 +706,13 @@ mod tests {
     #[test]
     fn border_style_uses_active_palette_border_color() {
         // Arrange
-        let _theme_scope = scoped_active_theme(ColorTheme::Hacker);
+        let _theme_scope = scoped_active_theme(ColorTheme::Green);
 
         // Act
         let style = border_style();
 
         // Assert
-        assert_eq!(style.fg, Some(HACKER_PALETTE.border));
+        assert_eq!(style.fg, Some(GREEN_PALETTE.border));
     }
 
     #[test]

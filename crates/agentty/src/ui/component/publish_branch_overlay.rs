@@ -229,9 +229,9 @@ mod tests {
     }
 
     #[test]
-    fn test_publish_branch_overlay_hacker_theme_uses_session_list_text_color_for_locked_branch() {
+    fn test_publish_branch_overlay_green_theme_uses_session_list_text_color_for_locked_branch() {
         // Arrange
-        let _theme_scope = style::scoped_active_theme(ColorTheme::Hacker);
+        let _theme_scope = style::scoped_active_theme(ColorTheme::Green);
         let backend = ratatui::backend::TestBackend::new(120, 40);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let input = InputState::with_text("review/custom".to_string());

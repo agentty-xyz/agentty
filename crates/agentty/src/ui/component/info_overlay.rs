@@ -400,9 +400,9 @@ mod tests {
     }
 
     #[test]
-    fn test_info_overlay_hacker_theme_uses_session_list_text_color_for_body_text() {
+    fn test_info_overlay_green_theme_uses_session_list_text_color_for_body_text() {
         // Arrange
-        let _theme_scope = style::scoped_active_theme(ColorTheme::Hacker);
+        let _theme_scope = style::scoped_active_theme(ColorTheme::Green);
         let backend = ratatui::backend::TestBackend::new(100, 20);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let overlay = InfoOverlay::new("Sync blocked", "Use the session list text color.");
