@@ -9,10 +9,7 @@ use crate::domain::agent::{AgentCliInfo, ReasoningLevel};
 use crate::domain::input::InputState;
 use crate::domain::project::{ProjectListItem, ordered_project_items};
 use crate::domain::session::{DailyActivity, Session, SessionId};
-use crate::infra::review_comment_cache::ReviewCommentCache;
-use crate::presentation::app_mode::{
-    AppMode, ConfirmationIntent, ConfirmationViewMode, DiffRightPanel,
-};
+use crate::presentation::app_mode::{AppMode, ConfirmationIntent, ConfirmationViewMode};
 use crate::ui::overlay::{
     HelpOverlayRenderContext, SyncBlockedPopupRenderContext, ViewInfoPopupRenderContext,
 };
@@ -140,7 +137,6 @@ struct RouteAuxContext<'a> {
     diff_layout_cache: &'a page::diff::DiffLayoutCache,
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
     output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
-    review_comment_cache: &'a ReviewCommentCache,
     review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
     session_progress_messages: &'a HashMap<SessionId, String>,
     session_update_versions: &'a HashMap<SessionId, u64>,
@@ -251,7 +247,6 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         requested_review_selected_index,
         requested_review_table_state,
         requested_reviews,
-        review_comment_cache,
         session_review_snapshot,
         session_progress_messages,
         session_update_versions,
@@ -289,7 +284,6 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         diff_layout_cache,
         markdown_render_cache,
         output_layout_cache,
-        review_comment_cache,
         review_snapshot: session_review_snapshot,
         session_progress_messages,
         session_update_versions,
@@ -376,7 +370,6 @@ fn render_list_or_overlay_mode(
                 list_background: shared.list_background(),
                 markdown_render_cache: aux.markdown_render_cache,
                 output_layout_cache: aux.output_layout_cache,
-                review_comment_cache: aux.review_comment_cache,
                 review_snapshot: aux.review_snapshot,
                 scroll_offset: *scroll_offset,
                 session_progress_messages: aux.session_progress_messages,
@@ -706,23 +699,21 @@ fn render_session_or_diff_mode(
             diff,
             file_explorer_selected_index,
             restore_question: _,
-            right_panel,
             scroll_cache: _,
             scroll_offset,
             session_id,
-        } => render_diff_mode(
-            f,
-            area,
-            sessions,
-            session_id,
-            diff,
-            *scroll_offset,
-            *file_explorer_selected_index,
-            *right_panel,
-            aux.markdown_render_cache,
-            aux.diff_layout_cache,
-            aux.review_comment_cache,
-        ),
+        } => {
+            if let Some(session) = sessions.iter().find(|session| &session.id == session_id) {
+                page::diff::DiffPage::new(page::diff::DiffPageInput {
+                    diff,
+                    diff_layout_cache: aux.diff_layout_cache,
+                    file_explorer_selected_index: *file_explorer_selected_index,
+                    scroll_offset: *scroll_offset,
+                    session,
+                })
+                .render(f, area);
+            }
+        }
         _ => {}
     }
 }
@@ -846,37 +837,6 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
             .unwrap_or(&false),
     )
     .render(f, area);
-}
-
-/// Renders the diff page for a specific session when present.
-#[allow(clippy::too_many_arguments)]
-fn render_diff_mode(
-    f: &mut Frame,
-    area: Rect,
-    sessions: &[Session],
-    session_id: &SessionId,
-    diff: &str,
-    scroll_offset: u16,
-    file_explorer_selected_index: usize,
-    right_panel: DiffRightPanel,
-    markdown_render_cache: &markdown::MarkdownRenderCache,
-    diff_layout_cache: &page::diff::DiffLayoutCache,
-    review_comment_cache: &ReviewCommentCache,
-) {
-    if let Some(session) = sessions.iter().find(|session| &session.id == session_id) {
-        let snapshot = review_comment_cache.snapshot(session_id);
-        page::diff::DiffPage::new(page::diff::DiffPageInput {
-            diff,
-            diff_layout_cache,
-            file_explorer_selected_index,
-            markdown_render_cache,
-            review_comment_snapshot: snapshot.as_ref(),
-            right_panel,
-            scroll_offset,
-            session,
-        })
-        .render(f, area);
-    }
 }
 
 /// Renders base list tabs and the currently selected list tab content.
@@ -1007,7 +967,6 @@ mod tests {
         let progress_messages = HashMap::new();
         let cache = markdown::MarkdownRenderCache::default();
         let diff_layout_cache = page::diff::DiffLayoutCache::default();
-        let review_comment_cache = ReviewCommentCache::default();
         let output_layout_cache = component::session_output::SessionOutputLayoutCache::default();
         let session_update_versions = HashMap::new();
 
@@ -1025,7 +984,6 @@ mod tests {
                         diff_layout_cache: &diff_layout_cache,
                         markdown_render_cache: &cache,
                         output_layout_cache: &output_layout_cache,
-                        review_comment_cache: &review_comment_cache,
                         review_snapshot: None,
                         session_progress_messages: &progress_messages,
                         session_update_versions: &session_update_versions,
@@ -1055,7 +1013,6 @@ mod tests {
         let sessions = Vec::new();
         let cache = markdown::MarkdownRenderCache::default();
         let diff_layout_cache = page::diff::DiffLayoutCache::default();
-        let review_comment_cache = ReviewCommentCache::default();
         let output_layout_cache = component::session_output::SessionOutputLayoutCache::default();
         let session_update_versions = HashMap::new();
 
@@ -1075,7 +1032,6 @@ mod tests {
                         diff_layout_cache: &diff_layout_cache,
                         markdown_render_cache: &cache,
                         output_layout_cache: &output_layout_cache,
-                        review_comment_cache: &review_comment_cache,
                         review_snapshot: None,
                         session_progress_messages: &progress_messages,
                         session_update_versions: &session_update_versions,
@@ -1104,7 +1060,6 @@ mod tests {
             diff: String::new(),
             file_explorer_selected_index: 0,
             restore_question: None,
-            right_panel: DiffRightPanel::Diff,
             scroll_cache: None,
             session_id: session_id.into(),
             scroll_offset: 0,
@@ -1112,7 +1067,6 @@ mod tests {
         let progress_messages = HashMap::new();
         let cache = markdown::MarkdownRenderCache::default();
         let diff_layout_cache = page::diff::DiffLayoutCache::default();
-        let review_comment_cache = ReviewCommentCache::default();
         let output_layout_cache = component::session_output::SessionOutputLayoutCache::default();
         let session_update_versions = HashMap::new();
 
@@ -1130,7 +1084,6 @@ mod tests {
                         diff_layout_cache: &diff_layout_cache,
                         markdown_render_cache: &cache,
                         output_layout_cache: &output_layout_cache,
-                        review_comment_cache: &review_comment_cache,
                         review_snapshot: None,
                         session_progress_messages: &progress_messages,
                         session_update_versions: &session_update_versions,

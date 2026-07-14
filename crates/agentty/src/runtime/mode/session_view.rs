@@ -15,7 +15,7 @@ use crate::domain::input::InputState;
 use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, SessionId, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::presentation::app_mode::{
-    AppMode, ChatFocus, ConfirmationIntent, ConfirmationViewMode, DiffRightPanel, HelpContext,
+    AppMode, ChatFocus, ConfirmationIntent, ConfirmationViewMode, HelpContext,
 };
 use crate::presentation::help_action::{self, ViewSessionState};
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState};
@@ -1111,7 +1111,6 @@ async fn show_diff_for_view_session(app: &mut App, view_context: &ViewContext) -
         diff,
         file_explorer_selected_index: 0,
         restore_question: None,
-        right_panel: DiffRightPanel::Diff,
         scroll_cache: None,
         session_id: view_context.session_id.clone(),
         scroll_offset: 0,

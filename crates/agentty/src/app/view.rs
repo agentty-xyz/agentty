@@ -10,7 +10,6 @@ use crate::app::{
 use crate::domain::agent::AgentCliInfo;
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session, SessionId};
-use crate::infra::review_comment_cache::ReviewCommentCache;
 use crate::presentation::app_mode::{AppMode, HelpContext};
 
 /// Focused-review display state for the visible session.
@@ -37,7 +36,6 @@ pub(crate) struct AppViewSnapshot<'a> {
     pub(crate) projects: &'a [ProjectListItem],
     pub(crate) requested_review_selected_index: Option<usize>,
     pub(crate) requested_reviews: &'a RequestedReviewState,
-    pub(crate) review_comment_cache: ReviewCommentCache,
     pub(crate) session_branch_names: &'a HashMap<SessionId, String>,
     pub(crate) session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
     pub(crate) session_index_by_id: &'a HashMap<SessionId, usize>,
@@ -87,7 +85,6 @@ impl App {
             projects: project.project_items,
             requested_review_selected_index: self.requested_review_selected_index(),
             requested_reviews: &self.requested_reviews,
-            review_comment_cache: self.services.review_comment_cache(),
             session_branch_names: sessions.session_branch_names,
             session_git_statuses: sessions.session_git_statuses,
             session_index_by_id: sessions.session_index_by_id,

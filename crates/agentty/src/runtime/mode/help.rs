@@ -36,7 +36,7 @@ mod tests {
     use crossterm::event::KeyModifiers;
 
     use super::*;
-    use crate::presentation::app_mode::{DiffRightPanel, HelpContext};
+    use crate::presentation::app_mode::HelpContext;
     use crate::presentation::help_action::{HelpAction, ViewSessionState};
 
     #[tokio::test]
@@ -174,7 +174,6 @@ mod tests {
                 session_id: "s1".into(),
                 diff: "diff content".to_string(),
                 restore_question: None,
-                right_panel: DiffRightPanel::Diff,
                 scroll_offset: 7,
                 file_explorer_selected_index: 0,
             },
@@ -194,7 +193,6 @@ mod tests {
                 ref session_id,
                 ref diff,
                 restore_question: None,
-                right_panel: DiffRightPanel::Diff,
                 scroll_cache: None,
                 scroll_offset: 7,
                 file_explorer_selected_index: 0,

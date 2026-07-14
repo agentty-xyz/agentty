@@ -63,36 +63,6 @@ pub struct ViewportRect {
     pub y: u16,
 }
 
-/// Selects which content pane is shown on the right side of the diff page.
-///
-/// The diff page hosts two semantically related views:
-///
-/// - [`DiffRightPanel::Diff`] renders the raw git diff for the selected file.
-/// - [`DiffRightPanel::Comments`] renders cached review-request comments for
-///   the selected file, or the review-request-wide conversation comments when
-///   the synthetic "General discussion" entry is selected.
-///
-/// Users toggle between panels with the `c` key while in the diff page.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum DiffRightPanel {
-    /// Shows the git diff content for the current file selection.
-    #[default]
-    Diff,
-    /// Shows cached review-request comments for the current file selection.
-    Comments,
-}
-
-impl DiffRightPanel {
-    /// Returns the opposite panel selection.
-    #[must_use]
-    pub const fn toggled(self) -> Self {
-        match self {
-            Self::Diff => Self::Comments,
-            Self::Comments => Self::Diff,
-        }
-    }
-}
-
 /// Captured question-mode state for restoring after diff preview.
 ///
 /// When the user opens diff preview from question mode (`d` key while chat
@@ -278,26 +248,19 @@ pub enum AppMode {
         scroll_offset: Option<u16>,
     },
     /// Focused diff view with file-tree navigation and independent scrolling.
-    ///
-    /// The right-hand panel shows either the raw git diff or cached
-    /// review-request comments, selected by `right_panel`. Users toggle
-    /// between the panels with the `c` key while the mode is active.
     Diff {
-        /// Raw git diff rendered in the right-hand panel when `right_panel` is
-        /// [`DiffRightPanel::Diff`].
+        /// Raw git diff rendered in the right-hand panel.
         diff: String,
         /// Selected file or folder in the left explorer tree.
         file_explorer_selected_index: usize,
         /// Captured question state restored when leaving diff, if the diff was
         /// opened from question mode. `None` restores to `View` mode.
         restore_question: Option<QuestionModeSnapshot>,
-        /// Active right-hand panel selection.
-        right_panel: DiffRightPanel,
         /// Cached max scroll bound for the current content-area and selection.
         scroll_cache: Option<DiffScrollCache>,
         /// Vertical offset inside the rendered right panel.
         scroll_offset: u16,
-        /// Session whose diff and review-comments are currently visible.
+        /// Session whose diff is currently visible.
         session_id: SessionId,
     },
 
@@ -354,9 +317,6 @@ pub enum HelpContext {
         /// Preserved question-mode snapshot so the help→diff→exit path can
         /// still return to question mode when the diff was opened from there.
         restore_question: Option<QuestionModeSnapshot>,
-        /// Right-hand panel selection preserved across help entry/exit so the
-        /// comments/diff toggle survives the help overlay.
-        right_panel: DiffRightPanel,
         session_id: SessionId,
         scroll_offset: u16,
     },
@@ -397,7 +357,7 @@ impl HelpContext {
                 session_state: *session_state,
             }),
             HelpContext::List { keybindings } => keybindings.clone(),
-            HelpContext::Diff { right_panel, .. } => help_action::diff_actions(*right_panel),
+            HelpContext::Diff { .. } => help_action::diff_actions(),
         }
     }
 
@@ -418,14 +378,12 @@ impl HelpContext {
                 diff,
                 file_explorer_selected_index,
                 restore_question,
-                right_panel,
                 session_id,
                 scroll_offset,
             } => AppMode::Diff {
                 diff,
                 file_explorer_selected_index,
                 restore_question,
-                right_panel,
                 scroll_cache: None,
                 session_id,
                 scroll_offset,

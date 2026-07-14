@@ -970,7 +970,7 @@ fn seed_review_ready_session_with_review_request(
 ) -> Result<(), Box<dyn std::error::Error>> {
     seed_review_ready_session(env)?;
     seed_review_worktree_with_diff(env)?;
-    seed_github_review_comments_stub(env)?;
+    seed_github_review_request_stub(env)?;
 
     let runtime = common::seed_runtime()?;
 
@@ -1070,9 +1070,8 @@ fn run_git_stdout(
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// Installs a deterministic `gh` stub that returns review-request status and
-/// one inline review-thread snapshot for the E2E feature scenario.
-fn seed_github_review_comments_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+/// Installs a deterministic `gh` stub that returns review-request status.
+fn seed_github_review_request_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     let gh_path = env.stub_bin.join("gh");
     std::fs::write(
         &gh_path,
@@ -1083,9 +1082,6 @@ case "$*" in
     ;;
   *"pr view"*)
     printf '%s\n' '{"number":42,"title":"Review-ready session shortcuts","state":"OPEN","url":"https://github.com/agentty-xyz/agentty/pull/42","baseRefName":"main","headRefName":"wt/review-s","isDraft":false,"mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","mergedAt":null}'
-    ;;
-  *"api --hostname github.com graphql"*)
-    printf '%s\n' '{"data":{"repository":{"pullRequest":{"comments":{"nodes":[]},"reviewThreads":{"nodes":[{"diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":2,"path":"src/main.rs","startLine":null,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"alice"},"body":"Please simplify this line."}]}},{"diffSide":"RIGHT","isOutdated":false,"isResolved":true,"line":2,"path":"src/main.rs","startLine":null,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"bob"},"body":"Resolved comment should stay hidden."}]}}]}}}}}'
     ;;
   *)
     echo "unexpected gh invocation: $*" >&2
@@ -3188,20 +3184,14 @@ fn review_request_url_appears_in_session_header() -> E2eResult {
     Ok(())
 }
 
-/// Verify that opening the diff page from a review-ready session shows cached
-/// review-request comments inline below matching diff lines.
+/// Verify that opening the diff page from a review-ready session shows the
+/// selected file's local changes and change totals.
 #[test]
-fn review_comments_preview_opens_from_diff_page() -> E2eResult {
+fn diff_preview_opens_from_session() -> E2eResult {
     // Arrange, Act, Assert
-    FeatureTest::new("review_comments_preview")
+    FeatureTest::new("diff_preview")
         .with_git()
         .setup(seed_review_ready_session_with_review_request)
-        .zola(
-            "Review comments preview",
-            "From a review-ready session press `d` to open the diff page and see inline \
-             review-request comments on matching diff lines.",
-            44,
-        )
         .run(
             |scenario| {
                 scenario
@@ -3209,25 +3199,17 @@ fn review_comments_preview_opens_from_diff_page() -> E2eResult {
                     .compose(&common::switch_to_tab("Sessions"))
                     .compose(&common::open_selected_session_view())
                     .press_key("d")
+                    .wait_for_text("src/ +1 -0", 5000)
                     .wait_for_stable_frame(300, 5000)
-                    .wait_for_text("Please simplify this line.", 10000)
                     .viewing_pause_ms(1500)
-                    .capture_labeled(
-                        "review_comments_preview",
-                        "Review comments preview after pressing d",
-                    )
+                    .capture_labeled("diff_preview", "Diff preview after pressing d")
             },
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
-                let view_text = frame.text_in_region(&full);
 
-                assertion::assert_text_in_region(frame, "Please simplify this line.", &full);
                 assertion::assert_text_in_region(frame, "src/ +1 -0", &full);
-                assertion::assert_text_in_region(frame, "alice", &full);
-                assert!(
-                    !view_text.contains("Resolved comment should stay hidden."),
-                    "resolved review-thread comments should be hidden"
-                );
+                assertion::assert_text_in_region(frame, "println!(\"review\")", &full);
+                assertion::assert_text_in_region(frame, "j/k: select file", &full);
             },
         )?;
 

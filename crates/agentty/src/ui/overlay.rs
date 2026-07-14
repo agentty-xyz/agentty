@@ -8,8 +8,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding};
 
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::session::{Session, SessionId};
-use crate::infra::review_comment_cache::ReviewCommentCache;
-use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, DiffRightPanel, HelpContext};
+use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
 use crate::ui::router::{ListBackgroundRenderContext, render_list_background};
 use crate::ui::style::palette;
 use crate::ui::{Component, Page, SessionReviewSnapshot, component, markdown, page};
@@ -114,9 +113,6 @@ pub(crate) struct HelpOverlayRenderContext<'a, 'state> {
     pub(crate) markdown_render_cache: &'a markdown::MarkdownRenderCache,
     /// Shared output-layout cache reused by restored session backgrounds.
     pub(crate) output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
-    /// Shared review-comment cache used to restore the review-comments page
-    /// behind help overlays opened from that page.
-    pub(crate) review_comment_cache: &'a ReviewCommentCache,
     /// Focused-review state for the restored session background.
     pub(crate) review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
     /// Help overlay vertical scroll position.
@@ -141,9 +137,6 @@ struct HelpBackgroundRenderContext<'a, 'state> {
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
     /// Shared output-layout cache reused by restored session backgrounds.
     output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
-    /// Shared review-comment cache used to restore diff review comments behind
-    /// help.
-    review_comment_cache: &'a ReviewCommentCache,
     /// Focused-review state for the restored session background.
     review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
     /// Session progress messages keyed by session id.
@@ -335,7 +328,6 @@ pub(crate) fn render_help(f: &mut Frame, area: Rect, context: HelpOverlayRenderC
         list_background,
         markdown_render_cache,
         output_layout_cache,
-        review_comment_cache,
         review_snapshot,
         scroll_offset,
         session_progress_messages,
@@ -352,7 +344,6 @@ pub(crate) fn render_help(f: &mut Frame, area: Rect, context: HelpOverlayRenderC
             diff_layout_cache,
             markdown_render_cache,
             output_layout_cache,
-            review_comment_cache,
             review_snapshot,
             session_progress_messages,
             session_update_versions,
@@ -451,10 +442,8 @@ enum ResolvedHelpBackground<'a> {
     Diff {
         diff: &'a str,
         file_explorer_selected_index: usize,
-        right_panel: DiffRightPanel,
         scroll_offset: u16,
         session: &'a Session,
-        snapshot: Option<crate::infra::review_comment_cache::CachedReviewCommentSnapshot>,
     },
 }
 
@@ -462,7 +451,6 @@ enum ResolvedHelpBackground<'a> {
 fn resolve_help_background<'a>(
     help_context: &'a HelpContext,
     sessions: &'a [Session],
-    review_comment_cache: &ReviewCommentCache,
 ) -> Option<ResolvedHelpBackground<'a>> {
     match help_context {
         HelpContext::List { .. } => Some(ResolvedHelpBackground::List),
@@ -481,7 +469,6 @@ fn resolve_help_background<'a>(
         HelpContext::Diff {
             diff,
             file_explorer_selected_index,
-            right_panel,
             scroll_offset,
             session_id,
             ..
@@ -491,10 +478,8 @@ fn resolve_help_background<'a>(
             .map(|session| ResolvedHelpBackground::Diff {
                 diff,
                 file_explorer_selected_index: *file_explorer_selected_index,
-                right_panel: *right_panel,
                 scroll_offset: *scroll_offset,
                 session,
-                snapshot: review_comment_cache.snapshot(session_id),
             }),
     }
 }
@@ -507,7 +492,6 @@ fn render_help_background(f: &mut Frame, area: Rect, context: HelpBackgroundRend
         list_background,
         markdown_render_cache,
         output_layout_cache,
-        review_comment_cache,
         review_snapshot,
         session_progress_messages,
         session_update_versions,
@@ -515,7 +499,7 @@ fn render_help_background(f: &mut Frame, area: Rect, context: HelpBackgroundRend
     } = context;
     let sessions = list_background.sessions();
 
-    match resolve_help_background(help_context, sessions, review_comment_cache) {
+    match resolve_help_background(help_context, sessions) {
         Some(ResolvedHelpBackground::List) => {
             render_list_background(f, area, list_background, wall_clock_unix_seconds);
         }
@@ -556,17 +540,12 @@ fn render_help_background(f: &mut Frame, area: Rect, context: HelpBackgroundRend
         Some(ResolvedHelpBackground::Diff {
             diff,
             file_explorer_selected_index,
-            right_panel,
             session,
-            snapshot,
             scroll_offset,
         }) => page::diff::DiffPage::new(page::diff::DiffPageInput {
             diff,
             diff_layout_cache,
             file_explorer_selected_index,
-            markdown_render_cache,
-            review_comment_snapshot: snapshot.as_ref(),
-            right_panel,
             scroll_offset,
             session,
         })
@@ -743,7 +722,7 @@ mod tests {
         };
 
         // Act
-        let resolved = resolve_help_background(&help_context, &[], &ReviewCommentCache::default());
+        let resolved = resolve_help_background(&help_context, &[]);
 
         // Assert
         assert!(matches!(resolved, Some(ResolvedHelpBackground::List)));
@@ -767,7 +746,7 @@ mod tests {
         };
 
         // Act
-        let resolved = resolve_help_background(&help_context, &[], &ReviewCommentCache::default());
+        let resolved = resolve_help_background(&help_context, &[]);
 
         // Assert
         assert!(resolved.is_none());
@@ -780,13 +759,12 @@ mod tests {
             session_id: "missing-session".into(),
             diff: "diff --git a/file b/file".to_string(),
             restore_question: None,
-            right_panel: DiffRightPanel::Diff,
             scroll_offset: 0,
             file_explorer_selected_index: 0,
         };
 
         // Act
-        let resolved = resolve_help_background(&help_context, &[], &ReviewCommentCache::default());
+        let resolved = resolve_help_background(&help_context, &[]);
 
         // Assert
         assert!(resolved.is_none());

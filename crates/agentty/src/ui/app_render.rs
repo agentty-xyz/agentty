@@ -49,7 +49,6 @@ pub(crate) fn render_app(
             output_layout_cache: render_cache_store.session_output_layout_cache(),
             project_table_state,
             projects: snapshot.projects,
-            review_comment_cache: &snapshot.review_comment_cache,
             session_review_snapshot: session_review_snapshot.as_ref(),
             requested_reviews: snapshot.requested_reviews,
             requested_review_selected_index: snapshot.requested_review_selected_index,

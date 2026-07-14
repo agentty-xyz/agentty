@@ -1631,7 +1631,6 @@ impl App {
             generation: 0,
             git_client: services.git_client(),
             project_branch_name: projects.git_branch().map(str::to_string),
-            review_comment_cache: services.review_comment_cache(),
             review_request_client: services.review_request_client(),
             review_request_sync_targets: Self::review_request_sync_targets(sessions),
             session_git_status_targets: Self::session_git_status_targets(sessions),

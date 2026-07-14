@@ -152,13 +152,6 @@ pub fn diff_header_new_path(header_line: &str) -> Option<&str> {
     Some(new_path)
 }
 
-/// Extracts the old/left-side repository-relative path from a diff header.
-pub fn diff_header_old_path(header_line: &str) -> Option<&str> {
-    let (old_path, _) = diff_header_paths(header_line)?;
-
-    Some(old_path)
-}
-
 /// Find the maximum line number across all parsed diff lines for gutter width
 /// calculation.
 pub fn max_diff_line_number(lines: &[DiffLine<'_>]) -> u32 {

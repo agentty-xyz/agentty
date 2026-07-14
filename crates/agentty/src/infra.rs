@@ -14,9 +14,6 @@ pub mod home;
 pub(crate) mod process;
 /// Startup project-discovery boundary for home-directory repository scans.
 pub mod project_discovery;
-/// In-memory cache for review-request inline comment threads polled by the
-/// background sync task and read by the review-comments preview page.
-pub mod review_comment_cache;
 /// Tmux process boundary used by app orchestration.
 pub mod tmux;
 pub mod version;

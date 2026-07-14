@@ -71,17 +71,6 @@ impl ForgeKind {
             Self::GitLab => "MR",
         }
     }
-
-    /// Returns whether Agentty can fetch inline review-thread comments for
-    /// this forge.
-    ///
-    /// GitHub pull-request and GitLab merge-request adapters both expose
-    /// enough line-position data for the read-only comments preview.
-    pub fn supports_review_comments_preview(self) -> bool {
-        match self {
-            Self::GitHub | Self::GitLab => true,
-        }
-    }
 }
 
 /// Returns whether `host` looks like one GitLab instance hostname.
@@ -348,8 +337,8 @@ pub enum ReviewCommentAnchorSide {
 
 /// One review thread anchored to a line of the review request diff.
 ///
-/// Threads group chronological `comments` that share the same anchor. v1 of
-/// Agentty's comments preview renders these read-only, grouped by file and
+/// Threads group chronological `comments` that share the same anchor. Agentty
+/// renders these read-only in requested-review detail, grouped by file and
 /// sorted by `(path, line)` before display.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReviewCommentThread {
@@ -683,13 +672,6 @@ mod tests {
         assert_eq!(forge_kind.cli_name(), "glab");
         assert_eq!(forge_kind.review_request_name(), "merge request");
         assert_eq!(forge_kind.review_request_short_name(), "MR");
-    }
-
-    #[test]
-    fn supports_review_comments_preview_returns_true_for_supported_forges() {
-        // Arrange / Act / Assert
-        assert!(ForgeKind::GitHub.supports_review_comments_preview());
-        assert!(ForgeKind::GitLab.supports_review_comments_preview());
     }
 
     #[test]

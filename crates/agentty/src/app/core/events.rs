@@ -211,13 +211,6 @@ pub(crate) enum AppEvent {
         result: Result<SyncReviewRequestTaskResult, String>,
         session_id: SessionId,
     },
-    /// Indicates that the inline review-comment cache for one session now
-    /// exposes updated thread content.
-    ///
-    /// Emitted only when the background sync task observes a content change
-    /// (see `ReviewCommentCache::record_snapshot`) so the UI can redraw without
-    /// being woken on every 60-second tick.
-    ReviewCommentsUpdated { session_id: SessionId },
 }
 
 /// Reduced representation of all app events currently queued for one tick.
@@ -256,7 +249,6 @@ pub(super) struct AppEventBatch {
     /// persistence.
     pub(super) should_reload_sessions: bool,
     pub(super) review_request_status_updates: Vec<ReviewRequestStatusUpdate>,
-    pub(super) review_comment_session_ids: HashSet<SessionId>,
     /// Latest requested-review task result collected for this reducer batch,
     /// including its generation for stale-result rejection.
     pub(super) requested_reviews:
@@ -471,9 +463,6 @@ impl AppEventBatch {
                 result,
                 session_id,
             } => self.collect_review_request_status_updated(generation, result, session_id),
-            AppEvent::ReviewCommentsUpdated { session_id } => {
-                self.collect_review_comments_updated(session_id);
-            }
             _ => unreachable!("top-level app event should be collected before runtime events"),
         }
     }
@@ -559,12 +548,6 @@ impl AppEventBatch {
             .entry(session_id)
             .or_default()
             .push(notice);
-    }
-
-    /// Tracks one review-comment cache update so the reducer redraws and
-    /// clears stale diff scroll metrics for that session.
-    fn collect_review_comments_updated(&mut self, session_id: SessionId) {
-        self.review_comment_session_ids.insert(session_id);
     }
 
     /// Stores loaded at-mention entries for one session.
@@ -877,10 +860,6 @@ impl App {
             self.publish_sync_context();
         }
 
-        self.invalidate_diff_scroll_cache_for_review_comments(
-            &event_batch.review_comment_session_ids,
-        );
-
         self.apply_session_progress_updates(std::mem::take(
             &mut event_batch.session_progress_updates,
         ));
@@ -982,26 +961,6 @@ impl App {
             failures,
             "Stacked child post-merge sync failed",
         );
-    }
-
-    /// Clears the diff scroll limit cache when review comments change for the
-    /// currently visible diff session.
-    fn invalidate_diff_scroll_cache_for_review_comments(
-        &mut self,
-        review_comment_session_ids: &HashSet<SessionId>,
-    ) {
-        let AppMode::Diff {
-            scroll_cache,
-            session_id,
-            ..
-        } = &mut self.mode
-        else {
-            return;
-        };
-
-        if review_comment_session_ids.contains(session_id) {
-            *scroll_cache = None;
-        }
     }
 
     /// Applies reducer-batch updates that affect global app runtime state
@@ -1283,7 +1242,6 @@ impl App {
             || event_batch.branch_publish_action_update.is_some()
             || !event_batch.published_branch_sync_updates.is_empty()
             || !event_batch.review_request_status_updates.is_empty()
-            || !event_batch.review_comment_session_ids.is_empty()
             || event_batch.requested_reviews.is_some()
             || !event_batch.requested_review_comment_snapshots.is_empty()
             || !event_batch.review_updates.is_empty()

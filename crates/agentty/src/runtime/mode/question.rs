@@ -7,7 +7,7 @@ use crate::domain::input::InputState;
 use crate::domain::question::{QuestionItem, QuestionProgress, default_option_index};
 use crate::domain::session::{SessionId, Status};
 use crate::domain::turn_prompt::TurnPrompt;
-use crate::presentation::app_mode::{AppMode, ChatFocus, DiffRightPanel, QuestionModeSnapshot};
+use crate::presentation::app_mode::{AppMode, ChatFocus, QuestionModeSnapshot};
 use crate::presentation::prompt::PromptAtMentionState;
 use crate::runtime::EventResult;
 use crate::runtime::mode::chat_scroll::{self, ChatScrollMetrics};
@@ -291,7 +291,6 @@ async fn show_question_diff(app: &mut App, session_id: &str) {
         diff,
         file_explorer_selected_index: 0,
         restore_question: snapshot,
-        right_panel: DiffRightPanel::Diff,
         scroll_cache: None,
         session_id: session_id.into(),
         scroll_offset: 0,

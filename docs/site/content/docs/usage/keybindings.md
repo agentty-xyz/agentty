@@ -181,21 +181,17 @@ Publish (`p`), sync (`r`), and stacked behavior are described in
 ## Diff Mode
 
 Pressing `d` from session view opens diff mode with the right panel showing the git
-diff. Within diff mode, press `c` to toggle the right panel between the annotated git
-diff and the cached review-request comments.
+diff.
 
-| Key           | Action                                   |
-| ------------- | ---------------------------------------- |
-| `q` / `Esc`   | Back to session                          |
-| `j` / `k`     | Select file                              |
-| `Up` / `Down` | Scroll selected panel                    |
-| `c`           | Toggle right panel between diff/comments |
-| `?`           | Help                                     |
+| Key           | Action               |
+| ------------- | -------------------- |
+| `q` / `Esc`   | Back to session      |
+| `j` / `k`     | Select file          |
+| `Up` / `Down` | Scroll selected diff |
+| `?`           | Help                 |
 
 <a id="usage-diff-totals"></a> The diff panel title includes aggregate `+added` and
-`-removed` line totals plus the selected file or folder's added/removed counts, and
-cached review-request line comments render inline below matching diff lines. See
-[Workflow](@/docs/usage/workflow.md) for the comments panel behavior.
+`-removed` line totals plus the selected file or folder's added/removed counts.
 
 ## Prompt Input
 
