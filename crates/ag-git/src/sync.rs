@@ -10,7 +10,7 @@ use super::error::GitError;
 use super::rebase::{is_rebase_conflict, run_git_command_with_index_lock_retry};
 use super::repo::{
     command_output_detail, run_git_command, run_git_command_cancellable,
-    run_git_command_output_sync, run_git_command_sync,
+    run_git_command_output_sync, run_git_command_output_with_env_sync, run_git_command_sync,
 };
 
 /// Map of local branch names to their ahead/behind counts relative to their
@@ -257,12 +257,13 @@ pub(crate) async fn delete_branch(repo_path: PathBuf, branch_name: String) -> Re
 /// Returns the output of `git diff` for the given repository path, showing
 /// all changes (committed and uncommitted) relative to the base branch.
 ///
-/// Uses `git add --intent-to-add` to mark untracked files in the index, then
+/// Copies the repository index into a temporary index and uses
+/// `git add --intent-to-add` there to make untracked files visible, then
 /// finds the merge-base between `HEAD` and `base_branch` to diff against the
 /// fork point. To avoid re-showing squash-merged/cherry-picked session commits
 /// on non-rebased branches, this also checks `git cherry` and, when applicable,
 /// diffs from the last leading commit already applied to `base_branch`.
-/// Finally resets the index to restore the original state.
+/// The real repository index is never modified.
 ///
 /// # Arguments
 /// * `repo_path` - Path to the git repository or worktree
@@ -272,13 +273,27 @@ pub(crate) async fn delete_branch(repo_path: PathBuf, branch_name: String) -> Re
 /// The diff output as a string.
 ///
 /// # Errors
-/// Returns a [`GitError`] if preparing the index, generating the diff, or
-/// restoring index state fails.
+/// Returns a [`GitError`] if preparing the temporary index or generating the
+/// diff fails.
 pub(crate) async fn diff(repo_path: PathBuf, base_branch: String) -> Result<String, GitError> {
     spawn_blocking(move || -> Result<String, GitError> {
-        run_git_command_sync(
+        let index_path = run_git_command_sync(
+            &repo_path,
+            &["rev-parse", "--git-path", "index"],
+            "Git index path resolution failed",
+        )?;
+        let index_path = PathBuf::from(index_path.trim());
+        let index_path = if index_path.is_absolute() {
+            index_path
+        } else {
+            repo_path.join(index_path)
+        };
+        let temporary_index = copy_git_index_to_temp(&index_path)?;
+
+        run_git_command_with_index_sync(
             &repo_path,
             &["add", "-A", "--intent-to-add"],
+            &temporary_index,
             "Git add --intent-to-add failed",
         )?;
 
@@ -295,30 +310,62 @@ pub(crate) async fn diff(repo_path: PathBuf, base_branch: String) -> Result<Stri
             base_branch
         };
 
-        let diff_output = run_git_command_sync(
+        run_git_command_with_index_sync(
             &repo_path,
             &["diff", diff_target.as_str()],
+            &temporary_index,
             "Git diff failed",
-        );
-        let reset_result = run_git_command_sync(&repo_path, &["reset"], "Git reset failed");
-
-        if let Err(diff_error) = diff_output {
-            return match reset_result {
-                Ok(_) => Err(diff_error),
-                Err(reset_error) => Err(GitError::CommandFailed {
-                    command: "git diff".to_string(),
-                    stderr: format!(
-                        "{diff_error} Additionally failed to restore index state: {reset_error}"
-                    ),
-                }),
-            };
-        }
-
-        reset_result?;
-
-        diff_output
+        )
     })
     .await?
+}
+
+/// Copies one repository index beside its source and returns the temporary
+/// path used by isolated read-only diff commands.
+fn copy_git_index_to_temp(index_path: &Path) -> Result<tempfile::TempPath, GitError> {
+    let index_parent = index_path.parent().ok_or_else(|| {
+        GitError::OutputParse(format!(
+            "Git index path has no parent: {}",
+            index_path.display()
+        ))
+    })?;
+    let temporary_index =
+        tempfile::NamedTempFile::new_in(index_parent).map_err(|error| GitError::CommandFailed {
+            command: "create temporary git index".to_string(),
+            stderr: error.to_string(),
+        })?;
+    std::fs::copy(index_path, temporary_index.path()).map_err(|error| GitError::CommandFailed {
+        command: "copy git index".to_string(),
+        stderr: error.to_string(),
+    })?;
+
+    Ok(temporary_index.into_temp_path())
+}
+
+/// Runs one git command against a temporary index without touching the real
+/// index.
+fn run_git_command_with_index_sync(
+    repo_path: &Path,
+    args: &[&str],
+    index_path: &Path,
+    error_context: &str,
+) -> Result<String, GitError> {
+    let output = run_git_command_output_with_env_sync(
+        repo_path,
+        args,
+        &[("GIT_INDEX_FILE", index_path.as_os_str())],
+    )?;
+    if !output.status.success() {
+        return Err(GitError::CommandFailed {
+            command: format!("git {}", args.join(" ")),
+            stderr: format!(
+                "{error_context}: {}",
+                command_output_detail(&output.stdout, &output.stderr)
+            ),
+        });
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// Returns whether a repository or worktree has no uncommitted changes.
@@ -1330,6 +1377,109 @@ mod tests {
         fs::write(repo_path.join("README.md"), "base\n").expect("failed to write base file");
         run_git_command(repo_path, &["add", "README.md"]);
         run_git_command(repo_path, &["commit", "-m", "Initial commit"]);
+    }
+
+    #[tokio::test]
+    async fn diff_preserves_staged_changes_and_includes_untracked_files() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(temp_dir.path());
+        fs::write(temp_dir.path().join("README.md"), "staged change\n")
+            .expect("failed to write staged change");
+        run_git_command(temp_dir.path(), &["add", "README.md"]);
+        fs::write(
+            temp_dir.path().join("README.md"),
+            "staged change\nunstaged change\n",
+        )
+        .expect("failed to write unstaged change");
+        fs::write(temp_dir.path().join("new.txt"), "untracked change\n")
+            .expect("failed to write untracked file");
+        let cached_diff_before = git_command_output(temp_dir.path(), &["diff", "--cached"]).stdout;
+        let status_before = git_command_output(
+            temp_dir.path(),
+            &["status", "--porcelain=v1", "--untracked-files=all"],
+        )
+        .stdout;
+
+        // Act
+        let result = diff(temp_dir.path().to_path_buf(), "main".to_string()).await;
+
+        // Assert
+        let diff_output = result.expect("diff should succeed");
+        let cached_diff_after = git_command_output(temp_dir.path(), &["diff", "--cached"]).stdout;
+        let status_after = git_command_output(
+            temp_dir.path(),
+            &["status", "--porcelain=v1", "--untracked-files=all"],
+        )
+        .stdout;
+        assert!(diff_output.contains("staged change"));
+        assert!(diff_output.contains("unstaged change"));
+        assert!(diff_output.contains("untracked change"));
+        assert_eq!(cached_diff_after, cached_diff_before);
+        assert_eq!(status_after, status_before);
+    }
+
+    #[test]
+    fn copy_git_index_to_temp_maps_path_create_and_copy_failures() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        let path_without_parent = Path::new("/");
+        let missing_parent_index = temp_dir.path().join("missing-parent").join("index");
+        let missing_index = temp_dir.path().join("missing-index");
+
+        // Act
+        let parent_error = copy_git_index_to_temp(path_without_parent);
+        let create_error = copy_git_index_to_temp(&missing_parent_index);
+        let copy_error = copy_git_index_to_temp(&missing_index);
+
+        // Assert
+        assert!(matches!(parent_error, Err(GitError::OutputParse(_))));
+        assert!(matches!(
+            create_error,
+            Err(GitError::CommandFailed { ref command, .. })
+                if command == "create temporary git index"
+        ));
+        assert!(matches!(
+            copy_error,
+            Err(GitError::CommandFailed { ref command, .. }) if command == "copy git index"
+        ));
+    }
+
+    #[test]
+    fn run_git_command_with_index_sync_maps_process_and_command_failures() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        let index_path = temp_dir.path().join("index");
+        let missing_repo_path = temp_dir.path().join("missing-repository");
+        fs::write(&index_path, []).expect("failed to create temporary index");
+
+        // Act
+        let process_error = run_git_command_with_index_sync(
+            &missing_repo_path,
+            &["status"],
+            &index_path,
+            "Expected process failure",
+        );
+        let command_error = run_git_command_with_index_sync(
+            temp_dir.path(),
+            &["definitely-not-a-git-command"],
+            &index_path,
+            "Expected git failure",
+        );
+
+        // Assert
+        assert!(matches!(
+            process_error,
+            Err(GitError::CommandFailed { ref command, .. }) if command == "git status"
+        ));
+        assert!(matches!(
+            command_error,
+            Err(GitError::CommandFailed {
+                ref command,
+                ref stderr,
+            }) if command == "git definitely-not-a-git-command"
+                && stderr.starts_with("Expected git failure:")
+        ));
     }
 
     #[cfg(unix)]

@@ -297,7 +297,7 @@ pub(super) fn run_git_command_output_sync(
     repo_path: &Path,
     args: &[&str],
 ) -> Result<Output, GitError> {
-    run_git_command_output_with_env_sync(repo_path, args, &[])
+    run_git_command_output_with_env_sync(repo_path, args, &[] as &[(&str, &str)])
 }
 
 /// Runs a git command in `repo_path` with environment overrides and returns
@@ -319,11 +319,15 @@ pub(super) fn run_git_command_output_sync(
 ///
 /// # Errors
 /// Returns [`GitError::CommandFailed`] if spawning the command fails.
-pub(super) fn run_git_command_output_with_env_sync(
+pub(super) fn run_git_command_output_with_env_sync<Key, Value>(
     repo_path: &Path,
     args: &[&str],
-    environment: &[(&str, &str)],
-) -> Result<Output, GitError> {
+    environment: &[(Key, Value)],
+) -> Result<Output, GitError>
+where
+    Key: AsRef<std::ffi::OsStr>,
+    Value: AsRef<std::ffi::OsStr>,
+{
     let mut command = Command::new("git");
     command
         .args(args)

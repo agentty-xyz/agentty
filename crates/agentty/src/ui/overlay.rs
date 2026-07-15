@@ -752,6 +752,7 @@ mod tests {
             can_rebase_session_branch: true,
             can_reply_to_session: true,
             can_start_staged_session: false,
+            can_view_review_comments: false,
             publish_pull_request_action: None,
             session_id: "missing-session".into(),
             session_state: crate::presentation::help_action::ViewSessionState::Done,

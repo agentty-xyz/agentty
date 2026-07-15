@@ -159,9 +159,16 @@ fn session_metadata_base_text(
     )
 }
 
-/// Builds the footer help line shown in session view mode.
-pub(crate) fn session_view_footer_line(view_help_state: ViewHelpState) -> Line<'static> {
-    crate::ui::help_format::footer_line(&help_action::view_footer_actions(view_help_state))
+/// Builds the session-view footer and exposes linked forge comments on `c`
+/// when the current session has a review request.
+pub(crate) fn session_view_footer_line_with_review_comments(
+    view_help_state: ViewHelpState,
+    can_view_review_comments: bool,
+) -> Line<'static> {
+    crate::ui::help_format::footer_line(&help_action::view_footer_actions_with_review_comments(
+        view_help_state,
+        can_view_review_comments,
+    ))
 }
 
 /// Renders persisted summary payloads into display markdown.

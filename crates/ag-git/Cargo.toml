@@ -14,12 +14,12 @@ test-utils = ["dep:mockall"]
 [dependencies]
 mockall = { workspace = true, optional = true }
 rustix.workspace = true
+tempfile.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
 mockall.workspace = true
-tempfile.workspace = true
 
 [lints]
 workspace = true

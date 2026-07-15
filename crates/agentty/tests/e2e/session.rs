@@ -1420,6 +1420,9 @@ case "$*" in
   *"auth status"*)
     exit 0
     ;;
+  *"api --hostname github.com graphql"*)
+    printf '%s\n' '{"data":{"repository":{"pullRequest":{"comments":{"nodes":[]},"reviewThreads":{"nodes":[{"diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":2,"path":"src/main.rs","startLine":1,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"alice"},"body":"Please explain why this review output is needed."}]}},{"diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":null,"path":"src/main.rs","startLine":null,"subjectType":"FILE","comments":{"nodes":[{"author":{"login":"bob"},"body":"Please review the whole file."}]}}]}}}}}'
+    ;;
   *"pr view"*)
     printf '%s\n' '{"number":42,"title":"Review-ready session shortcuts","state":"OPEN","url":"https://github.com/agentty-xyz/agentty/pull/42","baseRefName":"main","headRefName":"wt/review-s","isDraft":false,"mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","mergedAt":null}'
     ;;
@@ -4032,6 +4035,83 @@ fn diff_preview_opens_from_session() -> E2eResult {
                 assertion::assert_text_in_region(frame, "src/ +1 -0", &full);
                 assertion::assert_text_in_region(frame, "println!(\"review\")", &full);
                 assertion::assert_text_in_region(frame, "j/k: select file", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that a linked review request opens a read-only split comment page
+/// with the selected thread's current diff context.
+#[test]
+fn test_session_review_comments() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_review_comments")
+        .with_git()
+        .setup(seed_review_ready_session_with_review_request)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .wait_for_text("c: comments", 5000)
+                    .press_key("c")
+                    .wait_for_text("Please explain why this review output is needed.", 5000)
+                    .wait_for_stable_frame(300, 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "inline_review_comment",
+                        "Multiline review comment with its attached code context",
+                    )
+                    .press_key("j")
+                    .wait_for_text(
+                        "This file-level comment is not attached to a code line.",
+                        5000,
+                    )
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "file_review_comment",
+                        "File-level review comment without a synthetic code anchor",
+                    )
+            },
+            |frame, report| {
+                let inline_frame = common::frame_from_capture(&report.captures[0]);
+                let inline_full = Region::full(inline_frame.cols(), inline_frame.rows());
+                let page_text = inline_frame.text_in_region(&inline_full);
+                let code_context_index = page_text
+                    .find("Code context")
+                    .expect("code context section should be visible");
+                let conversation_index = page_text
+                    .find("Conversation")
+                    .expect("conversation section should be visible");
+
+                assertion::assert_text_in_region(&inline_frame, "Comments (2)", &inline_full);
+                assertion::assert_text_in_region(&inline_frame, "src/main.rs:1-2", &inline_full);
+                assertion::assert_text_in_region(&inline_frame, "Conversation", &inline_full);
+                assertion::assert_text_in_region(
+                    &inline_frame,
+                    "Please explain why this review output is needed.",
+                    &inline_full,
+                );
+                assertion::assert_text_in_region(&inline_frame, "Code context", &inline_full);
+                assertion::assert_text_in_region(
+                    &inline_frame,
+                    "println!(\"review\")",
+                    &inline_full,
+                );
+                assert!(code_context_index < conversation_index);
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "file  ·  1 comments", &full);
+                assertion::assert_text_in_region(
+                    frame,
+                    "This file-level comment is not attached to a code line.",
+                    &full,
+                );
+                assertion::assert_text_in_region(frame, "Please review the whole file.", &full);
+                assertion::assert_not_visible(frame, "println!(\"review\")");
+                assertion::assert_text_in_region(frame, "j/k: select comment", &full);
             },
         )?;
 

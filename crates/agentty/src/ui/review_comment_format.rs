@@ -20,8 +20,8 @@ pub(crate) fn append_comment_bodies(
     }
 }
 
-/// Renders the `path:line · side · N comments · resolved/unresolved` header
-/// shared by review-detail and diff comment panels.
+/// Renders the `path:start-end · side · N comments · resolved/unresolved`
+/// header shared by review-detail and diff comment panels.
 pub(crate) fn thread_header_line(
     thread: &ReviewCommentThread,
     anchor_style: Style,
@@ -51,6 +51,28 @@ pub(crate) fn thread_header_line(
     ])
 }
 
+/// Returns the file-and-line or file-and-range anchor for one review thread.
+pub(crate) fn thread_anchor(thread: &ReviewCommentThread) -> String {
+    match thread_anchor_line_range(thread) {
+        Some((start_line, end_line)) if start_line != end_line => {
+            format!("{}:{start_line}-{end_line}", thread.path)
+        }
+        Some((_, end_line)) => format!("{}:{end_line}", thread.path),
+        None => thread.path.clone(),
+    }
+}
+
+/// Returns the normalized inclusive line range attached to one inline thread.
+pub(crate) fn thread_anchor_line_range(thread: &ReviewCommentThread) -> Option<(u32, u32)> {
+    if thread.anchor_side == ReviewCommentAnchorSide::File {
+        return None;
+    }
+    let end_line = thread.line?;
+    let start_line = thread.start_line.unwrap_or(end_line);
+
+    Some((start_line.min(end_line), start_line.max(end_line)))
+}
+
 /// Appends one comment's author header followed by the markdown-rendered body.
 fn append_comment_body(
     lines: &mut Vec<Line<'static>>,
@@ -72,14 +94,6 @@ fn append_comment_body(
         spans.push(Span::raw("  "));
         spans.extend(rendered_line.spans.iter().cloned());
         lines.push(Line::from(spans));
-    }
-}
-
-/// Returns the file-and-line anchor for one review thread.
-fn thread_anchor(thread: &ReviewCommentThread) -> String {
-    match thread.line {
-        Some(line) => format!("{}:{line}", thread.path),
-        None => thread.path.clone(),
     }
 }
 
@@ -123,6 +137,32 @@ mod tests {
     }
 
     #[test]
+    fn test_thread_header_line_includes_multiline_anchor_range() {
+        // Arrange
+        let thread = ReviewCommentThread {
+            anchor_side: ReviewCommentAnchorSide::New,
+            comments: vec![ReviewComment {
+                author: "alice".to_string(),
+                body: "Please check these lines.".to_string(),
+            }],
+            is_outdated: Some(false),
+            is_resolved: false,
+            line: Some(12),
+            path: "src/lib.rs".to_string(),
+            start_line: Some(10),
+        };
+
+        // Act
+        let line = thread_header_line(&thread, Style::default());
+
+        // Assert
+        assert_eq!(
+            line.to_string(),
+            "src/lib.rs:10-12  ·  new  ·  1 comments  ·  unresolved"
+        );
+    }
+
+    #[test]
     fn test_append_comment_bodies_indents_markdown_under_author() {
         // Arrange
         let mut lines = Vec::new();
@@ -143,5 +183,54 @@ mod tests {
             .join("\n");
         assert!(text.contains("alice"));
         assert!(text.contains("  Looks good."));
+    }
+
+    #[test]
+    fn test_append_comment_bodies_separates_multiple_comments() {
+        // Arrange
+        let mut lines = Vec::new();
+        let comments = vec![
+            ReviewComment {
+                author: "alice".to_string(),
+                body: "First".to_string(),
+            },
+            ReviewComment {
+                author: "bob".to_string(),
+                body: "Second".to_string(),
+            },
+        ];
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+
+        // Act
+        append_comment_bodies(&mut lines, &comments, &markdown_render_cache, 40);
+
+        // Assert
+        assert!(lines.iter().any(|line| line.spans.is_empty()));
+        assert!(lines.iter().any(|line| line.to_string() == "alice"));
+        assert!(lines.iter().any(|line| line.to_string() == "bob"));
+    }
+
+    #[test]
+    fn test_thread_header_line_shows_file_level_anchor() {
+        // Arrange
+        let thread = ReviewCommentThread {
+            anchor_side: ReviewCommentAnchorSide::File,
+            comments: Vec::new(),
+            is_outdated: None,
+            is_resolved: false,
+            line: None,
+            path: "src/lib.rs".to_string(),
+            start_line: None,
+        };
+
+        // Act
+        let line = thread_header_line(&thread, Style::default());
+
+        // Assert
+        assert_eq!(
+            line.to_string(),
+            "src/lib.rs  ·  file  ·  0 comments  ·  unresolved"
+        );
+        assert_eq!(thread_anchor_line_range(&thread), None);
     }
 }

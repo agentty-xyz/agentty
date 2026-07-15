@@ -151,6 +151,7 @@ The full set in **Review** state, subject to session and forge availability:
 | `/`                 | Open composer with `/` prefilled                    |
 | `o`                 | Run a launch configuration in the worktree          |
 | `p`                 | Publish branch and create or refresh review request |
+| `c`                 | Show linked review-request comments                 |
 | `d`                 | Show diff                                           |
 | `f`                 | Append or regenerate focused review output          |
 | `F`                 | Fork session with copied transcript history         |
@@ -181,14 +182,34 @@ State-specific differences:
 - **Question** sessions hide `r` until they return to review-ready state.
 - Review-ready stacked parents with a materialized child keep `Enter`, `m`, and `r`
   while the stack is idle, but hide `/` until the child is terminal or no longer linked.
-- **Done** sessions offer `c` to start a continuation draft (confirmation popup).
-- **Canceled**, **Queued**, and **Merging** sessions are read-only (`q`, scroll, help).
+- Sessions with a linked pull request or merge request use `c` to open its read-only
+  comments page. Linked terminal sessions keep continuation available on `C`.
+- **Done** sessions without a linked review request offer `c` to start a continuation
+  draft (confirmation popup).
+- **Canceled**, **Queued**, and **Merging** sessions are otherwise read-only (`q`,
+  scroll, help). Linked review requests remain available from any session state with
+  `c`.
 
 `o` runs the configured `Launch Configurations` entry, or opens a selector popup when
 several are configured. Run Agentty inside `tmux` when you rely on
 `Launch Configurations`, because those commands are dispatched into tmux windows.
 Publish (`p`), sync (`r`), and stacked behavior are described in
 [Workflow](@/docs/usage/workflow.md).
+
+## Review Comments
+
+The review-comments page uses the same split layout as diff view. The left panel lists
+general comments and inline threads; the right panel shows the selected comment's author
+and thread state, current diff context for its attached line or range, and then the
+conversation. File-level comments explicitly show that they have no attached code line
+instead of highlighting an arbitrary diff row. Inline snippets use the same gutters and
+added/removed line colors as diff view.
+
+| Key           | Action                       |
+| ------------- | ---------------------------- |
+| `q` / `Esc`   | Return to session view       |
+| `j` / `k`     | Select previous/next comment |
+| `Up` / `Down` | Scroll selected comment info |
 
 ## Publish Popup
 

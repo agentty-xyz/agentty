@@ -1,4 +1,4 @@
-use ag_forge::{AssignedIssue, IssueDetail, RequestedReview};
+use ag_forge::{AssignedIssue, IssueDetail, RequestedReview, ReviewCommentSnapshot};
 
 use super::help_action::{
     self, HelpAction, ViewActionAvailability, ViewHelpState, ViewSessionState,
@@ -269,6 +269,24 @@ pub enum AppMode {
         /// Session whose diff is currently visible.
         session_id: SessionId,
     },
+    /// Displays read-only forge review comments for one linked session review
+    /// request, with comment selection and current diff context.
+    ReviewComments {
+        /// User-facing failure returned while loading review comments.
+        comment_error: Option<String>,
+        /// Loaded review-request comment snapshot.
+        comment_snapshot: Option<ReviewCommentSnapshot>,
+        /// Raw session diff used to derive code context for inline threads.
+        diff: String,
+        /// Whether the linked review request's comments are loading.
+        is_loading_comments: bool,
+        /// Selected general comment or inline review thread.
+        selected_comment_index: usize,
+        /// Session whose linked review-request comments are visible.
+        session_id: SessionId,
+        /// Vertical offset inside the selected comment detail panel.
+        scroll_offset: u16,
+    },
 
     /// Interactive clarification flow that asks agent questions one-by-one.
     Question {
@@ -312,6 +330,7 @@ pub enum HelpContext {
         can_rebase_session_branch: bool,
         can_reply_to_session: bool,
         can_start_staged_session: bool,
+        can_view_review_comments: bool,
         publish_pull_request_action: Option<PublishBranchAction>,
         session_id: SessionId,
         session_state: ViewSessionState,
@@ -340,28 +359,32 @@ impl HelpContext {
                 can_rebase_session_branch,
                 can_reply_to_session,
                 can_start_staged_session,
+                can_view_review_comments,
                 publish_pull_request_action,
                 session_state,
                 ..
-            } => help_action::view_actions(ViewHelpState {
-                can_fork_session: ViewActionAvailability::from_bool(*can_fork_session),
-                can_merge_session_branch: ViewActionAvailability::from_bool(
-                    *can_merge_session_branch,
-                ),
-                can_mutate_session_branch: ViewActionAvailability::from_bool(
-                    *can_mutate_session_branch,
-                ),
-                can_open_worktree: ViewActionAvailability::from_bool(*can_open_worktree),
-                can_rebase_session_branch: ViewActionAvailability::from_bool(
-                    *can_rebase_session_branch,
-                ),
-                reply_to_session: ViewActionAvailability::from_bool(*can_reply_to_session),
-                can_start_staged_session: ViewActionAvailability::from_bool(
-                    *can_start_staged_session,
-                ),
-                publish_pull_request_action: *publish_pull_request_action,
-                session_state: *session_state,
-            }),
+            } => help_action::view_actions_with_review_comments(
+                ViewHelpState {
+                    can_fork_session: ViewActionAvailability::from_bool(*can_fork_session),
+                    can_merge_session_branch: ViewActionAvailability::from_bool(
+                        *can_merge_session_branch,
+                    ),
+                    can_mutate_session_branch: ViewActionAvailability::from_bool(
+                        *can_mutate_session_branch,
+                    ),
+                    can_open_worktree: ViewActionAvailability::from_bool(*can_open_worktree),
+                    can_rebase_session_branch: ViewActionAvailability::from_bool(
+                        *can_rebase_session_branch,
+                    ),
+                    reply_to_session: ViewActionAvailability::from_bool(*can_reply_to_session),
+                    can_start_staged_session: ViewActionAvailability::from_bool(
+                        *can_start_staged_session,
+                    ),
+                    publish_pull_request_action: *publish_pull_request_action,
+                    session_state: *session_state,
+                },
+                *can_view_review_comments,
+            ),
             HelpContext::List { keybindings } => keybindings.clone(),
             HelpContext::Diff { .. } => help_action::diff_actions(),
         }
@@ -440,6 +463,7 @@ mod tests {
             can_rebase_session_branch: true,
             can_reply_to_session: true,
             can_start_staged_session: false,
+            can_view_review_comments: false,
             publish_pull_request_action: None,
             session_id: "session-id".into(),
             session_state: ViewSessionState::InProgress,
@@ -472,6 +496,7 @@ mod tests {
             can_rebase_session_branch: true,
             can_reply_to_session: true,
             can_start_staged_session: false,
+            can_view_review_comments: false,
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
             session_id: "session-id".into(),
             session_state: ViewSessionState::InProgress,
@@ -503,6 +528,7 @@ mod tests {
             can_rebase_session_branch: true,
             can_reply_to_session: true,
             can_start_staged_session: false,
+            can_view_review_comments: false,
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
             session_id: "session-id".into(),
             session_state: ViewSessionState::Interactive,

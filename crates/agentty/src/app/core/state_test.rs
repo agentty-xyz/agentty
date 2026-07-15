@@ -111,6 +111,27 @@ async fn test_new_with_clients_fails_when_no_backend_cli_is_available() {
 }
 
 #[tokio::test]
+async fn review_comments_page_has_no_tick_driven_ui() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    app.mode = AppMode::ReviewComments {
+        comment_error: None,
+        comment_snapshot: None,
+        diff: String::new(),
+        is_loading_comments: true,
+        selected_comment_index: 0,
+        session_id: "session-id".into(),
+        scroll_offset: 0,
+    };
+
+    // Act
+    let has_tick_driven_ui = app.has_visible_tick_driven_ui();
+
+    // Assert
+    assert!(!has_tick_driven_ui);
+}
+
+#[tokio::test]
 async fn session_git_status_targets_include_active_unpublished_sessions() {
     // Arrange
     let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
@@ -495,6 +516,93 @@ async fn open_selected_requested_review_applies_background_comment_snapshot() {
         Some(&expected_comment_snapshot)
     );
     assert!(app.requested_review_comment_fetches.is_empty());
+}
+
+#[tokio::test]
+async fn open_session_review_comments_requires_link_and_applies_background_snapshot() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+        Arc::new(MockTmuxClient::new()),
+    )
+    .await;
+    let session_id = SessionId::from("session-review-comments");
+    let session = crate::test_support::SessionFixtureBuilder::new()
+        .id(session_id.clone())
+        .folder(PathBuf::from("/tmp/session-review-comments"))
+        .build();
+    app.sessions.push_session(session);
+
+    let missing_session_opened =
+        app.open_session_review_comments(&SessionId::from("missing-session"), String::new());
+    let unlinked_session_opened = app.open_session_review_comments(&session_id, String::new());
+
+    let session = app
+        .sessions
+        .sessions_mut()
+        .iter_mut()
+        .find(|session| session.id == session_id)
+        .expect("session should exist");
+    session.review_request = Some(ReviewRequest {
+        last_refreshed_at: 0,
+        summary: ReviewRequestSummary {
+            display_id: "#42".to_string(),
+            forge_kind: ForgeKind::GitHub,
+            source_branch: "wt/session-review-comments".to_string(),
+            state: ReviewRequestState::Open,
+            status_summary: None,
+            target_branch: "main".to_string(),
+            title: "Review comments".to_string(),
+            web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
+        },
+    });
+    let mut mock_git_client = ag_git::MockGitClient::new();
+    mock_git_client.expect_repo_url().once().returning(|_| {
+        Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
+    });
+    install_mock_git_client(&mut app, mock_git_client);
+    let mut mock_review_request_client = forge::MockReviewRequestClient::new();
+    mock_review_request_client
+        .expect_detect_remote()
+        .once()
+        .returning(|_| Ok(forge_remote()));
+    mock_review_request_client
+        .expect_fetch_review_comment_snapshot()
+        .once()
+        .returning(|_, _| Box::pin(async { Ok(review_comment_snapshot()) }));
+    install_mock_review_request_client(&mut app, mock_review_request_client);
+
+    // Act
+    let linked_session_opened =
+        app.open_session_review_comments(&session_id, "review diff".to_string());
+    wait_for_app_condition(&mut app, |app| {
+        matches!(
+            app.mode,
+            AppMode::ReviewComments {
+                is_loading_comments: false,
+                ..
+            }
+        )
+    })
+    .await;
+
+    // Assert
+    assert!(!missing_session_opened);
+    assert!(!unlinked_session_opened);
+    assert!(linked_session_opened);
+    assert!(matches!(
+        app.mode,
+        AppMode::ReviewComments {
+            comment_error: None,
+            comment_snapshot: Some(ref snapshot),
+            ref diff,
+            is_loading_comments: false,
+            selected_comment_index: 0,
+            ref session_id,
+            scroll_offset: 0,
+        } if snapshot == &review_comment_snapshot()
+            && diff == "review diff"
+            && session_id == "session-review-comments"
+    ));
 }
 
 /// Verifies reopening a loading requested-review detail reuses the

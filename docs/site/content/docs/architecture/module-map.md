@@ -70,9 +70,9 @@ For file-level detail, read the module docstrings directly.
 - `runtime/`: Terminal lifecycle and the event loop — terminal setup, the event-reader
   thread, key dispatch, mode-focused handlers under `runtime/mode/`, and shared handlers
   for common interactions such as issue/review detail navigation, session-output
-  metrics, transcript scrolling, and `KeyEvent` mapping to domain input commands.
-  Runtime owns `PresentationState`, including the shared `RenderCacheStore` used by
-  input metrics and frame rendering.
+  metrics, transcript scrolling, `KeyEvent` mapping to domain input commands, and
+  read-only session review-comment selection. Runtime owns `PresentationState`,
+  including the shared `RenderCacheStore` used by input metrics and frame rendering.
 - `presentation.rs` and `presentation/`: Frontend-neutral interaction state shared by
   runtime input and UI output. They expose mode, help-action, prompt, editor, scroll,
   viewport, and semantic list-selection contracts without importing Ratatui or `ui/`
@@ -80,9 +80,10 @@ For file-level detail, read the module docstrings directly.
 - `ui/`: Rendering — frame composition, mode-to-page routing, pages under `ui/page/`,
   reusable widgets under `ui/component/`, application-to-frame projection in
   `ui/app_render.rs`, Agentty theme adapters for `ag-tui-text`, plus diff, layout,
-  review-comment formatting, and theme helpers. `ui/session_output_assembly.rs` owns the
-  pure transcript-to-display-line projection; the `SessionOutput` component retains
-  layout caching, scrollbar metrics, loader effects, and Ratatui painting.
+  review-comment formatting, the split session review-comment page, and theme helpers.
+  `ui/session_output_assembly.rs` owns the pure transcript-to-display-line projection;
+  the `SessionOutput` component retains layout caching, scrollbar metrics, loader
+  effects, and Ratatui painting.
 
 ## Layer Rules
 

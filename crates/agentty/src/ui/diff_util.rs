@@ -1,5 +1,8 @@
 use ag_protocol::AgentResponseSummary;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::Style;
+
+use crate::ui::style;
 
 const BORDER_HORIZONTAL_WIDTH: u16 = 2;
 const DIFF_GIT_FILE_HEADER_PREFIX: &str = "diff --git";
@@ -163,6 +166,16 @@ pub fn max_diff_line_number(lines: &[DiffLine<'_>]) -> u32 {
         .unwrap_or(0)
 }
 
+/// Returns the shared display width for each old/new line-number column.
+pub fn diff_line_gutter_width(lines: &[DiffLine<'_>]) -> usize {
+    let max_line_number = max_diff_line_number(lines);
+    if max_line_number == 0 {
+        return MIN_GUTTER_WIDTH;
+    }
+
+    max_line_number.ilog10() as usize + MIN_GUTTER_WIDTH
+}
+
 /// Counts total added and removed lines across parsed diff content.
 pub fn diff_line_change_totals(lines: &[DiffLine<'_>]) -> (usize, usize) {
     lines.iter().fold(
@@ -173,6 +186,46 @@ pub fn diff_line_change_totals(lines: &[DiffLine<'_>]) -> (usize, usize) {
             _ => (added_count, removed_count),
         },
     )
+}
+
+/// Returns the sign and semantic content style shared by diff body rows.
+pub fn body_diff_line_style(kind: DiffLineKind) -> (&'static str, Style) {
+    match kind {
+        DiffLineKind::Addition => (
+            "+",
+            Style::default()
+                .fg(style::palette::success())
+                .bg(style::palette::surface_success()),
+        ),
+        DiffLineKind::Deletion => (
+            "-",
+            Style::default()
+                .fg(style::palette::danger())
+                .bg(style::palette::surface_danger()),
+        ),
+        DiffLineKind::Context | DiffLineKind::FileHeader | DiffLineKind::HunkHeader => {
+            (" ", Style::default().fg(style::palette::text_muted()))
+        }
+    }
+}
+
+/// Returns the subtle style shared by old/new line-number gutters.
+pub fn body_diff_line_gutter_style() -> Style {
+    Style::default().fg(style::palette::text_subtle())
+}
+
+/// Builds the old/new line-number gutter shared by diff body rows.
+pub fn body_diff_line_gutter(diff_line: &DiffLine<'_>, gutter_width: usize) -> String {
+    let old_line = diff_line.old_line.map_or_else(
+        || " ".repeat(gutter_width),
+        |line_number| format!("{line_number:>gutter_width$}"),
+    );
+    let new_line = diff_line.new_line.map_or_else(
+        || " ".repeat(gutter_width),
+        |line_number| format!("{line_number:>gutter_width$}"),
+    );
+
+    format!("{old_line}│{new_line} ")
 }
 
 /// Split a diff content string into chunks that fit within `max_width`
@@ -232,12 +285,7 @@ pub fn diff_render_layout(
     diff_area: Rect,
     reserve_scrollbar_width: bool,
 ) -> DiffRenderLayout {
-    let max_num = max_diff_line_number(parsed_lines);
-    let gutter_width = if max_num == 0 {
-        MIN_GUTTER_WIDTH
-    } else {
-        max_num.ilog10() as usize + MIN_GUTTER_WIDTH
-    };
+    let gutter_width = diff_line_gutter_width(parsed_lines);
     let prefix_width =
         gutter_width * LINE_NUMBER_COLUMN_COUNT + GUTTER_EXTRA_WIDTH + SIGN_COLUMN_WIDTH;
     let scrollbar_width = usize::from(reserve_scrollbar_width) * SCROLLBAR_WIDTH;
@@ -1055,6 +1103,18 @@ index abc..def 100644
 
         // Assert
         assert_eq!(max_num, 0);
+    }
+
+    #[test]
+    fn test_diff_line_gutter_width_matches_largest_line_number() {
+        // Arrange
+        let lines = parse_diff_lines("@@ -95,1 +100,1 @@\n context");
+
+        // Act
+        let gutter_width = diff_line_gutter_width(&lines);
+
+        // Assert
+        assert_eq!(gutter_width, 3);
     }
 
     #[test]
