@@ -105,9 +105,26 @@ impl SessionState {
             .and_then(|session_index| self.sessions.get(session_index))
     }
 
-    /// Replaces the full session snapshot list and rebuilds the cached
-    /// identifier index in one step.
-    pub(crate) fn replace_sessions(&mut self, sessions: Vec<Session>) {
+    /// Replaces persisted session snapshots while retaining in-process
+    /// transient output for sessions that remain loaded.
+    ///
+    /// Database refreshes can observe intermediate workflow persistence, such
+    /// as a published upstream branch before its review-request URL is ready.
+    /// Carrying transient output across that refresh keeps active loaders
+    /// visible until their owning reducer resolves them.
+    pub(crate) fn replace_sessions(&mut self, mut sessions: Vec<Session>) {
+        let transient_messages_by_session_id: HashMap<SessionId, _> = self
+            .sessions
+            .iter()
+            .map(|session| (session.id.clone(), session.transient_messages.clone()))
+            .collect();
+        for session in &mut sessions {
+            if let Some(transient_messages) = transient_messages_by_session_id.get(&session.id) {
+                session.transient_messages.clone_from(transient_messages);
+                session.reconcile_transient_messages();
+            }
+        }
+
         self.session_index_by_id = Self::build_session_index_by_id(&sessions);
         self.sessions = sessions;
     }
@@ -409,7 +426,10 @@ mod tests {
     use crate::domain::selection::SelectionState;
     use crate::domain::session::{Session, SessionHandles, SessionSize, SessionStats, Status};
     use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
-    use crate::domain::transient_message::TransientMessageStore;
+    use crate::domain::transient_message::{
+        TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
+        TransientMessageSlot, TransientMessageStore,
+    };
     use crate::test_support::SessionFixtureBuilder;
 
     struct FixedClock {
@@ -758,6 +778,53 @@ mod tests {
         // Assert
         assert_eq!(state.session_index_for_id("session-1"), None);
         assert_eq!(state.session_index_for_id("session-2"), Some(0));
+    }
+
+    #[test]
+    /// Verifies persisted refreshes retain active workflow loaders.
+    fn replace_sessions_preserves_active_transient_messages() {
+        // Arrange
+        let mut initial_session = SessionFixtureBuilder::new()
+            .id("session-1")
+            .status(Status::Review)
+            .build();
+        initial_session.transient_messages.upsert(TransientMessage {
+            anchor: TransientMessageAnchor::Tail,
+            body: TransientMessageBody::Loading("Publishing review request...".to_string()),
+            lifecycle: TransientMessageLifecycle::UntilResolved,
+            slot: TransientMessageSlot::BranchPublish,
+            turn_position: None,
+        });
+        let mut refreshed_session = SessionFixtureBuilder::new()
+            .id("session-1")
+            .status(Status::Review)
+            .build();
+        refreshed_session.published_upstream_ref = Some("origin/wt/session-1".to_string());
+        let mut state = SessionState::new(
+            HashMap::new(),
+            vec![initial_session],
+            SelectionState::default(),
+            Arc::new(FixedClock::new()),
+            0,
+            0,
+        );
+
+        // Act
+        state.replace_sessions(vec![refreshed_session]);
+
+        // Assert
+        let refreshed_session = &state.sessions[0];
+        assert_eq!(
+            refreshed_session.published_upstream_ref.as_deref(),
+            Some("origin/wt/session-1")
+        );
+        assert_eq!(
+            refreshed_session
+                .transient_messages
+                .get(TransientMessageSlot::BranchPublish)
+                .map(|message| message.body.text()),
+            Some("Publishing review request...")
+        );
     }
 
     #[test]
