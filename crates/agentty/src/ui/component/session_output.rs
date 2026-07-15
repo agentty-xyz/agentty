@@ -39,6 +39,7 @@ const DRAFT_PREVIEW_STAGED_NOTE: &str =
 const DRAFT_PREVIEW_STACKED_STAGED_NOTE: &str =
     "Draft messages stay local until the parent is review-ready and you press `s` in session view \
      to start the stacked bundle from its parent branch.";
+const SCROLLBAR_PADDING_WIDTH: u16 = 1;
 const SCROLLBAR_WIDTH: u16 = 1;
 const SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT: usize = 16;
 const USER_PROMPT_TAB_WIDTH: usize = 4;
@@ -1558,11 +1559,14 @@ impl<'a> SessionOutput<'a> {
         )
     }
 
-    /// Returns the width used to wrap output while leaving the final panel
-    /// column available for the scrollbar.
+    /// Returns the width used to wrap output while leaving padding before the
+    /// scrollbar in the final panel column.
     fn scrollbar_layout_area(output_area: Rect) -> Rect {
         Rect {
-            width: output_area.width.saturating_sub(SCROLLBAR_WIDTH),
+            width: output_area
+                .width
+                .saturating_sub(SCROLLBAR_PADDING_WIDTH)
+                .saturating_sub(SCROLLBAR_WIDTH),
             ..output_area
         }
     }
@@ -1804,6 +1808,21 @@ mod tests {
             .collect::<String>();
         assert!(rendered_text.contains(SCROLLBAR_TRACK_SYMBOL));
         assert!(rendered_text.contains(SCROLLBAR_THUMB_SYMBOL));
+    }
+
+    #[test]
+    fn test_scrollbar_layout_reserves_padding_before_track() {
+        // Arrange
+        let output_area = Rect::new(2, 3, 40, 10);
+
+        // Act
+        let content_area = SessionOutput::scrollbar_layout_area(output_area);
+
+        // Assert
+        assert_eq!(content_area.x, output_area.x);
+        assert_eq!(content_area.y, output_area.y);
+        assert_eq!(content_area.width, 38);
+        assert_eq!(content_area.height, output_area.height);
     }
 
     #[test]
