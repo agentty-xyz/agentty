@@ -175,12 +175,19 @@ derived data instead of recomputing the render twice per frame.
 1. `AppEvent::AgentResponseReceived` carries the reducer projection so the active
    session updates without a forced reload. If persistence fails, the worker appends a
    recovery error and falls back to a durable-state reload.
+1. When `a` requests the session-type selector, the app asks `GitClient` to verify the
+   effective pre-commit hook whenever the project contains `.pre-commit-config.yaml` or
+   `.pre-commit-config.yml`. A missing executable hook opens a warning overlay with
+   installation commands and future-enforcement guidance. `Enter` continues to the
+   selector; `Esc` or `q` returns to the list without creating a session.
 1. Auto-commit keeps one evolving commit on the session branch: the first file-changing
    turn creates it, later turns regenerate the message from the cumulative diff with the
    project's `Default Fast Model` and amend `HEAD`; an empty amend drops the reverted
-   commit. Repositories declaring pre-commit configuration must have an installed,
-   executable Git pre-commit hook; a missing hook fails immediately without entering
-   model-assisted commit recovery. The session title is synced from the commit text.
+   commit. After a successful normal commit, the app checks hook readiness again and
+   persists the first copy of each distinct `[Commit Warning]` when configured
+   validation did not run, avoiding repeated identical notices across later turns.
+   Installed-hook failures continue through normal commit error handling. The session
+   title is synced from the commit text.
 1. If the session already tracks a published upstream branch and no chat message or sync
    operation is queued, a per-session branch-operation guard transfers to the detached
    auto-push until it finishes. Every sync request holds the same guard through status

@@ -151,6 +151,13 @@ fn allow_detect_git_info(mock: &mut git::MockGitClient) {
     allow_detect_git_info_with_head_hash(mock, true);
 }
 
+/// Expects one successful advisory pre-commit readiness check.
+fn expect_pre_commit_hook_ready(mock: &mut git::MockGitClient) {
+    mock.expect_check_pre_commit_hook_ready()
+        .once()
+        .returning(|_| Box::pin(async { Ok(()) }));
+}
+
 fn allow_detect_git_info_with_head_hash(mock: &mut git::MockGitClient, allow_head_hash: bool) {
     mock.expect_detect_git_info().times(0..).returning(|path| {
         let branch_name = path
@@ -4041,6 +4048,7 @@ async fn test_spawn_session_task_auto_commits_changes() {
         .expect_head_short_hash()
         .times(1)
         .returning(|_| Box::pin(async { Ok("abc1234".to_string()) }));
+    expect_pre_commit_hook_ready(&mut mock_git_client);
     mock_git_client
         .expect_diff()
         .times(2)

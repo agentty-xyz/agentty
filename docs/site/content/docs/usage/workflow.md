@@ -270,10 +270,16 @@ reverts every change, the empty session commit is dropped. Commit and merge noti
 appear as transient status rows rather than persisted transcript messages.
 
 When a project contains `.pre-commit-config.yaml` or `.pre-commit-config.yml`, Agentty
-requires the Git pre-commit hook to be installed and executable before auto-commit. A
-missing hook stops the commit with an actionable error instead of allowing validation to
-surface for the first time in CI. Install it with the project's configured hook manager,
-such as `prek install` for `prek`.
+checks for an executable Git pre-commit hook when you press `a`. A missing hook opens a
+warning before the session-type selector. Press `Enter` to continue to the selector or
+`Esc` / `q` to cancel, and install the hook with `prek install` or `pre-commit install`
+when practical. This advisory will become an error in a future Agentty release.
+
+For now, Agentty still creates the session and runs the normal Git commit command. If a
+commit succeeds without the configured hook, the session output records a
+`[Commit Warning]` with the installation commands. Later commits do not repeat an
+unchanged warning in the same session. Installed hooks remain enabled and their failures
+still stop the commit.
 
 When a session merges, Agentty reuses the session branch `HEAD` commit message for the
 final squash commit on the base branch. Merging requires a clean main checkout and

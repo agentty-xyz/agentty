@@ -11,16 +11,16 @@ use super::rebase::{InProgressGitOperation, RebaseStepResult};
 use super::sync;
 use super::sync::{BranchTrackingMap, PullRebaseResult, SingleCommitMessageStrategy};
 use super::{
-    abort_rebase, branch_tracking_statuses, commit_all, commit_all_preserving_single_commit,
-    create_worktree, current_upstream_reference, delete_branch, detect_git_info, diff,
-    fetch_remote, find_git_repo_root, get_ahead_behind, get_ref_ahead_behind, has_commits_since,
-    has_unmerged_paths, head_commit_message, head_hash, head_short_hash, in_progress_operation,
-    is_rebase_in_progress, is_worktree_clean, list_conflicted_files, list_local_commit_titles,
-    list_staged_conflict_marker_files, list_upstream_commit_titles, main_checkout_working_tree,
-    main_repo_root, pull_rebase, push_current_branch, push_current_branch_to_remote_branch, rebase,
-    rebase_continue, rebase_onto_start, rebase_start, ref_hash, remote_branch_exists,
-    remove_worktree, repo_url, squash_merge, squash_merge_diff, stage_all, tracked_worktree_status,
-    worktree_status,
+    abort_rebase, branch_tracking_statuses, check_pre_commit_hook_ready, commit_all,
+    commit_all_preserving_single_commit, create_worktree, current_upstream_reference,
+    delete_branch, detect_git_info, diff, fetch_remote, find_git_repo_root, get_ahead_behind,
+    get_ref_ahead_behind, has_commits_since, has_unmerged_paths, head_commit_message, head_hash,
+    head_short_hash, in_progress_operation, is_rebase_in_progress, is_worktree_clean,
+    list_conflicted_files, list_local_commit_titles, list_staged_conflict_marker_files,
+    list_upstream_commit_titles, main_checkout_working_tree, main_repo_root, pull_rebase,
+    push_current_branch, push_current_branch_to_remote_branch, rebase, rebase_continue,
+    rebase_onto_start, rebase_start, ref_hash, remote_branch_exists, remove_worktree, repo_url,
+    squash_merge, squash_merge_diff, stage_all, tracked_worktree_status, worktree_status,
 };
 
 /// Boxed async result used by [`GitClient`] trait methods.
@@ -42,6 +42,13 @@ pub trait GitClient: Send + Sync {
     ///
     /// Returns `None` when `dir` is not in a git repository.
     fn find_git_repo_root(&self, dir: PathBuf) -> GitFuture<Option<PathBuf>>;
+
+    /// Verifies that configured pre-commit validation has an executable hook.
+    ///
+    /// # Errors
+    /// Returns an error when a supported pre-commit configuration exists but
+    /// its effective Git hook is missing or cannot be executed.
+    fn check_pre_commit_hook_ready(&self, repo_path: PathBuf) -> GitFuture<Result<(), GitError>>;
 
     /// Creates a new worktree at `worktree_path` on `branch_name` from
     /// `start_ref` inside `repo_path`.
@@ -422,6 +429,10 @@ impl GitClient for RealGitClient {
 
     fn find_git_repo_root(&self, dir: PathBuf) -> GitFuture<Option<PathBuf>> {
         Box::pin(async move { find_git_repo_root(dir).await })
+    }
+
+    fn check_pre_commit_hook_ready(&self, repo_path: PathBuf) -> GitFuture<Result<(), GitError>> {
+        Box::pin(async move { check_pre_commit_hook_ready(repo_path).await })
     }
 
     fn create_worktree(

@@ -194,6 +194,19 @@ pub(crate) fn render_session_creation_overlay(
     .render(f, area);
 }
 
+/// Renders the pre-commit advisory above the sessions list.
+pub(crate) fn render_pre_commit_hook_warning(
+    f: &mut Frame,
+    area: Rect,
+    list_background: ListBackgroundRenderContext<'_, '_>,
+    message: &str,
+    wall_clock_unix_seconds: i64,
+) {
+    render_list_background(f, area, list_background, wall_clock_unix_seconds);
+
+    component::info_overlay::InfoOverlay::new("Pre-commit hook warning", message).render(f, area);
+}
+
 /// Renders the list background and MRU-ordered project switcher overlay.
 pub(crate) fn render_project_switcher_overlay(
     f: &mut Frame,

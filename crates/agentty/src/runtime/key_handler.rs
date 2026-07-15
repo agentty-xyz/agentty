@@ -63,6 +63,9 @@ where
             AppMode::SessionCreation { .. } => {
                 unreachable!("session creation mode is handled before dispatch matching")
             }
+            AppMode::PreCommitHookWarning { .. } => {
+                Ok(handle_pre_commit_hook_warning_key(app, key))
+            }
             AppMode::ProjectSwitcher { .. } => {
                 unreachable!("project switcher mode is handled before dispatch matching")
             }
@@ -192,9 +195,9 @@ fn update_session_creation_selection(app: &mut App, selected_option_index: usize
 /// Creates the selected session type and opens its prompt composer.
 async fn create_selected_session(app: &mut App) -> io::Result<()> {
     let selected_option_index = current_session_creation_selection(app);
-    let session_id = match selected_option_index {
-        0 => app.create_session().await.map_err(io::Error::other)?,
-        1 => app.create_draft_session().await.map_err(io::Error::other)?,
+    let creation_result = match selected_option_index {
+        0 => app.create_session().await,
+        1 => app.create_draft_session().await,
         2 => {
             let Some(parent_session_id) = selected_stacked_parent_session_id(app) else {
                 return Ok(());
@@ -202,13 +205,31 @@ async fn create_selected_session(app: &mut App) -> io::Result<()> {
 
             app.create_stacked_draft_session(parent_session_id.as_str())
                 .await
-                .map_err(io::Error::other)?
         }
         _ => return Ok(()),
     };
+    let session_id = creation_result.map_err(io::Error::other)?;
     mode::list::open_session_prompt(app, session_id);
 
     Ok(())
+}
+
+/// Handles the advisory shown before session-type selection.
+fn handle_pre_commit_hook_warning_key(app: &mut App, key: KeyEvent) -> EventResult {
+    match key.code {
+        KeyCode::Enter => {
+            app.mode = AppMode::SessionCreation {
+                selected_option_index: 0,
+            };
+        }
+        KeyCode::Esc => app.mode = AppMode::List,
+        KeyCode::Char(character) if character.eq_ignore_ascii_case(&'q') => {
+            app.mode = AppMode::List;
+        }
+        _ => {}
+    }
+
+    EventResult::Continue
 }
 
 /// Returns the current highlighted session-creation option.
@@ -860,6 +881,50 @@ mod tests {
                 ..
             } if !session_id.is_empty()
         ));
+    }
+
+    #[tokio::test]
+    async fn test_pre_commit_warning_enter_opens_session_creation_options() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        app.mode = AppMode::PreCommitHookWarning {
+            message: "Missing pre-commit hook".to_string(),
+        };
+
+        // Act
+        let result = handle_pre_commit_hook_warning_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+
+        // Assert
+        assert!(matches!(result, EventResult::Continue));
+        assert!(app.sessions.sessions().is_empty());
+        assert!(matches!(
+            app.mode,
+            AppMode::SessionCreation {
+                selected_option_index: 0,
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_pre_commit_warning_escape_returns_to_session_list() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        app.mode = AppMode::PreCommitHookWarning {
+            message: "Missing pre-commit hook".to_string(),
+        };
+
+        // Act
+        let result = handle_pre_commit_hook_warning_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        );
+
+        // Assert
+        assert!(matches!(result, EventResult::Continue));
+        assert!(matches!(app.mode, AppMode::List));
     }
 
     #[tokio::test]

@@ -126,6 +126,7 @@ fn visible_review_session_id(mode: &AppMode) -> Option<&str> {
         | AppMode::IssueDetail { .. }
         | AppMode::ReviewDetail { .. }
         | AppMode::SessionCreation { .. }
+        | AppMode::PreCommitHookWarning { .. }
         | AppMode::ProjectSwitcher { .. }
         | AppMode::Confirmation { .. }
         | AppMode::SyncBlockedPopup { .. }

@@ -121,6 +121,16 @@ pub(crate) async fn stage_all(repo_path: PathBuf) -> Result<(), GitError> {
     spawn_blocking(move || stage_all_sync(&repo_path)).await?
 }
 
+/// Verifies that configured pre-commit validation has an executable Git hook.
+///
+/// # Errors
+/// Returns [`GitError::PreCommitHookMissing`] when a supported configuration
+/// exists without an executable hook, or a command error when the effective
+/// hook path cannot be resolved.
+pub(crate) async fn check_pre_commit_hook_ready(repo_path: PathBuf) -> Result<(), GitError> {
+    spawn_blocking(move || ensure_pre_commit_hook_ready(&repo_path)).await?
+}
+
 /// Returns the short hash of the current `HEAD` commit.
 ///
 /// # Arguments
@@ -998,10 +1008,6 @@ async fn commit_all_with_retry(
     amend_existing_commit: bool,
 ) -> Result<(), GitError> {
     spawn_blocking(move || {
-        if !no_verify {
-            ensure_pre_commit_hook_ready(&repo_path)?;
-        }
-
         stage_all_sync(&repo_path)?;
 
         for _ in 0..COMMIT_ALL_HOOK_RETRY_ATTEMPTS {
@@ -1453,7 +1459,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn commit_all_rejects_configured_validation_without_hook() {
+    async fn commit_all_allows_configured_validation_without_hook() {
         // Arrange
         let temp_dir = tempdir().expect("failed to create temp dir");
         setup_test_git_repo(temp_dir.path());
@@ -1474,10 +1480,10 @@ mod tests {
         .await;
 
         // Assert
-        assert!(matches!(result, Err(GitError::PreCommitHookMissing { .. })));
+        assert!(result.is_ok());
         assert_eq!(
             git_command_stdout(temp_dir.path(), &["log", "-1", "--pretty=%s"]),
-            "Initial commit"
+            "Change README"
         );
     }
 

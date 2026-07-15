@@ -13,17 +13,21 @@ For session states and transition behavior, see [Workflow](@/docs/usage/workflow
 
 ## Session List
 
-| Key                 | Action                                                    |
-| ------------------- | --------------------------------------------------------- |
-| `q`                 | Quit                                                      |
-| `a`                 | Open creation selector (`Regular`, `Draft`, or `Stacked`) |
-| `s`                 | Sync active project branch                                |
-| `c`                 | Cancel selected session after confirmation                |
-| `Enter`             | Open session                                              |
-| `j` / `k`           | Navigate sessions                                         |
-| `p`                 | Open project switcher popup                               |
-| `Tab` / `Shift+Tab` | Switch to next / previous tab                             |
-| `?`                 | Help                                                      |
+| Key                 | Action                                               |
+| ------------------- | ---------------------------------------------------- |
+| `q`                 | Quit                                                 |
+| `a`                 | Check hooks, then open the session creation selector |
+| `s`                 | Sync active project branch                           |
+| `c`                 | Cancel selected session after confirmation           |
+| `Enter`             | Open session                                         |
+| `j` / `k`           | Navigate sessions                                    |
+| `p`                 | Open project switcher popup                          |
+| `Tab` / `Shift+Tab` | Switch to next / previous tab                        |
+| `?`                 | Help                                                 |
+
+If pre-commit configuration exists without an executable hook, `a` first opens a
+warning. Press `Enter` to continue to the `Regular`, `Draft`, or `Stacked` selector, or
+`Esc` / `q` to cancel.
 
 In the `a` selector, `Stacked` is enabled only when the selected session is a root
 session with an active branch. `c` appears only for cancelable rows: running sessions,

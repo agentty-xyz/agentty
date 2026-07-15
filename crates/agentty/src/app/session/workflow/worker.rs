@@ -2715,10 +2715,19 @@ mod tests {
             .returning(|_| Box::pin(async { Some("wt/sess1".to_string()) }));
     }
 
+    /// Expects one successful advisory pre-commit readiness check.
+    fn expect_pre_commit_hook_ready(mock_git_client: &mut MockGitClient) {
+        mock_git_client
+            .expect_check_pre_commit_hook_ready()
+            .once()
+            .returning(|_| Box::pin(async { Ok(()) }));
+    }
+
     /// Returns one git client mock that produces a successful auto-commit
     /// outcome.
     fn auto_commit_git_client(commit_message: &str, sequence: &mut Sequence) -> MockGitClient {
         let mut mock_git_client = MockGitClient::new();
+        expect_pre_commit_hook_ready(&mut mock_git_client);
         mock_git_client
             .expect_is_worktree_clean()
             .once()
@@ -2771,6 +2780,7 @@ mod tests {
     /// follow-up auto-push.
     fn auto_commit_git_client_with_push_failure(commit_message: &str) -> MockGitClient {
         let mut mock_git_client = MockGitClient::new();
+        expect_pre_commit_hook_ready(&mut mock_git_client);
         mock_git_client
             .expect_is_worktree_clean()
             .once()

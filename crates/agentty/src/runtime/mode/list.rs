@@ -57,9 +57,7 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
         KeyCode::Char('a')
             if app.tabs.current() == Tab::Sessions && key.modifiers == KeyModifiers::NONE =>
         {
-            app.mode = AppMode::SessionCreation {
-                selected_option_index: 0,
-            };
+            open_session_creation_flow(app).await;
         }
         KeyCode::Char('p')
             if app.tabs.current() == Tab::Sessions && key.modifiers == KeyModifiers::NONE =>
@@ -108,6 +106,24 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
     }
 
     Ok(EventResult::Continue)
+}
+
+/// Opens the session selector, preceded by an advisory when configured
+/// pre-commit validation has no executable Git hook.
+async fn open_session_creation_flow(app: &mut App) {
+    if let Some(warning) = app.pre_commit_hook_warning().await {
+        app.mode = AppMode::PreCommitHookWarning {
+            message: format!(
+                "{warning}\n\nPress Enter to continue to session options, or Esc to cancel."
+            ),
+        };
+
+        return;
+    }
+
+    app.mode = AppMode::SessionCreation {
+        selected_option_index: 0,
+    };
 }
 
 /// Handles `Enter` in list mode and triggers the selected tab primary action.
@@ -480,6 +496,44 @@ mod tests {
             AppMode::SessionCreation {
                 selected_option_index: 0,
             }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_add_key_warns_before_options_when_pre_commit_hook_is_missing() {
+        // Arrange
+        let (mut app, base_dir) = crate::test_support::new_git_test_app().await;
+        std::fs::write(
+            base_dir.path().join(".pre-commit-config.yaml"),
+            "repos: []\n",
+        )
+        .expect("failed to write pre-commit configuration");
+        let git_config_output = std::process::Command::new("git")
+            .args(["config", "core.hooksPath", ".missing-hooks"])
+            .current_dir(base_dir.path())
+            .output()
+            .expect("failed to configure missing hooks path");
+        assert!(git_config_output.status.success());
+        app.tabs.set(Tab::Sessions);
+
+        // Act
+        let event_result = handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to handle key");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(app.sessions.sessions().is_empty());
+        assert!(matches!(
+            &app.mode,
+            AppMode::PreCommitHookWarning { message }
+                if message.contains("prek install")
+                    && message.contains("pre-commit install")
+                    && message.contains("will become an error in a future release")
+                    && message.contains("Press Enter to continue")
         ));
     }
 

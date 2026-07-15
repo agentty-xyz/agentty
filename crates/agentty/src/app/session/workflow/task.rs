@@ -314,6 +314,7 @@ impl SessionTaskService {
 
         let outcome = match Self::commit_changes_with_assist(&context).await {
             Ok(Some(outcome)) => {
+                Self::append_pre_commit_hook_warning(&context).await;
                 SessionManager::update_session_title_from_commit_message(
                     &context.db,
                     &context.id,
@@ -354,6 +355,51 @@ impl SessionTaskService {
         Self::clear_session_progress(&context.app_event_tx, &context.id);
 
         outcome
+    }
+
+    /// Appends one advisory per distinct missing-hook warning when a
+    /// successful commit ran without the configured pre-commit hook.
+    async fn append_pre_commit_hook_warning(context: &AssistContext) {
+        match context
+            .git_client
+            .check_pre_commit_hook_ready(context.folder.clone())
+            .await
+        {
+            Ok(()) => {}
+            Err(error @ git::GitError::PreCommitHookMissing { .. }) => {
+                let message = TranscriptNotice::CommitWarning.format(error);
+                let warning_already_recorded = context
+                    .transcript
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .messages()
+                    .iter()
+                    .any(|transcript_message| {
+                        transcript_message.kind == SessionMessageKind::WorkflowNotice
+                            && transcript_message.content == message
+                    });
+                if warning_already_recorded {
+                    return;
+                }
+
+                Self::append_workflow_notice(
+                    &context.transcript,
+                    &context.db,
+                    &context.app_event_tx,
+                    &context.session_update_versions,
+                    &context.id,
+                    &message,
+                )
+                .await;
+            }
+            Err(error) => {
+                warn!(
+                    session_id = context.id,
+                    error = %error,
+                    "failed to inspect pre-commit hook readiness after session commit"
+                );
+            }
+        }
     }
 
     /// Requests one immediate reducer-driven git-status refresh.
@@ -492,11 +538,6 @@ impl SessionTaskService {
                 }
                 Err(commit_error) if commit_error.to_string().contains("Nothing to commit") => {
                     return Ok(None);
-                }
-                Err(
-                    commit_error @ SessionError::Git(git::GitError::PreCommitHookMissing { .. }),
-                ) => {
-                    return Err(commit_error);
                 }
                 Err(commit_error) => {
                     // Keep test execution deterministic and offline by skipping
@@ -2132,6 +2173,133 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Verifies a missing configured hook emits an advisory after a successful
+    /// normal commit instead of turning the commit into a failure.
+    async fn test_handle_auto_commit_warns_when_pre_commit_hook_is_missing() {
+        // Arrange
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client
+            .expect_is_worktree_clean()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok::<_, GitError>(false) }));
+        mock_git_client
+            .expect_has_commits_since()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok::<_, GitError>(true) }));
+        mock_git_client
+            .expect_head_commit_message()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(Some("Update project".to_string())) }));
+        mock_git_client
+            .expect_commit_all_preserving_single_commit()
+            .times(1)
+            .returning(|_, _, _, _, _| Box::pin(async { Ok::<_, GitError>(()) }));
+        mock_git_client
+            .expect_head_short_hash()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok("abc1234".to_string()) }));
+        mock_git_client
+            .expect_check_pre_commit_hook_ready()
+            .times(1)
+            .returning(|_| {
+                Box::pin(async {
+                    Err(GitError::PreCommitHookMissing {
+                        config_file: ".pre-commit-config.yaml".to_string(),
+                    })
+                })
+            });
+        let database = AppRepositories::in_memory().await;
+        insert_review_session(&database, AgentModel::Gpt55.as_str()).await;
+        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+        let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
+        let context = AssistContext {
+            app_event_tx,
+            child_pid: Arc::new(Mutex::new(None)),
+            db: database.clone(),
+            folder: PathBuf::from("/tmp/project"),
+            git_client: Arc::new(mock_git_client),
+            id: "session-id".to_string(),
+            session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+            session_update_versions: Arc::default(),
+            transcript: Arc::clone(&transcript),
+        };
+
+        // Act
+        let outcome = SessionTaskService::handle_auto_commit(context).await;
+
+        // Assert
+        assert!(outcome.is_some());
+        let output_text = transcript
+            .lock()
+            .ok()
+            .and_then(|buffer| buffer.replay_text())
+            .unwrap_or_default();
+        assert!(output_text.contains("[Commit Warning]"));
+        assert!(output_text.contains("prek install"));
+        assert!(output_text.contains("pre-commit install"));
+        assert!(output_text.contains("will become an error in a future release"));
+        assert!(!output_text.contains("[Commit Error]"));
+    }
+
+    #[tokio::test]
+    /// Verifies repeated successful commits persist one copy of an unchanged
+    /// missing-hook warning in the session transcript.
+    async fn test_append_pre_commit_hook_warning_ignores_duplicate_advisory() {
+        // Arrange
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client
+            .expect_check_pre_commit_hook_ready()
+            .times(2)
+            .returning(|_| {
+                Box::pin(async {
+                    Err(GitError::PreCommitHookMissing {
+                        config_file: ".pre-commit-config.yaml".to_string(),
+                    })
+                })
+            });
+        let database = AppRepositories::in_memory().await;
+        insert_review_session(&database, AgentModel::Gpt55.as_str()).await;
+        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+        let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
+        let context = AssistContext {
+            app_event_tx,
+            child_pid: Arc::new(Mutex::new(None)),
+            db: database.clone(),
+            folder: PathBuf::from("/tmp/project"),
+            git_client: Arc::new(mock_git_client),
+            id: "session-id".to_string(),
+            session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+            session_update_versions: Arc::default(),
+            transcript: Arc::clone(&transcript),
+        };
+
+        // Act
+        SessionTaskService::append_pre_commit_hook_warning(&context).await;
+        SessionTaskService::append_pre_commit_hook_warning(&context).await;
+
+        // Assert
+        {
+            let transcript = transcript
+                .lock()
+                .expect("transcript lock should not be poisoned");
+            assert_eq!(transcript.messages().len(), 1);
+            assert!(
+                transcript.messages()[0]
+                    .content
+                    .contains("[Commit Warning]")
+            );
+        }
+
+        let messages = database
+            .sessions()
+            .load_session_messages("session-id")
+            .await
+            .expect("failed to load persisted session messages");
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].content.contains("[Commit Warning]"));
+    }
+
+    #[tokio::test]
     /// Verifies auto-commit reports clean-worktree no-op commits as transient
     /// workflow notices without appending to the transcript.
     async fn test_handle_auto_commit_reports_when_no_changes_exist() {
@@ -2241,6 +2409,10 @@ mod tests {
     async fn test_handle_auto_commit_preserves_agent_session_summary() {
         // Arrange
         let mut mock_git_client = MockGitClient::new();
+        mock_git_client
+            .expect_check_pre_commit_hook_ready()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(()) }));
         mock_git_client
             .expect_is_worktree_clean()
             .times(1)
