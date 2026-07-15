@@ -1591,7 +1591,7 @@ mod tests {
             publish_branch_action: crate::domain::session::PublishBranchAction::PublishPullRequest,
             restore_view: ConfirmationViewMode {
                 scroll_offset: Some(4),
-                session_id: session_id.into(),
+                session_id: session_id.clone().into(),
             },
         };
 
@@ -1605,14 +1605,22 @@ mod tests {
         assert!(matches!(event_result, EventResult::Continue));
         assert!(matches!(
             app.mode,
-            AppMode::ViewInfoPopup {
-                is_loading: true,
-                ref message,
-                ref title,
-                ..
-            } if title == "Publishing review request"
-                && message.contains("`review/custom`")
+            AppMode::View {
+                session_id: ref viewed_session_id,
+                scroll_offset: Some(4),
+            } if viewed_session_id == &session_id
         ));
+        assert_eq!(
+            app.sessions
+                .session_at(0)
+                .and_then(|session| {
+                    session
+                        .transient_messages
+                        .get(crate::domain::transient_message::TransientMessageSlot::BranchPublish)
+                })
+                .map(|message| message.body.text()),
+            Some("Publishing review request...")
+        );
     }
 
     #[tokio::test]

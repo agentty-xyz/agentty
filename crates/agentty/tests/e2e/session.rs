@@ -444,6 +444,37 @@ fn seed_rebase_transcript_session(env: &BuilderEnv) -> Result<(), Box<dyn std::e
     Ok(())
 }
 
+/// Seeds a review-ready worktree whose delayed successful push keeps the manual
+/// publish task visible long enough to verify session-chat responsiveness.
+fn seed_slow_successful_review_request_publish(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session_with_review_request(env)?;
+    let session_worktree = env.agentty_root.join("wt").join("review-s");
+    run_git(&session_worktree, &["branch", "-m", "wt/review-s"])?;
+
+    let real_git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|path| path.join("git"))
+        .find(|path| path.is_file())
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "git not found"))?;
+    let git_path = env.stub_bin.join("git");
+    let script = format!(
+        r#"#!/bin/sh
+if [ "$1" = "push" ]; then
+  sleep 3
+  exit 0
+fi
+exec '{}' "$@"
+"#,
+        real_git.display()
+    );
+    std::fs::write(&git_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&git_path, std::fs::Permissions::from_mode(0o755))?;
+
+    Ok(())
+}
+
 /// Seeds one published review-ready session whose latest auto-push completion
 /// is persisted as transcript output.
 fn seed_session_with_published_branch_push_notice(
@@ -3412,6 +3443,80 @@ fn review_request_publish_shortcut_opens_publish_popup() -> E2eResult {
                     "Leave blank to push as `wt/review-s`",
                     &full,
                 );
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that confirming review-request publish returns to an interactive
+/// session chat while the push runs in the background.
+#[test]
+fn review_request_publish_runs_in_background() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("review_request_background_publish")
+        .with_git()
+        .zola(
+            "Background review-request publish",
+            "Publish a review request in the background and receive its link in session chat.",
+            41,
+        )
+        .setup(seed_slow_successful_review_request_publish)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .press_key("p")
+                    .wait_for_stable_frame(300, 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Publishing review request...", 3000)
+                    .capture_labeled(
+                        "background_publish_started",
+                        "Review-request publish progress shown inline in session chat",
+                    )
+                    .press_key("?")
+                    .wait_for_text("Keybindings", 3000)
+                    .capture_labeled(
+                        "background_publish_help",
+                        "Session help remains available while publishing",
+                    )
+                    .press_key("q")
+                    .wait_for_text("GitHub pull request published", 10000)
+                    .capture_labeled(
+                        "background_publish_finished",
+                        "Successful publish and review-request link shown in session chat",
+                    )
+            },
+            |frame, report| {
+                let loading_frame = common::frame_from_capture(&report.captures[0]);
+                let loading_full = Region::full(loading_frame.cols(), loading_frame.rows());
+                assertion::assert_text_in_region(
+                    &loading_frame,
+                    "Publishing review request...",
+                    &loading_full,
+                );
+                assertion::assert_text_in_region(&loading_frame, "q: back", &loading_full);
+
+                let help_frame = common::frame_from_capture(&report.captures[1]);
+                let help_full = Region::full(help_frame.cols(), help_frame.rows());
+                assertion::assert_text_in_region(&help_frame, "Keybindings", &help_full);
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "GitHub pull request published", &full);
+                assertion::assert_text_in_region(
+                    frame,
+                    "Successfully published session branch wt/review-s.",
+                    &full,
+                );
+                assertion::assert_text_in_region(frame, "GitHub pull request #42", &full);
+                assertion::assert_text_in_region(
+                    frame,
+                    "https://github.com/agentty-xyz/agentty/pull/42",
+                    &full,
+                );
+                assertion::assert_text_in_region(frame, "q: back", &full);
             },
         )?;
 

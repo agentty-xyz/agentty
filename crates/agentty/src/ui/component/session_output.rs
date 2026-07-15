@@ -191,11 +191,10 @@ impl TranscriptFingerprint {
 pub(crate) struct SessionOutputLayout {
     /// Index of the active Tachyon loader row within `lines`, when present.
     pub(crate) active_loader_line_index: Option<usize>,
+    /// Index of the branch-operation loader row within `lines`, when present.
+    pub(crate) branch_operation_loader_line_index: Option<usize>,
     /// Number of rendered lines, saturated for scroll metric arithmetic.
     pub(crate) line_count: u16,
-    /// Index of the published-branch sync loader row within `lines`, when
-    /// present.
-    pub(crate) published_loader_line_index: Option<usize>,
     /// Rendered lines shared between scroll metrics and frame painting.
     pub(crate) lines: Arc<[Line<'static>]>,
 }
@@ -210,16 +209,16 @@ struct SessionOutputResolvedLayout {
 /// Fully assembled session-output lines plus metadata derived during assembly.
 struct SessionOutputLines {
     active_loader_line_index: Option<usize>,
+    branch_operation_loader_line_index: Option<usize>,
     lines: Vec<Line<'static>>,
-    published_loader_line_index: Option<usize>,
 }
 
 /// Cached stable output body shared across status-tail changes such as a
 /// review-ready session entering the rebase workflow.
 #[derive(Clone)]
 struct SessionOutputBody {
+    branch_operation_loader_line_index: Option<usize>,
     lines: Arc<[Line<'static>]>,
-    published_loader_line_index: Option<usize>,
 }
 
 /// One logical output block in the assembled session transcript panel.
@@ -268,11 +267,11 @@ struct SessionOutputAssembly<'a> {
     active_progress: Option<&'a str>,
     active_turn_has_visible_text: bool,
     active_turn_section: SessionOutputTranscriptSection<'a>,
+    branch_operation_loader_line_index: Option<usize>,
     completed_turn_section: SessionOutputTranscriptSection<'a>,
     inner_width: usize,
     lines: Vec<Line<'static>>,
     markdown_render_cache: Option<&'a markdown::MarkdownRenderCache>,
-    published_loader_line_index: Option<usize>,
     session: &'a Session,
     status: Status,
     trailing_notice_section: SessionOutputTranscriptSection<'a>,
@@ -315,8 +314,8 @@ impl SessionOutputAssembly<'_> {
 
         SessionOutputLines {
             active_loader_line_index: self.active_loader_line_index,
+            branch_operation_loader_line_index: self.branch_operation_loader_line_index,
             lines: self.lines,
-            published_loader_line_index: self.published_loader_line_index,
         }
     }
 
@@ -332,8 +331,8 @@ impl SessionOutputAssembly<'_> {
         }
 
         SessionOutputBody {
+            branch_operation_loader_line_index: self.branch_operation_loader_line_index,
             lines: Arc::from(self.lines),
-            published_loader_line_index: self.published_loader_line_index,
         }
     }
 
@@ -393,7 +392,7 @@ impl SessionOutputAssembly<'_> {
                 self.inner_width,
                 self.markdown_render_cache,
             ) {
-                self.published_loader_line_index = Some(self.lines.len().saturating_sub(1));
+                self.branch_operation_loader_line_index = Some(self.lines.len().saturating_sub(1));
             }
         }
     }
@@ -779,8 +778,8 @@ impl<'a> SessionOutput<'a> {
 
         SessionOutputLayout {
             active_loader_line_index: output_lines.active_loader_line_index,
+            branch_operation_loader_line_index: output_lines.branch_operation_loader_line_index,
             line_count,
-            published_loader_line_index: output_lines.published_loader_line_index,
             lines: Arc::<[Line<'static>]>::from(output_lines.lines),
         }
     }
@@ -813,8 +812,8 @@ impl<'a> SessionOutput<'a> {
 
         SessionOutputLayout {
             active_loader_line_index,
+            branch_operation_loader_line_index: body.branch_operation_loader_line_index,
             line_count,
-            published_loader_line_index: body.published_loader_line_index,
             lines: Arc::from(lines),
         }
     }
@@ -937,12 +936,12 @@ impl<'a> SessionOutput<'a> {
             active_loader_line_index: None,
             active_progress,
             active_turn_has_visible_text,
+            branch_operation_loader_line_index: None,
             active_turn_section: transcript_sections.active_turn,
             completed_turn_section: transcript_sections.completed_turn,
             inner_width,
             lines: Vec::new(),
             markdown_render_cache,
-            published_loader_line_index: None,
             session,
             status,
             trailing_notice_section: transcript_sections.trailing_notice,
@@ -1029,6 +1028,7 @@ impl<'a> SessionOutput<'a> {
                         session_format::format_review_markdown(markdown)
                     }
                     TransientMessageSlot::WorkflowNotice
+                    | TransientMessageSlot::BranchPublish
                     | TransientMessageSlot::PublishedBranchSync => markdown.clone(),
                 };
                 Self::append_markdown_lines(lines, &markdown, inner_width, markdown_render_cache);
@@ -1053,8 +1053,10 @@ impl<'a> SessionOutput<'a> {
             }
         }
 
-        message.slot == TransientMessageSlot::PublishedBranchSync
-            && matches!(message.body, TransientMessageBody::Loading(_))
+        matches!(
+            message.slot,
+            TransientMessageSlot::BranchPublish | TransientMessageSlot::PublishedBranchSync
+        ) && matches!(&message.body, TransientMessageBody::Loading(_))
     }
 
     /// Returns transcript sections from draft-preview text or typed message
@@ -1626,9 +1628,9 @@ impl Component for SessionOutput<'_> {
         } else {
             None
         };
-        let published_loader_area = Self::loader_area(
+        let branch_operation_loader_area = Self::loader_area(
             output_area,
-            layout.published_loader_line_index,
+            layout.branch_operation_loader_line_index,
             final_scroll,
         );
 
@@ -1659,7 +1661,7 @@ impl Component for SessionOutput<'_> {
         if let Some(loader_area) = active_loader_area {
             self.apply_tachyon_loader_effect(f.buffer_mut(), loader_area, spinner_frame);
         }
-        if let Some(loader_area) = published_loader_area {
+        if let Some(loader_area) = branch_operation_loader_area {
             TachyonLoaderEffect::apply_stateless(f.buffer_mut(), loader_area, spinner_frame);
         }
     }
@@ -1903,6 +1905,40 @@ mod tests {
         // Assert
         assert_eq!(first_layout.line_count, second_layout.line_count);
         assert!(Arc::ptr_eq(&first_layout.lines, &second_layout.lines));
+    }
+
+    #[test]
+    fn test_output_layout_cache_tracks_manual_branch_publish_loader() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::Review;
+        session.transient_messages.upsert(TransientMessage {
+            anchor: TransientMessageAnchor::Tail,
+            body: TransientMessageBody::Loading("Publishing review request...".to_string()),
+            lifecycle: crate::domain::transient_message::TransientMessageLifecycle::UntilResolved,
+            slot: TransientMessageSlot::BranchPublish,
+            turn_position: None,
+        });
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let output_layout_cache = SessionOutputLayoutCache::default();
+
+        // Act
+        let layout = output_layout_cache.layout(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            line_context(),
+            Some(&markdown_render_cache),
+        );
+        let loader_line_index = layout
+            .branch_operation_loader_line_index
+            .expect("manual publish loader should be tracked through the layout cache");
+
+        // Assert
+        assert!(
+            layout.lines[loader_line_index]
+                .to_string()
+                .contains("Publishing review request...")
+        );
     }
 
     /// Verifies workflow-only status changes reuse the stable transcript body
@@ -2848,6 +2884,40 @@ mod tests {
         assert!(text.contains(review_status_message));
     }
 
+    /// Verifies a manual review-request publish renders as an animated
+    /// session-chat row instead of requiring a modal loading popup.
+    #[test]
+    fn test_output_lines_tracks_manual_branch_publish_loader() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::Review;
+        session.transient_messages.upsert(TransientMessage {
+            anchor: TransientMessageAnchor::Tail,
+            body: TransientMessageBody::Loading("Publishing review request...".to_string()),
+            lifecycle: crate::domain::transient_message::TransientMessageLifecycle::UntilResolved,
+            slot: TransientMessageSlot::BranchPublish,
+            turn_position: None,
+        });
+
+        // Act
+        let lines = SessionOutput::output_lines_with_metadata(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            line_context(),
+            None,
+        );
+        let loader_line_index = lines
+            .branch_operation_loader_line_index
+            .expect("manual publish loader should be tracked");
+
+        // Assert
+        assert!(
+            lines.lines[loader_line_index]
+                .to_string()
+                .contains("Publishing review request...")
+        );
+    }
+
     /// Verifies completed published-branch pushes render through transcript
     /// notices instead of appending a sticky synthetic status row.
     #[test]
@@ -2879,7 +2949,7 @@ mod tests {
             .join("\n");
 
         // Assert
-        assert_eq!(lines.published_loader_line_index, None);
+        assert_eq!(lines.branch_operation_loader_line_index, None);
         assert!(text.contains("[Branch Push]"));
         assert_eq!(
             text.matches("Auto-pushed published branch after completed turn.")
