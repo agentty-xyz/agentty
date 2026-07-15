@@ -11,7 +11,7 @@ use app::branch_publish::{
     branch_publish_success_title as branch_publish_success_title_text,
     detected_forge_kind_from_git_push_error, git_push_authentication_message,
     is_git_push_authentication_error,
-    pull_request_publish_success_message as pull_request_publish_success_message_text,
+    review_request_created_notice as review_request_created_notice_text,
 };
 use app::reducer::AppEventReducer;
 use app::review::{
@@ -834,7 +834,8 @@ impl App {
             .await;
 
         for branch_publish_action_update in event_batch.branch_publish_action_updates {
-            self.apply_branch_publish_action_update(branch_publish_action_update);
+            self.apply_branch_publish_action_update(branch_publish_action_update)
+                .await;
         }
 
         let applied_review_request_status_update = event_batch
@@ -1604,13 +1605,13 @@ impl App {
     }
 
     /// Applies one completed branch-publish action to the session chat.
-    pub(super) fn apply_branch_publish_action_update(
+    pub(super) async fn apply_branch_publish_action_update(
         &mut self,
         branch_publish_action_update: BranchPublishActionUpdate,
     ) {
         let BranchPublishActionUpdate { result, session_id } = branch_publish_action_update;
 
-        let result_message = match result {
+        match result {
             Ok(BranchPublishTaskSuccess::Pushed {
                 branch_name,
                 review_request_creation,
@@ -1619,38 +1620,49 @@ impl App {
                 self.sessions
                     .apply_published_upstream_ref(&session_id, upstream_reference);
 
-                TransientMessageBody::Markdown(format!(
+                let result_message = TransientMessageBody::Markdown(format!(
                     "**{}**\n\n{}",
                     Self::branch_publish_success_title(PublishBranchAction::Push),
                     Self::branch_publish_success_message(
                         &branch_name,
                         review_request_creation.as_ref(),
                     )
-                ))
+                ));
+                self.sessions
+                    .finish_branch_publish(&session_id, result_message);
             }
             Ok(BranchPublishTaskSuccess::PullRequestPublished {
-                branch_name,
                 review_request,
                 upstream_reference,
+                ..
             }) => {
                 self.sessions
                     .apply_published_upstream_ref(&session_id, upstream_reference);
                 self.sessions
                     .apply_review_request(&session_id, review_request.clone());
 
-                TransientMessageBody::Markdown(format!(
-                    "**{}**\n\n{}",
-                    Self::review_request_publish_success_title(&review_request),
-                    Self::pull_request_publish_success_message(&branch_name, &review_request)
-                ))
+                let persistent_notice = Self::review_request_created_notice(&review_request);
+                if self
+                    .sessions
+                    .finish_review_request_publish(&session_id, &persistent_notice)
+                {
+                    SessionTaskService::persist_workflow_notice(
+                        self.services.db(),
+                        &session_id,
+                        &persistent_notice,
+                    )
+                    .await;
+                }
             }
-            Err(failure) => TransientMessageBody::Markdown(format!(
-                "**{}**\n\n{}",
-                failure.title, failure.message
-            )),
-        };
-        self.sessions
-            .finish_branch_publish(&session_id, result_message);
+            Err(failure) => {
+                let result_message = TransientMessageBody::Markdown(format!(
+                    "**{}**\n\n{}",
+                    failure.title, failure.message
+                ));
+                self.sessions
+                    .finish_branch_publish(&session_id, result_message);
+            }
+        }
     }
 
     /// Applies one background review-request status refresh.
@@ -1876,21 +1888,12 @@ impl App {
         )
     }
 
-    /// Returns the success popup title for one completed review-request
+    /// Returns the durable transcript notice for one completed review-request
     /// publish.
-    pub(super) fn review_request_publish_success_title(
+    pub(super) fn review_request_created_notice(
         review_request: &crate::domain::session::ReviewRequest,
     ) -> String {
-        crate::app::branch_publish::review_request_publish_success_title(review_request)
-    }
-
-    /// Returns the success popup body for one completed review-request
-    /// publish.
-    pub(super) fn pull_request_publish_success_message(
-        branch_name: &str,
-        review_request: &crate::domain::session::ReviewRequest,
-    ) -> String {
-        pull_request_publish_success_message_text(branch_name, review_request)
+        review_request_created_notice_text(review_request)
     }
 
     /// Builds final sync popup mode from background sync completion result.

@@ -139,8 +139,12 @@ Manual branch and review-request publishing returns from its branch-name popup t
 `AppMode::View` before spawning the task. Its session-scoped transient slot renders the
 animated progress row, then the terminal reducer event replaces that row with inline
 success or failure output without changing whichever app mode is active at completion.
-The manual task holds the same per-session branch-operation lock as completed-turn
-auto-push for its full push and forge-metadata workflow.
+Successful review-request creation retracts the transient row and appends its
+single-line URL result as a durable `WorkflowNotice` at the current transcript position.
+Later turns therefore leave the result in its original history position instead of
+reconstructing a transient between turns. The manual task holds the same per-session
+branch-operation lock as completed-turn auto-push for its full push and forge-metadata
+workflow.
 
 Published-branch auto-push completion sends one terminal reducer event carrying its
 `WorkflowNotice`. After accepting the current operation identifier, the reducer persists

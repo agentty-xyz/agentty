@@ -2993,6 +2993,50 @@ mod tests {
         );
     }
 
+    /// Verifies persisted review-request creation renders as one logical
+    /// transcript line.
+    #[test]
+    fn test_output_lines_renders_persisted_review_request_on_one_line() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::InProgress;
+        let created_message =
+            "[Review Request] Created PR https://github.com/agentty-xyz/agentty/pull/42";
+        set_conversation_transcript(
+            &mut session,
+            vec![
+                (SessionMessageKind::AssistantAnswer, "Published the changes."),
+                (
+                    SessionMessageKind::WorkflowNotice,
+                    "\n[Review Request] Created PR \
+                     https://github.com/agentty-xyz/agentty/pull/42\n",
+                ),
+                (SessionMessageKind::UserPrompt, "continue the session"),
+            ],
+        );
+
+        // Act
+        let lines = output_lines(&session, Rect::new(0, 0, 120, 8), line_context(), None);
+
+        // Assert
+        let created_message_index = lines
+            .iter()
+            .position(|line| line.to_string() == created_message)
+            .expect("review request notice should be rendered");
+        let later_prompt_index = lines
+            .iter()
+            .position(|line| line.to_string().contains("continue the session"))
+            .expect("later user prompt should be rendered");
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.to_string() == created_message)
+                .count(),
+            1
+        );
+        assert!(created_message_index < later_prompt_index);
+    }
+
     /// Verifies completed published-branch pushes render through transcript
     /// notices instead of appending a sticky synthetic status row.
     #[test]
