@@ -1039,9 +1039,9 @@ impl App {
             .await
     }
 
-    /// Queues one chat prompt for an existing `InProgress` session so the
-    /// session worker dispatches it as the next turn once the running turn
-    /// finishes.
+    /// Queues one chat prompt for an existing `InProgress` or `Rebasing`
+    /// session so the session worker dispatches it as the next turn once the
+    /// active operation finishes.
     ///
     /// # Errors
     /// Returns the underlying [`crate::app::session::SessionError`] when

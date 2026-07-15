@@ -644,13 +644,14 @@ fn is_view_action_allowed(status: Status) -> bool {
 
 /// Returns whether `Enter` can open the chat composer.
 ///
-/// Allowing `Enter` during `InProgress` lets users queue follow-up chat
-/// messages without waiting for the running turn to return to `Review`.
+/// Allowing `Enter` during `InProgress` or `Rebasing` lets users queue
+/// follow-up chat messages without waiting for the active operation to return
+/// to `Review`.
 /// Slash-command shortcuts and other action keys still require
-/// [`is_view_action_allowed`] so terminal or rebasing sessions are not
+/// [`is_view_action_allowed`] so terminal or busy sessions are not
 /// accidentally re-driven.
 fn is_view_chat_allowed(status: Status) -> bool {
-    is_view_action_allowed(status) || matches!(status, Status::InProgress)
+    is_view_action_allowed(status) || matches!(status, Status::InProgress | Status::Rebasing)
 }
 
 /// Returns whether the `d` shortcut can open the diff view.
@@ -1321,6 +1322,27 @@ mod tests {
         assert!(review_allowed);
         assert!(!in_progress_allowed);
         assert!(!done_allowed);
+    }
+
+    #[test]
+    fn test_is_view_chat_allowed_includes_in_progress_and_rebasing() {
+        // Arrange
+        let review_status = Status::Review;
+        let in_progress_status = Status::InProgress;
+        let rebasing_status = Status::Rebasing;
+        let merging_status = Status::Merging;
+
+        // Act
+        let review_allowed = is_view_chat_allowed(review_status);
+        let in_progress_allowed = is_view_chat_allowed(in_progress_status);
+        let rebasing_allowed = is_view_chat_allowed(rebasing_status);
+        let merging_allowed = is_view_chat_allowed(merging_status);
+
+        // Assert
+        assert!(review_allowed);
+        assert!(in_progress_allowed);
+        assert!(rebasing_allowed);
+        assert!(!merging_allowed);
     }
 
     #[test]
