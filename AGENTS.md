@@ -375,8 +375,8 @@ Use slower hygiene hooks only in CI or when making broader changes. Consult
 
 - Run local broad checks when relevant: coverage summary, member source tests,
   `zola-check`, `cargo-machete`, and `cargo-audit`.
-- Do not run GitHub-only `coverage-lcov` or the full `test-agentty-e2e` suite locally;
-  `.github/workflows/postsubmit.yml` owns those after merge to `main`.
+- Do not run the full `test-agentty-e2e` suite locally; GitHub presubmit and postsubmit
+  workflows own it.
 
 ### Test Failure Protocol
 

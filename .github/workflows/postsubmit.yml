@@ -76,10 +76,11 @@ jobs:
           cargo-llvm-cov: "true"
           llvm-tools-preview: "true"
 
-      - name: Generate coverage report
-        run: prek run coverage-lcov --all-files --hook-stage manual
+      - name: Generate and check coverage report
+        run: prek run coverage --all-files --hook-stage manual
 
       - name: Summarize coverage
+        if: ${{ !cancelled() && hashFiles('coverage.lcov') != '' }}
         run: |
           # Summarize LCOV totals in the GitHub Actions run summary.
           awk '
@@ -109,6 +110,7 @@ jobs:
           ' coverage.lcov >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload coverage report
+        if: ${{ !cancelled() && hashFiles('coverage.lcov') != '' }}
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           fail_ci_if_error: true

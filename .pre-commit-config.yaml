@@ -165,23 +165,14 @@ repos:
         stages: [manual]
       - id: coverage
         name: coverage
-        description: Verify source-test coverage meets workspace ratchet thresholds with `cargo-llvm-cov` and Nextest.
+        description: Verify source-test coverage meets workspace ratchet thresholds and write the CI LCOV report.
         entry: >-
           cargo llvm-cov nextest --workspace --lib --bins --locked --profile ci
           --fail-under-lines 91 --fail-under-functions 91
-        language: system
-        types: [rust]
-        pass_filenames: false
-        stages: [manual]
-      - id: coverage-lcov
-        name: coverage lcov
-        description: Generate the postsubmit Nextest LCOV report uploaded to Codecov, excluding `crates/agentty/tests`.
-        entry: >-
-          cargo llvm-cov nextest --workspace --lib --bins --locked --profile ci
           --lcov --ignore-filename-regex '^crates/agentty/tests/'
           --output-path coverage.lcov
         language: system
-        always_run: true
+        types: [rust]
         pass_filenames: false
         stages: [manual]
       - id: cargo-machete
