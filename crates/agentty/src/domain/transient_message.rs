@@ -1,7 +1,11 @@
 //! Explicit lifecycle state for non-durable session-output messages.
 
+use std::hash::{Hash, Hasher};
+
+use rustc_hash::FxHasher;
+
 /// Stable identity for one replaceable session-output message.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) enum TransientMessageSlot {
     /// Published session summary for the latest completed turn.
     Summary,
@@ -16,7 +20,7 @@ pub(crate) enum TransientMessageSlot {
 }
 
 /// Placement of one transient message relative to durable transcript content.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum TransientMessageAnchor {
     /// Immediately after durable content from the latest completed turn.
     AfterCompletedTurn,
@@ -25,7 +29,7 @@ pub(crate) enum TransientMessageAnchor {
 }
 
 /// Removal policy for one transient message.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum TransientMessageLifecycle {
     /// Remove when a later user turn becomes active.
     ClearOnNewTurn,
@@ -34,7 +38,7 @@ pub(crate) enum TransientMessageLifecycle {
 }
 
 /// Typed content for one transient message.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum TransientMessageBody {
     /// Markdown content rendered through the shared markdown cache.
     Markdown(String),
@@ -54,7 +58,7 @@ impl TransientMessageBody {
 }
 
 /// One replaceable session-output message with explicit placement and lifetime.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct TransientMessage {
     pub(crate) anchor: TransientMessageAnchor,
     pub(crate) body: TransientMessageBody,
@@ -66,11 +70,14 @@ pub(crate) struct TransientMessage {
 
 /// Per-session slot store for non-durable output messages.
 ///
-/// `version` is the cache key and changes only when observable slot content
-/// changes. Slots use canonical enum order rather than async event arrival
-/// order, so status replacement does not move surrounding output.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+/// `version` changes only when observable slot content changes. `fingerprint`
+/// gives render caches a content identity that remains valid when refreshes
+/// reconstruct an equivalent store with a new local version sequence. Slots
+/// use canonical enum order rather than async event arrival order, so status
+/// replacement does not move surrounding output.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TransientMessageStore {
+    fingerprint: u64,
     messages: Vec<TransientMessage>,
     version: u64,
 }
@@ -79,6 +86,12 @@ impl TransientMessageStore {
     /// Returns the monotonic observable-content version.
     pub(crate) fn version(&self) -> u64 {
         self.version
+    }
+
+    /// Returns a content-derived cache identity that remains stable when
+    /// equivalent messages are reconstructed in a refreshed session snapshot.
+    pub(crate) fn fingerprint(&self) -> u64 {
+        self.fingerprint
     }
 
     /// Returns all current messages in stable display order.
@@ -142,6 +155,27 @@ impl TransientMessageStore {
 
     fn bump_version(&mut self) {
         self.version = self.version.wrapping_add(1);
+        self.fingerprint = Self::calculate_fingerprint(&self.messages);
+    }
+
+    fn calculate_fingerprint(messages: &[TransientMessage]) -> u64 {
+        let mut hasher = FxHasher::default();
+        messages.hash(&mut hasher);
+
+        hasher.finish()
+    }
+}
+
+impl Default for TransientMessageStore {
+    fn default() -> Self {
+        let messages = Vec::new();
+        let fingerprint = Self::calculate_fingerprint(&messages);
+
+        Self {
+            fingerprint,
+            messages,
+            version: 0,
+        }
     }
 }
 
@@ -204,5 +238,48 @@ mod tests {
         assert!(store.get(TransientMessageSlot::Review).is_some());
         assert!(store.get(TransientMessageSlot::WorkflowNotice).is_none());
         assert!(store.get(TransientMessageSlot::BranchPublish).is_some());
+    }
+
+    #[test]
+    fn fingerprint_distinguishes_reconstructed_stores_with_matching_versions() {
+        // Arrange
+        let mut loading_store = TransientMessageStore::default();
+        loading_store.upsert(TransientMessage {
+            anchor: TransientMessageAnchor::Tail,
+            body: TransientMessageBody::Loading("Reviewing changes".to_string()),
+            lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
+            slot: TransientMessageSlot::Review,
+            turn_position: Some(1),
+        });
+        let mut ready_store = TransientMessageStore::default();
+        ready_store.upsert(message(
+            TransientMessageSlot::Review,
+            "## Review\nFinding",
+            1,
+        ));
+
+        // Act
+        let loading_fingerprint = loading_store.fingerprint();
+        let ready_fingerprint = ready_store.fingerprint();
+
+        // Assert
+        assert_eq!(loading_store.version(), ready_store.version());
+        assert_ne!(loading_fingerprint, ready_fingerprint);
+    }
+
+    #[test]
+    fn fingerprint_matches_fresh_store_after_last_message_is_retracted() {
+        // Arrange
+        let fresh_store = TransientMessageStore::default();
+        let mut emptied_store = TransientMessageStore::default();
+        emptied_store.upsert(message(TransientMessageSlot::Review, "review", 1));
+
+        // Act
+        let retracted_message = emptied_store.retract(TransientMessageSlot::Review);
+
+        // Assert
+        assert!(retracted_message.is_some());
+        assert!(emptied_store.messages().is_empty());
+        assert_eq!(emptied_store.fingerprint(), fresh_store.fingerprint());
     }
 }

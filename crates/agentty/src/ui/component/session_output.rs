@@ -48,9 +48,9 @@ const USER_PROMPT_TAB_WIDTH: usize = 4;
 /// The key is intentionally tied to the session identifier plus observable
 /// update version and `updated_at` timestamp instead of hashing the full
 /// transcript on every frame. Width, active prompt, queued messages, review
-/// text/status, progress text, and markdown style version cover the transient
-/// inputs that can alter rendered lines without changing the stored session
-/// row.
+/// state fingerprint, progress text, and markdown style version cover the
+/// transient inputs that can alter rendered lines without changing the stored
+/// session row.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SessionOutputLayoutCacheKey {
     active_progress: TextFingerprint,
@@ -66,6 +66,7 @@ struct SessionOutputLayoutCacheKey {
     session_updated_at: i64,
     status: Status,
     theme_cache_version: u64,
+    transient_message_fingerprint: u64,
     transient_message_version: u64,
     transcript: TranscriptFingerprint,
 }
@@ -82,6 +83,7 @@ struct SessionOutputBodyCacheKey {
     queued_messages: TextFingerprint,
     session_id: SessionId,
     theme_cache_version: u64,
+    transient_message_fingerprint: u64,
     transient_message_version: u64,
     transcript: TranscriptFingerprint,
 }
@@ -843,6 +845,7 @@ impl<'a> SessionOutput<'a> {
             session_updated_at: session.updated_at,
             status: session.status,
             theme_cache_version: style::active_theme_cache_version(),
+            transient_message_fingerprint: session.transient_messages.fingerprint(),
             transient_message_version: session.transient_messages.version(),
             transcript: TranscriptFingerprint::from_session(session),
         }
@@ -869,6 +872,7 @@ impl<'a> SessionOutput<'a> {
             ),
             session_id: session.id.clone(),
             theme_cache_version: style::active_theme_cache_version(),
+            transient_message_fingerprint: session.transient_messages.fingerprint(),
             transient_message_version: session.transient_messages.version(),
             transcript: TranscriptFingerprint::from_session(session),
         }
@@ -2253,6 +2257,77 @@ mod tests {
         // Assert
         assert!(review_layout.line_count > base_layout.line_count);
         assert!(!Arc::ptr_eq(&base_layout.lines, &review_layout.lines));
+    }
+
+    #[test]
+    fn test_output_cache_distinguishes_rebuilt_review_states_with_matching_versions() {
+        // Arrange
+        let mut loading_session = session_fixture();
+        loading_session.status = Status::AgentReview;
+        loading_session.transient_messages.upsert(TransientMessage {
+            anchor: TransientMessageAnchor::Tail,
+            body: TransientMessageBody::Loading("Reviewing changes".to_string()),
+            lifecycle: crate::domain::transient_message::TransientMessageLifecycle::ClearOnNewTurn,
+            slot: TransientMessageSlot::Review,
+            turn_position: None,
+        });
+        let mut ready_session = session_fixture();
+        ready_session.status = Status::Review;
+        set_review_transient(
+            &mut ready_session,
+            TransientMessageBody::Markdown("## Review\n\n- Stable finding".to_string()),
+        );
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let loading_then_ready_cache = SessionOutputLayoutCache::default();
+        let ready_then_loading_cache = SessionOutputLayoutCache::default();
+        let output_area = Rect::new(0, 0, 80, 8);
+
+        // Act
+        loading_then_ready_cache.layout(
+            &loading_session,
+            output_area,
+            line_context(),
+            Some(&markdown_render_cache),
+        );
+        let refreshed_ready_layout = loading_then_ready_cache.layout(
+            &ready_session,
+            output_area,
+            line_context(),
+            Some(&markdown_render_cache),
+        );
+        ready_then_loading_cache.layout(
+            &ready_session,
+            output_area,
+            line_context(),
+            Some(&markdown_render_cache),
+        );
+        let regenerated_loading_layout = ready_then_loading_cache.layout(
+            &loading_session,
+            output_area,
+            line_context(),
+            Some(&markdown_render_cache),
+        );
+        let refreshed_ready_text = refreshed_ready_layout
+            .lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let regenerated_loading_text = regenerated_loading_layout
+            .lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert_eq!(loading_session.id, ready_session.id);
+        assert_eq!(
+            loading_session.transient_messages.version(),
+            ready_session.transient_messages.version()
+        );
+        assert!(refreshed_ready_text.contains("Stable finding"));
+        assert!(!regenerated_loading_text.contains("Stable finding"));
     }
 
     #[test]
