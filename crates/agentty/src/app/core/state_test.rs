@@ -20,7 +20,7 @@ use crate::domain::session::{
     ForgeKind, PublishedBranchSyncStatus, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
     SESSION_DATA_DIR, SessionFollowUpTask, SessionHandles, SessionSize, SessionStats, Status,
 };
-use crate::domain::session_message::SessionTranscript;
+use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::setting::SettingName;
 use crate::infra::db::AppRepositories;
 use crate::infra::project_discovery::{HOME_PROJECT_SCAN_MAX_RESULTS, RealProjectDiscoveryClient};
@@ -995,6 +995,24 @@ async fn new_test_app_with_selected_session(
     app
 }
 
+/// Inserts the selected session into the test database for durable transcript
+/// assertions.
+async fn persist_selected_session(app: &App) {
+    let project_id = app
+        .services
+        .db()
+        .projects()
+        .upsert_project("/tmp/project", Some("main".to_string()))
+        .await
+        .expect("failed to insert project");
+    app.services
+        .db()
+        .sessions()
+        .insert_session("session-1", "gpt-5.5", "main", "Review", project_id)
+        .await
+        .expect("failed to insert session");
+}
+
 #[test]
 fn branch_publish_inline_helpers_format_copy() {
     // Act
@@ -1536,7 +1554,8 @@ async fn apply_branch_publish_action_update_sets_inline_success() {
             upstream_reference: "origin/wt/session-1".to_string(),
         }),
         session_id: "session-1".into(),
-    });
+    })
+    .await;
 
     // Assert
     assert!(matches!(app.mode, AppMode::List));
@@ -1564,7 +1583,7 @@ async fn apply_branch_publish_action_update_sets_inline_success() {
 }
 
 #[tokio::test]
-async fn apply_branch_publish_action_update_sets_inline_pull_request_success() {
+async fn apply_branch_publish_action_update_persists_pull_request_notice() {
     // Arrange
     let session_folder = tempdir().expect("failed to create temp dir");
     let mut app = new_test_app_with_selected_session(
@@ -1573,6 +1592,10 @@ async fn apply_branch_publish_action_update_sets_inline_pull_request_success() {
         Arc::new(MockTmuxClient::new()),
     )
     .await;
+    persist_selected_session(&app).await;
+    app.sessions
+        .session_handles_mut()
+        .insert("session-1".into(), SessionHandles::new(Status::Review));
     app.mode = AppMode::List;
     let review_request = crate::domain::session::ReviewRequest {
         last_refreshed_at: 55,
@@ -1590,20 +1613,72 @@ async fn apply_branch_publish_action_update_sets_inline_pull_request_success() {
             upstream_reference: "origin/wt/session-1".to_string(),
         }),
         session_id: "session-1".into(),
-    });
+    })
+    .await;
 
     // Assert
     assert!(matches!(app.mode, AppMode::List));
-    let publish_message = app.sessions.state().sessions()[0]
-        .transient_messages
-        .get(crate::domain::transient_message::TransientMessageSlot::BranchPublish)
-        .expect("review request publish result should be visible inline")
-        .body
-        .text();
-    assert!(publish_message.contains("GitHub pull request published"));
-    assert!(publish_message.contains("Successfully published session branch `wt/session-1`."));
-    assert!(publish_message.contains("GitHub pull request #42"));
-    assert!(publish_message.contains("https://github.com/agentty-xyz/agentty/pull/42"));
+    assert!(
+        app.sessions.state().sessions()[0]
+            .transient_messages
+            .get(crate::domain::transient_message::TransientMessageSlot::BranchPublish)
+            .is_none()
+    );
+    let transcript = app.sessions.state().sessions()[0]
+        .transcript
+        .as_ref()
+        .expect("review request notice should be appended to transcript");
+    let transcript_notice = transcript
+        .messages()
+        .last()
+        .expect("review request notice should be present");
+    assert_eq!(transcript_notice.kind, SessionMessageKind::WorkflowNotice);
+    assert_eq!(
+        transcript_notice.content,
+        "\n[Review Request] Created PR https://github.com/agentty-xyz/agentty/pull/42\n"
+    );
+    let persisted_messages = app
+        .services
+        .db()
+        .sessions()
+        .load_session_messages("session-1")
+        .await
+        .expect("failed to load persisted session messages");
+    assert_eq!(persisted_messages.len(), 1);
+    assert_eq!(
+        persisted_messages[0].kind,
+        SessionMessageKind::WorkflowNotice.as_str()
+    );
+    assert_eq!(persisted_messages[0].content, transcript_notice.content);
+    {
+        let handles = app
+            .sessions
+            .session_handles()
+            .get("session-1")
+            .expect("session handles should exist");
+        let mut live_transcript = handles
+            .transcript
+            .lock()
+            .expect("session transcript lock should succeed");
+        live_transcript.append_message(SessionMessageKind::UserPrompt, "continue the session");
+    }
+    app.sessions
+        .state_mut()
+        .sync_session_from_handle("session-1");
+    let messages_after_new_turn = app.sessions.state().sessions()[0]
+        .transcript
+        .as_ref()
+        .expect("session transcript should remain available")
+        .messages();
+    assert_eq!(messages_after_new_turn.len(), 2);
+    assert_eq!(
+        messages_after_new_turn[0].kind,
+        SessionMessageKind::WorkflowNotice
+    );
+    assert_eq!(
+        messages_after_new_turn[1].kind,
+        SessionMessageKind::UserPrompt
+    );
     assert_eq!(
         app.sessions
             .state()
@@ -1615,7 +1690,7 @@ async fn apply_branch_publish_action_update_sets_inline_pull_request_success() {
 }
 
 #[tokio::test]
-async fn apply_branch_publish_action_update_sets_inline_gitlab_merge_request_success() {
+async fn apply_branch_publish_action_update_persists_gitlab_merge_request_notice() {
     // Arrange
     let session_folder = tempdir().expect("failed to create temp dir");
     let mut app = new_test_app_with_selected_session(
@@ -1624,6 +1699,9 @@ async fn apply_branch_publish_action_update_sets_inline_gitlab_merge_request_suc
         Arc::new(MockTmuxClient::new()),
     )
     .await;
+    persist_selected_session(&app).await;
+    app.sessions
+        .start_branch_publish("session-1", "Publishing review request...".to_string());
     app.mode = AppMode::List;
     let review_request = crate::domain::session::ReviewRequest {
         last_refreshed_at: 77,
@@ -1647,20 +1725,41 @@ async fn apply_branch_publish_action_update_sets_inline_gitlab_merge_request_suc
             upstream_reference: "origin/wt/session-1".to_string(),
         }),
         session_id: "session-1".into(),
-    });
+    })
+    .await;
 
     // Assert
     assert!(matches!(app.mode, AppMode::List));
-    let publish_message = app.sessions.state().sessions()[0]
-        .transient_messages
-        .get(crate::domain::transient_message::TransientMessageSlot::BranchPublish)
-        .expect("merge request publish result should be visible inline")
-        .body
-        .text();
-    assert!(publish_message.contains("GitLab merge request published"));
-    assert!(publish_message.contains("Successfully published session branch `wt/session-1`."));
-    assert!(publish_message.contains("GitLab merge request !24"));
-    assert!(publish_message.contains("https://gitlab.com/agentty-xyz/agentty/-/merge_requests/24"));
+    assert!(
+        app.sessions.state().sessions()[0]
+            .transient_messages
+            .get(crate::domain::transient_message::TransientMessageSlot::BranchPublish)
+            .is_none()
+    );
+    let transcript_notice = app.sessions.state().sessions()[0]
+        .transcript
+        .as_ref()
+        .and_then(|transcript| transcript.messages().last())
+        .expect("merge request notice should be appended to transcript");
+    assert_eq!(transcript_notice.kind, SessionMessageKind::WorkflowNotice);
+    assert_eq!(
+        transcript_notice.content,
+        "\n[Review Request] Created MR \
+         https://gitlab.com/agentty-xyz/agentty/-/merge_requests/24\n"
+    );
+    let persisted_messages = app
+        .services
+        .db()
+        .sessions()
+        .load_session_messages("session-1")
+        .await
+        .expect("failed to load persisted session messages");
+    assert_eq!(persisted_messages.len(), 1);
+    assert_eq!(
+        persisted_messages[0].kind,
+        SessionMessageKind::WorkflowNotice.as_str()
+    );
+    assert_eq!(persisted_messages[0].content, transcript_notice.content);
 }
 
 #[tokio::test]
@@ -1682,7 +1781,8 @@ async fn apply_branch_publish_action_update_keeps_active_mode_on_failure() {
             "remote rejected".to_string(),
         )),
         session_id: "session-1".into(),
-    });
+    })
+    .await;
 
     // Assert
     assert!(matches!(app.mode, AppMode::List));

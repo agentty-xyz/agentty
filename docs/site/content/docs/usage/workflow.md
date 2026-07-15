@@ -343,11 +343,13 @@ publish popup for the linked forge review request:
 - Agentty publishes with `git push --force-with-lease`, then creates or refreshes the
   linked review request. After confirmation, the popup closes and publishing continues
   in the background while session chat remains interactive. Inline progress is replaced
-  by an explicit success message with the review-request URL, or by failure details,
-  when the task finishes; `p` stays hidden while that publish is active. GitHub projects
-  publish pull requests; GitLab projects publish merge requests. Manual publishing and
-  completed-turn auto-push share one per-session branch-operation lock, so whichever
-  starts later waits instead of force-pushing the same branch concurrently.
+  by a one-line `[Review Request] Created PR URL` or `[Review Request] Created MR URL`
+  transcript notice recorded at that point in session history, or by failure details
+  when the task finishes; `p` stays hidden while that publish is active. Later turns do
+  not move or reconstruct the creation notice. GitHub projects publish pull requests;
+  GitLab projects publish merge requests. Manual publishing and completed-turn auto-push
+  share one per-session branch-operation lock, so whichever starts later waits instead
+  of force-pushing the same branch concurrently.
 - Stacked child review requests target the parent review branch while the parent link is
   active.
 - When no review request is linked yet, only an open request for the same branch is

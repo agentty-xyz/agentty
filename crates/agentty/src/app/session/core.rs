@@ -478,6 +478,39 @@ impl SessionManager {
         }
     }
 
+    /// Promotes completed review-request creation into durable transcript
+    /// history and removes its transient loading row.
+    pub(crate) fn finish_review_request_publish(
+        &mut self,
+        session_id: &str,
+        persistent_notice: &str,
+    ) -> bool {
+        let appended_to_handle =
+            self.append_workflow_notice_to_handle(session_id, persistent_notice);
+        if appended_to_handle {
+            self.state.sync_session_from_handle(session_id);
+        }
+        let Some(session) = self
+            .state
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        else {
+            return false;
+        };
+        if !appended_to_handle {
+            session
+                .transcript
+                .get_or_insert_default()
+                .append_message(SessionMessageKind::WorkflowNotice, persistent_notice);
+        }
+        session
+            .transient_messages
+            .retract(TransientMessageSlot::BranchPublish);
+
+        true
+    }
+
     /// Marks one session branch as currently auto-syncing to its published
     /// upstream reference.
     pub(crate) fn start_published_branch_sync(
@@ -525,17 +558,11 @@ impl SessionManager {
         self.published_branch_sync_operations.remove(session_id);
 
         let appended_to_handle = persistent_notice.is_some_and(|persistent_notice| {
-            let Some(handles) = self.state.handles.get(session_id) else {
-                return false;
-            };
-            let Ok(mut transcript) = handles.transcript.lock() else {
-                return false;
-            };
-
-            transcript.append_message(SessionMessageKind::WorkflowNotice, persistent_notice);
-
-            true
+            self.append_workflow_notice_to_handle(session_id, persistent_notice)
         });
+        if appended_to_handle {
+            self.state.sync_session_from_handle(session_id);
+        }
 
         let Some(session) = self
             .state
@@ -869,6 +896,21 @@ impl SessionManager {
             position,
             launched_session_id,
         );
+    }
+
+    /// Appends one workflow notice to a live transcript handle when the
+    /// session currently owns one.
+    fn append_workflow_notice_to_handle(&self, session_id: &str, persistent_notice: &str) -> bool {
+        let Some(handles) = self.state.handles.get(session_id) else {
+            return false;
+        };
+        let Ok(mut transcript) = handles.transcript.lock() else {
+            return false;
+        };
+
+        transcript.append_message(SessionMessageKind::WorkflowNotice, persistent_notice);
+
+        true
     }
 }
 

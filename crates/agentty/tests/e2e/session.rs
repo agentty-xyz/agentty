@@ -3483,10 +3483,10 @@ fn review_request_publish_runs_in_background() -> E2eResult {
                         "Session help remains available while publishing",
                     )
                     .press_key("q")
-                    .wait_for_text("GitHub pull request published", 10000)
+                    .wait_for_text("[Review Request] Created PR", 10000)
                     .capture_labeled(
                         "background_publish_finished",
-                        "Successful publish and review-request link shown in session chat",
+                        "Review-request link recorded in session transcript history",
                     )
             },
             |frame, report| {
@@ -3504,16 +3504,9 @@ fn review_request_publish_runs_in_background() -> E2eResult {
                 assertion::assert_text_in_region(&help_frame, "Keybindings", &help_full);
 
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "GitHub pull request published", &full);
                 assertion::assert_text_in_region(
                     frame,
-                    "Successfully published session branch wt/review-s.",
-                    &full,
-                );
-                assertion::assert_text_in_region(frame, "GitHub pull request #42", &full);
-                assertion::assert_text_in_region(
-                    frame,
-                    "https://github.com/agentty-xyz/agentty/pull/42",
+                    "[Review Request] Created PR https://github.com/agentty-xyz/agentty/pull/42",
                     &full,
                 );
                 assertion::assert_text_in_region(frame, "q: back", &full);

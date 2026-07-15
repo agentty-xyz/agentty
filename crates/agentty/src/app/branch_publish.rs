@@ -9,6 +9,7 @@ use ag_git::GitClient;
 use super::session::{self, unix_timestamp_from_system_time};
 use crate::app::review_request;
 use crate::domain::session::{PublishBranchAction, ReviewRequest, Session, SessionId, Status};
+use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::clock::Clock;
 use crate::infra::db;
 
@@ -202,31 +203,17 @@ pub(crate) fn branch_push_success_message(
     }
 }
 
-/// Returns the inline success title for one completed review-request publish.
-pub(crate) fn review_request_publish_success_title(review_request: &ReviewRequest) -> String {
-    format!(
-        "{} published",
+/// Returns the durable transcript notice for one completed review-request
+/// publish.
+pub(crate) fn review_request_created_notice(review_request: &ReviewRequest) -> String {
+    TranscriptNotice::ReviewRequest.format(format!(
+        "Created {} {}",
         review_request
             .summary
             .forge_kind
-            .review_request_display_name()
-    )
-}
-
-/// Returns the inline success body for one completed review-request publish.
-pub(crate) fn pull_request_publish_success_message(
-    branch_name: &str,
-    review_request: &ReviewRequest,
-) -> String {
-    format!(
-        "Successfully published session branch `{branch_name}`.\n\n{} {}:\n{}",
-        review_request
-            .summary
-            .forge_kind
-            .review_request_display_name(),
-        review_request.summary.display_id,
+            .review_request_short_name(),
         review_request.summary.web_url
-    )
+    ))
 }
 
 /// Executes one background branch-publish action while holding the session's
@@ -1177,7 +1164,7 @@ mod tests {
     }
 
     #[test]
-    fn pull_request_publish_success_message_uses_gitlab_display_copy() {
+    fn review_request_created_notice_uses_gitlab_short_name() {
         // Arrange
         let review_request = ReviewRequest {
             last_refreshed_at: 42,
@@ -1194,13 +1181,14 @@ mod tests {
         };
 
         // Act
-        let title = review_request_publish_success_title(&review_request);
-        let message = pull_request_publish_success_message("wt/session-1", &review_request);
+        let notice = review_request_created_notice(&review_request);
 
         // Assert
-        assert_eq!(title, "GitLab merge request published");
-        assert!(message.contains("Successfully published session branch `wt/session-1`."));
-        assert!(message.contains("GitLab merge request !24"));
+        assert_eq!(
+            notice,
+            "\n[Review Request] Created MR \
+             https://gitlab.com/agentty-xyz/agentty/-/merge_requests/24\n"
+        );
     }
 
     #[tokio::test]

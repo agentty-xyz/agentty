@@ -48,6 +48,8 @@ pub(crate) enum TranscriptNotice {
     RebaseError,
     /// Reply submission failure.
     ReplyError,
+    /// Review-request creation result.
+    ReviewRequest,
     /// Review-request sync warning.
     ReviewRequestSyncWarning,
     /// Draft session start failure.
@@ -80,6 +82,7 @@ impl TranscriptNotice {
             Self::RebaseAssist => "[Sync Assist]",
             Self::RebaseError => "[Sync Error]",
             Self::ReplyError => "[Reply Error]",
+            Self::ReviewRequest => "[Review Request]",
             Self::ReviewRequestSyncWarning => "[Review Request Sync Warning]",
             Self::StartError => "[Start Error]",
             Self::TurnMetadataError => "[Turn Metadata Error]",
