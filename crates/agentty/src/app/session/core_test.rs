@@ -31,7 +31,7 @@ use crate::domain::session::{
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::setting::SettingName;
 use crate::domain::transient_message::{
-    TransientMessageBody, TransientMessageSlot, TransientMessageStore,
+    TransientMessageAnchor, TransientMessageBody, TransientMessageSlot, TransientMessageStore,
 };
 use crate::infra::clock::RealClock;
 use crate::infra::db::AppRepositories;
@@ -795,6 +795,32 @@ fn test_append_stacked_rebase_failure_notices_updates_affected_child() {
             .map(|message| message.body.text()),
         Some("[Sync Error] Stacked child auto-sync failed: Session handles not found")
     );
+}
+
+#[test]
+fn test_append_workflow_notice_anchors_active_status_notices_after_active_turn() {
+    for status in [Status::InProgress, Status::Queued] {
+        // Arrange
+        let mut session_manager = test_session_manager("session-id", None);
+        session_manager.sessions_mut()[0].status = status;
+
+        // Act
+        session_manager.append_workflow_notice(
+            "session-id",
+            "[Sync] Queued until the current turn finishes.".to_string(),
+        );
+
+        // Assert
+        let workflow_notice = session_manager.sessions()[0]
+            .transient_messages
+            .get(TransientMessageSlot::WorkflowNotice)
+            .expect("workflow notice should be present");
+        assert_eq!(
+            workflow_notice.anchor,
+            TransientMessageAnchor::AfterActiveTurn,
+            "unexpected anchor for {status}"
+        );
+    }
 }
 
 #[test]

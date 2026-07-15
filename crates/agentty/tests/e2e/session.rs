@@ -2178,6 +2178,19 @@ fn session_running_turn_shows_sync_shortcut() -> E2eResult {
                     &queued_full,
                 );
                 assertion::assert_text_in_region(&queued_frame, "Ctrl+c: stop", &queued_full);
+                let active_turn_row = queued_frame
+                    .find_text("Keep the active turn running")
+                    .first()
+                    .expect("missing active turn prompt")
+                    .rect
+                    .row;
+                let queued_sync_row = queued_frame
+                    .find_text("will rebase after the current turn finishes")
+                    .first()
+                    .expect("missing queued sync notice")
+                    .rect
+                    .row;
+                assert!(active_turn_row < queued_sync_row);
 
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, QUEUED_SYNC_TURN_ANSWER, &full);

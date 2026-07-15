@@ -251,13 +251,14 @@ enum SessionOutputSeparator {
     AfterPreviousContent,
 }
 
-const SESSION_OUTPUT_BLOCK_ORDER: [SessionOutputBlock; 8] = [
+const SESSION_OUTPUT_BLOCK_ORDER: [SessionOutputBlock; 9] = [
     SessionOutputBlock::CompletedTranscript,
     SessionOutputBlock::TrailingTranscriptNotice(
         TrailingTranscriptNoticePlacement::BeforeActiveTurn,
     ),
     SessionOutputBlock::Transient(TransientMessageAnchor::AfterCompletedTurn),
     SessionOutputBlock::ActiveTurn,
+    SessionOutputBlock::Transient(TransientMessageAnchor::AfterActiveTurn),
     SessionOutputBlock::QueuedMessage,
     SessionOutputBlock::TrailingTranscriptNotice(TrailingTranscriptNoticePlacement::AfterReview),
     SessionOutputBlock::Transient(TransientMessageAnchor::Tail),
@@ -3273,6 +3274,57 @@ mod tests {
         assert!(commit_index < prompt_index);
         assert!(prompt_index < queued_index);
         assert!(text.contains("        with context"));
+    }
+
+    #[test]
+    fn test_output_lines_in_progress_session_places_notice_after_active_turn() {
+        // Arrange
+        let mut session = session_fixture();
+        set_conversation_transcript(
+            &mut session,
+            vec![
+                (SessionMessageKind::UserPrompt, "previous turn"),
+                (SessionMessageKind::AssistantAnswer, "previous answer"),
+                (SessionMessageKind::UserPrompt, "current turn"),
+                (SessionMessageKind::AssistantAnswer, "working"),
+            ],
+        );
+        session.status = Status::InProgress;
+        session.queued_messages = vec!["queued follow-up".to_string()];
+        session.transient_messages.upsert(TransientMessage {
+            anchor: TransientMessageAnchor::AfterActiveTurn,
+            body: TransientMessageBody::Markdown(
+                "[Sync] Queued until the current turn finishes.".to_string(),
+            ),
+            lifecycle: crate::domain::transient_message::TransientMessageLifecycle::ClearOnNewTurn,
+            slot: TransientMessageSlot::WorkflowNotice,
+            turn_position: session.latest_user_prompt_position(),
+        });
+
+        // Act
+        let lines = output_lines(&session, Rect::new(0, 0, 80, 8), line_context(), None);
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let previous_answer_index = text
+            .find("previous answer")
+            .expect("previous answer should be rendered");
+        let current_turn_index = text
+            .find("current turn")
+            .expect("current turn should be rendered");
+        let notice_index = text
+            .find("[Sync] Queued until the current turn finishes.")
+            .expect("queued sync notice should be rendered");
+        let queued_message_index = text
+            .find("queued › queued follow-up")
+            .expect("queued follow-up should be rendered");
+
+        // Assert
+        assert!(previous_answer_index < current_turn_index);
+        assert!(current_turn_index < notice_index);
+        assert!(notice_index < queued_message_index);
     }
 
     /// Verifies an active prompt at the start of the transcript hides stale

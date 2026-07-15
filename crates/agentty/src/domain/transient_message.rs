@@ -24,6 +24,8 @@ pub(crate) enum TransientMessageSlot {
 pub(crate) enum TransientMessageAnchor {
     /// Immediately after durable content from the latest completed turn.
     AfterCompletedTurn,
+    /// Immediately after content from the active user turn.
+    AfterActiveTurn,
     /// At the end of the output, beside other active status rows.
     Tail,
 }

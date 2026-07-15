@@ -23,7 +23,7 @@ use crate::domain::file_entry::FileEntry;
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
     DailyActivity, FollowUpTaskAction, ReviewRequest, Session, SessionFollowUpTask, SessionId,
-    SessionStats,
+    SessionStats, Status,
 };
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -612,8 +612,13 @@ impl SessionManager {
                 .get(TransientMessageSlot::WorkflowNotice)
                 .map(|message| format!("{}\n\n{notice}", message.body.text()))
                 .unwrap_or(notice);
+            let anchor = if matches!(session.status, Status::InProgress | Status::Queued) {
+                TransientMessageAnchor::AfterActiveTurn
+            } else {
+                TransientMessageAnchor::AfterCompletedTurn
+            };
             session.transient_messages.upsert(TransientMessage {
-                anchor: TransientMessageAnchor::AfterCompletedTurn,
+                anchor,
                 body: TransientMessageBody::Markdown(notice),
                 lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
                 slot: TransientMessageSlot::WorkflowNotice,

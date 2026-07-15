@@ -187,7 +187,7 @@ the queued sync command starts. The existing worker must accept the request; Age
 never creates a second worker from an **InProgress** status just to start sync. If sync
 arrives while Agentty is draining queued chat, the active chat turn finishes before sync
 runs, and sync runs before the remaining queued messages. Agentty shows a `[Sync]`
-notice in the session output while the rebase is queued, and repeated `r` presses keep
+notice below the active turn while the rebase is queued, and repeated `r` presses keep
 the single queued rebase instead of adding duplicates. Session sync reserves
 branch-publish ownership before it queues or starts, and retains that ownership through
 its post-rebase push. A completed turn or subsequent sync therefore cannot start a
