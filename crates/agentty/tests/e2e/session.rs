@@ -1398,7 +1398,7 @@ fn seed_session_with_scrollable_output(env: &BuilderEnv) -> Result<(), Box<dyn s
     )?;
 
     let output = (0..60)
-        .map(|line_index| format!("Transcript line {line_index}"))
+        .map(|line_index| format!("Transcript line {line_index:02} {}", "x".repeat(60)))
         .collect::<Vec<_>>()
         .join("\n");
     let runtime = common::seed_runtime()?;
@@ -3290,9 +3290,20 @@ fn session_output_scrollbar_is_visible() -> E2eResult {
                     session_output_scrollbar_rows(&top_frame);
                 let (bottom_scrollbar_rows, bottom_thumb_rows) =
                     session_output_scrollbar_rows(&bottom_frame);
+                let scrollbar_padding_column = top_frame.cols().saturating_sub(3);
 
                 assert!(top_scrollbar_rows.len() > top_thumb_rows.len());
                 assert!(bottom_scrollbar_rows.len() > bottom_thumb_rows.len());
+                assert!(
+                    top_scrollbar_rows
+                        .iter()
+                        .all(|row| { top_frame.cell_text(*row, scrollbar_padding_column) == " " })
+                );
+                assert!(
+                    bottom_scrollbar_rows.iter().all(|row| {
+                        bottom_frame.cell_text(*row, scrollbar_padding_column) == " "
+                    })
+                );
                 assert_eq!(top_thumb_rows.first(), top_scrollbar_rows.first());
                 assert_eq!(bottom_thumb_rows.last(), bottom_scrollbar_rows.last());
                 assert!(
