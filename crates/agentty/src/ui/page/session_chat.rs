@@ -582,7 +582,7 @@ fn render_question_help_footer(
         is_navigating_options,
         is_at_mention_open,
     ))
-    .alignment(ratatui::layout::Alignment::Right);
+    .alignment(ratatui::layout::Alignment::Left);
     f.render_widget(help_para, area);
 }
 

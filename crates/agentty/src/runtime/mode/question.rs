@@ -22,13 +22,14 @@ const NO_ANSWER: &str = "no answer";
 /// `Tab` toggles focus between the question panel and the chat output for
 /// scrolling. When chat is focused, scroll keys (`j`/`k`/`Up`/`Down`/`g`/`G`/
 /// `Ctrl+d`/`Ctrl+u`) navigate the session transcript. `Enter` submits the
-/// typed answer (or `no answer` when blank), `Ctrl+C` and `Esc` end the entire
-/// turn without sending a reply (with `Esc` only doing so when the answer
-/// input is focused and no at-mention dropdown is open, so it stays available
-/// to dismiss those overlays), and `q` returns to the sessions list while
-/// saving already-submitted answers for the next visit (skipped while the
-/// user is actively typing a free-text answer so the character can still be
-/// inserted into the response).
+/// typed answer (or `no answer` when blank), `Ctrl+C` and `Esc` end the
+/// entire turn without sending a reply while the answer input is focused
+/// (`Esc` additionally requires no open at-mention dropdown, so it stays
+/// available to dismiss that overlay; chat focus keeps both keys from ending
+/// the turn), and `q` returns to the sessions list while saving already-
+/// submitted answers for the next visit
+/// (skipped while the user is actively typing a free-text answer so the
+/// character can still be inserted into the response).
 pub(crate) async fn handle_with_cache(
     app: &mut App,
     render_cache_store: &RenderCacheStore,
@@ -40,7 +41,9 @@ pub(crate) async fn handle_with_cache(
     }
 
     if is_ctrl_c(key) {
-        end_turn_no_answer(app).await;
+        if is_answer_input_focused(app) {
+            end_turn_no_answer(app).await;
+        }
 
         return EventResult::Continue;
     }
@@ -85,6 +88,17 @@ async fn handle(app: &mut App, terminal_size: Rect, key: KeyEvent) -> EventResul
 /// Returns whether `key` is a plain `Ctrl+C` press.
 fn is_ctrl_c(key: KeyEvent) -> bool {
     matches!(key.code, KeyCode::Char('c' | 'C')) && key.modifiers.contains(KeyModifiers::CONTROL)
+}
+
+/// Returns whether the question answer input currently holds focus.
+fn is_answer_input_focused(app: &App) -> bool {
+    matches!(
+        &app.mode,
+        AppMode::Question {
+            focus: ChatFocus::Input,
+            ..
+        }
+    )
 }
 
 /// Returns whether `key` is an unmodified `Esc` press.
@@ -168,19 +182,23 @@ fn handle_focus_toggle(app: &mut App, key: KeyEvent) -> bool {
 
 /// Applies scroll keys when the chat output area is focused.
 ///
-/// Returns `true` when the key was consumed as a scroll action. `Enter` and
-/// `Esc` switch focus back to the answer input so they cannot accidentally
-/// submit or end the turn while scrolling. `d` opens the diff preview for the
-/// session.
+/// Returns `true` when the key was consumed as a chat-focus action. `d` opens
+/// the diff preview for the session; `Tab` is the sole focus toggle.
 async fn handle_chat_scroll(
     app: &mut App,
     render_cache_store: &RenderCacheStore,
     terminal_size: Rect,
     key: KeyEvent,
 ) -> bool {
-    let Some(metrics) = question_scroll_metrics(app, render_cache_store, terminal_size) else {
+    if !matches!(
+        &app.mode,
+        AppMode::Question {
+            focus: ChatFocus::Chat,
+            ..
+        }
+    ) {
         return false;
-    };
+    }
 
     if key.code == KeyCode::Char('d') && !key.modifiers.contains(event::KeyModifiers::CONTROL) {
         if let Some(session_id) = extract_question_session_id(app) {
@@ -190,20 +208,20 @@ async fn handle_chat_scroll(
         return true;
     }
 
-    let AppMode::Question {
-        focus,
-        scroll_offset,
-        ..
-    } = &mut app.mode
-    else {
+    // Chat focus is read-only: only transcript navigation keys may continue
+    // past this point. This prevents `Enter` and `Esc` from reaching the
+    // answer-input submission and end-turn handlers.
+    if !chat_scroll::is_scroll_key(key) {
+        return true;
+    }
+
+    let Some(metrics) = question_scroll_metrics(app, render_cache_store, terminal_size) else {
         return false;
     };
 
-    if matches!(key.code, KeyCode::Enter | KeyCode::Esc) {
-        *focus = ChatFocus::Input;
-
-        return true;
-    }
+    let AppMode::Question { scroll_offset, .. } = &mut app.mode else {
+        return false;
+    };
 
     chat_scroll::apply_scroll_key(scroll_offset, metrics, key)
 }
@@ -862,7 +880,8 @@ fn mark_session_in_progress(app: &mut App, session_id: &str) {
 
 /// Ends the question turn without sending a reply to the agent.
 ///
-/// Triggered by `Ctrl+C`. The session status is reverted to `Review` so the
+/// Triggered by `Ctrl+C` or `Esc` while the answer input is focused. The
+/// session status is reverted to `Review` so the
 /// user can inspect the current diff or start a new follow-up manually.
 /// If the database write fails the mode stays on `Question` so the user
 /// can retry, avoiding a split between persisted and in-memory state.
@@ -1156,6 +1175,45 @@ mod tests {
                 ref session_id,
                 ..
             } if session_id == "session-ctrl-c"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_ctrl_c_is_swallowed_while_chat_is_focused() {
+        // Arrange — chat focus is read-only, so Ctrl+C must not end the turn
+        // while the user scrolls the transcript.
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        app.mode = AppMode::Question {
+            at_mention_state: None,
+            session_id: "session-chat-ctrl-c".into(),
+            questions: vec![QuestionItem {
+                options: Vec::new(),
+                text: "Q?".to_string(),
+            }],
+            responses: Vec::new(),
+            current_index: 0,
+            focus: ChatFocus::Chat,
+            input: InputState::with_text("partial answer".to_string()),
+            scroll_offset: None,
+            selected_option_index: None,
+        };
+
+        // Act
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        )
+        .await;
+
+        // Assert — the question turn stays active with the draft preserved.
+        assert!(matches!(
+            app.mode,
+            AppMode::Question {
+                focus: ChatFocus::Chat,
+                ref input,
+                ..
+            } if input.text() == "partial answer"
         ));
     }
 
@@ -2450,9 +2508,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_enter_in_chat_focus_switches_to_answer_without_submitting() {
-        // Arrange — chat focused, pressing Enter should return focus to Answer
-        // without submitting the question response.
+    async fn test_handle_chat_focus_preserves_question_state_for_enter_and_escape() {
+        // Arrange
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = question_mode_with_options();
         if let AppMode::Question { focus, .. } = &mut app.mode {
@@ -2460,18 +2517,20 @@ mod tests {
         }
 
         // Act
-        let _ = handle(
-            &mut app,
-            TEST_TERMINAL_SIZE,
-            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-        )
-        .await;
+        for key in [KeyCode::Enter, KeyCode::Esc] {
+            let _ = handle(
+                &mut app,
+                TEST_TERMINAL_SIZE,
+                KeyEvent::new(key, KeyModifiers::NONE),
+            )
+            .await;
+        }
 
-        // Assert — focus switched to Answer, no response submitted.
+        // Assert
         assert!(matches!(
             app.mode,
             AppMode::Question {
-                focus: ChatFocus::Input,
+                focus: ChatFocus::Chat,
                 current_index: 0,
                 ref responses,
                 ..
@@ -2993,45 +3052,6 @@ mod tests {
                 ref responses,
                 ..
             } if responses == &vec!["Yes".to_string()]
-        ));
-    }
-
-    #[tokio::test]
-    async fn test_escape_in_chat_focus_returns_to_answer_focus() {
-        // Arrange — question mode with chat focused. Esc should switch
-        // focus back to Answer, not end the turn.
-        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
-        app.mode = AppMode::Question {
-            at_mention_state: None,
-            session_id: "session-esc-chat".into(),
-            questions: vec![QuestionItem {
-                options: vec!["Yes".to_string()],
-                text: "Continue?".to_string(),
-            }],
-            responses: Vec::new(),
-            current_index: 0,
-            focus: ChatFocus::Chat,
-            input: InputState::default(),
-            scroll_offset: None,
-            selected_option_index: Some(0),
-        };
-
-        // Act
-        let _ = handle(
-            &mut app,
-            TEST_TERMINAL_SIZE,
-            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
-        )
-        .await;
-
-        // Assert — still in question mode with focus returned to Answer.
-        assert!(matches!(
-            app.mode,
-            AppMode::Question {
-                focus: ChatFocus::Input,
-                ref session_id,
-                ..
-            } if session_id == "session-esc-chat"
         ));
     }
 
