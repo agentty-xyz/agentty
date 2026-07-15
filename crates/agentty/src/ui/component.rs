@@ -15,3 +15,4 @@ pub mod session_output;
 pub mod status_bar;
 pub mod tab;
 pub mod tachyon_loader;
+pub mod vertical_scrollbar;

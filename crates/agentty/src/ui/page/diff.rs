@@ -14,13 +14,14 @@ use rustc_hash::FxHasher;
 use crate::domain::session::Session;
 use crate::presentation::help_action;
 use crate::ui::component::file_explorer::FileExplorer;
+use crate::ui::component::vertical_scrollbar::VerticalScrollbar;
+#[cfg(test)]
+use crate::ui::component::vertical_scrollbar::{SCROLLBAR_THUMB_SYMBOL, SCROLLBAR_TRACK_SYMBOL};
 use crate::ui::diff_util::{
     DiffLine, DiffLineKind, FileTreeItem, diff_header_new_path, parse_diff_lines,
 };
 use crate::ui::{Component, Page, diff_util, style};
 
-const SCROLLBAR_TRACK_SYMBOL: &str = "│";
-const SCROLLBAR_THUMB_SYMBOL: &str = "█";
 const WRAPPED_CHUNK_START_INDEX: usize = 0;
 const DIFF_CONTENT_CACHE_ENTRY_LIMIT: usize = 8;
 const DIFF_LAYOUT_CACHE_ENTRY_LIMIT: usize = 16;
@@ -604,13 +605,10 @@ impl<'a> DiffPage<'a> {
         f.render_widget(paragraph, area);
 
         if layout.show_scrollbar {
-            Self::render_diff_scrollbar(
-                f,
-                area,
-                layout.render_layout.viewport_height,
-                scroll_offset,
-                layout.line_count,
-            );
+            let scrollbar_area =
+                diff_util::diff_scrollbar_area(area, layout.render_layout.viewport_height);
+
+            VerticalScrollbar::new(scroll_offset, layout.line_count).render(f, scrollbar_area);
         }
     }
 
@@ -754,56 +752,6 @@ impl<'a> DiffPage<'a> {
         };
 
         format!("{old_str}│{new_str} ")
-    }
-
-    /// Renders a slim scrollbar inside the diff panel so users can see their
-    /// position in long diffs at a glance.
-    fn render_diff_scrollbar(
-        f: &mut Frame,
-        area: Rect,
-        viewport_height: u16,
-        scroll_offset: u16,
-        total_lines: usize,
-    ) {
-        if viewport_height == 0 {
-            return;
-        }
-
-        if !diff_util::diff_has_scrollable_overflow(total_lines, viewport_height) {
-            return;
-        }
-
-        let track_height = usize::from(viewport_height);
-        let thumb_height = (track_height * track_height / total_lines).max(1);
-        let max_scroll = total_lines.saturating_sub(track_height);
-        let max_thumb_offset = track_height.saturating_sub(thumb_height);
-        let thumb_offset = usize::from(scroll_offset)
-            .saturating_mul(max_thumb_offset)
-            .checked_div(max_scroll)
-            .unwrap_or(0);
-
-        let scrollbar_area = diff_util::diff_scrollbar_area(area, viewport_height);
-        let mut scrollbar_lines = Vec::with_capacity(track_height);
-
-        for line_index in 0..track_height {
-            let is_thumb_line =
-                line_index >= thumb_offset && line_index < thumb_offset + thumb_height;
-            let (symbol, symbol_style) = if is_thumb_line {
-                (
-                    SCROLLBAR_THUMB_SYMBOL,
-                    Style::default().fg(style::palette::warning()),
-                )
-            } else {
-                (
-                    SCROLLBAR_TRACK_SYMBOL,
-                    Style::default().fg(style::palette::text_subtle()),
-                )
-            };
-
-            scrollbar_lines.push(Line::from(Span::styled(symbol, symbol_style)));
-        }
-
-        f.render_widget(Paragraph::new(scrollbar_lines), scrollbar_area);
     }
 }
 

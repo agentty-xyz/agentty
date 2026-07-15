@@ -3,13 +3,15 @@ use crate::ui::RenderCacheStore;
 use crate::ui::component::session_output::SessionOutputLineContext;
 use crate::ui::page::session_chat::SessionChatPage;
 
-/// Returns rendered session-output line count for runtime scroll metrics.
+/// Returns rendered session-output line count for runtime scroll metrics,
+/// resolving conditional scrollbar width against `viewport_height`.
 pub(crate) fn rendered_output_line_count_with_cache(
     app: &App,
     render_cache_store: &RenderCacheStore,
     session_id: &str,
     session_index: usize,
     output_width: u16,
+    viewport_height: u16,
 ) -> u16 {
     let active_progress = app.session_progress_message(session_id);
     let active_prompt_output = app
@@ -22,6 +24,7 @@ pub(crate) fn rendered_output_line_count_with_cache(
         SessionChatPage::rendered_output_line_count(
             session,
             output_width,
+            viewport_height,
             SessionOutputLineContext {
                 active_prompt_output,
                 active_progress,
@@ -39,6 +42,7 @@ pub(crate) fn rendered_output_line_count(
     session_id: &str,
     session_index: usize,
     output_width: u16,
+    viewport_height: u16,
 ) -> u16 {
     rendered_output_line_count_with_cache(
         app,
@@ -46,5 +50,6 @@ pub(crate) fn rendered_output_line_count(
         session_id,
         session_index,
         output_width,
+        viewport_height,
     )
 }

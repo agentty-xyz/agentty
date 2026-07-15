@@ -1764,7 +1764,7 @@ mod tests {
 
         // Act
         let total_lines =
-            session_output_metric::rendered_output_line_count(&app, &session_id, 0, 20);
+            session_output_metric::rendered_output_line_count(&app, &session_id, 0, 20, 5);
 
         // Assert
         assert!(total_lines > raw_line_count);
@@ -1834,6 +1834,7 @@ mod tests {
                 &session_id,
                 0,
                 20,
+                5,
             ),
             view_height: 5,
         };
@@ -1881,11 +1882,13 @@ mod tests {
         );
         app.sessions.sessions_mut()[0].status = Status::AgentReview;
         let output_width = 14;
+        let viewport_height = 5;
         let render_cache_store = RenderCacheStore::default();
         let session = &app.sessions.sessions()[0];
         let expected = SessionChatPage::rendered_output_line_count(
             session,
             output_width,
+            viewport_height,
             SessionOutputLineContext {
                 active_prompt_output: None,
                 active_progress: None,
@@ -1896,8 +1899,13 @@ mod tests {
         );
 
         // Act
-        let total_lines =
-            session_output_metric::rendered_output_line_count(&app, &session_id, 0, output_width);
+        let total_lines = session_output_metric::rendered_output_line_count(
+            &app,
+            &session_id,
+            0,
+            output_width,
+            viewport_height,
+        );
 
         // Assert
         assert_eq!(total_lines, expected);

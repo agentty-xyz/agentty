@@ -21,6 +21,7 @@ use agentty::test_support;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection, Executor};
 use testty::assertion;
+use testty::frame::TerminalFrame;
 use testty::region::Region;
 use testty::scenario::Scenario;
 
@@ -48,6 +49,27 @@ const RECONCILE_QUESTION_TEXT: &str = "Should I add a regression test?";
 
 /// Draft text typed into the composer by the chat-focus toggle test.
 const PROMPT_FOCUS_DRAFT_TEXT: &str = "Draft kept while reading chat";
+
+/// Returns every scrollbar row and the subset occupied by its thumb in the
+/// session output's rightmost column.
+fn session_output_scrollbar_rows(frame: &TerminalFrame) -> (Vec<u16>, Vec<u16>) {
+    let scrollbar_column = frame.cols().saturating_sub(2);
+    let mut scrollbar_rows = Vec::new();
+    let mut thumb_rows = Vec::new();
+
+    for row in 0..frame.rows() {
+        match frame.cell_text(row, scrollbar_column) {
+            "█" => {
+                scrollbar_rows.push(row);
+                thumb_rows.push(row);
+            }
+            "│" => scrollbar_rows.push(row),
+            _ => {}
+        }
+    }
+
+    (scrollbar_rows, thumb_rows)
+}
 
 /// Seeds one review-ready session whose transcript contains a beautified
 /// provider command failure.
@@ -1330,6 +1352,38 @@ fn seed_active_loader_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error
     Ok(())
 }
 
+/// Seeds one review-ready session with enough output to overflow a compact
+/// transcript viewport.
+fn seed_session_with_scrollable_output(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    const SESSION_ID: &str = "scroll-output-0001";
+
+    common::seed_session(
+        env,
+        SessionSeed::regular(SESSION_ID, "gpt-5.5", "main", "Review")
+            .with_title("Scrollable output"),
+    )?;
+
+    let output = (0..60)
+        .map(|line_index| format!("Transcript line {line_index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let runtime = common::seed_runtime()?;
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .append_session_message(SESSION_ID, SessionMessageKind::AssistantAnswer, &output)
+            .await
+    })?;
+
+    std::fs::create_dir_all(test_support::session_folder(
+        &env.agentty_root.join("wt"),
+        SESSION_ID,
+    ))?;
+
+    Ok(())
+}
+
 /// Verify that the Sessions tab hides empty groups and guides session creation.
 ///
 /// Starts Agentty with no sessions, then creates an active session and verifies
@@ -1451,7 +1505,8 @@ fn test_session_missing_pre_commit_hook_error() -> E2eResult {
                     "pre-commit validation is configured",
                     &full,
                 );
-                assertion::assert_text_in_region(frame, "not installed or executable", &full);
+                assertion::assert_text_in_region(frame, "not installed or", &full);
+                assertion::assert_text_in_region(frame, "executable; install it", &full);
             },
         )?;
 
@@ -3116,6 +3171,65 @@ fn session_active_loader_uses_tachyonfx_glyph() -> E2eResult {
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "▌▌▌ Working...", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that overflowing session output shows a scrollbar in the panel's
+/// rightmost column.
+#[test]
+fn session_output_scrollbar_is_visible() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_output_scrollbar")
+        .with_terminal_size(80, 20)
+        .setup(seed_session_with_scrollable_output)
+        .zola(
+            "Session output scrollbar",
+            "Track your position while scrolling through long session transcripts.",
+            43,
+        )
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .press_key("g")
+                    .wait_for_stable_frame(300, 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "session_output_scrollbar_top",
+                        "Scrollbar thumb at the top of long session output",
+                    )
+                    .write_text("G")
+                    .wait_for_stable_frame(300, 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "session_output_scrollbar_bottom",
+                        "Scrollbar thumb at the bottom of long session output",
+                    )
+            },
+            |_frame, report| {
+                assert_eq!(report.captures.len(), 2);
+
+                let top_frame = common::frame_from_capture(&report.captures[0]);
+                let bottom_frame = common::frame_from_capture(&report.captures[1]);
+                let (top_scrollbar_rows, top_thumb_rows) =
+                    session_output_scrollbar_rows(&top_frame);
+                let (bottom_scrollbar_rows, bottom_thumb_rows) =
+                    session_output_scrollbar_rows(&bottom_frame);
+
+                assert!(top_scrollbar_rows.len() > top_thumb_rows.len());
+                assert!(bottom_scrollbar_rows.len() > bottom_thumb_rows.len());
+                assert_eq!(top_thumb_rows.first(), top_scrollbar_rows.first());
+                assert_eq!(bottom_thumb_rows.last(), bottom_scrollbar_rows.last());
+                assert!(
+                    top_thumb_rows.last() < bottom_thumb_rows.first(),
+                    "expected the scrollbar thumb to move from top to bottom"
+                );
             },
         )?;
 
