@@ -447,12 +447,14 @@ fn seed_rebase_transcript_session(env: &BuilderEnv) -> Result<(), Box<dyn std::e
     Ok(())
 }
 
-/// Seeds a review-ready worktree whose delayed successful push keeps the manual
-/// publish task visible long enough to verify session-chat responsiveness.
+/// Seeds a review-ready worktree whose delayed successful publish keeps the
+/// manual task active beyond the upstream-ref refresh observed by the feature
+/// scenario.
 fn seed_slow_successful_review_request_publish(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    seed_review_ready_session_with_review_request(env)?;
+    seed_review_ready_session(env)?;
+    seed_review_worktree_with_diff(env)?;
     let session_worktree = env.agentty_root.join("wt").join("review-s");
     run_git(&session_worktree, &["branch", "-m", "wt/review-s"])?;
 
@@ -474,6 +476,40 @@ exec '{}' "$@"
     std::fs::write(&git_path, script)?;
     #[cfg(unix)]
     std::fs::set_permissions(&git_path, std::fs::Permissions::from_mode(0o755))?;
+
+    let gh_path = env.stub_bin.join("gh");
+    std::fs::write(
+        &gh_path,
+        r#"#!/bin/sh
+marker_path="${0}.created"
+case "$*" in
+  *"auth status"*)
+    exit 0
+    ;;
+  *"api"*"/pulls"*)
+    if [ -f "$marker_path" ]; then
+      printf '%s\n' '[{"number":42}]'
+    else
+      printf '%s\n' '[]'
+    fi
+    ;;
+  *"pr create"*)
+    # Exceeds both 3 s scenario wait budgets plus the 5.5 s mid-flight pause.
+    sleep 15
+    touch "$marker_path"
+    ;;
+  *"pr view"*)
+    printf '%s\n' '{"number":42,"title":"Review-ready session shortcuts","state":"OPEN","url":"https://github.com/agentty-xyz/agentty/pull/42","baseRefName":"main","headRefName":"wt/review-s","isDraft":false,"mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","mergedAt":null}'
+    ;;
+  *)
+    echo "unexpected gh invocation: $*" >&2
+    exit 1
+    ;;
+esac
+"#,
+    )?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&gh_path, std::fs::Permissions::from_mode(0o755))?;
 
     Ok(())
 }
@@ -3552,7 +3588,12 @@ fn review_request_publish_runs_in_background() -> E2eResult {
                         "Session help remains available while publishing",
                     )
                     .press_key("q")
-                    .wait_for_text("[Review Request] Created PR", 10000)
+                    .viewing_pause_ms(5500)
+                    .capture_labeled(
+                        "background_publish_waiting_for_url",
+                        "Review-request publish progress remains until its URL is ready",
+                    )
+                    .wait_for_text("[Review Request] Created PR", 20000)
                     .capture_labeled(
                         "background_publish_finished",
                         "Review-request link recorded in session transcript history",
@@ -3571,6 +3612,14 @@ fn review_request_publish_runs_in_background() -> E2eResult {
                 let help_frame = common::frame_from_capture(&report.captures[1]);
                 let help_full = Region::full(help_frame.cols(), help_frame.rows());
                 assertion::assert_text_in_region(&help_frame, "Keybindings", &help_full);
+
+                let waiting_frame = common::frame_from_capture(&report.captures[2]);
+                let waiting_full = Region::full(waiting_frame.cols(), waiting_frame.rows());
+                assertion::assert_text_in_region(
+                    &waiting_frame,
+                    "Publishing review request...",
+                    &waiting_full,
+                );
 
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(
