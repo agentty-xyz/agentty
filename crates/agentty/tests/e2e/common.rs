@@ -144,6 +144,7 @@ impl BuilderEnv {
             .size(terminal_cols, terminal_rows)
             .env("AGENTTY_ROOT", self.agentty_root.to_string_lossy())
             .env("HOME", self.home_dir.to_string_lossy())
+            .env(NO_COLOR_ENV_VAR, NO_COLOR_ENV_VALUE)
             .env("PATH", path_env)
             .workdir(&self.workdir)
     }
@@ -170,6 +171,7 @@ impl BuilderEnv {
                 "HOME".to_string(),
                 self.home_dir.to_string_lossy().into_owned(),
             ),
+            (NO_COLOR_ENV_VAR.to_string(), NO_COLOR_ENV_VALUE.to_string()),
             ("PATH".to_string(), path_env),
         ]
     }
@@ -478,6 +480,14 @@ pub(crate) const TESTTY_GIF_MODE_ENV_VAR: &str = "TESTTY_GIF_MODE";
 /// Mirrors `agentty::infra::clock::CLOCK_UNIX_ENV_VAR`, which is private to
 /// the binary crate and therefore not importable from this integration test.
 const PINNED_CLOCK_ENV_VAR: &str = "AGENTTY_CLOCK_UNIX";
+/// Environment variable that disables terminal color detection.
+///
+/// Feature GIF hashes include formatted terminal frames, including cell
+/// styles. Pinning this avoids styling drift when a developer's shell exports
+/// `NO_COLOR` but the Linux CI runner does not.
+const NO_COLOR_ENV_VAR: &str = "NO_COLOR";
+/// Value used to disable terminal color detection for feature runs.
+const NO_COLOR_ENV_VALUE: &str = "1";
 /// Wall-clock time every feature run is pinned to: `2026-07-01T00:00:00Z`.
 ///
 /// Captured frames are hashed to decide whether a GIF needs re-recording, so
@@ -1227,6 +1237,24 @@ mod tests {
         // Assert
         assert_eq!(env.agentty_root, env.home_dir.join(".agentty"));
         assert!(env.workdir.starts_with(&env.home_dir));
+    }
+
+    #[test]
+    fn builder_env_exports_no_color_to_vhs_recording() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("failed to create temporary directory");
+        let env = BuilderEnv::new(temp.path()).expect("failed to create builder environment");
+
+        // Act
+        let environment = env.as_vhs_env_pairs();
+
+        // Assert
+        assert!(
+            environment
+                .iter()
+                .any(|(key, value)| { key == NO_COLOR_ENV_VAR && value == NO_COLOR_ENV_VALUE }),
+            "feature recording must disable color"
+        );
     }
 
     #[test]
