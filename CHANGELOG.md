@@ -7,6 +7,34 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- testty: add `feature::Redaction` and `FeatureDemo::redact` so callers can declare
+  generated tokens the GIF freshness hash must ignore.
+- testty: add `Redaction::literal` for exact-string redaction, such as the version an
+  application paints in its header.
+- agentty: declare the `wt/<hash>` session worktree redaction in feature tests, so a
+  session's random worktree name no longer makes every recorded GIF look stale.
+- agentty: redact the `Agentty v<version>` header in feature tests so release bumps do
+  not stale every committed GIF hash.
+
+### Changed
+
+- agentty: make `TESTTY_GIF_MODE=check` and `check-only` run freshness checks for
+  published feature GIFs instead of silently disabling GIF hashing, including failures
+  for invalid committed hash sidecars.
+- testty: distinguish missing and invalid feature GIF hash sidecars in
+  `GifStatus::Stale`.
+- testty: use a stable FNV-1a feature GIF frame hash so committed sidecars compare
+  consistently across local machines and CI.
+- testty (breaking): `feature::compute_frame_hash` now takes the caller's redaction
+  rules as a second argument. Pass `&[]` to keep the previous behavior.
+- agentty: nest the E2E test project and worktree directories under the test `HOME` so
+  the TUI paints home-collapsed paths (`~/test-project`, `~/.agentty/wt/<hash>`) and
+  feature GIF frame hashes reproduce across macOS and Linux CI.
+- agentty: stub every supported agent CLI in E2E test environments — not just `claude` —
+  so the default agent a new session resolves is identical on developer machines and CI.
+
 ## [v0.13.0] - 2026-07-14
 
 ### Added

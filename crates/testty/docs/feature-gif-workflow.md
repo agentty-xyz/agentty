@@ -23,8 +23,10 @@ graph TD
 `FeatureDemo` hashes the PTY frames and compares them to a committed `.{name}.hash`
 sidecar next to the GIF. A mismatch means the UI moved since the GIF was recorded.
 
-The hash is a staleness signal, not a gate. It never fails a test — it decides whether
-`vhs` needs to run.
+In generate mode the portable FNV-1a hash is a staleness signal, not a gate: it decides
+whether `vhs` needs to run. In check mode the same hash becomes a read-only freshness
+gate, so callers can fail CI when the committed GIF sidecar is missing, stale, or
+invalid without launching `vhs`.
 
 ## Modes
 
@@ -34,6 +36,8 @@ shells out to `vhs` and never touches the docs tree:
 - **unset** — no recording. The scenario still runs and still asserts.
 - **`generate`** — record only when the hash moved. Without `vhs` installed, skip
   silently.
+- **`check` / `check-only`** — compare the current hash with the committed sidecar
+  without invoking `vhs` or touching the GIF output directory.
 - **`force`** — always record. Missing `vhs` is an error.
 
 ## Determinism
@@ -42,9 +46,33 @@ The hash is only meaningful if the same UI produces the same frames. Anything vo
 in a captured frame — wall-clock timers, rotating status-bar messages, temp paths —
 makes every run look stale and re-records the GIF for no reason.
 
-Temp paths are normalized during hashing. Everything else must be frozen by the
-application under test, by injecting a fixed clock and pinning time-derived UI to a
-constant.
+Temp paths are normalized during hashing. Time is the application's job: inject a fixed
+clock and pin time-derived UI to a constant.
+
+Identifiers the application generates — a session hash, a worktree name, a short commit
+id — cannot be frozen without changing what the UI is. Declare them instead, and they
+stop counting as drift:
+
+```rust
+FeatureDemo::new("session_creation")
+    // `wt/4175e5af` and `wt/9c0b17ff` now hash the same.
+    .redact(Redaction::hex_after("wt/", 8, "<hash>"))
+```
+
+`Redaction::hex_after(prefix, max_len, placeholder)` rewrites a run of up to `max_len`
+hex digits following `prefix`. Shorter runs match too, because a TUI truncates: a hash
+printed near the right edge shows only the digits that fit, and that count shifts with
+everything printed before it. Longer runs are left alone, so a rule for a short hash
+never clips a full-length one.
+
+`Redaction::literal(needle, placeholder)` replaces one exact string. Use it for volatile
+text the caller can spell out ahead of time — typically the version the application
+paints in its header, built from the caller's own compile-time version so the rule
+tracks releases automatically. Without it, every release bump changes every captured
+frame and stales every committed GIF hash at once.
+
+Redaction applies to the hash only — captured frames, assertions, and the recorded GIF
+still show the real value.
 
 ## Recording in CI (planned)
 

@@ -1104,7 +1104,7 @@ case " $* " in
   *) answer='Claude web tools missing' ;;
 esac
 printf '%s\n' '{"type":"system","subtype":"init"}'
-printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"%s"}]}}\n' "$answer"
+printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"{\\"answer\\":\\"%s\\",\\"questions\\":[],\\"summary\\":null}"}]}}\n' "$answer"
 printf '{"type":"result","subtype":"success","result":"{\"answer\":\"%s\",\"questions\":[],\"summary\":null}","usage":{"input_tokens":5,"output_tokens":9}}\n' "$answer"
 "#;
 
@@ -2553,6 +2553,34 @@ fn session_prompt_chat_focus_toggle() -> E2eResult {
                 assertion::assert_text_in_region(frame, "Enter: submit", &full);
                 assertion::assert_text_in_region(frame, PROMPT_FOCUS_DRAFT_TEXT, &full);
                 assertion::assert_not_visible(frame, "j/k: scroll");
+
+                // This session's worktree name comes from a fresh UUID, so the
+                // footer reads differently on every run. Pin the harness
+                // redaction against the footer agentty actually paints: without
+                // a match, the frame hash moves every run and the committed GIF
+                // is re-recorded for a UI that never changed.
+                let redacted = common::session_worktree_redaction().apply(&frame.all_text());
+                let placeholder = format!(
+                    "{}{}",
+                    common::SESSION_WORKTREE_PREFIX,
+                    common::SESSION_WORKTREE_PLACEHOLDER,
+                );
+
+                assert!(
+                    redacted.contains(&placeholder),
+                    "the session worktree hash must be redacted out of the footer, \
+                     got:\n{redacted}",
+                );
+
+                // The footer must paint the worktree path home-collapsed. An
+                // absolute temp path is truncated differently per platform
+                // (macOS temp roots are far longer than Linux's `/tmp`), which
+                // would make the committed freshness hash unreproducible on CI.
+                assert!(
+                    redacted.contains("~/.agentty/wt/"),
+                    "the footer must paint the worktree path home-collapsed so frames hash \
+                     identically on every platform, got:\n{redacted}",
+                );
             },
         )?;
 

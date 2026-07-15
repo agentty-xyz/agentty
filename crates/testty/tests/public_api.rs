@@ -24,8 +24,8 @@ use std::time::Duration;
 
 use testty::assertion::{self, AssertionFailure, Expected, MatchResult, SoftAssertions};
 use testty::feature::{
-    self, FeatureDemo, FeatureMeta, FeatureResult, GifMode, GifStatus, compute_frame_hash,
-    hash_sidecar_path,
+    self, FeatureDemo, FeatureMeta, FeatureResult, GifMode, GifStatus, Redaction,
+    compute_frame_hash, hash_sidecar_path,
 };
 use testty::frame::{CellColor, CellStyle, TerminalFrame};
 use testty::journey::{Journey, StartupWait};
@@ -218,13 +218,17 @@ fn auxiliary_surface_is_stable() {
 
     // Feature freshness primitives — exposed so external tooling can build
     // freshness reports without re-running VHS.
-    let _: fn(&ProofReport) -> u64 = compute_frame_hash;
+    let _: fn(&ProofReport, &[Redaction]) -> u64 = compute_frame_hash;
     let _: fn(&Path, &str) -> PathBuf = hash_sidecar_path;
     let _: GifMode = GifMode::default();
     let _: GifMode = GifMode::CheckOnly;
     let _: GifMode = GifMode::AlwaysGenerate;
     let _: GifMode = GifMode::GenerateIfStale;
-    let _ = FeatureDemo::new("public-api").gif_mode(GifMode::CheckOnly);
+    let _: String = Redaction::hex_after("wt/", 8, "<hash>").apply("wt/4175e5af");
+    let _: String = Redaction::literal("Agentty v0.13.0", "<version>").apply("Agentty v0.13.0");
+    let _ = FeatureDemo::new("public-api")
+        .gif_mode(GifMode::CheckOnly)
+        .redact(Redaction::hex_after("wt/", 8, "<hash>"));
     let _: Option<FeatureMeta> = None;
     let _: Option<FeatureResult> = None;
 }
@@ -261,9 +265,11 @@ fn gif_status_destructuring_is_stable(status: &GifStatus) -> &'static str {
             gif_path,
             current,
             committed,
+            committed_error,
             ..
         } => {
-            let _: (&PathBuf, &u64, &Option<u64>) = (gif_path, current, committed);
+            let _: (&PathBuf, &u64, &Option<u64>, &Option<String>) =
+                (gif_path, current, committed, committed_error);
 
             "stale"
         }
