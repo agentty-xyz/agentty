@@ -87,28 +87,25 @@ pub(crate) fn question_option_lines(
 /// `is_at_mention_open` mirrors the runtime predicate that routes `Esc` to the
 /// at-mention dropdown dismissal, so the end-turn hint drops the `Esc` prefix
 /// and a `Esc: cancel @` hint is surfaced while the dropdown is visible.
+///
+/// Footer entries follow the canonical composer-footer ordering shared with
+/// prompt mode: the `Tab` focus toggle first as the stable anchor, then the
+/// primary `Enter` action, reading extras, and exit actions last.
 pub fn question_help_footer_line(
     focus: ChatFocus,
     is_navigating_options: bool,
     is_at_mention_open: bool,
 ) -> Line<'static> {
     let is_chat_focused = focus == ChatFocus::Chat;
-    let mut help_actions = Vec::new();
+    let focus_label = if is_chat_focused { "Answer" } else { "Chat" };
+    let mut help_actions = vec![help_action::HelpAction::new("focus", "Tab", focus_label)];
 
     if is_chat_focused {
         help_actions.push(help_action::HelpAction::new("scroll", "j/k", "Scroll chat"));
         help_actions.push(help_action::HelpAction::new("diff", "d", "Diff"));
-        help_actions.push(help_action::HelpAction::new(
-            "answer",
-            "Esc/Enter",
-            "Answer",
-        ));
     } else {
-        help_actions.push(help_action::HelpAction::new("send", "Enter", "Submit"));
+        help_actions.push(help_action::HelpAction::new("send", "Enter", "Send answer"));
     }
-
-    let focus_label = if is_chat_focused { "Answer" } else { "Chat" };
-    help_actions.push(help_action::HelpAction::new("focus", "Tab", focus_label));
 
     if is_chat_focused || is_navigating_options {
         help_actions.push(help_action::HelpAction::new("sessions", "q", "Sessions"));

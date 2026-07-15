@@ -24,7 +24,7 @@ const NEW_SESSION_PROMPT_FOOTER_ACTIONS: [help_action::HelpAction; 4] = [
     help_action::HelpAction::new("cancel", "Esc", "Cancel prompt"),
 ];
 const PROMPT_FOOTER_ACTIONS: [help_action::HelpAction; 4] = [
-    help_action::HelpAction::new("submit", "Enter", "Submit prompt"),
+    help_action::HelpAction::new("send", "Enter", "Send prompt"),
     help_action::HelpAction::new("newline", "Alt+Enter", "Insert newline"),
     help_action::HelpAction::new(
         "paste image",
@@ -35,29 +35,31 @@ const PROMPT_FOOTER_ACTIONS: [help_action::HelpAction; 4] = [
 ];
 /// Footer actions shown while the chat transcript above the composer is
 /// focused for scrolling.
-const PROMPT_CHAT_FOCUS_FOOTER_ACTIONS: [help_action::HelpAction; 2] = [
-    help_action::HelpAction::new("scroll", "j/k", "Scroll chat"),
-    help_action::HelpAction::new("cancel", "Ctrl+C", "Cancel prompt"),
-];
+const PROMPT_CHAT_FOCUS_FOOTER_ACTIONS: [help_action::HelpAction; 1] =
+    [help_action::HelpAction::new("scroll", "j/k", "Scroll chat")];
 
 /// Builds the prompt-mode footer help line shown below the composer.
 ///
 /// The composer and the chat transcript above it share `Tab` as the focus
 /// toggle, so each focus target advertises its own action set: composing shows
-/// submit/newline/cancel, and reading the transcript shows the scroll keys.
+/// send/newline/cancel, and reading the transcript shows the scroll keys.
+///
+/// Footer entries follow the canonical composer-footer ordering shared with
+/// question mode: the `Tab` focus toggle first as the stable anchor, then the
+/// primary `Enter` action, editing or reading extras, and exit actions last.
 pub fn prompt_footer_line(
     session: &crate::domain::session::Session,
     attachment_count: usize,
     focus: ChatFocus,
 ) -> Line<'static> {
     let is_chat_focused = focus == ChatFocus::Chat;
-    let mut help_actions = if is_chat_focused {
-        PROMPT_CHAT_FOCUS_FOOTER_ACTIONS.to_vec()
-    } else {
-        prompt_footer_actions(session).to_vec()
-    };
     let focus_label = if is_chat_focused { "Compose" } else { "Chat" };
-    help_actions.push(help_action::HelpAction::new("focus", "Tab", focus_label));
+    let mut help_actions = vec![help_action::HelpAction::new("focus", "Tab", focus_label)];
+    if is_chat_focused {
+        help_actions.extend(PROMPT_CHAT_FOCUS_FOOTER_ACTIONS);
+    } else {
+        help_actions.extend_from_slice(prompt_footer_actions(session));
+    }
 
     let mut footer_line = crate::ui::help_format::footer_line(&help_actions);
 

@@ -674,8 +674,8 @@ mod tests {
         // Assert
         assert_eq!(
             footer_line.to_string(),
-            "Enter: submit | Alt+Enter: newline | Ctrl+V/Alt+V: paste image | Esc: cancel | Tab: \
-             focus | 2 images ready"
+            "Tab: focus | Enter: send | Alt+Enter: newline | Ctrl+V/Alt+V: paste image | Esc: \
+             cancel | 2 images ready"
         );
         assert_eq!(
             footer_line.spans[0].style,
@@ -709,7 +709,7 @@ mod tests {
 
         // Assert
         assert!(footer_line.to_string().contains("Enter: stage draft"));
-        assert!(!footer_line.to_string().contains("Enter: submit"));
+        assert!(!footer_line.to_string().contains("Enter: send"));
     }
 
     #[test]
@@ -721,10 +721,7 @@ mod tests {
         let footer_line = prompt_footer_line(&session, 0, ChatFocus::Chat);
 
         // Assert
-        assert_eq!(
-            footer_line.to_string(),
-            "j/k: scroll | Ctrl+C: cancel | Tab: focus"
-        );
+        assert_eq!(footer_line.to_string(), "Tab: focus | j/k: scroll");
     }
 
     #[test]
@@ -1152,16 +1149,14 @@ mod tests {
         let answer_focus_line = question_help_footer_line(ChatFocus::Input, false, false);
 
         // Assert
-        assert!(chat_focus_line.to_string().contains("j/k: scroll"));
-        assert!(chat_focus_line.to_string().contains("Esc/Enter: answer"));
-        assert!(chat_focus_line.to_string().contains("q: sessions"));
-        assert!(answer_focus_line.to_string().contains("Enter: send"));
-        assert!(
-            answer_focus_line
-                .to_string()
-                .contains("Esc/Ctrl+C: end turn")
+        assert_eq!(
+            chat_focus_line.to_string(),
+            "Tab: focus | j/k: scroll | d: diff | q: sessions"
         );
-        assert!(!answer_focus_line.to_string().contains("q: sessions"));
+        assert_eq!(
+            answer_focus_line.to_string(),
+            "Tab: focus | Enter: send | Esc/Ctrl+C: end turn"
+        );
     }
 
     #[test]
@@ -1180,11 +1175,14 @@ mod tests {
             question_help_footer_line(ChatFocus::Input, false, true).to_string();
 
         // Assert
-        assert!(answer_focus_with_options.contains("q: sessions"));
-        assert!(answer_focus_with_options.contains("Esc/Ctrl+C: end turn"));
-        assert!(answer_focus_with_overlay.contains("Esc: cancel @"));
-        assert!(answer_focus_with_overlay.contains("Ctrl+C: end turn"));
-        assert!(!answer_focus_with_overlay.contains("Esc/Ctrl+C: end turn"));
+        assert_eq!(
+            answer_focus_with_options,
+            "Tab: focus | Enter: send | q: sessions | Esc/Ctrl+C: end turn"
+        );
+        assert_eq!(
+            answer_focus_with_overlay,
+            "Tab: focus | Enter: send | Esc: cancel @ | Ctrl+C: end turn"
+        );
     }
 
     #[test]

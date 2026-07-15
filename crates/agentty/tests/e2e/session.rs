@@ -2411,22 +2411,33 @@ fn session_stop_turn_returns_to_review() -> E2eResult {
 /// question instead of restarting from the first.
 #[test]
 fn session_question_resume_after_leaving_to_list() -> E2eResult {
-    // Arrange, Act, Assert
+    // Arrange
     FeatureTest::new("session_question_resume")
         .with_git()
         .setup(seed_question_resume_session)
         .run(
             |scenario| {
+                // Act
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .wait_for_text("Question resume session", 5000)
                     .press_key("Enter")
                     .wait_for_text("Question 1/2", 5000)
+                    .wait_for_text("Tab: focus", 5000)
                     .capture_labeled(
-                        "first_question",
-                        "Question mode opens on the first question",
+                        "answer_focused",
+                        "Question mode starts with the answer input focused",
                     )
+                    .press_key("Tab")
+                    .wait_for_text("j/k: scroll", 5000)
+                    .press_key("ctrl+c")
+                    .capture_labeled(
+                        "chat_focused",
+                        "Chat focus keeps Ctrl+C from ending the question turn",
+                    )
+                    .press_key("Tab")
+                    .wait_for_text("Enter: send", 5000)
                     .press_key("Enter")
                     .wait_for_text("Question 2/2", 5000)
                     .press_key("q")
@@ -2439,10 +2450,35 @@ fn session_question_resume_after_leaving_to_list() -> E2eResult {
                     )
             },
             |frame, report| {
-                let first_frame = common::frame_from_capture(&report.captures[0]);
-                let first_full = Region::full(first_frame.cols(), first_frame.rows());
-                assertion::assert_text_in_region(&first_frame, "Question 1/2", &first_full);
-                assertion::assert_text_in_region(&first_frame, FIRST_QUESTION_TEXT, &first_full);
+                // Assert
+                let answer_focused_frame = common::frame_from_capture(&report.captures[0]);
+                let answer_focused_full =
+                    Region::full(answer_focused_frame.cols(), answer_focused_frame.rows());
+                assertion::assert_text_in_region(
+                    &answer_focused_frame,
+                    "Tab: focus | Enter: send | q: sessions | Esc/Ctrl+C: end turn",
+                    &answer_focused_full,
+                );
+
+                let chat_focused_frame = common::frame_from_capture(&report.captures[1]);
+                let chat_focused_full =
+                    Region::full(chat_focused_frame.cols(), chat_focused_frame.rows());
+                assertion::assert_text_in_region(
+                    &chat_focused_frame,
+                    "Tab: focus | j/k: scroll | d: diff | q: sessions",
+                    &chat_focused_full,
+                );
+                assertion::assert_not_visible(&chat_focused_frame, "Ctrl+C");
+                assertion::assert_text_in_region(
+                    &chat_focused_frame,
+                    "Question 1/2",
+                    &chat_focused_full,
+                );
+                assertion::assert_text_in_region(
+                    &chat_focused_frame,
+                    FIRST_QUESTION_TEXT,
+                    &chat_focused_full,
+                );
 
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Question 2/2", &full);
@@ -2492,7 +2528,7 @@ ON CONFLICT(name) DO UPDATE SET value = excluded.value
 /// instead of editing the typed draft.
 #[test]
 fn session_prompt_chat_focus_toggle() -> E2eResult {
-    // Arrange, Act, Assert
+    // Arrange
     FeatureTest::new("session_prompt_chat_focus")
         .with_git()
         .setup(seed_sessions_startup_tab)
@@ -2504,6 +2540,7 @@ fn session_prompt_chat_focus_toggle() -> E2eResult {
         )
         .run(
             |scenario| {
+                // Act
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .wait_for_text("new session", 5000)
@@ -2525,23 +2562,27 @@ fn session_prompt_chat_focus_toggle() -> E2eResult {
                         "Tab focuses the chat transcript for scrolling",
                     )
                     .press_key("Tab")
-                    .wait_for_text("Enter: submit", 5000)
+                    .wait_for_text("Enter: send", 5000)
                     .viewing_pause_ms(1500)
             },
             |frame, report| {
+                // Assert
                 let chat_focused_frame = common::frame_from_capture(&report.captures[1]);
                 let chat_focused_full =
                     Region::full(chat_focused_frame.cols(), chat_focused_frame.rows());
                 assertion::assert_text_in_region(
                     &chat_focused_frame,
-                    "j/k: scroll",
+                    "Tab: focus",
                     &chat_focused_full,
                 );
                 assertion::assert_text_in_region(
                     &chat_focused_frame,
-                    "Ctrl+C: cancel",
+                    "j/k: scroll",
                     &chat_focused_full,
                 );
+                // Chat focus exposes no cancel shortcut, so the composer draft
+                // cannot be lost while scrolling.
+                assertion::assert_not_visible(&chat_focused_frame, "Ctrl+C");
                 // Scroll keys pressed in chat focus must not reach the draft.
                 assertion::assert_text_in_region(
                     &chat_focused_frame,
@@ -2550,7 +2591,7 @@ fn session_prompt_chat_focus_toggle() -> E2eResult {
                 );
 
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Enter: submit", &full);
+                assertion::assert_text_in_region(frame, "Enter: send", &full);
                 assertion::assert_text_in_region(frame, PROMPT_FOCUS_DRAFT_TEXT, &full);
                 assertion::assert_not_visible(frame, "j/k: scroll");
 
@@ -2722,7 +2763,7 @@ fn session_question_reconcile_after_help_overlay() -> E2eResult {
 /// and choosing the regular option opens prompt mode with the submit footer.
 #[test]
 fn session_creation_opens_prompt_mode() -> E2eResult {
-    // Arrange, Act, Assert
+    // Arrange
     FeatureTest::new("session_creation")
         .with_git()
         .zola(
@@ -2732,6 +2773,7 @@ fn session_creation_opens_prompt_mode() -> E2eResult {
         )
         .run(
             |scenario| {
+                // Act
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
@@ -2745,6 +2787,7 @@ fn session_creation_opens_prompt_mode() -> E2eResult {
                     .capture_labeled("prompt_mode", "Prompt mode after choosing Regular")
             },
             |frame, report| {
+                // Assert
                 let selector_frame = common::frame_from_capture(&report.captures[0]);
                 let selector_full = Region::full(selector_frame.cols(), selector_frame.rows());
                 assertion::assert_text_in_region(&selector_frame, "Regular", &selector_full);
@@ -2759,9 +2802,7 @@ fn session_creation_opens_prompt_mode() -> E2eResult {
                 assertion::assert_text_in_region(&selector_frame, "q: close", &selector_full);
 
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Enter: submit", &full);
-                assertion::assert_text_in_region(frame, "Ctrl+V/Alt+V: paste image", &full);
-                assertion::assert_text_in_region(frame, "Esc: cancel", &full);
+                assertion::assert_text_in_region(frame, "Tab: focus | Enter: send", &full);
             },
         )?;
 
@@ -3138,7 +3179,7 @@ fn antigravity_model_picker_includes_gemini_models() -> E2eResult {
 /// staging with explicit draft guidance before any message is staged.
 #[test]
 fn draft_session_creation_opens_staging_mode() -> E2eResult {
-    // Arrange, Act, Assert
+    // Arrange
     FeatureTest::new("draft_session_creation")
         .with_git()
         .zola(
@@ -3149,6 +3190,7 @@ fn draft_session_creation_opens_staging_mode() -> E2eResult {
         )
         .run(
             |scenario| {
+                // Act
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
@@ -3165,11 +3207,12 @@ fn draft_session_creation_opens_staging_mode() -> E2eResult {
                     )
             },
             |frame, _report| {
+                // Assert
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Draft Session", &full);
                 assertion::assert_text_in_region(frame, "No draft messages staged yet.", &full);
-                assertion::assert_text_in_region(frame, "Enter: stage draft", &full);
-                assertion::assert_text_in_region(frame, "Ctrl+V/Alt+V: paste image", &full);
+                assertion::assert_text_in_region(frame, "Tab: focus | Enter: stage draft", &full);
+                assertion::assert_text_in_region(frame, "Ctrl+V/Alt+V", &full);
             },
         )?;
 
@@ -3233,7 +3276,7 @@ fn draft_session_view_paste_image_opens_composer() -> E2eResult {
 /// session deletes it and returns to the empty Sessions list.
 #[test]
 fn session_prompt_cancel_returns_to_empty_list() -> E2eResult {
-    // Arrange, Act, Assert
+    // Arrange
     FeatureTest::new("prompt_cancel")
         .with_git()
         .zola(
@@ -3243,6 +3286,7 @@ fn session_prompt_cancel_returns_to_empty_list() -> E2eResult {
         )
         .run(
             |scenario| {
+                // Act
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
@@ -3258,9 +3302,14 @@ fn session_prompt_cancel_returns_to_empty_list() -> E2eResult {
                     .capture_labeled("back_to_list", "Sessions list after cancel")
             },
             |frame, report| {
+                // Assert
                 let prompt_frame = common::frame_from_capture(&report.captures[0]);
                 let prompt_full = Region::full(prompt_frame.cols(), prompt_frame.rows());
-                assertion::assert_text_in_region(&prompt_frame, "Esc: cancel", &prompt_full);
+                assertion::assert_text_in_region(
+                    &prompt_frame,
+                    "Tab: focus | Enter: send",
+                    &prompt_full,
+                );
 
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "No sessions", &full);

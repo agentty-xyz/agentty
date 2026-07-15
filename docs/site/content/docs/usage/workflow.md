@@ -391,13 +391,13 @@ questions, the session moves to **Question** status. You answer each question in
 sequence, and Agentty sends one consolidated follow-up message back to the session.
 
 <a id="usage-question-options"></a> Questions may include predefined answer options
-shown as a numbered list; use `j`/`k` or `Up`/`Down` to navigate and `Enter` to submit
-the highlighted choice. Moving past the list edges switches to the free-text input.
-Submitting a blank free-text answer stores `no answer`. `Ctrl+C` ends the clarification
-turn and returns the session to **Review** without sending a reply, while `q` (outside
-free-text input) returns to the sessions list with the **Question** state kept for
-later; answers already submitted are saved, and reopening the session resumes at the
-next unanswered question.
+shown as a numbered list; use `j`/`k` or `Up`/`Down` to navigate and `Enter` to send the
+highlighted choice. Moving past the list edges switches to the free-text input. Sending
+a blank free-text answer stores `no answer`. `Ctrl+C` while the answer input is focused
+ends the clarification turn and returns the session to **Review** without sending a
+reply; it is ignored while chat output is focused. `q` (outside free-text input) returns
+to the sessions list with the **Question** state kept for later; answers already
+submitted are saved, and reopening the session resumes at the next unanswered question.
 
 ## Prompt Input Extras
 

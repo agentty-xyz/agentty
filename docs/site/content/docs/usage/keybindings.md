@@ -201,25 +201,25 @@ diff.
 
 ## Prompt Input
 
-| Key                                 | Action                               |
-| ----------------------------------- | ------------------------------------ |
-| `Enter`                             | Submit prompt or stage it in a draft |
-| `Alt+Enter` / `Shift+Enter`         | Insert newline                       |
-| `Ctrl+J` / `Ctrl+M`                 | Insert newline (terminal fallback)   |
-| `Ctrl+V` / `Ctrl+Shift+V` / `Alt+V` | Paste image as `[Image #n]`          |
-| `Cmd+Left` / `Cmd+Right`            | Move to start / end of current line  |
-| `Option+Left` / `Option+Right`      | Move to previous / next word         |
-| `Option+Backspace`                  | Delete previous word                 |
-| `Cmd+Backspace`                     | Delete current line                  |
-| `Esc`                               | Cancel                               |
-| `Tab`                               | Focus chat output for scrolling      |
-| `@`                                 | Open file picker                     |
-| `/`                                 | Open slash commands                  |
+| Key                                 | Action                              |
+| ----------------------------------- | ----------------------------------- |
+| `Enter`                             | Send prompt or stage it in a draft  |
+| `Alt+Enter` / `Shift+Enter`         | Insert newline                      |
+| `Ctrl+J` / `Ctrl+M`                 | Insert newline (terminal fallback)  |
+| `Ctrl+V` / `Ctrl+Shift+V` / `Alt+V` | Paste image as `[Image #n]`         |
+| `Cmd+Left` / `Cmd+Right`            | Move to start / end of current line |
+| `Option+Left` / `Option+Right`      | Move to previous / next word        |
+| `Option+Backspace`                  | Delete previous word                |
+| `Cmd+Backspace`                     | Delete current line                 |
+| `Esc`                               | Cancel                              |
+| `Tab`                               | Focus chat output for scrolling     |
+| `@`                                 | Open file picker                    |
+| `/`                                 | Open slash commands                 |
 
 While the chat output is focused, `j` / `k` / `Up` / `Down` scroll the transcript, `g` /
 `G` jump to the top or bottom, `Ctrl+D` / `Ctrl+U` scroll by half a page, and `Tab`
 returns focus to the composer. The typed draft is preserved: keys pressed in chat focus
-never edit it, and `Ctrl+C` still cancels the composer.
+never edit it, and `Ctrl+C` is ignored.
 
 Prompt input keeps regular text paste on terminal `Event::Paste`. The dedicated image
 paste shortcuts insert highlighted `[Image #n]` tokens directly in the composer and send
@@ -241,7 +241,7 @@ When predefined options are shown:
 | Key                       | Action                          |
 | ------------------------- | ------------------------------- |
 | `j` / `k` / `Up` / `Down` | Navigate options                |
-| `Enter`                   | Choose highlighted option       |
+| `Enter`                   | Send highlighted option         |
 | `Tab`                     | Focus chat output for scrolling |
 | `q`                       | Return to sessions list         |
 | `Ctrl+C`                  | End turn without answering      |
@@ -251,27 +251,27 @@ When predefined options are shown:
 After moving above or below the predefined option list, or when no predefined options
 exist:
 
-| Key                              | Action                                 |
-| -------------------------------- | -------------------------------------- |
-| `Enter`                          | Submit response; blank means no answer |
-| `Alt+Enter` / `Shift+Enter`      | Insert newline                         |
-| `Ctrl+J` / `Ctrl+M`              | Insert newline (terminal fallback)     |
-| `Ctrl+C`                         | End turn without answering             |
-| `Esc`                            | End turn when answer text is empty     |
-| `Left` / `Right` / `Up` / `Down` | Move cursor                            |
-| `Backspace` / `Delete`           | Delete character                       |
-| `Home` / `End`                   | Move to start / end                    |
-| `Cmd+Left` / `Cmd+Right`         | Move to start / end of current line    |
-| `Option+Left` / `Option+Right`   | Move to previous / next word           |
-| `Option+Backspace` / `Ctrl+W`    | Delete previous word                   |
-| `Cmd+Backspace`                  | Delete current line                    |
-| `Ctrl+K`                         | Delete to end of current line          |
-| `Ctrl+D`                         | Delete character forward               |
-| `Tab`                            | Focus chat output for scrolling        |
+| Key                              | Action                               |
+| -------------------------------- | ------------------------------------ |
+| `Enter`                          | Send response; blank means no answer |
+| `Alt+Enter` / `Shift+Enter`      | Insert newline                       |
+| `Ctrl+J` / `Ctrl+M`              | Insert newline (terminal fallback)   |
+| `Ctrl+C`                         | End turn without answering           |
+| `Esc`                            | End turn without answering           |
+| `Left` / `Right` / `Up` / `Down` | Move cursor                          |
+| `Backspace` / `Delete`           | Delete character                     |
+| `Home` / `End`                   | Move to start / end                  |
+| `Cmd+Left` / `Cmd+Right`         | Move to start / end of current line  |
+| `Option+Left` / `Option+Right`   | Move to previous / next word         |
+| `Option+Backspace` / `Ctrl+W`    | Delete previous word                 |
+| `Cmd+Backspace`                  | Delete current line                  |
+| `Ctrl+K`                         | Delete to end of current line        |
+| `Ctrl+D`                         | Delete character forward             |
+| `Tab`                            | Focus chat output for scrolling      |
 
 In free-text mode every other printable character — including `q` — is inserted into the
 answer. To leave without answering, press `Tab` to focus the chat output and then `q`,
-or press `Ctrl+C` from any focus to end the turn.
+or press `Ctrl+C` while the answer input is focused.
 
 ## Question Input — Chat Scroll
 
@@ -283,9 +283,8 @@ When chat output is focused (press `Tab` to switch):
 | `g` / `G`                 | Scroll to top / bottom            |
 | `Ctrl+d` / `Ctrl+u`       | Half page down / up               |
 | `d`                       | Open current-session diff preview |
-| `Enter` / `Esc` / `Tab`   | Return focus to answer input      |
+| `Tab`                     | Return focus to answer input      |
 | `q`                       | Return to sessions list           |
-| `Ctrl+C`                  | End turn without answering        |
 
 <a id="usage-question-input-submit-flow"></a> After the last question is answered,
 Agentty sends one follow-up message with each question and its response, then returns to

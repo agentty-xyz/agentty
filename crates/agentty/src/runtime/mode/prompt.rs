@@ -159,10 +159,10 @@ fn handle_focus_toggle(app: &mut App, key: KeyEvent) -> bool {
 /// Handles keys while the chat transcript above the composer holds focus.
 ///
 /// Scroll keys navigate the transcript and `Tab` returns focus to the composer.
-/// Every other key is swallowed so the typed draft cannot change while the user
-/// reads back the conversation; only `Ctrl+C` falls through to composer
-/// cancellation. Swallowed keys skip scroll-metric construction, which lays out
-/// the transcript.
+/// Every other key — including `Ctrl+C` and `Esc` — is swallowed so the typed
+/// draft and the prompt itself cannot change while the user reads back the
+/// conversation. Swallowed keys skip scroll-metric construction, which lays
+/// out the transcript.
 ///
 /// Returns `true` when the key was consumed by the focused transcript.
 fn handle_chat_focus_key<B: Backend>(
@@ -182,10 +182,6 @@ where
             ..
         }
     ) {
-        return Ok(false);
-    }
-
-    if input_key::is_control_key(key) && key.code == KeyCode::Char('c') {
         return Ok(false);
     }
 
@@ -1241,6 +1237,31 @@ mod tests {
 
         // Act
         press_prompt_key(&mut app, KeyCode::Esc).await;
+
+        // Assert
+        assert_eq!(prompt_focus(&app), ChatFocus::Chat);
+        let AppMode::Prompt { input, .. } = &app.mode else {
+            unreachable!("expected AppMode::Prompt");
+        };
+        assert_eq!(input.text(), "draft text");
+    }
+
+    #[tokio::test]
+    async fn test_ctrl_c_keeps_chat_focus_without_canceling_prompt() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("draft text", None).await;
+        press_prompt_key(&mut app, KeyCode::Tab).await;
+
+        // Act
+        let mut terminal = test_terminal();
+        handle_with_cache(
+            &mut app,
+            &RenderCacheStore::default(),
+            &mut terminal,
+            KeyEvent::new(KeyCode::Char('c'), event::KeyModifiers::CONTROL),
+        )
+        .await
+        .expect("prompt key handling failed");
 
         // Assert
         assert_eq!(prompt_focus(&app), ChatFocus::Chat);
