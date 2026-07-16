@@ -2267,8 +2267,8 @@ fn session_queue_chat_message_during_rebase() -> E2eResult {
                     .rect
                     .row;
 
-                assert!(commit_row < sync_assist_row);
-                assert!(sync_assist_row < queued_message_row);
+                assert_eq!(sync_assist_row, commit_row + 2);
+                assert_eq!(queued_message_row, sync_assist_row + 2);
             },
         )?;
 

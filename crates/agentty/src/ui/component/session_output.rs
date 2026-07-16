@@ -1296,16 +1296,35 @@ impl<'a> SessionOutput<'a> {
             return;
         }
 
-        Self::append_block_separator(lines, SessionOutputSeparator::Always);
-
         let queued_style = ratatui::style::Style::default()
             .fg(style::palette::text_subtle())
             .add_modifier(ratatui::style::Modifier::ITALIC);
+        let mut has_rendered_message = false;
         for queued_text in queued_messages {
-            if queued_text.trim().is_empty() {
+            let message_lines = queued_text.split('\n').collect::<Vec<_>>();
+            let Some(first_content_line_index) = message_lines
+                .iter()
+                .position(|message_line| !message_line.trim().is_empty())
+            else {
                 continue;
-            }
-            for (line_index, message_line) in queued_text.split('\n').enumerate() {
+            };
+            let last_content_line_index = message_lines
+                .iter()
+                .rposition(|message_line| !message_line.trim().is_empty())
+                .unwrap_or(first_content_line_index);
+
+            let separator = if has_rendered_message {
+                SessionOutputSeparator::AfterPreviousContent
+            } else {
+                SessionOutputSeparator::Always
+            };
+            Self::append_block_separator(lines, separator);
+
+            for (line_index, message_line) in message_lines
+                [first_content_line_index..=last_content_line_index]
+                .iter()
+                .enumerate()
+            {
                 let prefix = if line_index == 0 {
                     "queued › "
                 } else {
@@ -1317,8 +1336,12 @@ impl<'a> SessionOutput<'a> {
                     queued_style,
                 ));
             }
+            has_rendered_message = true;
         }
-        lines.push(Line::from(""));
+
+        if has_rendered_message {
+            lines.push(Line::from(""));
+        }
     }
 
     /// Appends one typed user prompt block with its content rendered as
@@ -1346,16 +1369,22 @@ impl<'a> SessionOutput<'a> {
             prompt_content_width,
             markdown_render_cache,
         );
-        if rendered_lines.is_empty() {
+        let Some(first_visible_line_index) =
+            rendered_lines.iter().position(|line| line.width() > 0)
+        else {
             return;
-        }
+        };
+        let last_visible_line_index = rendered_lines
+            .iter()
+            .rposition(|line| line.width() > 0)
+            .unwrap_or(first_visible_line_index);
 
         Self::append_block_separator(lines, SessionOutputSeparator::AfterPreviousContent);
         lines.push(prompt_block::user_prompt_padding_line(inner_width));
 
         let mut has_rendered_content_line = false;
         let continuation_prefix = prompt_block::user_prompt_continuation_prefix();
-        for rendered_line in rendered_lines.iter() {
+        for rendered_line in &rendered_lines[first_visible_line_index..=last_visible_line_index] {
             if rendered_line.width() == 0 {
                 lines.push(prompt_block::user_prompt_padding_line(inner_width));
 
@@ -1480,12 +1509,14 @@ impl<'a> SessionOutput<'a> {
         })
     }
 
-    /// Appends rendered markdown with one blank separator while trimming any
-    /// existing trailing blank lines from `lines`.
+    /// Appends rendered markdown with exactly one blank separator between
+    /// visible messages.
     ///
-    /// When a shared render cache is available, every appended markdown block
-    /// reuses it so transcript sections do not evict each other between
-    /// frames.
+    /// Outer blank rows from persisted message content are excluded so they
+    /// cannot stack with the assembly separator. Blank rows within the
+    /// message remain intact. When a shared render cache is available, every
+    /// appended markdown block reuses it so transcript sections do not evict
+    /// each other between frames.
     fn append_markdown_lines(
         lines: &mut Vec<Line<'static>>,
         markdown: &str,
@@ -1494,12 +1525,22 @@ impl<'a> SessionOutput<'a> {
     ) {
         let rendered_lines =
             Self::rendered_markdown_lines(markdown, inner_width, markdown_render_cache);
-        if rendered_lines.is_empty() {
+        let Some(first_visible_line_index) =
+            rendered_lines.iter().position(|line| line.width() > 0)
+        else {
             return;
-        }
+        };
+        let last_visible_line_index = rendered_lines
+            .iter()
+            .rposition(|line| line.width() > 0)
+            .unwrap_or(first_visible_line_index);
 
         Self::append_block_separator(lines, SessionOutputSeparator::AfterPreviousContent);
-        lines.extend(rendered_lines.iter().cloned());
+        lines.extend(
+            rendered_lines[first_visible_line_index..=last_visible_line_index]
+                .iter()
+                .cloned(),
+        );
     }
 
     /// Returns rendered markdown as a shared slice so cache hits avoid cloning
@@ -3056,6 +3097,147 @@ mod tests {
             1
         );
         assert!(created_message_index < later_prompt_index);
+    }
+
+    /// Verifies persisted message padding cannot add extra rows to the
+    /// canonical one-empty-line transcript gap.
+    #[test]
+    fn test_output_lines_places_one_empty_line_between_messages() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::Review;
+        let visible_messages = [
+            "Completed turn.",
+            "[Commit] No changes to commit.",
+            "[Review Request] Created PR 42",
+            "[Sync] Successfully synced onto main",
+            "[Branch Push] Auto-pushed published branch.",
+            "queued › Verify the spacing.",
+            "queued › Keep one empty line.",
+        ];
+        set_conversation_transcript(
+            &mut session,
+            vec![
+                (SessionMessageKind::AssistantAnswer, visible_messages[0]),
+                (
+                    SessionMessageKind::WorkflowNotice,
+                    "\n[Commit] No changes to commit.\n",
+                ),
+                (
+                    SessionMessageKind::WorkflowNotice,
+                    "\n[Review Request] Created PR 42\n",
+                ),
+                (
+                    SessionMessageKind::WorkflowNotice,
+                    "\n[Sync] Successfully synced onto main\n",
+                ),
+                (
+                    SessionMessageKind::WorkflowNotice,
+                    "\n[Branch Push] Auto-pushed published branch.\n",
+                ),
+            ],
+        );
+        session.queued_messages = vec![
+            "\nVerify the spacing.\n".to_string(),
+            " \nKeep one empty line.\n\t".to_string(),
+        ];
+
+        // Act
+        let rendered_lines = output_lines(&session, Rect::new(0, 0, 120, 16), line_context(), None)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        let message_rows = visible_messages
+            .iter()
+            .map(|message| {
+                rendered_lines
+                    .iter()
+                    .position(|line| line == message)
+                    .expect("message should be rendered")
+            })
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert!(message_rows.windows(2).all(|rows| rows[1] == rows[0] + 2));
+    }
+
+    /// Verifies queued-message edge trimming preserves blank lines within a
+    /// multiline message.
+    #[test]
+    fn test_append_queued_message_lines_trims_only_outer_empty_lines() {
+        // Arrange
+        let mut lines = vec![Line::from("Previous message.")];
+        let queued_messages = vec![
+            "\nFirst queued message.\n".to_string(),
+            " \nSecond queued message.\n\nMore context.\n\t".to_string(),
+        ];
+
+        // Act
+        SessionOutput::append_queued_message_lines(&mut lines, &queued_messages);
+        let rendered_lines = lines.iter().map(ToString::to_string).collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(
+            rendered_lines,
+            vec![
+                "Previous message.",
+                "",
+                "queued › First queued message.",
+                "",
+                "queued › Second queued message.",
+                "        ",
+                "        More context.",
+                "",
+            ]
+        );
+    }
+
+    /// Verifies prompt edge trimming keeps internal blank rows while
+    /// retaining one separator before the following transcript message.
+    #[test]
+    fn test_output_lines_trims_only_outer_user_prompt_empty_lines() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::Review;
+        set_conversation_transcript(
+            &mut session,
+            vec![
+                (
+                    SessionMessageKind::UserPrompt,
+                    "\nfollow up\n\nwith context\n",
+                ),
+                (SessionMessageKind::AssistantAnswer, "Completed response."),
+            ],
+        );
+
+        // Act
+        let rendered_lines = output_lines(&session, Rect::new(0, 0, 120, 16), line_context(), None);
+        let prompt_line_index = rendered_lines
+            .iter()
+            .position(|line| line.to_string().contains("follow up"))
+            .expect("prompt should be rendered");
+        let context_line_index = rendered_lines
+            .iter()
+            .position(|line| line.to_string().contains("with context"))
+            .expect("prompt context should be rendered");
+        let response_line_index = rendered_lines
+            .iter()
+            .position(|line| line.to_string() == "Completed response.")
+            .expect("response should be rendered");
+
+        // Assert
+        assert_eq!(prompt_line_index, 1);
+        assert_eq!(context_line_index, prompt_line_index + 2);
+        assert!(rendered_lines[prompt_line_index + 1].width() > 0);
+        assert!(
+            rendered_lines[prompt_line_index + 1]
+                .to_string()
+                .trim()
+                .is_empty()
+        );
+        assert_eq!(response_line_index, context_line_index + 3);
+        assert!(rendered_lines[context_line_index + 1].width() > 0);
+        assert_eq!(rendered_lines[context_line_index + 2].width(), 0);
     }
 
     /// Verifies completed published-branch pushes render through transcript
