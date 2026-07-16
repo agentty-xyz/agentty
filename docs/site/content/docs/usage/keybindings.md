@@ -262,10 +262,11 @@ diff.
 | `@`                                 | Open file picker                    |
 | `/`                                 | Open slash commands                 |
 
-While the chat output is focused, `j` / `k` / `Up` / `Down` scroll the transcript, `g` /
-`G` jump to the top or bottom, `Ctrl+D` / `Ctrl+U` scroll by half a page, and `Tab`
-returns focus to the composer. The typed draft is preserved: keys pressed in chat focus
-never edit it, and `Ctrl+C` is ignored.
+While the chat output is focused, `d` opens the current-session diff preview, `j` / `k`
+/ `Up` / `Down` scroll the transcript, `g` / `G` jump to the top or bottom, `Ctrl+D` /
+`Ctrl+U` scroll by half a page, and `Tab` returns focus to the composer. The typed draft
+is preserved: keys pressed in chat focus never edit it, and `Ctrl+C` is ignored. Leaving
+the diff preview returns to the composer with the draft intact.
 
 Prompt input keeps regular text paste on terminal `Event::Paste`. The dedicated image
 paste shortcuts insert highlighted `[Image #n]` tokens directly in the composer and send

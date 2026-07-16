@@ -772,7 +772,7 @@ mod tests {
         let help_context = HelpContext::Diff {
             session_id: "missing-session".into(),
             diff: "diff --git a/file b/file".to_string(),
-            restore_question: None,
+            restore: None,
             scroll_offset: 0,
             file_explorer_selected_index: 0,
         };

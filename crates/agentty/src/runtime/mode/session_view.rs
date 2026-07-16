@@ -23,7 +23,7 @@ use crate::runtime::EventResult;
 use crate::runtime::mode::chat_scroll::{self, ChatScrollMetrics};
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
 use crate::runtime::mode::input_key::is_insertable_char_key;
-use crate::runtime::mode::prompt;
+use crate::runtime::mode::{diff, prompt};
 use crate::ui::RenderCacheStore;
 
 #[derive(Clone)]
@@ -1134,19 +1134,12 @@ async fn open_review_output_mode(app: &mut App, view_context: &ViewContext) {
 /// is empty, which keeps the view page in place so the `d` shortcut behaves as
 /// unavailable for unchanged review sessions.
 async fn show_diff_for_view_session(app: &mut App, view_context: &ViewContext) -> bool {
-    let diff = load_view_session_diff(app, view_context).await;
-    if diff.trim().is_empty() {
+    let diff_text = load_view_session_diff(app, view_context).await;
+    if diff_text.trim().is_empty() {
         return false;
     }
 
-    app.mode = AppMode::Diff {
-        diff,
-        file_explorer_selected_index: 0,
-        restore_question: None,
-        scroll_cache: None,
-        session_id: view_context.session_id.clone(),
-        scroll_offset: 0,
-    };
+    diff::enter_diff_mode(app, &view_context.session_id, diff_text, None);
 
     true
 }
@@ -1453,6 +1446,28 @@ mod tests {
 
         // Assert
         assert!(context.is_none());
+        assert!(matches!(app.mode, AppMode::List));
+    }
+
+    #[tokio::test]
+    async fn test_handle_ignores_key_when_mode_is_not_view() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
+        app.mode = AppMode::List;
+        let backend = ratatui::backend::TestBackend::new(120, 30);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        let result = handle(
+            &mut app,
+            &mut terminal,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("non-view key should be handled");
+
+        // Assert
+        assert!(matches!(result, EventResult::Continue));
         assert!(matches!(app.mode, AppMode::List));
     }
 

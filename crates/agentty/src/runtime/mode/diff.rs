@@ -2,7 +2,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 
 use crate::app::App;
-use crate::presentation::app_mode::{AppMode, DiffScrollCache, HelpContext, ViewportRect};
+use crate::presentation::app_mode::{
+    AppMode, DiffRestoreTarget, DiffScrollCache, HelpContext, ViewportRect,
+};
 use crate::runtime::EventResult;
 use crate::ui::component::file_explorer::FileExplorer;
 use crate::ui::{RenderCacheStore, page};
@@ -10,9 +12,9 @@ use crate::ui::{RenderCacheStore, page};
 /// Handles key input while the app is in `AppMode::Diff`.
 ///
 /// File selection via `j`/`k` wraps around between the first and last file
-/// explorer entries. Leaving diff mode restores the prior question snapshot
-/// when present; otherwise it rebuilds session view with any cached focused
-/// review output for the same session.
+/// explorer entries. Leaving diff mode restores the prior composer or question
+/// snapshot when present; otherwise it rebuilds session view with any cached
+/// focused review output for the same session.
 pub(crate) fn handle_with_cache(
     app: &mut App,
     render_cache_store: &RenderCacheStore,
@@ -37,6 +39,56 @@ fn handle(app: &mut App, content_area: Rect, key: KeyEvent) -> EventResult {
     handle_with_cache(app, &RenderCacheStore::default(), content_area, key)
 }
 
+/// Runs `git diff` for the session with `session_id`, returning the diff text.
+///
+/// Returns `None` when the session is not loaded or the worktree diff is empty,
+/// so callers can treat the diff shortcut as unavailable for unchanged
+/// sessions. Git failures surface as a `Failed to run git diff:` message rather
+/// than `None`, so the diff view still opens to report the error.
+pub(crate) async fn session_diff(app: &App, session_id: &str) -> Option<String> {
+    let session = app
+        .sessions
+        .sessions()
+        .iter()
+        .find(|session| session.id == session_id)?;
+
+    let session_folder = session.folder.clone();
+    let base_branch = session.base_branch.clone();
+
+    let diff = app
+        .services
+        .git_client()
+        .diff(session_folder, base_branch)
+        .await
+        .unwrap_or_else(|error| format!("Failed to run git diff: {error}"));
+
+    if diff.trim().is_empty() {
+        return None;
+    }
+
+    Some(diff)
+}
+
+/// Enters `AppMode::Diff` for `session_id` with a preloaded `diff`.
+///
+/// `restore` records the originating page so leaving the diff returns there;
+/// `None` falls back to session view.
+pub(crate) fn enter_diff_mode(
+    app: &mut App,
+    session_id: &str,
+    diff: String,
+    restore: Option<DiffRestoreTarget>,
+) {
+    app.mode = AppMode::Diff {
+        diff,
+        file_explorer_selected_index: 0,
+        restore: restore.map(Box::new),
+        scroll_cache: None,
+        session_id: session_id.into(),
+        scroll_offset: 0,
+    };
+}
+
 /// Opens diff help while preserving the current diff-mode snapshot.
 fn handle_help_key(app: &mut App, key: KeyEvent) -> bool {
     if key.code != KeyCode::Char('?') {
@@ -47,7 +99,7 @@ fn handle_help_key(app: &mut App, key: KeyEvent) -> bool {
     if let AppMode::Diff {
         diff,
         file_explorer_selected_index,
-        restore_question,
+        restore,
         session_id,
         scroll_offset,
         ..
@@ -57,7 +109,7 @@ fn handle_help_key(app: &mut App, key: KeyEvent) -> bool {
             context: HelpContext::Diff {
                 diff,
                 file_explorer_selected_index,
-                restore_question,
+                restore,
                 session_id,
                 scroll_offset,
             },
@@ -78,13 +130,13 @@ fn handle_exit_key(app: &mut App, key: KeyEvent) -> bool {
 
     let mode = std::mem::replace(&mut app.mode, AppMode::List);
     if let AppMode::Diff {
-        restore_question,
+        restore,
         session_id,
         ..
     } = mode
     {
-        app.mode = if let Some(snapshot) = restore_question {
-            snapshot.into_question_mode()
+        app.mode = if let Some(restore) = restore {
+            restore.into_mode()
         } else {
             AppMode::View {
                 session_id,
@@ -109,7 +161,7 @@ fn handle_navigation_key(
     let AppMode::Diff {
         diff,
         mut file_explorer_selected_index,
-        restore_question,
+        restore,
         mut scroll_cache,
         mut scroll_offset,
         session_id,
@@ -183,7 +235,7 @@ fn handle_navigation_key(
     app.mode = AppMode::Diff {
         diff,
         file_explorer_selected_index,
-        restore_question,
+        restore,
         scroll_cache,
         scroll_offset,
         session_id,
@@ -268,6 +320,100 @@ mod tests {
             .join("\n")
     }
 
+    /// Draft text carried by [`non_default_prompt_snapshot`].
+    const RESTORE_DRAFT_TEXT: &str = "draft body";
+
+    /// The single at-mention entry carried by [`non_default_prompt_snapshot`].
+    fn prompt_mention_entry() -> crate::domain::file_entry::FileEntry {
+        crate::domain::file_entry::FileEntry {
+            is_dir: false,
+            path: "src/main.rs".to_string(),
+        }
+    }
+
+    /// Builds a prompt snapshot with non-default attachment, history, slash,
+    /// and at-mention state so restore tests prove no composer field is
+    /// dropped when leaving diff.
+    fn non_default_prompt_snapshot() -> crate::presentation::app_mode::PromptModeSnapshot {
+        use crate::domain::agent::AgentKind;
+        use crate::domain::input::InputState;
+        use crate::presentation::app_mode::PromptModeSnapshot;
+        use crate::presentation::prompt::{
+            PromptAtMentionState, PromptAttachmentState, PromptHistoryState, PromptSlashStage,
+            PromptSlashState,
+        };
+
+        let mut attachment_state = PromptAttachmentState::default();
+        attachment_state.register_local_image(std::path::PathBuf::from("/tmp/pic.png"), 0);
+
+        let mut history_state =
+            PromptHistoryState::new(vec!["prev one".to_string(), "prev two".to_string()]);
+        history_state.draft_text = Some("saved draft".to_string());
+        history_state.selected_index = Some(1);
+
+        let mut slash_state = PromptSlashState::with_available_agent_kinds(vec![AgentKind::Codex]);
+        slash_state.stage = PromptSlashStage::Model;
+        slash_state.selected_index = 2;
+
+        PromptModeSnapshot {
+            at_mention_state: Some(PromptAtMentionState {
+                all_entries: vec![prompt_mention_entry()],
+                selected_index: 1,
+            }),
+            attachment_state,
+            history_state,
+            input: InputState::with_text(RESTORE_DRAFT_TEXT.to_string()),
+            scroll_offset: Some(4),
+            session_id: "session-p".into(),
+            slash_state,
+        }
+    }
+
+    /// Asserts `mode` is a prompt composer restored losslessly from
+    /// [`non_default_prompt_snapshot`], with input focus.
+    fn assert_restored_prompt_composer(mode: &AppMode) {
+        use crate::domain::agent::AgentKind;
+        use crate::presentation::prompt::PromptSlashStage;
+
+        let AppMode::Prompt {
+            at_mention_state,
+            attachment_state,
+            focus,
+            history_state,
+            input,
+            scroll_offset,
+            slash_state,
+            ..
+        } = mode
+        else {
+            unreachable!("expected AppMode::Prompt after leaving diff");
+        };
+
+        assert_eq!(*focus, crate::presentation::app_mode::ChatFocus::Input);
+        assert_eq!(input.text(), RESTORE_DRAFT_TEXT);
+        assert_eq!(*scroll_offset, Some(4));
+
+        assert_eq!(attachment_state.attachments.len(), 1);
+        assert_eq!(attachment_state.next_attachment_number, 2);
+
+        assert_eq!(
+            history_state.entries,
+            vec!["prev one".to_string(), "prev two".to_string()]
+        );
+        assert_eq!(history_state.draft_text, Some("saved draft".to_string()));
+        assert_eq!(history_state.selected_index, Some(1));
+
+        assert_eq!(slash_state.available_agent_kinds, vec![AgentKind::Codex]);
+        assert_eq!(slash_state.stage, PromptSlashStage::Model);
+        assert_eq!(slash_state.selected_index, 2);
+
+        let at_mention_state = at_mention_state
+            .as_ref()
+            .expect("at-mention state must survive leaving diff");
+        assert_eq!(at_mention_state.selected_index, 1);
+        assert_eq!(at_mention_state.all_entries, vec![prompt_mention_entry()]);
+    }
+
     #[tokio::test]
     async fn test_handle_quit_key_returns_to_view_mode() {
         // Arrange
@@ -277,7 +423,7 @@ mod tests {
             diff: "diff output".to_string(),
             scroll_offset: 7,
             file_explorer_selected_index: 0,
-            restore_question: None,
+            restore: None,
             scroll_cache: None,
         };
 
@@ -316,7 +462,7 @@ mod tests {
             diff: "diff output".to_string(),
             scroll_offset: 7,
             file_explorer_selected_index: 0,
-            restore_question: None,
+            restore: None,
             scroll_cache: None,
         };
 
@@ -348,7 +494,7 @@ mod tests {
             diff: scrollable_diff_fixture(),
             scroll_offset: 0,
             file_explorer_selected_index: 0,
-            restore_question: None,
+            restore: None,
             scroll_cache: None,
         };
 
@@ -379,7 +525,7 @@ mod tests {
             diff: scrollable_diff_fixture(),
             scroll_offset: 3,
             file_explorer_selected_index: 2,
-            restore_question: None,
+            restore: None,
             scroll_cache: None,
         };
 
@@ -411,7 +557,7 @@ mod tests {
             diff: "diff output".to_string(),
             scroll_offset: 0,
             file_explorer_selected_index: 0,
-            restore_question: None,
+            restore: None,
             scroll_cache: None,
         };
 
@@ -442,7 +588,7 @@ mod tests {
             diff: "diff output".to_string(),
             scroll_offset: 0,
             file_explorer_selected_index: 2,
-            restore_question: None,
+            restore: None,
             scroll_cache: None,
         };
 
@@ -492,7 +638,7 @@ mod tests {
             diff: "diff --git a/src/main.rs b/src/main.rs\n+added".to_string(),
             scroll_offset: 10,
             file_explorer_selected_index: 0,
-            restore_question: None,
+            restore: None,
             scroll_cache: None,
         };
 
@@ -523,7 +669,7 @@ mod tests {
             diff: "diff --git a/src/main.rs b/src/main.rs\n+added".to_string(),
             scroll_offset: 10,
             file_explorer_selected_index: 1,
-            restore_question: None,
+            restore: None,
             scroll_cache: None,
         };
 
@@ -554,7 +700,7 @@ mod tests {
             diff: "diff --git a/src/main.rs b/src/main.rs\n+added".to_string(),
             scroll_offset: 10,
             file_explorer_selected_index: 1,
-            restore_question: None,
+            restore: None,
             scroll_cache: None,
         };
 
@@ -585,7 +731,7 @@ mod tests {
             diff: "diff --git a/src/main.rs b/src/main.rs\n+added".to_string(),
             scroll_offset: 10,
             file_explorer_selected_index: 0,
-            restore_question: None,
+            restore: None,
             scroll_cache: None,
         };
 
@@ -616,7 +762,7 @@ mod tests {
             diff: "diff output".to_string(),
             scroll_offset: 5,
             file_explorer_selected_index: 3,
-            restore_question: None,
+            restore: None,
             scroll_cache: None,
         };
 
@@ -657,7 +803,7 @@ mod tests {
             diff,
             scroll_offset: max_scroll_offset,
             file_explorer_selected_index: 0,
-            restore_question: None,
+            restore: None,
             scroll_cache: None,
         };
 
@@ -692,7 +838,7 @@ mod tests {
             diff,
             scroll_offset: u16::MAX,
             file_explorer_selected_index: 0,
-            restore_question: None,
+            restore: None,
             scroll_cache: None,
         };
 
@@ -727,19 +873,21 @@ mod tests {
             diff: "diff output".to_string(),
             scroll_offset: 0,
             file_explorer_selected_index: 0,
-            restore_question: Some(QuestionModeSnapshot {
-                at_mention_state: None,
-                current_index: 0,
-                input: InputState::default(),
-                questions: vec![QuestionItem {
-                    options: Vec::new(),
-                    text: "Q?".to_string(),
-                }],
-                responses: Vec::new(),
-                scroll_offset: None,
-                selected_option_index: None,
-                session_id: "session-q".into(),
-            }),
+            restore: Some(Box::new(DiffRestoreTarget::Question(
+                QuestionModeSnapshot {
+                    at_mention_state: None,
+                    current_index: 0,
+                    input: InputState::default(),
+                    questions: vec![QuestionItem {
+                        options: Vec::new(),
+                        text: "Q?".to_string(),
+                    }],
+                    responses: Vec::new(),
+                    scroll_offset: None,
+                    selected_option_index: None,
+                    session_id: "session-q".into(),
+                },
+            ))),
             scroll_cache: None,
         };
 
@@ -760,6 +908,140 @@ mod tests {
                 ..
             } if session_id == "session-q"
         ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_quit_with_prompt_snapshot_restores_prompt_mode() {
+        // Arrange — diff opened from prompt mode carries a composer snapshot.
+        use crate::domain::input::InputState;
+        use crate::presentation::app_mode::PromptModeSnapshot;
+        use crate::presentation::prompt::{
+            PromptAttachmentState, PromptHistoryState, PromptSlashState,
+        };
+
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        app.mode = AppMode::Diff {
+            session_id: "session-p".into(),
+            diff: "diff output".to_string(),
+            scroll_offset: 0,
+            file_explorer_selected_index: 0,
+            restore: Some(Box::new(DiffRestoreTarget::Prompt(PromptModeSnapshot {
+                at_mention_state: None,
+                attachment_state: PromptAttachmentState::default(),
+                history_state: PromptHistoryState::new(Vec::new()),
+                input: InputState::with_text("draft text".to_string()),
+                scroll_offset: None,
+                session_id: "session-p".into(),
+                slash_state: PromptSlashState::default(),
+            }))),
+            scroll_cache: None,
+        };
+
+        // Act
+        let event_result = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        );
+
+        // Assert — restored to prompt mode with the draft intact and input focus.
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(
+            &app.mode,
+            AppMode::Prompt {
+                focus: crate::presentation::app_mode::ChatFocus::Input,
+                input,
+                session_id,
+                ..
+            } if input.text() == "draft text" && session_id == "session-p"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_quit_with_prompt_snapshot_preserves_composer_context() {
+        // Arrange — a prompt snapshot carrying non-default attachment, history,
+        // slash, and at-mention state so leaving diff cannot silently drop it.
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        app.mode = AppMode::Diff {
+            session_id: "session-p".into(),
+            diff: "diff output".to_string(),
+            scroll_offset: 0,
+            file_explorer_selected_index: 0,
+            restore: Some(Box::new(DiffRestoreTarget::Prompt(
+                non_default_prompt_snapshot(),
+            ))),
+            scroll_cache: None,
+        };
+
+        // Act
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        );
+
+        // Assert — every composer field survives the diff round-trip.
+        assert_restored_prompt_composer(&app.mode);
+    }
+
+    #[tokio::test]
+    async fn test_handle_prompt_then_help_then_exit_preserves_composer_context() {
+        // Arrange — diff opened from prompt mode, then the user opens help with `?`.
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        app.mode = AppMode::Diff {
+            session_id: "session-p".into(),
+            diff: "diff output".to_string(),
+            scroll_offset: 3,
+            file_explorer_selected_index: 1,
+            restore: Some(Box::new(DiffRestoreTarget::Prompt(
+                non_default_prompt_snapshot(),
+            ))),
+            scroll_cache: None,
+        };
+
+        // Act — open help overlay.
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE),
+        );
+
+        // Intermediate assert — help carries the prompt restore target.
+        assert!(matches!(
+            app.mode,
+            AppMode::Help {
+                context: HelpContext::Diff {
+                    restore: Some(_),
+                    ..
+                },
+                ..
+            }
+        ));
+
+        // Act — close help overlay, returning to diff.
+        crate::runtime::mode::help::handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        );
+
+        // Intermediate assert — diff still carries the prompt restore target.
+        assert!(matches!(
+            app.mode,
+            AppMode::Diff {
+                restore: Some(_),
+                ..
+            }
+        ));
+
+        // Act — exit diff.
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+        );
+
+        // Assert — restored to the prompt composer with all context intact.
+        assert_restored_prompt_composer(&app.mode);
     }
 
     #[tokio::test]
@@ -795,7 +1077,7 @@ mod tests {
             diff: "diff output".to_string(),
             scroll_offset: 3,
             file_explorer_selected_index: 1,
-            restore_question: Some(snapshot),
+            restore: Some(Box::new(DiffRestoreTarget::Question(snapshot))),
             scroll_cache: None,
         };
 
@@ -811,7 +1093,7 @@ mod tests {
             app.mode,
             AppMode::Help {
                 context: HelpContext::Diff {
-                    restore_question: Some(_),
+                    restore: Some(_),
                     ..
                 },
                 ..
@@ -828,7 +1110,7 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::Diff {
-                restore_question: Some(_),
+                restore: Some(_),
                 ..
             }
         ));
@@ -850,5 +1132,106 @@ mod tests {
                 ..
             } if session_id == "session-q"
         ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_question_mark_in_non_diff_mode_leaves_mode_unchanged() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        app.mode = AppMode::List;
+
+        // Act
+        let event_result = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE),
+        );
+
+        // Assert — the help key is a no-op outside diff mode.
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(app.mode, AppMode::List));
+    }
+
+    #[tokio::test]
+    async fn test_handle_navigation_key_in_non_diff_mode_leaves_mode_unchanged() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        app.mode = AppMode::List;
+
+        // Act
+        let event_result = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        );
+
+        // Assert — navigation keys are a no-op outside diff mode.
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(app.mode, AppMode::List));
+    }
+
+    #[tokio::test]
+    async fn test_handle_unhandled_key_keeps_diff_mode_unchanged() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        app.mode = AppMode::Diff {
+            session_id: "session-id".into(),
+            diff: "diff output".to_string(),
+            scroll_offset: 4,
+            file_explorer_selected_index: 2,
+            restore: None,
+            scroll_cache: None,
+        };
+
+        // Act
+        let event_result = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+        );
+
+        // Assert — an unhandled key leaves the diff selection and scroll intact.
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(
+            app.mode,
+            AppMode::Diff {
+                scroll_offset: 4,
+                file_explorer_selected_index: 2,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_diff_max_scroll_offset_returns_cached_value_on_matching_key() {
+        // Arrange — a cache entry whose key matches the requested viewport and
+        // selection.
+        let diff = scrollable_diff_fixture();
+        let diff_layout_cache = page::diff::DiffLayoutCache::default();
+        let mut scroll_cache = Some(DiffScrollCache {
+            content_area: viewport_rect(TEST_TERMINAL_SIZE),
+            file_explorer_selected_index: 0,
+            max_scroll_offset: 4242,
+        });
+
+        // Act
+        let max_scroll_offset = diff_max_scroll_offset(
+            &diff,
+            TEST_TERMINAL_SIZE,
+            0,
+            &mut scroll_cache,
+            &diff_layout_cache,
+        );
+
+        // Assert — the cached limit is returned verbatim without recomputing.
+        assert_eq!(max_scroll_offset, 4242);
+    }
+
+    #[test]
+    #[should_panic(expected = "expected AppMode::Prompt after leaving diff")]
+    fn test_assert_restored_prompt_composer_rejects_non_prompt_mode() {
+        // Arrange, Act & Assert — the helper rejects modes that are not a restored
+        // composer.
+        assert_restored_prompt_composer(&AppMode::List);
     }
 }
