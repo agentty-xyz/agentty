@@ -39,8 +39,13 @@ through the correct modules without crossing layer boundaries.
 
 ## Add a Keybinding or Mode Interaction
 
-1. Update the handler in `crates/agentty/src/runtime/mode/`, or in
-   `crates/agentty/src/runtime/key_handler.rs` when the interaction is a cross-mode
+1. For basic text editing, add or update the semantic command in
+   `crates/agentty/src/domain/input.rs`, then map terminal keys once in
+   `crates/agentty/src/runtime/mode/input_key.rs`.
+1. Let prompt, question, branch-publish, and settings input modes intercept only their
+   context-specific actions before falling back to the shared input command mapping.
+1. For other interactions, update the handler in `crates/agentty/src/runtime/mode/`, or
+   in `crates/agentty/src/runtime/key_handler.rs` when the interaction is a cross-mode
    overlay dispatch.
 1. If a new mode/state is needed, extend `crates/agentty/src/presentation/app_mode.rs`.
 1. If help content changes, update `crates/agentty/src/presentation/help_action.rs` as

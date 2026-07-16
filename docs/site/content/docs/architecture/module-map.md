@@ -55,9 +55,11 @@ For file-level detail, read the module docstrings directly.
   traits.
 - `domain/`: Pure business entities and logic — sessions and statuses, projects,
   settings keys, themes, structured questions, typed transcript messages, explicit
-  transient-message slots and lifecycles, prompt-composer logic, and thin re-export
-  modules for `ag-agent` provider models plus shared protocol question and turn prompt
-  payloads. No I/O.
+  transient-message slots and lifecycles, prompt-composer logic, the shared `InputState`
+  command and undo/redo model, stable input-revision and character-offset identities
+  used to bind prompt attachments to exact placeholder occurrences and history states,
+  and thin re-export modules for `ag-agent` provider models plus shared protocol
+  question and turn prompt payloads. No I/O.
 - `infra/`: External integrations behind traits — Agentty data-root resolution, SQLite
   persistence (`infra/db/` repositories), git (`GitClient`, backed by `ag-git`),
   filesystem (`FsClient`), tmux, clipboard images, version checks, project discovery,
@@ -68,8 +70,9 @@ For file-level detail, read the module docstrings directly.
 - `runtime/`: Terminal lifecycle and the event loop — terminal setup, the event-reader
   thread, key dispatch, mode-focused handlers under `runtime/mode/`, and shared handlers
   for common interactions such as issue/review detail navigation, session-output
-  metrics, and transcript scrolling. Runtime owns `PresentationState`, including the
-  shared `RenderCacheStore` used by input metrics and frame rendering.
+  metrics, transcript scrolling, and `KeyEvent` mapping to domain input commands.
+  Runtime owns `PresentationState`, including the shared `RenderCacheStore` used by
+  input metrics and frame rendering.
 - `presentation.rs` and `presentation/`: Frontend-neutral interaction state shared by
   runtime input and UI output. They expose mode, help-action, prompt, editor, scroll,
   viewport, and semantic list-selection contracts without importing Ratatui or `ui/`

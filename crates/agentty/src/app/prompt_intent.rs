@@ -5,6 +5,7 @@ use tracing::warn;
 
 use crate::app::{App, ReviewCacheEntry, diff_content_hash};
 use crate::domain::agent::{AgentKind, ReasoningLevel};
+use crate::domain::composer::PromptAttachment;
 use crate::domain::review;
 use crate::domain::session::{SessionId, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -102,7 +103,11 @@ impl App {
             return;
         }
 
+        let archived_prompt = self.archived_prompt_attachments();
         let prompt = self.take_submitted_turn_prompt();
+        if let Some(archived_prompt) = archived_prompt {
+            self.cleanup_prompt_attachment_files(&archived_prompt).await;
+        }
         if prompt.is_empty() {
             return;
         }
@@ -134,7 +139,7 @@ impl App {
         match selection {
             Some(PromptSuggestionSelection::Command("/apply")) => {
                 if self.handle_apply_prompt_command(context).await {
-                    self.reset_prompt_slash_input();
+                    self.reset_prompt_slash_input().await;
                 } else {
                     self.reset_prompt_slash_state();
                 }
@@ -171,12 +176,12 @@ impl App {
                 }
             }
             Some(PromptSuggestionSelection::Model(selected_agent)) => {
-                self.reset_prompt_slash_input();
+                self.reset_prompt_slash_input().await;
                 self.update_prompt_session_model(context, selected_agent)
                     .await;
             }
             Some(PromptSuggestionSelection::Reasoning(reasoning_level)) => {
-                self.reset_prompt_slash_input();
+                self.reset_prompt_slash_input().await;
                 self.update_prompt_session_reasoning_level(context, reasoning_level)
                     .await;
             }
@@ -204,7 +209,10 @@ impl App {
             .await
         {
             Ok(persisted_image) => {
-                self.insert_pasted_image_placeholder(persisted_image.local_image_path);
+                let unreachable_attachments =
+                    self.insert_pasted_image_placeholder(persisted_image.local_image_path);
+                self.cleanup_prompt_attachments(unreachable_attachments)
+                    .await;
             }
             Err(error) => {
                 self.append_prompt_status_line(
@@ -219,7 +227,10 @@ impl App {
 
     /// Inserts one persisted image placeholder into the prompt input and
     /// records the attachment metadata in prompt state.
-    pub(crate) fn insert_pasted_image_placeholder(&mut self, local_image_path: PathBuf) {
+    pub(crate) fn insert_pasted_image_placeholder(
+        &mut self,
+        local_image_path: PathBuf,
+    ) -> Vec<PromptAttachment> {
         if let AppMode::Prompt {
             at_mention_state,
             attachment_state,
@@ -237,7 +248,34 @@ impl App {
                 local_image_path,
             );
             *at_mention_state = None;
+
+            return attachment_state.prune_unreachable(input);
         }
+
+        Vec::new()
+    }
+
+    /// Removes image files whose attachment identities are no longer
+    /// reachable through the prompt input's bounded undo/redo history.
+    pub(crate) async fn cleanup_prompt_attachments(&self, attachments: Vec<PromptAttachment>) {
+        if attachments.is_empty() {
+            return;
+        }
+
+        let attachments = attachments
+            .into_iter()
+            .map(|attachment| TurnPromptAttachment {
+                local_image_path: attachment.local_image_path,
+                placeholder: attachment.placeholder,
+            })
+            .collect();
+        let prompt = TurnPrompt {
+            attachments,
+            text: String::new(),
+            text_source: TurnPromptTextSource::UserPrompt,
+        };
+
+        self.cleanup_prompt_attachment_files(&prompt).await;
     }
 
     /// Handles the cancel intent emitted by prompt-mode key routing.
@@ -247,7 +285,7 @@ impl App {
     /// a blank backing session, and otherwise restores session view.
     pub(crate) async fn handle_prompt_cancel_intent(&mut self, context: &PromptIntentContext) {
         if context.is_slash_command() {
-            self.reset_prompt_slash_input();
+            self.reset_prompt_slash_input().await;
 
             return;
         }
@@ -310,6 +348,35 @@ impl App {
         }
     }
 
+    /// Builds a cleanup-only prompt for image attachments currently absent
+    /// from the editable text but retained for undo.
+    fn archived_prompt_attachments(&self) -> Option<TurnPrompt> {
+        let AppMode::Prompt {
+            attachment_state, ..
+        } = &self.mode
+        else {
+            return None;
+        };
+        if attachment_state.archived_attachments.is_empty() {
+            return None;
+        }
+
+        let attachments = attachment_state
+            .archived_attachments
+            .iter()
+            .map(|attachment| TurnPromptAttachment {
+                local_image_path: attachment.local_image_path.clone(),
+                placeholder: attachment.placeholder.clone(),
+            })
+            .collect();
+
+        Some(TurnPrompt {
+            attachments,
+            text: String::new(),
+            text_source: TurnPromptTextSource::UserPrompt,
+        })
+    }
+
     /// Routes one prepared turn prompt through the lifecycle path for the
     /// active prompt context.
     async fn submit_turn_prompt_for_context(
@@ -365,9 +432,11 @@ impl App {
             .is_some_and(|session| matches!(session.status, Status::InProgress | Status::Rebasing))
     }
 
-    /// Clears the slash-command buffer after one prompt slash action is
-    /// accepted.
-    fn reset_prompt_slash_input(&mut self) {
+    /// Clears the slash-command buffer and cleans up attachments removed with
+    /// it after one prompt slash action is accepted or canceled.
+    async fn reset_prompt_slash_input(&mut self) {
+        self.cleanup_prompt_attachment_state().await;
+
         if let AppMode::Prompt {
             input, slash_state, ..
         } = &mut self.mode
@@ -465,6 +534,7 @@ impl App {
                 let attachments = attachment_state
                     .attachments
                     .iter()
+                    .chain(&attachment_state.archived_attachments)
                     .map(|attachment| TurnPromptAttachment {
                         local_image_path: attachment.local_image_path.clone(),
                         placeholder: attachment.placeholder.clone(),
@@ -611,6 +681,11 @@ pub(crate) fn build_apply_review_prompt(suggestions: &str) -> TurnPrompt {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::composer::{
+        PromptAttachment, PromptAttachmentState, PromptHistoryState, PromptSlashState,
+    };
+    use crate::domain::input::InputState;
+    use crate::presentation::app_mode::ChatFocus;
 
     /// Verifies `/apply` submits the checked-in markdown prompt with the
     /// review suggestions fenced as data.
@@ -651,5 +726,60 @@ mod tests {
         // Assert
         assert!(prompt.text.contains("````text\n"));
         assert!(prompt.text.contains("```markdown\nexample\n```"));
+    }
+
+    /// Ensures image files retained for input undo are included in the
+    /// cleanup payload produced when the prompt is submitted.
+    #[tokio::test]
+    async fn test_archived_prompt_attachments_builds_cleanup_prompt() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        let attachment = PromptAttachment::new(1, PathBuf::from("/tmp/image-1.png"));
+        let expected_placeholder = attachment.placeholder.clone();
+        app.mode = AppMode::Prompt {
+            at_mention_state: None,
+            attachment_state: PromptAttachmentState {
+                archived_attachments: vec![attachment],
+                ..PromptAttachmentState::default()
+            },
+            focus: ChatFocus::Input,
+            history_state: PromptHistoryState::new(Vec::new()),
+            input: InputState::default(),
+            scroll_offset: None,
+            session_id: "session-id".into(),
+            slash_state: PromptSlashState::default(),
+        };
+
+        // Act
+        let prompt = app
+            .archived_prompt_attachments()
+            .expect("archived attachment should produce a cleanup prompt");
+
+        // Assert
+        assert_eq!(prompt.attachments.len(), 1);
+        assert_eq!(
+            prompt.attachments[0].local_image_path,
+            PathBuf::from("/tmp/image-1.png")
+        );
+        assert_eq!(prompt.attachments[0].placeholder, expected_placeholder);
+        assert!(prompt.text.is_empty());
+        assert_eq!(prompt.text_source, TurnPromptTextSource::UserPrompt);
+    }
+
+    #[tokio::test]
+    async fn test_non_prompt_mode_has_no_composer_attachments() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        app.mode = AppMode::List;
+
+        // Act
+        let pruned = app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-1.png"));
+        let archived_prompt = app.archived_prompt_attachments();
+        let submission = app.take_submitted_turn_prompt();
+
+        // Assert
+        assert!(pruned.is_empty());
+        assert!(archived_prompt.is_none());
+        assert!(submission.is_empty());
     }
 }

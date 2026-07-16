@@ -519,93 +519,9 @@ fn navigate_option_down(selected_option_index: &mut Option<usize>, option_count:
 
 /// Resolves a key event in free-text input mode (no option selected).
 fn resolve_free_text_key(input: &mut InputState, key: KeyEvent) -> QuestionAction {
-    match key.code {
-        KeyCode::Backspace if input_key::is_line_delete_backspace(key) => {
-            input.delete_current_line();
-        }
-        KeyCode::Backspace if input_key::is_word_delete_backspace(key) => {
-            input_key::delete_word_backward(input);
-        }
-        KeyCode::Backspace => input.delete_backward(),
-        KeyCode::Delete => input.delete_forward(),
-        KeyCode::Left if key.modifiers.contains(event::KeyModifiers::SUPER) => {
-            input.move_line_start();
-        }
-        KeyCode::Left
-            if key
-                .modifiers
-                .intersects(event::KeyModifiers::ALT | event::KeyModifiers::SHIFT) =>
-        {
-            input_key::move_cursor_word_left(input);
-        }
-        KeyCode::Left => input.move_left(),
-        KeyCode::Right if key.modifiers.contains(event::KeyModifiers::SUPER) => {
-            input.move_line_end();
-        }
-        KeyCode::Right
-            if key
-                .modifiers
-                .intersects(event::KeyModifiers::ALT | event::KeyModifiers::SHIFT) =>
-        {
-            input_key::move_cursor_word_right(input);
-        }
-        KeyCode::Right => input.move_right(),
-        KeyCode::Up => input.move_up(),
-        KeyCode::Down => input.move_down(),
-        KeyCode::Home => input.move_home(),
-        KeyCode::End => input.move_end(),
-        // Ctrl+a / Ctrl+e: macOS terminals send these for Cmd+Left / Cmd+Right.
-        KeyCode::Char('a') if input_key::is_control_key(key) => {
-            input.move_line_start();
-        }
-        KeyCode::Char('e') if input_key::is_control_key(key) => {
-            input.move_line_end();
-        }
-        // Ctrl+f / Ctrl+b: emacs-style forward/backward character movement.
-        KeyCode::Char('f') if input_key::is_control_key(key) => {
-            input.move_right();
-        }
-        KeyCode::Char('b') if input_key::is_control_key(key) => {
-            input.move_left();
-        }
-        // Ctrl+p / Ctrl+n: emacs-style up/down line movement.
-        KeyCode::Char('p') if input_key::is_control_key(key) => {
-            input.move_up();
-        }
-        KeyCode::Char('n') if input_key::is_control_key(key) => {
-            input.move_down();
-        }
-        // Ctrl+d: emacs-style forward delete.
-        KeyCode::Char('d') if input_key::is_control_key(key) => {
-            input.delete_forward();
-        }
-        // Ctrl+k: kill to end of current line.
-        KeyCode::Char('k') if input_key::is_control_key(key) => {
-            input.delete_to_line_end();
-        }
-        // Ctrl+w: delete previous word.
-        KeyCode::Char('w') if input_key::is_control_key(key) => {
-            input_key::delete_word_backward(input);
-        }
-        // Alt+b / Alt+f: macOS terminals send these for Option+Left / Option+Right.
-        KeyCode::Char('b') if input_key::is_alt_key(key) => {
-            input_key::move_cursor_word_left(input);
-        }
-        KeyCode::Char('f') if input_key::is_alt_key(key) => {
-            input_key::move_cursor_word_right(input);
-        }
-        // KeyCode::Tab is handled by the focus toggle at the top level.
-        KeyCode::Char('u') if input_key::is_control_key(key) => {
-            input.delete_current_line();
-        }
-        // Ctrl+j / Ctrl+m: alternative newline insertion (macOS terminal compat).
-        KeyCode::Char(character) if input_key::is_control_newline_key(key, character) => {
-            input.insert_newline();
-        }
-        KeyCode::Char(character) if input_key::is_insertable_char_key(key) => {
-            input.insert_char(character);
-        }
-        _ => {}
+    if let Some(command) = input_key::command_for_key(key, input_key::InputCapabilities::MULTILINE)
+    {
+        input.apply(command);
     }
 
     QuestionAction::Continue
@@ -2966,6 +2882,33 @@ mod tests {
         // Assert — deletes "world" and the preceding whitespace.
         if let AppMode::Question { input, .. } = &app.mode {
             assert_eq!(input.text(), "hello brave");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_resolve_free_text_ctrl_z_undoes_previous_edit() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        app.mode = free_text_question_mode("hello brave", "hello brave".chars().count());
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('!'), KeyModifiers::NONE),
+        )
+        .await;
+
+        // Act
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL),
+        )
+        .await;
+
+        // Assert
+        if let AppMode::Question { input, .. } = &app.mode {
+            assert_eq!(input.text(), "hello brave");
+            assert_eq!(input.cursor, "hello brave".chars().count());
         }
     }
 

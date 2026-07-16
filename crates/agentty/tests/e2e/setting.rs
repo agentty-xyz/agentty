@@ -383,6 +383,66 @@ fn settings_launch_configurations_list_editor() {
         .expect("feature test failed");
 }
 
+/// Verify shared input word deletion, undo, and redo in a single-line editor.
+#[test]
+fn test_input_undo_redo() {
+    // Arrange, Act, Assert
+    FeatureTest::new("input_undo_redo")
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::switch_to_tab("Inbox"))
+                    .compose(&common::switch_to_tab("Issues"))
+                    .compose(&common::switch_to_tab("Settings"))
+                    .press_key("j")
+                    .press_key("j")
+                    .press_key("j")
+                    .press_key("j")
+                    .press_key("j")
+                    .press_key("j")
+                    .press_key("Enter")
+                    .wait_for_stable_frame(200, 3000)
+                    .press_key("a")
+                    .write_text("hello brave world")
+                    .wait_for_stable_frame(200, 3000)
+                    .capture_labeled("typed", "Text before shared editing shortcuts")
+                    .press_key("ctrl+w")
+                    .wait_for_stable_frame(200, 3000)
+                    .capture_labeled("word_deleted", "Previous word deleted with Ctrl+w")
+                    .press_key("ctrl+z")
+                    .wait_for_stable_frame(200, 3000)
+                    .capture_labeled("undone", "Deleted word restored with Ctrl+z")
+                    .press_key("ctrl+y")
+                    .wait_for_stable_frame(200, 3000)
+                    .capture_labeled("redone", "Word deletion restored with Ctrl+y")
+            },
+            |frame, report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "hello brave|", &full);
+                assert_eq!(
+                    report.captures.len(),
+                    4,
+                    "Expected four input edit captures"
+                );
+
+                let typed_frame = common::frame_from_capture(&report.captures[0]);
+                let typed_full = Region::full(typed_frame.cols(), typed_frame.rows());
+                assertion::assert_text_in_region(&typed_frame, "hello brave world|", &typed_full);
+
+                let deleted_frame = common::frame_from_capture(&report.captures[1]);
+                let deleted_full = Region::full(deleted_frame.cols(), deleted_frame.rows());
+                assertion::assert_text_in_region(&deleted_frame, "hello brave|", &deleted_full);
+
+                let undone_frame = common::frame_from_capture(&report.captures[2]);
+                let undone_full = Region::full(undone_frame.cols(), undone_frame.rows());
+                assertion::assert_text_in_region(&undone_frame, "hello brave world|", &undone_full);
+            },
+        )
+        .expect("feature test failed");
+}
+
 /// Verify that the `Theme` settings row dropdown selects `Agentty Default`,
 /// `Agentty Green`, and `Dark Horizon` and wraps back to `Agentty Default`.
 #[test]

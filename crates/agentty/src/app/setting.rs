@@ -4,7 +4,7 @@ use crate::app::AppServices;
 use crate::domain::agent::{
     self, AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ReasoningLevel,
 };
-use crate::domain::input::InputState;
+use crate::domain::input::{InputCommand, InputState};
 use crate::domain::selection::SelectionState;
 use crate::domain::setting::SettingName;
 use crate::domain::theme::ColorTheme;
@@ -602,59 +602,16 @@ impl SettingsManager {
         editor.mode = LaunchConfigurationListEditorMode::Browse;
     }
 
-    /// Appends one character to the active launch-configuration input field.
-    pub fn append_launch_configuration_input_character(&mut self, character: char) {
-        let Some(editor) = &mut self.launch_configuration_list_editor else {
-            return;
-        };
-
-        if editor.is_input_mode() {
-            editor.input.insert_char(character);
-        }
-    }
-
-    /// Removes the character before the cursor in the active
-    /// launch-configuration input field.
-    pub fn remove_launch_configuration_input_character(&mut self) {
-        let Some(editor) = &mut self.launch_configuration_list_editor else {
-            return;
-        };
-
-        if editor.is_input_mode() {
-            editor.input.delete_backward();
-        }
-    }
-
-    /// Removes the character at the cursor in the active launch-configuration
+    /// Applies one shared editing command to the active launch-configuration
     /// input field.
-    pub fn delete_launch_configuration_input_character(&mut self) {
+    pub fn apply_launch_configuration_input_command(&mut self, command: InputCommand) {
         let Some(editor) = &mut self.launch_configuration_list_editor else {
             return;
         };
 
         if editor.is_input_mode() {
-            editor.input.delete_forward();
+            editor.input.apply(command);
         }
-    }
-
-    /// Moves the launch-configuration input cursor one character to the left.
-    pub fn move_launch_configuration_input_cursor_left(&mut self) {
-        self.move_launch_configuration_input_cursor(LaunchConfigurationInputCursorDirection::Left);
-    }
-
-    /// Moves the launch-configuration input cursor one character to the right.
-    pub fn move_launch_configuration_input_cursor_right(&mut self) {
-        self.move_launch_configuration_input_cursor(LaunchConfigurationInputCursorDirection::Right);
-    }
-
-    /// Moves the launch-configuration input cursor to the start of the field.
-    pub fn move_launch_configuration_input_cursor_home(&mut self) {
-        self.move_launch_configuration_input_cursor(LaunchConfigurationInputCursorDirection::Home);
-    }
-
-    /// Moves the launch-configuration input cursor to the end of the field.
-    pub fn move_launch_configuration_input_cursor_end(&mut self) {
-        self.move_launch_configuration_input_cursor(LaunchConfigurationInputCursorDirection::End);
     }
 
     /// Confirms the active add/edit input and persists the normalized command
@@ -962,27 +919,6 @@ impl SettingsManager {
         };
     }
 
-    /// Moves the launch-configuration input cursor in the requested direction.
-    fn move_launch_configuration_input_cursor(
-        &mut self,
-        direction: LaunchConfigurationInputCursorDirection,
-    ) {
-        let Some(editor) = &mut self.launch_configuration_list_editor else {
-            return;
-        };
-
-        if !editor.is_input_mode() {
-            return;
-        }
-
-        match direction {
-            LaunchConfigurationInputCursorDirection::End => editor.input.move_end(),
-            LaunchConfigurationInputCursorDirection::Home => editor.input.move_home(),
-            LaunchConfigurationInputCursorDirection::Left => editor.input.move_left(),
-            LaunchConfigurationInputCursorDirection::Right => editor.input.move_right(),
-        }
-    }
-
     /// Applies the active add/edit input to the command list.
     fn apply_launch_configuration_input(&mut self) -> bool {
         let Some(editor) = &mut self.launch_configuration_list_editor else {
@@ -1277,15 +1213,6 @@ impl SettingsManager {
 enum LaunchConfigurationListDirection {
     Next,
     Previous,
-}
-
-/// Launch-configuration editor input cursor movement direction.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum LaunchConfigurationInputCursorDirection {
-    End,
-    Home,
-    Left,
-    Right,
 }
 
 /// Launch-configuration editor reorder direction.
@@ -2483,7 +2410,7 @@ mod tests {
         select_row(&mut manager, 6);
         manager.handle_enter();
         manager.start_adding_launch_configuration();
-        manager.append_launch_configuration_input_character('n');
+        manager.apply_launch_configuration_input_command(InputCommand::Insert('n'));
 
         // Act
         manager.cancel_launch_configuration_input();
@@ -2507,12 +2434,9 @@ mod tests {
         manager.start_adding_launch_configuration();
 
         // Act
-        manager.append_launch_configuration_input_character(' ');
-        manager.append_launch_configuration_input_character('n');
-        manager.append_launch_configuration_input_character('v');
-        manager.append_launch_configuration_input_character('i');
-        manager.append_launch_configuration_input_character('m');
-        manager.append_launch_configuration_input_character(' ');
+        manager.apply_launch_configuration_input_command(InputCommand::InsertText(
+            " nvim ".to_string(),
+        ));
         manager.confirm_launch_configuration_input(&services).await;
 
         // Assert
@@ -2540,10 +2464,10 @@ mod tests {
         manager.start_editing_selected_launch_configuration();
 
         for _ in 0.."npm run dev".chars().count() {
-            manager.remove_launch_configuration_input_character();
+            manager.apply_launch_configuration_input_command(InputCommand::DeleteBackward);
         }
         for character in "lazygit".chars() {
-            manager.append_launch_configuration_input_character(character);
+            manager.apply_launch_configuration_input_command(InputCommand::Insert(character));
         }
 
         // Act
@@ -2573,7 +2497,7 @@ mod tests {
         manager.start_editing_selected_launch_configuration();
 
         for _ in 0.."cargo test".chars().count() {
-            manager.remove_launch_configuration_input_character();
+            manager.apply_launch_configuration_input_command(InputCommand::DeleteBackward);
         }
 
         // Act
@@ -2723,13 +2647,13 @@ mod tests {
         // Act
         manager.start_adding_launch_configuration();
         manager.start_editing_selected_launch_configuration();
-        manager.append_launch_configuration_input_character('n');
-        manager.remove_launch_configuration_input_character();
-        manager.delete_launch_configuration_input_character();
-        manager.move_launch_configuration_input_cursor_left();
-        manager.move_launch_configuration_input_cursor_right();
-        manager.move_launch_configuration_input_cursor_home();
-        manager.move_launch_configuration_input_cursor_end();
+        manager.apply_launch_configuration_input_command(InputCommand::Insert('n'));
+        manager.apply_launch_configuration_input_command(InputCommand::DeleteBackward);
+        manager.apply_launch_configuration_input_command(InputCommand::DeleteForward);
+        manager.apply_launch_configuration_input_command(InputCommand::MoveLeft);
+        manager.apply_launch_configuration_input_command(InputCommand::MoveRight);
+        manager.apply_launch_configuration_input_command(InputCommand::MoveHome);
+        manager.apply_launch_configuration_input_command(InputCommand::MoveEnd);
         manager.confirm_launch_configuration_input(&services).await;
         manager
             .delete_selected_launch_configuration(&services)

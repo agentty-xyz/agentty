@@ -47,6 +47,13 @@ pub enum PromptSuggestionSelection {
     Reasoning(ReasoningLevel),
 }
 
+/// Concrete character location owned by an attachment in one input revision.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AttachmentRevision {
+    revision: u64,
+    start: usize,
+}
+
 /// Inline attachment metadata for one pasted local image placeholder.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PromptAttachment {
@@ -56,6 +63,8 @@ pub struct PromptAttachment {
     pub local_image_path: PathBuf,
     /// Placeholder token inserted into the prompt composer text.
     pub placeholder: String,
+    current_start: Option<usize>,
+    valid_locations: Vec<AttachmentRevision>,
 }
 
 impl PromptAttachment {
@@ -64,8 +73,10 @@ impl PromptAttachment {
     pub fn new(attachment_number: usize, local_image_path: PathBuf) -> Self {
         Self {
             attachment_number,
+            current_start: None,
             local_image_path,
             placeholder: Self::placeholder_for(attachment_number),
+            valid_locations: Vec::new(),
         }
     }
 
@@ -73,6 +84,51 @@ impl PromptAttachment {
     #[must_use]
     pub fn placeholder_for(attachment_number: usize) -> String {
         format!("[Image #{attachment_number}]")
+    }
+
+    /// Records the concrete placeholder occurrence owned by this attachment
+    /// in one input revision.
+    fn remember_revision(&mut self, revision: u64) {
+        let Some(start) = self.current_start else {
+            return;
+        };
+        if !self
+            .valid_locations
+            .iter()
+            .any(|location| location.revision == revision)
+        {
+            self.valid_locations
+                .push(AttachmentRevision { revision, start });
+        }
+    }
+
+    /// Restores the concrete placeholder occurrence owned in `revision`.
+    fn restore_revision(&mut self, revision: u64) {
+        self.current_start = self
+            .valid_locations
+            .iter()
+            .find(|location| location.revision == revision)
+            .map(|location| location.start);
+    }
+
+    /// Updates the owned placeholder occurrence across one text edit.
+    fn apply_edit(&mut self, old_start: usize, old_end: usize, new_end: usize) {
+        let Some(current_start) = self.current_start else {
+            return;
+        };
+        let current_end = current_start + self.placeholder.chars().count();
+
+        if old_end <= current_start {
+            let removed_length = old_end - old_start;
+            let inserted_length = new_end - old_start;
+            self.current_start = Some(if inserted_length >= removed_length {
+                current_start + inserted_length - removed_length
+            } else {
+                current_start - (removed_length - inserted_length)
+            });
+        } else if old_start < current_end {
+            self.current_start = None;
+        }
     }
 }
 
@@ -96,6 +152,9 @@ impl PromptComposerSubmission {
 /// UI state for pasted local-image attachments in prompt mode.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PromptAttachmentState {
+    /// Deleted attachments retained while input undo history can restore their
+    /// placeholders.
+    pub archived_attachments: Vec<PromptAttachment>,
     /// Attachments in the same order their placeholders were inserted.
     pub attachments: Vec<PromptAttachment>,
     /// Next placeholder number that should be assigned to a pasted image.
@@ -105,8 +164,13 @@ pub struct PromptAttachmentState {
 impl PromptAttachmentState {
     /// Registers a pasted local image and returns the placeholder inserted
     /// into the prompt input text.
-    pub fn register_local_image(&mut self, local_image_path: PathBuf) -> String {
-        let attachment = PromptAttachment::new(self.next_attachment_number, local_image_path);
+    pub fn register_local_image(
+        &mut self,
+        local_image_path: PathBuf,
+        placeholder_start: usize,
+    ) -> String {
+        let mut attachment = PromptAttachment::new(self.next_attachment_number, local_image_path);
+        attachment.current_start = Some(placeholder_start);
         let placeholder = attachment.placeholder.clone();
 
         self.attachments.push(attachment);
@@ -123,25 +187,121 @@ impl PromptAttachmentState {
             .find(|attachment| attachment.placeholder == placeholder)
     }
 
-    /// Recomputes the next placeholder number by reusing the smallest missing
-    /// positive attachment number.
+    /// Recomputes the next placeholder number after all active and archived
+    /// attachment numbers.
     pub fn refresh_next_attachment_number(&mut self) {
-        let mut next_attachment_number = 1;
-
-        while self
+        self.next_attachment_number = self
             .attachments
             .iter()
-            .any(|attachment| attachment.attachment_number == next_attachment_number)
-        {
-            next_attachment_number += 1;
+            .chain(&self.archived_attachments)
+            .map(|attachment| attachment.attachment_number)
+            .max()
+            .unwrap_or_default()
+            .saturating_add(1);
+    }
+
+    /// Associates currently active attachments with the current input
+    /// revision before a text mutation changes it.
+    pub fn remember_current_revision(&mut self, input: &InputState) {
+        for attachment in &mut self.attachments {
+            attachment.remember_revision(input.revision());
+        }
+    }
+
+    /// Reconciles concrete attachment occurrences after one normal text edit
+    /// without activating archived images from lookalike placeholder text.
+    pub fn sync_after_edit(
+        &mut self,
+        input: &InputState,
+        old_start: usize,
+        old_end: usize,
+        new_end: usize,
+    ) {
+        for attachment in &mut self.attachments {
+            attachment.apply_edit(old_start, old_end, new_end);
         }
 
-        self.next_attachment_number = next_attachment_number;
+        let (mut active, removed): (Vec<_>, Vec<_>) = std::mem::take(&mut self.attachments)
+            .into_iter()
+            .partition(|attachment| attachment.current_start.is_some());
+        for attachment in &mut active {
+            attachment.remember_revision(input.revision());
+        }
+
+        self.attachments = active;
+        self.archived_attachments.extend(removed);
+        self.archived_attachments
+            .sort_by_key(|attachment| attachment.attachment_number);
+    }
+
+    /// Restores attachment membership for the exact input revision reached
+    /// through undo or redo.
+    pub fn sync_after_history_restore(&mut self, input: &InputState) {
+        let mut tracked_attachments = std::mem::take(&mut self.attachments);
+        tracked_attachments.append(&mut self.archived_attachments);
+        tracked_attachments.sort_by_key(|attachment| attachment.attachment_number);
+
+        for attachment in &mut tracked_attachments {
+            attachment.restore_revision(input.revision());
+        }
+
+        (self.attachments, self.archived_attachments) = tracked_attachments
+            .into_iter()
+            .partition(|attachment| attachment.current_start.is_some());
+    }
+
+    /// Archives every current attachment while prompt-history navigation is
+    /// showing a previously submitted text entry.
+    pub fn archive_current(&mut self) {
+        for attachment in &mut self.attachments {
+            attachment.current_start = None;
+        }
+        self.archived_attachments.append(&mut self.attachments);
+        self.archived_attachments
+            .sort_by_key(|attachment| attachment.attachment_number);
+    }
+
+    /// Restores draft attachment occurrences from `draft_revision` into the
+    /// input's new current revision after prompt-history navigation.
+    pub fn restore_draft_revision(&mut self, draft_revision: u64, input: &InputState) {
+        let mut tracked_attachments = std::mem::take(&mut self.attachments);
+        tracked_attachments.append(&mut self.archived_attachments);
+        tracked_attachments.sort_by_key(|attachment| attachment.attachment_number);
+        for attachment in &mut tracked_attachments {
+            attachment.restore_revision(draft_revision);
+            attachment.remember_revision(input.revision());
+        }
+
+        (self.attachments, self.archived_attachments) = tracked_attachments
+            .into_iter()
+            .partition(|attachment| attachment.current_start.is_some());
+    }
+
+    /// Drops archived attachments whose valid revisions have all fallen out
+    /// of bounded input undo/redo history and returns them for file cleanup.
+    pub fn prune_unreachable(&mut self, input: &InputState) -> Vec<PromptAttachment> {
+        for attachment in self
+            .attachments
+            .iter_mut()
+            .chain(&mut self.archived_attachments)
+        {
+            attachment
+                .valid_locations
+                .retain(|location| input.retains_revision(location.revision));
+        }
+
+        let (retained, unreachable) = std::mem::take(&mut self.archived_attachments)
+            .into_iter()
+            .partition(|attachment| !attachment.valid_locations.is_empty());
+        self.archived_attachments = retained;
+
+        unreachable
     }
 
     /// Clears all tracked attachments and resets numbering back to the first
     /// placeholder.
     pub fn reset(&mut self) {
+        self.archived_attachments.clear();
         self.attachments.clear();
         self.next_attachment_number = 1;
     }
@@ -152,6 +312,7 @@ impl Default for PromptAttachmentState {
     /// starting at 1.
     fn default() -> Self {
         Self {
+            archived_attachments: Vec::new(),
             attachments: Vec::new(),
             next_attachment_number: 1,
         }
@@ -161,6 +322,8 @@ impl Default for PromptAttachmentState {
 /// UI state for navigating previously sent prompts with `Up` and `Down`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PromptHistoryState {
+    /// Input revision containing the attachment membership of `draft_text`.
+    pub draft_input_revision: Option<u64>,
     /// Draft input captured before entering history navigation.
     pub draft_text: Option<String>,
     /// Previously sent user prompts in chronological order.
@@ -174,6 +337,7 @@ impl PromptHistoryState {
     #[must_use]
     pub fn new(entries: Vec<String>) -> Self {
         Self {
+            draft_input_revision: None,
             draft_text: None,
             entries,
             selected_index: None,
@@ -182,6 +346,7 @@ impl PromptHistoryState {
 
     /// Clears active history navigation and stored draft text.
     pub fn reset_navigation(&mut self) {
+        self.draft_input_revision = None;
         self.draft_text = None;
         self.selected_index = None;
     }
@@ -335,22 +500,38 @@ impl PromptComposerState {
     /// Inserts pasted prompt text by delegating to the canonical field-level
     /// helper and clears any transient slash/history navigation state.
     pub fn insert_text(&mut self, text: &str) {
+        self.attachment_state.remember_current_revision(&self.input);
+        let insert_start = self.input.cursor;
         insert_prompt_text(
             &mut self.input,
             &mut self.history_state,
             &mut self.slash_state,
             text,
         );
+        self.attachment_state.sync_after_edit(
+            &self.input,
+            insert_start,
+            insert_start,
+            self.input.cursor,
+        );
     }
 
     /// Inserts one typed character by delegating to the canonical field-level
     /// helper and clears transient slash/history state.
     pub fn insert_char(&mut self, character: char) {
+        self.attachment_state.remember_current_revision(&self.input);
+        let insert_start = self.input.cursor;
         insert_prompt_character(
             &mut self.input,
             &mut self.history_state,
             &mut self.slash_state,
             character,
+        );
+        self.attachment_state.sync_after_edit(
+            &self.input,
+            insert_start,
+            insert_start,
+            self.input.cursor,
         );
     }
 
@@ -539,8 +720,13 @@ pub fn insert_prompt_local_image(
     slash_state: &mut PromptSlashState,
     local_image_path: PathBuf,
 ) {
-    let placeholder = attachment_state.register_local_image(local_image_path);
+    attachment_state.remember_current_revision(input);
+    let placeholder_start = input.cursor;
+    let placeholder = PromptAttachment::placeholder_for(attachment_state.next_attachment_number);
     input.insert_text(&placeholder);
+    attachment_state.sync_after_edit(input, placeholder_start, placeholder_start, input.cursor);
+    attachment_state.register_local_image(local_image_path, placeholder_start);
+    attachment_state.remember_current_revision(input);
     history_state.reset_navigation();
     slash_state.reset();
 }
@@ -564,11 +750,9 @@ pub fn apply_prompt_delete_range(
         return;
     }
 
+    attachment_state.remember_current_revision(input);
     input.replace_range(delete_start, delete_end, "");
-    attachment_state
-        .attachments
-        .retain(|attachment| input.text().contains(&attachment.placeholder));
-    attachment_state.refresh_next_attachment_number();
+    attachment_state.sync_after_edit(input, delete_start, delete_end, delete_start);
     history_state.reset_navigation();
     slash_state.reset();
 }
@@ -587,10 +771,10 @@ pub fn drain_prompt_submission(
     let mut attachments = attachment_state
         .attachments
         .iter()
-        .filter(|attachment| text.contains(&attachment.placeholder))
+        .filter(|attachment| attachment.current_start.is_some())
         .cloned()
         .collect::<Vec<_>>();
-    attachments.sort_by_key(|attachment| text.find(&attachment.placeholder).unwrap_or(usize::MAX));
+    attachments.sort_by_key(|attachment| attachment.current_start.unwrap_or(usize::MAX));
     attachment_state.reset();
 
     PromptComposerSubmission { attachments, text }
@@ -921,6 +1105,30 @@ fn image_token_end_index(characters: &[char], start_index: usize) -> Option<usiz
 mod tests {
     use super::*;
     use crate::domain::agent::AgentModel;
+    use crate::domain::input::INPUT_HISTORY_LIMIT;
+
+    fn insert_test_attachment(
+        attachment_state: &mut PromptAttachmentState,
+        input: &mut InputState,
+        local_image_path: PathBuf,
+    ) -> String {
+        let mut history_state = PromptHistoryState::default();
+        let mut slash_state = PromptSlashState::default();
+        insert_prompt_local_image(
+            attachment_state,
+            &mut history_state,
+            input,
+            &mut slash_state,
+            local_image_path,
+        );
+
+        attachment_state
+            .attachments
+            .last()
+            .expect("attachment should be registered")
+            .placeholder
+            .clone()
+    }
 
     #[test]
     fn test_prompt_attachment_state_registers_images_in_placeholder_order() {
@@ -929,34 +1137,35 @@ mod tests {
 
         // Act
         let first_placeholder =
-            attachment_state.register_local_image(PathBuf::from("/tmp/first-image.png"));
+            attachment_state.register_local_image(PathBuf::from("/tmp/first-image.png"), 0);
         let second_placeholder =
-            attachment_state.register_local_image(PathBuf::from("/tmp/second-image.png"));
+            attachment_state.register_local_image(PathBuf::from("/tmp/second-image.png"), 10);
 
         // Assert
         assert_eq!(first_placeholder, "[Image #1]");
         assert_eq!(second_placeholder, "[Image #2]");
         assert_eq!(attachment_state.attachments.len(), 2);
+        let attachment = attachment_state
+            .attachment_for_placeholder("[Image #2]")
+            .expect("second attachment should exist");
+        assert_eq!(attachment.attachment_number, 2);
         assert_eq!(
-            attachment_state.attachment_for_placeholder("[Image #2]"),
-            Some(&PromptAttachment {
-                attachment_number: 2,
-                local_image_path: PathBuf::from("/tmp/second-image.png"),
-                placeholder: "[Image #2]".to_string(),
-            })
+            attachment.local_image_path,
+            PathBuf::from("/tmp/second-image.png")
         );
+        assert_eq!(attachment.placeholder, "[Image #2]");
     }
 
     #[test]
     fn test_prompt_attachment_state_reset_clears_attachments_and_restarts_numbering() {
         // Arrange
         let mut attachment_state = PromptAttachmentState::default();
-        let _ = attachment_state.register_local_image(PathBuf::from("/tmp/first-image.png"));
+        let _ = attachment_state.register_local_image(PathBuf::from("/tmp/first-image.png"), 0);
 
         // Act
         attachment_state.reset();
         let placeholder =
-            attachment_state.register_local_image(PathBuf::from("/tmp/second-image.png"));
+            attachment_state.register_local_image(PathBuf::from("/tmp/second-image.png"), 0);
 
         // Assert
         assert_eq!(attachment_state.attachments.len(), 1);
@@ -965,9 +1174,10 @@ mod tests {
     }
 
     #[test]
-    fn test_prompt_attachment_state_refresh_next_attachment_number_reuses_gaps() {
+    fn test_prompt_attachment_state_refresh_next_attachment_number_stays_monotonic() {
         // Arrange
         let mut attachment_state = PromptAttachmentState {
+            archived_attachments: Vec::new(),
             attachments: vec![
                 PromptAttachment::new(1, PathBuf::from("/tmp/first-image.png")),
                 PromptAttachment::new(3, PathBuf::from("/tmp/third-image.png")),
@@ -979,7 +1189,118 @@ mod tests {
         attachment_state.refresh_next_attachment_number();
 
         // Assert
+        assert_eq!(attachment_state.next_attachment_number, 4);
+    }
+
+    #[test]
+    fn test_prompt_attachment_state_ignores_revision_before_attachment_is_placed() {
+        // Arrange
+        let input = InputState::default();
+        let mut attachment_state = PromptAttachmentState::default();
+        attachment_state.attachments.push(PromptAttachment::new(
+            1,
+            PathBuf::from("/tmp/first-image.png"),
+        ));
+
+        // Act
+        attachment_state.remember_current_revision(&input);
+
+        // Assert
+        assert!(attachment_state.attachments[0].valid_locations.is_empty());
+    }
+
+    #[test]
+    fn test_prompt_attachment_ignores_edits_while_not_in_input() {
+        // Arrange
+        let mut attachment = PromptAttachment::new(1, PathBuf::from("/tmp/first-image.png"));
+
+        // Act
+        attachment.apply_edit(0, 0, 1);
+
+        // Assert
+        assert_eq!(attachment.current_start, None);
+    }
+
+    #[test]
+    fn test_prompt_attachment_state_sync_restores_undone_attachment() {
+        // Arrange
+        let mut input = InputState::default();
+        let mut attachment_state = PromptAttachmentState::default();
+        let placeholder = insert_test_attachment(
+            &mut attachment_state,
+            &mut input,
+            PathBuf::from("/tmp/first-image.png"),
+        );
+        attachment_state.remember_current_revision(&input);
+        input.replace_range(0, placeholder.chars().count(), "");
+        attachment_state.sync_after_edit(&input, 0, placeholder.chars().count(), 0);
+
+        // Act
+        input.undo();
+        attachment_state.sync_after_history_restore(&input);
+
+        // Assert
+        assert_eq!(attachment_state.attachments.len(), 1);
+        assert!(attachment_state.archived_attachments.is_empty());
         assert_eq!(attachment_state.next_attachment_number, 2);
+    }
+
+    #[test]
+    fn test_prompt_attachment_state_does_not_activate_manually_entered_placeholder() {
+        // Arrange
+        let mut input = InputState::default();
+        let mut attachment_state = PromptAttachmentState::default();
+        let placeholder = insert_test_attachment(
+            &mut attachment_state,
+            &mut input,
+            PathBuf::from("/tmp/first-image.png"),
+        );
+        attachment_state.remember_current_revision(&input);
+        input.replace_range(0, placeholder.chars().count(), "");
+        attachment_state.sync_after_edit(&input, 0, placeholder.chars().count(), 0);
+
+        // Act
+        let insert_start = input.cursor;
+        input.insert_text(&placeholder);
+        attachment_state.sync_after_edit(&input, insert_start, insert_start, input.cursor);
+
+        // Assert
+        assert!(attachment_state.attachments.is_empty());
+        assert_eq!(attachment_state.archived_attachments.len(), 1);
+        let submission = drain_prompt_submission(&mut attachment_state, &mut input);
+        assert!(submission.attachments.is_empty());
+        assert_eq!(submission.text, placeholder);
+    }
+
+    #[test]
+    fn test_prompt_attachment_state_prunes_attachment_after_revision_eviction() {
+        // Arrange
+        let mut input = InputState::default();
+        let mut attachment_state = PromptAttachmentState::default();
+        let placeholder = insert_test_attachment(
+            &mut attachment_state,
+            &mut input,
+            PathBuf::from("/tmp/first-image.png"),
+        );
+        attachment_state.remember_current_revision(&input);
+        input.replace_range(0, placeholder.chars().count(), "");
+        attachment_state.sync_after_edit(&input, 0, placeholder.chars().count(), 0);
+        for _ in 0..INPUT_HISTORY_LIMIT {
+            let insert_start = input.cursor;
+            input.insert_char('x');
+            attachment_state.sync_after_edit(&input, insert_start, insert_start, input.cursor);
+        }
+
+        // Act
+        let unreachable = attachment_state.prune_unreachable(&input);
+
+        // Assert
+        assert!(attachment_state.archived_attachments.is_empty());
+        assert_eq!(unreachable.len(), 1);
+        assert_eq!(
+            unreachable[0].local_image_path,
+            PathBuf::from("/tmp/first-image.png")
+        );
     }
 
     #[test]
@@ -1219,10 +1540,9 @@ mod tests {
     fn test_prompt_composer_delete_range_removes_whole_image_token() {
         // Arrange
         let mut composer = PromptComposerState::new(AgentKind::ALL.to_vec());
-        composer.insert_text("Review [Image #1] now");
-        composer.attachment_state.attachments =
-            vec![PromptAttachment::new(1, PathBuf::from("/tmp/image.png"))];
-        composer.attachment_state.next_attachment_number = 2;
+        composer.insert_text("Review ");
+        composer.insert_local_image(PathBuf::from("/tmp/image.png"));
+        composer.insert_text(" now");
 
         // Act
         composer.delete_range(10, 11);
@@ -1230,18 +1550,35 @@ mod tests {
         // Assert
         assert_eq!(composer.input.text(), "Review  now");
         assert!(composer.attachment_state.attachments.is_empty());
-        assert_eq!(composer.attachment_state.next_attachment_number, 1);
+        assert_eq!(composer.attachment_state.archived_attachments.len(), 1);
+        assert_eq!(composer.attachment_state.next_attachment_number, 2);
+    }
+
+    #[test]
+    fn test_prompt_composer_insert_char_keeps_attachment_position_synchronized() {
+        // Arrange
+        let mut composer = PromptComposerState::new(AgentKind::ALL.to_vec());
+        composer.insert_local_image(PathBuf::from("/tmp/image.png"));
+        composer.input.cursor = 0;
+
+        // Act
+        composer.insert_char('x');
+        let submission = composer.take_submission();
+
+        // Assert
+        assert_eq!(submission.text, "x[Image #1]");
+        assert_eq!(submission.attachments.len(), 1);
+        assert_eq!(submission.attachments[0].current_start, Some(1));
     }
 
     #[test]
     fn test_take_submission_filters_deleted_attachment_placeholders() {
         // Arrange
         let mut composer = PromptComposerState::new(AgentKind::ALL.to_vec());
-        composer.insert_text("One [Image #1] two [Image #2]");
-        composer.attachment_state.attachments = vec![
-            PromptAttachment::new(1, PathBuf::from("/tmp/one.png")),
-            PromptAttachment::new(2, PathBuf::from("/tmp/two.png")),
-        ];
+        composer.insert_text("One ");
+        composer.insert_local_image(PathBuf::from("/tmp/one.png"));
+        composer.insert_text(" two ");
+        composer.insert_local_image(PathBuf::from("/tmp/two.png"));
         composer.delete_range(4, 15);
 
         // Act
