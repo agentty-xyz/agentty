@@ -4,72 +4,12 @@ use std::path::Path;
 
 use askama::Template;
 
-use crate::{ProtocolRequestProfile, agent_response_json_schema_json};
+use super::model::ProtocolRequestProfile;
+use super::schema::agent_response_json_schema_json;
 
 const PROTOCOL_INSTRUCTIONS_MARKER: &str = "Structured response protocol:";
 const PROTOCOL_REFRESH_REMINDER_MARKER: &str = "Protocol refresh reminder:";
 const REPAIR_RESPONSE_PREVIEW_MAX_CHARS: usize = 500;
-
-/// Askama view model for full protocol instructions with prompt-side schema.
-#[derive(Template)]
-#[template(path = "protocol_instruction_prompt.md", escape = "none")]
-struct ProtocolInstructionPromptTemplate<'a> {
-    prompt: &'a str,
-    protocol_usage_instructions: &'a str,
-    response_json_schema: &'a str,
-    workspace_root: &'a str,
-}
-
-/// Askama view model for protocol instructions when the transport enforces
-/// the response schema.
-#[derive(Template)]
-#[template(path = "protocol_instruction_policy_prompt.md", escape = "none")]
-struct ProtocolInstructionPolicyPromptTemplate<'a> {
-    prompt: &'a str,
-    protocol_usage_instructions: &'a str,
-    workspace_root: &'a str,
-}
-
-/// Askama view model for session-turn protocol usage instructions.
-#[derive(Template)]
-#[template(path = "protocol_instruction_session_turn_usage.md", escape = "none")]
-struct ProtocolInstructionSessionTurnUsageTemplate;
-
-/// Askama view model for one-shot protocol usage instructions.
-#[derive(Template)]
-#[template(path = "protocol_instruction_utility_prompt_usage.md", escape = "none")]
-struct ProtocolInstructionUtilityPromptUsageTemplate;
-
-/// Askama view model for compact refresh reminders.
-#[derive(Template)]
-#[template(path = "protocol_refresh_prompt.md", escape = "none")]
-struct ProtocolRefreshPromptTemplate<'a> {
-    prompt: &'a str,
-    protocol_refresh_instructions: &'a str,
-    workspace_root: &'a str,
-}
-
-/// Askama view model for session-turn refresh instructions.
-#[derive(Template)]
-#[template(path = "protocol_refresh_session_turn_instruction.md", escape = "none")]
-struct ProtocolRefreshSessionTurnInstructionTemplate;
-
-/// Askama view model for one-shot refresh instructions.
-#[derive(Template)]
-#[template(
-    path = "protocol_refresh_utility_prompt_instruction.md",
-    escape = "none"
-)]
-struct ProtocolRefreshUtilityPromptInstructionTemplate;
-
-/// Askama view model for repair prompts after protocol parse failures.
-#[derive(Template)]
-#[template(path = "protocol_repair_prompt.md", escape = "none")]
-struct ProtocolRepairPromptTemplate<'a> {
-    parse_error: &'a str,
-    response_json_schema: &'a str,
-    response_preview: &'a str,
-}
 
 /// Controls whether bootstrap prompt instructions include the full protocol
 /// JSON Schema text.
@@ -182,6 +122,68 @@ pub fn build_protocol_repair_prompt(parse_error: &str, malformed_response: &str)
     render_template("protocol_repair_prompt.md", &template)
 }
 
+/// Askama view model for protocol instructions when the transport enforces
+/// the response schema.
+#[derive(Template)]
+#[template(path = "protocol_instruction_policy_prompt.md", escape = "none")]
+struct ProtocolInstructionPolicyPromptTemplate<'a> {
+    prompt: &'a str,
+    protocol_usage_instructions: &'a str,
+    workspace_root: &'a str,
+}
+
+/// Askama view model for full protocol instructions with prompt-side schema.
+#[derive(Template)]
+#[template(path = "protocol_instruction_prompt.md", escape = "none")]
+struct ProtocolInstructionPromptTemplate<'a> {
+    prompt: &'a str,
+    protocol_usage_instructions: &'a str,
+    response_json_schema: &'a str,
+    workspace_root: &'a str,
+}
+
+/// Askama view model for compact refresh reminders.
+#[derive(Template)]
+#[template(path = "protocol_refresh_prompt.md", escape = "none")]
+struct ProtocolRefreshPromptTemplate<'a> {
+    prompt: &'a str,
+    protocol_refresh_instructions: &'a str,
+    workspace_root: &'a str,
+}
+
+/// Askama view model for repair prompts after protocol parse failures.
+#[derive(Template)]
+#[template(path = "protocol_repair_prompt.md", escape = "none")]
+struct ProtocolRepairPromptTemplate<'a> {
+    parse_error: &'a str,
+    response_json_schema: &'a str,
+    response_preview: &'a str,
+}
+
+/// Askama view model for session-turn protocol usage instructions.
+#[derive(Template)]
+#[template(path = "protocol_instruction_session_turn_usage.md", escape = "none")]
+struct ProtocolInstructionSessionTurnUsageTemplate;
+
+/// Askama view model for one-shot protocol usage instructions.
+#[derive(Template)]
+#[template(path = "protocol_instruction_utility_prompt_usage.md", escape = "none")]
+struct ProtocolInstructionUtilityPromptUsageTemplate;
+
+/// Askama view model for session-turn refresh instructions.
+#[derive(Template)]
+#[template(path = "protocol_refresh_session_turn_instruction.md", escape = "none")]
+struct ProtocolRefreshSessionTurnInstructionTemplate;
+
+/// Askama view model for one-shot refresh instructions.
+#[derive(Template)]
+#[template(
+    path = "protocol_refresh_utility_prompt_instruction.md",
+    escape = "none"
+)]
+struct ProtocolRefreshUtilityPromptInstructionTemplate;
+
+/// Renders the protocol usage instructions for one request profile.
 fn render_protocol_usage_instructions(profile: ProtocolRequestProfile) -> String {
     if matches!(profile, ProtocolRequestProfile::SessionTurn) {
         return render_template(
@@ -196,6 +198,7 @@ fn render_protocol_usage_instructions(profile: ProtocolRequestProfile) -> String
     )
 }
 
+/// Renders the compact protocol refresh instructions for one request profile.
 fn render_protocol_refresh_instructions(profile: ProtocolRequestProfile) -> String {
     if matches!(profile, ProtocolRequestProfile::SessionTurn) {
         return render_template(
@@ -210,19 +213,17 @@ fn render_protocol_refresh_instructions(profile: ProtocolRequestProfile) -> Stri
     )
 }
 
+/// Renders one Askama template and removes trailing whitespace.
 fn render_template(template_name: &str, template: &impl Template) -> String {
     let rendered = match template.render() {
         Ok(rendered) => rendered,
         Err(error) => format!("Failed to render `{template_name}`: {error}"),
     };
 
-    trim_template(&rendered)
+    rendered.trim_end().to_string()
 }
 
-fn trim_template(template: &str) -> String {
-    template.trim_end().to_string()
-}
-
+/// Truncates one malformed response preview to a character-count limit.
 fn truncate_preview(raw: &str, max_chars: usize) -> String {
     let preview: String = raw.chars().take(max_chars).collect();
     let total_chars = raw.chars().count();

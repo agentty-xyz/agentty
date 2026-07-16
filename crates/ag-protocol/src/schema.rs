@@ -45,13 +45,11 @@ pub fn agent_response_json_schema_json() -> String {
     stringify_schema_json(&schema)
 }
 
-/// Returns a pretty-printed JSON Schema string for prompt instruction
-/// templating.
+/// Returns a pretty-printed, transport-normalized JSON Schema string.
 ///
-/// This is used by prompt builders for providers that cannot enforce
-/// `outputSchema` at transport level and must be guided by in-prompt schema
-/// text instead, or by native schema-validation flags that accept a serialized
-/// schema document.
+/// Provider adapters use this serialized schema document when their native
+/// structured-output API accepts JSON text. `required_policy` selects the
+/// provider-compatible `required` field normalization.
 pub fn agent_response_output_schema_json(required_policy: SchemaRequiredPolicy) -> String {
     let schema = agent_response_output_schema(required_policy);
 
@@ -152,14 +150,6 @@ fn inject_minimum_required_protocol_key(schema: &mut Value) {
     }
 }
 
-/// Pretty-prints one schema document for prompt or transport wiring.
-fn stringify_schema_json(schema: &Value) -> String {
-    match serde_json::to_string_pretty(schema) {
-        Ok(schema_json) => schema_json,
-        Err(_) => "null".to_string(),
-    }
-}
-
 /// Normalizes one schema tree for transport-level provider compatibility.
 ///
 /// Claude rejects schemas with a top-level `$schema` URI when its validator
@@ -219,6 +209,20 @@ fn normalize_schema_for_transport(value: &mut Value, required_policy: SchemaRequ
     }
 }
 
+/// Rewrites one `$ref` schema object to Codex-compatible form.
+///
+/// Codex rejects sibling keywords alongside `$ref` (for example
+/// `{ "$ref": "...", "description": "..." }`), so this keeps only the
+/// reference key when present.
+fn normalize_ref_object_for_codex(object: &mut serde_json::Map<String, Value>) {
+    let Some(reference) = object.get("$ref").cloned() else {
+        return;
+    };
+
+    object.clear();
+    object.insert("$ref".to_string(), reference);
+}
+
 /// Ensures all `properties` keys appear in `required` for Codex compatibility.
 ///
 /// Codex rejects schemas where `properties` contains keys not listed in
@@ -253,18 +257,9 @@ fn normalize_required_for_codex(object: &mut serde_json::Map<String, Value>) {
     }
 }
 
-/// Rewrites one `$ref` schema object to Codex-compatible form.
-///
-/// Codex rejects sibling keywords alongside `$ref` (for example
-/// `{ "$ref": "...", "description": "..." }`), so this keeps only the
-/// reference key when present.
-fn normalize_ref_object_for_codex(object: &mut serde_json::Map<String, Value>) {
-    let Some(reference) = object.get("$ref").cloned() else {
-        return;
-    };
-
-    object.clear();
-    object.insert("$ref".to_string(), reference);
+/// Pretty-prints one schema document for prompt or transport wiring.
+fn stringify_schema_json(schema: &Value) -> String {
+    serde_json::to_string_pretty(schema).unwrap_or("null".to_string())
 }
 
 #[cfg(test)]

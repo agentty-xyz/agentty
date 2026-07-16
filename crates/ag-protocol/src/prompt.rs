@@ -4,12 +4,15 @@ use std::fmt;
 use std::path::PathBuf;
 
 /// One local image attachment referenced from a prompt placeholder.
+///
+/// Serialized JSON consumers must match fields by name; object key order is
+/// not part of this transport contract.
 #[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct TurnPromptAttachment {
-    /// Inline placeholder token such as `[Image #1]` used in prompt text.
-    pub placeholder: String,
     /// Local file path persisted for transport upload.
     pub local_image_path: PathBuf,
+    /// Inline placeholder token such as `[Image #1]` used in prompt text.
+    pub placeholder: String,
 }
 
 /// Structured prompt payload for one agent turn.
@@ -22,29 +25,6 @@ pub struct TurnPrompt {
     /// Source classification that controls prompt-only text rewrites.
     #[serde(default)]
     pub text_source: TurnPromptTextSource,
-}
-
-/// Source classification for one turn prompt text payload.
-#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-pub enum TurnPromptTextSource {
-    /// User-authored prompt text where `@path` lookup tokens should be
-    /// converted before transport delivery.
-    #[default]
-    UserPrompt,
-    /// Agent-facing generated data such as utility prompts, protocol repair
-    /// prompts, diffs, and transcript previews that must be sent unchanged.
-    AgentData,
-}
-
-/// Ordered content piece produced when serializing one turn prompt.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum TurnPromptContentPart<'prompt> {
-    /// One local image attachment referenced from the prompt text.
-    Attachment(&'prompt TurnPromptAttachment),
-    /// One attachment whose placeholder no longer appears in the prompt text.
-    OrphanAttachment(&'prompt TurnPromptAttachment),
-    /// One plain-text span from the prompt.
-    Text(&'prompt str),
 }
 
 impl TurnPrompt {
@@ -159,6 +139,110 @@ impl TurnPrompt {
     }
 }
 
+impl From<String> for TurnPrompt {
+    fn from(text: String) -> Self {
+        Self::from_text(text)
+    }
+}
+
+impl From<&str> for TurnPrompt {
+    fn from(text: &str) -> Self {
+        Self::from_text(text.to_string())
+    }
+}
+
+impl From<&TurnPrompt> for TurnPrompt {
+    fn from(prompt: &TurnPrompt) -> Self {
+        prompt.clone()
+    }
+}
+
+impl fmt::Display for TurnPrompt {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.text)
+    }
+}
+
+impl PartialEq<&str> for TurnPrompt {
+    fn eq(&self, other: &&str) -> bool {
+        self.text == *other
+    }
+}
+
+impl PartialEq<TurnPrompt> for &str {
+    fn eq(&self, other: &TurnPrompt) -> bool {
+        *self == other.text
+    }
+}
+
+/// Source classification for one turn prompt text payload.
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub enum TurnPromptTextSource {
+    /// User-authored prompt text where `@path` lookup tokens should be
+    /// converted before transport delivery.
+    #[default]
+    UserPrompt,
+    /// Agent-facing generated data such as utility prompts, protocol repair
+    /// prompts, diffs, and transcript previews that must be sent unchanged.
+    AgentData,
+}
+
+/// Ordered content piece produced when serializing one turn prompt.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum TurnPromptContentPart<'prompt> {
+    /// One local image attachment referenced from the prompt text.
+    Attachment(&'prompt TurnPromptAttachment),
+    /// One attachment whose placeholder no longer appears in the prompt text.
+    OrphanAttachment(&'prompt TurnPromptAttachment),
+    /// One plain-text span from the prompt.
+    Text(&'prompt str),
+}
+
+/// Rewrites user-entered `@` lookups into quoted agent-facing path tokens.
+///
+/// File and directory lookups like `@path/to/file` are rewritten to
+/// `"path/to/file"`. Non-lookup uses of `@`, including email-like tokens and
+/// lone `@`, are preserved so frontends and persisted transcripts can continue
+/// storing the original user input unchanged.
+#[must_use]
+pub fn render_prompt_text_for_agent(text: &str) -> String {
+    let characters = text.chars().collect::<Vec<char>>();
+    let mut output = String::with_capacity(text.len());
+    let mut index = 0;
+
+    while let Some(&character) = characters.get(index) {
+        if character != '@'
+            || !is_at_mention_boundary(characters.get(index.wrapping_sub(1)).copied())
+            || index + 1 >= characters.len()
+        {
+            output.push(character);
+            index += 1;
+
+            continue;
+        }
+
+        let mut scan_index = index + 1;
+        while scan_index < characters.len() && is_at_mention_query_character(characters[scan_index])
+        {
+            scan_index += 1;
+        }
+
+        if scan_index == index + 1 {
+            output.push(character);
+            index += 1;
+
+            continue;
+        }
+
+        output.push('"');
+        output.extend(characters[index + 1..scan_index].iter());
+        output.push('"');
+        index = scan_index;
+    }
+
+    output
+}
+
 /// Splits prompt text into ordered text and attachment parts for transport
 /// serialization.
 #[must_use]
@@ -211,51 +295,6 @@ pub fn split_turn_prompt_content<'prompt>(
     content_parts
 }
 
-/// Rewrites user-entered `@` lookups into quoted agent-facing path tokens.
-///
-/// File and directory lookups like `@path/to/file` are rewritten to
-/// `"path/to/file"`. Non-lookup uses of `@`, including email-like tokens and
-/// lone `@`, are preserved so frontends and persisted transcripts can continue
-/// storing the original user input unchanged.
-#[must_use]
-pub fn render_prompt_text_for_agent(text: &str) -> String {
-    let characters = text.chars().collect::<Vec<char>>();
-    let mut output = String::with_capacity(text.len());
-    let mut index = 0;
-
-    while let Some(&character) = characters.get(index) {
-        if character != '@'
-            || !is_at_mention_boundary(characters.get(index.wrapping_sub(1)).copied())
-            || index + 1 >= characters.len()
-        {
-            output.push(character);
-            index += 1;
-
-            continue;
-        }
-
-        let mut scan_index = index + 1;
-        while scan_index < characters.len() && is_at_mention_query_character(characters[scan_index])
-        {
-            scan_index += 1;
-        }
-
-        if scan_index == index + 1 {
-            output.push(character);
-            index += 1;
-
-            continue;
-        }
-
-        output.push('"');
-        output.extend(characters[index + 1..scan_index].iter());
-        output.push('"');
-        index = scan_index;
-    }
-
-    output
-}
-
 /// Returns whether the character before `@` starts a file lookup token.
 fn is_at_mention_boundary(previous_character: Option<char>) -> bool {
     previous_character.is_none_or(|character| {
@@ -273,42 +312,6 @@ fn is_at_mention_opening_delimiter(character: char) -> bool {
     matches!(character, '(' | '[' | '{')
 }
 
-impl From<String> for TurnPrompt {
-    fn from(text: String) -> Self {
-        Self::from_text(text)
-    }
-}
-
-impl From<&str> for TurnPrompt {
-    fn from(text: &str) -> Self {
-        Self::from_text(text.to_string())
-    }
-}
-
-impl From<&TurnPrompt> for TurnPrompt {
-    fn from(prompt: &TurnPrompt) -> Self {
-        prompt.clone()
-    }
-}
-
-impl fmt::Display for TurnPrompt {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.text)
-    }
-}
-
-impl PartialEq<&str> for TurnPrompt {
-    fn eq(&self, other: &&str) -> bool {
-        self.text == *other
-    }
-}
-
-impl PartialEq<TurnPrompt> for &str {
-    fn eq(&self, other: &TurnPrompt) -> bool {
-        *self == other.text
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -316,13 +319,58 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Ensures attachment JSON accepts either object key order while
+    /// preserving the complete named-field wire shape.
+    fn test_turn_prompt_attachment_json_uses_named_fields_independent_of_order() {
+        // Arrange
+        let attachment = TurnPromptAttachment {
+            local_image_path: PathBuf::from("/tmp/image-1.png"),
+            placeholder: "[Image #1]".to_string(),
+        };
+        let alternate_order_json =
+            r#"{"placeholder":"[Image #1]","local_image_path":"/tmp/image-1.png"}"#;
+
+        // Act
+        let deserialized_attachment =
+            serde_json::from_str::<TurnPromptAttachment>(alternate_order_json)
+                .expect("attachment JSON should deserialize by field name");
+        let serialized_value =
+            serde_json::to_value(&attachment).expect("attachment should serialize");
+
+        // Assert
+        assert_eq!(deserialized_attachment, attachment);
+        assert_eq!(
+            serialized_value,
+            serde_json::json!({
+                "local_image_path": "/tmp/image-1.png",
+                "placeholder": "[Image #1]",
+            })
+        );
+    }
+
+    #[test]
+    /// Ensures prompt text comparisons work with string slices on either side.
+    fn test_turn_prompt_compares_with_str_in_both_directions() {
+        // Arrange
+        let prompt = TurnPrompt::from("Review this change");
+
+        // Act
+        let prompt_matches = prompt == "Review this change";
+        let text_matches = "Review this change" == prompt;
+
+        // Assert
+        assert!(prompt_matches);
+        assert!(text_matches);
+    }
+
+    #[test]
     /// Ensures transcript text keeps inline image placeholders unchanged.
     fn test_turn_prompt_transcript_text_keeps_inline_placeholders() {
         // Arrange
         let prompt = TurnPrompt {
             attachments: vec![TurnPromptAttachment {
-                placeholder: "[Image #1]".to_string(),
                 local_image_path: PathBuf::from("/tmp/image-1.png"),
+                placeholder: "[Image #1]".to_string(),
             }],
             text: "Review [Image #1] carefully".to_string(),
             text_source: TurnPromptTextSource::UserPrompt,
@@ -378,12 +426,12 @@ mod tests {
         let prompt = TurnPrompt {
             attachments: vec![
                 TurnPromptAttachment {
-                    placeholder: "[Image #1]".to_string(),
                     local_image_path: PathBuf::from("/tmp/image-1.png"),
+                    placeholder: "[Image #1]".to_string(),
                 },
                 TurnPromptAttachment {
-                    placeholder: "[Image #2]".to_string(),
                     local_image_path: PathBuf::from("/tmp/image-2.png"),
+                    placeholder: "[Image #2]".to_string(),
                 },
             ],
             text: "Review".to_string(),
@@ -398,22 +446,35 @@ mod tests {
     }
 
     #[test]
+    /// Ensures prompt content without attachments remains one text part.
+    fn test_split_turn_prompt_content_returns_text_without_attachments() {
+        // Arrange
+        let text = "Review this change";
+
+        // Act
+        let content_parts = split_turn_prompt_content(text, &[]);
+
+        // Assert
+        assert_eq!(content_parts, vec![TurnPromptContentPart::Text(text)]);
+    }
+
+    #[test]
     /// Ensures prompt content parts follow placeholder order and keep orphaned
     /// attachments at the end.
     fn test_split_turn_prompt_content_orders_placeholders_and_appends_orphans() {
         // Arrange
         let attachments = vec![
             TurnPromptAttachment {
-                placeholder: "[Image #1]".to_string(),
                 local_image_path: PathBuf::from("/tmp/image-1.png"),
+                placeholder: "[Image #1]".to_string(),
             },
             TurnPromptAttachment {
-                placeholder: "[Image #2]".to_string(),
                 local_image_path: PathBuf::from("/tmp/image-2.png"),
+                placeholder: "[Image #2]".to_string(),
             },
             TurnPromptAttachment {
-                placeholder: "[Image #3]".to_string(),
                 local_image_path: PathBuf::from("/tmp/image-3.png"),
+                placeholder: "[Image #3]".to_string(),
             },
         ];
 
