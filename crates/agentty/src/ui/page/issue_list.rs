@@ -143,6 +143,7 @@ impl IssueTableRow<'_> {
                     Cell::from(item.repository.as_str()),
                     Cell::from(item.updated_at.as_deref().map_or("", issue_updated_date)),
                 ])
+                .style(Style::default().fg(style::palette::text()))
             }
         }
     }
@@ -243,6 +244,14 @@ mod tests {
         assert!(text.contains("Issues"));
         assert!(text.contains("Assigned to you"));
         assert!(text.contains("#124 Keep issue list compact"));
+        let issue_cell = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .find(|cell| cell.symbol() == "#")
+            .expect("issue row should be rendered");
+        assert_eq!(issue_cell.fg, style::palette::text());
     }
 
     #[test]
