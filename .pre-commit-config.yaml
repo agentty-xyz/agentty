@@ -165,7 +165,7 @@ repos:
         stages: [manual]
       - id: coverage
         name: coverage
-        description: Verify source-test coverage meets workspace ratchet thresholds and write the CI LCOV report.
+        description: Verify source-test coverage meets workspace ratchet thresholds and write the CI LCOV report for SonarQube and Codecov.
         entry: >-
           cargo llvm-cov nextest --workspace --lib --bins --locked --profile ci
           --fail-under-lines 91 --fail-under-functions 91

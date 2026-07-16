@@ -59,6 +59,7 @@ jobs:
       cargo-machete: true
 
   coverage:
+    name: SonarQube and coverage
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -68,6 +69,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Setup Rust and `prek`
@@ -78,6 +80,12 @@ jobs:
 
       - name: Generate and check coverage report
         run: prek run coverage --all-files --hook-stage manual
+
+      - name: SonarQube Scan
+        if: ${{ !cancelled() && hashFiles('coverage.lcov') != '' }}
+        uses: SonarSource/sonarqube-scan-action@713881670b6b3676cda39549040e2d88c70d582e # v8.2.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
       - name: Summarize coverage
         if: ${{ !cancelled() && hashFiles('coverage.lcov') != '' }}
