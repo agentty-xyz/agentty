@@ -80,7 +80,9 @@ For file-level detail, read the module docstrings directly.
 - `ui/`: Rendering — frame composition, mode-to-page routing, pages under `ui/page/`,
   reusable widgets under `ui/component/`, application-to-frame projection in
   `ui/app_render.rs`, Agentty theme adapters for `ag-tui-text`, plus diff, layout,
-  review-comment formatting, and theme helpers.
+  review-comment formatting, and theme helpers. `ui/session_output_assembly.rs` owns the
+  pure transcript-to-display-line projection; the `SessionOutput` component retains
+  layout caching, scrollbar metrics, loader effects, and Ratatui painting.
 
 ## Layer Rules
 

@@ -1,6 +1,5 @@
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::fmt::Write as _;
+use std::collections::{HashMap, VecDeque};
 use std::hash::Hasher;
 use std::sync::Arc;
 
@@ -13,36 +12,18 @@ use ratatui::widgets::{Block, Paragraph};
 use rustc_hash::FxHasher;
 
 use crate::domain::session::{Session, SessionId, Status};
-use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
-use crate::domain::transient_message::{
-    TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageSlot,
-};
 use crate::ui::component::tachyon_loader::TachyonLoaderEffect;
 use crate::ui::component::vertical_scrollbar::VerticalScrollbar;
 #[cfg(test)]
 use crate::ui::component::vertical_scrollbar::{SCROLLBAR_THUMB_SYMBOL, SCROLLBAR_TRACK_SYMBOL};
 use crate::ui::icon::{Icon, TACHYON_LOADER_WIDTH};
 use crate::ui::input_layout::{bottom_pinned_scroll_offset, panel_inner_width};
-use crate::ui::markdown::{self, render_markdown};
-use crate::ui::prompt_block::{self, USER_PROMPT_PREFIX, USER_PROMPT_RIGHT_GUTTER_WIDTH};
-use crate::ui::{Component, session_format, style};
+use crate::ui::session_output_assembly::{self, SessionOutputBody, SessionOutputLines};
+use crate::ui::{Component, markdown, session_format, style};
 
-const DRAFT_PREVIEW_HEADER: &str = "## Draft Session";
-const DRAFT_PREVIEW_EMPTY_NOTE: &str = "No draft messages staged yet. Use `Enter` to stage the \
-                                        first draft locally, then press `s` in session view to \
-                                        start the bundle.";
-const DRAFT_PREVIEW_STACKED_EMPTY_NOTE: &str = "No draft messages staged yet. Use `Enter` to \
-                                                stage the first draft locally. The `s` start \
-                                                action appears after the parent is review-ready.";
-const DRAFT_PREVIEW_STAGED_NOTE: &str =
-    "Draft messages stay local until you press `s` in session view to start the staged bundle.";
-const DRAFT_PREVIEW_STACKED_STAGED_NOTE: &str =
-    "Draft messages stay local until the parent is review-ready and you press `s` in session view \
-     to start the stacked bundle from its parent branch.";
 const SCROLLBAR_PADDING_WIDTH: u16 = 1;
 const SCROLLBAR_WIDTH: u16 = 1;
 const SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT: usize = 16;
-const USER_PROMPT_TAB_WIDTH: usize = 4;
 
 /// Cache key for one fully assembled session-output layout.
 ///
@@ -209,221 +190,6 @@ struct SessionOutputResolvedLayout {
     show_scrollbar: bool,
 }
 
-/// Fully assembled session-output lines plus metadata derived during assembly.
-struct SessionOutputLines {
-    active_loader_line_index: Option<usize>,
-    branch_operation_loader_line_index: Option<usize>,
-    lines: Vec<Line<'static>>,
-}
-
-/// Cached stable output body shared across status-tail changes such as a
-/// review-ready session entering the rebase workflow.
-#[derive(Clone)]
-struct SessionOutputBody {
-    branch_operation_loader_line_index: Option<usize>,
-    lines: Arc<[Line<'static>]>,
-}
-
-/// One logical output block in the assembled session transcript panel.
-#[derive(Clone, Copy)]
-enum SessionOutputBlock {
-    ActiveTurn,
-    CompletedTranscript,
-    QueuedMessage,
-    SessionTail,
-    Transient(TransientMessageAnchor),
-    TrailingTranscriptNotice(TrailingTranscriptNoticePlacement),
-}
-
-/// Render placement for trailing transcript notices split from persisted
-/// output.
-#[derive(Clone, Copy)]
-enum TrailingTranscriptNoticePlacement {
-    AfterReview,
-    BeforeActiveTurn,
-}
-
-/// Controls whether a block separator is always emitted or only separates
-/// previously rendered content.
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum SessionOutputSeparator {
-    Always,
-    AfterPreviousContent,
-}
-
-const SESSION_OUTPUT_BLOCK_ORDER: [SessionOutputBlock; 9] = [
-    SessionOutputBlock::CompletedTranscript,
-    SessionOutputBlock::TrailingTranscriptNotice(
-        TrailingTranscriptNoticePlacement::BeforeActiveTurn,
-    ),
-    SessionOutputBlock::Transient(TransientMessageAnchor::AfterCompletedTurn),
-    SessionOutputBlock::ActiveTurn,
-    SessionOutputBlock::Transient(TransientMessageAnchor::AfterActiveTurn),
-    SessionOutputBlock::TrailingTranscriptNotice(TrailingTranscriptNoticePlacement::AfterReview),
-    SessionOutputBlock::QueuedMessage,
-    SessionOutputBlock::Transient(TransientMessageAnchor::Tail),
-    SessionOutputBlock::SessionTail,
-];
-
-/// Mutable state for assembling session-output blocks in display order.
-struct SessionOutputAssembly<'a> {
-    active_loader_line_index: Option<usize>,
-    active_progress: Option<&'a str>,
-    active_turn_has_visible_text: bool,
-    active_turn_section: SessionOutputTranscriptSection<'a>,
-    branch_operation_loader_line_index: Option<usize>,
-    completed_turn_section: SessionOutputTranscriptSection<'a>,
-    inner_width: usize,
-    lines: Vec<Line<'static>>,
-    markdown_render_cache: Option<&'a markdown::MarkdownRenderCache>,
-    session: &'a Session,
-    status: Status,
-    trailing_notice_section: SessionOutputTranscriptSection<'a>,
-}
-
-/// Transcript text split into the visual sections understood by the output
-/// assembly.
-struct SessionOutputTextSections<'a> {
-    active_turn: SessionOutputTranscriptSection<'a>,
-    completed_turn: SessionOutputTranscriptSection<'a>,
-    trailing_notice: SessionOutputTranscriptSection<'a>,
-}
-
-/// One renderable transcript section split from persisted session output.
-enum SessionOutputTranscriptSection<'a> {
-    Empty,
-    Markdown(String),
-    Messages(&'a [SessionMessage]),
-}
-
-impl SessionOutputTranscriptSection<'_> {
-    /// Returns whether this transcript section contains no visible content.
-    fn is_empty(&self) -> bool {
-        match self {
-            Self::Empty => true,
-            Self::Markdown(text) => text.trim().is_empty(),
-            Self::Messages(messages) => messages
-                .iter()
-                .all(|message| message.content.trim().is_empty()),
-        }
-    }
-}
-
-impl SessionOutputAssembly<'_> {
-    /// Appends all known output blocks in the canonical display order.
-    fn into_output_lines(mut self) -> SessionOutputLines {
-        for block in SESSION_OUTPUT_BLOCK_ORDER {
-            self.append_block(block);
-        }
-
-        SessionOutputLines {
-            active_loader_line_index: self.active_loader_line_index,
-            branch_operation_loader_line_index: self.branch_operation_loader_line_index,
-            lines: self.lines,
-        }
-    }
-
-    /// Appends the stable output body while leaving the status tail for the
-    /// current render state to assemble separately.
-    fn into_output_body(mut self) -> SessionOutputBody {
-        for block in SESSION_OUTPUT_BLOCK_ORDER {
-            if matches!(block, SessionOutputBlock::SessionTail) {
-                continue;
-            }
-
-            self.append_block(block);
-        }
-
-        SessionOutputBody {
-            branch_operation_loader_line_index: self.branch_operation_loader_line_index,
-            lines: Arc::from(self.lines),
-        }
-    }
-
-    /// Appends one optional output block when its current inputs are visible.
-    fn append_block(&mut self, block: SessionOutputBlock) {
-        match block {
-            SessionOutputBlock::CompletedTranscript => self.append_completed_transcript(),
-            SessionOutputBlock::TrailingTranscriptNotice(placement) => {
-                self.append_trailing_transcript_notice(placement);
-            }
-            SessionOutputBlock::Transient(anchor) => self.append_transient_messages(anchor),
-            SessionOutputBlock::ActiveTurn => self.append_active_turn(),
-            SessionOutputBlock::QueuedMessage => self.append_queued_messages(),
-            SessionOutputBlock::SessionTail => self.append_session_tail(),
-        }
-    }
-
-    fn append_completed_transcript(&mut self) {
-        SessionOutput::append_transcript_section_lines(
-            &mut self.lines,
-            &self.completed_turn_section,
-            self.inner_width,
-            self.markdown_render_cache,
-        );
-    }
-
-    fn append_trailing_transcript_notice(&mut self, placement: TrailingTranscriptNoticePlacement) {
-        let should_append = match placement {
-            TrailingTranscriptNoticePlacement::BeforeActiveTurn => {
-                self.active_turn_has_visible_text
-            }
-            TrailingTranscriptNoticePlacement::AfterReview => !self.active_turn_has_visible_text,
-        };
-        if !should_append {
-            return;
-        }
-
-        SessionOutput::append_transcript_section_lines(
-            &mut self.lines,
-            &self.trailing_notice_section,
-            self.inner_width,
-            self.markdown_render_cache,
-        );
-    }
-
-    fn append_transient_messages(&mut self, anchor: TransientMessageAnchor) {
-        for message in self
-            .session
-            .transient_messages
-            .messages()
-            .iter()
-            .filter(|message| message.anchor == anchor)
-        {
-            if SessionOutput::append_transient_message_lines(
-                &mut self.lines,
-                message,
-                self.inner_width,
-                self.markdown_render_cache,
-            ) {
-                self.branch_operation_loader_line_index = Some(self.lines.len().saturating_sub(1));
-            }
-        }
-    }
-
-    fn append_active_turn(&mut self) {
-        SessionOutput::append_transcript_section_lines(
-            &mut self.lines,
-            &self.active_turn_section,
-            self.inner_width,
-            self.markdown_render_cache,
-        );
-    }
-
-    fn append_queued_messages(&mut self) {
-        SessionOutput::append_queued_message_lines(&mut self.lines, &self.session.queued_messages);
-    }
-
-    fn append_session_tail(&mut self) {
-        self.active_loader_line_index = SessionOutput::append_session_tail_lines(
-            &mut self.lines,
-            self.status,
-            self.active_progress,
-            SessionOutput::review_loading_message(self.session),
-        );
-    }
-}
-
 /// Cached session-output layout entry.
 struct SessionOutputLayoutCacheEntry {
     key: SessionOutputLayoutCacheKey,
@@ -492,8 +258,10 @@ impl SessionOutputLayoutCache {
             markdown_render_cache.map_or(0, markdown::MarkdownRenderCache::version),
         );
         let body = self.cached_body(&body_key).unwrap_or_else(|| {
+            let inner_width =
+                panel_inner_width(output_area, session_format::session_output_panel_borders());
             let body =
-                SessionOutput::derive_body(session, output_area, context, markdown_render_cache);
+                session_output_assembly::output_body(session, inner_width, markdown_render_cache);
             self.store_body_entry(SessionOutputBodyCacheEntry {
                 body: body.clone(),
                 key: body_key,
@@ -501,8 +269,9 @@ impl SessionOutputLayoutCache {
 
             body
         });
-        let layout =
-            SessionOutput::derive_layout_from_body(session, context.active_progress, &body);
+        let layout = SessionOutput::layout_from_assembled_lines(
+            session_output_assembly::layout_from_body(session, context.active_progress, &body),
+        );
         self.store_entry(SessionOutputLayoutCacheEntry {
             key,
             layout: layout.clone(),
@@ -776,49 +545,28 @@ impl<'a> SessionOutput<'a> {
         context: SessionOutputLineContext<'_>,
         markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
     ) -> SessionOutputLayout {
-        let output_lines =
-            Self::output_lines_with_metadata(session, output_area, context, markdown_render_cache);
+        let inner_width =
+            panel_inner_width(output_area, session_format::session_output_panel_borders());
+        let output_lines = session_output_assembly::output_lines(
+            session,
+            inner_width,
+            context.active_progress,
+            markdown_render_cache,
+        );
+
+        Self::layout_from_assembled_lines(output_lines)
+    }
+
+    /// Converts pure assembled lines into a cacheable layout for scrolling and
+    /// Ratatui painting.
+    fn layout_from_assembled_lines(output_lines: SessionOutputLines) -> SessionOutputLayout {
         let line_count = u16::try_from(output_lines.lines.len()).unwrap_or(u16::MAX);
 
         SessionOutputLayout {
             active_loader_line_index: output_lines.active_loader_line_index,
             branch_operation_loader_line_index: output_lines.branch_operation_loader_line_index,
             line_count,
-            lines: Arc::<[Line<'static>]>::from(output_lines.lines),
-        }
-    }
-
-    /// Derives the stable transcript body without the dynamic status tail.
-    fn derive_body<'assembly>(
-        session: &'assembly Session,
-        output_area: Rect,
-        context: SessionOutputLineContext<'assembly>,
-        markdown_render_cache: Option<&'assembly markdown::MarkdownRenderCache>,
-    ) -> SessionOutputBody {
-        Self::output_assembly(session, output_area, context, markdown_render_cache)
-            .into_output_body()
-    }
-
-    /// Appends the current status tail to a cached transcript body.
-    fn derive_layout_from_body(
-        session: &Session,
-        active_progress: Option<&str>,
-        body: &SessionOutputBody,
-    ) -> SessionOutputLayout {
-        let mut lines = body.lines.iter().cloned().collect::<Vec<_>>();
-        let active_loader_line_index = Self::append_session_tail_lines(
-            &mut lines,
-            session.status,
-            active_progress,
-            Self::review_loading_message(session),
-        );
-        let line_count = u16::try_from(lines.len()).unwrap_or(u16::MAX);
-
-        SessionOutputLayout {
-            active_loader_line_index,
-            branch_operation_loader_line_index: body.branch_operation_loader_line_index,
-            line_count,
-            lines: Arc::from(lines),
+            lines: Arc::from(output_lines.lines),
         }
     }
 
@@ -865,7 +613,7 @@ impl<'a> SessionOutput<'a> {
 
         SessionOutputBodyCacheKey {
             draft_prompt: Self::draft_prompt_fingerprint(session),
-            has_active_turn: Self::status_has_active_turn(session.status),
+            has_active_turn: session_output_assembly::status_has_active_turn(session.status),
             is_stacked_child: session.is_stacked_child(),
             markdown_render_version,
             output_width: u16::try_from(inner_width).unwrap_or(u16::MAX),
@@ -888,672 +636,6 @@ impl<'a> SessionOutput<'a> {
         }
 
         TextFingerprint::from_text(None)
-    }
-
-    /// Builds rendered markdown lines, contextual status/help rows, and
-    /// metadata for rows that receive post-render effects.
-    ///
-    /// `Status::Done` includes an inline continuation hint. Active statuses
-    /// append only the generic loader row so transcript text stays stable until
-    /// the turn completes.
-    /// Wrapping width follows the configured output panel borders so line
-    /// metrics stay in sync with rendered content. Transcript-derived content
-    /// always renders completed content before the currently active prompt
-    /// block. When a new prompt is active, the previous-turn summary is hidden
-    /// so the output stream no longer shows stale change metadata for work
-    /// that is already being superseded.
-    /// Queued follow-up messages render beneath the running turn and any
-    /// existing workflow notices so users see staged local input after the
-    /// transcript content that preceded it. Trailing transcript notices that
-    /// belong to a completed turn stay above any active prompt so in-progress
-    /// sessions remain chronological. Focused-review output is appended before
-    /// trailing transcript notices for non-terminal review states, keeping
-    /// workflow failures below the completed turn's summary/review content
-    /// while terminal views keep their final transcript and summary display
-    /// stable.
-    fn output_lines_with_metadata<'assembly>(
-        session: &'assembly Session,
-        output_area: Rect,
-        context: SessionOutputLineContext<'assembly>,
-        markdown_render_cache: Option<&'assembly markdown::MarkdownRenderCache>,
-    ) -> SessionOutputLines {
-        Self::output_assembly(session, output_area, context, markdown_render_cache)
-            .into_output_lines()
-    }
-
-    /// Prepares one output assembly shared by full-layout and stable-body
-    /// derivation paths.
-    fn output_assembly<'assembly>(
-        session: &'assembly Session,
-        output_area: Rect,
-        context: SessionOutputLineContext<'assembly>,
-        markdown_render_cache: Option<&'assembly markdown::MarkdownRenderCache>,
-    ) -> SessionOutputAssembly<'assembly> {
-        let SessionOutputLineContext {
-            active_progress,
-            active_prompt_output: _,
-            session_update_version: _,
-        } = context;
-        let status = session.status;
-        let transcript_sections = Self::output_text_sections(session, status);
-        let inner_width =
-            panel_inner_width(output_area, session_format::session_output_panel_borders());
-        let active_turn_has_visible_text = !transcript_sections.active_turn.is_empty();
-        SessionOutputAssembly {
-            active_loader_line_index: None,
-            active_progress,
-            active_turn_has_visible_text,
-            branch_operation_loader_line_index: None,
-            active_turn_section: transcript_sections.active_turn,
-            completed_turn_section: transcript_sections.completed_turn,
-            inner_width,
-            lines: Vec::new(),
-            markdown_render_cache,
-            session,
-            status,
-            trailing_notice_section: transcript_sections.trailing_notice,
-        }
-    }
-
-    /// Trims trailing blank rows before appending a block separator.
-    fn append_block_separator(lines: &mut Vec<Line<'static>>, separator: SessionOutputSeparator) {
-        Self::trim_trailing_blank_lines(lines);
-
-        if separator == SessionOutputSeparator::Always || !lines.is_empty() {
-            lines.push(Line::from(""));
-        }
-    }
-
-    /// Removes blank rows from the end of already-assembled output blocks.
-    fn trim_trailing_blank_lines(lines: &mut Vec<Line<'static>>) {
-        while lines.last().is_some_and(|line| line.width() == 0) {
-            lines.pop();
-        }
-    }
-
-    /// Appends the trailing status, done, or spacer rows and returns the
-    /// active-loader line index when the appended status uses animation.
-    fn append_session_tail_lines(
-        lines: &mut Vec<Line<'static>>,
-        status: Status,
-        active_progress: Option<&str>,
-        review_status_message: Option<&str>,
-    ) -> Option<usize> {
-        if let Some(status_line) = session_format::session_output_status_line(
-            status,
-            active_progress,
-            review_status_message,
-        ) {
-            Self::append_block_separator(lines, SessionOutputSeparator::Always);
-            let active_loader_line_index =
-                Self::status_uses_tachyon_loader(status).then_some(lines.len());
-            lines.push(status_line);
-
-            return active_loader_line_index;
-        }
-
-        if status == Status::Done {
-            lines.push(Line::from(""));
-            lines.push(session_format::session_output_done_line());
-            lines.push(Line::from(""));
-
-            return None;
-        }
-
-        lines.push(Line::from(""));
-
-        None
-    }
-
-    /// Returns the focused-review loading label rendered in the shared status
-    /// row rather than in the stable transcript body.
-    fn review_loading_message(session: &Session) -> Option<&str> {
-        session
-            .transient_messages
-            .get(TransientMessageSlot::Review)
-            .and_then(|message| match &message.body {
-                TransientMessageBody::Loading(message) => Some(message.as_str()),
-                TransientMessageBody::Markdown(_) | TransientMessageBody::Plain(_) => None,
-            })
-    }
-
-    /// Appends one explicitly typed transient message and returns whether it
-    /// owns the published-branch loader row.
-    fn append_transient_message_lines(
-        lines: &mut Vec<Line<'static>>,
-        message: &TransientMessage,
-        inner_width: usize,
-        markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
-    ) -> bool {
-        match &message.body {
-            TransientMessageBody::Markdown(markdown) => {
-                let markdown = match message.slot {
-                    TransientMessageSlot::Summary => {
-                        session_format::session_output_summary_markdown(markdown)
-                    }
-                    TransientMessageSlot::Review => {
-                        session_format::format_review_markdown(markdown)
-                    }
-                    TransientMessageSlot::WorkflowNotice
-                    | TransientMessageSlot::BranchPublish
-                    | TransientMessageSlot::PublishedBranchSync => markdown.clone(),
-                };
-                Self::append_markdown_lines(lines, &markdown, inner_width, markdown_render_cache);
-            }
-            TransientMessageBody::Plain(status_message) => {
-                Self::append_block_separator(lines, SessionOutputSeparator::AfterPreviousContent);
-                Self::append_plain_status_lines(lines, status_message, inner_width);
-            }
-            TransientMessageBody::Loading(status_message) => {
-                if message.slot == TransientMessageSlot::Review {
-                    // Review loading is painted by `append_session_tail()` so
-                    // it shares the status row's tachyon animation. The Tail
-                    // anchor classifies its placement but this pass must skip
-                    // it to avoid rendering a duplicate static loading row.
-                    return false;
-                }
-
-                Self::append_block_separator(lines, SessionOutputSeparator::Always);
-                lines.push(session_format::session_output_transient_loading_line(
-                    status_message,
-                ));
-            }
-        }
-
-        matches!(
-            message.slot,
-            TransientMessageSlot::BranchPublish | TransientMessageSlot::PublishedBranchSync
-        ) && matches!(&message.body, TransientMessageBody::Loading(_))
-    }
-
-    /// Returns transcript sections from draft-preview text or typed message
-    /// rows.
-    fn output_text_sections(session: &Session, status: Status) -> SessionOutputTextSections<'_> {
-        let is_draft_preview = session.status == Status::Draft && session.is_draft_session();
-        if is_draft_preview {
-            return SessionOutputTextSections {
-                active_turn: SessionOutputTranscriptSection::Empty,
-                completed_turn: SessionOutputTranscriptSection::Markdown(
-                    Self::render_draft_session_preview(session),
-                ),
-                trailing_notice: SessionOutputTranscriptSection::Empty,
-            };
-        }
-
-        if let Some(transcript) = session
-            .transcript
-            .as_ref()
-            .filter(|transcript| !transcript.is_empty())
-        {
-            return Self::typed_transcript_sections(status, transcript);
-        }
-
-        SessionOutputTextSections {
-            active_turn: SessionOutputTranscriptSection::Empty,
-            completed_turn: SessionOutputTranscriptSection::Empty,
-            trailing_notice: SessionOutputTranscriptSection::Empty,
-        }
-    }
-
-    /// Splits a typed transcript without rediscovering user prompts or
-    /// workflow notices from rendered text prefixes.
-    fn typed_transcript_sections(
-        status: Status,
-        transcript: &SessionTranscript,
-    ) -> SessionOutputTextSections<'_> {
-        let messages = transcript.messages();
-        let active_prompt_index =
-            Self::active_prompt_message_index(status, messages).unwrap_or(messages.len());
-        let (completed_messages, active_messages) = messages.split_at(active_prompt_index);
-        let trailing_notice_start = Self::trailing_workflow_notice_start(completed_messages)
-            .unwrap_or(completed_messages.len());
-        let (completed_messages, trailing_notice_messages) =
-            completed_messages.split_at(trailing_notice_start);
-
-        SessionOutputTextSections {
-            active_turn: Self::messages_section(active_messages),
-            completed_turn: Self::messages_section(completed_messages),
-            trailing_notice: Self::messages_section(trailing_notice_messages),
-        }
-    }
-
-    /// Returns a renderable section for a typed message slice.
-    fn messages_section(messages: &[SessionMessage]) -> SessionOutputTranscriptSection<'_> {
-        if messages.is_empty() {
-            return SessionOutputTranscriptSection::Empty;
-        }
-
-        SessionOutputTranscriptSection::Messages(messages)
-    }
-
-    /// Returns the start index for the latest active user prompt message.
-    fn active_prompt_message_index(status: Status, messages: &[SessionMessage]) -> Option<usize> {
-        if !Self::status_has_active_turn(status) {
-            return None;
-        }
-
-        messages
-            .iter()
-            .rposition(|message| message.kind == SessionMessageKind::UserPrompt)
-    }
-
-    /// Returns whether one status represents a live or queued agent turn whose
-    /// latest prompt must remain separate from completed transcript content.
-    fn status_has_active_turn(status: Status) -> bool {
-        matches!(status, Status::InProgress | Status::Queued)
-    }
-
-    /// Returns the first index of the trailing workflow-notice suffix.
-    fn trailing_workflow_notice_start(messages: &[SessionMessage]) -> Option<usize> {
-        if messages.is_empty() {
-            return None;
-        }
-
-        let Some(first_non_notice_from_end) = messages
-            .iter()
-            .rposition(|message| message.kind != SessionMessageKind::WorkflowNotice)
-        else {
-            return Some(0);
-        };
-        let notice_start = first_non_notice_from_end.saturating_add(1);
-
-        (notice_start < messages.len()).then_some(notice_start)
-    }
-
-    /// Renders the staged-draft guidance shown while a draft session remains
-    /// in `Draft`.
-    fn render_draft_session_preview(session: &Session) -> String {
-        let mut output = String::from(DRAFT_PREVIEW_HEADER);
-
-        if session.has_staged_drafts() {
-            let draft_note = if session.is_stacked_child() {
-                DRAFT_PREVIEW_STACKED_STAGED_NOTE
-            } else {
-                DRAFT_PREVIEW_STAGED_NOTE
-            };
-            let _ = write!(output, "\n\n{draft_note}\n\n");
-            output.push_str(&Self::staged_draft_transcript_block(&session.prompt));
-        } else {
-            let draft_note = if session.is_stacked_child() {
-                DRAFT_PREVIEW_STACKED_EMPTY_NOTE
-            } else {
-                DRAFT_PREVIEW_EMPTY_NOTE
-            };
-            let _ = write!(output, "\n\n{draft_note}\n");
-        }
-
-        if let Some(transcript_text) = session
-            .transcript
-            .as_ref()
-            .and_then(SessionTranscript::replay_text)
-            .map(|text| text.trim().to_string())
-            .filter(|text| !text.is_empty())
-        {
-            let _ = write!(output, "\n\n{transcript_text}");
-        }
-
-        output
-    }
-
-    /// Formats the staged draft-session prompt using the same transcript
-    /// prompt markers used for persisted user-turn output.
-    fn staged_draft_transcript_block(prompt_text: &str) -> String {
-        let prompt_lines = prompt_text.split('\n').collect::<Vec<_>>();
-        let mut formatted_lines = Vec::with_capacity(prompt_lines.len());
-        let continuation_prefix = prompt_block::user_prompt_continuation_prefix();
-
-        for (index, prompt_line) in prompt_lines.into_iter().enumerate() {
-            let prefix = if index == 0 {
-                USER_PROMPT_PREFIX
-            } else {
-                continuation_prefix.as_str()
-            };
-
-            formatted_lines.push(format!("{prefix}{prompt_line}"));
-        }
-
-        format!("{}\n\n", formatted_lines.join("\n"))
-    }
-
-    /// Appends transient fallback text without interpreting markdown
-    /// metacharacters in status strings.
-    ///
-    /// The caller owns separator trimming and spacing so this helper remains
-    /// purely additive.
-    fn append_plain_status_lines(
-        lines: &mut Vec<Line<'static>>,
-        status_message: &str,
-        inner_width: usize,
-    ) {
-        let rendered_lines = text_util::wrap_lines(status_message, inner_width)
-            .into_iter()
-            .map(|line| Line::from(line.to_string()));
-
-        lines.extend(rendered_lines);
-    }
-
-    /// Appends one split transcript section while preserving typed message
-    /// boundaries for user prompts.
-    fn append_transcript_section_lines(
-        lines: &mut Vec<Line<'static>>,
-        section: &SessionOutputTranscriptSection<'_>,
-        inner_width: usize,
-        markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
-    ) {
-        match section {
-            SessionOutputTranscriptSection::Empty => {}
-            SessionOutputTranscriptSection::Markdown(markdown) => {
-                Self::append_markdown_lines(lines, markdown, inner_width, markdown_render_cache);
-            }
-            SessionOutputTranscriptSection::Messages(messages) => {
-                Self::append_transcript_message_lines(
-                    lines,
-                    messages,
-                    inner_width,
-                    markdown_render_cache,
-                );
-            }
-        }
-    }
-
-    /// Appends typed transcript messages with user prompts rendered from raw
-    /// markdown content and assistant/workflow rows rendered normally.
-    fn append_transcript_message_lines(
-        lines: &mut Vec<Line<'static>>,
-        messages: &[SessionMessage],
-        inner_width: usize,
-        markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
-    ) {
-        for message in messages {
-            match message.kind {
-                SessionMessageKind::UserPrompt => Self::append_user_prompt_markdown_lines(
-                    lines,
-                    &message.content,
-                    inner_width,
-                    markdown_render_cache,
-                ),
-                SessionMessageKind::AssistantAnswer | SessionMessageKind::WorkflowNotice => {
-                    Self::append_markdown_lines(
-                        lines,
-                        &message.content,
-                        inner_width,
-                        markdown_render_cache,
-                    );
-                }
-            }
-        }
-    }
-
-    /// Appends one transcript row per chat message currently queued for
-    /// dispatch.
-    ///
-    /// Queued rows render in submission order beneath the running turn with
-    /// a muted style and a `queued ›` prefix so users can distinguish staged
-    /// follow-ups from completed transcript content while the active turn is
-    /// still running.
-    fn append_queued_message_lines(lines: &mut Vec<Line<'static>>, queued_messages: &[String]) {
-        if queued_messages.is_empty() {
-            return;
-        }
-
-        let queued_style = ratatui::style::Style::default()
-            .fg(style::palette::text_subtle())
-            .add_modifier(ratatui::style::Modifier::ITALIC);
-        let mut has_rendered_message = false;
-        for queued_text in queued_messages {
-            let message_lines = queued_text.split('\n').collect::<Vec<_>>();
-            let Some(first_content_line_index) = message_lines
-                .iter()
-                .position(|message_line| !message_line.trim().is_empty())
-            else {
-                continue;
-            };
-            let last_content_line_index = message_lines
-                .iter()
-                .rposition(|message_line| !message_line.trim().is_empty())
-                .unwrap_or(first_content_line_index);
-
-            let separator = if has_rendered_message {
-                SessionOutputSeparator::AfterPreviousContent
-            } else {
-                SessionOutputSeparator::Always
-            };
-            Self::append_block_separator(lines, separator);
-
-            for (line_index, message_line) in message_lines
-                [first_content_line_index..=last_content_line_index]
-                .iter()
-                .enumerate()
-            {
-                let prefix = if line_index == 0 {
-                    "queued › "
-                } else {
-                    "        "
-                };
-
-                lines.push(Line::styled(
-                    format!("{prefix}{message_line}"),
-                    queued_style,
-                ));
-            }
-            has_rendered_message = true;
-        }
-
-        if has_rendered_message {
-            lines.push(Line::from(""));
-        }
-    }
-
-    /// Appends one typed user prompt block with its content rendered as
-    /// markdown while retaining the visible prompt marker and shaded prompt
-    /// rows.
-    fn append_user_prompt_markdown_lines(
-        lines: &mut Vec<Line<'static>>,
-        prompt_text: &str,
-        inner_width: usize,
-        markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
-    ) {
-        if prompt_text.trim().is_empty() {
-            return;
-        }
-
-        let prompt_prefix_width = USER_PROMPT_PREFIX.chars().count();
-        let prompt_content_width = inner_width
-            .saturating_sub(prompt_prefix_width)
-            .saturating_sub(USER_PROMPT_RIGHT_GUTTER_WIDTH)
-            .max(1);
-        let (protected_prompt_text, indent_marker) =
-            Self::protect_user_prompt_indentation(prompt_text);
-        let rendered_lines = Self::rendered_markdown_lines(
-            &protected_prompt_text,
-            prompt_content_width,
-            markdown_render_cache,
-        );
-        let Some(first_visible_line_index) =
-            rendered_lines.iter().position(|line| line.width() > 0)
-        else {
-            return;
-        };
-        let last_visible_line_index = rendered_lines
-            .iter()
-            .rposition(|line| line.width() > 0)
-            .unwrap_or(first_visible_line_index);
-
-        Self::append_block_separator(lines, SessionOutputSeparator::AfterPreviousContent);
-        lines.push(prompt_block::user_prompt_padding_line(inner_width));
-
-        let mut has_rendered_content_line = false;
-        let continuation_prefix = prompt_block::user_prompt_continuation_prefix();
-        for rendered_line in &rendered_lines[first_visible_line_index..=last_visible_line_index] {
-            if rendered_line.width() == 0 {
-                lines.push(prompt_block::user_prompt_padding_line(inner_width));
-
-                continue;
-            }
-
-            let prefix = if has_rendered_content_line {
-                continuation_prefix.as_str()
-            } else {
-                USER_PROMPT_PREFIX
-            };
-            let prefix_style = if has_rendered_content_line {
-                prompt_block::user_prompt_content_style()
-            } else {
-                prompt_block::user_prompt_prefix_style()
-            };
-            lines.push(prompt_block::user_prompt_markdown_line(
-                Self::restored_user_prompt_spans(rendered_line, indent_marker),
-                prefix,
-                prefix_style,
-                inner_width,
-            ));
-            has_rendered_content_line = true;
-        }
-
-        lines.push(prompt_block::user_prompt_padding_line(inner_width));
-    }
-
-    /// Replaces leading prompt spaces with a visible-width non-whitespace
-    /// marker so Markdown wrapping cannot discard indentation.
-    fn protect_user_prompt_indentation(prompt_text: &str) -> (String, Option<char>) {
-        let Some(indent_marker) = Self::unused_private_use_character(prompt_text) else {
-            return (prompt_text.to_string(), None);
-        };
-
-        let mut protected_text = String::with_capacity(prompt_text.len());
-        let prompt_lines = prompt_text.split('\n').collect::<Vec<_>>();
-        let preservation_mask = markdown::markdown_block_preservation_mask(prompt_text);
-
-        for (line_index, line) in prompt_lines.into_iter().enumerate() {
-            if line_index > 0 {
-                protected_text.push('\n');
-            }
-
-            if preservation_mask[line_index] {
-                protected_text.push_str(line);
-            } else {
-                let (content_start, indentation_width) = Self::leading_indentation(line);
-                let content = &line[content_start..];
-                protected_text.extend(std::iter::repeat_n(indent_marker, indentation_width));
-                protected_text.push_str(content);
-            }
-        }
-
-        (protected_text, Some(indent_marker))
-    }
-
-    /// Chooses a private-use character absent from the prompt so literal user
-    /// content can never collide with the temporary indentation marker.
-    fn unused_private_use_character(prompt_text: &str) -> Option<char> {
-        const DEFAULT_INDENT_MARKER: char = '\u{e000}';
-
-        if !prompt_text.contains(DEFAULT_INDENT_MARKER) {
-            return Some(DEFAULT_INDENT_MARKER);
-        }
-
-        let used_characters = prompt_text
-            .chars()
-            .filter(|character| {
-                matches!(
-                    u32::from(*character),
-                    0xe000..=0xf8ff | 0x000f_0000..=0x000f_fffd | 0x0010_0000..=0x0010_fffd
-                )
-            })
-            .collect::<HashSet<_>>();
-        [
-            0xe000..=0xf8ff,
-            0x000f_0000..=0x000f_fffd,
-            0x0010_0000..=0x0010_fffd,
-        ]
-        .into_iter()
-        .flatten()
-        .filter_map(char::from_u32)
-        .find(|character| !used_characters.contains(character))
-    }
-
-    /// Returns the byte offset after leading horizontal whitespace and its
-    /// terminal width, expanding tabs to four-column tab stops.
-    fn leading_indentation(line: &str) -> (usize, usize) {
-        let mut content_start = 0;
-        let mut indentation_width = 0;
-
-        for (byte_index, character) in line.char_indices() {
-            match character {
-                ' ' => indentation_width += 1,
-                '\t' => {
-                    indentation_width +=
-                        USER_PROMPT_TAB_WIDTH - (indentation_width % USER_PROMPT_TAB_WIDTH);
-                }
-                _ => break,
-            }
-            content_start = byte_index + character.len_utf8();
-        }
-
-        (content_start, indentation_width)
-    }
-
-    /// Lazily restores protected indent markers while yielding spans to the
-    /// final prompt line, avoiding an intermediate `Line` and `Vec` allocation.
-    fn restored_user_prompt_spans<'line>(
-        rendered_line: &'line Line<'static>,
-        indent_marker: Option<char>,
-    ) -> impl Iterator<Item = ratatui::text::Span<'static>> + 'line {
-        rendered_line.spans.iter().cloned().map(move |mut span| {
-            if let Some(indent_marker) = indent_marker
-                && span.content.contains(indent_marker)
-            {
-                span.content = span.content.replace(indent_marker, " ").into();
-            }
-
-            span
-        })
-    }
-
-    /// Appends rendered markdown with exactly one blank separator between
-    /// visible messages.
-    ///
-    /// Outer blank rows from persisted message content are excluded so they
-    /// cannot stack with the assembly separator. Blank rows within the
-    /// message remain intact. When a shared render cache is available, every
-    /// appended markdown block reuses it so transcript sections do not evict
-    /// each other between frames.
-    fn append_markdown_lines(
-        lines: &mut Vec<Line<'static>>,
-        markdown: &str,
-        inner_width: usize,
-        markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
-    ) {
-        let rendered_lines =
-            Self::rendered_markdown_lines(markdown, inner_width, markdown_render_cache);
-        let Some(first_visible_line_index) =
-            rendered_lines.iter().position(|line| line.width() > 0)
-        else {
-            return;
-        };
-        let last_visible_line_index = rendered_lines
-            .iter()
-            .rposition(|line| line.width() > 0)
-            .unwrap_or(first_visible_line_index);
-
-        Self::append_block_separator(lines, SessionOutputSeparator::AfterPreviousContent);
-        lines.extend(
-            rendered_lines[first_visible_line_index..=last_visible_line_index]
-                .iter()
-                .cloned(),
-        );
-    }
-
-    /// Returns rendered markdown as a shared slice so cache hits avoid cloning
-    /// the entire rendered block.
-    fn rendered_markdown_lines(
-        markdown: &str,
-        inner_width: usize,
-        markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
-    ) -> Arc<[Line<'static>]> {
-        match markdown_render_cache {
-            Some(cache) => cache.render(markdown, inner_width),
-            None => Arc::from(render_markdown(markdown, inner_width)),
-        }
     }
 
     /// Returns the screen area occupied by a loader glyph when its row is
@@ -1619,15 +701,6 @@ impl<'a> SessionOutput<'a> {
         viewport_height > 0 && line_count > usize::from(viewport_height)
     }
 
-    /// Returns whether a status row should receive the Tachyonfx loader
-    /// treatment.
-    fn status_uses_tachyon_loader(status: Status) -> bool {
-        matches!(
-            status,
-            Status::InProgress | Status::AgentReview | Status::Rebasing | Status::Merging
-        )
-    }
-
     /// Applies one deterministic Tachyonfx pulse frame to the loader glyph.
     ///
     /// Live rendering provides `output_layout_cache` so the Tachyonfx phase is
@@ -1674,7 +747,7 @@ impl Component for SessionOutput<'_> {
             layout.lines.len(),
             self.scroll_offset,
         );
-        let active_loader_area = if Self::status_uses_tachyon_loader(status) {
+        let active_loader_area = if session_format::session_output_uses_tachyon_loader(status) {
             Self::loader_area(output_area, layout.active_loader_line_index, final_scroll)
         } else {
             None
@@ -1729,7 +802,12 @@ mod tests {
     use serde_json;
 
     use super::*;
+    use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
     use crate::domain::theme::ColorTheme;
+    use crate::domain::transient_message::{
+        TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageSlot,
+    };
+    use crate::ui::prompt_block::{self, USER_PROMPT_PREFIX};
 
     /// Builds one output-line context with defaults suitable for tests.
     fn line_context() -> SessionOutputLineContext<'static> {
@@ -1773,10 +851,12 @@ mod tests {
         context: SessionOutputLineContext<'_>,
         markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
     ) -> Vec<Line<'static>> {
-        SessionOutput::output_lines_with_metadata(
+        let inner_width =
+            panel_inner_width(output_area, session_format::session_output_panel_borders());
+        session_output_assembly::output_lines(
             session,
-            output_area,
-            context,
+            inner_width,
+            context.active_progress,
             markdown_render_cache,
         )
         .lines
@@ -2529,12 +1609,8 @@ mod tests {
         let context = line_context();
 
         // Act
-        let output_lines = SessionOutput::output_lines_with_metadata(
-            &session,
-            Rect::new(0, 0, 80, 8),
-            context,
-            None,
-        );
+        let output_lines =
+            session_output_assembly::output_lines(&session, 78, context.active_progress, None);
 
         // Assert
         let loader_line_index = output_lines
@@ -2917,25 +1993,8 @@ mod tests {
         ]);
 
         // Act
-        let sections = SessionOutput::typed_transcript_sections(Status::InProgress, &transcript);
-        let completed_turn = match sections.completed_turn {
-            SessionOutputTranscriptSection::Messages(messages) => {
-                SessionTranscript::display_text_for_messages(messages)
-            }
-            _ => String::new(),
-        };
-        let trailing_notice = match sections.trailing_notice {
-            SessionOutputTranscriptSection::Messages(messages) => {
-                SessionTranscript::display_text_for_messages(messages)
-            }
-            _ => String::new(),
-        };
-        let active_turn = match sections.active_turn {
-            SessionOutputTranscriptSection::Messages(messages) => {
-                SessionTranscript::display_text_for_messages(messages)
-            }
-            _ => String::new(),
-        };
+        let (completed_turn, active_turn, trailing_notice) =
+            session_output_assembly::transcript_section_texts(Status::InProgress, &transcript);
 
         // Assert
         assert!(completed_turn.contains(" › quoted assistant marker"));
@@ -3037,12 +2096,7 @@ mod tests {
         });
 
         // Act
-        let lines = SessionOutput::output_lines_with_metadata(
-            &session,
-            Rect::new(0, 0, 80, 8),
-            line_context(),
-            None,
-        );
+        let lines = session_output_assembly::output_lines(&session, 78, None, None);
         let loader_line_index = lines
             .branch_operation_loader_line_index
             .expect("manual publish loader should be tracked");
@@ -3173,7 +2227,7 @@ mod tests {
         ];
 
         // Act
-        SessionOutput::append_queued_message_lines(&mut lines, &queued_messages);
+        session_output_assembly::append_queued_message_lines(&mut lines, &queued_messages);
         let rendered_lines = lines.iter().map(ToString::to_string).collect::<Vec<_>>();
 
         // Assert
@@ -3257,12 +2311,7 @@ mod tests {
         session.status = Status::Review;
         session.reconcile_transient_messages();
         // Act
-        let lines = SessionOutput::output_lines_with_metadata(
-            &session,
-            Rect::new(0, 0, 80, 8),
-            line_context(),
-            None,
-        );
+        let lines = session_output_assembly::output_lines(&session, 78, None, None);
         let text = lines
             .lines
             .iter()
@@ -3902,7 +2951,7 @@ mod tests {
         let mut lines = Vec::new();
 
         // Act
-        SessionOutput::append_user_prompt_markdown_lines(&mut lines, "one two", 10, None);
+        session_output_assembly::append_user_prompt_markdown_lines(&mut lines, "one two", 10, None);
         let rendered_lines = lines.iter().map(ToString::to_string).collect::<Vec<_>>();
         let continuation_prefix = prompt_block::user_prompt_continuation_prefix();
         let prompt_lines = lines
@@ -3945,7 +2994,7 @@ mod tests {
         let prompt = "```text\nformatted blocks in user messages without words breaking\n```";
 
         // Act
-        SessionOutput::append_user_prompt_markdown_lines(&mut lines, prompt, 36, None);
+        session_output_assembly::append_user_prompt_markdown_lines(&mut lines, prompt, 36, None);
         let rendered_lines = lines
             .iter()
             .map(|line| line.to_string().trim_end().to_string())
