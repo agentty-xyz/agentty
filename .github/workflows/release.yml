@@ -296,7 +296,9 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     runs-on: "ubuntu-22.04"
     permissions:
+      "attestations": "write"
       "contents": "write"
+      "id-token": "write"
     outputs:
       val: ${{ steps.host.outputs.manifest }}
     steps:
@@ -343,7 +345,19 @@ jobs:
         run: |
           # Remove the granular manifests
           rm -f artifacts/*-dist-manifest.json
-      - name: Create GitHub Release
+      - id: attest
+        name: Attest release artifacts
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f
+        with:
+          subject-path: artifacts/*
+      - name: Stage Sigstore bundle
+        env:
+          ATTESTATION_BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+          RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          bundle_name="${RELEASE_TAG//\//-}.sigstore.json"
+          cp "$ATTESTATION_BUNDLE_PATH" "artifacts/$bundle_name"
+      - name: Create or reuse GitHub Release
         env:
           PRERELEASE_FLAG: "${{ fromJson(steps.host.outputs.manifest).announcement_is_prerelease && '--prerelease' || '' }}"
           ANNOUNCEMENT_TITLE: "${{ fromJson(steps.host.outputs.manifest).announcement_title }}"
@@ -359,7 +373,17 @@ jobs:
             release_args+=("$PRERELEASE_FLAG")
           fi
 
-          gh release create "$RELEASE_TAG" --target "$RELEASE_COMMIT" "${release_args[@]}" --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
+          if release_is_draft="$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' 2>/dev/null)"; then
+            if [ "$release_is_draft" != "true" ]; then
+              echo "release $RELEASE_TAG already exists and is not a draft" >&2
+              exit 1
+            fi
+          else
+            gh release create "$RELEASE_TAG" --draft --target "$RELEASE_COMMIT" "${release_args[@]}" --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt"
+          fi
+
+          gh release upload "$RELEASE_TAG" artifacts/* --clobber
+          gh release edit "$RELEASE_TAG" --draft=false
 
   custom-publish-npm-oidc:
     needs:

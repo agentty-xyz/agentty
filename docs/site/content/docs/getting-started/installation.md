@@ -49,6 +49,24 @@ curl --proto '=https' --tlsv1.2 -LsSf https://github.com/agentty-xyz/agentty/rel
 cargo install agentty
 ```
 
+## Verify a GitHub Release
+
+Install the [GitHub CLI](https://cli.github.com/), then download a GitHub release
+artifact. Each artifact has keyless Sigstore build provenance that identifies Agentty's
+release workflow:
+
+```bash
+gh attestation verify PATH_TO_ARTIFACT --repo agentty-xyz/agentty
+```
+
+Release immutability also protects the published tag and complete asset set. Verify a
+specific release and a downloaded asset with:
+
+```bash
+gh release verify vX.Y.Z --repo agentty-xyz/agentty
+gh release verify-asset vX.Y.Z PATH_TO_ARTIFACT --repo agentty-xyz/agentty
+```
+
 ## Prepare an Agent Backend
 
 Agentty also requires at least one supported agent CLI on your `PATH`. Install and
