@@ -169,12 +169,13 @@ thought and tool-status text; the transcript itself updates only after the final
 result is parsed and persisted.
 
 Pressing `Enter` during a running turn or session sync opens the composer and queues the
-message inline with a `queued ›` prefix. Queued messages dispatch one-by-one as new
-turns after the active turn or sync finishes. During **InProgress**, each `Ctrl+c` press
-retracts the most recently queued message (LIFO) without interrupting the running turn;
-once the queue is empty, the next `Ctrl+c` stops the current turn and returns the
-session to **Review**. **Rebasing** keeps cancellation unavailable while still accepting
-queued messages. The queue is in-memory only and is discarded if `agentty` restarts.
+message inline with a `queued ›` prefix below the transcript messages and workflow
+notices that preceded it. Queued messages dispatch one-by-one as new turns after the
+active turn or sync finishes. During **InProgress**, each `Ctrl+c` press retracts the
+most recently queued message (LIFO) without interrupting the running turn; once the
+queue is empty, the next `Ctrl+c` stops the current turn and returns the session to
+**Review**. **Rebasing** keeps cancellation unavailable while still accepting queued
+messages. The queue is in-memory only and is discarded if `agentty` restarts.
 
 While the composer is open, `Tab` moves focus to the chat transcript above it so the
 conversation can be scrolled with `j` / `k`, `g` / `G`, and `Ctrl+D` / `Ctrl+U` without

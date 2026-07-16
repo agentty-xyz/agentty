@@ -955,6 +955,27 @@ fn seed_rebasing_queue_session(env: &BuilderEnv) -> Result<(), Box<dyn std::erro
     let worktree_name = &REBASING_QUEUE_SESSION_ID[..8];
     std::fs::create_dir_all(env.agentty_root.join("wt").join(worktree_name))?;
 
+    let runtime = common::seed_runtime()?;
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .append_session_message(
+                REBASING_QUEUE_SESSION_ID,
+                SessionMessageKind::WorkflowNotice,
+                "\n[Commit] No changes to commit.\n",
+            )
+            .await?;
+        database
+            .sessions()
+            .append_session_message(
+                REBASING_QUEUE_SESSION_ID,
+                SessionMessageKind::WorkflowNotice,
+                "\n[Sync Assist] Resolving existing conflicts.\n",
+            )
+            .await
+    })?;
+
     Ok(())
 }
 
@@ -2188,8 +2209,8 @@ fn session_queue_chat_messages_during_in_progress_turn() -> E2eResult {
 }
 
 /// Verify `Enter` opens the composer while a session is `Rebasing` and the
-/// submitted follow-up renders inline as queued work without replacing the
-/// active rebase status.
+/// submitted follow-up renders below existing workflow notices as queued work
+/// without replacing the active rebase status.
 #[test]
 fn session_queue_chat_message_during_rebase() -> E2eResult {
     // Arrange, Act, Assert
@@ -2219,8 +2240,35 @@ fn session_queue_chat_message_during_rebase() -> E2eResult {
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Rebasing...", &full);
+                assertion::assert_text_in_region(frame, "[Commit] No changes to commit.", &full);
+                assertion::assert_text_in_region(
+                    frame,
+                    "[Sync Assist] Resolving existing conflicts.",
+                    &full,
+                );
                 assertion::assert_text_in_region(frame, "queued ›", &full);
                 assertion::assert_text_in_region(frame, "follow up after sync", &full);
+                let commit_row = frame
+                    .find_text("[Commit] No changes to commit.")
+                    .first()
+                    .expect("missing commit notice")
+                    .rect
+                    .row;
+                let sync_assist_row = frame
+                    .find_text("[Sync Assist] Resolving existing conflicts.")
+                    .first()
+                    .expect("missing sync-assist notice")
+                    .rect
+                    .row;
+                let queued_message_row = frame
+                    .find_text("queued › follow up after sync")
+                    .first()
+                    .expect("missing queued follow-up")
+                    .rect
+                    .row;
+
+                assert!(commit_row < sync_assist_row);
+                assert!(sync_assist_row < queued_message_row);
             },
         )?;
 

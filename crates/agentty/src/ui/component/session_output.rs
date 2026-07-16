@@ -259,8 +259,8 @@ const SESSION_OUTPUT_BLOCK_ORDER: [SessionOutputBlock; 9] = [
     SessionOutputBlock::Transient(TransientMessageAnchor::AfterCompletedTurn),
     SessionOutputBlock::ActiveTurn,
     SessionOutputBlock::Transient(TransientMessageAnchor::AfterActiveTurn),
-    SessionOutputBlock::QueuedMessage,
     SessionOutputBlock::TrailingTranscriptNotice(TrailingTranscriptNoticePlacement::AfterReview),
+    SessionOutputBlock::QueuedMessage,
     SessionOutputBlock::Transient(TransientMessageAnchor::Tail),
     SessionOutputBlock::SessionTail,
 ];
@@ -902,14 +902,15 @@ impl<'a> SessionOutput<'a> {
     /// block. When a new prompt is active, the previous-turn summary is hidden
     /// so the output stream no longer shows stale change metadata for work
     /// that is already being superseded.
-    /// Queued follow-up messages render beneath the running turn so users can
-    /// see staged local input without mixing it into completed transcript
-    /// content. Trailing transcript notices that belong to a completed turn
-    /// stay above any active prompt so in-progress sessions remain
-    /// chronological. Focused-review output is appended before trailing
-    /// transcript notices for non-terminal review states, keeping workflow
-    /// failures below the completed turn's summary/review content while
-    /// terminal views keep their final transcript and summary display stable.
+    /// Queued follow-up messages render beneath the running turn and any
+    /// existing workflow notices so users see staged local input after the
+    /// transcript content that preceded it. Trailing transcript notices that
+    /// belong to a completed turn stay above any active prompt so in-progress
+    /// sessions remain chronological. Focused-review output is appended before
+    /// trailing transcript notices for non-terminal review states, keeping
+    /// workflow failures below the completed turn's summary/review content
+    /// while terminal views keep their final transcript and summary display
+    /// stable.
     fn output_lines_with_metadata<'assembly>(
         session: &'assembly Session,
         output_area: Rect,
@@ -3325,6 +3326,50 @@ mod tests {
         assert!(previous_answer_index < current_turn_index);
         assert!(current_turn_index < notice_index);
         assert!(notice_index < queued_message_index);
+    }
+
+    /// Verifies a queued follow-up remains below workflow notices that were
+    /// already visible when a session sync accepted the message.
+    #[test]
+    fn test_output_lines_rebasing_session_places_queued_message_after_workflow_notices() {
+        // Arrange
+        let mut session = session_fixture();
+        set_conversation_transcript(
+            &mut session,
+            vec![
+                (
+                    SessionMessageKind::WorkflowNotice,
+                    "\n[Commit] No changes to commit.\n",
+                ),
+                (
+                    SessionMessageKind::WorkflowNotice,
+                    "\n[Sync Assist] Attempt 1/3. Resolving conflicts.\n",
+                ),
+            ],
+        );
+        session.status = Status::Rebasing;
+        session.queued_messages = vec!["address review comments".to_string()];
+
+        // Act
+        let lines = output_lines(&session, Rect::new(0, 0, 80, 12), line_context(), None);
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let commit_index = text
+            .find("[Commit] No changes to commit.")
+            .expect("commit notice should be rendered");
+        let sync_assist_index = text
+            .find("[Sync Assist] Attempt 1/3.")
+            .expect("sync-assist notice should be rendered");
+        let queued_message_index = text
+            .find("queued › address review comments")
+            .expect("queued follow-up should be rendered");
+
+        // Assert
+        assert!(commit_index < sync_assist_index);
+        assert!(sync_assist_index < queued_message_index);
     }
 
     /// Verifies an active prompt at the start of the transcript hides stale
