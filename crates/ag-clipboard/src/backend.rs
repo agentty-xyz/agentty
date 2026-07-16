@@ -7,7 +7,7 @@ mod macos;
 mod unsupported;
 #[cfg(any(target_os = "linux", test))]
 mod wayland;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", test))]
 mod x11;
 
 pub(crate) use contract::ClipboardBackend;

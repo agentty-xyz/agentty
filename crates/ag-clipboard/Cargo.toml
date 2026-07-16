@@ -18,6 +18,8 @@ thiserror.workspace = true
 
 [dev-dependencies]
 mockall.workspace = true
+rustix.workspace = true
+x11rb.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix.workspace = true
