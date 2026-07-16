@@ -1,0 +1,27 @@
+[package]
+name = "ag-fuzz"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+ag-protocol.workspace = true
+libfuzzer-sys.workspace = true
+
+[[bin]]
+name = "protocol_response"
+path = "fuzz_targets/protocol_response.rs"
+test = false
+doc = false
+bench = false
+
+[lints]
+workspace = true

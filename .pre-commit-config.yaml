@@ -43,7 +43,7 @@ repos:
       - id: clippy-fix
         name: clippy fix
         description: Auto-fix clippy lints across Rust targets when a mechanical fix is available.
-        entry: cargo clippy --fix --allow-dirty --allow-staged -q --all-targets --all-features -- -D warnings
+        entry: cargo clippy --fix --allow-dirty --allow-staged -q --workspace --exclude ag-fuzz --all-targets --all-features -- -D warnings
         language: system
         files: (^|/)(Cargo\.toml|Cargo\.lock|.*\.rs)$
         pass_filenames: false
@@ -58,14 +58,14 @@ repos:
       - id: cargo-check
         name: cargo check
         description: Type-check all Rust workspace targets and features without running tests.
-        entry: cargo check -q --locked --all-targets --all-features
+        entry: cargo check -q --locked --workspace --exclude ag-fuzz --all-targets --all-features
         language: system
         files: (^|/)(Cargo\.toml|Cargo\.lock|.*\.rs)$
         pass_filenames: false
       - id: clippy
         name: clippy
         description: Run strict clippy across all Rust targets and features, failing on warnings.
-        entry: cargo clippy -q --locked --all-targets --all-features -- -D warnings
+        entry: cargo clippy -q --locked --workspace --exclude ag-fuzz --all-targets --all-features -- -D warnings
         language: system
         files: (^|/)(Cargo\.toml|Cargo\.lock|.*\.rs)$
         pass_filenames: false
@@ -183,7 +183,7 @@ repos:
         name: coverage
         description: Verify source-test coverage meets workspace ratchet thresholds and write the CI LCOV report for SonarQube and Codecov.
         entry: >-
-          cargo llvm-cov nextest --workspace --lib --bins --locked --profile ci
+          cargo llvm-cov nextest --workspace --exclude ag-fuzz --lib --bins --locked --profile ci
           --fail-under-lines 93 --fail-under-functions 91
           --lcov --ignore-filename-regex '^crates/agentty/tests/'
           --output-path coverage.lcov
