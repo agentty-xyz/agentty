@@ -6,13 +6,14 @@
 //! session turns.
 
 use std::os::unix::process::ExitStatusExt as _;
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ag_protocol::{
     AgentResponse, build_protocol_repair_prompt, format_protocol_parse_debug_details,
     parse_agent_response_strict,
 };
+use async_trait::async_trait;
 
 use super::backend::{AgentBackend, BuildCommandRequest};
 use super::cli::{error, stdin};
@@ -27,19 +28,19 @@ use crate::model::session::SessionStats;
 /// Input payload for one isolated prompt that prefers structured protocol
 /// output.
 #[derive(Clone, Debug)]
-pub struct OneShotRequest<'a> {
+pub struct OneShotRequest {
     /// Provider backend used for command construction, stdin shaping, and
     /// response parsing.
     pub agent_kind: AgentKind,
     /// Optional PID slot used by cancel/stop flows to terminate the spawned
     /// subprocess while a one-shot prompt is running.
-    pub child_pid: Option<&'a Mutex<Option<u32>>>,
+    pub child_pid: Option<Arc<Mutex<Option<u32>>>>,
     /// Working directory where the prompt command runs.
-    pub folder: &'a Path,
+    pub folder: PathBuf,
     /// Provider-specific model used for command construction and parsing.
     pub model: AgentModel,
     /// Prompt text submitted to the agent.
-    pub prompt: &'a str,
+    pub prompt: String,
     /// Canonical request kind for this isolated prompt.
     pub request_kind: AgentRequestKind,
     /// Reasoning effort preference for the one-shot prompt.
@@ -55,27 +56,64 @@ pub struct OneShotSubmission {
     pub stats: SessionStats,
 }
 
-/// Executes one isolated prompt and returns the parsed response.
+/// Typed failure returned by [`OneShotClient`] submissions.
 ///
-/// # Errors
-/// Returns an error when command construction fails, process execution fails,
-/// or the final output is empty or otherwise unusable.
-pub async fn submit_one_shot(request: OneShotRequest<'_>) -> Result<AgentResponse, String> {
-    let submission = submit_one_shot_with_stats(request).await?;
-
-    Ok(submission.response)
+/// The concrete transport, protocol-repair, and provider diagnostics remain
+/// available through [`std::fmt::Display`] without exposing transport-specific
+/// variants to callers.
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("{message}")]
+pub struct OneShotError {
+    message: String,
 }
 
-/// Executes one isolated prompt and returns the parsed response plus
-/// aggregated usage statistics.
+impl OneShotError {
+    /// Creates an error from one already formatted submission diagnostic.
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+/// Provider-neutral boundary for isolated structured agent prompts.
 ///
-/// # Errors
-/// Returns an error when command construction fails, process execution fails,
-/// or the final output is empty or otherwise unusable.
-pub(crate) async fn submit_one_shot_with_stats(
-    request: OneShotRequest<'_>,
-) -> Result<OneShotSubmission, String> {
-    submit_one_shot_with_stats_and_app_server_client(request, None).await
+/// Implementations own transport selection, protocol repair, temporary
+/// app-server lifecycle, and usage aggregation so callers submit one request
+/// without selecting a CLI or app-server execution helper.
+#[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
+#[async_trait]
+pub trait OneShotClient: Send + Sync {
+    /// Executes one isolated prompt and returns its parsed response and usage.
+    async fn submit(&self, request: OneShotRequest) -> Result<OneShotSubmission, OneShotError>;
+}
+
+/// Production [`OneShotClient`] that routes through the selected provider.
+pub struct RealOneShotClient {
+    app_server_client_override: Option<Arc<dyn AppServerClient>>,
+}
+
+impl RealOneShotClient {
+    /// Creates a client with an optional app-server override.
+    ///
+    /// Production passes `None` so each provider supplies its native client;
+    /// deterministic environments may inject a shared app-server boundary.
+    pub fn new(app_server_client_override: Option<Arc<dyn AppServerClient>>) -> Self {
+        Self {
+            app_server_client_override,
+        }
+    }
+}
+
+#[async_trait]
+impl OneShotClient for RealOneShotClient {
+    async fn submit(&self, request: OneShotRequest) -> Result<OneShotSubmission, OneShotError> {
+        let app_server_client_override = self.app_server_client_override.as_ref().map(Arc::clone);
+
+        submit_one_shot_with_stats_and_app_server_client(request, app_server_client_override)
+            .await
+            .map_err(OneShotError::new)
+    }
 }
 
 /// Executes one isolated prompt and returns the parsed response plus
@@ -85,8 +123,8 @@ pub(crate) async fn submit_one_shot_with_stats(
 /// # Errors
 /// Returns an error when command construction fails, process execution fails,
 /// or the final output is empty or otherwise unusable.
-pub(crate) async fn submit_one_shot_with_stats_and_app_server_client(
-    request: OneShotRequest<'_>,
+async fn submit_one_shot_with_stats_and_app_server_client(
+    request: OneShotRequest,
     app_server_client_override: Option<Arc<dyn AppServerClient>>,
 ) -> Result<OneShotSubmission, String> {
     let backend = create_backend(request.agent_kind);
@@ -117,20 +155,20 @@ pub(crate) async fn submit_one_shot_with_stats_and_app_server_client(
 /// # Errors
 /// Returns an error when app-server turn execution fails or the final output
 /// is empty or otherwise unusable.
-pub async fn submit_one_shot_with_app_server_client(
+async fn submit_one_shot_with_app_server_client(
     app_server_client: &dyn AppServerClient,
-    request: OneShotRequest<'_>,
+    request: OneShotRequest,
 ) -> Result<OneShotSubmission, String> {
-    clear_child_pid_slot(request.child_pid);
+    clear_child_pid_slot(request.child_pid.as_deref());
 
     let session_id = format!("one-shot-{}", uuid::Uuid::new_v4());
     let (stream_tx, _stream_rx) = tokio::sync::mpsc::unbounded_channel();
     let turn_request = AppServerTurnRequest {
-        folder: request.folder.to_path_buf(),
+        folder: request.folder.clone(),
         live_transcript: None,
         main_checkout_root: None,
         model: request.model.provider_model_str().to_string(),
-        prompt: ag_protocol::TurnPrompt::from_agent_data(request.prompt.to_string()),
+        prompt: ag_protocol::TurnPrompt::from_agent_data(request.prompt.clone()),
         request_kind: request.request_kind.clone(),
         replay_transcript: None,
         provider_conversation_id: None,
@@ -141,13 +179,13 @@ pub async fn submit_one_shot_with_app_server_client(
 
     let turn_result = app_server_client.run_turn(turn_request, stream_tx).await;
 
-    let child_pid = request.child_pid;
+    let child_pid = request.child_pid.as_ref().map(Arc::clone);
 
     let turn_result = match turn_result {
         Ok(result) => result,
         Err(error) => {
             app_server_client.shutdown_session(session_id).await;
-            clear_child_pid_slot(child_pid);
+            clear_child_pid_slot(child_pid.as_deref());
 
             return Err(format!(
                 "Failed to execute one-shot app-server turn: {error}"
@@ -171,7 +209,7 @@ pub async fn submit_one_shot_with_app_server_client(
     };
 
     app_server_client.shutdown_session(session_id).await;
-    clear_child_pid_slot(child_pid);
+    clear_child_pid_slot(child_pid.as_deref());
 
     let (response, repair_input_tokens, repair_output_tokens) = parse_result?;
 
@@ -195,12 +233,12 @@ pub async fn submit_one_shot_with_app_server_client(
 /// # Errors
 /// Returns an error when command construction fails, process execution fails,
 /// or the final output is empty or otherwise unusable.
-pub async fn submit_one_shot_with_backend(
+async fn submit_one_shot_with_backend(
     backend: &dyn AgentBackend,
-    request: OneShotRequest<'_>,
+    request: OneShotRequest,
 ) -> Result<OneShotSubmission, String> {
     let parsed_response =
-        execute_one_shot_command(backend, request.prompt, request.clone()).await?;
+        execute_one_shot_command(backend, &request.prompt, request.clone()).await?;
     let (agent_response, repair_stats) = match parse_one_shot_response(&parsed_response.content) {
         Ok(response) => (response, None),
         Err(parse_error) => {
@@ -266,7 +304,7 @@ async fn attempt_one_shot_app_server_repair(
     app_server_client: &dyn AppServerClient,
     parse_error: &str,
     malformed_response: &str,
-    request: OneShotRequest<'_>,
+    request: OneShotRequest,
     session_id: &str,
     provider_conversation_id: Option<&str>,
 ) -> Result<(AgentResponse, u64, u64), String> {
@@ -274,7 +312,7 @@ async fn attempt_one_shot_app_server_repair(
 
     let (repair_stream_tx, _repair_stream_rx) = tokio::sync::mpsc::unbounded_channel();
     let repair_turn_request = AppServerTurnRequest {
-        folder: request.folder.to_path_buf(),
+        folder: request.folder,
         live_transcript: None,
         main_checkout_root: None,
         model: request.model.provider_model_str().to_string(),
@@ -317,12 +355,12 @@ async fn attempt_one_shot_app_server_repair(
 async fn execute_one_shot_command(
     backend: &dyn AgentBackend,
     prompt: &str,
-    request: OneShotRequest<'_>,
+    request: OneShotRequest,
 ) -> Result<ParsedResponse, String> {
     let prompt_payload = ag_protocol::TurnPrompt::from_agent_data(prompt.to_string());
     let build_request = BuildCommandRequest {
         attachments: &prompt_payload.attachments,
-        folder: request.folder,
+        folder: &request.folder,
         main_checkout_root: None,
         replay_transcript: None,
         model: request.model.provider_model_str(),
@@ -413,13 +451,13 @@ fn clear_child_pid_slot(child_pid: Option<&Mutex<Option<u32>>>) {
 }
 
 /// Tracks the active one-shot subprocess identifier for cancel/stop flows.
-struct ChildPidGuard<'a> {
-    child_pid: Option<&'a Mutex<Option<u32>>>,
+struct ChildPidGuard {
+    child_pid: Option<Arc<Mutex<Option<u32>>>>,
 }
 
-impl<'a> ChildPidGuard<'a> {
+impl ChildPidGuard {
     /// Creates one PID guard for the optional shared child slot.
-    fn new(child_pid: Option<&'a Mutex<Option<u32>>>) -> Self {
+    fn new(child_pid: Option<Arc<Mutex<Option<u32>>>>) -> Self {
         Self { child_pid }
     }
 
@@ -429,7 +467,7 @@ impl<'a> ChildPidGuard<'a> {
             return;
         };
 
-        let Some(child_pid) = self.child_pid else {
+        let Some(child_pid) = self.child_pid.as_deref() else {
             return;
         };
 
@@ -439,9 +477,9 @@ impl<'a> ChildPidGuard<'a> {
     }
 }
 
-impl Drop for ChildPidGuard<'_> {
+impl Drop for ChildPidGuard {
     fn drop(&mut self) {
-        let Some(child_pid) = self.child_pid else {
+        let Some(child_pid) = self.child_pid.as_deref() else {
             return;
         };
 
@@ -453,6 +491,7 @@ impl Drop for ChildPidGuard<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
     use std::process::Command;
     use std::time::Duration;
 
@@ -460,7 +499,7 @@ mod tests {
 
     use super::*;
     use crate::MockAgentBackend;
-    use crate::app_server::{AppServerTurnResponse, MockAppServerClient};
+    use crate::app_server::{AppServerError, AppServerTurnResponse, MockAppServerClient};
 
     /// Builds one shell command that emits controlled stdout/stderr and exits.
     fn mock_shell_command(stdout: &str, stderr: &str, exit_code: i32) -> Command {
@@ -518,9 +557,9 @@ mod tests {
             OneShotRequest {
                 agent_kind: AgentKind::Claude,
                 child_pid: None,
-                folder: temp_directory.path(),
+                folder: temp_directory.path().to_path_buf(),
                 model: AgentModel::ClaudeSonnet5,
-                prompt: "Generate title",
+                prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
             },
@@ -560,9 +599,9 @@ mod tests {
             OneShotRequest {
                 agent_kind: AgentKind::Codex,
                 child_pid: None,
-                folder: temp_directory.path(),
+                folder: temp_directory.path().to_path_buf(),
                 model: AgentModel::Gpt55,
-                prompt: "Generate title",
+                prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
             },
@@ -606,9 +645,9 @@ mod tests {
             OneShotRequest {
                 agent_kind: AgentKind::Claude,
                 child_pid: None,
-                folder: temp_directory.path(),
+                folder: temp_directory.path().to_path_buf(),
                 model: AgentModel::ClaudeSonnet5,
-                prompt: "Generate title",
+                prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
             },
@@ -656,9 +695,9 @@ mod tests {
             OneShotRequest {
                 agent_kind: AgentKind::Claude,
                 child_pid: None,
-                folder: temp_directory.path(),
+                folder: temp_directory.path().to_path_buf(),
                 model: AgentModel::ClaudeSonnet5,
-                prompt: "Generate title",
+                prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
             },
@@ -705,9 +744,9 @@ mod tests {
             OneShotRequest {
                 agent_kind: AgentKind::Codex,
                 child_pid: None,
-                folder: temp_directory.path(),
+                folder: temp_directory.path().to_path_buf(),
                 model: AgentModel::Gpt55,
-                prompt: "Generate title",
+                prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
             },
@@ -744,9 +783,9 @@ mod tests {
             OneShotRequest {
                 agent_kind: AgentKind::Codex,
                 child_pid: None,
-                folder: temp_directory.path(),
+                folder: temp_directory.path().to_path_buf(),
                 model: AgentModel::Gpt55,
-                prompt: "Generate title",
+                prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
             },
@@ -788,9 +827,9 @@ mod tests {
                 OneShotRequest {
                     agent_kind: AgentKind::Claude,
                     child_pid: None,
-                    folder: temp_directory.path(),
+                    folder: temp_directory.path().to_path_buf(),
                     model: AgentModel::ClaudeSonnet5,
-                    prompt: &large_prompt,
+                    prompt: large_prompt.clone(),
                     request_kind: AgentRequestKind::UtilityPrompt,
                     reasoning_level: ReasoningLevel::default(),
                 },
@@ -824,9 +863,9 @@ mod tests {
             OneShotRequest {
                 agent_kind: AgentKind::Claude,
                 child_pid: None,
-                folder: temp_directory.path(),
+                folder: temp_directory.path().to_path_buf(),
                 model: AgentModel::ClaudeSonnet5,
-                prompt: "Generate title",
+                prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
             },
@@ -865,9 +904,9 @@ mod tests {
             OneShotRequest {
                 agent_kind: AgentKind::Claude,
                 child_pid: None,
-                folder: temp_directory.path(),
+                folder: temp_directory.path().to_path_buf(),
                 model: AgentModel::ClaudeSonnet5,
-                prompt: &large_prompt,
+                prompt: large_prompt,
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
             },
@@ -905,9 +944,9 @@ mod tests {
             OneShotRequest {
                 agent_kind: AgentKind::Claude,
                 child_pid: None,
-                folder: temp_directory.path(),
+                folder: temp_directory.path().to_path_buf(),
                 model: AgentModel::ClaudeSonnet5,
-                prompt: "Generate title",
+                prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
             },
@@ -921,6 +960,33 @@ mod tests {
         );
         assert!(error.contains("`claude auth login`"));
         assert!(error.contains("`claude auth status`"));
+    }
+
+    #[tokio::test]
+    /// Verifies the child PID guard tracks a running process, ignores a
+    /// completed process without an id, and clears the slot when dropped.
+    async fn test_child_pid_guard_tracks_and_clears_child_process() {
+        // Arrange
+        let child_pid = Arc::new(Mutex::new(None));
+        let mut child = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg("exit 0")
+            .spawn()
+            .expect("test child should spawn");
+        let expected_pid = child.id().expect("running child should expose its pid");
+        let mut guard = ChildPidGuard::new(Some(Arc::clone(&child_pid)));
+
+        // Act
+        guard.update_from_child(&child);
+        let tracked_pid = *child_pid.lock().expect("child pid lock should succeed");
+        child.wait().await.expect("test child should exit");
+        guard.update_from_child(&child);
+        drop(guard);
+        let cleared_pid = *child_pid.lock().expect("child pid lock should succeed");
+
+        // Assert
+        assert_eq!(tracked_pid, Some(expected_pid));
+        assert_eq!(cleared_pid, None);
     }
 
     #[tokio::test]
@@ -965,9 +1031,9 @@ mod tests {
             OneShotRequest {
                 agent_kind: AgentKind::Codex,
                 child_pid: None,
-                folder: temp_directory.path(),
+                folder: temp_directory.path().to_path_buf(),
                 model: AgentModel::Gpt55,
-                prompt: "Generate title",
+                prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
             },
@@ -982,6 +1048,53 @@ mod tests {
         );
         assert_eq!(response.stats.input_tokens, 11);
         assert_eq!(response.stats.output_tokens, 7);
+    }
+
+    #[tokio::test]
+    /// Verifies app-server turn failures shut down the temporary session and
+    /// clear the caller's shared child-process slot.
+    async fn test_submit_one_shot_with_app_server_client_clears_pid_after_turn_failure() {
+        // Arrange
+        let temp_directory = tempdir().expect("failed to create temp dir");
+        let child_pid = Arc::new(Mutex::new(Some(42)));
+        let mut app_server_client = MockAppServerClient::new();
+        app_server_client
+            .expect_run_turn()
+            .times(1)
+            .returning(|_, _| {
+                Box::pin(async {
+                    Err(AppServerError::Provider(
+                        "app-server turn failed".to_string(),
+                    ))
+                })
+            });
+        app_server_client
+            .expect_shutdown_session()
+            .times(1)
+            .returning(|_| Box::pin(async {}));
+
+        // Act
+        let error = submit_one_shot_with_app_server_client(
+            &app_server_client,
+            OneShotRequest {
+                agent_kind: AgentKind::Codex,
+                child_pid: Some(Arc::clone(&child_pid)),
+                folder: temp_directory.path().to_path_buf(),
+                model: AgentModel::Gpt55,
+                prompt: "Generate title".to_string(),
+                request_kind: AgentRequestKind::UtilityPrompt,
+                reasoning_level: ReasoningLevel::default(),
+            },
+        )
+        .await
+        .expect_err("app-server turn failure should surface");
+
+        // Assert
+        assert!(error.contains("app-server turn failed"));
+        assert_eq!(
+            *child_pid.lock().expect("child pid lock should succeed"),
+            None
+        );
     }
 
     #[tokio::test]
@@ -1020,9 +1133,9 @@ mod tests {
             OneShotRequest {
                 agent_kind: AgentKind::Codex,
                 child_pid: None,
-                folder: temp_directory.path(),
+                folder: temp_directory.path().to_path_buf(),
                 model: AgentModel::Gpt55,
-                prompt: "Generate title",
+                prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
             },
@@ -1075,9 +1188,9 @@ mod tests {
             OneShotRequest {
                 agent_kind: AgentKind::Codex,
                 child_pid: None,
-                folder: temp_directory.path(),
+                folder: temp_directory.path().to_path_buf(),
                 model: AgentModel::Gpt55,
-                prompt: "Generate title",
+                prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::SessionStart,
                 reasoning_level: ReasoningLevel::default(),
             },

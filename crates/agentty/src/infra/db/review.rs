@@ -9,14 +9,23 @@ use crate::infra::db::DbError;
 /// Row returned when loading one `session_review_request`.
 #[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
 pub struct SessionReviewRequestRow {
+    /// Forge-native display identifier such as `#123` or `!123`.
     pub display_id: String,
+    /// Persisted forge-family discriminator.
     pub forge_kind: String,
+    /// Most recent successful refresh timestamp in Unix seconds.
     pub last_refreshed_at: i64,
+    /// Review request source branch.
     pub source_branch: String,
+    /// Persisted normalized lifecycle state.
     pub state: String,
+    /// Optional normalized checks or merge-status summary.
     pub status_summary: Option<String>,
+    /// Review request target branch.
     pub target_branch: String,
+    /// Review request title.
     pub title: String,
+    /// Browser-openable review request URL.
     pub web_url: String,
 }
 

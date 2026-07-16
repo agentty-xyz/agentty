@@ -4,6 +4,7 @@ use std::str::FromStr;
 /// Supported permission mode values for agent execution workflows.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
 pub enum PermissionMode {
+    /// Allows the agent to edit files automatically within its sandbox.
     #[default]
     AutoEdit,
 }

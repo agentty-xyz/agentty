@@ -38,6 +38,8 @@ use crate::domain::setting::SettingName;
 #[cfg(test)]
 use crate::domain::transient_message::TransientMessageStore;
 #[cfg(test)]
+use crate::infra::project_discovery::MockProjectDiscoveryClient;
+#[cfg(test)]
 use crate::presentation::app_mode::AppMode;
 
 /// Returns the canonical session folder path for integration-test fixtures.
@@ -336,9 +338,17 @@ pub(crate) fn mock_app_server() -> Arc<dyn AppServerClient> {
 pub(crate) fn test_app_clients_with_available_agent_kinds(
     available_agent_kinds: Vec<AgentKind>,
 ) -> app::AppClients {
-    app::AppClients::new().with_agent_availability_probe(Arc::new(StaticAgentAvailabilityProbe {
-        available_agent_kinds,
-    }))
+    let mut project_discovery_client = MockProjectDiscoveryClient::new();
+    project_discovery_client
+        .expect_discover_home_project_paths()
+        .times(0..)
+        .returning(|_, _| Box::pin(async { Ok(Vec::new()) }));
+
+    app::AppClients::new()
+        .with_agent_availability_probe(Arc::new(StaticAgentAvailabilityProbe {
+            available_agent_kinds,
+        }))
+        .with_project_discovery_client(Arc::new(project_discovery_client))
 }
 
 /// Builds one client bundle with deterministic agent availability for test

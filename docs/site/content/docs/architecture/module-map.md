@@ -19,8 +19,9 @@ For file-level detail, read the module docstrings directly.
   own macOS pasteboard access, X11 selection reads, Wayland `wl-paste` reads, and
   unsupported-backend reporting.
 - `crates/ag-agent/`: Shared agent backend library crate with provider model metadata,
-  prompt templates, provider-neutral channel contracts, one-shot submission helpers,
-  provider availability probes, and crate-private CLI/app-server transport wiring.
+  prompt templates, provider-neutral channel contracts, the injectable `OneShotClient`
+  submission boundary, provider availability probes, and crate-private CLI/app-server
+  transport wiring.
 - `crates/ag-forge/`: Shared forge review-request library crate with normalized
   review-request types, GitHub/GitLab remote detection, and the `gh`/`glab` adapters and
   project-scoped assigned GitHub issue list/detail loading behind the

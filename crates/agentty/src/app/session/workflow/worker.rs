@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use ag_agent as agent;
 use ag_agent::{
-    AgentChannel, AgentError, AgentRequestKind, TurnEvent, TurnRequest, TurnResult,
-    create_agent_channel,
+    AgentChannel, AgentError, AgentRequestKind, OneShotClient, TurnContinuation, TurnEvent,
+    TurnRequest, TurnResult, create_agent_channel,
 };
 use ag_forge as forge;
 use ag_git::GitClient;
@@ -275,16 +275,18 @@ impl SessionWorkerRebaseAssistClient {
             .ok()
             .flatten();
         let req = TurnRequest {
+            continuation: TurnContinuation::provider(
+                Some(turn::live_transcript_source(&self.transcript)),
+                persisted_instruction_conversation_id,
+                provider_conversation_id,
+                None,
+            ),
             folder: self.folder.clone(),
-            live_transcript: Some(turn::live_transcript_source(&self.transcript)),
             main_checkout_root: self.main_checkout_root.clone(),
             model: self.session_agent.model().provider_model_str().to_string(),
-            request_kind: AgentRequestKind::UtilityPrompt,
-            replay_transcript: None,
             prompt: TurnPrompt::from_agent_data(prompt),
-            provider_conversation_id,
-            persisted_instruction_conversation_id,
             reasoning_level,
+            request_kind: AgentRequestKind::UtilityPrompt,
         };
         let (event_tx, event_rx) = mpsc::unbounded_channel::<TurnEvent>();
         let consumer = tokio::spawn(turn::consume_turn_events(
@@ -684,7 +686,7 @@ impl SessionWorkerService {
         let (sender, receiver) = mpsc::unbounded_channel();
         self.workers
             .insert(runtime.session_id.clone(), sender.clone());
-        Self::spawn_session_worker(context, receiver);
+        Self::spawn_session_worker(context, services.one_shot_client(), receiver);
 
         sender
     }
@@ -733,13 +735,15 @@ impl SessionWorkerService {
     /// into the next session activity.
     fn spawn_session_worker(
         context: SessionWorkerContext,
+        one_shot_client: Arc<dyn OneShotClient>,
         mut receiver: mpsc::UnboundedReceiver<SessionCommand>,
     ) {
         tokio::spawn(async move {
             while let Some(command) = receiver.recv().await {
                 let mut next_command = Some(command);
                 while let Some(command) = next_command.take() {
-                    let result = Self::process_session_command(&context, command).await;
+                    let result =
+                        Self::process_session_command(&context, &one_shot_client, command).await;
                     if matches!(result, Some(Err(SessionError::StoppedByUser(_)))) {
                         context.clear_queued_messages();
                         Self::emit_queue_session_updated(&context);
@@ -752,7 +756,9 @@ impl SessionWorkerService {
                         continue;
                     }
 
-                    next_command = Self::drain_queued_messages(&context, &mut receiver).await;
+                    next_command =
+                        Self::drain_queued_messages(&context, &one_shot_client, &mut receiver)
+                            .await;
                 }
             }
 
@@ -776,6 +782,7 @@ impl SessionWorkerService {
     /// turn ran.
     async fn process_session_command(
         context: &SessionWorkerContext,
+        one_shot_client: &Arc<dyn OneShotClient>,
         command: SessionCommand,
     ) -> Option<Result<(), SessionError>> {
         let operation_id = command.operation_id().to_string();
@@ -792,7 +799,7 @@ impl SessionWorkerService {
             return None;
         }
 
-        let result = Self::execute_session_command(context, command).await;
+        let result = Self::execute_session_command(context, one_shot_client, command).await;
         match &result {
             Ok(()) => {
                 // Best-effort: operation tracking metadata is non-critical.
@@ -828,6 +835,7 @@ impl SessionWorkerService {
     /// queue so `Ctrl+C` cancels the queued work cleanly.
     async fn drain_queued_messages(
         context: &SessionWorkerContext,
+        one_shot_client: &Arc<dyn OneShotClient>,
         receiver: &mut mpsc::UnboundedReceiver<SessionCommand>,
     ) -> Option<SessionCommand> {
         loop {
@@ -865,7 +873,7 @@ impl SessionWorkerService {
                     session_agent: context.session_agent,
                 },
             };
-            let result = Self::process_session_command(context, command).await;
+            let result = Self::process_session_command(context, one_shot_client, command).await;
             if matches!(result, Some(Err(SessionError::StoppedByUser(_)))) {
                 context.clear_queued_messages();
                 Self::emit_queue_session_updated(context);
@@ -892,11 +900,12 @@ impl SessionWorkerService {
     /// Executes the queued command through the session's agent channel.
     async fn execute_session_command(
         context: &SessionWorkerContext,
+        one_shot_client: &Arc<dyn OneShotClient>,
         command: SessionCommand,
     ) -> Result<(), SessionError> {
         match command {
             SessionCommand::Rebase { base_branch, .. } => {
-                Self::run_rebase_command(context, base_branch).await
+                Self::run_rebase_command(context, Arc::clone(one_shot_client), base_branch).await
             }
             SessionCommand::Run {
                 request_kind,
@@ -907,6 +916,7 @@ impl SessionWorkerService {
             } => {
                 turn::run_channel_turn(
                     context,
+                    Arc::clone(one_shot_client),
                     turn_metadata,
                     request_kind,
                     replay_transcript,
@@ -928,6 +938,7 @@ impl SessionWorkerService {
     /// user-visible rebase outcome.
     async fn run_rebase_command(
         context: &SessionWorkerContext,
+        one_shot_client: Arc<dyn OneShotClient>,
         base_branch: String,
     ) -> Result<(), SessionError> {
         let validation = isolation::validate_session_worktree(
@@ -953,6 +964,7 @@ impl SessionWorkerService {
             fs_client: Arc::clone(&context.fs_client),
             git_client: Arc::clone(&context.git_client),
             id: context.session_id.clone(),
+            one_shot_client,
             review_request_client: Arc::clone(&context.review_request_client),
             session_agent: context.session_agent,
             session_update_versions: context.session_update_versions.clone(),
@@ -1118,7 +1130,7 @@ async fn append_drained_prompt_to_transcript(context: &SessionWorkerContext, pro
 mod tests {
     use std::sync::Arc;
 
-    use ag_agent::MockAgentChannel;
+    use ag_agent::{MockAgentChannel, MockOneShotClient};
     use ag_git::{MockGitClient, RebaseStepResult};
     use mockall::Sequence;
     use serde_json;
@@ -1238,6 +1250,28 @@ mod tests {
             .unwrap_or_default()
     }
 
+    /// Builds a deterministic post-turn one-shot boundary. Tests whose
+    /// worktrees are clean never submit; auto-commit tests receive the
+    /// canonical message they already expect.
+    fn auto_commit_one_shot_client() -> Arc<dyn OneShotClient> {
+        let mut one_shot_client = MockOneShotClient::new();
+        one_shot_client.expect_submit().times(0..).returning(|_| {
+            Ok(agent::OneShotSubmission {
+                response: AgentResponse::plain(
+                    "Refine review metadata sync\n\n- Update the linked review request body.",
+                ),
+                stats: agent::SessionStats {
+                    added_lines: 0,
+                    deleted_lines: 0,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                },
+            })
+        });
+
+        Arc::new(one_shot_client)
+    }
+
     /// Applies one turn result through the narrowed post-turn dependency set
     /// cloned from a full worker context.
     async fn apply_worker_turn_result(
@@ -1245,7 +1279,8 @@ mod tests {
         turn_metadata: TurnMetadata,
         turn_result: Result<TurnResult, AgentError>,
     ) -> Result<Status, SessionError> {
-        let post_turn_context = PostTurnContext::from_worker(context);
+        let post_turn_context =
+            PostTurnContext::from_worker(context, auto_commit_one_shot_client());
 
         apply_turn_result(&post_turn_context, turn_metadata, turn_result).await
     }
@@ -1550,6 +1585,7 @@ mod tests {
         // Act
         let result = run_channel_turn(
             &context,
+            auto_commit_one_shot_client(),
             default_turn_metadata(),
             AgentRequestKind::SessionStart,
             None,
@@ -1673,6 +1709,7 @@ mod tests {
         // `run_channel_turn` swaps in a fresh token.
         let result = run_channel_turn(
             &context,
+            auto_commit_one_shot_client(),
             default_turn_metadata(),
             AgentRequestKind::SessionStart,
             None,
@@ -1770,6 +1807,7 @@ mod tests {
         // Act
         let result = run_channel_turn(
             &context,
+            auto_commit_one_shot_client(),
             default_turn_metadata(),
             AgentRequestKind::SessionStart,
             None,
@@ -1869,6 +1907,7 @@ mod tests {
         // Act
         let result = run_channel_turn(
             &context,
+            auto_commit_one_shot_client(),
             default_turn_metadata(),
             AgentRequestKind::SessionStart,
             None,
@@ -1955,6 +1994,7 @@ mod tests {
         // Act
         let result = run_channel_turn(
             &context,
+            auto_commit_one_shot_client(),
             default_turn_metadata(),
             AgentRequestKind::SessionStart,
             None,
@@ -2047,6 +2087,7 @@ mod tests {
         // Act
         let result = run_channel_turn(
             &context,
+            auto_commit_one_shot_client(),
             default_turn_metadata(),
             AgentRequestKind::SessionStart,
             None,
@@ -2122,16 +2163,13 @@ mod tests {
         };
 
         let req = TurnRequest {
+            continuation: TurnContinuation::fresh(),
             folder: context.folder.clone(),
-            live_transcript: None,
             main_checkout_root: None,
             model: "gemini-3-flash-preview".to_string(),
-            request_kind: AgentRequestKind::SessionStart,
-            replay_transcript: None,
             prompt: "test".into(),
-            provider_conversation_id: None,
-            persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
+            request_kind: AgentRequestKind::SessionStart,
         };
 
         // Act — pass the pre-cancelled token directly.
@@ -2197,16 +2235,13 @@ mod tests {
         };
 
         let req = TurnRequest {
+            continuation: TurnContinuation::fresh(),
             folder: context.folder.clone(),
-            live_transcript: None,
             main_checkout_root: None,
             model: "gemini-3-flash-preview".to_string(),
-            request_kind: AgentRequestKind::SessionStart,
-            replay_transcript: None,
             prompt: "test".into(),
-            provider_conversation_id: None,
-            persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
+            request_kind: AgentRequestKind::SessionStart,
         };
 
         // Spawn a task that cancels the token after a small delay so the
@@ -2733,6 +2768,10 @@ mod tests {
             .once()
             .returning(|_| Box::pin(async { Ok(false) }));
         mock_git_client
+            .expect_diff()
+            .once()
+            .returning(|_, _| Box::pin(async { Ok("diff --git a/a.rs b/a.rs".to_string()) }));
+        mock_git_client
             .expect_has_commits_since()
             .once()
             .returning(|_, _| Box::pin(async { Ok(true) }));
@@ -2785,6 +2824,10 @@ mod tests {
             .expect_is_worktree_clean()
             .once()
             .returning(|_| Box::pin(async { Ok(false) }));
+        mock_git_client
+            .expect_diff()
+            .once()
+            .returning(|_, _| Box::pin(async { Ok("diff --git a/a.rs b/a.rs".to_string()) }));
         mock_git_client
             .expect_has_commits_since()
             .once()
@@ -3643,8 +3686,8 @@ mod tests {
                 session_id == "sess1"
                     && request.request_kind == AgentRequestKind::UtilityPrompt
                     && request.main_checkout_root.as_ref() == Some(&main_checkout_root)
-                    && request.provider_conversation_id.as_deref() == Some("thread-before")
-                    && request.persisted_instruction_conversation_id.as_deref()
+                    && request.continuation.provider_conversation_id() == Some("thread-before")
+                    && request.continuation.persisted_instruction_conversation_id()
                         == Some("instruction-before")
                     && request
                         .prompt
@@ -3812,9 +3855,13 @@ mod tests {
         let harness = rebase_assist_worker_harness(base_dir.path().to_path_buf(), db);
 
         // Act
-        SessionWorkerService::run_rebase_command(&harness.context, "main".to_string())
-            .await
-            .expect("rebase command should complete");
+        SessionWorkerService::run_rebase_command(
+            &harness.context,
+            auto_commit_one_shot_client(),
+            "main".to_string(),
+        )
+        .await
+        .expect("rebase command should complete");
         let provider_conversation_id = harness
             .db
             .sessions()
@@ -4383,8 +4430,13 @@ mod tests {
         let (_command_tx, mut command_rx) = mpsc::unbounded_channel();
 
         // Act
-        let next_command =
-            SessionWorkerService::drain_queued_messages(&context, &mut command_rx).await;
+        let one_shot_client = auto_commit_one_shot_client();
+        let next_command = SessionWorkerService::drain_queued_messages(
+            &context,
+            &one_shot_client,
+            &mut command_rx,
+        )
+        .await;
 
         // Assert — queued prompt remains untouched until status becomes
         // runnable again.
@@ -4428,7 +4480,12 @@ mod tests {
         let (command_tx, mut command_rx) = mpsc::unbounded_channel();
 
         // Act
-        let drain_future = SessionWorkerService::drain_queued_messages(&context, &mut command_rx);
+        let one_shot_client = auto_commit_one_shot_client();
+        let drain_future = SessionWorkerService::drain_queued_messages(
+            &context,
+            &one_shot_client,
+            &mut command_rx,
+        );
         let enqueue_command_future = async {
             turn_started.notified().await;
             command_tx
@@ -4523,8 +4580,13 @@ mod tests {
         context.git_client = Arc::new(mock_git_client);
 
         // Act
-        let next_command =
-            SessionWorkerService::drain_queued_messages(&context, &mut command_rx).await;
+        let one_shot_client = auto_commit_one_shot_client();
+        let next_command = SessionWorkerService::drain_queued_messages(
+            &context,
+            &one_shot_client,
+            &mut command_rx,
+        )
+        .await;
         let sync_events = tokio::time::timeout(Duration::from_secs(1), async {
             let mut sync_events = Vec::new();
             while sync_events.len() < 2 {
@@ -4585,8 +4647,13 @@ mod tests {
         let (_command_tx, mut command_rx) = mpsc::unbounded_channel();
 
         // Act
-        let next_command =
-            SessionWorkerService::drain_queued_messages(&context, &mut command_rx).await;
+        let one_shot_client = auto_commit_one_shot_client();
+        let next_command = SessionWorkerService::drain_queued_messages(
+            &context,
+            &one_shot_client,
+            &mut command_rx,
+        )
+        .await;
 
         // Assert — first prompt was dispatched, the StoppedByUser result
         // propagated, and the remaining queued prompt was cleared.

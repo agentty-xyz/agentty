@@ -2,9 +2,11 @@
 //!
 //! This crate owns the agent execution boundary used by Agentty: provider
 //! model metadata, turn prompt payloads, CLI/app-server transports, and
-//! channel contracts. It intentionally avoids depending on the `agentty`
-//! application crate so provider-specific dependencies compile in a leaf
-//! workspace member.
+//! channel contracts. [`OneShotClient`] presents isolated structured prompts
+//! as one injectable operation, while [`TurnContinuation`] keeps transport
+//! recovery state out of [`TurnRequest`]. The crate intentionally avoids
+//! depending on the `agentty` application crate so provider-specific
+//! dependencies compile in a leaf workspace member.
 
 mod agent;
 mod app_server;
@@ -12,15 +14,15 @@ pub(crate) mod app_server_transport;
 mod channel;
 mod model;
 
-#[cfg(any(test, feature = "test-utils"))]
-pub use agent::MockAgentBackend;
 pub use agent::{
     AgentAvailabilityProbe, AgentBackend, AgentBackendError, AgentTransport, BuildCommandRequest,
-    OneShotRequest, OneShotSubmission, RealAgentAvailabilityProbe, StaticAgentAvailabilityProbe,
-    cleanup_session_worktree_artifacts, create_app_server_client, create_backend, diff_fence,
-    executable_name, normalize_instruction_conversation_id, submit_one_shot,
-    submit_one_shot_with_app_server_client, submit_one_shot_with_backend, transport_mode,
+    OneShotClient, OneShotError, OneShotRequest, OneShotSubmission, RealAgentAvailabilityProbe,
+    RealOneShotClient, StaticAgentAvailabilityProbe, cleanup_session_worktree_artifacts,
+    create_app_server_client, create_backend, diff_fence, executable_name,
+    normalize_instruction_conversation_id, transport_mode,
 };
+#[cfg(any(test, feature = "test-utils"))]
+pub use agent::{MockAgentBackend, MockOneShotClient};
 #[cfg(any(test, feature = "test-utils"))]
 pub use app_server::MockAppServerClient;
 pub use app_server::{
@@ -29,7 +31,8 @@ pub use app_server::{
 };
 pub use channel::{
     AgentChannel, AgentError, AgentFuture, AgentRequestKind, LiveTranscript, SessionRef,
-    StartSessionRequest, TurnEvent, TurnRequest, TurnResult, create_agent_channel,
+    StartSessionRequest, TurnContinuation, TurnEvent, TurnRequest, TurnResult,
+    create_agent_channel,
 };
 #[cfg(any(test, feature = "test-utils"))]
 pub use channel::{MockAgentChannel, create_cli_agent_channel_with_backend};

@@ -493,10 +493,15 @@ impl DiffLayoutCache {
 
 /// Renders the current session's git diff in a scrollable page.
 pub struct DiffPage<'a> {
+    /// Raw unified diff currently shown by the page.
     pub diff: &'a str,
+    /// Shared cache for parsed diff content and rendered layouts.
     pub diff_layout_cache: &'a DiffLayoutCache,
+    /// Selected file-tree row in the left panel.
     pub file_explorer_selected_index: usize,
+    /// Vertical scroll offset inside the diff panel.
     pub scroll_offset: u16,
+    /// Session whose diff is being rendered.
     pub session: &'a Session,
 }
 

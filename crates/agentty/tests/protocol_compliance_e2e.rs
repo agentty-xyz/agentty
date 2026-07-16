@@ -1,9 +1,12 @@
+//! Provider contract compliance tests against mock app-server transports.
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use ag_agent::{
-    AgentChannel, AgentRequestKind, StartSessionRequest, TurnRequest, create_agent_channel,
+    AgentChannel, AgentRequestKind, StartSessionRequest, TurnContinuation, TurnRequest,
+    create_agent_channel,
 };
 use agentty::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
 use tokio::sync::mpsc;
@@ -264,16 +267,13 @@ fn resolve_workspace_folder() -> Result<PathBuf, String> {
 /// Builds one standard turn request for protocol-compliance validation.
 fn build_turn_request(folder: PathBuf, model: AgentModel) -> TurnRequest {
     TurnRequest {
+        continuation: TurnContinuation::fresh(),
         folder,
-        live_transcript: None,
         main_checkout_root: None,
         model: model.provider_model_str().to_string(),
-        request_kind: AgentRequestKind::SessionStart,
-        replay_transcript: None,
         prompt: PROTOCOL_COMPLIANCE_PROMPT.to_string().into(),
-        provider_conversation_id: None,
-        persisted_instruction_conversation_id: None,
         reasoning_level: ReasoningLevel::default(),
+        request_kind: AgentRequestKind::SessionStart,
     }
 }
 

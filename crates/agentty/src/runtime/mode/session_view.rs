@@ -1262,6 +1262,7 @@ mod tests {
                 clipboard_image_client_override: Some(clipboard_image_client),
                 fs_client,
                 git_client,
+                one_shot_client_override: None,
                 repositories: db,
                 review_request_client,
             },

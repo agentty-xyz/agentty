@@ -4,11 +4,15 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ag_agent::{AgentError, AgentRequestKind, LiveTranscript, TurnEvent, TurnRequest, TurnResult};
+use ag_agent::{
+    AgentError, AgentRequestKind, LiveTranscript, OneShotClient, TurnContinuation, TurnEvent,
+    TurnRequest, TurnResult,
+};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
+use super::lifecycle::SessionTitleGenerationTaskInput;
 use super::worker::{SessionWorkerContext, TurnMetadata};
 use super::{SessionTaskService, StatusTransition, isolation, post_turn};
 use crate::app::session::SessionError;
@@ -143,6 +147,7 @@ impl MainCheckoutSnapshot {
 /// in [`run_turn_with_cancellation`].
 pub(super) async fn run_channel_turn(
     context: &SessionWorkerContext,
+    one_shot_client: Arc<dyn OneShotClient>,
     turn_metadata: TurnMetadata,
     request_kind: AgentRequestKind,
     replay_transcript: Option<String>,
@@ -155,6 +160,8 @@ pub(super) async fn run_channel_turn(
 
     prepare_resume_turn(context, &request_kind).await;
 
+    let post_turn_context =
+        post_turn::PostTurnContext::from_worker(context, Arc::clone(&one_shot_client));
     let main_checkout_snapshot = match MainCheckoutSnapshot::capture(context).await {
         Ok(snapshot) => snapshot,
         Err(error) => {
@@ -163,7 +170,6 @@ pub(super) async fn run_channel_turn(
                 prompt.local_image_paths().cloned().collect(),
             )
             .await;
-            let post_turn_context = post_turn::PostTurnContext::from_worker(context);
             let finalizer_context = post_turn::TurnFinalizerContext::from_worker(context);
             let result = post_turn::apply_turn_result(
                 &post_turn_context,
@@ -195,8 +201,13 @@ pub(super) async fn run_channel_turn(
         .flatten();
 
     let req = TurnRequest {
+        continuation: TurnContinuation::provider(
+            Some(live_transcript_source(&context.transcript)),
+            persisted_instruction_conversation_id,
+            provider_conversation_id,
+            replay_transcript,
+        ),
         folder: context.folder.clone(),
-        live_transcript: Some(live_transcript_source(&context.transcript)),
         main_checkout_root: main_checkout_snapshot
             .as_ref()
             .map(|snapshot| snapshot.main_repo_root.clone()),
@@ -205,12 +216,9 @@ pub(super) async fn run_channel_turn(
             .model()
             .provider_model_str()
             .to_string(),
-        request_kind: request_kind.clone(),
-        replay_transcript,
         prompt: prompt.clone(),
-        provider_conversation_id,
-        persisted_instruction_conversation_id,
         reasoning_level,
+        request_kind: request_kind.clone(),
     };
 
     let (event_tx, event_rx) = mpsc::unbounded_channel::<TurnEvent>();
@@ -223,6 +231,7 @@ pub(super) async fn run_channel_turn(
 
     spawn_start_turn_title_generation(
         context,
+        Arc::clone(&one_shot_client),
         session_project_id,
         &request_kind,
         &prompt.text,
@@ -241,7 +250,6 @@ pub(super) async fn run_channel_turn(
 
     let turn_result =
         add_main_checkout_warning(context, main_checkout_snapshot.as_ref(), turn_result).await;
-    let post_turn_context = post_turn::PostTurnContext::from_worker(context);
     let finalizer_context = post_turn::TurnFinalizerContext::from_worker(context);
     let result = post_turn::apply_turn_result(&post_turn_context, turn_metadata, turn_result).await;
     post_turn::finalize_channel_turn(&finalizer_context, &result).await;
@@ -559,6 +567,7 @@ async fn append_main_checkout_warning(context: &SessionWorkerContext, warning: S
 /// Spawns first-turn session title generation from the initial user prompt.
 async fn spawn_start_turn_title_generation(
     context: &SessionWorkerContext,
+    one_shot_client: Arc<dyn OneShotClient>,
     session_project_id: Option<i64>,
     request_kind: &AgentRequestKind,
     prompt: &str,
@@ -576,15 +585,17 @@ async fn spawn_start_turn_title_generation(
     )
     .await;
 
-    let _title_generation_task = SessionManager::spawn_session_title_generation_task(
-        context.app_event_tx.clone(),
-        context.db.clone(),
-        &context.session_id,
-        &context.folder,
-        prompt,
-        title_agent,
-        None,
-    );
+    let _title_generation_task =
+        SessionManager::spawn_session_title_generation_task(SessionTitleGenerationTaskInput {
+            app_event_tx: context.app_event_tx.clone(),
+            db: context.db.clone(),
+            folder: context.folder.clone(),
+            one_shot_client,
+            prompt: prompt.to_string(),
+            session_agent: title_agent,
+            session_id: context.session_id.clone(),
+            tracked_generation: None,
+        });
 }
 
 /// Returns one normalized thinking text line.

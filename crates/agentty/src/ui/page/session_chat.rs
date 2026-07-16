@@ -54,22 +54,32 @@ impl PreparedPromptPanel {
 
 /// Chat page renderer for a single session.
 pub struct SessionChatPage<'a> {
+    /// Exact prompt transcript block for the active turn, when available.
     pub active_prompt_output: Option<&'a str>,
+    /// Transient progress text for the active agent turn.
     pub active_progress: Option<&'a str>,
+    /// Whether the session worktree can be opened externally.
     pub can_open_worktree: bool,
+    /// Active project-scoped default reasoning level.
     pub default_reasoning_level: ReasoningLevel,
     /// Shared markdown cache reused across transcript renders in this page.
     pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
+    /// Current UI mode that controls the bottom panel and focus.
     pub mode: &'a AppMode,
     /// Shared fully assembled output-layout cache for scroll metrics and
     /// frame rendering.
     pub output_layout_cache: &'a SessionOutputLayoutCache,
+    /// Focused-review output for the rendered session.
     pub review_text: Option<&'a str>,
+    /// Current vertical transcript scroll offset.
     pub scroll_offset: Option<u16>,
+    /// Index of the session being rendered.
     pub session_index: usize,
     /// Observable update version for the rendered session snapshot.
     pub session_update_version: u64,
+    /// Session rows available to the page.
     pub sessions: &'a [Session],
+    /// Render-time clock used for deterministic timers.
     pub wall_clock_unix_seconds: i64,
 }
 

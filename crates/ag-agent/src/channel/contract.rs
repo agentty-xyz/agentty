@@ -54,46 +54,153 @@ impl AgentRequestKind {
     }
 }
 
+/// Continuation state for one provider-agnostic agent turn.
+///
+/// The concrete representation keeps provider-runtime recovery details out of
+/// [`TurnRequest`] while allowing CLI channels to consume only replay text.
+#[derive(Clone, Debug)]
+pub struct TurnContinuation {
+    kind: TurnContinuationKind,
+}
+
+impl TurnContinuation {
+    /// Creates continuation state for a fresh turn with no prior context.
+    #[must_use]
+    pub fn fresh() -> Self {
+        Self {
+            kind: TurnContinuationKind::Fresh,
+        }
+    }
+
+    /// Creates continuation state for a stateless turn that replays prior text.
+    #[must_use]
+    pub fn replaying(replay_transcript: String) -> Self {
+        Self {
+            kind: TurnContinuationKind::Replay { replay_transcript },
+        }
+    }
+
+    /// Creates continuation state for a provider runtime that may resume a
+    /// native conversation and reconstruct context from a live transcript.
+    #[must_use]
+    pub fn provider(
+        live_transcript: Option<Arc<dyn LiveTranscript>>,
+        persisted_instruction_conversation_id: Option<String>,
+        provider_conversation_id: Option<String>,
+        replay_transcript: Option<String>,
+    ) -> Self {
+        Self {
+            kind: TurnContinuationKind::Provider {
+                live_transcript,
+                persisted_instruction_conversation_id,
+                provider_conversation_id,
+                replay_transcript,
+            },
+        }
+    }
+
+    /// Returns replayable transcript text when this turn carries it.
+    #[must_use]
+    pub fn replay_transcript(&self) -> Option<&str> {
+        match &self.kind {
+            TurnContinuationKind::Fresh => None,
+            TurnContinuationKind::Provider {
+                replay_transcript, ..
+            } => replay_transcript.as_deref(),
+            TurnContinuationKind::Replay { replay_transcript } => Some(replay_transcript.as_str()),
+        }
+    }
+
+    /// Returns the provider-native conversation identifier when available.
+    #[must_use]
+    pub fn provider_conversation_id(&self) -> Option<&str> {
+        match &self.kind {
+            TurnContinuationKind::Provider {
+                provider_conversation_id,
+                ..
+            } => provider_conversation_id.as_deref(),
+            TurnContinuationKind::Fresh | TurnContinuationKind::Replay { .. } => None,
+        }
+    }
+
+    /// Returns the conversation identifier that received the instruction
+    /// bootstrap when available.
+    #[must_use]
+    pub fn persisted_instruction_conversation_id(&self) -> Option<&str> {
+        match &self.kind {
+            TurnContinuationKind::Provider {
+                persisted_instruction_conversation_id,
+                ..
+            } => persisted_instruction_conversation_id.as_deref(),
+            TurnContinuationKind::Fresh | TurnContinuationKind::Replay { .. } => None,
+        }
+    }
+
+    pub(crate) fn into_parts(self) -> TurnContinuationParts {
+        match self.kind {
+            TurnContinuationKind::Fresh => TurnContinuationParts::default(),
+            TurnContinuationKind::Replay { replay_transcript } => TurnContinuationParts {
+                replay_transcript: Some(replay_transcript),
+                ..TurnContinuationParts::default()
+            },
+            TurnContinuationKind::Provider {
+                live_transcript,
+                persisted_instruction_conversation_id,
+                provider_conversation_id,
+                replay_transcript,
+            } => TurnContinuationParts {
+                live_transcript,
+                persisted_instruction_conversation_id,
+                provider_conversation_id,
+                replay_transcript,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+enum TurnContinuationKind {
+    Fresh,
+    Provider {
+        live_transcript: Option<Arc<dyn LiveTranscript>>,
+        persisted_instruction_conversation_id: Option<String>,
+        provider_conversation_id: Option<String>,
+        replay_transcript: Option<String>,
+    },
+    Replay {
+        replay_transcript: String,
+    },
+}
+
+#[derive(Default)]
+pub(crate) struct TurnContinuationParts {
+    pub(crate) live_transcript: Option<Arc<dyn LiveTranscript>>,
+    pub(crate) persisted_instruction_conversation_id: Option<String>,
+    pub(crate) provider_conversation_id: Option<String>,
+    pub(crate) replay_transcript: Option<String>,
+}
+
 /// Input payload for one provider-agnostic agent turn.
 #[derive(Debug, Clone)]
 pub struct TurnRequest {
+    /// Prior context needed to continue this turn.
+    pub continuation: TurnContinuation,
     /// Session worktree folder where the agent runs.
     pub folder: PathBuf,
-    /// Live transcript source for app-server context reconstruction.
-    ///
-    /// App-server clients may read this source during a turn to access content
-    /// that was streamed before a prior crash, providing a more complete replay
-    /// transcript than the snapshot captured at enqueue time. CLI channels
-    /// ignore this field.
-    pub live_transcript: Option<Arc<dyn LiveTranscript>>,
     /// Main repository checkout that must remain read-only during the turn,
     /// when Agentty can resolve it.
     pub main_checkout_root: Option<PathBuf>,
     /// Provider-specific model identifier.
     pub model: String,
-    /// Canonical request kind that drives transport behavior and protocol
-    /// semantics for this turn.
-    pub request_kind: AgentRequestKind,
-    /// Replayable transcript text captured when the turn was queued.
-    pub replay_transcript: Option<String>,
     /// Structured prompt payload for the turn.
     pub prompt: TurnPrompt,
-    /// Provider-native conversation identifier loaded from persistence.
-    ///
-    /// When present, app-server channels forward this to the provider runtime
-    /// so it can attempt native context resume. CLI channels ignore this field.
-    pub provider_conversation_id: Option<String>,
-    /// Persisted provider-native conversation id that already received the
-    /// full instruction bootstrap.
-    ///
-    /// App-server channels use this to choose between a full bootstrap and a
-    /// compact reminder for the active provider context. CLI channels ignore
-    /// this field.
-    pub persisted_instruction_conversation_id: Option<String>,
     /// Reasoning effort preference for the turn.
     ///
     /// Ignored by providers/models that do not support reasoning effort.
     pub reasoning_level: ReasoningLevel,
+    /// Canonical request kind that drives transport behavior and protocol
+    /// semantics for this turn.
+    pub request_kind: AgentRequestKind,
 }
 
 /// Incremental event emitted during one agent turn.
@@ -223,6 +330,53 @@ pub trait AgentChannel: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_turn_continuation_fresh_has_no_context() {
+        // Arrange / Act
+        let continuation = TurnContinuation::fresh();
+
+        // Assert
+        assert_eq!(continuation.replay_transcript(), None);
+        assert_eq!(continuation.provider_conversation_id(), None);
+        assert_eq!(continuation.persisted_instruction_conversation_id(), None);
+    }
+
+    #[test]
+    fn test_turn_continuation_replaying_exposes_transcript_only() {
+        // Arrange
+        let continuation = TurnContinuation::replaying("prior turn".to_string());
+
+        // Act
+        let parts = continuation.clone().into_parts();
+
+        // Assert
+        assert_eq!(continuation.replay_transcript(), Some("prior turn"));
+        assert_eq!(continuation.provider_conversation_id(), None);
+        assert!(parts.live_transcript.is_none());
+        assert_eq!(parts.persisted_instruction_conversation_id, None);
+        assert_eq!(parts.provider_conversation_id, None);
+        assert_eq!(parts.replay_transcript.as_deref(), Some("prior turn"));
+    }
+
+    #[test]
+    fn test_turn_continuation_provider_exposes_persisted_context() {
+        // Arrange / Act
+        let continuation = TurnContinuation::provider(
+            None,
+            Some("instruction-1".to_string()),
+            Some("thread-1".to_string()),
+            Some("prior turn".to_string()),
+        );
+
+        // Assert
+        assert_eq!(continuation.replay_transcript(), Some("prior turn"));
+        assert_eq!(continuation.provider_conversation_id(), Some("thread-1"));
+        assert_eq!(
+            continuation.persisted_instruction_conversation_id(),
+            Some("instruction-1")
+        );
+    }
 
     #[test]
     /// Ensures session request kinds derive the session-turn protocol

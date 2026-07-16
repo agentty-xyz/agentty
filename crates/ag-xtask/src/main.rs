@@ -1,3 +1,5 @@
+//! Workspace maintenance command-line tasks.
+
 mod check_migration;
 
 use std::process::ExitCode;

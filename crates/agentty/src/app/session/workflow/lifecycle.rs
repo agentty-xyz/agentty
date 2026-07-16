@@ -3,8 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use ag_agent as agent;
-use ag_agent::AgentRequestKind;
+use ag_agent::{self as agent, AgentRequestKind, OneShotClient};
 use ag_forge as forge;
 use ag_git as git;
 use ag_protocol::{AgentResponse, parse_agent_response_strict};
@@ -93,6 +92,26 @@ struct SessionTitleGenerationPromptTemplate<'a> {
 struct TitleGenerationTaskCompletion {
     generation: u64,
     session_id: SessionId,
+}
+
+/// Inputs for one detached session-title generation task.
+pub(super) struct SessionTitleGenerationTaskInput {
+    /// Event sink used to publish task completion and session refreshes.
+    pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    /// Repository bundle used to persist a generated title.
+    pub(super) db: db::AppRepositories,
+    /// Project folder used as the isolated prompt working directory.
+    pub(super) folder: PathBuf,
+    /// Provider-neutral boundary for the isolated title prompt.
+    pub(super) one_shot_client: Arc<dyn OneShotClient>,
+    /// Prompt snapshot used to generate and validate the title.
+    pub(super) prompt: String,
+    /// Agent/model selection used for title generation.
+    pub(super) session_agent: AgentSelection,
+    /// Session receiving the generated title.
+    pub(super) session_id: SessionId,
+    /// Optional generation used to ignore superseded draft-title tasks.
+    pub(super) tracked_generation: Option<u64>,
 }
 
 impl SessionManager {
@@ -921,15 +940,17 @@ impl SessionManager {
 
         let title_generation_task_generation =
             self.next_title_generation_task_generation(&persisted_session_id);
-        let title_generation_task = Self::spawn_session_title_generation_task(
-            services.event_sender(),
-            services.db().clone(),
-            &persisted_session_id,
-            &title_generation_folder,
-            &title_generation_prompt,
-            title_generation_agent,
-            Some(title_generation_task_generation),
-        );
+        let title_generation_task =
+            Self::spawn_session_title_generation_task(SessionTitleGenerationTaskInput {
+                app_event_tx: services.event_sender(),
+                db: services.db().clone(),
+                folder: title_generation_folder,
+                one_shot_client: services.one_shot_client(),
+                prompt: title_generation_prompt,
+                session_agent: title_generation_agent,
+                session_id: persisted_session_id.clone(),
+                tracked_generation: Some(title_generation_task_generation),
+            });
         self.replace_title_generation_task(
             &persisted_session_id,
             title_generation_task_generation,
@@ -2174,18 +2195,19 @@ impl SessionManager {
     /// is emitted so list-mode snapshots pick up the new title. Callers that
     /// can supersede draft-title generation should retain the returned task
     /// handle and abort any older in-flight task before replacing it.
-    pub(crate) fn spawn_session_title_generation_task(
-        app_event_tx: mpsc::UnboundedSender<AppEvent>,
-        db: db::AppRepositories,
-        session_id: &str,
-        folder: &Path,
-        prompt: &str,
-        session_agent: AgentSelection,
-        tracked_generation: Option<u64>,
+    pub(super) fn spawn_session_title_generation_task(
+        input: SessionTitleGenerationTaskInput,
     ) -> tokio::task::JoinHandle<()> {
-        let folder = folder.to_path_buf();
-        let prompt = prompt.to_string();
-        let persisted_session_id = SessionId::from(session_id);
+        let SessionTitleGenerationTaskInput {
+            app_event_tx,
+            db,
+            folder,
+            one_shot_client,
+            prompt,
+            session_agent,
+            session_id: persisted_session_id,
+            tracked_generation,
+        } = input;
         let tracked_completion =
             tracked_generation.map(|generation| TitleGenerationTaskCompletion {
                 generation,
@@ -2207,6 +2229,7 @@ impl SessionManager {
                 folder.as_path(),
                 &title_generation_prompt,
                 session_agent,
+                one_shot_client.as_ref(),
             )
             .await
             else {
@@ -2290,26 +2313,27 @@ impl SessionManager {
         }
     }
 
-    /// Executes one detached title-generation command and returns parsed
-    /// content.
+    /// Executes title generation through an injected one-shot boundary.
     async fn run_title_generation_command(
         folder: &Path,
         prompt: &str,
         session_agent: AgentSelection,
+        one_shot_client: &dyn OneShotClient,
     ) -> Option<String> {
-        let response = agent::submit_one_shot(agent::OneShotRequest {
-            agent_kind: session_agent.kind(),
-            child_pid: None,
-            folder,
-            model: session_agent.model(),
-            prompt,
-            request_kind: AgentRequestKind::UtilityPrompt,
-            reasoning_level: ReasoningLevel::default(),
-        })
-        .await
-        .ok()?;
+        let submission = one_shot_client
+            .submit(agent::OneShotRequest {
+                agent_kind: session_agent.kind(),
+                child_pid: None,
+                folder: folder.to_path_buf(),
+                model: session_agent.model(),
+                prompt: prompt.to_string(),
+                request_kind: AgentRequestKind::UtilityPrompt,
+                reasoning_level: ReasoningLevel::default(),
+            })
+            .await
+            .ok()?;
 
-        Some(response.to_answer_display_text())
+        Some(submission.response.to_answer_display_text())
     }
 
     /// Builds the title-generation instruction prompt from the user message.
@@ -2989,6 +3013,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use ag_agent::MockOneShotClient;
     use ag_forge as forge;
     use tokio::sync::mpsc;
 
@@ -3159,6 +3184,7 @@ mod tests {
                 clipboard_image_client_override: None,
                 fs_client,
                 git_client,
+                one_shot_client_override: None,
                 repositories: database.clone(),
                 review_request_client,
             },
@@ -3198,6 +3224,7 @@ mod tests {
                 clipboard_image_client_override: None,
                 fs_client: Arc::new(create_passthrough_mock_fs_client()),
                 git_client,
+                one_shot_client_override: None,
                 repositories: database.clone(),
                 review_request_client,
             },
@@ -4145,6 +4172,48 @@ mod tests {
             matches!(error, SessionError::Workflow(_)),
             "expected SessionError::Workflow, got: {error:?}"
         );
+    }
+
+    #[tokio::test]
+    /// Ensures title generation returns normalized answer text from the
+    /// injected one-shot boundary.
+    async fn test_run_title_generation_command_returns_answer_text() {
+        // Arrange
+        let folder = PathBuf::from("/tmp/title-generation");
+        let expected_folder = folder.clone();
+        let mut one_shot_client = MockOneShotClient::new();
+        one_shot_client
+            .expect_submit()
+            .times(1)
+            .returning(move |request| {
+                assert_eq!(request.agent_kind, AgentKind::Claude);
+                assert_eq!(request.folder, expected_folder);
+                assert_eq!(request.model, AgentModel::ClaudeSonnet5);
+                assert_eq!(request.prompt, "Generate a title");
+                assert_eq!(request.request_kind, AgentRequestKind::UtilityPrompt);
+
+                Ok(agent::OneShotSubmission {
+                    response: AgentResponse::plain("Refine session titles"),
+                    stats: agent::SessionStats {
+                        added_lines: 0,
+                        deleted_lines: 0,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                    },
+                })
+            });
+
+        // Act
+        let title = SessionManager::run_title_generation_command(
+            &folder,
+            "Generate a title",
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+            &one_shot_client,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(title.as_deref(), Some("Refine session titles"));
     }
 
     #[test]

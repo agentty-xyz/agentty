@@ -7,38 +7,65 @@ pub(crate) const INPUT_HISTORY_LIMIT: usize = 100;
 /// Semantic editing command shared by every text input.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InputCommand {
+    /// Deletes the character immediately before the cursor.
     DeleteBackward,
+    /// Deletes the current line and one adjacent newline separator.
     DeleteCurrentLine,
+    /// Deletes the character at the cursor.
     DeleteForward,
+    /// Deletes text from the cursor to the end of the current line.
     DeleteToLineEnd,
+    /// Deletes the previous word and adjacent separator whitespace.
     DeleteWordBackward,
+    /// Inserts one character at the cursor.
     Insert(char),
+    /// Inserts a newline at the cursor.
     InsertNewline,
+    /// Inserts text at the cursor.
     InsertText(String),
+    /// Moves the cursor to the next line while preserving visual column.
     MoveDown,
+    /// Moves the cursor to the end of the buffer.
     MoveEnd,
+    /// Moves the cursor to the start of the buffer.
     MoveHome,
+    /// Moves the cursor one character to the left.
     MoveLeft,
+    /// Moves the cursor to the end of the current line.
     MoveLineEnd,
+    /// Moves the cursor to the start of the current line.
     MoveLineStart,
+    /// Moves the cursor one character to the right.
     MoveRight,
+    /// Moves the cursor to the previous line while preserving visual column.
     MoveUp,
+    /// Moves the cursor to the start of the previous word.
     MoveWordLeft,
+    /// Moves the cursor to the start of the next word.
     MoveWordRight,
+    /// Reapplies the most recently undone text mutation.
     Redo,
+    /// Replaces one character-indexed range with new text.
     ReplaceRange {
+        /// Inclusive character index at which replacement begins.
         start: usize,
+        /// Exclusive character index at which replacement ends.
         end: usize,
+        /// Text inserted in place of the selected range.
         text: String,
     },
+    /// Restores the state before the most recent text mutation.
     Undo,
 }
 
 /// Observable result of applying one [`InputCommand`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InputEffect {
+    /// The cursor moved without changing text.
     CursorMoved,
+    /// The text buffer changed.
     TextChanged,
+    /// Neither the cursor nor the text buffer changed.
     Unchanged,
 }
 

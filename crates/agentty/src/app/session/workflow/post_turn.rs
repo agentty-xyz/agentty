@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ag_agent as agent;
-use ag_agent::{AgentError, TurnResult};
+use ag_agent::{AgentError, OneShotClient, TurnResult};
 use ag_forge as forge;
 use ag_git::GitClient;
 use ag_protocol::AgentResponse;
@@ -48,6 +48,8 @@ pub(super) struct PostTurnContext {
     pub(super) folder: PathBuf,
     /// Git boundary used by auto-commit and published-branch auto-push.
     pub(super) git_client: Arc<dyn GitClient>,
+    /// Provider-neutral boundary used by post-turn auto-commit prompts.
+    pub(super) one_shot_client: Arc<dyn OneShotClient>,
     /// In-memory queue checked before starting detached auto-push effects.
     pub(super) queued_messages: Arc<Mutex<VecDeque<TurnPrompt>>>,
     /// Forge boundary used for optional linked PR/MR metadata refresh.
@@ -62,7 +64,10 @@ pub(super) struct PostTurnContext {
 
 impl PostTurnContext {
     /// Clones the worker fields required by post-turn result application.
-    pub(super) fn from_worker(context: &SessionWorkerContext) -> Self {
+    pub(super) fn from_worker(
+        context: &SessionWorkerContext,
+        one_shot_client: Arc<dyn OneShotClient>,
+    ) -> Self {
         Self {
             app_event_tx: context.app_event_tx.clone(),
             branch_operation_lock: Arc::clone(&context.branch_operation_lock),
@@ -71,6 +76,7 @@ impl PostTurnContext {
             db: context.db.clone(),
             folder: context.folder.clone(),
             git_client: Arc::clone(&context.git_client),
+            one_shot_client,
             queued_messages: Arc::clone(&context.queued_messages),
             review_request_client: Arc::clone(&context.review_request_client),
             session_update_versions: context.session_update_versions.clone(),
@@ -423,6 +429,7 @@ async fn apply_successful_turn_result(
         folder: context.folder.clone(),
         git_client: Arc::clone(&context.git_client),
         id: context.session_id.to_string(),
+        one_shot_client: Arc::clone(&context.one_shot_client),
         session_agent: turn_metadata.session_agent,
         session_update_versions: context.session_update_versions.clone(),
         transcript: Arc::clone(&context.transcript),
@@ -583,6 +590,7 @@ fn turn_applied_follow_up_tasks(_assistant_message: &AgentResponse) -> Vec<Sessi
 
 #[cfg(test)]
 mod tests {
+    use ag_agent::MockOneShotClient;
     use ag_git::MockGitClient;
 
     use super::*;
@@ -629,6 +637,7 @@ mod tests {
             db,
             folder: PathBuf::new(),
             git_client: Arc::new(MockGitClient::new()),
+            one_shot_client: Arc::new(MockOneShotClient::new()),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
@@ -680,6 +689,7 @@ mod tests {
             db: db.clone(),
             folder: PathBuf::new(),
             git_client: Arc::new(mock_git_client),
+            one_shot_client: Arc::new(MockOneShotClient::new()),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),

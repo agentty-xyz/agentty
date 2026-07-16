@@ -53,7 +53,10 @@ pub enum RebaseStepResult {
     /// Rebase step completed successfully.
     Completed,
     /// Rebase step stopped because of merge conflicts.
-    Conflict { detail: String },
+    Conflict {
+        /// Git diagnostic describing the conflict state.
+        detail: String,
+    },
 }
 
 /// Git operation metadata that marks a worktree as unsafe for branch pushes.

@@ -9,11 +9,17 @@ use crate::infra::db::DbError;
 /// Row returned when loading per-model token usage from the `session_usage`
 /// table.
 pub struct SessionUsageRow {
+    /// Row creation timestamp in Unix seconds.
     pub created_at: i64,
+    /// Accumulated input-token count.
     pub input_tokens: i64,
+    /// Number of agent invocations included in the totals.
     pub invocation_count: i64,
+    /// Provider model identifier.
     pub model: String,
+    /// Accumulated output-token count.
     pub output_tokens: i64,
+    /// Owning session identifier, when present.
     pub session_id: Option<String>,
 }
 

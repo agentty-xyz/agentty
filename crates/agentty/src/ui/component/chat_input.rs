@@ -36,6 +36,7 @@ pub struct SuggestionList {
 
 /// Prompt input component with optional rich suggestion dropdown.
 pub struct ChatInput<'a> {
+    /// Placeholder rendered while the input is empty.
     pub placeholder: &'a str,
     active: bool,
     clear_style: Option<Style>,

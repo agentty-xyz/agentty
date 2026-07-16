@@ -3,7 +3,9 @@
 /// Describes whether a tab is global or tied to the active project.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TabScope {
+    /// Tab is available without an active project.
     Global,
+    /// Tab displays data belonging to the active project.
     Project,
 }
 
@@ -13,11 +15,16 @@ pub enum TabScope {
 /// navigation state starts on the projects tab.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Tab {
+    /// Project selection and management.
     #[default]
     Projects,
+    /// Sessions belonging to the active project.
     Sessions,
+    /// Requested forge reviews belonging to the active project.
     Review,
+    /// Assigned forge issues belonging to the active project.
     Issues,
+    /// Settings for the active project.
     Settings,
 }
 

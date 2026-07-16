@@ -18,6 +18,10 @@ pub enum SessionError {
     #[error("{0}")]
     Git(#[from] ag_git::GitError),
 
+    /// An isolated agent prompt failed.
+    #[error("{0}")]
+    OneShot(#[from] ag_agent::OneShotError),
+
     /// A database operation failed.
     #[error("{0}")]
     Db(#[from] crate::infra::db::DbError),
@@ -111,6 +115,19 @@ mod tests {
         // Assert
         assert!(matches!(error, SessionError::Git(_)));
         assert_eq!(error.to_string(), "bad output");
+    }
+
+    #[test]
+    fn one_shot_error_converts_via_from() {
+        // Arrange
+        let one_shot_error = ag_agent::OneShotError::new("one-shot failed");
+
+        // Act
+        let error = SessionError::from(one_shot_error);
+
+        // Assert
+        assert!(matches!(error, SessionError::OneShot(_)));
+        assert_eq!(error.to_string(), "one-shot failed");
     }
 
     #[test]

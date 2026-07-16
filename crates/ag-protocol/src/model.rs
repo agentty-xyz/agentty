@@ -172,7 +172,10 @@ pub enum AgentResponseParseError {
     Empty,
     /// Response was JSON, but it did not satisfy the structured protocol
     /// contract.
-    InvalidFormat { reason: String },
+    InvalidFormat {
+        /// Explanation of the protocol contract violation.
+        reason: String,
+    },
 }
 
 impl fmt::Display for AgentResponseParseError {

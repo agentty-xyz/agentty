@@ -401,7 +401,10 @@ pub struct UpdateReviewRequestInput {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ReviewRequestError {
     /// The required forge CLI is not available on the user's machine.
-    CliNotInstalled { forge_kind: ForgeKind },
+    CliNotInstalled {
+        /// Forge family whose CLI is unavailable.
+        forge_kind: ForgeKind,
+    },
     /// The forge CLI is installed but not authorized for the target host.
     AuthenticationRequired {
         /// Forge family that reported the authentication failure.
@@ -412,12 +415,22 @@ pub enum ReviewRequestError {
         detail: Option<String>,
     },
     /// The forge host from the repository remote could not be resolved.
-    HostResolutionFailed { forge_kind: ForgeKind, host: String },
+    HostResolutionFailed {
+        /// Forge family inferred from the repository remote.
+        forge_kind: ForgeKind,
+        /// Hostname that could not be resolved.
+        host: String,
+    },
     /// The repository remote does not map to a supported forge.
-    UnsupportedRemote { repo_url: String },
+    UnsupportedRemote {
+        /// Repository remote URL that could not be classified.
+        repo_url: String,
+    },
     /// A forge CLI command ran but failed.
     OperationFailed {
+        /// Forge family whose command failed.
         forge_kind: ForgeKind,
+        /// Original CLI failure detail.
         message: String,
     },
 }

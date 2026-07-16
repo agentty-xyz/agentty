@@ -21,7 +21,10 @@ pub enum SessionTreePosition {
     /// Root-level session row with no tree marker.
     Root,
     /// One-level child row connected to its parent.
-    Child { is_last: bool },
+    Child {
+        /// Whether this is the final child rendered under the parent.
+        is_last: bool,
+    },
 }
 
 /// One row in the grouped session list model.

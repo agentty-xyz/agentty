@@ -56,7 +56,7 @@ fn build_command_request<'a>(
         attachments: &request.prompt.attachments,
         folder: &request.folder,
         main_checkout_root: request.main_checkout_root.as_deref(),
-        replay_transcript: request.replay_transcript.as_deref(),
+        replay_transcript: request.continuation.replay_transcript(),
         model: &request.model,
         prompt: prompt_text,
         reasoning_level: request.reasoning_level,
@@ -487,16 +487,13 @@ mod tests {
 
     fn make_turn_request(folder: PathBuf) -> TurnRequest {
         TurnRequest {
+            continuation: crate::channel::TurnContinuation::fresh(),
             folder,
-            live_transcript: None,
             main_checkout_root: None,
             model: "claude-sonnet-5".to_string(),
-            request_kind: AgentRequestKind::SessionStart,
-            replay_transcript: None,
             prompt: "Write a test".into(),
-            provider_conversation_id: None,
-            persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
+            request_kind: AgentRequestKind::SessionStart,
         }
     }
 
@@ -525,16 +522,13 @@ mod tests {
     fn test_build_command_request_uses_agent_facing_prompt_text() {
         // Arrange
         let request = TurnRequest {
+            continuation: crate::channel::TurnContinuation::fresh(),
             folder: PathBuf::from("/tmp/session"),
-            live_transcript: None,
             main_checkout_root: Some(PathBuf::from("/tmp/main")),
             model: "claude-sonnet-5".to_string(),
-            request_kind: AgentRequestKind::SessionStart,
-            replay_transcript: None,
             prompt: TurnPrompt::from("Review @src/main.rs"),
-            provider_conversation_id: None,
-            persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
+            request_kind: AgentRequestKind::SessionStart,
         };
         let prompt_text = request.prompt.agent_text();
 
