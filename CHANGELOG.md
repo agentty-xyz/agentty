@@ -7,6 +7,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.13.1] - 2026-07-15
+
 ### Added
 
 - testty: add `feature::Redaction` and `FeatureDemo::redact` so callers can declare
@@ -34,6 +36,21 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   feature GIF frame hashes reproduce across macOS and Linux CI.
 - agentty: stub every supported agent CLI in E2E test environments — not just `claude` —
   so the default agent a new session resolves is identical on developer machines and CI.
+- agentty: run feature tests and VHS recordings with color disabled so GIF hashes remain
+  stable across local shells and CI.
+- agentty: preserve prompt and question drafts while chat output is focused for
+  scrolling, and clarify the related footer shortcuts and send labels.
+- agentty: accept and queue follow-up prompts while sessions are rebasing.
+- agentty: preserve review-request publishing progress across session refreshes.
+- agentty: place queued synchronization notices after the active turn and before
+  follow-up messages.
+- ci: run coverage checks in presubmit and postsubmit workflows.
+- release: bump workspace crate metadata and lockfile package versions to `0.13.1`.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
 
 ## [v0.13.0] - 2026-07-14
 
