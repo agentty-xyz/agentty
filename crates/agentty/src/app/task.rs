@@ -1032,7 +1032,8 @@ mod tests {
 
     #[test]
     /// Ensures review prompt rendering includes prior user and assistant
-    /// messages without adding stale session-summary context.
+    /// messages as decision context without adding stale session-summary
+    /// context.
     fn test_review_assist_prompt_includes_session_chat_history() {
         // Arrange
         let review_diff = "diff --git a/src/lib.rs b/src/lib.rs\n+new behavior";
@@ -1041,6 +1042,7 @@ mod tests {
         // Act
         let prompt = TaskService::review_assist_prompt(review_diff, session_chat_history)
             .expect("review prompt should render");
+        let normalized_prompt = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
 
         // Assert
         assert!(
@@ -1048,6 +1050,21 @@ mod tests {
         );
         assert!(prompt.contains(" › Add focused review context\n\nDone."));
         assert!(!prompt.contains("Existing session summary context"));
+        assert!(normalized_prompt.contains(
+            "Use the session chat history as decision context, not just background information"
+        ));
+        assert!(normalized_prompt.contains(
+            "Treat explicit user decisions, accepted tradeoffs, and explanations in the history \
+             as review constraints"
+        ));
+        assert!(normalized_prompt.contains(
+            "Do not repeat a suggestion already resolved in the history unless the current diff \
+             contradicts that resolution or inspection reveals a new high- or medium-severity risk"
+        ));
+        assert!(normalized_prompt.contains(
+            "When reopening a resolved suggestion, acknowledge the prior resolution and state the \
+             new evidence"
+        ));
     }
 
     #[test]

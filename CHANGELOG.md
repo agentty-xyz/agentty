@@ -7,6 +7,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- agentty: keep focused review suggestions aligned with decisions, accepted tradeoffs,
+  and explanations already resolved in the session chat.
+
 ## [v0.13.1] - 2026-07-15
 
 ### Added
