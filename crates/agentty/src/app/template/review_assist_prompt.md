@@ -52,6 +52,13 @@ All review parts must be concise.
 - Exclude low-severity, optional polish, and stylistic nits.
 - Keep suggestions scoped to the current changes and prioritize high-severity items
   first.
+- Use the session chat history as decision context, not just background information.
+- Treat explicit user decisions, accepted tradeoffs, and explanations in the history as
+  review constraints.
+- Do not repeat a suggestion already resolved in the history unless the current diff
+  contradicts that resolution or inspection reveals a new high- or medium-severity risk.
+  When reopening a resolved suggestion, acknowledge the prior resolution and state the
+  new evidence.
 - If there are no suggestions, write `- None`.
 
 Session chat history (user and agent messages only; may be empty):

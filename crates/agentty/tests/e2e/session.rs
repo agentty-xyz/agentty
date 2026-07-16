@@ -53,6 +53,29 @@ const RECONCILE_QUESTION_TEXT: &str = "Should I add a regression test?";
 /// Draft text typed into the composer by the chat-focus toggle test.
 const PROMPT_FOCUS_DRAFT_TEXT: &str = "Draft kept while reading chat";
 
+/// Focused-review output emitted when the prompt carries both the saved
+/// decision and the instruction to honor it.
+const RESOLVED_DECISION_REVIEW_TEXT: &str = "Resolved session decision honored.";
+
+/// Stable policy phrase the focused-review stub expects in the prompt.
+///
+/// This intentionally matches only the durable concept instead of one full
+/// template sentence so harmless copy edits do not masquerade as behavior
+/// regressions.
+const REVIEW_DECISION_CONTEXT_PROMPT_MARKER: &str = "session chat history as decision context";
+
+/// Accepted tradeoff saved in the transcript and expected by the review stub.
+const RESOLVED_DECISION_HISTORY_TEXT: &str =
+    "Understood. Retaining the println call is an accepted tradeoff for the demo output.";
+
+/// Diagnostic emitted when the focused-review prompt omits its policy marker.
+const MISSING_DECISION_CONTEXT_POLICY_TEXT: &str =
+    "Focused review prompt omitted decision-context guidance.";
+
+/// Diagnostic emitted when the focused-review prompt omits saved chat context.
+const MISSING_RESOLVED_DECISION_HISTORY_TEXT: &str =
+    "Focused review prompt omitted the resolved session decision.";
+
 /// Returns every scrollbar row and the subset occupied by its thumb in the
 /// session output's rightmost column.
 fn session_output_scrollbar_rows(frame: &TerminalFrame) -> (Vec<u16>, Vec<u16>) {
@@ -148,7 +171,7 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Crea
     #[cfg(unix)]
     std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
 
-    seed_project_default_model(env, "claude-haiku-4-5-20251001")?;
+    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])?;
 
     Ok(())
 }
@@ -372,6 +395,71 @@ fn seed_session_with_typed_marker_collision(
     ))?;
 
     Ok(())
+}
+
+/// Seeds one review-ready session plus its default source branch and
+/// propagates setup errors to the caller.
+fn seed_review_with_resolved_decision(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session(env)?;
+    seed_review_worktree_with_diff(env)?;
+
+    let runtime = common::seed_runtime()?;
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .append_session_message(
+                "review-shortcut-0001",
+                SessionMessageKind::UserPrompt,
+                "Keep the println call; its output is required by the demo contract.",
+            )
+            .await?;
+        database
+            .sessions()
+            .append_session_message(
+                "review-shortcut-0001",
+                SessionMessageKind::AssistantAnswer,
+                RESOLVED_DECISION_HISTORY_TEXT,
+            )
+            .await
+    })?;
+
+    let claude_path = env.stub_bin.join("claude");
+    let script = format!(
+        r###"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+prompt=$(cat)
+case "$prompt" in
+  *"{REVIEW_DECISION_CONTEXT_PROMPT_MARKER}"*)
+    case "$prompt" in
+      *"{RESOLVED_DECISION_HISTORY_TEXT}"*)
+        answer='{RESOLVED_DECISION_REVIEW_TEXT}'
+        ;;
+      *)
+        answer='{MISSING_RESOLVED_DECISION_HISTORY_TEXT}'
+        ;;
+    esac
+    ;;
+  *)
+    answer='{MISSING_DECISION_CONTEXT_POLICY_TEXT}'
+    ;;
+esac
+printf '%s\n' '{{"type":"system","subtype":"init"}}'
+printf '{{"type":"result","subtype":"success","result":"{{\\"answer\\":\\"## Review\\\\n\\\\n### Project Impact\\\\n\\\\n- %s\\\\n\\\\n### Suggestions\\\\n\\\\n- None\\",\\"questions\\":[],\\"summary\\":null}}","usage":{{"input_tokens":5,"output_tokens":9}}}}\n' "$answer"
+"###,
+    );
+    std::fs::write(&claude_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+
+    seed_project_settings(
+        env,
+        &[
+            ("DefaultReviewAgent", "claude"),
+            ("DefaultReviewModel", "claude-haiku-4-5-20251001"),
+        ],
+    )
 }
 
 /// Seeds one review-ready session plus its default source branch and
@@ -825,7 +913,7 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"{payload}"}}'
     #[cfg(unix)]
     std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
 
-    seed_project_default_model(env, "claude-haiku-4-5-20251001")?;
+    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])?;
 
     Ok(())
 }
@@ -1010,11 +1098,11 @@ fn seed_question_resume_session(env: &BuilderEnv) -> Result<(), Box<dyn std::err
     Ok(())
 }
 
-/// Persists the project default model so session-creation tests route to a
-/// deterministic backend even when additional real CLIs exist on `PATH`.
-fn seed_project_default_model(
+/// Persists project-scoped settings so feature tests route model selections
+/// to deterministic backends even when additional real CLIs exist on `PATH`.
+fn seed_project_settings(
     env: &BuilderEnv,
-    model: &str,
+    settings: &[(&str, &str)],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let runtime = common::seed_runtime()?;
     runtime.block_on(async {
@@ -1038,17 +1126,19 @@ fn seed_project_default_model(
             .filename(&db_path)
             .connect()
             .await?;
-        let query = sqlx::query(
-            r"
+        for (setting_name, setting_value) in settings {
+            let query = sqlx::query(
+                r"
 INSERT INTO project_setting (project_id, name, value)
 VALUES (?, ?, ?)
 ON CONFLICT(project_id, name) DO UPDATE SET value = excluded.value
 ",
-        )
-        .bind(project_id)
-        .bind("DefaultSmartModel")
-        .bind(model);
-        connection.execute(query).await?;
+            )
+            .bind(project_id)
+            .bind(setting_name)
+            .bind(setting_value);
+            connection.execute(query).await?;
+        }
         connection.close().await?;
 
         Result::<(), Box<dyn std::error::Error>>::Ok(())
@@ -1081,7 +1171,7 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"Ne
     #[cfg(unix)]
     std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
 
-    seed_project_default_model(env, "claude-haiku-4-5-20251001")
+    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])
 }
 
 /// Answer emitted before the queued session sync is allowed to start.
@@ -1107,7 +1197,7 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{Q
     #[cfg(unix)]
     std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
 
-    seed_project_default_model(env, "claude-haiku-4-5-20251001")
+    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])
 }
 
 /// Installs a Claude stub that reports whether Agentty passed web-capable
@@ -1133,7 +1223,7 @@ printf '{"type":"result","subtype":"success","result":"{\"answer\":\"%s\",\"ques
     #[cfg(unix)]
     std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
 
-    seed_project_default_model(env, "claude-haiku-4-5-20251001")
+    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])
 }
 
 /// Answer text emitted by the bare-layout success stub once its turn completes.
@@ -1211,7 +1301,7 @@ printf '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{BARE_LAY
     #[cfg(unix)]
     std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
 
-    seed_project_default_model(env, "claude-haiku-4-5-20251001")
+    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])
 }
 
 /// Seeds one review-ready session with a linked review request.
@@ -4040,6 +4130,42 @@ fn persisted_focused_review_survives_reload() -> E2eResult {
                 assert_eq!(impact_finding.rect.row, impact_header.rect.row + 1);
                 assert_eq!(empty_suggestion.rect.row, suggestions_header.rect.row + 1);
                 assertion::assert_not_visible(frame, "type \"/apply\" to verify and apply");
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify focused review treats explanations and accepted tradeoffs from the
+/// saved session chat as constraints instead of repeating resolved advice.
+#[test]
+fn focused_review_honors_resolved_session_decisions() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("focused_review_resolved_decision")
+        .with_git()
+        .setup(seed_review_with_resolved_decision)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_text("Keep the println call", 5000)
+                    .press_key("f")
+                    .wait_for_text("Suggestions", 30000)
+                    .viewing_pause_ms(1000)
+                    .capture_labeled(
+                        "resolved_decision_honored",
+                        "Focused review honors a decision resolved in session chat",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, RESOLVED_DECISION_REVIEW_TEXT, &full);
+                assertion::assert_text_in_region(frame, "Suggestions", &full);
+                assertion::assert_text_in_region(frame, "- None", &full);
+                assertion::assert_not_visible(frame, MISSING_DECISION_CONTEXT_POLICY_TEXT);
+                assertion::assert_not_visible(frame, MISSING_RESOLVED_DECISION_HISTORY_TEXT);
             },
         )?;
 
