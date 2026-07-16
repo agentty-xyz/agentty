@@ -123,10 +123,6 @@ where
         return Ok(EventResult::Continue);
     }
 
-    if handle_focus_toggle(app, key) {
-        return Ok(EventResult::Continue);
-    }
-
     if handle_chat_focus_key(app, render_cache_store, terminal, &prompt_context, key)? {
         return Ok(EventResult::Continue);
     }
@@ -136,33 +132,14 @@ where
     Ok(EventResult::Continue)
 }
 
-/// Toggles focus between the composer and the chat transcript on `Tab`.
-///
-/// Returns `true` when the key was consumed as a focus toggle.
-fn handle_focus_toggle(app: &mut App, key: KeyEvent) -> bool {
-    if key.code != KeyCode::Tab {
-        return false;
-    }
-
-    let AppMode::Prompt { focus, .. } = &mut app.mode else {
-        return false;
-    };
-
-    *focus = match *focus {
-        ChatFocus::Input => ChatFocus::Chat,
-        ChatFocus::Chat => ChatFocus::Input,
-    };
-
-    true
-}
-
 /// Handles keys while the chat transcript above the composer holds focus.
 ///
-/// Scroll keys navigate the transcript and `Tab` returns focus to the composer.
-/// Every other key — including `Ctrl+C` and `Esc` — is swallowed so the typed
-/// draft and the prompt itself cannot change while the user reads back the
-/// conversation. Swallowed keys skip scroll-metric construction, which lays
-/// out the transcript.
+/// The shared chat-focus classifier handles `Tab`, transcript navigation, and
+/// unsupported keys. Prompt mode does not permit diff preview, so it consumes
+/// that action like every other unsupported chat-focused key. This keeps the
+/// typed draft and prompt unchanged while the user reads the conversation.
+/// Swallowed keys skip scroll-metric construction, which lays out the
+/// transcript.
 ///
 /// Returns `true` when the key was consumed by the focused transcript.
 fn handle_chat_focus_key<B: Backend>(
@@ -175,38 +152,39 @@ fn handle_chat_focus_key<B: Backend>(
 where
     B::Error: std::error::Error + Send + Sync + 'static,
 {
-    if !matches!(
-        &app.mode,
-        AppMode::Prompt {
-            focus: ChatFocus::Chat,
-            ..
-        }
-    ) {
-        return Ok(false);
-    }
-
-    // Swallow non-scroll keys before building scroll metrics, which lay out and
-    // fingerprint the whole transcript.
-    if !chat_scroll::is_scroll_key(key) {
-        return Ok(true);
-    }
-
-    let terminal_size = terminal.size().map_err(crate::runtime::backend_err)?;
-    let metrics = ChatScrollMetrics::new(
-        app,
-        render_cache_store,
-        &prompt_context.session_id,
-        prompt_context.session_index,
-        Rect::new(0, 0, terminal_size.width, terminal_size.height),
-    );
-
-    let AppMode::Prompt { scroll_offset, .. } = &mut app.mode else {
+    let AppMode::Prompt { focus, .. } = &app.mode else {
         return Ok(false);
     };
 
-    chat_scroll::apply_scroll_key(scroll_offset, metrics, key);
+    match chat_scroll::classify_chat_focus_action(*focus, key) {
+        None => Ok(false),
+        Some(chat_scroll::ChatFocusAction::ToggleFocus) => {
+            if let AppMode::Prompt { focus, .. } = &mut app.mode {
+                chat_scroll::toggle_chat_focus(focus);
+            }
 
-    Ok(true)
+            Ok(true)
+        }
+        Some(chat_scroll::ChatFocusAction::Scroll) => {
+            let terminal_size = terminal.size().map_err(crate::runtime::backend_err)?;
+            let metrics = ChatScrollMetrics::new(
+                app,
+                render_cache_store,
+                &prompt_context.session_id,
+                prompt_context.session_index,
+                Rect::new(0, 0, terminal_size.width, terminal_size.height),
+            );
+
+            if let AppMode::Prompt { scroll_offset, .. } = &mut app.mode {
+                chat_scroll::apply_scroll_key(scroll_offset, metrics, key);
+            }
+
+            Ok(true)
+        }
+        Some(chat_scroll::ChatFocusAction::OpenDiff | chat_scroll::ChatFocusAction::Swallow) => {
+            Ok(true)
+        }
+    }
 }
 
 /// Handles keys when the at-mention dropdown is active.
@@ -1129,6 +1107,51 @@ mod tests {
 
         // Assert
         assert_eq!(chat_focus, ChatFocus::Chat);
+        assert_eq!(prompt_focus(&app), ChatFocus::Input);
+    }
+
+    #[tokio::test]
+    async fn test_chat_focus_key_ignores_non_prompt_mode() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("draft text", None).await;
+        let prompt_context = prompt_context(&mut app).expect("prompt context should be available");
+        app.mode = AppMode::List;
+        let terminal = test_terminal();
+
+        // Act
+        let is_consumed = handle_chat_focus_key(
+            &mut app,
+            &RenderCacheStore::default(),
+            &terminal,
+            &prompt_context,
+            KeyEvent::new(KeyCode::Tab, event::KeyModifiers::NONE),
+        )
+        .expect("chat focus handling should not fail");
+
+        // Assert
+        assert!(!is_consumed);
+        assert!(matches!(app.mode, AppMode::List));
+    }
+
+    #[tokio::test]
+    async fn test_chat_focus_key_leaves_input_panel_keys_unclaimed() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("draft text", None).await;
+        let prompt_context = prompt_context(&mut app).expect("prompt context should be available");
+        let terminal = test_terminal();
+
+        // Act
+        let is_consumed = handle_chat_focus_key(
+            &mut app,
+            &RenderCacheStore::default(),
+            &terminal,
+            &prompt_context,
+            KeyEvent::new(KeyCode::Char('q'), event::KeyModifiers::NONE),
+        )
+        .expect("chat focus handling should not fail");
+
+        // Assert
+        assert!(!is_consumed);
         assert_eq!(prompt_focus(&app), ChatFocus::Input);
     }
 

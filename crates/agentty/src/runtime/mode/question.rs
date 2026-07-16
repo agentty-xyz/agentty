@@ -1,4 +1,4 @@
-use crossterm::event::{self, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 
 use crate::app::session::SessionTaskService;
@@ -36,7 +36,13 @@ pub(crate) async fn handle_with_cache(
     terminal_size: Rect,
     key: KeyEvent,
 ) -> EventResult {
-    if handle_focus_toggle(app, key) {
+    if is_plain_q(key) && should_exit_to_list_on_q(app) {
+        exit_to_list_saving_progress(app);
+
+        return EventResult::Continue;
+    }
+
+    if handle_chat_focus_key(app, render_cache_store, terminal_size, key).await {
         return EventResult::Continue;
     }
 
@@ -45,16 +51,6 @@ pub(crate) async fn handle_with_cache(
             end_turn_no_answer(app).await;
         }
 
-        return EventResult::Continue;
-    }
-
-    if is_plain_q(key) && should_exit_to_list_on_q(app) {
-        exit_to_list_saving_progress(app);
-
-        return EventResult::Continue;
-    }
-
-    if handle_chat_scroll(app, render_cache_store, terminal_size, key).await {
         return EventResult::Continue;
     }
 
@@ -160,70 +156,52 @@ fn exit_to_list_saving_progress(app: &mut App) {
     }
 }
 
-/// Toggles focus between the question panel and chat output on `Tab`.
+/// Applies shared semantic actions while the chat output area is focused.
 ///
-/// Returns `true` when the key was consumed as a focus toggle.
-fn handle_focus_toggle(app: &mut App, key: KeyEvent) -> bool {
-    if key.code != KeyCode::Tab {
-        return false;
-    }
-
-    let AppMode::Question { focus, .. } = &mut app.mode else {
-        return false;
-    };
-
-    *focus = match *focus {
-        ChatFocus::Input => ChatFocus::Chat,
-        ChatFocus::Chat => ChatFocus::Input,
-    };
-
-    true
-}
-
-/// Applies scroll keys when the chat output area is focused.
-///
-/// Returns `true` when the key was consumed as a chat-focus action. `d` opens
-/// the diff preview for the session; `Tab` is the sole focus toggle.
-async fn handle_chat_scroll(
+/// Returns `true` when the key was consumed as a chat-focus action. Question
+/// mode permits the shared diff-preview action; unsupported actions are
+/// swallowed to keep the answer draft unchanged.
+async fn handle_chat_focus_key(
     app: &mut App,
     render_cache_store: &RenderCacheStore,
     terminal_size: Rect,
     key: KeyEvent,
 ) -> bool {
-    if !matches!(
-        &app.mode,
-        AppMode::Question {
-            focus: ChatFocus::Chat,
-            ..
-        }
-    ) {
+    let AppMode::Question {
+        focus, session_id, ..
+    } = &app.mode
+    else {
         return false;
-    }
+    };
+    let focus = *focus;
 
-    if key.code == KeyCode::Char('d') && !key.modifiers.contains(event::KeyModifiers::CONTROL) {
-        if let Some(session_id) = extract_question_session_id(app) {
+    match chat_scroll::classify_chat_focus_action(focus, key) {
+        None => false,
+        Some(chat_scroll::ChatFocusAction::ToggleFocus) => {
+            if let AppMode::Question { focus, .. } = &mut app.mode {
+                chat_scroll::toggle_chat_focus(focus);
+            }
+
+            true
+        }
+        Some(chat_scroll::ChatFocusAction::OpenDiff) => {
+            let session_id = session_id.clone();
+
             show_question_diff(app, &session_id).await;
+
+            true
         }
+        Some(chat_scroll::ChatFocusAction::Scroll) => {
+            if let Some(metrics) = question_scroll_metrics(app, render_cache_store, terminal_size)
+                && let AppMode::Question { scroll_offset, .. } = &mut app.mode
+            {
+                chat_scroll::apply_scroll_key(scroll_offset, metrics, key);
+            }
 
-        return true;
+            true
+        }
+        Some(chat_scroll::ChatFocusAction::Swallow) => true,
     }
-
-    // Chat focus is read-only: only transcript navigation keys may continue
-    // past this point. This prevents `Enter` and `Esc` from reaching the
-    // answer-input submission and end-turn handlers.
-    if !chat_scroll::is_scroll_key(key) {
-        return true;
-    }
-
-    let Some(metrics) = question_scroll_metrics(app, render_cache_store, terminal_size) else {
-        return false;
-    };
-
-    let AppMode::Question { scroll_offset, .. } = &mut app.mode else {
-        return false;
-    };
-
-    chat_scroll::apply_scroll_key(scroll_offset, metrics, key)
 }
 
 /// Returns transcript scroll metrics while question mode focuses the chat.
@@ -263,15 +241,6 @@ fn question_scroll_metrics(
             )
         },
     ))
-}
-
-/// Extracts the `session_id` from the current question mode, if active.
-fn extract_question_session_id(app: &App) -> Option<SessionId> {
-    if let AppMode::Question { session_id, .. } = &app.mode {
-        Some(session_id.clone())
-    } else {
-        None
-    }
 }
 
 /// Opens the diff preview from question mode.
@@ -2293,6 +2262,26 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn test_chat_focus_key_ignores_non_question_mode() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        app.mode = AppMode::List;
+
+        // Act
+        let is_consumed = handle_chat_focus_key(
+            &mut app,
+            &RenderCacheStore::default(),
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert
+        assert!(!is_consumed);
+        assert!(matches!(app.mode, AppMode::List));
     }
 
     #[tokio::test]
