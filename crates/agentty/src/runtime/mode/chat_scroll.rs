@@ -9,6 +9,7 @@ use ratatui::layout::Rect;
 
 use crate::app::App;
 use crate::domain::session::SessionId;
+use crate::presentation::app_mode::ChatFocus;
 use crate::runtime::mode::session_output_metric;
 use crate::ui::page::session_chat::{self, SessionChatLayoutInput};
 use crate::ui::{RenderCacheStore, input_layout, layout, session_format};
@@ -23,6 +24,23 @@ pub(crate) struct ChatScrollMetrics {
     pub(crate) total_lines: u16,
     /// Visible transcript height in terminal lines.
     pub(crate) view_height: u16,
+}
+
+/// A semantic action for a key while a chat page owns the active focus.
+///
+/// Prompt and question modes share transcript navigation and focus switching.
+/// Question mode additionally permits diff preview, while prompt mode consumes
+/// that action with the rest of its unsupported chat-focused keys.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ChatFocusAction {
+    /// Opens the session diff preview when the active mode allows it.
+    OpenDiff,
+    /// Moves the transcript viewport.
+    Scroll,
+    /// Switches focus between the transcript and the bottom input panel.
+    ToggleFocus,
+    /// Consumes a key that has no chat-focused behavior.
+    Swallow,
 }
 
 impl ChatScrollMetrics {
@@ -94,6 +112,43 @@ impl ChatScrollMetrics {
     }
 }
 
+/// Classifies `key` into a shared chat-page action for the current focus.
+///
+/// `Tab` switches focus from either panel. When the transcript is focused,
+/// `d` requests a diff preview, recognized scroll keys move the transcript,
+/// and all remaining keys are swallowed to preserve the bottom-panel draft.
+/// Keys from the bottom input panel return `None` so its mode can handle them.
+pub(crate) fn classify_chat_focus_action(
+    focus: ChatFocus,
+    key: KeyEvent,
+) -> Option<ChatFocusAction> {
+    if key.code == KeyCode::Tab {
+        return Some(ChatFocusAction::ToggleFocus);
+    }
+
+    if focus == ChatFocus::Input {
+        return None;
+    }
+
+    if is_diff_preview_key(key) {
+        return Some(ChatFocusAction::OpenDiff);
+    }
+
+    if is_scroll_key(key) {
+        return Some(ChatFocusAction::Scroll);
+    }
+
+    Some(ChatFocusAction::Swallow)
+}
+
+/// Switches focus between the chat transcript and its bottom input panel.
+pub(crate) fn toggle_chat_focus(focus: &mut ChatFocus) {
+    *focus = match *focus {
+        ChatFocus::Input => ChatFocus::Chat,
+        ChatFocus::Chat => ChatFocus::Input,
+    };
+}
+
 /// Returns whether `key` scrolls the session transcript.
 ///
 /// Handlers that swallow every other key check this before building
@@ -101,6 +156,11 @@ impl ChatScrollMetrics {
 /// whole transcript and would otherwise run on each ignored keystroke.
 pub(crate) fn is_scroll_key(key: KeyEvent) -> bool {
     ScrollStep::from_key(key).is_some()
+}
+
+/// Returns whether `key` requests the session diff preview from chat focus.
+fn is_diff_preview_key(key: KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Char('d')) && !key.modifiers.contains(KeyModifiers::CONTROL)
 }
 
 /// Applies one transcript scroll key to `scroll_offset`.
@@ -237,6 +297,61 @@ mod tests {
         // Act, Assert
         assert!(scroll_keys.into_iter().all(is_scroll_key));
         assert!(!other_keys.into_iter().any(is_scroll_key));
+    }
+
+    #[test]
+    fn test_classify_chat_focus_action_distinguishes_input_and_chat_keys() {
+        // Arrange
+        let input_key = plain_key(KeyCode::Char('q'));
+        let chat_keys = [
+            (plain_key(KeyCode::Tab), ChatFocusAction::ToggleFocus),
+            (plain_key(KeyCode::Char('d')), ChatFocusAction::OpenDiff),
+            (plain_key(KeyCode::Char('j')), ChatFocusAction::Scroll),
+            (plain_key(KeyCode::Esc), ChatFocusAction::Swallow),
+        ];
+
+        // Act, Assert
+        assert_eq!(
+            classify_chat_focus_action(ChatFocus::Input, input_key),
+            None
+        );
+        assert_eq!(
+            classify_chat_focus_action(ChatFocus::Input, plain_key(KeyCode::Tab)),
+            Some(ChatFocusAction::ToggleFocus)
+        );
+        for (key, action) in chat_keys {
+            assert_eq!(
+                classify_chat_focus_action(ChatFocus::Chat, key),
+                Some(action)
+            );
+        }
+    }
+
+    #[test]
+    fn test_classify_chat_focus_action_keeps_ctrl_d_as_scroll() {
+        // Arrange
+        let key = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL);
+
+        // Act
+        let action = classify_chat_focus_action(ChatFocus::Chat, key);
+
+        // Assert
+        assert_eq!(action, Some(ChatFocusAction::Scroll));
+    }
+
+    #[test]
+    fn test_toggle_chat_focus_switches_between_panels() {
+        // Arrange
+        let mut focus = ChatFocus::Input;
+
+        // Act
+        toggle_chat_focus(&mut focus);
+        let chat_focus = focus;
+        toggle_chat_focus(&mut focus);
+
+        // Assert
+        assert_eq!(chat_focus, ChatFocus::Chat);
+        assert_eq!(focus, ChatFocus::Input);
     }
 
     #[test]
