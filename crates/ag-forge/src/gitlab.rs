@@ -133,7 +133,7 @@ impl ReviewRequestAdapter for GitLabReviewRequestAdapter {
             remote,
             display_id,
             input,
-            config,
+            &config,
             move |remote, display_id| {
                 adapter.refresh_authenticated_review_request(remote, display_id)
             },
@@ -212,6 +212,16 @@ fn lookup_command(remote: &ForgeRemote, source_branch: &str) -> ForgeCommand {
     )
 }
 
+/// Parses one optional display id from a GitLab merge-request lookup response.
+fn parse_lookup_display_id(stdout: &str) -> Result<Option<String>, String> {
+    let merge_requests: Vec<GitLabLookupResponse> = serde_json::from_str(stdout)
+        .map_err(|error| format!("invalid GitLab merge-request lookup response: {error}"))?;
+
+    Ok(merge_requests
+        .first()
+        .map(|merge_request| format!("!{}", merge_request.iid)))
+}
+
 /// Builds the `glab mr create` command for `input`.
 ///
 /// GitLab merge requests default to draft so session-published review requests
@@ -239,115 +249,6 @@ fn create_command(remote: &ForgeRemote, input: &CreateReviewRequestInput) -> For
     )
 }
 
-/// Builds the `glab mr view` command for one merge-request IID.
-fn view_command(remote: &ForgeRemote, merge_request_iid: &str) -> ForgeCommand {
-    gitlab_command(
-        remote,
-        "glab",
-        vec![
-            "mr".to_string(),
-            "view".to_string(),
-            merge_request_iid.to_string(),
-            "--repo".to_string(),
-            remote.web_url.clone(),
-            "--output".to_string(),
-            "json".to_string(),
-        ],
-    )
-}
-
-/// Builds the `glab mr update` command for updating one merge-request
-/// title/description.
-fn update_metadata_command(
-    remote: &ForgeRemote,
-    merge_request_iid: &str,
-    input: &UpdateReviewRequestInput,
-) -> ForgeCommand {
-    gitlab_command(
-        remote,
-        "glab",
-        vec![
-            "mr".to_string(),
-            "update".to_string(),
-            merge_request_iid.to_string(),
-            "--repo".to_string(),
-            remote.web_url.clone(),
-            "--title".to_string(),
-            input.title.clone(),
-            "--description".to_string(),
-            input.body.clone().unwrap_or_default(),
-            "--yes".to_string(),
-        ],
-    )
-}
-
-/// Builds the `glab mr list` command for MRs requesting the current user's
-/// review in the selected repository.
-fn requested_reviews_command(remote: &ForgeRemote) -> ForgeCommand {
-    gitlab_command(
-        remote,
-        "glab",
-        vec![
-            "mr".to_string(),
-            "list".to_string(),
-            "--repo".to_string(),
-            remote.web_url.clone(),
-            "--reviewer".to_string(),
-            "@me".to_string(),
-            "--per-page".to_string(),
-            REQUESTED_REVIEW_LIMIT.to_string(),
-            "--output".to_string(),
-            "json".to_string(),
-        ],
-    )
-}
-
-/// Builds the `glab api` command for merge-request discussions.
-fn discussions_command(remote: &ForgeRemote, merge_request_iid: &str) -> ForgeCommand {
-    let encoded_project_path: String =
-        form_urlencoded::byte_serialize(remote.project_path().as_bytes()).collect();
-    let endpoint = format!(
-        "/projects/{encoded_project_path}/merge_requests/{merge_request_iid}/discussions?\
-         per_page=100"
-    );
-
-    gitlab_command(
-        remote,
-        "glab",
-        vec![
-            "api".to_string(),
-            "--hostname".to_string(),
-            remote.host.clone(),
-            "--paginate".to_string(),
-            endpoint,
-        ],
-    )
-}
-
-/// Builds one base `glab` command with deterministic color settings and the
-/// optional session worktree for repository-aware host detection.
-fn gitlab_command(
-    remote: &ForgeRemote,
-    executable: &'static str,
-    arguments: Vec<String>,
-) -> ForgeCommand {
-    ForgeCommand::new(executable, arguments)
-        .with_environment("CLICOLOR", "0")
-        .with_environment("NO_COLOR", "1")
-        .with_environment("GITLAB_HOST", remote.host.clone())
-        .with_optional_working_directory(remote.command_working_directory.clone())
-}
-
-/// Parses one optional display id from a GitLab merge-request lookup response.
-fn parse_lookup_display_id(stdout: &str) -> Result<Option<String>, String> {
-    let merge_requests: Vec<GitLabLookupResponse> = serde_json::from_str(stdout)
-        .map_err(|error| format!("invalid GitLab merge-request lookup response: {error}"))?;
-
-    Ok(merge_requests
-        .first()
-        .map(|merge_request| format!("!{}", merge_request.iid)))
-}
-
 /// Parses one merge-request display id from `glab mr create` stdout.
 fn parse_create_display_id(stdout: &str) -> Result<String, String> {
     let created_url = stdout
@@ -369,12 +270,47 @@ fn parse_create_display_id(stdout: &str) -> Result<String, String> {
         .get(merge_request_index + 1)
         .ok_or_else(|| "missing merge request iid in create response URL".to_string())?;
     let display_id = format!("!{merge_request_iid}");
-    parse_display_id(&display_id).map_err(|error| match error {
-        ReviewRequestError::OperationFailed { message, .. } => message,
-        _ => "invalid GitLab merge-request display id".to_string(),
-    })?;
+    parse_display_id_value(&display_id)?;
 
     Ok(display_id)
+}
+
+/// Parses one GitLab merge-request display id into the numeric argument for
+/// `glab`.
+fn parse_display_id(display_id: &str) -> Result<String, ReviewRequestError> {
+    parse_display_id_value(display_id).map_err(|message| ReviewRequestError::OperationFailed {
+        forge_kind: ForgeKind::GitLab,
+        message,
+    })
+}
+
+/// Validates one GitLab merge-request display id and returns its numeric value.
+fn parse_display_id_value(display_id: &str) -> Result<String, String> {
+    let trimmed = display_id.trim().trim_start_matches('!');
+    if trimmed.is_empty() || !trimmed.chars().all(|character| character.is_ascii_digit()) {
+        return Err(format!(
+            "invalid GitLab merge-request display id: `{display_id}`"
+        ));
+    }
+
+    Ok(trimmed.to_string())
+}
+
+/// Builds the `glab mr view` command for one merge-request IID.
+fn view_command(remote: &ForgeRemote, merge_request_iid: &str) -> ForgeCommand {
+    gitlab_command(
+        remote,
+        "glab",
+        vec![
+            "mr".to_string(),
+            "view".to_string(),
+            merge_request_iid.to_string(),
+            "--repo".to_string(),
+            remote.web_url.clone(),
+            "--output".to_string(),
+            "json".to_string(),
+        ],
+    )
 }
 
 /// Parses one merge-request summary from a `glab mr view --output json`
@@ -404,50 +340,51 @@ fn parse_metadata_response(stdout: &str) -> Result<GitLabMetadataResponse, Strin
         .map_err(|error| format!("invalid GitLab merge-request metadata response: {error}"))
 }
 
-/// Parses GitLab list rows into normalized requested-review rows.
-///
-/// The current `glab mr list --reviewer @me` surface filters by user reviewer
-/// and does not expose a separate reviewer-group audience for listed rows, so
-/// GitLab requested reviews are normalized as personal requests.
-fn parse_requested_reviews_response(
-    stdout: &str,
+/// Builds the `glab mr update` command for updating one merge-request
+/// title/description.
+fn update_metadata_command(
     remote: &ForgeRemote,
-) -> Result<Vec<RequestedReview>, String> {
-    let merge_requests: Vec<GitLabRequestedReviewResponse> = serde_json::from_str(stdout)
-        .map_err(|error| format!("invalid GitLab requested-review response: {error}"))?;
+    merge_request_iid: &str,
+    input: &UpdateReviewRequestInput,
+) -> ForgeCommand {
+    gitlab_command(
+        remote,
+        "glab",
+        vec![
+            "mr".to_string(),
+            "update".to_string(),
+            merge_request_iid.to_string(),
+            "--repo".to_string(),
+            remote.web_url.clone(),
+            "--title".to_string(),
+            input.title.clone(),
+            "--description".to_string(),
+            input.body.clone().unwrap_or_default(),
+            "--yes".to_string(),
+        ],
+    )
+}
 
-    Ok(merge_requests
-        .into_iter()
-        .map(|merge_request| {
-            let status_summary = if merge_request.draft {
-                Some("Draft".to_string())
-            } else {
-                None
-            };
+/// Builds the `glab api` command for merge-request discussions.
+fn discussions_command(remote: &ForgeRemote, merge_request_iid: &str) -> ForgeCommand {
+    let encoded_project_path: String =
+        form_urlencoded::byte_serialize(remote.project_path().as_bytes()).collect();
+    let endpoint = format!(
+        "/projects/{encoded_project_path}/merge_requests/{merge_request_iid}/discussions?\
+         per_page=100"
+    );
 
-            RequestedReview {
-                audience: RequestedReviewAudience::Personal,
-                author: merge_request.author.map_or_else(
-                    || "unknown".to_string(),
-                    |author| {
-                        author
-                            .username
-                            .or(author.name)
-                            .unwrap_or_else(|| "unknown".to_string())
-                    },
-                ),
-                body: merge_request.description,
-                comment_snapshot: None,
-                display_id: format!("!{}", merge_request.iid),
-                forge_kind: ForgeKind::GitLab,
-                repository: remote.project_path(),
-                status_summary,
-                title: merge_request.title,
-                updated_at: merge_request.updated_at,
-                web_url: merge_request.web_url,
-            }
-        })
-        .collect())
+    gitlab_command(
+        remote,
+        "glab",
+        vec![
+            "api".to_string(),
+            "--hostname".to_string(),
+            remote.host.clone(),
+            "--paginate".to_string(),
+            endpoint,
+        ],
+    )
 }
 
 /// Parses merge-request discussions into inline threads and MR-level comments.
@@ -557,37 +494,85 @@ fn review_comment_from_note(note: GitLabDiscussionNote) -> ReviewComment {
     }
 }
 
-/// Parses one GitLab merge-request display id into the numeric argument for
-/// `glab`.
-fn parse_display_id(display_id: &str) -> Result<String, ReviewRequestError> {
-    let trimmed = display_id.trim().trim_start_matches('!');
-    if trimmed.is_empty() || !trimmed.chars().all(|character| character.is_ascii_digit()) {
-        return Err(ReviewRequestError::OperationFailed {
-            forge_kind: ForgeKind::GitLab,
-            message: format!("invalid GitLab merge-request display id: `{display_id}`"),
-        });
-    }
-
-    Ok(trimmed.to_string())
+/// Builds the `glab mr list` command for MRs requesting the current user's
+/// review in the selected repository.
+fn requested_reviews_command(remote: &ForgeRemote) -> ForgeCommand {
+    gitlab_command(
+        remote,
+        "glab",
+        vec![
+            "mr".to_string(),
+            "list".to_string(),
+            "--repo".to_string(),
+            remote.web_url.clone(),
+            "--reviewer".to_string(),
+            "@me".to_string(),
+            "--per-page".to_string(),
+            REQUESTED_REVIEW_LIMIT.to_string(),
+            "--output".to_string(),
+            "json".to_string(),
+        ],
+    )
 }
 
-/// Formats one GitLab merge-status label for the UI.
-fn merge_status_summary(
-    merge_status: Option<&str>,
-    detailed_merge_status: Option<&str>,
-) -> Option<String> {
-    let status = detailed_merge_status.or(merge_status)?;
+/// Parses GitLab list rows into normalized requested-review rows.
+///
+/// The current `glab mr list --reviewer @me` surface filters by user reviewer
+/// and does not expose a separate reviewer-group audience for listed rows, so
+/// GitLab requested reviews are normalized as personal requests.
+fn parse_requested_reviews_response(
+    stdout: &str,
+    remote: &ForgeRemote,
+) -> Result<Vec<RequestedReview>, String> {
+    let merge_requests: Vec<GitLabRequestedReviewResponse> = serde_json::from_str(stdout)
+        .map_err(|error| format!("invalid GitLab requested-review response: {error}"))?;
 
-    match status {
-        "can_be_merged" | "mergeable" => Some("Mergeable".to_string()),
-        "cannot_be_merged" => Some("Conflicts".to_string()),
-        "cannot_be_merged_recheck" | "checking" | "unchecked" => Some("Checking".to_string()),
-        "ci_still_running" | "commits_status" => Some("Checks pending".to_string()),
-        "ci_must_pass" => Some("Checks required".to_string()),
-        "discussions_not_resolved" => Some("Discussions unresolved".to_string()),
-        "draft_status" | "not_open" => None,
-        other => Some(normalize_provider_label(other)),
-    }
+    Ok(merge_requests
+        .into_iter()
+        .map(|merge_request| {
+            let status_summary = if merge_request.draft {
+                Some("Draft".to_string())
+            } else {
+                None
+            };
+
+            RequestedReview {
+                audience: RequestedReviewAudience::Personal,
+                author: merge_request.author.map_or_else(
+                    || "unknown".to_string(),
+                    |author| {
+                        author
+                            .username
+                            .or(author.name)
+                            .unwrap_or_else(|| "unknown".to_string())
+                    },
+                ),
+                body: merge_request.description,
+                comment_snapshot: None,
+                display_id: format!("!{}", merge_request.iid),
+                forge_kind: ForgeKind::GitLab,
+                repository: remote.project_path(),
+                status_summary,
+                title: merge_request.title,
+                updated_at: merge_request.updated_at,
+                web_url: merge_request.web_url,
+            }
+        })
+        .collect())
+}
+
+/// Builds one base `glab` command with deterministic color settings and the
+/// optional session worktree for repository-aware host detection.
+fn gitlab_command(
+    remote: &ForgeRemote,
+    executable: &'static str,
+    arguments: Vec<String>,
+) -> ForgeCommand {
+    ForgeCommand::new(executable, arguments)
+        .with_environment("CLICOLOR", "0")
+        .with_environment("NO_COLOR", "1")
+        .with_environment("GITLAB_HOST", remote.host.clone())
+        .with_optional_working_directory(remote.command_working_directory.clone())
 }
 
 /// Minimal GitLab list payload used to find an existing merge request.
@@ -639,6 +624,57 @@ struct GitLabViewResponse {
     title: String,
     #[serde(rename = "web_url")]
     web_url: String,
+}
+
+impl GitLabViewResponse {
+    /// Maps GitLab state fields into the normalized review-request state.
+    fn review_request_state(&self) -> ReviewRequestState {
+        if self.merged_at.is_some() || self.state.eq_ignore_ascii_case("merged") {
+            return ReviewRequestState::Merged;
+        }
+
+        if matches!(self.state.as_str(), "closed" | "locked") {
+            return ReviewRequestState::Closed;
+        }
+
+        ReviewRequestState::Open
+    }
+
+    /// Formats the provider-specific status summary for the UI.
+    fn status_summary(&self) -> Option<String> {
+        let mut parts = Vec::new();
+        if self.draft {
+            parts.push("Draft".to_string());
+        }
+
+        if let Some(merge_summary) = Self::merge_status_summary(
+            self.merge_status.as_deref(),
+            self.detailed_merge_status.as_deref(),
+        ) {
+            parts.push(merge_summary);
+        }
+
+        status_summary_parts(&parts)
+    }
+
+    /// Formats one GitLab merge-status label for the UI.
+    fn merge_status_summary(
+        merge_status: Option<&str>,
+        detailed_merge_status: Option<&str>,
+    ) -> Option<String> {
+        let status = detailed_merge_status.or(merge_status)?;
+
+        match status {
+            "can_be_merged" | "mergeable" => Some("Mergeable".to_string()),
+            "cannot_be_merged" => Some("Conflicts".to_string()),
+            "cannot_be_merged_recheck" | "checking" | "unchecked" => Some("Checking".to_string()),
+            "ci_still_running" | "commits_status" => Some("Checks pending".to_string()),
+            "ci_must_pass" => Some("Checks required".to_string()),
+            "discussions_not_resolved" => Some("Discussions unresolved".to_string()),
+            "draft_status" | "not_open" => None,
+            other => Some(normalize_provider_label(other)),
+        }
+    }
 }
 
 /// GitLab merge-request title/description payload returned by
@@ -695,38 +731,6 @@ struct GitLabDiscussionPosition {
     old_line: Option<u32>,
     #[serde(rename = "old_path")]
     old_path: Option<String>,
-}
-
-impl GitLabViewResponse {
-    /// Maps GitLab state fields into the normalized review-request state.
-    fn review_request_state(&self) -> ReviewRequestState {
-        if self.merged_at.is_some() || self.state.eq_ignore_ascii_case("merged") {
-            return ReviewRequestState::Merged;
-        }
-
-        if matches!(self.state.as_str(), "closed" | "locked") {
-            return ReviewRequestState::Closed;
-        }
-
-        ReviewRequestState::Open
-    }
-
-    /// Formats the provider-specific status summary for the UI.
-    fn status_summary(&self) -> Option<String> {
-        let mut parts = Vec::new();
-        if self.draft {
-            parts.push("Draft".to_string());
-        }
-
-        if let Some(merge_summary) = merge_status_summary(
-            self.merge_status.as_deref(),
-            self.detailed_merge_status.as_deref(),
-        ) {
-            parts.push(merge_summary);
-        }
-
-        status_summary_parts(&parts)
-    }
 }
 
 #[cfg(test)]
@@ -1026,6 +1030,102 @@ mod tests {
         );
     }
 
+    #[test]
+    fn parse_requested_reviews_response_defaults_optional_fields() {
+        // Arrange
+        let remote = gitlab_remote();
+        let stdout = r#"[{
+            "iid": 43,
+            "title": "Review parser defaults",
+            "web_url": "https://gitlab.com/agentty-xyz/agentty/-/merge_requests/43"
+        }]"#;
+
+        // Act
+        let requested_reviews = parse_requested_reviews_response(stdout, &remote)
+            .expect("requested-review defaults should parse");
+
+        // Assert
+        assert_eq!(requested_reviews.len(), 1);
+        let requested_review = &requested_reviews[0];
+        assert_eq!(requested_review.author, "unknown");
+        assert_eq!(requested_review.body, None);
+        assert_eq!(requested_review.status_summary, None);
+        assert_eq!(requested_review.updated_at, None);
+    }
+
+    #[test]
+    fn gitlab_view_response_maps_terminal_states() {
+        // Arrange
+        let cases = [
+            (
+                Some("2026-07-16T12:00:00Z"),
+                "opened",
+                ReviewRequestState::Merged,
+            ),
+            (None, "merged", ReviewRequestState::Merged),
+            (None, "closed", ReviewRequestState::Closed),
+            (None, "locked", ReviewRequestState::Closed),
+            (None, "opened", ReviewRequestState::Open),
+        ];
+
+        // Act & Assert
+        for (merged_at, state, expected) in cases {
+            let response = GitLabViewResponse {
+                draft: false,
+                detailed_merge_status: None,
+                iid: 42,
+                merge_status: None,
+                merged_at: merged_at.map(str::to_string),
+                source_branch: "feature/forge".to_string(),
+                state: state.to_string(),
+                target_branch: "main".to_string(),
+                title: "Add forge review support".to_string(),
+                web_url: "https://gitlab.com/agentty-xyz/agentty/-/merge_requests/42".to_string(),
+            };
+
+            assert_eq!(response.review_request_state(), expected);
+        }
+    }
+
+    #[test]
+    fn gitlab_merge_status_summary_maps_provider_labels() {
+        // Arrange
+        let cases = [
+            (Some("can_be_merged"), None, Some("Mergeable")),
+            (Some("mergeable"), None, Some("Mergeable")),
+            (Some("cannot_be_merged"), None, Some("Conflicts")),
+            (Some("cannot_be_merged_recheck"), None, Some("Checking")),
+            (Some("checking"), None, Some("Checking")),
+            (Some("unchecked"), None, Some("Checking")),
+            (Some("ci_still_running"), None, Some("Checks pending")),
+            (Some("commits_status"), None, Some("Checks pending")),
+            (Some("ci_must_pass"), None, Some("Checks required")),
+            (
+                Some("discussions_not_resolved"),
+                None,
+                Some("Discussions unresolved"),
+            ),
+            (Some("draft_status"), None, None),
+            (Some("not_open"), None, None),
+            (Some("needs_rebase"), None, Some("Needs rebase")),
+            (
+                Some("can_be_merged"),
+                Some("cannot_be_merged"),
+                Some("Conflicts"),
+            ),
+            (None, None, None),
+        ];
+
+        // Act & Assert
+        for (merge_status, detailed_merge_status, expected) in cases {
+            assert_eq!(
+                GitLabViewResponse::merge_status_summary(merge_status, detailed_merge_status)
+                    .as_deref(),
+                expected
+            );
+        }
+    }
+
     #[tokio::test]
     async fn fetch_authenticated_review_comment_snapshot_parses_discussions_response() {
         // Arrange
@@ -1109,6 +1209,21 @@ mod tests {
 
         // Assert
         assert_eq!(display_id, "!42");
+    }
+
+    #[test]
+    fn parse_create_display_id_rejects_non_numeric_iid() {
+        // Arrange
+        let stdout = "https://gitlab.com/agentty-xyz/agentty/-/merge_requests/not-a-number\n";
+
+        // Act
+        let error = parse_create_display_id(stdout).expect_err("non-numeric iid should fail");
+
+        // Assert
+        assert_eq!(
+            error,
+            "invalid GitLab merge-request display id: `!not-a-number`"
+        );
     }
 
     #[test]
