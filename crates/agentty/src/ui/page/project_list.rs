@@ -27,8 +27,10 @@ const ROW_HIGHLIGHT_SYMBOL: &str = "";
 const ACTIVE_PROJECT_MARKER: &str = "* ";
 /// Horizontal spacing between project-table columns.
 const TABLE_COLUMN_SPACING: u16 = 2;
-/// Fixed height reserved for the top activity and work-pace panels.
-const PROJECT_DASHBOARD_PANEL_HEIGHT: u16 = 12;
+/// Month heading plus one row for each weekday in the activity heatmap.
+const HEATMAP_CONTENT_HEIGHT: u16 = 8;
+/// Heatmap content height plus the top dashboard panel borders.
+const PROJECT_DASHBOARD_PANEL_HEIGHT: u16 = HEATMAP_CONTENT_HEIGHT + 2;
 /// Projects tab renderer showing saved repositories, activity, compact
 /// work-performance stats, available agent CLIs, and project metadata.
 pub struct ProjectListPage<'a> {
@@ -151,11 +153,9 @@ impl Page for ProjectListPage<'_> {
 }
 
 impl ProjectListPage<'_> {
-    /// Builds project-list activity heatmap content lines without a duplicate
-    /// heading because the surrounding panel block supplies the `Activity`
-    /// title, then trims week columns to the visible panel width.
+    /// Builds the heatmap month heading and weekday rows, trimming week
+    /// columns to the visible panel width.
     fn build_heatmap_lines(&self, available_width: u16) -> Vec<Line<'static>> {
-        let content_width = usize::from(available_width);
         let end_day_key = current_day_key_local();
         let grid = build_activity_heatmap_grid(self.stats_activity, end_day_key);
         let max_count = heatmap_max_count(&grid);
@@ -190,35 +190,6 @@ impl ProjectListPage<'_> {
 
             lines.push(Line::from(spans));
         }
-
-        if content_width < 24 {
-            lines.push(Line::from(Span::styled(
-                format!("Max/day: {max_count}"),
-                Style::default().fg(style::palette::text_muted()),
-            )));
-
-            return lines;
-        }
-
-        let mut legend = vec![Span::styled(
-            "Less ",
-            Style::default().fg(style::palette::text_muted()),
-        )];
-        for intensity in 0_u8..=4 {
-            legend.push(Span::styled(
-                "  ",
-                Style::default().bg(Self::heatmap_color(intensity)),
-            ));
-            legend.push(Span::raw(" "));
-        }
-        legend.push(Span::styled(
-            "More",
-            Style::default().fg(style::palette::text_muted()),
-        ));
-        if content_width >= 36 {
-            legend.push(Span::raw(format!(" | Max/day: {max_count}")));
-        }
-        lines.push(Line::from(legend));
 
         lines
     }
@@ -564,6 +535,18 @@ mod tests {
 
         // Assert
         assert_eq!(constraints, expected_constraints);
+    }
+
+    #[test]
+    fn test_dashboard_panel_height_matches_heatmap() {
+        // Arrange
+        let expected_height = 10;
+
+        // Act
+        let panel_height = PROJECT_DASHBOARD_PANEL_HEIGHT;
+
+        // Assert
+        assert_eq!(panel_height, expected_height);
     }
 
     #[test]
@@ -928,8 +911,6 @@ mod tests {
         // Assert
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("┐┌"));
-        assert!(text.contains("Less"));
-        assert!(text.contains("More"));
         assert!(text.contains("Work Pace"));
         assert!(text.contains("Agent CLIs"));
         assert!(text.contains("claude 2.1.39"));
@@ -943,7 +924,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_heatmap_lines_uses_persisted_activity_for_max_count() {
+    fn test_build_heatmap_lines_uses_persisted_activity_for_intensity() {
         // Arrange
         let activity = vec![DailyActivity {
             day_key: current_day_key_local(),
@@ -954,14 +935,14 @@ mod tests {
 
         // Act
         let heatmap_lines = page.build_heatmap_lines(80);
-        let rendered_text = heatmap_lines
-            .into_iter()
-            .map(|line| line.to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
 
         // Assert
-        assert!(rendered_text.contains("Max/day: 50"));
+        assert_eq!(heatmap_lines.len(), usize::from(HEATMAP_CONTENT_HEIGHT));
+        assert!(heatmap_lines.iter().any(|line| {
+            line.spans
+                .iter()
+                .any(|span| span.style.bg == Some(ProjectListPage::heatmap_color(4)))
+        }));
     }
 
     #[test]
