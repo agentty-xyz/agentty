@@ -211,6 +211,44 @@ Routine agent validation must use `TESTTY_GIF_MODE=check` so the semantic PTY as
 still run while GIF freshness is checked without invoking VHS or launching Chrome. Use
 `TESTTY_GIF_MODE=force` only when intentionally regenerating GIF assets.
 
+### Record in the canonical container
+
+Committed hash sidecars must be produced by the same environment that CI verifies them
+in. `docker/e2e.Dockerfile` defines that environment: a pinned `linux/amd64` image with
+the Rust toolchain, `prek`, `cargo-nextest`, and the full VHS recording stack (`vhs`,
+`ttyd`, Chromium, `ffmpeg`, JetBrains Mono). Presubmit and postsubmit build this image
+and run the `test-agentty-e2e` hook inside it against a read-only checkout, so record
+GIFs in the same image instead of on the host. The host needs Docker only — no local
+Chrome or VHS — and the localhost-socket sandbox restriction below does not apply inside
+the container.
+
+Build the image (rebuild only when the Dockerfile changes):
+
+```sh
+docker build --platform linux/amd64 \
+  --file docker/e2e.Dockerfile --tag agentty-e2e docker
+```
+
+Record or refresh feature artifacts with a writable workspace mount and `generate` mode,
+which re-records only missing or stale GIFs. The two named volumes cache the cargo
+registry and build output between runs:
+
+```sh
+docker run --rm --platform linux/amd64 \
+  --mount type=bind,source="$PWD",target=/workspace \
+  --mount type=volume,source=agentty-e2e-cargo,target=/usr/local/cargo/registry \
+  --mount type=volume,source=agentty-e2e-target,target=/tmp/target \
+  --env CARGO_TARGET_DIR=/tmp/target \
+  --env TESTTY_GIF_MODE=generate \
+  agentty-e2e \
+  cargo nextest run --locked --profile ci -p agentty --test e2e test_{name}
+```
+
+Review the changed GIF and `.{name}.hash` sidecar, then refresh the PNG poster for every
+regenerated GIF (section 4) before committing all three together.
+
+### Host recording caveats
+
 `force` mode must run from an unsandboxed shell — a normal user terminal, or a single
 agent command explicitly approved to bypass the sandbox. VHS records through localhost
 sockets (`ttyd` plus the Chrome DevTools protocol), and sandboxed agent shells deny all

@@ -134,8 +134,17 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Rust and `prek`
-        uses: ./.github/actions/setup-rust-prek
+      - name: Build the pinned E2E image
+        run: >-
+          docker build --platform linux/amd64
+          --file docker/e2e.Dockerfile --tag agentty-e2e docker
 
+      # The checkout is mounted read-only so `TESTTY_GIF_MODE=check` (set by
+      # the hook) verifies committed GIF hash sidecars without rewriting them.
       - name: Run end-to-end feature suite
-        run: prek run test-agentty-e2e --all-files --hook-stage manual
+        run: >-
+          docker run --rm --platform linux/amd64
+          --mount type=bind,source="$PWD",target=/workspace,readonly
+          --env CARGO_TARGET_DIR=/tmp/target
+          agentty-e2e
+          prek run test-agentty-e2e --all-files --hook-stage manual
