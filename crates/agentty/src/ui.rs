@@ -18,6 +18,7 @@ mod render_cache;
 pub mod review_comment_format;
 pub mod router;
 pub mod session_format;
+pub(crate) mod session_output_assembly;
 /// Shared theme-aware UI styling helpers and status-display helpers.
 pub mod style;
 

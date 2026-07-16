@@ -239,6 +239,15 @@ pub fn session_output_panel_border_style(status: Status) -> Style {
     Style::default().fg(style::status_color(status))
 }
 
+/// Returns whether the session-output status row receives a Tachyon loader
+/// effect.
+pub(crate) fn session_output_uses_tachyon_loader(status: Status) -> bool {
+    matches!(
+        status,
+        Status::InProgress | Status::AgentReview | Status::Rebasing | Status::Merging
+    )
+}
+
 /// Builds the inline shortcut hint for continuing a completed session.
 pub fn session_output_done_line() -> Line<'static> {
     Line::from(vec![Span::styled(
@@ -439,5 +448,32 @@ mod tests {
 
         // Assert
         assert!(metadata_text.contains("Agent: codex  Model: gpt-5.5"));
+    }
+
+    #[test]
+    fn test_session_output_uses_tachyon_loader_for_animated_statuses() {
+        // Arrange
+        let animated_statuses = [
+            Status::InProgress,
+            Status::AgentReview,
+            Status::Rebasing,
+            Status::Merging,
+        ];
+        let static_statuses = [
+            Status::Draft,
+            Status::Review,
+            Status::Question,
+            Status::Queued,
+            Status::Done,
+            Status::Canceled,
+        ];
+
+        // Act
+        let animated_results = animated_statuses.map(session_output_uses_tachyon_loader);
+        let static_results = static_statuses.map(session_output_uses_tachyon_loader);
+
+        // Assert
+        assert!(animated_results.into_iter().all(|uses_loader| uses_loader));
+        assert!(static_results.into_iter().all(|uses_loader| !uses_loader));
     }
 }
