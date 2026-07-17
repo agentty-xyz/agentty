@@ -22,7 +22,7 @@ use tempfile::tempdir;
 use tokio::sync::{Barrier, Notify};
 
 use super::*;
-use crate::app::prompt_intent::ReviewCommentSelection;
+use crate::app::prompt_intent::{ReviewCommentResolutionOutcome, ReviewCommentSelection};
 use crate::app::review::{review_failure_message, review_loading_message};
 use crate::app::{App, AppEvent, ReviewCacheEntry, SyncSessionStartError, Tab};
 use crate::domain::agent::{
@@ -2564,7 +2564,7 @@ async fn test_resolve_session_review_comments_enqueues_turn_and_clears_focused_r
         .insert(session_id.clone(), Arc::new(mock_channel));
 
     // Act
-    let enqueued = app
+    let outcome = app
         .resolve_session_review_comments(
             &session_id,
             &snapshot,
@@ -2582,16 +2582,14 @@ async fn test_resolve_session_review_comments_enqueues_turn_and_clears_focused_r
         .expect("failed to load focused reviews");
 
     // Assert
-    assert!(enqueued);
+    assert_eq!(
+        outcome,
+        ReviewCommentResolutionOutcome::ShowSession {
+            session_id: session_id.clone(),
+        }
+    );
     assert!(!app.review_cache.contains_key(&session_id));
     assert!(focused_reviews.is_empty());
-    assert!(matches!(
-        &app.mode,
-        AppMode::View {
-            session_id: viewed_session_id,
-            ..
-        } if viewed_session_id == &session_id
-    ));
 }
 
 /// Builds one actionable inline review thread for session-resolution tests.

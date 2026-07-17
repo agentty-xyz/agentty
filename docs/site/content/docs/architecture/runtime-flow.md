@@ -168,9 +168,10 @@ derived data instead of recomputing the render twice per frame.
 
 <a id="architecture-runtime-flow-turn"></a> From prompt submit to persisted result:
 
-1. Prompt mode converts a submit key into an app-layer prompt intent;
-   `App::handle_prompt_submit_intent()` drains normal submissions or dispatches
-   slash-command selections.
+1. Prompt mode drains presentation-owned composer state into a typed submission, or
+   resolves a presentation-owned slash-menu selection. `app/prompt_intent.rs` executes
+   the requested session workflow and returns typed composer/navigation effects; prompt
+   mode applies those effects to `AppMode`.
 1. `start_session()` (first prompt) or `reply()` (follow-up) persists the command in
    `session_operation` and enqueues it on the per-session worker.
 1. The worker marks the operation `running`, checks cancel flags, verifies worktree

@@ -1,4 +1,5 @@
 use std::io;
+use std::path::PathBuf;
 
 use crossterm::event::{self, KeyCode, KeyEvent};
 use ratatui::Terminal;
@@ -7,16 +8,21 @@ use ratatui::layout::Rect;
 
 use crate::app::App;
 use crate::app::prompt_intent::{
-    PromptIntentContext, PromptIntentInputMode, PromptIntentSessionMode,
+    PromptApplyOutcome, PromptCancellation, PromptImagePaste, PromptSessionMode, PromptSubmission,
+    PromptWorkflowOutcome,
 };
-use crate::domain::agent::AgentKind;
+use crate::domain::agent::{AgentKind, ReasoningLevel};
+use crate::domain::composer::PromptAttachment;
 use crate::domain::input::{InputCommand, InputEffect, InputState};
 use crate::domain::session::SessionId;
+use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
 use crate::presentation::app_mode::{AppMode, ChatFocus, DiffRestoreTarget, PromptModeSnapshot};
 use crate::presentation::prompt::{
-    PromptAtMentionState, apply_prompt_delete_range as apply_prompt_delete_range_components,
-    current_line_delete_range as prompt_current_line_delete_range, insert_prompt_text,
-    prompt_slash_option_count,
+    PromptAtMentionState, PromptSlashStage, PromptSuggestionSelection,
+    apply_prompt_delete_range as apply_prompt_delete_range_components,
+    current_line_delete_range as prompt_current_line_delete_range, drain_prompt_submission,
+    insert_prompt_local_image, insert_prompt_text, prompt_slash_option_count,
+    resolve_prompt_slash_selection,
 };
 use crate::runtime::EventResult;
 use crate::runtime::mode::chat_scroll::{self, ChatScrollMetrics};
@@ -38,26 +44,6 @@ struct PromptContext {
 }
 
 impl PromptContext {
-    /// Converts runtime prompt routing state into an app-layer execution
-    /// intent context.
-    fn to_intent_context(&self) -> PromptIntentContext {
-        PromptIntentContext {
-            input_mode: match self.input_mode {
-                PromptInputMode::SlashCommand => PromptIntentInputMode::SlashCommand,
-                PromptInputMode::AtMention | PromptInputMode::Text => PromptIntentInputMode::Text,
-            },
-            scroll_offset: self.scroll_offset,
-            session_id: self.session_id.clone(),
-            session_index: self.session_index,
-            session_mode: match self.session_mode {
-                PromptSessionMode::Existing => PromptIntentSessionMode::Existing,
-                PromptSessionMode::NewDeletable => PromptIntentSessionMode::NewDeletable,
-                PromptSessionMode::NewDraft => PromptIntentSessionMode::NewDraft,
-                PromptSessionMode::NewRegular => PromptIntentSessionMode::NewRegular,
-            },
-        }
-    }
-
     /// Returns whether the prompt is currently editing an active `@` mention.
     fn is_at_mention(&self) -> bool {
         self.input_mode == PromptInputMode::AtMention
@@ -78,22 +64,6 @@ enum PromptInputMode {
     SlashCommand,
     /// Prompt text is normal user input.
     Text,
-}
-
-/// Session lifecycle shape that determines prompt submission and cancellation
-/// behavior.
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum PromptSessionMode {
-    /// Existing session receiving a follow-up reply.
-    Existing,
-    /// New non-draft session that can be deleted when prompt composition is
-    /// canceled.
-    NewDeletable,
-    /// Draft-mode session that stages prompt text instead of starting a turn.
-    NewDraft,
-    /// New non-draft session that should be preserved on cancel because it has
-    /// staged drafts.
-    NewRegular,
 }
 
 /// Handles key input while the app is in `AppMode::Prompt`.
@@ -692,17 +662,20 @@ fn navigate_prompt_history_down(app: &mut App) {
 }
 
 fn advance_prompt_slash_selection(app: &mut App) {
-    let allow_apply_command = app.prompt_apply_command_is_available();
     let (
         available_agent_kinds,
         input_text,
         selected_agent,
         selected_index,
         session_agent_kind,
+        session_id,
         stage,
     ) = match &app.mode {
         AppMode::Prompt {
-            input, slash_state, ..
+            input,
+            session_id,
+            slash_state,
+            ..
         } => (
             slash_state.available_agent_kinds.clone(),
             input.text().to_string(),
@@ -710,10 +683,13 @@ fn advance_prompt_slash_selection(app: &mut App) {
             slash_state.selected_index,
             app.selected_session()
                 .map_or(AgentKind::Codex, |session| session.agent.kind()),
+            Some(session_id.clone()),
             slash_state.stage,
         ),
         _ => return,
     };
+    let allow_apply_command = session_id
+        .is_some_and(|session_id| app.prompt_apply_command_is_available_for_session(&session_id));
 
     let option_count = prompt_slash_option_count(
         &input_text,
@@ -741,14 +717,28 @@ fn advance_prompt_slash_selection(app: &mut App) {
 /// text in [`prompt_context`], so any leading `/` falls through to the queue
 /// path instead of executing a slash command against the active operation.
 async fn handle_prompt_submit_key(app: &mut App, prompt_context: &PromptContext) {
-    app.handle_prompt_submit_intent(&prompt_context.to_intent_context())
+    if prompt_context.is_slash_command() {
+        handle_prompt_slash_submit(app, prompt_context).await;
+
+        return;
+    }
+
+    let (prompt, archived_attachments) = take_submitted_turn_prompt(app);
+    app.cleanup_prompt_attachments(archived_attachments).await;
+    let outcome = app
+        .submit_prompt(PromptSubmission {
+            prompt,
+            session_id: prompt_context.session_id.clone(),
+            session_mode: prompt_context.session_mode,
+        })
         .await;
+
+    apply_prompt_workflow_outcome(app, outcome, None);
 }
 
 /// Dispatches one clipboard-image paste intent for the active prompt.
 async fn handle_prompt_image_paste(app: &mut App, prompt_context: &PromptContext) {
-    app.handle_prompt_image_paste_intent(&prompt_context.to_intent_context())
-        .await;
+    paste_image_into_active_prompt(app, &prompt_context.session_id).await;
 }
 
 /// Cancels the active prompt and drops any composer-owned attachment files.
@@ -756,8 +746,260 @@ async fn handle_prompt_image_paste(app: &mut App, prompt_context: &PromptContext
 /// Existing focused-review output is restored into session view because no new
 /// prompt was submitted.
 async fn handle_prompt_cancel_key(app: &mut App, prompt_context: &PromptContext) {
-    app.handle_prompt_cancel_intent(&prompt_context.to_intent_context())
+    if prompt_context.is_slash_command() {
+        clear_prompt_slash_input(app).await;
+
+        return;
+    }
+
+    let attachments = take_prompt_attachment_cleanup(app);
+    app.cleanup_prompt_attachments(attachments).await;
+    let outcome = app
+        .cancel_prompt(PromptCancellation {
+            session_id: prompt_context.session_id.clone(),
+            session_mode: prompt_context.session_mode,
+        })
         .await;
+
+    apply_prompt_workflow_outcome(app, outcome, prompt_context.scroll_offset);
+}
+
+/// Executes the selected slash-command action from presentation-owned state.
+async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContext) {
+    let session_agent_kind = app
+        .session_at(prompt_context.session_index)
+        .map_or(AgentKind::Codex, |session| session.agent.kind());
+    let selection = match &app.mode {
+        AppMode::Prompt {
+            input, slash_state, ..
+        } => resolve_prompt_slash_selection(
+            input.text(),
+            slash_state,
+            session_agent_kind,
+            app.prompt_apply_command_is_available_for_session(&prompt_context.session_id),
+        ),
+        _ => None,
+    };
+
+    match selection {
+        Some(PromptSuggestionSelection::Command("/apply")) => {
+            let outcome = app
+                .apply_focused_review(&prompt_context.session_id, prompt_context.session_index)
+                .await;
+            apply_prompt_apply_outcome(app, outcome).await;
+        }
+        Some(PromptSuggestionSelection::Command("/reasoning")) => {
+            let selected_reasoning_level = app
+                .session_at(prompt_context.session_index)
+                .map_or(app.settings.reasoning_level, |session| {
+                    session.effective_reasoning_level()
+                });
+            let selected_index = ReasoningLevel::ALL
+                .iter()
+                .position(|level| *level == selected_reasoning_level)
+                .unwrap_or(0);
+
+            if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+                slash_state.stage = PromptSlashStage::Reasoning;
+                slash_state.selected_agent = None;
+                slash_state.selected_index = selected_index;
+            }
+        }
+        Some(PromptSuggestionSelection::Command(_)) => {
+            if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+                slash_state.stage = PromptSlashStage::Agent;
+                slash_state.selected_agent = None;
+                slash_state.selected_index = 0;
+            }
+        }
+        Some(PromptSuggestionSelection::Agent(selected_agent)) => {
+            if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+                slash_state.selected_agent = Some(selected_agent);
+                slash_state.stage = PromptSlashStage::Model;
+                slash_state.selected_index = 0;
+            }
+        }
+        Some(PromptSuggestionSelection::Model(selected_agent)) => {
+            clear_prompt_slash_input(app).await;
+            app.update_prompt_session_model(&prompt_context.session_id, selected_agent)
+                .await;
+        }
+        Some(PromptSuggestionSelection::Reasoning(reasoning_level)) => {
+            clear_prompt_slash_input(app).await;
+            app.update_prompt_session_reasoning_level(&prompt_context.session_id, reasoning_level)
+                .await;
+        }
+        None => {}
+    }
+}
+
+/// Applies the navigation requested by one app-layer prompt workflow.
+fn apply_prompt_workflow_outcome(
+    app: &mut App,
+    outcome: PromptWorkflowOutcome,
+    scroll_offset: Option<u16>,
+) {
+    match outcome {
+        PromptWorkflowOutcome::KeepPrompt => {}
+        PromptWorkflowOutcome::ShowSession { session_id } => {
+            app.mode = AppMode::View {
+                scroll_offset,
+                session_id,
+            };
+        }
+        PromptWorkflowOutcome::ShowSessionList => app.mode = AppMode::List,
+    }
+}
+
+/// Applies the composer and navigation changes requested by `/apply`.
+async fn apply_prompt_apply_outcome(app: &mut App, outcome: PromptApplyOutcome) {
+    match outcome {
+        PromptApplyOutcome::ClearComposer => clear_prompt_slash_input(app).await,
+        PromptApplyOutcome::KeepComposer => reset_prompt_slash_state(app),
+        PromptApplyOutcome::ShowSession { session_id } => {
+            let attachments = take_prompt_attachment_cleanup(app);
+            app.cleanup_prompt_attachments(attachments).await;
+            app.mode = AppMode::View {
+                scroll_offset: None,
+                session_id,
+            };
+        }
+    }
+}
+
+/// Persists a clipboard image and inserts it into the active presentation
+/// composer when the capture succeeds.
+pub(crate) async fn paste_image_into_active_prompt(app: &mut App, session_id: &SessionId) {
+    let attachment_number = match &app.mode {
+        AppMode::Prompt {
+            attachment_state, ..
+        } => attachment_state.next_attachment_number,
+        _ => return,
+    };
+    let request = PromptImagePaste {
+        attachment_number,
+        session_id: session_id.clone(),
+    };
+    let Some(local_image_path) = app.persist_prompt_image(request).await else {
+        return;
+    };
+
+    let unreachable_attachments = insert_pasted_image_placeholder(app, local_image_path);
+    app.cleanup_prompt_attachments(unreachable_attachments)
+        .await;
+}
+
+/// Inserts one persisted image placeholder into presentation-owned prompt
+/// state.
+fn insert_pasted_image_placeholder(
+    app: &mut App,
+    local_image_path: PathBuf,
+) -> Vec<PromptAttachment> {
+    if let AppMode::Prompt {
+        at_mention_state,
+        attachment_state,
+        history_state,
+        input,
+        slash_state,
+        ..
+    } = &mut app.mode
+    {
+        insert_prompt_local_image(
+            attachment_state,
+            history_state,
+            input,
+            slash_state,
+            local_image_path,
+        );
+        *at_mention_state = None;
+
+        return attachment_state.prune_unreachable(input);
+    }
+
+    Vec::new()
+}
+
+/// Drains presentation-owned prompt input into an app-layer submission and
+/// returns archived attachment files that require cleanup.
+fn take_submitted_turn_prompt(app: &mut App) -> (TurnPrompt, Vec<PromptAttachment>) {
+    let AppMode::Prompt {
+        attachment_state,
+        input,
+        ..
+    } = &mut app.mode
+    else {
+        return (TurnPrompt::from_text(String::new()), Vec::new());
+    };
+    let archived_attachments = attachment_state.archived_attachments.clone();
+    let submission = drain_prompt_submission(attachment_state, input);
+    let attachments = submission
+        .attachments
+        .into_iter()
+        .map(|attachment| TurnPromptAttachment {
+            local_image_path: attachment.local_image_path,
+            placeholder: attachment.placeholder,
+        })
+        .collect();
+    let prompt = TurnPrompt {
+        attachments,
+        text: submission.text,
+        text_source: TurnPromptTextSource::UserPrompt,
+    };
+
+    (prompt, archived_attachments)
+}
+
+/// Removes all attachments owned by the active composer and resets that
+/// presentation state before it leaves prompt mode.
+fn take_prompt_attachment_cleanup(app: &mut App) -> Vec<PromptAttachment> {
+    let attachments = prompt_attachment_cleanup(app);
+
+    reset_prompt_attachment_state(app);
+
+    attachments
+}
+
+/// Clones every image attachment owned by the active presentation composer.
+fn prompt_attachment_cleanup(app: &App) -> Vec<PromptAttachment> {
+    let AppMode::Prompt {
+        attachment_state, ..
+    } = &app.mode
+    else {
+        return Vec::new();
+    };
+
+    attachment_state
+        .attachments
+        .iter()
+        .chain(&attachment_state.archived_attachments)
+        .cloned()
+        .collect()
+}
+
+/// Clears attachment state after its files have been cleaned up elsewhere.
+fn reset_prompt_attachment_state(app: &mut App) {
+    let AppMode::Prompt {
+        attachment_state, ..
+    } = &mut app.mode
+    else {
+        return;
+    };
+
+    attachment_state.reset();
+}
+
+/// Clears the slash buffer and cleans up composer attachments it owned.
+async fn clear_prompt_slash_input(app: &mut App) {
+    let attachments = take_prompt_attachment_cleanup(app);
+    app.cleanup_prompt_attachments(attachments).await;
+
+    if let AppMode::Prompt {
+        input, slash_state, ..
+    } = &mut app.mode
+    {
+        input.take_text();
+        slash_state.reset();
+    }
 }
 
 fn prompt_input_width<B: Backend>(terminal: &Terminal<B>) -> io::Result<u16>
@@ -891,22 +1133,40 @@ async fn handle_at_mention_select(app: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::process::Command;
 
     use tempfile::tempdir;
 
     use super::*;
     use crate::app::prompt_intent::build_apply_review_prompt;
-    use crate::domain::agent::ReasoningLevel;
+    use crate::domain::agent::{AgentCliInfo, AgentModel, AgentSelection, ReasoningLevel};
     use crate::domain::file_entry::FileEntry;
     use crate::domain::input::INPUT_HISTORY_LIMIT;
     use crate::domain::session_message::SessionTranscript;
     use crate::infra::db::Database;
+    use crate::infra::fs;
     use crate::presentation::prompt::{
         PromptAtMentionState, PromptAttachmentState, PromptHistoryState, PromptSlashStage,
         PromptSlashState,
     };
+
+    trait PromptTestAppExt {
+        fn insert_pasted_image_placeholder(&mut self, local_image_path: PathBuf);
+        fn take_submitted_turn_prompt(&mut self) -> TurnPrompt;
+    }
+
+    impl PromptTestAppExt for App {
+        fn insert_pasted_image_placeholder(&mut self, local_image_path: PathBuf) {
+            let _ = insert_pasted_image_placeholder(self, local_image_path);
+        }
+
+        fn take_submitted_turn_prompt(&mut self) -> TurnPrompt {
+            let (prompt, _) = take_submitted_turn_prompt(self);
+
+            prompt
+        }
+    }
 
     fn session_replay_text(session: &crate::domain::session::Session) -> String {
         session
@@ -926,8 +1186,7 @@ mod tests {
         let db = app.services.db().clone();
         let event_sender = app.services.event_sender();
         let available_agent_kinds = app.services.available_agent_kinds();
-        let available_agent_clis =
-            crate::domain::agent::AgentCliInfo::from_kinds(&available_agent_kinds);
+        let available_agent_clis = AgentCliInfo::from_kinds(&available_agent_kinds);
         let app_server_client_override = app.services.app_server_client_override();
         let clipboard_image_client_override = Some(app.services.clipboard_image_client());
         let fs_client = app.services.fs_client();
@@ -964,8 +1223,7 @@ mod tests {
         let db = app.services.db().clone();
         let event_sender = app.services.event_sender();
         let available_agent_kinds = app.services.available_agent_kinds();
-        let available_agent_clis =
-            crate::domain::agent::AgentCliInfo::from_kinds(&available_agent_kinds);
+        let available_agent_clis = AgentCliInfo::from_kinds(&available_agent_kinds);
         let app_server_client_override = app.services.app_server_client_override();
         let fs_client = app.services.fs_client();
         let git_client = app.services.git_client();
@@ -979,6 +1237,38 @@ mod tests {
                 app_server_client_override,
                 available_agent_kinds,
                 clipboard_image_client_override: Some(clipboard_image_client),
+                fs_client,
+                git_client,
+                one_shot_client_override: None,
+                repositories: db,
+                review_request_client,
+            },
+            available_agent_clis,
+        );
+    }
+
+    /// Replaces the app-level filesystem dependency with a caller-provided
+    /// mock.
+    fn install_mock_fs_client(app: &mut App, mock_fs_client: fs::MockFsClient) {
+        let fs_client: std::sync::Arc<dyn fs::FsClient> = std::sync::Arc::new(mock_fs_client);
+        let base_path = app.services.base_path().to_path_buf();
+        let db = app.services.db().clone();
+        let event_sender = app.services.event_sender();
+        let available_agent_kinds = app.services.available_agent_kinds();
+        let available_agent_clis = AgentCliInfo::from_kinds(&available_agent_kinds);
+        let app_server_client_override = app.services.app_server_client_override();
+        let clipboard_image_client_override = Some(app.services.clipboard_image_client());
+        let git_client = app.services.git_client();
+        let review_request_client = app.services.review_request_client();
+
+        app.services = crate::app::AppServices::new_with_agent_clis(
+            base_path,
+            app.services.clock(),
+            event_sender,
+            crate::app::AppServiceDeps {
+                app_server_client_override,
+                available_agent_kinds,
+                clipboard_image_client_override,
                 fs_client,
                 git_client,
                 one_shot_client_override: None,
@@ -1296,7 +1586,7 @@ mod tests {
             .expect("failed to write diff fixture");
 
         let mut attachment_state = PromptAttachmentState::default();
-        attachment_state.register_local_image(std::path::PathBuf::from("/tmp/pic.png"), 0);
+        attachment_state.register_local_image(PathBuf::from("/tmp/pic.png"), 0);
         let expected_attachment_state = attachment_state.clone();
 
         let mut history_state =
@@ -1597,7 +1887,7 @@ mod tests {
         }
 
         // Act
-        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
+        app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-1.png"));
 
         // Assert
         if let AppMode::Prompt {
@@ -1613,7 +1903,7 @@ mod tests {
             assert_eq!(attachment_state.attachments.len(), 1);
             assert_eq!(
                 attachment_state.attachments[0].local_image_path,
-                std::path::PathBuf::from("/tmp/image-1.png")
+                PathBuf::from("/tmp/image-1.png")
             );
             assert_eq!(history_state.selected_index, None);
             assert_eq!(history_state.draft_text, None);
@@ -1639,7 +1929,7 @@ mod tests {
             .returning(|_, _| {
                 Box::pin(async {
                     Ok(crate::infra::clipboard_image::PersistedClipboardImage {
-                        local_image_path: std::path::PathBuf::from("/tmp/pasted.png"),
+                        local_image_path: PathBuf::from("/tmp/pasted.png"),
                     })
                 })
             });
@@ -1659,7 +1949,7 @@ mod tests {
             assert_eq!(attachment_state.attachments.len(), 1);
             assert_eq!(
                 attachment_state.attachments[0].local_image_path,
-                std::path::PathBuf::from("/tmp/pasted.png")
+                PathBuf::from("/tmp/pasted.png")
             );
         }
     }
@@ -1697,6 +1987,28 @@ mod tests {
             assert_eq!(input.text(), "Review ");
             assert!(attachment_state.attachments.is_empty());
         }
+    }
+
+    #[tokio::test]
+    async fn test_prompt_attachment_helpers_ignore_non_prompt_mode() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
+        app.mode = AppMode::List;
+        let session_id = SessionId::from("session-id");
+
+        // Act
+        paste_image_into_active_prompt(&mut app, &session_id).await;
+        let inserted_attachments =
+            insert_pasted_image_placeholder(&mut app, PathBuf::from("/tmp/image-1.png"));
+        let (prompt, archived_attachments) = take_submitted_turn_prompt(&mut app);
+        let cleanup_attachments = take_prompt_attachment_cleanup(&mut app);
+
+        // Assert
+        assert!(matches!(app.mode, AppMode::List));
+        assert!(inserted_attachments.is_empty());
+        assert!(prompt.is_empty());
+        assert!(archived_attachments.is_empty());
+        assert!(cleanup_attachments.is_empty());
     }
 
     /// Verifies unavailable clipboard backends surface as inline paste errors
@@ -1744,7 +2056,7 @@ mod tests {
     async fn test_take_submitted_turn_prompt_drains_text_and_attachment_state() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
-        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
+        app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-1.png"));
 
         // Act
         let prompt = app.take_submitted_turn_prompt();
@@ -1755,7 +2067,7 @@ mod tests {
         assert_eq!(prompt.attachments[0].placeholder, "[Image #1]");
         assert_eq!(
             prompt.attachments[0].local_image_path,
-            std::path::PathBuf::from("/tmp/image-1.png")
+            PathBuf::from("/tmp/image-1.png")
         );
         if let AppMode::Prompt {
             attachment_state,
@@ -1773,8 +2085,8 @@ mod tests {
     async fn test_take_submitted_turn_prompt_filters_deleted_attachment_placeholders() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
-        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
-        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-2.png"));
+        app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-1.png"));
+        app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-2.png"));
         if let AppMode::Prompt { input, .. } = &mut app.mode {
             input.cursor = "Review ".chars().count();
         }
@@ -1789,7 +2101,7 @@ mod tests {
         assert_eq!(prompt.attachments[0].placeholder, "[Image #2]");
         assert_eq!(
             prompt.attachments[0].local_image_path,
-            std::path::PathBuf::from("/tmp/image-2.png")
+            PathBuf::from("/tmp/image-2.png")
         );
         if let AppMode::Prompt {
             attachment_state,
@@ -1804,14 +2116,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_take_submitted_turn_prompt_returns_archived_attachments_for_cleanup() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
+        let image_path = PathBuf::from("/tmp/image-1.png");
+        app.insert_pasted_image_placeholder(image_path.clone());
+        apply_prompt_input_command(&mut app, InputCommand::DeleteBackward).await;
+
+        // Act
+        let (prompt, archived_attachments) = take_submitted_turn_prompt(&mut app);
+
+        // Assert
+        assert_eq!(prompt.text, "Review ");
+        assert!(prompt.attachments.is_empty());
+        assert_eq!(archived_attachments.len(), 1);
+        assert_eq!(archived_attachments[0].local_image_path, image_path);
+        assert_eq!(archived_attachments[0].placeholder, "[Image #1]");
+    }
+
+    #[tokio::test]
     async fn test_take_submitted_turn_prompt_sorts_attachments_by_text_position() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("", None).await;
-        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
+        app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-1.png"));
         if let AppMode::Prompt { input, .. } = &mut app.mode {
             input.cursor = 0;
         }
-        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-2.png"));
+        app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-2.png"));
         handle_paste(&mut app, " then ").await;
 
         // Act
@@ -2068,7 +2399,7 @@ mod tests {
     async fn test_prompt_history_round_trip_restores_image_draft_attachment() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
-        let image_path = std::path::PathBuf::from("/tmp/image-1.png");
+        let image_path = PathBuf::from("/tmp/image-1.png");
         app.insert_pasted_image_placeholder(image_path.clone());
         if let AppMode::Prompt { history_state, .. } = &mut app.mode {
             history_state.entries = vec!["Earlier prompt".to_string()];
@@ -2133,8 +2464,7 @@ mod tests {
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
-            .await;
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
 
         // Assert
         if let AppMode::Prompt {
@@ -2149,14 +2479,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_handle_prompt_slash_submit_ignores_non_prompt_mode() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+        app.mode = AppMode::List;
+
+        // Act
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+
+        // Assert
+        assert!(matches!(app.mode, AppMode::List));
+    }
+
+    #[tokio::test]
     async fn test_handle_prompt_slash_submit_maps_filtered_first_command_to_model() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("/", None).await;
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
-            .await;
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
 
         // Assert
         if let AppMode::Prompt { slash_state, .. } = &app.mode {
@@ -2181,8 +2524,7 @@ mod tests {
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
-            .await;
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
 
         // Assert
         if let AppMode::Prompt { slash_state, .. } = &app.mode {
@@ -2205,8 +2547,7 @@ mod tests {
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
-            .await;
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
         app.process_pending_app_events().await;
 
         // Assert
@@ -2224,9 +2565,7 @@ mod tests {
     async fn test_model_slash_submit_discards_pasted_image_before_normal_submission() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
-        app.insert_pasted_image_placeholder(std::path::PathBuf::from(
-            "/tmp/nonexistent-test-attachment.png",
-        ));
+        app.insert_pasted_image_placeholder(PathBuf::from("/tmp/nonexistent-test-attachment.png"));
         if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
             slash_state.stage = PromptSlashStage::Model;
             slash_state.selected_agent = Some(AgentKind::Claude);
@@ -2235,8 +2574,7 @@ mod tests {
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
-            .await;
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
         if let AppMode::Prompt { input, .. } = &mut app.mode {
             input.reset_text("normal prompt".to_string());
         }
@@ -2258,8 +2596,7 @@ mod tests {
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
-            .await;
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
         app.process_pending_app_events().await;
 
         // Assert
@@ -2278,9 +2615,7 @@ mod tests {
     async fn test_canceling_slash_input_discards_pasted_attachment() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
-        app.insert_pasted_image_placeholder(std::path::PathBuf::from(
-            "/tmp/nonexistent-test-attachment.png",
-        ));
+        app.insert_pasted_image_placeholder(PathBuf::from("/tmp/nonexistent-test-attachment.png"));
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
@@ -2306,8 +2641,7 @@ mod tests {
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
-            .await;
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
 
         // Assert
         if let AppMode::Prompt { slash_state, .. } = &app.mode {
@@ -2325,8 +2659,7 @@ mod tests {
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
-            .await;
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
 
         // Assert
         if let AppMode::Prompt { slash_state, .. } = &app.mode {
@@ -2346,8 +2679,7 @@ mod tests {
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
-            .await;
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
 
         // Assert
         if let AppMode::Prompt { slash_state, .. } = &app.mode {
@@ -2366,8 +2698,7 @@ mod tests {
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
-            .await;
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
 
         // Assert
         if let AppMode::Prompt {
@@ -2492,7 +2823,7 @@ mod tests {
     async fn test_handle_prompt_backspace_removes_whole_image_token_and_attachment() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
-        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
+        app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-1.png"));
         if let AppMode::Prompt {
             history_state,
             input,
@@ -2527,7 +2858,7 @@ mod tests {
     async fn test_handle_prompt_delete_removes_whole_image_token_and_attachment() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
-        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
+        app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-1.png"));
         if let AppMode::Prompt {
             history_state,
             input,
@@ -2562,7 +2893,7 @@ mod tests {
     async fn test_prompt_undo_restores_deleted_image_attachment() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
-        let image_path = std::path::PathBuf::from("/tmp/image-1.png");
+        let image_path = PathBuf::from("/tmp/image-1.png");
         app.insert_pasted_image_placeholder(image_path.clone());
 
         // Act
@@ -2587,7 +2918,7 @@ mod tests {
     async fn test_manually_entered_image_placeholder_does_not_restore_attachment() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
-        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
+        app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-1.png"));
         apply_prompt_input_command(&mut app, InputCommand::DeleteBackward).await;
 
         // Act
@@ -2610,7 +2941,7 @@ mod tests {
     async fn test_deleting_original_duplicate_placeholder_does_not_submit_image() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("", None).await;
-        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
+        app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-1.png"));
         handle_paste(&mut app, "[Image #1]").await;
         if let AppMode::Prompt { input, .. } = &mut app.mode {
             input.cursor = 0;
@@ -2629,7 +2960,7 @@ mod tests {
     async fn test_deleting_duplicate_lookalike_keeps_original_image() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("", None).await;
-        let image_path = std::path::PathBuf::from("/tmp/image-1.png");
+        let image_path = PathBuf::from("/tmp/image-1.png");
         app.insert_pasted_image_placeholder(image_path.clone());
         handle_paste(&mut app, "[Image #1]").await;
 
@@ -2647,7 +2978,7 @@ mod tests {
     async fn test_prompt_edit_prunes_attachment_after_undo_revision_eviction() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("", None).await;
-        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
+        app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-1.png"));
         apply_prompt_input_command(&mut app, InputCommand::DeleteBackward).await;
 
         // Act
@@ -2669,16 +3000,16 @@ mod tests {
     async fn test_handle_prompt_delete_keeps_new_image_number_unique_for_undo() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("", None).await;
-        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
-        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-2.png"));
-        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-3.png"));
+        app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-1.png"));
+        app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-2.png"));
+        app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-3.png"));
         if let AppMode::Prompt { input, .. } = &mut app.mode {
             input.cursor = "[Image #1][Image #2]".chars().count();
         }
 
         // Act
         apply_prompt_input_command(&mut app, InputCommand::DeleteForward).await;
-        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-4.png"));
+        app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-4.png"));
 
         // Assert
         if let AppMode::Prompt {
@@ -2693,7 +3024,7 @@ mod tests {
             assert_eq!(attachment_state.attachments[2].placeholder, "[Image #4]");
             assert_eq!(
                 attachment_state.attachments[2].local_image_path,
-                std::path::PathBuf::from("/tmp/image-4.png")
+                PathBuf::from("/tmp/image-4.png")
             );
         }
     }
@@ -2955,7 +3286,7 @@ mod tests {
             path: selected_path.to_string(),
         }]);
         let (mut app, _base_dir) = new_test_prompt_app("@v", None).await;
-        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
+        app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-1.png"));
         if let AppMode::Prompt {
             at_mention_state: state,
             input,
@@ -3135,7 +3466,7 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("", None).await;
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
-        assert!(prompt_context.session_mode != PromptSessionMode::Existing);
+        assert_ne!(prompt_context.session_mode, PromptSessionMode::Existing);
         assert_eq!(app.sessions.sessions().len(), 1);
 
         // Act
@@ -3151,8 +3482,8 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_draft_prompt_app("", None).await;
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
-        assert!(prompt_context.session_mode != PromptSessionMode::Existing);
-        assert!(prompt_context.session_mode != PromptSessionMode::NewDeletable);
+        assert_ne!(prompt_context.session_mode, PromptSessionMode::Existing);
+        assert_ne!(prompt_context.session_mode, PromptSessionMode::NewDeletable);
         assert_eq!(app.sessions.sessions().len(), 1);
 
         // Act
@@ -3184,12 +3515,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_handle_prompt_submit_key_routes_slash_command() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_prompt_submit_key(&mut app, &prompt_context).await;
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Prompt {
+                input, slash_state, ..
+            } if input.text() == "/model" && slash_state.stage == PromptSlashStage::Agent
+        ));
+    }
+
+    #[tokio::test]
     async fn test_handle_prompt_submit_key_cleans_archived_attachment() {
         // Arrange
         let (mut app, _base_dir) = new_test_draft_prompt_app("Review ", None).await;
-        app.insert_pasted_image_placeholder(std::path::PathBuf::from(
-            "/tmp/nonexistent-test-attachment.png",
-        ));
+        app.insert_pasted_image_placeholder(PathBuf::from("/tmp/nonexistent-test-attachment.png"));
         apply_prompt_input_command(&mut app, InputCommand::DeleteBackward).await;
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
@@ -3206,11 +3553,9 @@ mod tests {
     async fn test_handle_prompt_submit_key_drains_supported_image_turn() {
         // Arrange
         let (mut app, _base_dir) = new_test_draft_prompt_app("Review ", None).await;
-        app.sessions.sessions_mut()[0].agent = crate::domain::agent::AgentSelection::new(
-            crate::domain::agent::AgentKind::Claude,
-            crate::domain::agent::AgentModel::ClaudeSonnet5,
-        );
-        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
+        app.sessions.sessions_mut()[0].agent =
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5);
+        app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-1.png"));
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
@@ -3234,11 +3579,9 @@ mod tests {
     async fn test_handle_prompt_submit_key_starts_regular_session_with_image_turn() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
-        app.sessions.sessions_mut()[0].agent = crate::domain::agent::AgentSelection::new(
-            crate::domain::agent::AgentKind::Claude,
-            crate::domain::agent::AgentModel::ClaudeSonnet5,
-        );
-        app.insert_pasted_image_placeholder(std::path::PathBuf::from("/tmp/image-1.png"));
+        app.sessions.sessions_mut()[0].agent =
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5);
+        app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-1.png"));
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
@@ -3287,7 +3630,7 @@ mod tests {
         handle_prompt_submit_key(&mut app, &prompt_context).await;
 
         // Assert
-        assert!(prompt_context.session_mode != PromptSessionMode::NewDraft);
+        assert_ne!(prompt_context.session_mode, PromptSessionMode::NewDraft);
         assert!(matches!(app.mode, AppMode::View { .. }));
         assert!(
             !session_replay_text(&app.sessions.sessions()[0])
@@ -3370,6 +3713,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_apply_prompt_apply_outcome_keeps_composer_for_retry() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/apply", None).await;
+        if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+            slash_state.stage = PromptSlashStage::Model;
+            slash_state.selected_agent = Some(AgentKind::Codex);
+            slash_state.selected_index = 2;
+        }
+
+        // Act
+        apply_prompt_apply_outcome(&mut app, PromptApplyOutcome::KeepComposer).await;
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Prompt {
+                input, slash_state, ..
+            } if input.text() == "/apply" && *slash_state == PromptSlashState::default()
+        ));
+    }
+
+    #[tokio::test]
     async fn test_handle_apply_command_rejects_when_session_not_in_review_status() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("/apply", None).await;
@@ -3384,8 +3749,7 @@ mod tests {
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
-            .await;
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
 
         // Assert
         assert!(matches!(app.mode, AppMode::Prompt { .. }));
@@ -3400,8 +3764,7 @@ mod tests {
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
-            .await;
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
 
         // Assert
         assert!(matches!(app.mode, AppMode::Prompt { .. }));
@@ -3423,8 +3786,7 @@ mod tests {
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
-            .await;
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
 
         // Assert
         assert!(!app.review_cache.contains_key(session_id.as_str()));
@@ -3453,11 +3815,40 @@ mod tests {
                 text: "## Review\n### Suggestions\n- Fix the typo in `README.md`.".to_string(),
             },
         );
+        let image_path = crate::infra::home::agentty_home()
+            .join("tmp")
+            .join(session_id.as_str())
+            .join("images")
+            .join("image-1.png");
+        if let AppMode::Prompt {
+            attachment_state, ..
+        } = &mut app.mode
+        {
+            attachment_state
+                .attachments
+                .push(PromptAttachment::new(1, image_path.clone()));
+        }
+        let expected_image_path = image_path.clone();
+        let expected_image_directory = image_path
+            .parent()
+            .expect("managed image path should have a parent")
+            .to_path_buf();
+        let mut mock_fs_client = fs::MockFsClient::new();
+        mock_fs_client
+            .expect_remove_file()
+            .once()
+            .withf(move |path| path == &expected_image_path)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        mock_fs_client
+            .expect_remove_dir()
+            .once()
+            .withf(move |path| path == &expected_image_directory)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        install_mock_fs_client(&mut app, mock_fs_client);
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
-            .await;
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
 
         // Assert
         assert!(!app.review_cache.contains_key(session_id.as_str()));
@@ -3491,8 +3882,7 @@ mod tests {
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
-            .await;
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
 
         // Assert
         assert!(matches!(app.mode, AppMode::Prompt { .. }));
@@ -3649,18 +4039,15 @@ mod tests {
             attachment_state, ..
         } = &mut app.mode
         {
-            attachment_state
-                .attachments
-                .push(crate::domain::composer::PromptAttachment::new(
-                    1,
-                    std::path::PathBuf::from("/tmp/nonexistent-test-attachment.png"),
-                ));
+            attachment_state.attachments.push(PromptAttachment::new(
+                1,
+                PathBuf::from("/tmp/nonexistent-test-attachment.png"),
+            ));
         }
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
-            .await;
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
 
         // Assert
         let AppMode::Prompt {
@@ -3692,8 +4079,7 @@ mod tests {
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        app.handle_prompt_slash_submit_intent(&prompt_context.to_intent_context())
-            .await;
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
 
         // Assert
         let AppMode::Prompt {
