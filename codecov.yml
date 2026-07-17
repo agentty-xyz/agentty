@@ -1,0 +1,8 @@
+coverage:
+  status:
+    patch:
+      default:
+        informational: false
+        only_pulls: true
+        target: 100%
+        threshold: 0%
