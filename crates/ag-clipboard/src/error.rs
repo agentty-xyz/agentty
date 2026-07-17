@@ -38,7 +38,7 @@ pub enum ClipboardError {
 }
 
 impl ClipboardError {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", test))]
     pub(crate) fn backend(context: &str, error: impl fmt::Display) -> Self {
         Self::Backend {
             reason: format!("{context}: {error}"),

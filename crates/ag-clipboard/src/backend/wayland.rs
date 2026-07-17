@@ -10,12 +10,6 @@ use super::ClipboardBackend;
 use crate::{ClipboardError, RgbaImageData, format, uri};
 
 const IMAGE_PNG_MIME: &str = "image/png";
-const TEXT_URI_LIST_MIME: &str = "text/uri-list";
-#[cfg(target_os = "linux")]
-const WL_PASTE_COMMAND: &str = "wl-paste";
-const WL_PASTE_LIST_TYPES_ARGS: &[&str] = &["--list-types"];
-#[cfg(target_os = "linux")]
-const WL_PASTE_VERSION_ARGS: &[&str] = &["--version"];
 const TEXT_MIME_CANDIDATES: &[&str] = &[
     "text/plain;charset=utf-8",
     "text/plain;charset=UTF-8",
@@ -24,6 +18,12 @@ const TEXT_MIME_CANDIDATES: &[&str] = &[
     "TEXT",
     "STRING",
 ];
+const TEXT_URI_LIST_MIME: &str = "text/uri-list";
+#[cfg(target_os = "linux")]
+const WL_PASTE_COMMAND: &str = "wl-paste";
+const WL_PASTE_LIST_TYPES_ARGS: &[&str] = &["--list-types"];
+#[cfg(target_os = "linux")]
+const WL_PASTE_VERSION_ARGS: &[&str] = &["--version"];
 
 pub(crate) struct WaylandClipboard {
     runner: Box<dyn WaylandCommandRunner>,
@@ -55,23 +55,23 @@ impl WaylandClipboard {
         Ok(())
     }
 
-    fn read_clipboard_bytes_for_mime(&self, mime_type: &str) -> Result<Vec<u8>, ClipboardError> {
-        let args = ["--no-newline", "--type", mime_type];
-
-        self.run_successful(&args, "failed to read Wayland clipboard payload")
-    }
-
     fn available_mime_types(&self) -> Result<Vec<String>, ClipboardError> {
         let stdout = self.run_successful(
             WL_PASTE_LIST_TYPES_ARGS,
             "failed to list Wayland clipboard types",
         )?;
-        let mime_types = parse_mime_types(&stdout);
+        let mime_types = Self::parse_mime_types(&stdout);
         if mime_types.is_empty() {
             return Err(ClipboardError::ContentUnavailable);
         }
 
         Ok(mime_types)
+    }
+
+    fn read_clipboard_bytes_for_mime(&self, mime_type: &str) -> Result<Vec<u8>, ClipboardError> {
+        let args = ["--no-newline", "--type", mime_type];
+
+        self.run_successful(&args, "failed to read Wayland clipboard payload")
     }
 
     fn run_successful(
@@ -82,7 +82,7 @@ impl WaylandClipboard {
         let output = self.run_wl_paste(args)?;
         if !output.status_success {
             return Err(ClipboardError::Backend {
-                reason: wl_paste_failure_reason(context, &output.stderr),
+                reason: Self::wl_paste_failure_reason(context, &output.stderr),
             });
         }
 
@@ -97,20 +97,42 @@ impl WaylandClipboard {
 
         self.runner.run(&owned_args)
     }
+
+    fn parse_mime_types(stdout: &[u8]) -> Vec<String> {
+        String::from_utf8_lossy(stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn wl_paste_failure_reason(context: &str, stderr: &[u8]) -> String {
+        let stderr = String::from_utf8_lossy(stderr).trim().to_string();
+        if stderr.is_empty() {
+            return format!("{context}: `wl-paste` exited unsuccessfully");
+        }
+
+        format!("{context}: {stderr}")
+    }
+
+    fn select_text_mime_type(mime_types: &[String]) -> Option<&str> {
+        TEXT_MIME_CANDIDATES
+            .iter()
+            .find(|candidate| mime_types.iter().any(|mime_type| mime_type == **candidate))
+            .copied()
+    }
 }
 
 impl ClipboardBackend for WaylandClipboard {
     fn read_text(&mut self) -> Result<String, ClipboardError> {
         let mime_types = self.available_mime_types()?;
         let mime_type =
-            select_text_mime_type(&mime_types).ok_or(ClipboardError::ContentUnavailable)?;
+            Self::select_text_mime_type(&mime_types).ok_or(ClipboardError::ContentUnavailable)?;
         let bytes = self.read_clipboard_bytes_for_mime(mime_type)?;
 
         String::from_utf8(bytes).map_err(|error| {
-            ClipboardError::image_conversion(
-                "failed to decode Wayland clipboard text as UTF-8",
-                error,
-            )
+            ClipboardError::backend("failed to decode Wayland clipboard text as UTF-8", error)
         })
     }
 
@@ -188,31 +210,6 @@ fn map_wl_paste_spawn_error(error: io::Error) -> ClipboardError {
     ClipboardError::backend("failed to run `wl-paste`", error)
 }
 
-fn parse_mime_types(stdout: &[u8]) -> Vec<String> {
-    String::from_utf8_lossy(stdout)
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(str::to_string)
-        .collect()
-}
-
-fn select_text_mime_type(mime_types: &[String]) -> Option<&str> {
-    TEXT_MIME_CANDIDATES
-        .iter()
-        .find(|candidate| mime_types.iter().any(|mime_type| mime_type == **candidate))
-        .copied()
-}
-
-fn wl_paste_failure_reason(context: &str, stderr: &[u8]) -> String {
-    let stderr = String::from_utf8_lossy(stderr).trim().to_string();
-    if stderr.is_empty() {
-        return format!("{context}: `wl-paste` exited unsuccessfully");
-    }
-
-    format!("{context}: {stderr}")
-}
-
 #[cfg(test)]
 mod tests {
     use image::codecs::png::PngEncoder;
@@ -222,7 +219,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_read_image_rgba_reads_wayland_png_payload() {
+    fn test_run_successful_reports_backend_failure_for_unsuccessful_command() {
         // Arrange
         let mut runner = MockWaylandCommandRunner::new();
         runner
@@ -233,76 +230,25 @@ mod tests {
             }))
             .returning(|_| {
                 Ok(WaylandCommandOutput {
-                    status_success: true,
-                    stderr: Vec::new(),
-                    stdout: b"image/png\ntext/plain;charset=utf-8\n".to_vec(),
+                    status_success: false,
+                    stderr: b"compositor rejected request\n".to_vec(),
+                    stdout: Vec::new(),
                 })
             });
-        runner
-            .expect_run()
-            .once()
-            .with(predicate::function(|args: &[String]| {
-                args_match(args, &["--no-newline", "--type", "image/png"])
-            }))
-            .returning(|_| {
-                Ok(WaylandCommandOutput {
-                    status_success: true,
-                    stderr: Vec::new(),
-                    stdout: test_png_bytes(),
-                })
-            });
-        let mut clipboard = WaylandClipboard::with_runner(Box::new(runner));
+        let clipboard = WaylandClipboard::with_runner(Box::new(runner));
 
         // Act
-        let image_data = clipboard
-            .read_image_rgba()
-            .expect("mocked PNG payload should decode");
+        let result = clipboard.run_successful(
+            WL_PASTE_LIST_TYPES_ARGS,
+            "failed to list Wayland clipboard types",
+        );
 
         // Assert
-        assert_eq!(image_data.width, 1);
-        assert_eq!(image_data.height, 1);
-        assert_eq!(image_data.rgba_bytes, vec![255, 0, 0, 255]);
-    }
-
-    #[test]
-    fn test_read_file_list_reads_wayland_uri_list_payload() {
-        // Arrange
-        let mut runner = MockWaylandCommandRunner::new();
-        runner
-            .expect_run()
-            .once()
-            .with(predicate::function(|args: &[String]| {
-                args_match(args, &["--list-types"])
-            }))
-            .returning(|_| {
-                Ok(WaylandCommandOutput {
-                    status_success: true,
-                    stderr: Vec::new(),
-                    stdout: b"text/uri-list\ntext/plain;charset=utf-8\n".to_vec(),
-                })
-            });
-        runner
-            .expect_run()
-            .once()
-            .with(predicate::function(|args: &[String]| {
-                args_match(args, &["--no-newline", "--type", "text/uri-list"])
-            }))
-            .returning(|_| {
-                Ok(WaylandCommandOutput {
-                    status_success: true,
-                    stderr: Vec::new(),
-                    stdout: b"file:///tmp/image%201.png\r\n".to_vec(),
-                })
-            });
-        let mut clipboard = WaylandClipboard::with_runner(Box::new(runner));
-
-        // Act
-        let paths = clipboard
-            .read_file_list()
-            .expect("mocked URI list should parse");
-
-        // Assert
-        assert_eq!(paths, vec![PathBuf::from("/tmp/image 1.png")]);
+        assert!(matches!(
+            result,
+            Err(ClipboardError::Backend { reason })
+                if reason == "failed to list Wayland clipboard types: compositor rejected request"
+        ));
     }
 
     #[test]
@@ -350,6 +296,136 @@ mod tests {
     }
 
     #[test]
+    fn test_read_text_reports_backend_failure_for_invalid_utf8() {
+        // Arrange
+        let mut runner = MockWaylandCommandRunner::new();
+        runner
+            .expect_run()
+            .once()
+            .with(predicate::function(|args: &[String]| {
+                args_match(args, &["--list-types"])
+            }))
+            .returning(|_| {
+                Ok(WaylandCommandOutput {
+                    status_success: true,
+                    stderr: Vec::new(),
+                    stdout: b"text/plain;charset=utf-8\n".to_vec(),
+                })
+            });
+        runner
+            .expect_run()
+            .once()
+            .with(predicate::function(|args: &[String]| {
+                args_match(
+                    args,
+                    &["--no-newline", "--type", "text/plain;charset=utf-8"],
+                )
+            }))
+            .returning(|_| {
+                Ok(WaylandCommandOutput {
+                    status_success: true,
+                    stderr: Vec::new(),
+                    stdout: vec![0xFF],
+                })
+            });
+        let mut clipboard = WaylandClipboard::with_runner(Box::new(runner));
+
+        // Act
+        let result = clipboard.read_text();
+
+        // Assert
+        assert!(matches!(
+            result,
+            Err(ClipboardError::Backend { reason })
+                if reason.starts_with("failed to decode Wayland clipboard text as UTF-8")
+        ));
+    }
+
+    #[test]
+    fn test_read_file_list_reads_wayland_uri_list_payload() {
+        // Arrange
+        let mut runner = MockWaylandCommandRunner::new();
+        runner
+            .expect_run()
+            .once()
+            .with(predicate::function(|args: &[String]| {
+                args_match(args, &["--list-types"])
+            }))
+            .returning(|_| {
+                Ok(WaylandCommandOutput {
+                    status_success: true,
+                    stderr: Vec::new(),
+                    stdout: b"text/uri-list\ntext/plain;charset=utf-8\n".to_vec(),
+                })
+            });
+        runner
+            .expect_run()
+            .once()
+            .with(predicate::function(|args: &[String]| {
+                args_match(args, &["--no-newline", "--type", "text/uri-list"])
+            }))
+            .returning(|_| {
+                Ok(WaylandCommandOutput {
+                    status_success: true,
+                    stderr: Vec::new(),
+                    stdout: b"file:///tmp/image%201.png\r\n".to_vec(),
+                })
+            });
+        let mut clipboard = WaylandClipboard::with_runner(Box::new(runner));
+
+        // Act
+        let paths = clipboard
+            .read_file_list()
+            .expect("mocked URI list should parse");
+
+        // Assert
+        assert_eq!(paths, vec![PathBuf::from("/tmp/image 1.png")]);
+    }
+
+    #[test]
+    fn test_read_image_rgba_reads_wayland_png_payload() {
+        // Arrange
+        let mut runner = MockWaylandCommandRunner::new();
+        runner
+            .expect_run()
+            .once()
+            .with(predicate::function(|args: &[String]| {
+                args_match(args, &["--list-types"])
+            }))
+            .returning(|_| {
+                Ok(WaylandCommandOutput {
+                    status_success: true,
+                    stderr: Vec::new(),
+                    stdout: b"image/png\ntext/plain;charset=utf-8\n".to_vec(),
+                })
+            });
+        runner
+            .expect_run()
+            .once()
+            .with(predicate::function(|args: &[String]| {
+                args_match(args, &["--no-newline", "--type", "image/png"])
+            }))
+            .returning(|_| {
+                Ok(WaylandCommandOutput {
+                    status_success: true,
+                    stderr: Vec::new(),
+                    stdout: test_png_bytes(),
+                })
+            });
+        let mut clipboard = WaylandClipboard::with_runner(Box::new(runner));
+
+        // Act
+        let image_data = clipboard
+            .read_image_rgba()
+            .expect("mocked PNG payload should decode");
+
+        // Assert
+        assert_eq!(image_data.width, 1);
+        assert_eq!(image_data.height, 1);
+        assert_eq!(image_data.rgba_bytes, vec![255, 0, 0, 255]);
+    }
+
+    #[test]
     fn test_read_image_rgba_reports_content_unavailable_without_png_mime() {
         // Arrange
         let mut runner = MockWaylandCommandRunner::new();
@@ -381,7 +457,7 @@ mod tests {
         let stdout = b"\n image/png \n\ntext/plain;charset=utf-8\n";
 
         // Act
-        let mime_types = parse_mime_types(stdout);
+        let mime_types = WaylandClipboard::parse_mime_types(stdout);
 
         // Assert
         assert_eq!(
@@ -399,12 +475,33 @@ mod tests {
         let stderr = b"compositor does not support data-control\n";
 
         // Act
-        let reason = wl_paste_failure_reason("failed to list Wayland clipboard types", stderr);
+        let reason = WaylandClipboard::wl_paste_failure_reason(
+            "failed to list Wayland clipboard types",
+            stderr,
+        );
 
         // Assert
         assert_eq!(
             reason,
             "failed to list Wayland clipboard types: compositor does not support data-control"
+        );
+    }
+
+    #[test]
+    fn test_wl_paste_failure_reason_describes_empty_stderr() {
+        // Arrange
+        let stderr = b"";
+
+        // Act
+        let reason = WaylandClipboard::wl_paste_failure_reason(
+            "failed to list Wayland clipboard types",
+            stderr,
+        );
+
+        // Assert
+        assert_eq!(
+            reason,
+            "failed to list Wayland clipboard types: `wl-paste` exited unsuccessfully"
         );
     }
 
