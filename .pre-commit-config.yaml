@@ -168,7 +168,7 @@ repos:
         description: Verify source-test coverage meets workspace ratchet thresholds and write the CI LCOV report for SonarQube and Codecov.
         entry: >-
           cargo llvm-cov nextest --workspace --lib --bins --locked --profile ci
-          --fail-under-lines 91 --fail-under-functions 91
+          --fail-under-lines 93 --fail-under-functions 91
           --lcov --ignore-filename-regex '^crates/agentty/tests/'
           --output-path coverage.lcov
         language: system
