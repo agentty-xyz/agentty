@@ -48,6 +48,12 @@ validation commands. See Quality Gates for when to run what.
   feature test in `crates/agentty/tests/e2e/` using the `FeatureTest` builder from
   `common.rs`. If infrastructure blocks the feature test, report the blocker and the
   missing coverage in the handoff.
+- **Patch Coverage Gate:** Every code change must include automated tests that exercise
+  100% of its coverable changed lines. Codecov enforces this requirement as a blocking
+  pull-request patch check in `codecov.yml`; there are no pragmatic exceptions for
+  boilerplate or I/O. Before finalizing any code change, run
+  `prek run coverage --all-files --hook-stage manual` to enforce the workspace coverage
+  ratchets and generate the LCOV report consumed by Codecov.
 - **Never Bypass Hooks:** Do not use `--no-verify`, `--no-gpg-sign`, or any other flag
   that skips or disables git hooks managed by `prek`. If a hook fails, investigate and
   fix the underlying issue instead of bypassing it.
@@ -141,9 +147,8 @@ repository's current session.
   - Use fully-qualified `crate::...` references only when needed for disambiguation,
     explicit UFCS trait calls, or rustdoc links.
   - In test modules, prefer `use super::*;` where practical.
-- **Test Coverage:** Cover all touched behavior with automated tests when practical.
-  Critical logic always needs regression coverage; boilerplate or untestable I/O can use
-  a pragmatic exception.
+- **Test Coverage:** Add automated tests for every code change and exercise 100% of its
+  coverable changed lines, as required by the MANDATORY patch coverage gate.
 - **Test Isolation for External Commands:** Keep isolated single-command tests real when
   they validate one external command call, but for higher-level flows that involve
   multiple external command calls, always extract trait boundaries and mock them with
@@ -340,8 +345,8 @@ the full suite.
 
 - **Markdown and docs:** Run `mdformat`, then the default hooks for touched paths.
 - **`docs/site/` content:** Add `zola-check`; use `djlint-reformat` for HTML templates.
-- **Rust sources:** Run `rustfmt-fix` while iterating, then `cargo-check` and `clippy`;
-  add focused tests for the changed crate and affected dependents.
+- **Rust sources:** Run `rustfmt-fix` while iterating, then `cargo-check`, `clippy`,
+  focused tests for the changed crate and affected dependents, and `coverage`.
 - **Workspace crate source tests:** Use the narrowest matching member source-test hook.
 - **Cargo manifests and lockfile:** Run `cargo-check`, `clippy`, and affected crate
   tests; use `test-workspace` when dependency impact is broad or uncertain.
@@ -370,11 +375,12 @@ Run mutating fixers one at a time and inspect the resulting diff after each one:
 
 ### Periodic / CI
 
-Use slower hygiene hooks only in CI or when making broader changes. Consult
+Use slower hygiene hooks only in CI or when making broader changes, except for the
+mandatory `coverage` hook required for every code change. Consult
 `.pre-commit-config.yaml` for current hook IDs and invocations.
 
-- Run local broad checks when relevant: coverage summary, member source tests,
-  `zola-check`, `cargo-machete`, and `cargo-audit`.
+- Run other local broad checks when relevant: member source tests, `zola-check`,
+  `cargo-machete`, and `cargo-audit`.
 - Do not run the full `test-agentty-e2e` suite locally; GitHub presubmit and postsubmit
   workflows own it.
 
