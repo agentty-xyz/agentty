@@ -7,10 +7,50 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.13.2] - 2026-07-16
+
+### Added
+
+- agentty: add shared semantic text editing across prompt, clarification,
+  publish-branch, and launch-configuration inputs, including word and line movement,
+  consistent paste behavior, and bounded undo and redo history.
+- security: add a security policy covering supported versions, private vulnerability
+  reporting, response and disclosure timelines, and safe harbor.
+- docs: add the SonarCloud coverage badge to `README.md`.
+
 ### Changed
 
+- agentty: bind pasted image attachments to exact placeholder occurrences and input
+  revisions so editing, undo, redo, and prompt-history navigation preserve the intended
+  images and clean up discarded files safely.
+- agentty: align the activity heatmap with its dashboard panel by deriving panel height
+  from content and removing the redundant legend and summary footer.
+- agentty: render queued follow-up messages after the transcript messages and workflow
+  notices that preceded them.
+- agentty: normalize transcript, queued-message, and workflow-notice spacing to one
+  empty line between visible messages.
 - agentty: keep focused review suggestions aligned with decisions, accepted tradeoffs,
   and explanations already resolved in the session chat.
+- agentty: centralize chat-focus key handling while preserving transcript scrolling,
+  diff preview, prompt draft protection, and question-mode exit behavior.
+- agentty: extract transcript-to-display-line assembly from `SessionOutput`, leaving the
+  component responsible for layout caching, scrolling, loader effects, and painting.
+- deps: update `agent-client-protocol` to `1.2.0` and `serde_with` to `3.21.0`.
+- ci: run SonarQube from coverage jobs with LCOV input and remove the standalone
+  security-scan workflow.
+- ci: update `taiki-e/install-action` from `2.82.10` to `2.82.11`.
+- release: bump workspace crate metadata and lockfile package versions to `0.13.2`.
+
+### Fixed
+
+- agentty: render assigned issue rows with the active theme's text color.
+- ci: grant the Pages workflow the read permissions required by its build steps.
+
+### Contributors
+
+- @andagaev
+- @dependabot
+- @minev-dev
 
 ## [v0.13.1] - 2026-07-15
 
