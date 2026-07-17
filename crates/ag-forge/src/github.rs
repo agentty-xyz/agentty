@@ -18,6 +18,15 @@ use super::{
 const REQUESTED_REVIEW_LIMIT: usize = 100;
 /// Maximum assigned-issue rows loaded from `gh` for one refresh.
 const ASSIGNED_ISSUE_LIMIT: usize = 100;
+/// GraphQL query text used to fetch review threads and review-request-wide
+/// conversation comments for one pull request.
+///
+/// Capped at 100 threads per request and 100 comments per thread/PR.
+const REVIEW_THREADS_QUERY: &str =
+    "query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: \
+     $repo) { pullRequest(number: $number) { comments(first: 100) { nodes { author { login } body \
+     } } reviewThreads(first: 100) { nodes { diffSide isOutdated isResolved line path startLine \
+     subjectType comments(first: 100) { nodes { author { login } body } } } } } } }";
 
 /// GitHub pull-request adapter that normalizes `gh` command output.
 #[derive(Clone)]
@@ -191,7 +200,7 @@ impl ReviewRequestAdapter for GitHubReviewRequestAdapter {
             remote,
             display_id,
             input,
-            config,
+            &config,
             move |remote, display_id| {
                 adapter.refresh_authenticated_review_request(remote, display_id)
             },
@@ -256,19 +265,6 @@ impl ReviewRequestAdapter for GitHubReviewRequestAdapter {
     }
 }
 
-/// Builds the `gh auth status` command for one GitHub host.
-fn auth_status_command(remote: &ForgeRemote) -> ForgeCommand {
-    github_command(
-        remote,
-        vec![
-            "auth".to_string(),
-            "status".to_string(),
-            "--hostname".to_string(),
-            remote.host.clone(),
-        ],
-    )
-}
-
 /// Builds the project-scoped `gh search issues` command for assigned open
 /// issues.
 fn assigned_issues_command(remote: &ForgeRemote) -> ForgeCommand {
@@ -291,6 +287,23 @@ fn assigned_issues_command(remote: &ForgeRemote) -> ForgeCommand {
     )
 }
 
+/// Parses GitHub issue search rows into normalized assigned-issue rows.
+fn parse_assigned_issues_response(stdout: &str) -> Result<Vec<AssignedIssue>, String> {
+    let issues: Vec<GitHubAssignedIssueResponse> = serde_json::from_str(stdout)
+        .map_err(|error| format!("invalid GitHub assigned-issue response: {error}"))?;
+
+    Ok(issues
+        .into_iter()
+        .map(|issue| AssignedIssue {
+            display_id: format!("#{}", issue.number),
+            repository: issue.repository.name_with_owner,
+            title: issue.title,
+            updated_at: issue.updated_at,
+            web_url: issue.url,
+        })
+        .collect())
+}
+
 /// Builds the project-scoped `gh issue view` command for base issue details.
 fn issue_detail_command(remote: &ForgeRemote, display_id: &str) -> ForgeCommand {
     github_command(
@@ -303,6 +316,41 @@ fn issue_detail_command(remote: &ForgeRemote, display_id: &str) -> ForgeCommand 
             remote.project_path(),
             "--json".to_string(),
             "assignees,author,body,createdAt,labels,number,state,title,updatedAt,url".to_string(),
+        ],
+    )
+}
+
+/// Parses one GitHub issue detail response without comment data.
+fn parse_issue_detail_response(remote: &ForgeRemote, stdout: &str) -> Result<IssueDetail, String> {
+    let issue: GitHubIssueDetailResponse = serde_json::from_str(stdout)
+        .map_err(|error| format!("invalid GitHub issue-detail response: {error}"))?;
+
+    Ok(IssueDetail {
+        assignees: issue.assignees.into_iter().map(|user| user.login).collect(),
+        author: issue
+            .author
+            .map_or_else(|| "ghost".to_string(), |author| author.login),
+        body: issue.body,
+        created_at: issue.created_at,
+        display_id: format!("#{}", issue.number),
+        labels: issue.labels.into_iter().map(|label| label.name).collect(),
+        repository: remote.project_path(),
+        state: issue.state,
+        title: issue.title,
+        updated_at: issue.updated_at,
+        web_url: issue.url,
+    })
+}
+
+/// Builds the `gh auth status` command for one GitHub host.
+fn auth_status_command(remote: &ForgeRemote) -> ForgeCommand {
+    github_command(
+        remote,
+        vec![
+            "auth".to_string(),
+            "status".to_string(),
+            "--hostname".to_string(),
+            remote.host.clone(),
         ],
     )
 }
@@ -333,6 +381,16 @@ fn lookup_command(remote: &ForgeRemote, source_branch: &str) -> ForgeCommand {
     )
 }
 
+/// Parses one optional display id from a GitHub pull-request lookup response.
+fn parse_lookup_display_id(stdout: &str) -> Result<Option<String>, String> {
+    let pull_requests: Vec<GitHubLookupResponse> = serde_json::from_str(stdout)
+        .map_err(|error| format!("invalid GitHub pull-request lookup response: {error}"))?;
+
+    Ok(pull_requests
+        .first()
+        .map(|pull_request| format!("#{}", pull_request.number)))
+}
+
 /// Builds the `gh pr create` command for `input`.
 ///
 /// GitHub pull requests default to draft so session-published review requests
@@ -352,6 +410,102 @@ fn create_command(remote: &ForgeRemote, input: &CreateReviewRequestInput) -> For
             input.source_branch.clone(),
             "--base".to_string(),
             input.target_branch.clone(),
+            "--title".to_string(),
+            input.title.clone(),
+            "--body".to_string(),
+            input.body.clone().unwrap_or_default(),
+        ],
+    )
+}
+
+/// Parses one GitHub pull-request display id into the numeric argument for
+/// `gh`.
+fn parse_display_id(display_id: &str) -> Result<String, ReviewRequestError> {
+    let trimmed = display_id.trim().trim_start_matches('#');
+    if trimmed.is_empty() || !trimmed.chars().all(|character| character.is_ascii_digit()) {
+        return Err(ReviewRequestError::OperationFailed {
+            forge_kind: ForgeKind::GitHub,
+            message: format!("invalid GitHub pull-request display id: `{display_id}`"),
+        });
+    }
+
+    Ok(trimmed.to_string())
+}
+
+/// Builds the `gh pr view` command for one pull-request number.
+fn view_command(remote: &ForgeRemote, pull_request_number: &str) -> ForgeCommand {
+    github_command(
+        remote,
+        vec![
+            "pr".to_string(),
+            "view".to_string(),
+            pull_request_number.to_string(),
+            "--repo".to_string(),
+            remote.project_path(),
+            "--json".to_string(),
+            "number,title,state,url,baseRefName,headRefName,isDraft,mergeStateStatus,\
+             reviewDecision,mergedAt"
+                .to_string(),
+        ],
+    )
+}
+
+/// Parses one pull-request summary from a `gh pr view` JSON response.
+fn parse_view_response(stdout: &str) -> Result<ReviewRequestSummary, String> {
+    let pull_request: GitHubViewResponse = serde_json::from_str(stdout)
+        .map_err(|error| format!("invalid GitHub pull-request view response: {error}"))?;
+    let state = pull_request.review_request_state();
+    let status_summary = pull_request.status_summary();
+
+    Ok(ReviewRequestSummary {
+        display_id: format!("#{}", pull_request.number),
+        forge_kind: ForgeKind::GitHub,
+        source_branch: pull_request.head_ref_name,
+        state,
+        status_summary,
+        target_branch: pull_request.base_ref_name,
+        title: pull_request.title,
+        web_url: pull_request.url,
+    })
+}
+
+/// Builds the `gh pr view` command that reads title/body metadata used for
+/// change detection before editing a pull request.
+fn view_metadata_command(remote: &ForgeRemote, pull_request_number: &str) -> ForgeCommand {
+    github_command(
+        remote,
+        vec![
+            "pr".to_string(),
+            "view".to_string(),
+            pull_request_number.to_string(),
+            "--repo".to_string(),
+            remote.project_path(),
+            "--json".to_string(),
+            "title,body".to_string(),
+        ],
+    )
+}
+
+/// Parses current pull-request title/body metadata from `gh pr view` JSON.
+fn parse_metadata_response(stdout: &str) -> Result<GitHubMetadataResponse, String> {
+    serde_json::from_str(stdout)
+        .map_err(|error| format!("invalid GitHub pull-request metadata response: {error}"))
+}
+
+/// Builds the `gh pr edit` command for updating one pull-request title/body.
+fn edit_metadata_command(
+    remote: &ForgeRemote,
+    pull_request_number: &str,
+    input: &UpdateReviewRequestInput,
+) -> ForgeCommand {
+    github_command(
+        remote,
+        vec![
+            "pr".to_string(),
+            "edit".to_string(),
+            pull_request_number.to_string(),
+            "--repo".to_string(),
+            remote.project_path(),
             "--title".to_string(),
             input.title.clone(),
             "--body".to_string(),
@@ -381,314 +535,6 @@ fn review_threads_command(remote: &ForgeRemote, pull_request_number: &str) -> Fo
         ],
     )
 }
-
-/// Builds the `gh search prs` command for PRs requesting the current user's
-/// review in the selected repository.
-fn requested_reviews_command(remote: &ForgeRemote) -> ForgeCommand {
-    github_command(
-        remote,
-        vec![
-            "search".to_string(),
-            "prs".to_string(),
-            "--review-requested".to_string(),
-            "@me".to_string(),
-            "--state".to_string(),
-            "open".to_string(),
-            "--repo".to_string(),
-            remote.project_path(),
-            "--limit".to_string(),
-            REQUESTED_REVIEW_LIMIT.to_string(),
-            "--json".to_string(),
-            "number,title,body,url,isDraft,updatedAt,author".to_string(),
-        ],
-    )
-}
-
-/// Builds the `gh search prs` command for pull requests requesting review
-/// from the current GitHub user directly, excluding team-only requests.
-fn personal_requested_reviews_command(remote: &ForgeRemote) -> ForgeCommand {
-    github_command(
-        remote,
-        vec![
-            "search".to_string(),
-            "prs".to_string(),
-            "user-review-requested:@me".to_string(),
-            "--state".to_string(),
-            "open".to_string(),
-            "--repo".to_string(),
-            remote.project_path(),
-            "--limit".to_string(),
-            REQUESTED_REVIEW_LIMIT.to_string(),
-            "--json".to_string(),
-            "number,title,body,url,isDraft,updatedAt,author".to_string(),
-        ],
-    )
-}
-
-/// Builds the `gh pr view` command for one pull-request number.
-fn view_command(remote: &ForgeRemote, pull_request_number: &str) -> ForgeCommand {
-    github_command(
-        remote,
-        vec![
-            "pr".to_string(),
-            "view".to_string(),
-            pull_request_number.to_string(),
-            "--repo".to_string(),
-            remote.project_path(),
-            "--json".to_string(),
-            "number,title,state,url,baseRefName,headRefName,isDraft,mergeStateStatus,\
-             reviewDecision,mergedAt"
-                .to_string(),
-        ],
-    )
-}
-
-/// Builds the `gh pr view` command that reads title/body metadata used for
-/// change detection before editing a pull request.
-fn view_metadata_command(remote: &ForgeRemote, pull_request_number: &str) -> ForgeCommand {
-    github_command(
-        remote,
-        vec![
-            "pr".to_string(),
-            "view".to_string(),
-            pull_request_number.to_string(),
-            "--repo".to_string(),
-            remote.project_path(),
-            "--json".to_string(),
-            "title,body".to_string(),
-        ],
-    )
-}
-
-/// Builds the `gh pr edit` command for updating one pull-request title/body.
-fn edit_metadata_command(
-    remote: &ForgeRemote,
-    pull_request_number: &str,
-    input: &UpdateReviewRequestInput,
-) -> ForgeCommand {
-    github_command(
-        remote,
-        vec![
-            "pr".to_string(),
-            "edit".to_string(),
-            pull_request_number.to_string(),
-            "--repo".to_string(),
-            remote.project_path(),
-            "--title".to_string(),
-            input.title.clone(),
-            "--body".to_string(),
-            input.body.clone().unwrap_or_default(),
-        ],
-    )
-}
-
-/// Builds one base `gh` command with deterministic color settings and the
-/// optional session worktree for repository-aware git fallback commands.
-fn github_command(remote: &ForgeRemote, arguments: Vec<String>) -> ForgeCommand {
-    ForgeCommand::new("gh", arguments)
-        .with_environment("CLICOLOR", "0")
-        .with_environment("NO_COLOR", "1")
-        .with_optional_working_directory(remote.command_working_directory.clone())
-}
-
-/// Parses one optional display id from a GitHub pull-request lookup response.
-fn parse_lookup_display_id(stdout: &str) -> Result<Option<String>, String> {
-    let pull_requests: Vec<GitHubLookupResponse> = serde_json::from_str(stdout)
-        .map_err(|error| format!("invalid GitHub pull-request lookup response: {error}"))?;
-
-    Ok(pull_requests
-        .first()
-        .map(|pull_request| format!("#{}", pull_request.number)))
-}
-
-/// Parses one pull-request summary from a `gh pr view` JSON response.
-fn parse_view_response(stdout: &str) -> Result<ReviewRequestSummary, String> {
-    let pull_request: GitHubViewResponse = serde_json::from_str(stdout)
-        .map_err(|error| format!("invalid GitHub pull-request view response: {error}"))?;
-    let state = pull_request.review_request_state();
-    let status_summary = pull_request.status_summary();
-
-    Ok(ReviewRequestSummary {
-        display_id: format!("#{}", pull_request.number),
-        forge_kind: ForgeKind::GitHub,
-        source_branch: pull_request.head_ref_name,
-        state,
-        status_summary,
-        target_branch: pull_request.base_ref_name,
-        title: pull_request.title,
-        web_url: pull_request.url,
-    })
-}
-
-/// Parses current pull-request title/body metadata from `gh pr view` JSON.
-fn parse_metadata_response(stdout: &str) -> Result<GitHubMetadataResponse, String> {
-    serde_json::from_str(stdout)
-        .map_err(|error| format!("invalid GitHub pull-request metadata response: {error}"))
-}
-
-/// Parses GitHub search rows into normalized requested-review rows.
-fn parse_requested_reviews_response(
-    stdout: &str,
-    remote: &ForgeRemote,
-) -> Result<Vec<RequestedReview>, String> {
-    let pull_requests: Vec<GitHubRequestedReviewResponse> = serde_json::from_str(stdout)
-        .map_err(|error| format!("invalid GitHub requested-review response: {error}"))?;
-
-    Ok(pull_requests
-        .into_iter()
-        .map(|pull_request| {
-            let status_summary = if pull_request.is_draft {
-                Some("Draft".to_string())
-            } else {
-                None
-            };
-
-            RequestedReview {
-                audience: RequestedReviewAudience::Personal,
-                author: pull_request
-                    .author
-                    .map_or_else(|| "ghost".to_string(), |author| author.login),
-                body: pull_request.body,
-                comment_snapshot: None,
-                display_id: format!("#{}", pull_request.number),
-                forge_kind: ForgeKind::GitHub,
-                repository: remote.project_path(),
-                status_summary,
-                title: pull_request.title,
-                updated_at: pull_request.updated_at,
-                web_url: pull_request.url,
-            }
-        })
-        .collect())
-}
-
-/// Parses GitHub issue search rows into normalized assigned-issue rows.
-fn parse_assigned_issues_response(stdout: &str) -> Result<Vec<AssignedIssue>, String> {
-    let issues: Vec<GitHubAssignedIssueResponse> = serde_json::from_str(stdout)
-        .map_err(|error| format!("invalid GitHub assigned-issue response: {error}"))?;
-
-    Ok(issues
-        .into_iter()
-        .map(|issue| AssignedIssue {
-            display_id: format!("#{}", issue.number),
-            repository: issue.repository.name_with_owner,
-            title: issue.title,
-            updated_at: issue.updated_at,
-            web_url: issue.url,
-        })
-        .collect())
-}
-
-/// Parses one GitHub issue detail response without comment data.
-fn parse_issue_detail_response(remote: &ForgeRemote, stdout: &str) -> Result<IssueDetail, String> {
-    let issue: GitHubIssueDetailResponse = serde_json::from_str(stdout)
-        .map_err(|error| format!("invalid GitHub issue-detail response: {error}"))?;
-
-    Ok(IssueDetail {
-        assignees: issue.assignees.into_iter().map(|user| user.login).collect(),
-        author: issue
-            .author
-            .map_or_else(|| "ghost".to_string(), |author| author.login),
-        body: issue.body,
-        created_at: issue.created_at,
-        display_id: format!("#{}", issue.number),
-        labels: issue.labels.into_iter().map(|label| label.name).collect(),
-        repository: remote.project_path(),
-        state: issue.state,
-        title: issue.title,
-        updated_at: issue.updated_at,
-        web_url: issue.url,
-    })
-}
-
-/// Merges requested-review rows from both GitHub searches, marking rows as
-/// personal when they appear in the `user-review-requested:@me` result and as
-/// group requests otherwise.
-///
-/// Rows from the broader search keep their original order, while personal-only
-/// rows are appended so brief API timing or pagination differences do not drop
-/// directly requested pull requests from the UI.
-fn categorize_requested_reviews(
-    all_reviews: Vec<RequestedReview>,
-    personal_reviews: &[RequestedReview],
-) -> Vec<RequestedReview> {
-    let personal_urls = personal_reviews
-        .iter()
-        .map(|review| review.web_url.as_str())
-        .collect::<HashSet<_>>();
-    let mut seen_urls = HashSet::new();
-    let mut categorized_reviews = Vec::with_capacity(all_reviews.len().max(personal_reviews.len()));
-
-    for mut review in all_reviews {
-        review.audience = if personal_urls.contains(review.web_url.as_str()) {
-            RequestedReviewAudience::Personal
-        } else {
-            RequestedReviewAudience::Group
-        };
-
-        if seen_urls.insert(review.web_url.clone()) {
-            categorized_reviews.push(review);
-        }
-    }
-
-    for review in personal_reviews {
-        if seen_urls.insert(review.web_url.clone()) {
-            let mut review = review.clone();
-            review.audience = RequestedReviewAudience::Personal;
-            categorized_reviews.push(review);
-        }
-    }
-
-    categorized_reviews
-}
-
-/// Parses one GitHub pull-request display id into the numeric argument for
-/// `gh`.
-fn parse_display_id(display_id: &str) -> Result<String, ReviewRequestError> {
-    let trimmed = display_id.trim().trim_start_matches('#');
-    if trimmed.is_empty() || !trimmed.chars().all(|character| character.is_ascii_digit()) {
-        return Err(ReviewRequestError::OperationFailed {
-            forge_kind: ForgeKind::GitHub,
-            message: format!("invalid GitHub pull-request display id: `{display_id}`"),
-        });
-    }
-
-    Ok(trimmed.to_string())
-}
-
-/// Formats one GitHub merge-state label for the UI.
-fn merge_state_summary(merge_state_status: Option<&str>) -> Option<String> {
-    match merge_state_status {
-        Some("BLOCKED") => Some("Blocked".to_string()),
-        Some("CLEAN") => Some("Mergeable".to_string()),
-        Some("DIRTY") => Some("Conflicts".to_string()),
-        Some("HAS_HOOKS") => Some("Hooks pending".to_string()),
-        Some("UNSTABLE") => Some("Checks pending".to_string()),
-        Some("UNKNOWN") | None => None,
-        Some(other) => Some(normalize_provider_label(other)),
-    }
-}
-
-/// Formats one GitHub review-decision label for the UI.
-fn review_decision_summary(review_decision: Option<&str>) -> Option<String> {
-    match review_decision {
-        Some("APPROVED") => Some("Approved".to_string()),
-        Some("CHANGES_REQUESTED") => Some("Changes requested".to_string()),
-        Some("REVIEW_REQUIRED") => Some("Review required".to_string()),
-        Some(other) => Some(normalize_provider_label(other)),
-        None => None,
-    }
-}
-
-/// GraphQL query text used to fetch review threads and review-request-wide
-/// conversation comments for one pull request.
-///
-/// Capped at 100 threads per request and 100 comments per thread/PR.
-const REVIEW_THREADS_QUERY: &str =
-    "query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: \
-     $repo) { pullRequest(number: $number) { comments(first: 100) { nodes { author { login } body \
-     } } reviewThreads(first: 100) { nodes { diffSide isOutdated isResolved line path startLine \
-     subjectType comments(first: 100) { nodes { author { login } body } } } } } } }";
 
 /// Parses the full review-comment snapshot from a GraphQL response.
 ///
@@ -755,16 +601,6 @@ fn review_comment_thread_from_node(node: GitHubReviewThreadNode) -> ReviewCommen
     }
 }
 
-/// Converts one GraphQL comment node into the forge-neutral representation.
-fn review_comment_from_node(node: GitHubReviewCommentNode) -> ReviewComment {
-    ReviewComment {
-        author: node
-            .author
-            .map_or_else(|| "ghost".to_string(), |author| author.login),
-        body: node.body,
-    }
-}
-
 /// Converts GitHub's diff-side labels into Agentty's normalized anchor side.
 fn github_anchor_side(node: &GitHubReviewThreadNode) -> ReviewCommentAnchorSide {
     if node.subject_type == "FILE" || node.line.is_none() {
@@ -775,6 +611,145 @@ fn github_anchor_side(node: &GitHubReviewThreadNode) -> ReviewCommentAnchorSide 
         "LEFT" => ReviewCommentAnchorSide::Old,
         _ => ReviewCommentAnchorSide::New,
     }
+}
+
+/// Converts one GraphQL comment node into the forge-neutral representation.
+fn review_comment_from_node(node: GitHubReviewCommentNode) -> ReviewComment {
+    ReviewComment {
+        author: node
+            .author
+            .map_or_else(|| "ghost".to_string(), |author| author.login),
+        body: node.body,
+    }
+}
+
+/// Builds the `gh search prs` command for PRs requesting the current user's
+/// review in the selected repository.
+fn requested_reviews_command(remote: &ForgeRemote) -> ForgeCommand {
+    github_command(
+        remote,
+        vec![
+            "search".to_string(),
+            "prs".to_string(),
+            "--review-requested".to_string(),
+            "@me".to_string(),
+            "--state".to_string(),
+            "open".to_string(),
+            "--repo".to_string(),
+            remote.project_path(),
+            "--limit".to_string(),
+            REQUESTED_REVIEW_LIMIT.to_string(),
+            "--json".to_string(),
+            "number,title,body,url,isDraft,updatedAt,author".to_string(),
+        ],
+    )
+}
+
+/// Builds the `gh search prs` command for pull requests requesting review
+/// from the current GitHub user directly, excluding team-only requests.
+fn personal_requested_reviews_command(remote: &ForgeRemote) -> ForgeCommand {
+    github_command(
+        remote,
+        vec![
+            "search".to_string(),
+            "prs".to_string(),
+            "user-review-requested:@me".to_string(),
+            "--state".to_string(),
+            "open".to_string(),
+            "--repo".to_string(),
+            remote.project_path(),
+            "--limit".to_string(),
+            REQUESTED_REVIEW_LIMIT.to_string(),
+            "--json".to_string(),
+            "number,title,body,url,isDraft,updatedAt,author".to_string(),
+        ],
+    )
+}
+
+/// Parses GitHub search rows into normalized requested-review rows.
+fn parse_requested_reviews_response(
+    stdout: &str,
+    remote: &ForgeRemote,
+) -> Result<Vec<RequestedReview>, String> {
+    let pull_requests: Vec<GitHubRequestedReviewResponse> = serde_json::from_str(stdout)
+        .map_err(|error| format!("invalid GitHub requested-review response: {error}"))?;
+
+    Ok(pull_requests
+        .into_iter()
+        .map(|pull_request| {
+            let status_summary = if pull_request.is_draft {
+                Some("Draft".to_string())
+            } else {
+                None
+            };
+
+            RequestedReview {
+                audience: RequestedReviewAudience::Personal,
+                author: pull_request
+                    .author
+                    .map_or_else(|| "ghost".to_string(), |author| author.login),
+                body: pull_request.body,
+                comment_snapshot: None,
+                display_id: format!("#{}", pull_request.number),
+                forge_kind: ForgeKind::GitHub,
+                repository: remote.project_path(),
+                status_summary,
+                title: pull_request.title,
+                updated_at: pull_request.updated_at,
+                web_url: pull_request.url,
+            }
+        })
+        .collect())
+}
+
+/// Merges requested-review rows from both GitHub searches, marking rows as
+/// personal when they appear in the `user-review-requested:@me` result and as
+/// group requests otherwise.
+///
+/// Rows from the broader search keep their original order, while personal-only
+/// rows are appended so brief API timing or pagination differences do not drop
+/// directly requested pull requests from the UI.
+fn categorize_requested_reviews(
+    all_reviews: Vec<RequestedReview>,
+    personal_reviews: &[RequestedReview],
+) -> Vec<RequestedReview> {
+    let personal_urls = personal_reviews
+        .iter()
+        .map(|review| review.web_url.as_str())
+        .collect::<HashSet<_>>();
+    let mut seen_urls = HashSet::new();
+    let mut categorized_reviews = Vec::with_capacity(all_reviews.len().max(personal_reviews.len()));
+
+    for mut review in all_reviews {
+        review.audience = if personal_urls.contains(review.web_url.as_str()) {
+            RequestedReviewAudience::Personal
+        } else {
+            RequestedReviewAudience::Group
+        };
+
+        if seen_urls.insert(review.web_url.clone()) {
+            categorized_reviews.push(review);
+        }
+    }
+
+    for review in personal_reviews {
+        if seen_urls.insert(review.web_url.clone()) {
+            let mut review = review.clone();
+            review.audience = RequestedReviewAudience::Personal;
+            categorized_reviews.push(review);
+        }
+    }
+
+    categorized_reviews
+}
+
+/// Builds one base `gh` command with deterministic color settings and the
+/// optional session worktree for repository-aware git fallback commands.
+fn github_command(remote: &ForgeRemote, arguments: Vec<String>) -> ForgeCommand {
+    ForgeCommand::new("gh", arguments)
+        .with_environment("CLICOLOR", "0")
+        .with_environment("NO_COLOR", "1")
+        .with_optional_working_directory(remote.command_working_directory.clone())
 }
 
 /// Minimal GitHub API lookup payload used to find an existing pull request.
@@ -965,15 +940,40 @@ impl GitHubViewResponse {
             parts.push("Draft".to_string());
         }
 
-        if let Some(review_summary) = review_decision_summary(self.review_decision.as_deref()) {
+        if let Some(review_summary) = Self::review_decision_summary(self.review_decision.as_deref())
+        {
             parts.push(review_summary);
         }
 
-        if let Some(merge_summary) = merge_state_summary(self.merge_state_status.as_deref()) {
+        if let Some(merge_summary) = Self::merge_state_summary(self.merge_state_status.as_deref()) {
             parts.push(merge_summary);
         }
 
         status_summary_parts(&parts)
+    }
+
+    /// Formats one GitHub review-decision label for the UI.
+    fn review_decision_summary(review_decision: Option<&str>) -> Option<String> {
+        match review_decision {
+            Some("APPROVED") => Some("Approved".to_string()),
+            Some("CHANGES_REQUESTED") => Some("Changes requested".to_string()),
+            Some("REVIEW_REQUIRED") => Some("Review required".to_string()),
+            Some(other) => Some(normalize_provider_label(other)),
+            None => None,
+        }
+    }
+
+    /// Formats one GitHub merge-state label for the UI.
+    fn merge_state_summary(merge_state_status: Option<&str>) -> Option<String> {
+        match merge_state_status {
+            Some("BLOCKED") => Some("Blocked".to_string()),
+            Some("CLEAN") => Some("Mergeable".to_string()),
+            Some("DIRTY") => Some("Conflicts".to_string()),
+            Some("HAS_HOOKS") => Some("Hooks pending".to_string()),
+            Some("UNSTABLE") => Some("Checks pending".to_string()),
+            Some("UNKNOWN") | None => None,
+            Some(other) => Some(normalize_provider_label(other)),
+        }
     }
 }
 
@@ -1231,6 +1231,24 @@ mod tests {
         assert_eq!(
             review_request.status_summary.as_deref(),
             Some("Approved, Mergeable")
+        );
+    }
+
+    #[test]
+    fn parse_display_id_rejects_invalid_pull_request_reference() {
+        // Arrange
+        let display_id = "#not-a-number";
+
+        // Act
+        let error = parse_display_id(display_id).expect_err("invalid display id should fail");
+
+        // Assert
+        assert_eq!(
+            error,
+            ReviewRequestError::OperationFailed {
+                forge_kind: ForgeKind::GitHub,
+                message: "invalid GitHub pull-request display id: `#not-a-number`".to_string(),
+            }
         );
     }
 
@@ -1495,7 +1513,7 @@ mod tests {
             .expect("GitHub review-comment snapshot fetch should succeed");
 
         // Assert
-        assert_eq!(snapshot.threads.len(), 2);
+        assert_eq!(snapshot.threads.len(), 3);
         let unresolved = &snapshot.threads[0];
         assert_eq!(unresolved.path, "src/foo.rs");
         assert_eq!(unresolved.line, Some(42));
@@ -1512,6 +1530,11 @@ mod tests {
         assert!(resolved.is_resolved);
         assert_eq!(resolved.comments.len(), 1);
         assert_eq!(resolved.comments[0].author, "ghost");
+
+        let file_level = &snapshot.threads[2];
+        assert_eq!(file_level.path, "Cargo.toml");
+        assert_eq!(file_level.line, None);
+        assert_eq!(file_level.anchor_side, ReviewCommentAnchorSide::File);
 
         assert_eq!(snapshot.pr_level_comments.len(), 2);
         assert_eq!(snapshot.pr_level_comments[0].author, "carol");
@@ -1609,6 +1632,42 @@ mod tests {
         );
     }
 
+    #[test]
+    fn github_status_helpers_map_provider_labels() {
+        // Arrange
+        let review_decision_cases = [
+            (Some("APPROVED"), Some("Approved")),
+            (Some("CHANGES_REQUESTED"), Some("Changes requested")),
+            (Some("REVIEW_REQUIRED"), Some("Review required")),
+            (Some("COMMENTED"), Some("Commented")),
+            (None, None),
+        ];
+        let merge_state_cases = [
+            (Some("BLOCKED"), Some("Blocked")),
+            (Some("CLEAN"), Some("Mergeable")),
+            (Some("DIRTY"), Some("Conflicts")),
+            (Some("HAS_HOOKS"), Some("Hooks pending")),
+            (Some("UNSTABLE"), Some("Checks pending")),
+            (Some("UNKNOWN"), None),
+            (Some("BEHIND"), Some("Behind")),
+            (None, None),
+        ];
+
+        // Act & Assert
+        for (status, expected) in review_decision_cases {
+            assert_eq!(
+                GitHubViewResponse::review_decision_summary(status).as_deref(),
+                expected
+            );
+        }
+        for (status, expected) in merge_state_cases {
+            assert_eq!(
+                GitHubViewResponse::merge_state_summary(status).as_deref(),
+                expected
+            );
+        }
+    }
+
     fn github_remote() -> ForgeRemote {
         ForgeRemote {
             command_working_directory: None,
@@ -1693,6 +1752,19 @@ mod tests {
                                                 "url": "https://github.com/agentty-xyz/agentty/pull/42#discussion_r3"
                                             }
                                         ]
+                                    }
+                                },
+                                {
+                                    "id": "thread-3",
+                                    "isResolved": false,
+                                    "isOutdated": false,
+                                    "path": "Cargo.toml",
+                                    "line": null,
+                                    "startLine": null,
+                                    "diffSide": "RIGHT",
+                                    "subjectType": "FILE",
+                                    "comments": {
+                                        "nodes": []
                                     }
                                 }
                             ]

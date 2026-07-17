@@ -87,13 +87,6 @@ pub(crate) fn strip_port(host: &str) -> &str {
     host.split(':').next().unwrap_or(host)
 }
 
-/// Removes any `username[:password]@` prefix from one URL authority segment.
-fn strip_userinfo(authority: &str) -> &str {
-    authority
-        .rsplit_once('@')
-        .map_or(authority, |(_, host)| host)
-}
-
 /// Builds one parsed remote from extracted host and path components.
 ///
 /// When `strip_transport_port` is `true`, the parsed host is normalized for
@@ -127,6 +120,13 @@ fn parsed_remote_from_parts(
         repo_url: repo_url.to_string(),
         web_url: format!("https://{host}/{path}"),
     })
+}
+
+/// Removes any `username[:password]@` prefix from one URL authority segment.
+fn strip_userinfo(authority: &str) -> &str {
+    authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host)
 }
 
 #[cfg(test)]

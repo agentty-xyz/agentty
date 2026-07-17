@@ -132,6 +132,41 @@ impl RealReviewRequestClient {
     pub(crate) fn new(command_runner: Arc<dyn ForgeCommandRunner>) -> Self {
         Self { command_runner }
     }
+
+    /// Runs `call` on an authenticated adapter selected for `remote`.
+    fn call_with_authenticated_adapter<T>(
+        &self,
+        remote: ForgeRemote,
+        call: impl FnOnce(
+            Arc<dyn ReviewRequestAdapter>,
+            ForgeRemote,
+        ) -> ForgeFuture<Result<T, ReviewRequestError>>
+        + Send
+        + 'static,
+    ) -> ForgeFuture<Result<T, ReviewRequestError>>
+    where
+        T: Send + 'static,
+    {
+        let adapter = self.adapter_for(remote.forge_kind);
+
+        Box::pin(async move {
+            adapter.ensure_authenticated(&remote).await?;
+
+            call(adapter, remote).await
+        })
+    }
+
+    /// Returns one adapter implementation for `forge_kind`.
+    fn adapter_for(&self, forge_kind: ForgeKind) -> Arc<dyn ReviewRequestAdapter> {
+        match forge_kind {
+            ForgeKind::GitHub => Arc::new(GitHubReviewRequestAdapter::new(Arc::clone(
+                &self.command_runner,
+            ))),
+            ForgeKind::GitLab => Arc::new(GitLabReviewRequestAdapter::new(Arc::clone(
+                &self.command_runner,
+            ))),
+        }
+    }
 }
 
 impl Default for RealReviewRequestClient {
@@ -251,43 +286,6 @@ impl ReviewRequestClient for RealReviewRequestClient {
     ) -> ForgeFuture<Result<Vec<RequestedReview>, ReviewRequestError>> {
         self.call_with_authenticated_adapter(remote, move |adapter, remote| {
             adapter.list_authenticated_requested_reviews(remote)
-        })
-    }
-}
-
-impl RealReviewRequestClient {
-    /// Returns one adapter implementation for `forge_kind`.
-    fn adapter_for(&self, forge_kind: ForgeKind) -> Arc<dyn ReviewRequestAdapter> {
-        match forge_kind {
-            ForgeKind::GitHub => Arc::new(GitHubReviewRequestAdapter::new(Arc::clone(
-                &self.command_runner,
-            ))),
-            ForgeKind::GitLab => Arc::new(GitLabReviewRequestAdapter::new(Arc::clone(
-                &self.command_runner,
-            ))),
-        }
-    }
-
-    /// Runs `call` on an authenticated adapter selected for `remote`.
-    fn call_with_authenticated_adapter<T>(
-        &self,
-        remote: ForgeRemote,
-        call: impl FnOnce(
-            Arc<dyn ReviewRequestAdapter>,
-            ForgeRemote,
-        ) -> ForgeFuture<Result<T, ReviewRequestError>>
-        + Send
-        + 'static,
-    ) -> ForgeFuture<Result<T, ReviewRequestError>>
-    where
-        T: Send + 'static,
-    {
-        let adapter = self.adapter_for(remote.forge_kind);
-
-        Box::pin(async move {
-            adapter.ensure_authenticated(&remote).await?;
-
-            call(adapter, remote).await
         })
     }
 }

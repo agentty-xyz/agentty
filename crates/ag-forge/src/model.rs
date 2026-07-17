@@ -73,14 +73,6 @@ impl ForgeKind {
     }
 }
 
-/// Returns whether `host` looks like one GitLab instance hostname.
-pub fn is_gitlab_host(host: &str) -> bool {
-    host == "gitlab.com"
-        || host.ends_with(".gitlab.com")
-        || host.starts_with("gitlab.")
-        || host.contains(".gitlab.")
-}
-
 impl fmt::Display for ForgeKind {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.as_str())
@@ -97,6 +89,14 @@ impl FromStr for ForgeKind {
             _ => Err(format!("Unknown review-request forge: {value}")),
         }
     }
+}
+
+/// Returns whether `host` looks like one GitLab instance hostname.
+pub fn is_gitlab_host(host: &str) -> bool {
+    host == "gitlab.com"
+        || host.ends_with(".gitlab.com")
+        || host.starts_with("gitlab.")
+        || host.contains(".gitlab.")
 }
 
 /// Normalized remote lifecycle state for one linked review request.
@@ -458,43 +458,6 @@ impl ReviewRequestError {
     }
 }
 
-/// Returns actionable copy for one CLI authentication failure and preserves
-/// the original CLI output when it is available.
-fn authentication_required_message(
-    forge_kind: ForgeKind,
-    host: &str,
-    detail: Option<&str>,
-) -> String {
-    let mut message = format!(
-        "{} review requests require local CLI authentication for `{host}`.\nRun `{}` and retry.",
-        forge_kind.display_name(),
-        forge_kind.auth_login_command(),
-    );
-
-    if let Some(detail) = non_empty_detail(detail) {
-        // Infallible: writing to a String cannot fail.
-        let _ = write!(
-            message,
-            "\n\nOriginal `{}` error:\n```text\n{detail}",
-            forge_kind.cli_name(),
-        );
-        if !detail.ends_with('\n') {
-            message.push('\n');
-        }
-        message.push_str("```");
-    }
-
-    message
-}
-
-/// Returns one trimmed CLI error detail when the captured output is not empty.
-fn non_empty_detail(detail: Option<&str>) -> Option<&str> {
-    detail.and_then(|detail| {
-        let trimmed_detail = detail.trim();
-        (!trimmed_detail.is_empty()).then_some(trimmed_detail)
-    })
-}
-
 /// Builds one GitHub compare URL that opens the new pull-request flow.
 fn github_review_request_creation_url(
     remote: &ForgeRemote,
@@ -563,9 +526,63 @@ fn invalid_web_url_error(remote: &ForgeRemote) -> ReviewRequestError {
     }
 }
 
+/// Returns actionable copy for one CLI authentication failure and preserves
+/// the original CLI output when it is available.
+fn authentication_required_message(
+    forge_kind: ForgeKind,
+    host: &str,
+    detail: Option<&str>,
+) -> String {
+    let mut message = format!(
+        "{} review requests require local CLI authentication for `{host}`.\nRun `{}` and retry.",
+        forge_kind.display_name(),
+        forge_kind.auth_login_command(),
+    );
+
+    if let Some(detail) = non_empty_detail(detail) {
+        // Infallible: writing to a String cannot fail.
+        let _ = write!(
+            message,
+            "\n\nOriginal `{}` error:\n```text\n{detail}",
+            forge_kind.cli_name(),
+        );
+        if !detail.ends_with('\n') {
+            message.push('\n');
+        }
+        message.push_str("```");
+    }
+
+    message
+}
+
+/// Returns one trimmed CLI error detail when the captured output is not empty.
+fn non_empty_detail(detail: Option<&str>) -> Option<&str> {
+    detail.and_then(|detail| {
+        let trimmed_detail = detail.trim();
+        (!trimmed_detail.is_empty()).then_some(trimmed_detail)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn forge_kind_from_str_gitlab() {
+        // Arrange
+        let raw_forge_kind = "GitLab";
+
+        // Act
+        let forge_kind = raw_forge_kind
+            .parse::<ForgeKind>()
+            .expect("gitlab forge kind should parse");
+
+        // Assert
+        assert_eq!(forge_kind, ForgeKind::GitLab);
+        assert_eq!(forge_kind.cli_name(), "glab");
+        assert_eq!(forge_kind.review_request_name(), "merge request");
+        assert_eq!(forge_kind.review_request_short_name(), "MR");
+    }
 
     #[test]
     fn authentication_required_message_includes_original_cli_error_detail() {
@@ -655,23 +672,6 @@ mod tests {
                 message: "repository remote is missing a valid web URL: `not a url`".to_string(),
             }
         );
-    }
-
-    #[test]
-    fn forge_kind_from_str_gitlab() {
-        // Arrange
-        let raw_forge_kind = "GitLab";
-
-        // Act
-        let forge_kind = raw_forge_kind
-            .parse::<ForgeKind>()
-            .expect("gitlab forge kind should parse");
-
-        // Assert
-        assert_eq!(forge_kind, ForgeKind::GitLab);
-        assert_eq!(forge_kind.cli_name(), "glab");
-        assert_eq!(forge_kind.review_request_name(), "merge request");
-        assert_eq!(forge_kind.review_request_short_name(), "MR");
     }
 
     #[test]

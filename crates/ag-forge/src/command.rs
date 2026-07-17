@@ -123,6 +123,21 @@ impl ForgeCommandRunner for RealForgeCommandRunner {
     }
 }
 
+/// Extracts the best human-readable error detail from command output.
+pub(crate) fn command_output_detail(output: &ForgeCommandOutput) -> String {
+    let stderr_text = output.stderr.trim();
+    if !stderr_text.is_empty() {
+        return stderr_text.to_string();
+    }
+
+    let stdout_text = output.stdout.trim();
+    if !stdout_text.is_empty() {
+        return stdout_text.to_string();
+    }
+
+    "Unknown forge CLI error".to_string()
+}
+
 /// Runs one forge CLI command and captures stdout, stderr, and exit status.
 async fn run_command(command: ForgeCommand) -> Result<ForgeCommandOutput, ForgeCommandError> {
     run_command_with_timeout(command, FORGE_COMMAND_TIMEOUT).await
@@ -169,21 +184,6 @@ async fn run_command_with_timeout(
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
     })
-}
-
-/// Extracts the best human-readable error detail from command output.
-pub(crate) fn command_output_detail(output: &ForgeCommandOutput) -> String {
-    let stderr_text = output.stderr.trim();
-    if !stderr_text.is_empty() {
-        return stderr_text.to_string();
-    }
-
-    let stdout_text = output.stdout.trim();
-    if !stdout_text.is_empty() {
-        return stdout_text.to_string();
-    }
-
-    "Unknown forge CLI error".to_string()
 }
 
 #[cfg(test)]
