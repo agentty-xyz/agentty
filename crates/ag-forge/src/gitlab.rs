@@ -365,10 +365,12 @@ fn parse_view_response(stdout: &str) -> Result<ReviewRequestSummary, String> {
         .map_err(|error| format!("invalid GitLab merge-request view response: {error}"))?;
     let state = merge_request.review_request_state();
     let status_summary = merge_request.status_summary();
+    let merge_commit_sha = merge_request.merged_commit_sha();
 
     Ok(ReviewRequestSummary {
         display_id: format!("!{}", merge_request.iid),
         forge_kind: ForgeKind::GitLab,
+        merge_commit_sha,
         source_branch: merge_request.source_branch,
         state,
         status_summary,
@@ -726,17 +728,22 @@ struct GitLabRequestedReviewAuthor {
 /// GitLab merge-request JSON payload returned by `glab mr view --output json`.
 #[derive(Deserialize)]
 struct GitLabViewResponse {
-    #[serde(default)]
-    draft: bool,
     #[serde(rename = "detailed_merge_status")]
     detailed_merge_status: Option<String>,
+    #[serde(default)]
+    draft: bool,
     iid: u64,
+    #[serde(rename = "merge_commit_sha")]
+    merge_commit_sha: Option<String>,
     #[serde(rename = "merge_status")]
     merge_status: Option<String>,
     #[serde(rename = "merged_at")]
     merged_at: Option<String>,
+    sha: Option<String>,
     #[serde(rename = "source_branch")]
     source_branch: String,
+    #[serde(rename = "squash_commit_sha")]
+    squash_commit_sha: Option<String>,
     state: String,
     #[serde(rename = "target_branch")]
     target_branch: String,
@@ -746,6 +753,28 @@ struct GitLabViewResponse {
 }
 
 impl GitLabViewResponse {
+    /// Resolves the commit that landed on the target branch.
+    ///
+    /// GitLab reports a merge commit for merge-commit strategies, a squash
+    /// commit for squash strategies, and only the source head SHA for a
+    /// fast-forward merge.
+    fn merged_commit_sha(&self) -> Option<String> {
+        if self.review_request_state() != ReviewRequestState::Merged {
+            return None;
+        }
+
+        [
+            self.merge_commit_sha.as_deref(),
+            self.squash_commit_sha.as_deref(),
+            self.sha.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|commit_sha| !commit_sha.is_empty())
+        .map(ToString::to_string)
+    }
+
     /// Maps GitLab state fields into the normalized review-request state.
     fn review_request_state(&self) -> ReviewRequestState {
         if self.merged_at.is_some() || self.state.eq_ignore_ascii_case("merged") {
@@ -903,6 +932,7 @@ mod tests {
             Some(ReviewRequestSummary {
                 display_id: "!42".to_string(),
                 forge_kind: ForgeKind::GitLab,
+                merge_commit_sha: None,
                 source_branch: "feature/forge".to_string(),
                 state: ReviewRequestState::Open,
                 status_summary: Some("Draft, Mergeable".to_string()),
@@ -1194,9 +1224,12 @@ mod tests {
                 draft: false,
                 detailed_merge_status: None,
                 iid: 42,
+                merge_commit_sha: None,
                 merge_status: None,
                 merged_at: merged_at.map(str::to_string),
+                sha: None,
                 source_branch: "feature/forge".to_string(),
+                squash_commit_sha: None,
                 state: state.to_string(),
                 target_branch: "main".to_string(),
                 title: "Add forge review support".to_string(),
@@ -1204,6 +1237,38 @@ mod tests {
             };
 
             assert_eq!(response.review_request_state(), expected);
+        }
+    }
+
+    #[test]
+    fn gitlab_view_response_resolves_strategy_specific_merged_commit() {
+        // Arrange
+        let cases = [
+            (Some("merge"), Some("squash"), Some("head"), Some("merge")),
+            (None, Some("squash"), Some("head"), Some("squash")),
+            (None, None, Some("head"), Some("head")),
+            (None, None, None, None),
+        ];
+
+        // Act & Assert
+        for (merge_commit_sha, squash_commit_sha, sha, expected) in cases {
+            let response = GitLabViewResponse {
+                draft: false,
+                detailed_merge_status: None,
+                iid: 42,
+                merge_commit_sha: merge_commit_sha.map(str::to_string),
+                merge_status: None,
+                merged_at: Some("2026-07-16T12:00:00Z".to_string()),
+                sha: sha.map(str::to_string),
+                source_branch: "feature/forge".to_string(),
+                squash_commit_sha: squash_commit_sha.map(str::to_string),
+                state: "merged".to_string(),
+                target_branch: "main".to_string(),
+                title: "Add forge review support".to_string(),
+                web_url: "https://gitlab.com/group/project/-/merge_requests/42".to_string(),
+            };
+
+            assert_eq!(response.merged_commit_sha().as_deref(), expected);
         }
     }
 

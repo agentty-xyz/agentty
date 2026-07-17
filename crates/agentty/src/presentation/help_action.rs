@@ -68,6 +68,10 @@ pub enum ViewSessionState {
     Done,
     /// Session was canceled locally; view mode stays read-only.
     Canceled,
+    /// Review request merged upstream; the target branch has not been
+    /// observed locally yet, so only read-only actions and force completion
+    /// remain available.
+    Merged,
     /// Session is currently running; queued replies, queued sync, and stop
     /// remain available while worktree-open and diff shortcuts are hidden.
     InProgress,
@@ -152,6 +156,7 @@ pub(crate) struct ViewHelpState {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ViewActionSet {
     continue_terminal_session: ViewActionAvailability,
+    force_done: ViewActionAvailability,
     fork_session: ViewActionAvailability,
     launch_configuration: ViewActionAvailability,
     merge_session: ViewActionAvailability,
@@ -186,11 +191,16 @@ impl ViewActionSet {
             state.session_state,
             ViewSessionState::Review | ViewSessionState::AgentReview
         );
+        let can_show_diff = can_show_review || state.session_state == ViewSessionState::Merged;
 
         Self {
             continue_terminal_session: ViewActionAvailability::from_bool(matches!(
                 state.session_state,
                 ViewSessionState::Done
+            )),
+            force_done: ViewActionAvailability::from_bool(matches!(
+                state.session_state,
+                ViewSessionState::Merged
             )),
             fork_session: ViewActionAvailability::from_bool(
                 state.can_fork_session.is_enabled() && can_show_review,
@@ -200,7 +210,7 @@ impl ViewActionSet {
             open_prompt: ViewActionAvailability::from_bool(can_open_prompt),
             open_worktree: ViewActionAvailability::from_bool(can_open_worktree),
             rebase_session: ViewActionAvailability::from_bool(can_rebase_session),
-            show_diff: ViewActionAvailability::from_bool(can_show_review),
+            show_diff: ViewActionAvailability::from_bool(can_show_diff),
             show_review: ViewActionAvailability::from_bool(can_show_review),
             stop_session: ViewActionAvailability::from_bool(
                 state.session_state == ViewSessionState::InProgress,
@@ -215,6 +225,7 @@ pub(crate) fn session_view_state(session: &Session) -> ViewSessionState {
     match session.status {
         Status::Done => ViewSessionState::Done,
         Status::Canceled => ViewSessionState::Canceled,
+        Status::Merged => ViewSessionState::Merged,
         Status::InProgress => ViewSessionState::InProgress,
         Status::Draft if session.is_draft_session() && session.is_stacked_child() => {
             ViewSessionState::StackedDraft
@@ -411,6 +422,7 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
         actions.push(HelpAction::new("sync", "r", "Sync"));
     }
 
+    append_view_force_done_action(&mut actions, action_set);
     append_view_continue_action(&mut actions, action_set);
     actions.extend(VIEW_OUTPUT_SCROLL_ACTIONS);
     actions.push(HelpAction::new("help", "?", "Help"));
@@ -450,6 +462,7 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
     append_view_stop_action(&mut actions, action_set);
     append_view_open_action(&mut actions, action_set);
     append_view_review_actions(&mut actions, state, action_set);
+    append_view_force_done_action(&mut actions, action_set);
     append_view_continue_action(&mut actions, action_set);
     actions.extend(VIEW_FOOTER_TRAILING_ACTIONS);
 
@@ -534,6 +547,13 @@ fn append_view_review_actions(
 fn append_view_continue_action(actions: &mut Vec<HelpAction>, action_set: ViewActionSet) {
     if action_set.continue_terminal_session.is_enabled() {
         actions.push(HelpAction::new("continue", "c", "Continue in new session"));
+    }
+}
+
+/// Appends the manual completion escape hatch for merged-waiting sessions.
+fn append_view_force_done_action(actions: &mut Vec<HelpAction>, action_set: ViewActionSet) {
+    if action_set.force_done.is_enabled() {
+        actions.push(HelpAction::new("force done", "m", "Force session Done"));
     }
 }
 
@@ -1599,6 +1619,43 @@ mod tests {
     }
 
     #[test]
+    fn test_view_actions_merged_exposes_diff_force_done_navigation_and_scroll() {
+        // Arrange
+        let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
+            can_mutate_session_branch: ViewActionAvailability::Enabled,
+            can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_open_worktree: ViewActionAvailability::Enabled,
+            reply_to_session: ViewActionAvailability::Enabled,
+            can_start_staged_session: ViewActionAvailability::Disabled,
+            publish_pull_request_action: None,
+            session_state: ViewSessionState::Merged,
+        };
+
+        // Act
+        let actions = view_actions(state);
+        let footer_actions = view_footer_actions(state);
+
+        // Assert
+        assert!(
+            actions
+                .iter()
+                .any(|action| { action.key == "m" && action.popup_label == "Force session Done" })
+        );
+        assert!(actions.iter().any(|action| action.key == "d"));
+        assert!(!actions.iter().any(|action| action.key == "Enter"));
+        assert!(!actions.iter().any(|action| action.key == "o"));
+        assert!(!actions.iter().any(|action| action.key == "r"));
+        assert!(!actions.iter().any(|action| action.key == "s"));
+        assert!(
+            footer_actions
+                .iter()
+                .any(|action| { action.key == "m" && action.popup_label == "Force session Done" })
+        );
+    }
+
+    #[test]
     fn test_view_footer_actions_linked_review_uses_c_for_comments_before_other_actions() {
         // Arrange
         let state = ViewHelpState {
@@ -1731,6 +1788,18 @@ mod tests {
 
         // Assert
         assert_eq!(state, ViewSessionState::AgentReview);
+    }
+
+    #[test]
+    fn test_session_view_state_maps_merged_status() {
+        // Arrange
+        let session = SessionFixtureBuilder::new().status(Status::Merged).build();
+
+        // Act
+        let state = session_view_state(&session);
+
+        // Assert
+        assert_eq!(state, ViewSessionState::Merged);
     }
 
     #[test]

@@ -431,6 +431,7 @@ mod tests {
         let review_request = ReviewRequestSummary {
             display_id: "#42".to_string(),
             forge_kind: ForgeKind::GitHub,
+            merge_commit_sha: None,
             source_branch: "feature/forge".to_string(),
             state: ReviewRequestState::Open,
             status_summary: Some("Mergeable".to_string()),
@@ -461,6 +462,7 @@ mod tests {
         let review_request = ReviewRequestSummary {
             display_id: "!42".to_string(),
             forge_kind: ForgeKind::GitLab,
+            merge_commit_sha: None,
             source_branch: "feature/forge".to_string(),
             state: ReviewRequestState::Open,
             status_summary: Some("Draft".to_string()),
@@ -546,7 +548,7 @@ mod tests {
                         "agentty-xyz/agentty",
                         "--json",
                         "number,title,state,url,baseRefName,headRefName,isDraft,mergeStateStatus,\
-                         reviewDecision,mergedAt",
+                         reviewDecision,mergedAt,mergeCommit",
                     ],
                 )
             })
@@ -565,6 +567,7 @@ mod tests {
             Some(ReviewRequestSummary {
                 display_id: "#42".to_string(),
                 forge_kind: ForgeKind::GitHub,
+                merge_commit_sha: None,
                 source_branch: "feature/forge".to_string(),
                 state: ReviewRequestState::Open,
                 status_summary: Some("Approved, Mergeable".to_string()),

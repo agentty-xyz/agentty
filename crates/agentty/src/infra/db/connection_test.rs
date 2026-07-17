@@ -25,6 +25,7 @@ fn review_request_fixture() -> ReviewRequest {
         summary: ReviewRequestSummary {
             display_id: "#42".to_string(),
             forge_kind: ForgeKind::GitHub,
+            merge_commit_sha: Some("merged-commit".to_string()),
             source_branch: "feature/forge".to_string(),
             state: ReviewRequestState::Open,
             status_summary: Some("2 approvals, checks passing".to_string()),
@@ -55,6 +56,12 @@ fn assert_review_request_row(row: &SessionRow) {
             .as_ref()
             .map(|review_request| review_request.last_refreshed_at),
         Some(456)
+    );
+    assert_eq!(
+        row.review_request
+            .as_ref()
+            .and_then(|review_request| review_request.merge_commit_sha.as_deref()),
+        Some("merged-commit")
     );
     assert_eq!(
         row.review_request

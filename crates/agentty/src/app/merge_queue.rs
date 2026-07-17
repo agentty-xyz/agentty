@@ -37,6 +37,19 @@ impl MergeQueue {
         self.queued_session_ids.push_back(session_id);
     }
 
+    /// Removes one externally merged session from active or queued merge
+    /// state, returning whether it owned the active merge slot.
+    pub(crate) fn remove(&mut self, session_id: &str) -> bool {
+        let removed_active = self.active_session_id.as_deref() == Some(session_id);
+        if removed_active {
+            self.active_session_id = None;
+        }
+        self.queued_session_ids
+            .retain(|queued_session_id| queued_session_id.as_str() != session_id);
+
+        removed_active
+    }
+
     /// Returns whether a merge is currently active.
     pub(crate) fn has_active(&self) -> bool {
         self.active_session_id.is_some()
@@ -145,6 +158,26 @@ mod tests {
         assert_eq!(first.as_deref(), Some("session-a"));
         assert_eq!(second.as_deref(), Some("session-b"));
         assert_eq!(third, None);
+    }
+
+    #[test]
+    fn test_remove_evicts_active_and_queued_sessions() {
+        // Arrange
+        let mut queue = MergeQueue::default();
+        queue.set_active("active".into());
+        queue.enqueue("queued-a".into());
+        queue.enqueue("queued-b".into());
+
+        // Act
+        let removed_queued_active_slot = queue.remove("queued-a");
+        let removed_active_slot = queue.remove("active");
+
+        // Assert
+        assert!(!removed_queued_active_slot);
+        assert!(removed_active_slot);
+        assert!(!queue.has_active());
+        assert_eq!(queue.pop_next().as_deref(), Some("queued-b"));
+        assert!(queue.pop_next().is_none());
     }
 
     #[test]

@@ -527,6 +527,17 @@ async fn start_published_branch_auto_push(
     let Some(published_upstream_ref) = turn_metadata.published_upstream_ref else {
         return;
     };
+    let review_request_is_merged = context
+        .db
+        .reviews()
+        .load_session_review_request(&context.session_id)
+        .await
+        .ok()
+        .flatten()
+        .is_some_and(|review_request| review_request.state == "Merged");
+    if review_request_is_merged {
+        return;
+    }
     if context.has_queued_messages() {
         return;
     }
@@ -633,6 +644,9 @@ mod tests {
 
     use super::*;
     use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
+    use crate::domain::session::{
+        ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
+    };
 
     #[test]
     fn test_truncate_turn_error_notice_keeps_short_errors_intact() {
@@ -736,6 +750,89 @@ mod tests {
         assert!(
             should_skip_auto_push,
             "operation-query failures must suppress post-turn auto-push"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_auto_push_skips_review_request_that_merged_during_turn() {
+        // Arrange
+        let db = AppRepositories::in_memory().await;
+        let project_id = db
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to upsert project");
+        db.sessions()
+            .insert_session(
+                "session-id",
+                "gemini-3-flash-preview",
+                "main",
+                "Merged",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        db.reviews()
+            .update_session_review_request(
+                "session-id",
+                Some(ReviewRequest {
+                    last_refreshed_at: 1,
+                    summary: ReviewRequestSummary {
+                        display_id: "#42".to_string(),
+                        forge_kind: ForgeKind::GitHub,
+                        merge_commit_sha: Some("merged-commit".to_string()),
+                        source_branch: "wt/session-id".to_string(),
+                        state: ReviewRequestState::Merged,
+                        status_summary: None,
+                        target_branch: "main".to_string(),
+                        title: "Merged review".to_string(),
+                        web_url: "https://github.com/example/project/pull/42".to_string(),
+                    },
+                }),
+            )
+            .await
+            .expect("failed to persist merged review request");
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client
+            .expect_push_current_branch_to_remote_branch()
+            .never();
+        let context = PostTurnContext {
+            app_event_tx,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
+            child_pid: Arc::new(Mutex::new(None)),
+            clock: Arc::new(crate::infra::clock::RealClock),
+            db,
+            folder: PathBuf::new(),
+            git_client: Arc::new(mock_git_client),
+            one_shot_client: Arc::new(MockOneShotClient::new()),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
+            session_update_versions: Arc::default(),
+            session_id: "session-id".into(),
+            transcript: Arc::new(Mutex::new(SessionTranscript::default())),
+        };
+
+        // Act
+        start_published_branch_auto_push(
+            &context,
+            TurnMetadata {
+                published_upstream_ref: Some("origin/wt/session-id".to_string()),
+                review_comment_thread_ids: Vec::new(),
+                session_agent: AgentSelection::new(
+                    AgentKind::Antigravity,
+                    AgentModel::Gemini3FlashPreview,
+                ),
+            },
+            None,
+            Vec::new(),
+        )
+        .await;
+
+        // Assert
+        assert!(
+            app_event_rx.try_recv().is_err(),
+            "merged review request should suppress post-turn auto-push"
         );
     }
 

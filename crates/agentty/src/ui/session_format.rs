@@ -281,6 +281,7 @@ pub fn session_output_status_line(
             | Status::Queued
             | Status::Rebasing
             | Status::Merging
+            | Status::Merged
     ) {
         return None;
     }
@@ -344,6 +345,7 @@ fn session_output_status_message(
         Status::Queued => "Waiting in merge queue...".to_string(),
         Status::Rebasing => "Rebasing...".to_string(),
         Status::Merging => "Merging...".to_string(),
+        Status::Merged => "Merged; waiting for target branch sync...".to_string(),
         Status::Draft | Status::Review | Status::Question | Status::Done | Status::Canceled => {
             String::new()
         }
@@ -360,6 +362,7 @@ fn session_output_status_icon(status: Status) -> Icon {
         | Status::Draft
         | Status::Review
         | Status::Question
+        | Status::Merged
         | Status::Done
         | Status::Canceled => Icon::Pending,
     }
@@ -381,6 +384,7 @@ mod tests {
             summary: ReviewRequestSummary {
                 display_id: "#42".to_string(),
                 forge_kind: ForgeKind::GitHub,
+                merge_commit_sha: None,
                 source_branch: "main".to_string(),
                 state: ReviewRequestState::Open,
                 status_summary: None,
@@ -471,6 +475,7 @@ mod tests {
             Status::Review,
             Status::Question,
             Status::Queued,
+            Status::Merged,
             Status::Done,
             Status::Canceled,
         ];
@@ -482,5 +487,23 @@ mod tests {
         // Assert
         assert!(animated_results.into_iter().all(|uses_loader| uses_loader));
         assert!(static_results.into_iter().all(|uses_loader| !uses_loader));
+    }
+
+    #[test]
+    fn test_merged_session_output_status_waits_for_target_sync() {
+        // Arrange
+        let status = Status::Merged;
+
+        // Act
+        let message = session_output_status_message(status, None, None);
+        let icon = session_output_status_icon(status);
+        let status_line = session_output_status_line(status, None, None)
+            .expect("merged status should render a status line")
+            .to_string();
+
+        // Assert
+        assert_eq!(message, "Merged; waiting for target branch sync...");
+        assert_eq!(icon, Icon::Pending);
+        assert!(status_line.contains("Merged; waiting for target branch sync..."));
     }
 }

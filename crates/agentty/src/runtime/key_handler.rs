@@ -619,6 +619,7 @@ fn confirmation_cancel_mode(mode: &AppMode) -> AppMode {
         confirmation_intent:
             ConfirmationIntent::ContinueSession
             | ConfirmationIntent::ForkSession
+            | ConfirmationIntent::ForceDoneMergedSession
             | ConfirmationIntent::MergeSession
             | ConfirmationIntent::RegenerateReview,
         restore_view: Some(restore_view),
@@ -663,6 +664,14 @@ async fn handle_confirmation_confirm(app: &mut App) -> io::Result<EventResult> {
         ConfirmationIntent::ForkSession => {
             handle_fork_session_confirmation(app, confirmation_session_id, restore_view).await
         }
+        ConfirmationIntent::ForceDoneMergedSession => {
+            handle_force_done_merged_session_confirmation(
+                app,
+                confirmation_session_id,
+                restore_view,
+            )
+            .await
+        }
         ConfirmationIntent::MergeSession => {
             handle_merge_confirmation(app, confirmation_session_id, restore_view).await
         }
@@ -670,6 +679,30 @@ async fn handle_confirmation_confirm(app: &mut App) -> io::Result<EventResult> {
             handle_regenerate_review_confirmation(app, confirmation_session_id, restore_view).await
         }
     }
+}
+
+/// Completes one merged-waiting session without requiring the ancestry check.
+async fn handle_force_done_merged_session_confirmation(
+    app: &mut App,
+    confirmation_session_id: Option<SessionId>,
+    restore_view: Option<ConfirmationViewMode>,
+) -> io::Result<EventResult> {
+    let Some(session_id) = confirmation_session_id else {
+        app.mode = restore_view.map_or(AppMode::List, ConfirmationViewMode::into_view_mode);
+
+        return Ok(EventResult::Continue);
+    };
+
+    app.mode = restore_view.map_or(AppMode::List, ConfirmationViewMode::into_view_mode);
+    if let Err(error) = app.force_complete_merged_session(&session_id).await {
+        app.append_output_for_session(
+            &session_id,
+            &TranscriptNotice::ReviewRequestSyncWarning.format(error),
+        )
+        .await;
+    }
+
+    Ok(EventResult::Continue)
 }
 
 /// Cancels the confirmed cancelable session, when still present, and returns
@@ -1504,6 +1537,156 @@ mod tests {
                 scroll_offset: Some(4),
                 ..
             } if session_id_in_mode == &session_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_force_done_confirmation_handles_cancel_missing_and_invalid_session() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
+        app.mode = AppMode::Confirmation {
+            confirmation_intent: ConfirmationIntent::ForceDoneMergedSession,
+            confirmation_message: "Force this merged session to Done?".to_string(),
+            confirmation_title: "Confirm Force Done".to_string(),
+            restore_view: Some(ConfirmationViewMode {
+                scroll_offset: Some(8),
+                session_id: "merged-session".into(),
+            }),
+            session_id: Some("merged-session".into()),
+            selected_confirmation_index: 1,
+        };
+
+        // Act
+        let event_result =
+            handle_confirmation_decision(&mut app, ConfirmationDecision::Cancel).await;
+
+        // Assert
+        assert!(matches!(event_result, Ok(EventResult::Continue)));
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                ref session_id,
+                scroll_offset: Some(8),
+            } if session_id == "merged-session"
+        ));
+
+        // Arrange
+        app.mode = AppMode::Confirmation {
+            confirmation_intent: ConfirmationIntent::ForceDoneMergedSession,
+            confirmation_message: "Force this merged session to Done?".to_string(),
+            confirmation_title: "Confirm Force Done".to_string(),
+            restore_view: Some(ConfirmationViewMode {
+                scroll_offset: Some(3),
+                session_id: "stale-session".into(),
+            }),
+            session_id: None,
+            selected_confirmation_index: 0,
+        };
+
+        // Act
+        let missing_session_result =
+            handle_confirmation_decision(&mut app, ConfirmationDecision::Confirm).await;
+
+        // Assert
+        assert!(matches!(missing_session_result, Ok(EventResult::Continue)));
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                ref session_id,
+                scroll_offset: Some(3),
+            } if session_id == "stale-session"
+        ));
+
+        // Arrange
+        let session_id = "review-session".to_string();
+        app.sessions.push_session(
+            crate::test_support::SessionFixtureBuilder::new()
+                .id(session_id.clone())
+                .status(crate::domain::session::Status::Review)
+                .build(),
+        );
+        app.sessions.session_handles_mut().insert(
+            session_id.clone().into(),
+            crate::domain::session::SessionHandles::new(crate::domain::session::Status::Review),
+        );
+        app.mode = AppMode::Confirmation {
+            confirmation_intent: ConfirmationIntent::ForceDoneMergedSession,
+            confirmation_message: "Force this merged session to Done?".to_string(),
+            confirmation_title: "Confirm Force Done".to_string(),
+            restore_view: Some(ConfirmationViewMode {
+                scroll_offset: Some(4),
+                session_id: session_id.clone().into(),
+            }),
+            session_id: Some(session_id.clone().into()),
+            selected_confirmation_index: 0,
+        };
+
+        // Act
+        let event_result =
+            handle_confirmation_decision(&mut app, ConfirmationDecision::Confirm).await;
+        app.sessions.sync_from_handles();
+        let output = session_replay_text(&app.sessions.sessions()[0]);
+
+        // Assert
+        assert!(matches!(event_result, Ok(EventResult::Continue)));
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                session_id: ref viewed_session_id,
+                scroll_offset: Some(4),
+            } if viewed_session_id == &session_id
+        ));
+        assert!(output.contains("Session must be in Merged status"));
+    }
+
+    #[tokio::test]
+    async fn test_force_done_confirmation_completes_merged_session() {
+        // Arrange
+        let (mut merged_app, _merged_base_dir) =
+            crate::test_support::new_git_test_app_with_mock_tmux_client().await;
+        let merged_session_id = merged_app
+            .create_session()
+            .await
+            .expect("failed to create merged session");
+        crate::test_support::set_session_status_for_test(
+            &mut merged_app,
+            &merged_session_id,
+            crate::domain::session::Status::Merged,
+        );
+        merged_app.mode = AppMode::Confirmation {
+            confirmation_intent: ConfirmationIntent::ForceDoneMergedSession,
+            confirmation_message: "Force this merged session to Done?".to_string(),
+            confirmation_title: "Confirm Force Done".to_string(),
+            restore_view: Some(ConfirmationViewMode {
+                scroll_offset: Some(5),
+                session_id: merged_session_id.clone().into(),
+            }),
+            session_id: Some(merged_session_id.clone().into()),
+            selected_confirmation_index: 0,
+        };
+
+        // Act
+        let successful_result =
+            handle_confirmation_decision(&mut merged_app, ConfirmationDecision::Confirm).await;
+        merged_app.wait_for_background_cleanup_tasks().await;
+        merged_app.sessions.sync_from_handles();
+
+        // Assert
+        assert!(matches!(successful_result, Ok(EventResult::Continue)));
+        assert_eq!(
+            merged_app
+                .sessions
+                .session_or_err(&merged_session_id)
+                .expect("expected completed merged session")
+                .status,
+            crate::domain::session::Status::Done
+        );
+        assert!(matches!(
+            merged_app.mode,
+            AppMode::View {
+                session_id: ref viewed_session_id,
+                scroll_offset: Some(5),
+            } if viewed_session_id == &merged_session_id
         ));
     }
 

@@ -170,6 +170,8 @@ pub enum Status {
     Rebasing,
     /// The session branch is being merged into its target branch.
     Merging,
+    /// Review request merged upstream; local target-branch sync is pending.
+    Merged,
     /// The session completed successfully.
     Done,
     /// The session was canceled before completion.
@@ -178,7 +180,7 @@ pub enum Status {
 
 impl Status {
     /// Ordered list of all session statuses used for UI sizing and iteration.
-    pub const ALL: [Status; 10] = [
+    pub const ALL: [Status; 11] = [
         Status::Draft,
         Status::InProgress,
         Status::Review,
@@ -187,6 +189,7 @@ impl Status {
         Status::Queued,
         Status::Rebasing,
         Status::Merging,
+        Status::Merged,
         Status::Done,
         Status::Canceled,
     ];
@@ -230,6 +233,9 @@ impl Status {
         if self == next {
             return true;
         }
+        if next == Status::Merged {
+            return !matches!(self, Status::Done | Status::Canceled);
+        }
 
         matches!(
             (self, next),
@@ -259,6 +265,7 @@ impl Status {
                     Status::Merging,
                     Status::Done | Status::Review | Status::AgentReview
                 )
+                | (Status::Merged, Status::Done | Status::Canceled)
         )
     }
 }
@@ -274,6 +281,7 @@ impl fmt::Display for Status {
             Status::Queued => write!(f, "Queued"),
             Status::Rebasing => write!(f, "Rebasing"),
             Status::Merging => write!(f, "Merging"),
+            Status::Merged => write!(f, "Merged"),
             Status::Done => write!(f, "Done"),
             Status::Canceled => write!(f, "Canceled"),
         }
@@ -293,6 +301,7 @@ impl FromStr for Status {
             "Queued" => Ok(Status::Queued),
             "Rebasing" => Ok(Status::Rebasing),
             "Merging" => Ok(Status::Merging),
+            "Merged" => Ok(Status::Merged),
             "Done" => Ok(Status::Done),
             "Canceled" => Ok(Status::Canceled),
             _ => Err(format!("Unknown status: {s}")),
@@ -633,7 +642,10 @@ impl Session {
     pub fn allows_stacked_child_creation(&self) -> bool {
         self.parent_session_id.is_none()
             && !self.is_draft_session()
-            && !matches!(self.status, Status::Done | Status::Canceled)
+            && !matches!(
+                self.status,
+                Status::Merged | Status::Done | Status::Canceled
+            )
     }
 
     /// Returns whether this session can be forked into a new independent
@@ -650,6 +662,14 @@ impl Session {
         self.parent_session_id.is_none()
             && !self.is_draft_session()
             && self.status.allows_review_actions()
+    }
+
+    /// Returns whether this session is linked to a review request that still
+    /// owns merge authority on its forge.
+    pub(crate) fn has_open_review_request(&self) -> bool {
+        self.review_request
+            .as_ref()
+            .is_some_and(|review_request| review_request.summary.state == ReviewRequestState::Open)
     }
 
     /// Returns whether this session belongs to a one-level stack beneath a
@@ -672,6 +692,7 @@ impl Session {
     pub fn allows_cancel_action(&self) -> bool {
         self.status == Status::InProgress
             || self.status.allows_review_actions()
+            || self.status == Status::Merged
             || (self.status == Status::Draft && self.is_draft_session())
     }
 
@@ -751,12 +772,18 @@ impl Session {
     /// Returns whether this session can trigger a forge review request sync.
     ///
     /// Sync is available when the session has a published branch or a linked
-    /// review request and the status allows review actions.
+    /// review request and the status allows review actions. Merged-waiting
+    /// sessions remain eligible so a forge that exposes commit metadata
+    /// shortly after the state change can complete automatic promotion.
     pub fn can_sync_review_request(&self) -> bool {
         let has_forge_context =
             self.published_upstream_ref.is_some() || self.review_request.is_some();
 
-        has_forge_context && matches!(self.status, Status::Review | Status::AgentReview)
+        has_forge_context
+            && matches!(
+                self.status,
+                Status::Review | Status::AgentReview | Status::Merged
+            )
     }
 
     /// Returns the review-request publish action currently available in session
@@ -866,17 +893,21 @@ pub(crate) fn can_mutate_session_branch_in_stack(sessions: &[Session], session_i
     true
 }
 
-/// Returns whether a session can enter the merge queue while preserving stack
-/// consistency.
+/// Returns whether a session can enter the local merge queue while preserving
+/// forge ownership and stack consistency.
 ///
-/// Merging a parent with idle materialized children is allowed because the
-/// successful parent merge retargets and syncs the children afterward. Active
-/// stack members still block the request so the stack does not run competing
-/// branch work.
+/// Open review requests remain owned by their forge and cannot enter the local
+/// merge queue. Otherwise, merging a parent with idle materialized children is
+/// allowed because the successful parent merge retargets and syncs the children
+/// afterward. Active stack members still block the request so the stack does
+/// not run competing branch work.
 pub(crate) fn can_merge_session_branch_in_stack(sessions: &[Session], session_id: &str) -> bool {
     let Some(stack) = SessionStack::for_session(sessions, session_id) else {
         return false;
     };
+    if stack.requested_session().has_open_review_request() {
+        return false;
+    }
 
     !stack.has_branch_mutating_member_except(session_id)
 }
@@ -1172,6 +1203,31 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn test_has_open_review_request_matches_only_open_linked_requests() {
+        // Arrange
+        let open_review_request = crate::test_support::open_review_request_fixture();
+        let mut merged_review_request = open_review_request.clone();
+        merged_review_request.summary.state = ReviewRequestState::Merged;
+        let open_session = SessionFixtureBuilder::new()
+            .review_request(Some(open_review_request))
+            .build();
+        let merged_session = SessionFixtureBuilder::new()
+            .review_request(Some(merged_review_request))
+            .build();
+        let unlinked_session = SessionFixtureBuilder::new().build();
+
+        // Act
+        let open_result = open_session.has_open_review_request();
+        let merged_result = merged_session.has_open_review_request();
+        let unlinked_result = unlinked_session.has_open_review_request();
+
+        // Assert
+        assert!(open_result);
+        assert!(!merged_result);
+        assert!(!unlinked_result);
+    }
+
+    #[test]
     fn test_can_start_staged_session_checks_only_draft_readiness() {
         // Arrange
         let root_draft_session = SessionFixtureBuilder::new()
@@ -1346,6 +1402,22 @@ pub(crate) mod tests {
 
         // Assert
         assert!(!can_merge_review_child);
+    }
+
+    #[test]
+    fn test_can_merge_session_branch_in_stack_blocks_open_review_request() {
+        // Arrange
+        let session = SessionFixtureBuilder::new()
+            .id("review-session")
+            .status(Status::Review)
+            .review_request(Some(crate::test_support::open_review_request_fixture()))
+            .build();
+
+        // Act
+        let can_merge = can_merge_session_branch_in_stack(&[session], "review-session");
+
+        // Assert
+        assert!(!can_merge);
     }
 
     #[test]
@@ -1575,6 +1647,7 @@ pub(crate) mod tests {
             Status::Queued,
             Status::Rebasing,
             Status::Merging,
+            Status::Merged,
             Status::Done,
             Status::Canceled,
         ];
@@ -1712,6 +1785,24 @@ pub(crate) mod tests {
 
         // Assert
         assert!(!can_transition);
+    }
+
+    #[test]
+    fn test_status_merged_is_read_only_and_has_terminal_hatches() {
+        // Arrange
+        let merged_status = Status::Merged;
+
+        // Act
+        let allows_review_actions = merged_status.allows_review_actions();
+        let allows_done = merged_status.can_transition_to(Status::Done);
+        let allows_cancel = merged_status.can_transition_to(Status::Canceled);
+        let allows_resume = merged_status.can_transition_to(Status::InProgress);
+
+        // Assert
+        assert!(!allows_review_actions);
+        assert!(allows_done);
+        assert!(allows_cancel);
+        assert!(!allows_resume);
     }
 
     #[test]
@@ -2158,6 +2249,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             summary: ReviewRequestSummary {
                 display_id: "#42".to_string(),
                 forge_kind: ForgeKind::GitHub,
+                merge_commit_sha: None,
                 source_branch: "wt/session-id".to_string(),
                 state: ReviewRequestState::Open,
                 status_summary: None,
@@ -2183,6 +2275,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             summary: ReviewRequestSummary {
                 display_id: "#99".to_string(),
                 forge_kind: ForgeKind::GitHub,
+                merge_commit_sha: Some("merge123".to_string()),
                 source_branch: "wt/session-id".to_string(),
                 state: ReviewRequestState::Merged,
                 status_summary: None,
@@ -2208,6 +2301,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             summary: ReviewRequestSummary {
                 display_id: "#7".to_string(),
                 forge_kind: ForgeKind::GitHub,
+                merge_commit_sha: None,
                 source_branch: "wt/session-id".to_string(),
                 state: ReviewRequestState::Closed,
                 status_summary: None,
@@ -2259,6 +2353,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             summary: ReviewRequestSummary {
                 display_id: "#10".to_string(),
                 forge_kind: ForgeKind::GitHub,
+                merge_commit_sha: None,
                 source_branch: "wt/session-id".to_string(),
                 state: ReviewRequestState::Open,
                 status_summary: None,
@@ -2298,6 +2393,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             summary: ReviewRequestSummary {
                 display_id: "#1".to_string(),
                 forge_kind: ForgeKind::GitHub,
+                merge_commit_sha: None,
                 source_branch: "wt/session-id".to_string(),
                 state: ReviewRequestState::Open,
                 status_summary: None,
@@ -2345,6 +2441,33 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
     }
 
     #[test]
+    fn test_can_sync_review_request_true_while_waiting_for_merged_commit() {
+        // Arrange
+        let mut session = test_session(None);
+        session.status = Status::Merged;
+        session.review_request = Some(ReviewRequest {
+            last_refreshed_at: 1,
+            summary: ReviewRequestSummary {
+                display_id: "#42".to_string(),
+                forge_kind: ForgeKind::GitHub,
+                merge_commit_sha: None,
+                source_branch: "wt/session-id".to_string(),
+                state: ReviewRequestState::Merged,
+                status_summary: None,
+                target_branch: "main".to_string(),
+                title: "Merged review".to_string(),
+                web_url: "https://github.com/example/project/pull/42".to_string(),
+            },
+        });
+
+        // Act
+        let can_sync_review_request = session.can_sync_review_request();
+
+        // Assert
+        assert!(can_sync_review_request);
+    }
+
+    #[test]
     fn test_can_sync_review_request_false_without_forge_context() {
         // Arrange
         let mut session = test_session(None);
@@ -2373,6 +2496,19 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
         // Arrange
         let mut session = test_session(None);
         session.status = Status::InProgress;
+
+        // Act
+        let allows_cancel_action = session.allows_cancel_action();
+
+        // Assert
+        assert!(allows_cancel_action);
+    }
+
+    #[test]
+    fn test_session_allows_cancel_action_for_merged_session() {
+        // Arrange
+        let mut session = test_session(None);
+        session.status = Status::Merged;
 
         // Act
         let allows_cancel_action = session.allows_cancel_action();

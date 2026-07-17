@@ -30,7 +30,8 @@ use crate::domain::question::QuestionItem;
 use crate::domain::selection::SelectionState;
 #[cfg(test)]
 use crate::domain::session::{
-    ReviewRequest, Session, SessionHandles, SessionId, SessionSize, SessionStats, Status,
+    ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, Session, SessionHandles,
+    SessionId, SessionSize, SessionStats, Status,
 };
 #[cfg(test)]
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
@@ -140,6 +141,26 @@ pub(crate) fn assistant_transcript(content: impl AsRef<str>) -> SessionTranscrip
         SessionMessageKind::AssistantAnswer,
         content.as_ref(),
     )])
+}
+
+/// Builds one deterministic linked review request that retains forge merge
+/// ownership.
+#[cfg(test)]
+pub(crate) fn open_review_request_fixture() -> ReviewRequest {
+    ReviewRequest {
+        last_refreshed_at: 1,
+        summary: ReviewRequestSummary {
+            display_id: "#42".to_string(),
+            forge_kind: ForgeKind::GitHub,
+            merge_commit_sha: None,
+            source_branch: "wt/session-id".to_string(),
+            state: ReviewRequestState::Open,
+            status_summary: Some("Checks passing".to_string()),
+            target_branch: "main".to_string(),
+            title: "Open review request".to_string(),
+            web_url: "https://github.com/example/project/pull/42".to_string(),
+        },
+    }
 }
 
 #[cfg(test)]

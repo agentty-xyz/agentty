@@ -138,7 +138,14 @@ description; comments are not loaded in this iteration. Install `gh` and run
 For sessions linked to a GitHub pull request or GitLab merge request, press `c` in
 session view to browse review comments read-only. General comments and inline threads
 are listed on the left, with the selected conversation and attached current-diff context
-on the right.
+on the right. While that review request is open, it must be merged on GitHub or GitLab;
+Agentty hides and rejects its local merge-queue action so the forge and local target do
+not compete to land the same branch.
+
+When a linked review request merges externally, Agentty keeps the session read-only in
+**Merged** until the local review target contains the forge-reported merge commit. That
+ordering lets stacked children drop the merged parent's commits with
+`git rebase --onto`; `m` can force **Done** when ancestry cannot be detected.
 
 ## Documentation
 

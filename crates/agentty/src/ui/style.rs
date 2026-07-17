@@ -385,7 +385,7 @@ pub fn status_color(status: Status) -> Color {
         Status::Question => palette::question(),
         Status::Queued => palette::accent_soft(),
         Status::Rebasing | Status::Merging => palette::accent(),
-        Status::Done => palette::success(),
+        Status::Merged | Status::Done => palette::success(),
         Status::Canceled => palette::danger(),
     }
 }
@@ -398,7 +398,7 @@ pub fn status_icon(status: Status) -> Icon {
         Status::InProgress | Status::AgentReview | Status::Rebasing | Status::Merging => {
             Icon::current_spinner()
         }
-        Status::Done => Icon::Check,
+        Status::Merged | Status::Done => Icon::Check,
         Status::Canceled => Icon::Cross,
     }
 }

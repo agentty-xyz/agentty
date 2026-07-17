@@ -153,6 +153,11 @@ pub struct ReviewRequestSummary {
     pub display_id: String,
     /// Forge family that owns the linked review request.
     pub forge_kind: ForgeKind,
+    /// Commit that represents the merged review request on its target branch.
+    ///
+    /// Providers may omit this while the review request is open. GitLab
+    /// fast-forward merges fall back to the source head commit.
+    pub merge_commit_sha: Option<String>,
     /// Source branch published for review.
     pub source_branch: String,
     /// Latest normalized remote lifecycle state.

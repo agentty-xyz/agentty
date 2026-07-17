@@ -118,10 +118,14 @@ loader updates), and applies side effects in stable order. Key behaviors:
   home-directory project discovery runs only during `App::new()`.
 - Git-status and review-request events carry a sync-context generation so stale
   completions are discarded after the active project or session changes.
-- Externally merged review requests transition sessions to `Done`; closed requests
-  transition them to `Canceled`.
+- Externally merged review requests evict sessions from the merge queue and transition
+  them to `Merged`; generation-scoped git-status results promote them to `Done` only
+  after the persisted review target contains the forge-reported merge commit. Closed
+  requests transition directly to `Canceled`.
 - Terminal statuses (`Done`, `Canceled`) drop per-session worker senders so workers can
-  shut down their runtimes.
+  shut down their runtimes. `Merged` workers also discard queued prompts and commands
+  while preserving any provider turn that was already running when the merge was
+  observed.
 
 ## Session Chat Rendering
 
@@ -240,7 +244,11 @@ restart-safe:
 - `Review/Question -> InProgress` (reply)
 - Root `Review/AgentReview -> Review` (forked session snapshot opens as a new
   review-ready session)
-- `Review -> Queued -> Merging -> Done` (merge queue path)
+- `Review -> Queued -> Merging -> Done` (local merge queue path; unavailable after an
+  open review request is linked)
+- Any non-terminal status -> `Merged` (forge reports an external merge; an active or
+  queued local merge is evicted)
+- `Merged -> Done/Canceled` (target ancestry or manual force-`Done`; manual cancel)
 - `Review/AgentReview -> Rebasing -> Review/Question` (session sync path; starting from
   `AgentReview` cancels pending focused-review output)
 - `InProgress -> Rebasing -> Review/Question` (session sync requested during a running
@@ -251,7 +259,8 @@ restart-safe:
 - `InProgress/Rebasing -> Review/Question` (post-turn or post-sync)
 
 Stacked-session gates are enforced before branch work starts: a stacked draft
-materializes only when its parent is review-ready and no stack member is busy; parent
+materializes only when its parent is review-ready and no stack member is busy; local
+merge queueing is blocked when the requested session has an open review request; parent
 merge-queue and slash-command branch work are blocked while a materialized child remains
 linked; parent sync and replies are allowed when materialized children are idle. All
 checks are computed from one stack snapshot so parent, child, and sibling decisions
@@ -453,8 +462,10 @@ their triggers:
 - **Sync-main workflow** (list-mode `s`): pull/rebase/push of the project branch through
   the sync orchestrator, with assisted conflict resolution.
 
-- **Session merge task** (merge confirmation): rebase, squash merge with the session
-  commit message, worktree cleanup.
+- **Session merge task** (merge confirmation): for sessions without an open review
+  request, rebase, squash merge with the session commit message, and clean up the
+  worktree. UI, queue admission, and dequeue-time service validation all enforce that
+  forge-owned open requests cannot start this task.
 
 - **Session sync task** (view-mode `r`, stacked-parent fan-out): assisted rebase of the
   session branch; post-merge stacked-child syncs use `git rebase --onto` with the
@@ -474,9 +485,11 @@ orchestration paths:
 
 - `sync main`: selected project branch pull/rebase/push with optional assisted conflict
   resolution, serialized through the shared sync orchestrator.
-- Session merge: queue-aware workflow — assisted rebase first, squash commit into the
-  base branch reusing the session-branch `HEAD` commit message, then worktree cleanup
-  and status `Done`.
+- Session merge: queue-aware workflow for sessions without open review requests —
+  assisted rebase first, squash commit into the base branch reusing the session-branch
+  `HEAD` commit message, then worktree cleanup and status `Done`. The session manager
+  revalidates forge ownership when each queued item reaches the head, so a request
+  linked while waiting cannot start local mutation.
 - Session sync: assisted rebase onto the local base branch (unpublished) or the
   published upstream's remote base ref (published). Rebase-conflict prompts run through
   the existing session channel so the provider keeps conversation context while Agentty
@@ -487,17 +500,26 @@ orchestration paths:
   later navigation. It holds the same branch-operation lock as post-turn auto-push, so
   overlapping requests queue rather than running concurrent force-pushes.
 - Background review-request sync: review-ready sessions with a published branch or
-  linked request are polled; merged requests move the session to `Done`, closed requests
-  to `Canceled`. Externally merged worktree and branch cleanup runs as a tracked
-  background task after the terminal transition so input and redraws do not wait for git
-  or filesystem removal. Repeated merged results for an already-`Done` session do not
-  schedule cleanup again. Cleanup-critical git subprocesses are cancellable and bounded
-  to 30 seconds; confirmed shutdown shares a five-second grace period across all tracked
-  cleanup tasks before canceling unfinished work. The Inbox tab loads comment snapshots
-  on demand with generation-scoped deduplication. Session view also loads comments on
-  demand for its linked review request: `AppMode::ReviewComments` renders immediately
-  with a loading state, `TaskService` resolves the session worktree remote through the
-  injected git/forge boundaries, falls back to the persisted review-request URL after
+  linked request are polled. Open linked requests retain forge merge ownership and are
+  excluded from local queue admission; merged requests persist the forge merge commit
+  and review target, evict any legacy local merge-queue work, and move the session to
+  read-only `Merged`. Merged-waiting sessions remain forge polling targets so late
+  commit metadata can replace the manual-only degraded path. Git-status polling checks
+  commit ancestry against that persisted target after each fetch and after startup.
+  Promotion retargets children and emits `SessionCommand::Rebase` plans using
+  `git rebase --onto <target> <stored-parent-head>` before transitioning the parent to
+  `Done`. Missing commit metadata leaves the session visibly waiting with force-`Done`
+  and cancel hatches. Closed requests still move directly to `Canceled`. Externally
+  merged worktree and branch cleanup runs as a tracked background task only after
+  promotion so input and redraws do not wait for git or filesystem removal. Repeated
+  merged results for an already-`Merged` or `Done` session do not schedule cleanup
+  again. Cleanup-critical git subprocesses are cancellable and bounded to 30 seconds;
+  confirmed shutdown shares a five-second grace period across all tracked cleanup tasks
+  before canceling unfinished work. The Inbox tab loads comment snapshots on demand with
+  generation-scoped deduplication. Session view also loads comments on demand for its
+  linked review request: `AppMode::ReviewComments` renders immediately with a loading
+  state, `TaskService` resolves the session worktree remote through the injected
+  git/forge boundaries, falls back to the persisted review-request URL after
   terminal-session worktree cleanup, and uses the matching `AppEvent` to update only the
   still-open comments page. Inline code context is derived from the already loaded
   current diff. From a reply-capable session, `a` or `A` renders actionable comment data

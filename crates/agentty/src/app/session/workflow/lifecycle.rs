@@ -3272,6 +3272,7 @@ mod tests {
         ReviewRequestSummary {
             display_id: display_id.to_string(),
             forge_kind: ForgeKind::GitHub,
+            merge_commit_sha: None,
             source_branch: session_branch("session-id"),
             state: ReviewRequestState::Open,
             status_summary: Some("Checks pending".to_string()),

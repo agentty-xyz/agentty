@@ -523,6 +523,7 @@ fn parse_review_request(row: &SessionListRow) -> Option<ReviewRequest> {
         summary: ReviewRequestSummary {
             display_id: review_request_row.display_id.clone(),
             forge_kind,
+            merge_commit_sha: review_request_row.merge_commit_sha.clone(),
             source_branch: review_request_row.source_branch.clone(),
             state,
             status_summary: review_request_row.status_summary.clone(),
@@ -1097,6 +1098,7 @@ mod tests {
             summary: ReviewRequestSummary {
                 display_id: "#17".to_string(),
                 forge_kind: ForgeKind::GitHub,
+                merge_commit_sha: None,
                 source_branch: "feature/forge".to_string(),
                 state: ReviewRequestState::Closed,
                 status_summary: Some("closed by maintainer".to_string()),
@@ -1285,6 +1287,7 @@ mod tests {
                 display_id: "#42".to_string(),
                 forge_kind: "UnknownForge".to_string(),
                 last_refreshed_at: 0,
+                merge_commit_sha: None,
                 source_branch: "feature/forge".to_string(),
                 state: "Open".to_string(),
                 status_summary: None,

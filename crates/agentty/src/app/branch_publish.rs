@@ -1171,6 +1171,7 @@ mod tests {
             summary: forge::ReviewRequestSummary {
                 display_id: "!24".to_string(),
                 forge_kind: forge::ForgeKind::GitLab,
+                merge_commit_sha: None,
                 source_branch: "wt/session-1".to_string(),
                 state: forge::ReviewRequestState::Open,
                 status_summary: Some("Draft".to_string()),

@@ -24,7 +24,7 @@ use tokio::sync::{Barrier, Notify};
 use super::*;
 use crate::app::prompt_intent::ReviewCommentSelection;
 use crate::app::review::{review_failure_message, review_loading_message};
-use crate::app::{App, AppEvent, ReviewCacheEntry, SyncSessionStartError, Tab};
+use crate::app::{App, AppError, AppEvent, ReviewCacheEntry, SyncSessionStartError, Tab};
 use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ReasoningLevel,
 };
@@ -4687,6 +4687,33 @@ async fn test_merge_session_invalid_id() {
             .to_string()
             .contains("Session not found")
     );
+}
+
+#[tokio::test]
+async fn test_merge_session_rejects_open_review_request() {
+    // Arrange
+    let dir = tempdir().expect("failed to create temp dir");
+    let mut app = new_test_app_with_git(dir.path()).await;
+    let session_id = app
+        .create_session()
+        .await
+        .expect("failed to create review session");
+    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Review);
+    app.sessions.apply_review_request(
+        &session_id,
+        crate::test_support::open_review_request_fixture(),
+    );
+
+    // Act
+    let result = app.merge_session(&session_id).await;
+
+    // Assert
+    assert!(matches!(
+        result,
+        Err(AppError::Workflow(message))
+            if message == crate::app::session::OPEN_REVIEW_REQUEST_LOCAL_MERGE_ERROR
+    ));
+    assert_eq!(session_status_or_done(&app, &session_id), Status::Review);
 }
 
 #[tokio::test]

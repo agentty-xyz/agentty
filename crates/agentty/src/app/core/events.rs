@@ -75,6 +75,9 @@ pub(crate) enum AppEvent {
     GitStatusUpdated {
         /// Sync-context generation used to reject stale completions.
         generation: u64,
+        /// Merged-waiting sessions whose merge commit is now reachable from
+        /// the local review-request target branch.
+        merged_session_ids: Vec<SessionId>,
         session_statuses: HashMap<SessionId, SessionGitStatus>,
         status: Option<(u32, u32)>,
     },
@@ -279,6 +282,8 @@ pub(super) struct IssueDetailUpdate {
 pub(super) struct GitStatusBatchUpdate {
     /// Sync-context generation that produced this status snapshot.
     generation: u64,
+    /// Merged-waiting sessions ready for lifecycle promotion.
+    merged_session_ids: Vec<SessionId>,
     /// Main worktree added/deleted line counts, when available.
     status: Option<(u32, u32)>,
 }
@@ -350,9 +355,15 @@ impl AppEventBatch {
             } => self.collect_at_mention_entries_loaded(session_id, entries),
             AppEvent::GitStatusUpdated {
                 generation,
+                merged_session_ids,
                 session_statuses,
                 status,
-            } => self.collect_git_status_updated(generation, session_statuses, status),
+            } => self.collect_git_status_updated(
+                generation,
+                merged_session_ids,
+                session_statuses,
+                status,
+            ),
             AppEvent::VersionAvailabilityUpdated {
                 latest_available_version,
             } => self.collect_version_availability_updated(latest_available_version),
@@ -608,6 +619,7 @@ impl AppEventBatch {
     fn collect_git_status_updated(
         &mut self,
         generation: u64,
+        merged_session_ids: Vec<SessionId>,
         session_statuses: HashMap<SessionId, SessionGitStatus>,
         status: Option<(u32, u32)>,
     ) {
@@ -616,7 +628,11 @@ impl AppEventBatch {
             .as_ref()
             .is_none_or(|batched_update| generation >= batched_update.generation)
         {
-            self.git_status_update = Some(GitStatusBatchUpdate { generation, status });
+            self.git_status_update = Some(GitStatusBatchUpdate {
+                generation,
+                merged_session_ids,
+                status,
+            });
             self.session_git_status_updates = session_statuses;
         }
     }
@@ -866,6 +882,12 @@ impl App {
             self.publish_sync_context();
         }
 
+        self.promote_batch_externally_merged_sessions(
+            event_batch.git_status_update.as_ref(),
+            sync_generation_for_review_updates,
+        )
+        .await;
+
         self.apply_session_progress_updates(std::mem::take(
             &mut event_batch.session_progress_updates,
         ));
@@ -931,6 +953,27 @@ impl App {
 
         if should_mark_dirty {
             self.mark_dirty();
+        }
+    }
+
+    /// Promotes merged sessions reported by the current git-status generation.
+    async fn promote_batch_externally_merged_sessions(
+        &self,
+        git_status_update: Option<&GitStatusBatchUpdate>,
+        current_generation: u64,
+    ) {
+        let merged_session_ids = git_status_update
+            .filter(|update| update.generation == current_generation)
+            .map(|update| update.merged_session_ids.clone())
+            .unwrap_or_default();
+        for session_id in merged_session_ids {
+            if let Some(warning) = self.promote_externally_merged_session(&session_id).await {
+                self.append_output_for_session(
+                    &session_id,
+                    &TranscriptNotice::ReviewRequestSyncWarning.format(warning),
+                )
+                .await;
+            }
         }
     }
 
@@ -1747,8 +1790,9 @@ impl App {
             crate::app::session::SyncReviewRequestOutcome::Merged {
                 session_head_hash, ..
             } => {
+                let removed_active_merge = self.merge_queue.remove(&session_id);
                 if let Some(warning) = self
-                    .complete_externally_merged_session(&session_id, session_head_hash)
+                    .mark_externally_merged_session(&session_id, session_head_hash)
                     .await
                 {
                     self.append_output_for_session(
@@ -1756,6 +1800,9 @@ impl App {
                         &TranscriptNotice::ReviewRequestSyncWarning.format(warning),
                     )
                     .await;
+                }
+                if removed_active_merge {
+                    let _ = self.start_next_merge_from_queue(false).await;
                 }
             }
             crate::app::session::SyncReviewRequestOutcome::Closed { .. } => {
@@ -1766,55 +1813,139 @@ impl App {
         }
     }
 
-    /// Marks one externally merged session `Done`, persists continuation
-    /// commit-hash metadata when available, and returns any warning from
-    /// worktree cleanup.
+    /// Marks one externally merged session read-only while its local target
+    /// branch catches up.
     ///
-    /// The session is still moved to `Done` when cleanup fails because the
-    /// merge already happened upstream, but the caller should surface the
-    /// warning to the user.
-    async fn complete_externally_merged_session(
+    /// The local session head is persisted before child relationships move so
+    /// promotion can later seed deterministic child `--onto` rebases. Queued
+    /// prompts and worker commands are canceled without interrupting an
+    /// already-running provider turn.
+    async fn mark_externally_merged_session(
         &self,
         session_id: &str,
         session_head_hash: Option<String>,
     ) -> Option<String> {
-        let Ok(session) = self.sessions.session_or_err(session_id) else {
-            return None;
-        };
         let Ok(handles) = self.sessions.session_handles_or_err(session_id) else {
             return None;
         };
-        let should_schedule_cleanup = handles
+        if handles
             .status
             .lock()
-            .is_ok_and(|status| *status != Status::Done);
-
+            .is_ok_and(|status| matches!(*status, Status::Merged | Status::Done | Status::Canceled))
+        {
+            return None;
+        }
         let mut warnings = Vec::new();
+        if self
+            .sessions
+            .session_or_err(session_id)
+            .ok()
+            .and_then(|session| session.review_request.as_ref())
+            .and_then(|review_request| review_request.summary.merge_commit_sha.as_ref())
+            .is_none()
+        {
+            warnings.push(
+                "Forge did not report the merged commit yet; automatic completion remains \
+                 pending. Use `m` to force `Done` or `c` to cancel from the session list."
+                    .to_string(),
+            );
+        }
 
-        let commit_hash_persistence_error = if let Some(session_head_hash) = &session_head_hash {
-            self.services
+        if let Some(session_head_hash) = &session_head_hash
+            && let Err(error) = self
+                .services
                 .db()
                 .sessions()
                 .update_session_merged_commit_hash(session_id, Some(session_head_hash.clone()))
                 .await
-                .err()
-        } else {
-            None
-        };
-        if let Some(error) = commit_hash_persistence_error {
-            warnings.push(format!("Merged commit hash persistence failed: {error}"));
+        {
+            warnings.push(format!("Merged session head persistence failed: {error}"));
+        }
+        if let Err(error) = self
+            .services
+            .db()
+            .operations()
+            .request_cancel_for_session_operations(session_id)
+            .await
+        {
+            warnings.push(format!("Queued operation cancellation failed: {error}"));
+        }
+        if let Ok(mut queued_messages) = handles.queued_messages.lock() {
+            queued_messages.clear();
         }
 
-        let folder = session.folder.clone();
-        let base_branch = session.base_branch.clone();
-        let source_branch = crate::app::session::session_branch(session_id);
-        let app_event_tx = self.services.event_sender();
+        let status_transition =
+            StatusTransition::from_services(&self.services, handles, session_id);
+        if status_transition.apply(Status::Merged).await {
+            let target_branch = self
+                .sessions
+                .session_or_err(session_id)
+                .ok()
+                .and_then(|session| session.review_request.as_ref())
+                .map_or_else(
+                    || "the review-request target branch".to_string(),
+                    |review_request| review_request.summary.target_branch.clone(),
+                );
+            self.append_output_for_session(
+                session_id,
+                &TranscriptNotice::ReviewRequest.format(format!(
+                    "Merged upstream; waiting for local `{target_branch}` to include the merge \
+                     commit before completing this session."
+                )),
+            )
+            .await;
+        }
 
+        (!warnings.is_empty()).then(|| warnings.join("\n"))
+    }
+
+    /// Promotes one merged-waiting session to `Done`, retargeting and
+    /// deterministically restacking children before deferred cleanup.
+    pub(crate) async fn promote_externally_merged_session(
+        &self,
+        session_id: &str,
+    ) -> Option<String> {
+        let Ok(session) = self.sessions.session_or_err(session_id) else {
+            return None;
+        };
+        if session.status != Status::Merged {
+            return None;
+        }
+        let Ok(handles) = self.sessions.session_handles_or_err(session_id) else {
+            return None;
+        };
+        let mut warnings = Vec::new();
+        let target_branch = session.review_request.as_ref().map_or_else(
+            || {
+                warnings.push(
+                    "Merged session has no persisted review-request target branch; using its \
+                     session base for forced completion."
+                        .to_string(),
+                );
+                session.base_branch.clone()
+            },
+            |review_request| review_request.summary.target_branch.clone(),
+        );
+
+        let parent_commit_hash = match self
+            .services
+            .db()
+            .sessions()
+            .load_session_merged_commit_hash(session_id)
+            .await
+        {
+            Ok(parent_commit_hash) => parent_commit_hash,
+            Err(error) => {
+                warnings.push(format!("Merged session head load failed: {error}"));
+                None
+            }
+        };
+        let app_event_tx = self.services.event_sender();
         match crate::app::session::SessionManager::restack_child_sessions_after_parent_merge(
             self.services.db(),
             session_id,
-            &base_branch,
-            session_head_hash,
+            &target_branch,
+            parent_commit_hash,
         )
         .await
         {
@@ -1824,19 +1955,16 @@ impl App {
                     child_session_ids,
                 );
             }
-            Err(error) => {
-                warnings.push(format!("Stacked child restack failed: {error}"));
-            }
+            Err(error) => warnings.push(format!("Stacked child restack failed: {error}")),
         }
 
         let status_transition =
             StatusTransition::from_services(&self.services, handles, session_id);
-        let status_applied = status_transition.apply(Status::Done).await;
-        if should_schedule_cleanup && status_applied {
+        if status_transition.apply(Status::Done).await {
             self.spawn_externally_merged_session_cleanup(
                 session_id,
-                folder,
-                source_branch,
+                session.folder.clone(),
+                crate::app::session::session_branch(session_id),
                 handles,
             );
         }

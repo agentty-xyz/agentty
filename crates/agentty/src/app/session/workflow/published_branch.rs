@@ -421,6 +421,7 @@ fn review_request_from_row(
         summary: forge::ReviewRequestSummary {
             display_id: row.display_id,
             forge_kind: forge::ForgeKind::from_str(&row.forge_kind).ok()?,
+            merge_commit_sha: row.merge_commit_sha,
             source_branch: row.source_branch,
             state: ReviewRequestState::from_str(&row.state).ok()?,
             status_summary: row.status_summary,
@@ -759,6 +760,7 @@ mod tests {
                     summary: forge::ReviewRequestSummary {
                         display_id: "#42".to_string(),
                         forge_kind: forge::ForgeKind::GitHub,
+                        merge_commit_sha: None,
                         source_branch: "wt/session-id".to_string(),
                         state: ReviewRequestState::Open,
                         status_summary: None,

@@ -19,4 +19,5 @@ pub(crate) use core::{
 pub use error::SessionError;
 pub(crate) use state::SessionGitStatus;
 pub use state::SessionState;
+pub(crate) use workflow::merge::OPEN_REVIEW_REQUEST_LOCAL_MERGE_ERROR;
 pub(crate) use workflow::refresh::SyncReviewRequestOutcome;

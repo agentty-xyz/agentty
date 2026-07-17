@@ -1399,6 +1399,50 @@ impl App {
             .await?)
     }
 
+    /// Forces one merged-waiting session to `Done` when automatic ancestry
+    /// detection cannot complete.
+    ///
+    /// # Errors
+    /// Returns an error when the session is missing or is not waiting in the
+    /// merged state.
+    pub(crate) async fn force_complete_merged_session(
+        &self,
+        session_id: &str,
+    ) -> Result<(), String> {
+        let session = self
+            .sessions
+            .session_or_err(session_id)
+            .map_err(|error| error.to_string())?;
+        if session.status != Status::Merged {
+            return Err("Session must be in Merged status to force completion".to_string());
+        }
+
+        if let Some(warning) = self.promote_externally_merged_session(session_id).await {
+            self.append_output_for_session(
+                session_id,
+                &TranscriptNotice::ReviewRequestSyncWarning.format(warning),
+            )
+            .await;
+        }
+        let is_done = self
+            .sessions
+            .session_handles_or_err(session_id)
+            .ok()
+            .and_then(|handles| {
+                handles
+                    .status
+                    .lock()
+                    .ok()
+                    .map(|status| *status == Status::Done)
+            })
+            .unwrap_or(false);
+        if !is_done {
+            return Err("Merged session could not be forced to Done".to_string());
+        }
+
+        Ok(())
+    }
+
     /// Waits for tracked background cleanup tasks before process shutdown.
     pub(crate) async fn wait_for_background_cleanup_tasks(&self) {
         self.services.wait_for_cleanup_tasks().await;
@@ -1744,12 +1788,36 @@ impl App {
         sync::SyncContext {
             generation: 0,
             git_client: services.git_client(),
+            merged_session_promotion_targets: Self::merged_session_promotion_targets(sessions),
             project_branch_name: projects.git_branch().map(str::to_string),
             review_request_client: services.review_request_client(),
             review_request_sync_targets: Self::review_request_sync_targets(sessions),
             session_git_status_targets: Self::session_git_status_targets(sessions),
             working_dir: projects.working_dir().to_path_buf(),
         }
+    }
+
+    /// Builds ancestry-check targets for sessions that merged upstream but
+    /// still wait for their local review-request target branch to sync.
+    pub(crate) fn merged_session_promotion_targets(
+        sessions: &SessionManager,
+    ) -> Vec<sync::MergedSessionPromotionTarget> {
+        sessions
+            .state()
+            .sessions()
+            .iter()
+            .filter(|session| session.status == Status::Merged)
+            .filter_map(|session| {
+                let review_request = session.review_request.as_ref()?;
+                let merge_commit_sha = review_request.summary.merge_commit_sha.clone()?;
+
+                Some(sync::MergedSessionPromotionTarget {
+                    merge_commit_sha,
+                    session_id: session.id.clone(),
+                    target_branch: review_request.summary.target_branch.clone(),
+                })
+            })
+            .collect()
     }
 
     /// Builds git-status polling targets for active session branches in the
@@ -2008,7 +2076,8 @@ impl App {
     /// Validates whether a session is currently eligible for merge queueing.
     ///
     /// Sessions are eligible while actively under review or already marked as
-    /// `Queued` (for example, after app restart). A parent with idle
+    /// `Queued` (for example, after app restart), provided no open review
+    /// request already owns merge authority on the forge. A parent with idle
     /// materialized children can enter merge queueing because merge completion
     /// retargets those children; active stack work still blocks the request.
     ///
@@ -2020,6 +2089,11 @@ impl App {
         if !(session.status.allows_review_actions() || session.status == Status::Queued) {
             return Err(AppError::Workflow(
                 "Session must be in review or queued status".to_string(),
+            ));
+        }
+        if session.has_open_review_request() {
+            return Err(AppError::Workflow(
+                session::OPEN_REVIEW_REQUEST_LOCAL_MERGE_ERROR.to_string(),
             ));
         }
         if !self.sessions.can_merge_session_branch_in_stack(session_id) {
@@ -2077,7 +2151,10 @@ impl App {
     /// # Errors
     /// Returns an error when starting a queued merge fails and
     /// `stop_on_failure` is enabled.
-    async fn start_next_merge_from_queue(&mut self, stop_on_failure: bool) -> Result<(), AppError> {
+    pub(super) async fn start_next_merge_from_queue(
+        &mut self,
+        stop_on_failure: bool,
+    ) -> Result<(), AppError> {
         if self.merge_queue.has_active() {
             return Ok(());
         }

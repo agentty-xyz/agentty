@@ -9,7 +9,6 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
-use std::time::Duration;
 
 use agentty::db::{DB_DIR, DB_FILE, Database};
 use agentty::domain::agent::ReasoningLevel;
@@ -1355,6 +1354,7 @@ fn seed_review_ready_session_with_review_request(
             summary: ReviewRequestSummary {
                 display_id: "#42".to_string(),
                 forge_kind: ForgeKind::GitHub,
+                merge_commit_sha: None,
                 source_branch: "wt/review-s".to_string(),
                 state: ReviewRequestState::Open,
                 status_summary: Some("Checks passing".to_string()),
@@ -1534,9 +1534,9 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Addr
     Ok(())
 }
 
-/// Seeds a merged GitHub review response and delays runtime worktree removal
-/// so the feature scenario can prove terminal rendering stays responsive.
-fn seed_slow_merged_review_request_status(
+/// Seeds a merged GitHub review whose merge commit is not yet reachable from
+/// the local target branch.
+fn seed_merged_review_request_waiting_for_target(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
     seed_review_ready_session_with_review_request(env)?;
@@ -1550,7 +1550,7 @@ case "$*" in
     exit 0
     ;;
   *"pr view"*)
-    printf '%s\n' '{"number":42,"title":"Review-ready session shortcuts","state":"MERGED","url":"https://github.com/agentty-xyz/agentty/pull/42","baseRefName":"main","headRefName":"wt/review-s","isDraft":false,"mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","mergedAt":"2026-01-01T00:00:00Z"}'
+    printf '%s\n' '{"number":42,"title":"Review-ready session shortcuts","state":"MERGED","url":"https://github.com/agentty-xyz/agentty/pull/42","baseRefName":"main","headRefName":"wt/review-s","isDraft":false,"mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","mergedAt":"2026-01-01T00:00:00Z","mergeCommit":{"oid":"1111111111111111111111111111111111111111"}}'
     ;;
   *)
     echo "unexpected gh invocation: $*" >&2
@@ -1561,35 +1561,6 @@ esac
     )?;
     #[cfg(unix)]
     std::fs::set_permissions(&gh_path, std::fs::Permissions::from_mode(0o755))?;
-
-    install_delayed_worktree_remove_stub(env, 4)
-}
-
-/// Installs a git wrapper that delays worktree removal while forwarding all
-/// other commands to the real executable.
-fn install_delayed_worktree_remove_stub(
-    env: &BuilderEnv,
-    delay_seconds: u64,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let real_git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-        .map(|path| path.join("git"))
-        .find(|path| path.is_file())
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "git not found"))?;
-    let real_git = real_git.to_string_lossy().replace('\'', "'\"'\"'");
-    let git_path = env.stub_bin.join("git");
-    std::fs::write(
-        &git_path,
-        format!(
-            r#"#!/bin/sh
-if [ "$1" = "worktree" ] && [ "$2" = "remove" ]; then
-  exec sleep {delay_seconds}
-fi
-exec '{real_git}' "$@"
-"#
-        ),
-    )?;
-    #[cfg(unix)]
-    std::fs::set_permissions(&git_path, std::fs::Permissions::from_mode(0o755))?;
 
     Ok(())
 }
@@ -3960,8 +3931,9 @@ fn review_request_publish_runs_in_background() -> E2eResult {
     Ok(())
 }
 
-/// Verify that review-ready sessions no longer expose a manual review-request
-/// sync shortcut because linked review requests refresh in the background.
+/// Verify that review-ready sessions with open review requests expose neither
+/// manual review-request sync nor local merge actions because the forge owns
+/// both workflows.
 #[test]
 fn review_request_sync_runs_in_background() -> E2eResult {
     // Arrange, Act, Assert
@@ -3997,74 +3969,56 @@ fn review_request_sync_runs_in_background() -> E2eResult {
                     !view_text.contains("s: Sync"),
                     "manual sync help action should be absent"
                 );
+                assert!(
+                    !view_text.contains("Add to merge queue"),
+                    "local merge help action should be absent while the review request is open"
+                );
             },
         )?;
 
     Ok(())
 }
 
-/// Verify that externally merged status updates reach `Done` without waiting
-/// for slow worktree cleanup and the terminal remains navigable.
+/// Verify that an externally merged session stays read-only until its local
+/// target branch contains the forge-reported merge commit.
 #[test]
-fn test_merged_review_request_cleanup_responsive() -> E2eResult {
+fn test_merged_review_request_waits_for_target_sync() -> E2eResult {
     // Arrange, Act, Assert
-    FeatureTest::new("merged_review_request_cleanup_responsive")
+    FeatureTest::new("merged_review_request_waits_for_target_sync")
         .with_git()
-        .setup(seed_slow_merged_review_request_status)
+        .setup(seed_merged_review_request_waiting_for_target)
+        .zola(
+            "Merged session sync safety",
+            "Keep externally merged sessions read-only until the local target branch syncs.",
+            44,
+        )
         .run(
             |scenario| {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .wait_for_text("Done", 2500)
+                    .wait_for_text("Merged", 2500)
+                    .compose(&common::open_selected_session_view())
+                    .wait_for_text("waiting for target branch sync", 2500)
+                    .press_key("?")
+                    .wait_for_stable_frame(300, 5000)
+                    .viewing_pause_ms(1500)
                     .capture_labeled(
-                        "merged_status",
-                        "Merged session reaches Done before worktree cleanup finishes",
-                    )
-                    .press_key("Tab")
-                    .wait_for_text("Review Requests", 1000)
-                    .capture_labeled(
-                        "responsive_navigation",
-                        "Tab navigation remains responsive during worktree cleanup",
+                        "merged_waiting_actions",
+                        "Merged session waits read-only for local target synchronization",
                     )
             },
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Review Requests", &full);
+                let view_text = frame.text_in_region(&full);
+
+                assertion::assert_text_in_region(frame, "m: force done", &full);
+                assertion::assert_text_in_region(frame, "Show diff", &full);
+                assert!(!view_text.contains("Enter: Reply"));
+                assert!(!view_text.contains("r: Rebase"));
+                assert!(!view_text.contains("s: Sync"));
             },
         )?;
-
-    Ok(())
-}
-
-/// Verify that confirming quit does not wait indefinitely for externally
-/// merged worktree cleanup.
-#[test]
-fn merged_review_request_cleanup_does_not_block_quit() -> E2eResult {
-    // Arrange
-    let _test_guard = common::acquire_e2e_test_lock();
-    let temp = tempfile::TempDir::new()?;
-    let env = BuilderEnv::new(temp.path())?;
-    env.init_git()?;
-    seed_slow_merged_review_request_status(&env)?;
-    install_delayed_worktree_remove_stub(&env, 30)?;
-    let mut session = env.builder().spawn()?;
-    let scenario = Scenario::new("merged_cleanup_quit")
-        .compose(&common::wait_for_agentty_startup())
-        .compose(&common::switch_to_tab("Sessions"))
-        .wait_for_text("Done", 2500)
-        .compose(&common::open_quit_dialog())
-        .press_key("y");
-
-    // Act
-    scenario.execute_in_pty(&mut session)?;
-    let exited_successfully = session.wait_for_exit(Duration::from_secs(8))?;
-
-    // Assert
-    assert!(
-        exited_successfully,
-        "confirmed quit should cancel cleanup after the shutdown deadline"
-    );
 
     Ok(())
 }

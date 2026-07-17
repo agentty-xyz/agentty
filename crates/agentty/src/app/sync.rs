@@ -195,6 +195,9 @@ pub(crate) struct SyncContext {
     pub(crate) generation: u64,
     /// Git boundary used for fetch and ahead/behind queries.
     pub(crate) git_client: Arc<dyn GitClient>,
+    /// Merged sessions waiting for their review-request merge commit to
+    /// appear on the local target branch.
+    pub(crate) merged_session_promotion_targets: Vec<MergedSessionPromotionTarget>,
     /// Active project branch, or `None` when the project has no git branch
     /// and polling should be skipped.
     pub(crate) project_branch_name: Option<String>,
@@ -217,10 +220,22 @@ impl SyncContext {
     fn same_polling_inputs(&self, other: &SyncContext) -> bool {
         self.project_branch_name == other.project_branch_name
             && self.working_dir == other.working_dir
+            && self.merged_session_promotion_targets == other.merged_session_promotion_targets
             && self.session_git_status_targets == other.session_git_status_targets
             && review_target_polling_keys(&self.review_request_sync_targets)
                 == review_target_polling_keys(&other.review_request_sync_targets)
     }
+}
+
+/// One merged-waiting session whose target branch ancestry is polled.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MergedSessionPromotionTarget {
+    /// Forge-provided commit that represents the merged review request.
+    pub(crate) merge_commit_sha: String,
+    /// Stable session identifier used to route successful promotion.
+    pub(crate) session_id: SessionId,
+    /// Persisted review-request target branch checked in the local repository.
+    pub(crate) target_branch: String,
 }
 
 /// Commands accepted by the orchestrator task.
@@ -431,6 +446,12 @@ impl SyncOrchestrator {
             context.git_client.as_ref(),
         )
         .await;
+        let merged_session_ids = merged_sessions_ready_for_promotion(
+            &repo_root,
+            &context.merged_session_promotion_targets,
+            context.git_client.as_ref(),
+        )
+        .await;
 
         if self.context_is_stale(context) {
             return;
@@ -439,6 +460,7 @@ impl SyncOrchestrator {
         // Fire-and-forget: receiver may be dropped during shutdown.
         let _ = self.app_event_tx.send(AppEvent::GitStatusUpdated {
             generation: context.generation,
+            merged_session_ids,
             session_statuses,
             status,
         });
@@ -526,9 +548,9 @@ impl SyncOrchestrator {
     /// Runs one user-triggered main-branch sync.
     ///
     /// Review-request state is refreshed before the mutating git phases, but
-    /// successful terminal updates are emitted only after the main branch
-    /// sync succeeds. That keeps externally merged child restacking behind the
-    /// updated local default branch for the manual `s` workflow.
+    /// successful updates are emitted only after the main branch sync
+    /// succeeds. A merged result therefore enters the waiting state against
+    /// the updated target and the next git-status pass can safely promote it.
     async fn run_sync_main(&mut self, request: SyncMainRequest) {
         let SyncMainRequest {
             app_event_tx,
@@ -698,6 +720,30 @@ async fn session_git_statuses(
     }
 
     session_git_statuses
+}
+
+/// Returns merged-waiting sessions whose merge commit is reachable from the
+/// persisted local target branch.
+async fn merged_sessions_ready_for_promotion(
+    repo_root: &Path,
+    promotion_targets: &[MergedSessionPromotionTarget],
+    git_client: &dyn GitClient,
+) -> Vec<SessionId> {
+    let mut ready_session_ids = Vec::new();
+    for promotion_target in promotion_targets {
+        let ancestry = git_client
+            .get_ref_ahead_behind(
+                repo_root.to_path_buf(),
+                promotion_target.merge_commit_sha.clone(),
+                promotion_target.target_branch.clone(),
+            )
+            .await;
+        if ancestry.is_ok_and(|(ahead, _behind)| ahead == 0) {
+            ready_session_ids.push(promotion_target.session_id.clone());
+        }
+    }
+
+    ready_session_ids
 }
 
 /// Runs one review-request sync against the forge.
@@ -872,6 +918,7 @@ mod tests {
         ReviewRequestSummary {
             display_id: display_id.to_string(),
             forge_kind,
+            merge_commit_sha: None,
             source_branch: "wt/session-id".to_string(),
             state,
             status_summary: None,
@@ -913,6 +960,7 @@ mod tests {
         SyncContext {
             generation,
             git_client: Arc::new(MockGitClient::new()),
+            merged_session_promotion_targets: Vec::new(),
             project_branch_name: Some("main".to_string()),
             review_request_client: Arc::new(MockReviewRequestClient::new()),
             review_request_sync_targets,
@@ -944,6 +992,27 @@ mod tests {
         // Assert
         assert_eq!(unchanged_generation, 0);
         assert_eq!(changed_generation, 1);
+    }
+
+    #[test]
+    fn publish_context_detects_merged_session_promotion_target_changes() {
+        // Arrange
+        let (command_tx, _command_rx) = mpsc::unbounded_channel();
+        let initial_context = sync_context_fixture(0, Vec::new());
+        let (context_tx, context_rx) = watch::channel(initial_context);
+        let sync_handle = SyncHandle::new(command_tx, context_tx);
+        let mut changed_context = sync_context_fixture(0, Vec::new());
+        changed_context.merged_session_promotion_targets = vec![MergedSessionPromotionTarget {
+            merge_commit_sha: "merge-commit".to_string(),
+            session_id: "merged-session".into(),
+            target_branch: "release".to_string(),
+        }];
+
+        // Act
+        sync_handle.publish_context(changed_context);
+
+        // Assert
+        assert_eq!(context_rx.borrow().generation, 1);
     }
 
     #[test]
@@ -1195,6 +1264,59 @@ mod tests {
                 remote_status: None,
             })
         );
+    }
+
+    #[tokio::test]
+    /// Only promotes merged sessions when the merge commit is reachable from
+    /// the persisted review-request target branch.
+    async fn merged_sessions_ready_for_promotion_requires_target_ancestry() {
+        // Arrange
+        let repo_root = Path::new("/tmp/merged-session-promotion");
+        let targets = vec![
+            MergedSessionPromotionTarget {
+                merge_commit_sha: "ready-commit".to_string(),
+                session_id: "ready-session".into(),
+                target_branch: "main".to_string(),
+            },
+            MergedSessionPromotionTarget {
+                merge_commit_sha: "missing-commit".to_string(),
+                session_id: "waiting-session".into(),
+                target_branch: "release".to_string(),
+            },
+            MergedSessionPromotionTarget {
+                merge_commit_sha: "unknown-commit".to_string(),
+                session_id: "unknown-session".into(),
+                target_branch: "main".to_string(),
+            },
+            MergedSessionPromotionTarget {
+                merge_commit_sha: "unexpected-commit".to_string(),
+                session_id: "unexpected-session".into(),
+                target_branch: "unexpected-branch".to_string(),
+            },
+        ];
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client
+            .expect_get_ref_ahead_behind()
+            .times(4)
+            .returning(|_, merge_commit_sha, target_branch| {
+                Box::pin(async move {
+                    match (merge_commit_sha.as_str(), target_branch.as_str()) {
+                        ("ready-commit", "main") => Ok((0, 3)),
+                        ("missing-commit", "release") => Ok((1, 0)),
+                        ("unknown-commit", "main") => {
+                            Err(GitError::OutputParse("commit is unavailable".to_string()))
+                        }
+                        _ => Err(GitError::OutputParse("unexpected ref pair".to_string())),
+                    }
+                })
+            });
+
+        // Act
+        let ready_session_ids =
+            merged_sessions_ready_for_promotion(repo_root, &targets, &mock_git_client).await;
+
+        // Assert
+        assert_eq!(ready_session_ids, vec![SessionId::from("ready-session")]);
     }
 
     #[test]

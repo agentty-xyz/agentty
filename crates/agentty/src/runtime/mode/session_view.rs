@@ -449,6 +449,11 @@ async fn handle_workflow_view_key(
         {
             open_or_regenerate_review(app, view_context, pending_update).await;
         }
+        KeyCode::Char('m') if view_session_snapshot.session_status == Status::Merged => {
+            open_force_done_confirmation(app, view_context);
+
+            return Some(false);
+        }
         KeyCode::Char('m') if view_session_snapshot.can_merge_session() => {
             open_merge_confirmation(app, view_context);
         }
@@ -471,6 +476,20 @@ async fn handle_workflow_view_key(
     }
 
     Some(true)
+}
+
+/// Opens the manual completion confirmation for a merged-waiting session.
+fn open_force_done_confirmation(app: &mut App, view_context: &ViewContext) {
+    app.mode = AppMode::Confirmation {
+        confirmation_intent: ConfirmationIntent::ForceDoneMergedSession,
+        confirmation_message: "Force this merged session to Done before its target branch is \
+                               detected locally?"
+            .to_string(),
+        confirmation_title: "Confirm Force Done".to_string(),
+        restore_view: Some(confirmation_view_mode(view_context)),
+        session_id: Some(view_context.session_id.clone()),
+        selected_confirmation_index: DEFAULT_OPTION_INDEX,
+    };
 }
 
 /// Opens a fork confirmation overlay for the active view session.
@@ -650,6 +669,7 @@ fn is_view_worktree_open_allowed(status: Status) -> bool {
         status,
         Status::Done
             | Status::Canceled
+            | Status::Merged
             | Status::InProgress
             | Status::Rebasing
             | Status::Merging
@@ -664,6 +684,7 @@ fn is_view_action_allowed(status: Status) -> bool {
     !matches!(
         status,
         Status::Done
+            | Status::Merged
             | Status::InProgress
             | Status::Rebasing
             | Status::Merging
@@ -686,7 +707,7 @@ fn is_view_chat_allowed(status: Status) -> bool {
 
 /// Returns whether the `d` shortcut can open the diff view.
 fn is_view_diff_allowed(status: Status) -> bool {
-    status.allows_review_actions()
+    status.allows_review_actions() || status == Status::Merged
 }
 
 /// Returns whether the `f` shortcut can open review content.
@@ -1196,7 +1217,7 @@ mod tests {
     use crate::app::review_loading_message;
     use crate::domain::agent::AgentModel;
     use crate::domain::session::{
-        ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
+        ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionHandles,
     };
     use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
     use crate::infra::tmux::{MockTmuxClient, TmuxClient};
@@ -1332,22 +1353,37 @@ mod tests {
     }
 
     #[test]
+    fn test_is_view_worktree_open_allowed_returns_false_for_merged() {
+        // Arrange
+        let status = Status::Merged;
+
+        // Act
+        let can_open = is_view_worktree_open_allowed(status);
+
+        // Assert
+        assert!(!can_open);
+    }
+
+    #[test]
     fn test_is_view_action_allowed_only_for_non_done_non_in_progress_status() {
         // Arrange
         let canceled_status = Status::Canceled;
         let review_status = Status::Review;
+        let merged_status = Status::Merged;
         let in_progress_status = Status::InProgress;
         let done_status = Status::Done;
 
         // Act
         let canceled_allowed = is_view_action_allowed(canceled_status);
         let review_allowed = is_view_action_allowed(review_status);
+        let merged_allowed = is_view_action_allowed(merged_status);
         let in_progress_allowed = is_view_action_allowed(in_progress_status);
         let done_allowed = is_view_action_allowed(done_status);
 
         // Assert
         assert!(!canceled_allowed);
         assert!(review_allowed);
+        assert!(!merged_allowed);
         assert!(!in_progress_allowed);
         assert!(!done_allowed);
     }
@@ -1374,19 +1410,22 @@ mod tests {
     }
 
     #[test]
-    fn test_is_view_diff_allowed_only_for_review_status() {
+    fn test_is_view_diff_allowed_for_review_and_merged_status() {
         // Arrange
         let review_status = Status::Review;
+        let merged_status = Status::Merged;
         let new_status = Status::Draft;
         let in_progress_status = Status::InProgress;
 
         // Act
         let review_allowed = is_view_diff_allowed(review_status);
+        let merged_allowed = is_view_diff_allowed(merged_status);
         let new_allowed = is_view_diff_allowed(new_status);
         let in_progress_allowed = is_view_diff_allowed(in_progress_status);
 
         // Assert
         assert!(review_allowed);
+        assert!(merged_allowed);
         assert!(!new_allowed);
         assert!(!in_progress_allowed);
     }
@@ -1396,18 +1435,21 @@ mod tests {
         // Arrange
         let review_status = Status::Review;
         let agent_review_status = Status::AgentReview;
+        let merged_status = Status::Merged;
         let done_status = Status::Done;
         let in_progress_status = Status::InProgress;
 
         // Act
         let review_allowed = is_view_review_allowed(review_status);
         let agent_review_allowed = is_view_review_allowed(agent_review_status);
+        let merged_allowed = is_view_review_allowed(merged_status);
         let done_allowed = is_view_review_allowed(done_status);
         let in_progress_allowed = is_view_review_allowed(in_progress_status);
 
         // Assert
         assert!(review_allowed);
         assert!(agent_review_allowed);
+        assert!(!merged_allowed);
         assert!(!done_allowed);
         assert!(!in_progress_allowed);
     }
@@ -2241,6 +2283,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_open_force_done_confirmation_restores_merged_session_view() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
+        let session_id = "merged-session".to_string();
+        app.sessions.push_session(
+            crate::test_support::SessionFixtureBuilder::new()
+                .id(session_id.clone())
+                .status(Status::Merged)
+                .build(),
+        );
+        app.sessions.session_handles_mut().insert(
+            session_id.clone().into(),
+            SessionHandles::new(Status::Merged),
+        );
+        app.mode = AppMode::View {
+            session_id: session_id.clone().into(),
+            scroll_offset: Some(7),
+        };
+        let context = view_context(&mut app).expect("expected view context");
+        let session_snapshot =
+            view_session_snapshot(&app, &context).expect("expected session snapshot");
+        let mut pending_update = ViewPendingUpdate::from_context(&context);
+
+        // Act
+        let result = handle_workflow_view_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE),
+            &context,
+            &session_snapshot,
+            &mut pending_update,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(result, Some(false));
+        assert!(matches!(
+            app.mode,
+            AppMode::Confirmation {
+                confirmation_intent: ConfirmationIntent::ForceDoneMergedSession,
+                ref confirmation_message,
+                ref confirmation_title,
+                restore_view: Some(ConfirmationViewMode {
+                    scroll_offset: Some(7),
+                    session_id: ref restored_session_id,
+                }),
+                session_id: Some(ref mode_session_id),
+                selected_confirmation_index: DEFAULT_OPTION_INDEX,
+            } if confirmation_title == "Confirm Force Done"
+                && confirmation_message.contains("target branch")
+                && restored_session_id == &session_id
+                && mode_session_id == &session_id
+        ));
+    }
+
+    #[tokio::test]
     async fn test_open_worktree_for_view_session_opens_command_selector_for_multiple_commands() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
@@ -2917,6 +3014,7 @@ mod tests {
             summary: ReviewRequestSummary {
                 display_id: "#42".to_string(),
                 forge_kind: ForgeKind::GitHub,
+                merge_commit_sha: None,
                 source_branch: "wt/linked-terminal".to_string(),
                 state: ReviewRequestState::Open,
                 status_summary: None,

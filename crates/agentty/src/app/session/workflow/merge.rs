@@ -40,6 +40,11 @@ const REBASE_ASSIST_POLICY: AssistPolicy = AssistPolicy {
     max_identical_failure_streak: 3,
 };
 
+/// User-facing explanation for review requests that retain forge merge
+/// ownership instead of entering Agentty's local merge queue.
+pub(crate) const OPEN_REVIEW_REQUEST_LOCAL_MERGE_ERROR: &str =
+    "Local merge is unavailable while the linked review request is open; merge it on the forge";
+
 /// Coordinates merge/rebase session workflows behind a dedicated service
 /// boundary.
 pub(crate) struct SessionMergeService;
@@ -635,6 +640,11 @@ impl SessionMergeService {
                 "Session must be in review or queued status".to_string(),
             ));
         }
+        if session.has_open_review_request() {
+            return Err(SessionError::Workflow(
+                OPEN_REVIEW_REQUEST_LOCAL_MERGE_ERROR.to_string(),
+            ));
+        }
         if !manager.can_merge_session_branch_in_stack(session_id) {
             return Err(SessionError::Workflow(
                 "Merge can only run when no other stack session is active".to_string(),
@@ -1177,6 +1187,7 @@ impl SessionManager {
                 "Merge failed during rebase step: {error}"
             )));
         }
+        Self::ensure_local_merge_is_still_active(status.as_ref())?;
         let parent_commit_hash = git_client.head_hash(folder.clone()).await?;
 
         let squash_diff = Self::load_squash_diff(
@@ -1197,6 +1208,7 @@ impl SessionManager {
                 .await?,
             )
         };
+        Self::ensure_local_merge_is_still_active(status.as_ref())?;
         let merge_outcome = if let Some(commit_message) = authoritative_commit_message.as_ref() {
             let repo_root = repo_root.clone();
             let source_branch = source_branch.clone();
@@ -1252,6 +1264,19 @@ impl SessionManager {
             &source_branch,
             &base_branch,
             merge_outcome,
+        ))
+    }
+
+    /// Stops a local merge before it mutates the target branch when an
+    /// external merge observation has already moved the session away from
+    /// `Merging`.
+    fn ensure_local_merge_is_still_active(status: &Mutex<Status>) -> Result<(), SessionError> {
+        if status.lock().is_ok_and(|status| *status == Status::Merging) {
+            return Ok(());
+        }
+
+        Err(SessionError::Workflow(
+            "Local merge stopped because the review request merged upstream".to_string(),
         ))
     }
 
@@ -1476,6 +1501,7 @@ impl SessionManager {
                 SessionTaskService::emit_session_workflow_notice(app_event_tx, id, merge_message);
                 SessionTaskService::request_git_status_refresh(app_event_tx);
             }
+            Err(_) if status_transition.current_status() == Some(Status::Merged) => {}
             Err(error) => {
                 let merge_error = TranscriptNotice::MergeError.format(error);
                 SessionTaskService::append_workflow_notice(
@@ -3613,6 +3639,65 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_local_merge_stops_after_external_merge_observation() {
+        // Arrange
+        let active_status = Mutex::new(Status::Merging);
+        let externally_merged_status = Mutex::new(Status::Merged);
+
+        // Act
+        let active_result = SessionManager::ensure_local_merge_is_still_active(&active_status);
+        let externally_merged_result =
+            SessionManager::ensure_local_merge_is_still_active(&externally_merged_status);
+
+        // Assert
+        assert!(active_result.is_ok());
+        assert!(matches!(
+            externally_merged_result,
+            Err(SessionError::Workflow(message)) if message.contains("merged upstream")
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_finalize_merge_ignores_failure_after_external_merge_observation() {
+        // Arrange
+        let database = AppRepositories::in_memory().await;
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let session_update_versions = Arc::default();
+        let status = Arc::new(Mutex::new(Status::Merged));
+        let status_transition = StatusTransition::from_parts(
+            app_event_tx.clone(),
+            Arc::new(crate::infra::clock::RealClock),
+            database.clone(),
+            "session-id",
+            Arc::clone(&session_update_versions),
+            status,
+        );
+        let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
+
+        // Act
+        SessionManager::finalize_merge_task(FinalizeMergeInput {
+            app_event_tx: &app_event_tx,
+            db: &database,
+            id: "session-id",
+            result: Err(SessionError::Workflow("local merge stopped".to_string())),
+            session_update_versions: &session_update_versions,
+            status_transition: &status_transition,
+            transcript: &transcript,
+        })
+        .await;
+
+        // Assert
+        assert!(
+            transcript
+                .lock()
+                .expect("transcript lock should not be poisoned")
+                .messages()
+                .is_empty()
+        );
+        assert!(app_event_rx.try_recv().is_err());
+    }
+
     #[tokio::test]
     async fn test_execute_merge_workflow_reuses_session_head_commit_message() {
         // Arrange
@@ -3956,6 +4041,62 @@ mod tests {
                 old_base: "parent-tip".to_string(),
             }
         );
+    }
+
+    #[tokio::test]
+    async fn test_parent_merge_restack_records_parent_tip_for_materialized_child() {
+        // Arrange
+        let db = AppRepositories::in_memory().await;
+        let project_id = db
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to upsert project");
+        db.sessions()
+            .insert_session("parent-session", "gpt-5.5", "main", "Review", project_id)
+            .await
+            .expect("failed to insert parent");
+        db.sessions()
+            .insert_stacked_draft_session(
+                "child-session",
+                "gpt-5.5",
+                "wt/parent-session",
+                "Review",
+                "parent-session",
+                project_id,
+            )
+            .await
+            .expect("failed to insert materialized child");
+
+        // Act
+        let restacked_child_ids = SessionManager::restack_child_sessions_after_parent_merge(
+            &db,
+            "parent-session",
+            "main",
+            Some("parent-tip".to_string()),
+        )
+        .await
+        .expect("failed to restack child");
+        let stack_base_commit_hash = db
+            .sessions()
+            .get_session_stack_base_commit_hash("child-session")
+            .await
+            .expect("failed to load child stack-base commit");
+        let sessions = db
+            .sessions()
+            .load_sessions()
+            .await
+            .expect("failed to load sessions");
+        let child_session = sessions
+            .iter()
+            .find(|session| session.id == "child-session")
+            .expect("missing child");
+
+        // Assert
+        assert_eq!(restacked_child_ids, vec![SessionId::from("child-session")]);
+        assert_eq!(child_session.parent_session_id, None);
+        assert_eq!(child_session.base_branch, "main");
+        assert_eq!(stack_base_commit_hash.as_deref(), Some("parent-tip"));
     }
 
     #[tokio::test]
@@ -5143,6 +5284,7 @@ mod tests {
             summary: forge::ReviewRequestSummary {
                 display_id: "#42".to_string(),
                 forge_kind: forge::ForgeKind::GitHub,
+                merge_commit_sha: None,
                 source_branch: "wt/sess-rebase".to_string(),
                 state: crate::domain::session::ReviewRequestState::Open,
                 status_summary: Some("Draft".to_string()),
@@ -5224,6 +5366,7 @@ mod tests {
                     Ok(forge::ReviewRequestSummary {
                         display_id: "#42".to_string(),
                         forge_kind: forge::ForgeKind::GitHub,
+                        merge_commit_sha: None,
                         source_branch: "wt/sess-rebase".to_string(),
                         state: crate::domain::session::ReviewRequestState::Open,
                         status_summary: Some("Open".to_string()),

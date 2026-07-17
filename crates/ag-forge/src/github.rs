@@ -496,7 +496,7 @@ fn view_command(remote: &ForgeRemote, pull_request_number: &str) -> ForgeCommand
             remote.project_path(),
             "--json".to_string(),
             "number,title,state,url,baseRefName,headRefName,isDraft,mergeStateStatus,\
-             reviewDecision,mergedAt"
+             reviewDecision,mergedAt,mergeCommit"
                 .to_string(),
         ],
     )
@@ -512,6 +512,7 @@ fn parse_view_response(stdout: &str) -> Result<ReviewRequestSummary, String> {
     Ok(ReviewRequestSummary {
         display_id: format!("#{}", pull_request.number),
         forge_kind: ForgeKind::GitHub,
+        merge_commit_sha: pull_request.merge_commit.map(|commit| commit.oid),
         source_branch: pull_request.head_ref_name,
         state,
         status_summary,
@@ -1001,12 +1002,20 @@ struct GitHubViewResponse {
     merge_state_status: Option<String>,
     #[serde(rename = "mergedAt")]
     merged_at: Option<String>,
+    #[serde(rename = "mergeCommit")]
+    merge_commit: Option<GitHubCommitRef>,
     number: u64,
     #[serde(rename = "reviewDecision")]
     review_decision: Option<String>,
     state: String,
     title: String,
     url: String,
+}
+
+/// Minimal GitHub commit reference returned for `mergeCommit`.
+#[derive(Deserialize)]
+struct GitHubCommitRef {
+    oid: String,
 }
 
 impl GitHubViewResponse {
@@ -1234,6 +1243,7 @@ mod tests {
             Some(ReviewRequestSummary {
                 display_id: "#42".to_string(),
                 forge_kind: ForgeKind::GitHub,
+                merge_commit_sha: None,
                 source_branch: "feature/forge".to_string(),
                 state: ReviewRequestState::Open,
                 status_summary: Some("Approved, Mergeable".to_string()),
@@ -1929,6 +1939,32 @@ mod tests {
             "mergedAt": null
         }"#
         .to_string()
+    }
+
+    #[test]
+    fn parse_view_response_preserves_merged_commit_sha() {
+        // Arrange
+        let response = r#"{
+            "number": 42,
+            "title": "Merged review",
+            "state": "MERGED",
+            "url": "https://github.com/agentty-xyz/agentty/pull/42",
+            "baseRefName": "release",
+            "headRefName": "feature/forge",
+            "isDraft": false,
+            "mergeStateStatus": "UNKNOWN",
+            "reviewDecision": "APPROVED",
+            "mergedAt": "2026-07-16T12:00:00Z",
+            "mergeCommit": {"oid": "merged-commit"}
+        }"#;
+
+        // Act
+        let summary = parse_view_response(response).expect("GitHub response should parse");
+
+        // Assert
+        assert_eq!(summary.state, ReviewRequestState::Merged);
+        assert_eq!(summary.merge_commit_sha.as_deref(), Some("merged-commit"));
+        assert_eq!(summary.target_branch, "release");
     }
 
     fn github_metadata_json() -> String {

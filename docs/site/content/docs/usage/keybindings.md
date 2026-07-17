@@ -57,7 +57,8 @@ warning. Press `Enter` to continue to the `Regular`, `Draft`, or `Stacked` selec
 
 In the `a` selector, `Stacked` is enabled only when the selected session is a root
 session with an active branch. `c` appears only for cancelable rows: running sessions,
-review-ready sessions, and unstarted draft sessions.
+review-ready sessions, **Merged** sessions waiting for target synchronization, and
+unstarted draft sessions.
 
 <a id="usage-session-list-project-switcher"></a> The `p` popup lists registered projects
 in most-recently-opened order with the active project marked by a `* ` prefix. Each row
@@ -155,7 +156,7 @@ The full set in **Review** state, subject to session and forge availability:
 | `d`                 | Show diff                                           |
 | `f`                 | Append or regenerate focused review output          |
 | `F`                 | Fork session with copied transcript history         |
-| `m`                 | Add to merge queue after confirmation               |
+| `m`                 | Add an unlinked session to the local merge queue    |
 | `r`                 | Sync session branch                                 |
 | `j` / `k`           | Scroll output                                       |
 | `g` / `G`           | Scroll to top / bottom                              |
@@ -183,9 +184,14 @@ State-specific differences:
 - Review-ready stacked parents with a materialized child keep `Enter`, `m`, and `r`
   while the stack is idle, but hide `/` until the child is terminal or no longer linked.
 - Sessions with a linked pull request or merge request use `c` to open its comments
-  page. Linked terminal sessions keep continuation available on `C`.
+  page. Open linked requests must be merged on their forge and hide the local `m` merge
+  action. Linked terminal sessions keep continuation available on `C`.
 - **Done** sessions without a linked review request offer `c` to start a continuation
   draft (confirmation popup).
+- **Merged** sessions keep `d` for diff inspection and use `m` to force **Done** when
+  automatic target-branch ancestry detection cannot finish. New replies, launch
+  configurations, publish, sync, focused-review, and merge actions are unavailable;
+  cancel remains available as `c` from the session list.
 - **Canceled**, **Queued**, and **Merging** sessions are otherwise read-only (`q`,
   scroll, help). Linked review requests remain available from any session state with
   `c`.

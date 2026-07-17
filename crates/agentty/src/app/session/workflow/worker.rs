@@ -841,7 +841,17 @@ impl SessionWorkerService {
         receiver: &mut mpsc::UnboundedReceiver<SessionCommand>,
     ) -> Option<SessionCommand> {
         loop {
-            if matches!(context.current_status(), Status::Question) {
+            let current_status = context.current_status();
+            if current_status == Status::Question {
+                return None;
+            }
+            if matches!(
+                current_status,
+                Status::Merged | Status::Done | Status::Canceled
+            ) {
+                context.clear_queued_messages();
+                Self::emit_queue_session_updated(context);
+
                 return None;
             }
             if let Ok(command) = receiver.try_recv() {
@@ -989,6 +999,19 @@ impl SessionWorkerService {
             .await
             .unwrap_or(false);
         if !operation_is_unfinished {
+            return true;
+        }
+        let current_status = context.current_status();
+        if matches!(
+            current_status,
+            Status::Merged | Status::Done | Status::Canceled
+        ) {
+            let _ = context
+                .db
+                .operations()
+                .mark_session_operation_canceled(operation_id, CANCEL_BEFORE_EXECUTION_REASON)
+                .await;
+
             return true;
         }
 
@@ -2750,6 +2773,7 @@ mod tests {
             summary: forge::ReviewRequestSummary {
                 display_id: "#42".to_string(),
                 forge_kind: forge::ForgeKind::GitHub,
+                merge_commit_sha: None,
                 source_branch: "wt/session-id".to_string(),
                 state: ReviewRequestState::Open,
                 status_summary: Some("Draft".to_string()),
@@ -2980,6 +3004,7 @@ mod tests {
                     Ok(forge::ReviewRequestSummary {
                         display_id: "#42".to_string(),
                         forge_kind: forge::ForgeKind::GitHub,
+                        merge_commit_sha: None,
                         source_branch: "wt/session-id".to_string(),
                         state: ReviewRequestState::Open,
                         status_summary: Some("Draft".to_string()),
@@ -4269,6 +4294,32 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Verifies worker commands discovered after an external merge are
+    /// canceled before provider dispatch.
+    async fn test_should_skip_worker_command_for_merged_session() {
+        // Arrange
+        let (context, db, _queue_handle, _base_dir) =
+            queue_test_context(MockAgentChannel::new(), VecDeque::new(), Status::Merged).await;
+        db.operations()
+            .insert_session_operation("op-merged", "sess1", "reply")
+            .await
+            .expect("failed to insert merged-session operation");
+
+        // Act
+        let should_skip =
+            SessionWorkerService::should_skip_worker_command(&context, "op-merged").await;
+        let is_unfinished = db
+            .operations()
+            .is_session_operation_unfinished("op-merged")
+            .await
+            .expect("failed to check operation status");
+
+        // Assert
+        assert!(should_skip);
+        assert!(!is_unfinished);
+    }
+
+    #[tokio::test]
     /// Verifies cancel requests skip queued operations before execution and
     /// mark them canceled.
     async fn test_should_skip_worker_command_when_cancel_is_requested() {
@@ -4636,6 +4687,32 @@ mod tests {
         let queue = queue_handle.lock().expect("queue lock");
         assert_eq!(queue.len(), 1);
         assert_eq!(queue.front().expect("queued head").text, "queued reply");
+    }
+
+    #[tokio::test]
+    /// Verifies an externally merged session drops queued prompts before
+    /// worker dispatch so input queued before the forge poll cannot start.
+    async fn test_drain_queued_messages_clears_merged_session_queue() {
+        // Arrange
+        let mut mock_channel = MockAgentChannel::new();
+        mock_channel.expect_run_turn().never();
+        let queued = VecDeque::from([TurnPrompt::from_text("queued reply".to_string())]);
+        let (context, _db, queue_handle, _base_dir) =
+            queue_test_context(mock_channel, queued, Status::Merged).await;
+        let (_command_tx, mut command_rx) = mpsc::unbounded_channel();
+
+        // Act
+        let one_shot_client = auto_commit_one_shot_client();
+        let next_command = SessionWorkerService::drain_queued_messages(
+            &context,
+            &one_shot_client,
+            &mut command_rx,
+        )
+        .await;
+
+        // Assert
+        assert!(next_command.is_none());
+        assert!(queue_handle.lock().expect("queue lock").is_empty());
     }
 
     #[tokio::test]

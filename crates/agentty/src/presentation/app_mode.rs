@@ -21,6 +21,8 @@ pub enum ConfirmationIntent {
     ContinueSession,
     /// Confirms forking a root review-ready session into a new session.
     ForkSession,
+    /// Confirms manually completing a merged-waiting session.
+    ForceDoneMergedSession,
     /// Confirms queueing merge for the active view session.
     MergeSession,
     /// Confirms regenerating the focused review for the active view session.

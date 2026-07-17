@@ -896,6 +896,7 @@ mod tests {
             summary: ReviewRequestSummary {
                 display_id: "#42".to_string(),
                 forge_kind: ForgeKind::GitHub,
+                merge_commit_sha: None,
                 source_branch: "wt/session-id".to_string(),
                 state: ReviewRequestState::Open,
                 status_summary: None,

@@ -142,6 +142,11 @@ impl StatusTransition {
             "Invalid status transition to {status}"
         )))
     }
+
+    /// Returns the current shared status for race-aware workflow finalizers.
+    pub(crate) fn current_status(&self) -> Option<Status> {
+        self.status.lock().ok().map(|status| *status)
+    }
 }
 
 /// Generated session commit details for one successful auto-commit run.
@@ -1061,7 +1066,12 @@ impl SessionTaskService {
     fn status_requires_full_refresh(status: Status) -> bool {
         matches!(
             status,
-            Status::InProgress | Status::Review | Status::Merging | Status::Done | Status::Canceled
+            Status::InProgress
+                | Status::Review
+                | Status::Merging
+                | Status::Merged
+                | Status::Done
+                | Status::Canceled
         )
     }
 
@@ -1445,6 +1455,7 @@ mod tests {
             Status::InProgress,
             Status::Review,
             Status::Merging,
+            Status::Merged,
             Status::Done,
             Status::Canceled,
         ];
@@ -1577,6 +1588,7 @@ mod tests {
 
         // Act
         let status_updated = status_transition.apply(Status::InProgress).await;
+        let transition_status = status_transition.current_status();
         let live_status = handles
             .status
             .lock()
@@ -1593,6 +1605,7 @@ mod tests {
 
         // Assert
         assert!(status_updated);
+        assert_eq!(transition_status, Some(Status::InProgress));
         assert_eq!(live_status, Status::InProgress.to_string());
         assert_eq!(session_row.status, Status::InProgress.to_string());
     }

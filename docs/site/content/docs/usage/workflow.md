@@ -91,6 +91,7 @@ to the assist agent.
 | **Queued**      | Waiting in the merge queue.                                      |
 | **Rebasing**    | Session is syncing; follow-up messages queue behind the sync.    |
 | **Merging**     | Changes are being merged into the base branch.                   |
+| **Merged**      | Merged upstream; waiting for the local target branch to sync.    |
 | **Done**        | Completed and merged; the worktree was removed.                  |
 | **Canceled**    | Canceled by the user; the worktree was removed.                  |
 
@@ -130,6 +131,7 @@ flowchart TB
     rebasing["Rebasing"]
     queued["Queued"]
     merging["Merging"]
+    merged["Merged"]
     done["Done"]
     canceled["Canceled"]
   end
@@ -163,7 +165,12 @@ flowchart TB
   queued --> merging
   merging --> done
   review -->|cancel| canceled
-  review -->|sync detects merge| done
+  review -->|forge detects merge| merged
+  queued -->|forge detects merge| merged
+  merging -->|forge detects merge| merged
+  merged -->|target branch synced| done
+  merged -->|force Done| done
+  merged -->|cancel| canceled
 
   class agent_review,rebasing auxiliary
   class done,canceled terminal
@@ -339,14 +346,17 @@ read-only.
 
 Stacked drafts show `s` start only when the parent is in **Review** or **AgentReview**
 and no stack member is running, queued, syncing, merging, or waiting on a question.
-While a materialized child is linked, the parent keeps `Enter` replies, `m` merge
-queueing, and `r` sync but hides slash commands. Syncing the parent (or completing a
-parent turn) rebases review-ready children onto the refreshed parent branch
-automatically. When the parent merges, children are retargeted onto the parent's base
-branch and review-ready children are synced with `git rebase --onto` so they keep only
-their own commits. If an automatic child sync cannot start or complete, the affected
-child session shows a `[Sync Error]` notice with the failure. When the parent is
-canceled, its stacked child is canceled too.
+While a materialized child is linked, the parent keeps `Enter` replies and `r` sync but
+hides slash commands. It also keeps `m` local merge queueing only while no open review
+request is linked. Syncing the parent (or completing a parent turn) rebases review-ready
+children onto the refreshed parent branch automatically. When the parent merges
+upstream, it first waits in **Merged** until its persisted review-request target branch
+contains the forge-reported merge commit. Agentty then retargets children onto that
+target and syncs review-ready children with
+`git rebase --onto <target> <stored-parent-head>` so they keep only their own commits.
+If an automatic child sync cannot start or complete, the affected child session shows a
+`[Sync Error]` notice with the failure. When the parent is canceled, its stacked child
+is canceled too.
 
 ## Branch Publish Flow
 
@@ -370,6 +380,9 @@ publish popup for the linked forge review request:
   active.
 - When no review request is linked yet, only an open request for the same branch is
   reused; merged or closed requests are left alone.
+- Once an open review request is linked, GitHub or GitLab owns its merge. Agentty hides
+  and rejects local merge queueing for that session, including when a queued entry is
+  revalidated before it starts, so the local target cannot race the forge merge.
 - After the first publish, later completed turns push the same remote branch
   automatically in the background when no chat message or sync is already queued, and
   update the review request title and description from the latest session commit message
@@ -393,7 +406,8 @@ authenticated `glab` for GitLab. See
 
 <a id="usage-review-request-sync"></a> After a branch has been published, Agentty
 refreshes review-request status in the background for **Review** and **AgentReview**
-sessions. The session list shows forge indicators next to the status label:
+sessions, and keeps refreshing **Merged** sessions while they await usable merge-commit
+metadata. The session list shows forge indicators next to the status label:
 
 | Indicator | Meaning                                 |
 | --------- | --------------------------------------- |
@@ -402,8 +416,20 @@ sessions. The session list shows forge indicators next to the status label:
 | `✓ <id>`  | Review request `<id>` was merged.       |
 | `✗ <id>`  | Review request `<id>` was closed.       |
 
-When a sync detects that the review request was merged, the session moves straight to
-**Done**; a closed request moves it to **Canceled**.
+Open linked review requests remain forge-owned and cannot enter Agentty's local merge
+queue. When a refresh detects a merged review request, Agentty removes the session from
+any legacy local merge-queue entry and marks it **Merged**. New replies, branch actions,
+queued prompts, and post-turn pushes are blocked, while the transcript, diff, and linked
+review comments remain inspectable. An already-running provider turn may finish, but no
+queued turn starts afterward.
+
+The project git-status pass fetches remotes and checks whether the forge-reported merge
+commit is reachable from the review request's persisted target branch. Only then does
+Agentty retarget stacked children, sync them with `git rebase --onto`, move the parent
+to **Done**, and remove its worktree. This check is re-armed after restart. If the forge
+does not report a usable commit or local history cannot prove ancestry, press `m` in the
+session view to force **Done**, or press `c` in the session list to cancel. A closed
+review request still moves directly to **Canceled**.
 
 ## Clarification Interaction Loop
 

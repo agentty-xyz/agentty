@@ -690,6 +690,7 @@ async fn open_session_review_comments_requires_link_and_applies_background_snaps
         summary: ReviewRequestSummary {
             display_id: "#42".to_string(),
             forge_kind: ForgeKind::GitHub,
+            merge_commit_sha: None,
             source_branch: "wt/session-review-comments".to_string(),
             state: ReviewRequestState::Open,
             status_summary: None,
@@ -1589,6 +1590,7 @@ async fn branch_publish_task_context_targets_stacked_parent_review_source_branch
         summary: ReviewRequestSummary {
             display_id: "#12".to_string(),
             forge_kind: ForgeKind::GitHub,
+            merge_commit_sha: None,
             source_branch: "review/parent-session".to_string(),
             state: ReviewRequestState::Open,
             status_summary: Some("Draft".to_string()),
@@ -1959,6 +1961,7 @@ async fn apply_branch_publish_action_update_persists_gitlab_merge_request_notice
         summary: crate::domain::session::ReviewRequestSummary {
             display_id: "!24".to_string(),
             forge_kind: ForgeKind::GitLab,
+            merge_commit_sha: None,
             source_branch: "wt/session-1".to_string(),
             state: ReviewRequestState::Open,
             status_summary: Some("Draft".to_string()),
@@ -2899,6 +2902,7 @@ async fn apply_app_events_git_status_updated_updates_project_and_session_state()
     // Act
     app.apply_app_events(AppEvent::GitStatusUpdated {
         generation: app.sync_handle.current_generation(),
+        merged_session_ids: Vec::new(),
         session_statuses: HashMap::from([(
             SessionId::from("session-1"),
             SessionGitStatus {
@@ -2939,6 +2943,7 @@ async fn apply_app_events_git_status_updated_ignores_stale_generation() {
     // Act
     app.apply_app_events(AppEvent::GitStatusUpdated {
         generation: stale_generation,
+        merged_session_ids: Vec::new(),
         session_statuses: HashMap::new(),
         status: Some((9, 9)),
     })
@@ -3178,6 +3183,7 @@ async fn apply_app_events_refresh_git_status_requests_orchestrator_refresh() {
     assert!(
         observed_events.contains(&AppEvent::GitStatusUpdated {
             generation: app.sync_handle.current_generation(),
+            merged_session_ids: Vec::new(),
             session_statuses: HashMap::new(),
             status: Some((2, 1)),
         }),
@@ -4514,6 +4520,12 @@ async fn wait_for_app_condition(app: &mut App, condition: impl Fn(&App) -> bool)
     .expect("timed out waiting for app condition");
 }
 
+/// Discards reducer notifications after tests have synchronized the same live
+/// handles directly.
+fn discard_pending_app_events(app: &mut App) {
+    while app.event_rx.try_recv().is_ok() {}
+}
+
 /// Replaces the app-level git dependencies with one caller-provided mock.
 fn install_mock_git_client(app: &mut App, mock_git_client: ag_git::MockGitClient) {
     let mock_git_client: Arc<dyn ag_git::GitClient> = Arc::new(mock_git_client);
@@ -4539,6 +4551,65 @@ fn install_mock_git_client(app: &mut App, mock_git_client: ag_git::MockGitClient
             git_client: Arc::clone(&mock_git_client),
             one_shot_client_override: None,
             repositories: db,
+            review_request_client,
+        },
+        available_agent_clis,
+    );
+}
+
+/// Installs a git boundary whose merged-session worktree cleanup fails after
+/// repository-root discovery degrades to the optional fallback.
+fn install_failing_cleanup_git_client(app: &mut App) {
+    let mut mock_git_client = ag_git::MockGitClient::new();
+    mock_git_client
+        .expect_main_repo_root()
+        .times(2)
+        .returning(|_| {
+            Box::pin(async {
+                Err(ag_git::GitError::OutputParse(
+                    "repository unavailable".to_string(),
+                ))
+            })
+        });
+    mock_git_client
+        .expect_remove_worktree()
+        .times(2)
+        .returning(|_| {
+            Box::pin(async {
+                Err(ag_git::GitError::OutputParse(
+                    "worktree cleanup unavailable".to_string(),
+                ))
+            })
+        });
+    install_mock_git_client(app, mock_git_client);
+}
+
+/// Replaces the app-level repository bundle while preserving external
+/// dependency boundaries used by reducer tests.
+fn install_repositories(app: &mut App, repositories: AppRepositories) {
+    let base_path = app.services.base_path().to_path_buf();
+    let event_sender = app.services.event_sender();
+    let available_agent_kinds = app.services.available_agent_kinds();
+    let available_agent_clis =
+        crate::domain::agent::AgentCliInfo::from_kinds(&available_agent_kinds);
+    let app_server_client_override = app.services.app_server_client_override();
+    let fs_client = app.services.fs_client();
+    let git_client = app.services.git_client();
+    let one_shot_client = app.services.one_shot_client();
+    let review_request_client = app.services.review_request_client();
+
+    app.services = AppServices::new_with_agent_clis(
+        base_path,
+        app.services.clock(),
+        event_sender,
+        AppServiceDeps {
+            app_server_client_override,
+            available_agent_kinds,
+            clipboard_image_client_override: None,
+            fs_client,
+            git_client,
+            one_shot_client_override: Some(one_shot_client),
+            repositories,
             review_request_client,
         },
         available_agent_clis,
@@ -5257,6 +5328,7 @@ fn test_review_request_summary(
     ReviewRequestSummary {
         display_id: display_id.to_string(),
         forge_kind: ForgeKind::GitHub,
+        merge_commit_sha: (state == ReviewRequestState::Merged).then(|| "merge123".to_string()),
         source_branch: "wt/session-id".to_string(),
         state,
         status_summary: None,
@@ -5264,6 +5336,89 @@ fn test_review_request_summary(
         title: "feat".to_string(),
         web_url: String::new(),
     }
+}
+
+/// Builds one successful externally merged review-request update.
+fn merged_review_request_update(
+    session_id: &str,
+    session_head_hash: Option<&str>,
+    with_summary: bool,
+) -> ReviewRequestStatusUpdate {
+    ReviewRequestStatusUpdate {
+        generation: 0,
+        result: Ok(SyncReviewRequestTaskResult {
+            outcome: session::SyncReviewRequestOutcome::Merged {
+                display_id: "#9".to_string(),
+                session_head_hash: session_head_hash.map(str::to_string),
+            },
+            summary: with_summary
+                .then(|| test_review_request_summary("#9", ReviewRequestState::Merged)),
+        }),
+        session_id: session_id.into(),
+    }
+}
+
+async fn test_app_with_review_session(session_id: &str) -> App {
+    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+        Arc::new(MockTmuxClient::new()),
+    )
+    .await;
+    let project_id = app.active_project_id();
+    app.services
+        .db()
+        .sessions()
+        .insert_session(
+            session_id,
+            "gemini-3-flash-preview",
+            "main",
+            &Status::Review.to_string(),
+            project_id,
+        )
+        .await
+        .expect("failed to insert session");
+    let session_folder_name = session_id.chars().take(8).collect::<String>();
+    let session_data_dir = app
+        .services
+        .base_path()
+        .join(session_folder_name)
+        .join(SESSION_DATA_DIR);
+    fs::create_dir_all(session_data_dir).expect("failed to create session data dir");
+    app.refresh_sessions_now().await;
+
+    app
+}
+
+#[tokio::test]
+async fn test_merge_queue_revalidates_and_restores_open_review_request() {
+    // Arrange
+    let session_id = "queued-open-review";
+    let mut app = test_app_with_review_session(session_id).await;
+    crate::test_support::set_session_status_for_test(&mut app, session_id, Status::Queued);
+    app.sessions.apply_review_request(
+        session_id,
+        crate::test_support::open_review_request_fixture(),
+    );
+    app.merge_queue.enqueue(session_id.into());
+
+    // Act
+    let result = app.start_next_merge_from_queue(true).await;
+    app.sessions.sync_from_handles();
+
+    // Assert
+    assert!(matches!(
+        result,
+        Err(AppError::Session(crate::app::SessionError::Workflow(message)))
+            if message == session::OPEN_REVIEW_REQUEST_LOCAL_MERGE_ERROR
+    ));
+    assert_eq!(
+        app.sessions
+            .session_or_err(session_id)
+            .expect("expected restored session")
+            .status,
+        Status::Review
+    );
+    assert!(!app.merge_queue.has_active());
+    assert!(app.merge_queue.pop_next().is_none());
 }
 
 #[tokio::test]
@@ -5482,34 +5637,11 @@ async fn test_apply_review_request_status_update_closed_cancels_stacked_child() 
 }
 
 #[tokio::test]
-async fn test_apply_review_request_status_update_merged_schedules_cleanup_once() {
+async fn test_merged_review_request_waits_for_promotion_and_schedules_cleanup_once() {
     // Arrange
-    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
-        Arc::new(MockTmuxClient::new()),
-    )
-    .await;
-    let project_id = app.active_project_id();
     let session_id = "session-merged";
-    app.services
-        .db()
-        .sessions()
-        .insert_session(
-            session_id,
-            "gemini-3-flash-preview",
-            "main",
-            &Status::Review.to_string(),
-            project_id,
-        )
-        .await
-        .expect("failed to insert session");
-    let session_folder_name = session_id.chars().take(8).collect::<String>();
-    let session_data_dir = app
-        .services
-        .base_path()
-        .join(session_folder_name)
-        .join(SESSION_DATA_DIR);
-    fs::create_dir_all(session_data_dir).expect("failed to create session data dir");
-    app.refresh_sessions_now().await;
+    let mut app = test_app_with_review_session(session_id).await;
+    app.merge_queue.set_active(session_id.into());
     let (cleanup_started_tx, mut cleanup_started_rx) = tokio::sync::mpsc::unbounded_channel();
     let cleanup_release = Arc::new(tokio::sync::Notify::new());
     let mut mock_git_client = ag_git::MockGitClient::new();
@@ -5538,42 +5670,66 @@ async fn test_apply_review_request_status_update_merged_schedules_cleanup_once()
         .returning(|_, _| Box::pin(async { Ok(()) }));
     install_mock_git_client(&mut app, mock_git_client);
 
-    let merged_update = || ReviewRequestStatusUpdate {
-        generation: 0,
-        result: Ok(SyncReviewRequestTaskResult {
-            outcome: session::SyncReviewRequestOutcome::Merged {
-                display_id: "#9".to_string(),
-                session_head_hash: Some("abc1234".to_string()),
-            },
-            summary: Some(test_review_request_summary(
-                "#9",
-                ReviewRequestState::Merged,
-            )),
-        }),
-        session_id: session_id.into(),
-    };
-
     // Act
-    tokio::time::timeout(
-        Duration::from_millis(250),
-        app.apply_review_request_status_update(merged_update()),
-    )
+    tokio::time::timeout(Duration::from_millis(250), async {
+        app.apply_review_request_status_update(merged_review_request_update(
+            session_id,
+            Some("abc1234"),
+            true,
+        ))
+        .await;
+        app.apply_review_request_status_update(merged_review_request_update(
+            session_id,
+            Some("abc1234"),
+            true,
+        ))
+        .await;
+    })
     .await
     .expect("foreground status update should not wait for worktree cleanup");
     app.process_pending_app_events().await;
-    tokio::time::timeout(Duration::from_secs(1), cleanup_started_rx.recv())
-        .await
-        .expect("cleanup task should start")
-        .expect("cleanup task should report startup");
-    app.apply_review_request_status_update(merged_update())
-        .await;
 
     // Assert
-    let session = app
+    let marked_session = app
         .sessions
         .session_or_err(session_id)
         .expect("expected session to remain loaded");
-    assert_eq!(session.status, Status::Done);
+    assert_eq!(marked_session.status, Status::Merged);
+    assert!(!app.merge_queue.has_active());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), cleanup_started_rx.recv())
+            .await
+            .is_err(),
+        "merged-waiting status should defer cleanup"
+    );
+
+    // Act
+    app.apply_app_events(AppEvent::GitStatusUpdated {
+        generation: app.sync_handle.current_generation(),
+        merged_session_ids: vec![session_id.into()],
+        session_statuses: HashMap::new(),
+        status: None,
+    })
+    .await;
+    app.process_pending_app_events().await;
+    tokio::time::timeout(Duration::from_secs(1), cleanup_started_rx.recv())
+        .await
+        .expect("cleanup task should start after promotion")
+        .expect("cleanup task should report startup");
+    app.apply_app_events(AppEvent::GitStatusUpdated {
+        generation: app.sync_handle.current_generation(),
+        merged_session_ids: vec![session_id.into()],
+        session_statuses: HashMap::new(),
+        status: None,
+    })
+    .await;
+
+    // Assert
+    let promoted_session = app
+        .sessions
+        .session_or_err(session_id)
+        .expect("expected promoted session to remain loaded");
+    assert_eq!(promoted_session.status, Status::Done);
     let merged_commit_hash = app
         .services
         .db()
@@ -5596,27 +5752,12 @@ async fn test_apply_review_request_status_update_merged_schedules_cleanup_once()
 }
 
 #[tokio::test]
-async fn test_apply_review_request_status_update_merged_restacks_stacked_child() {
+async fn test_merged_review_request_restacks_child_only_after_promotion() {
     // Arrange
-    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
-        Arc::new(MockTmuxClient::new()),
-    )
-    .await;
-    let project_id = app.active_project_id();
     let session_id = "session-merged";
+    let mut app = test_app_with_review_session(session_id).await;
+    let project_id = app.active_project_id();
     let child_session_id = "session-child";
-    app.services
-        .db()
-        .sessions()
-        .insert_session(
-            session_id,
-            "gemini-3-flash-preview",
-            "main",
-            &Status::Review.to_string(),
-            project_id,
-        )
-        .await
-        .expect("failed to insert parent session");
     app.services
         .db()
         .sessions()
@@ -5636,13 +5777,6 @@ async fn test_apply_review_request_status_update_merged_restacks_stacked_child()
         .update_session_prompt(child_session_id, "Ready to start")
         .await
         .expect("failed to stage child prompt");
-    let session_folder_name = session_id.chars().take(8).collect::<String>();
-    let session_data_dir = app
-        .services
-        .base_path()
-        .join(session_folder_name)
-        .join(SESSION_DATA_DIR);
-    fs::create_dir_all(session_data_dir).expect("failed to create session data dir");
     app.refresh_sessions_now().await;
 
     let task_result = SyncReviewRequestTaskResult {
@@ -5671,14 +5805,31 @@ async fn test_apply_review_request_status_update_merged_restacks_stacked_child()
         .await;
 
     // Assert
-    let child_session = app
+    let waiting_child_session = app
         .sessions
         .session_or_err(child_session_id)
         .expect("expected child session to remain loaded");
-    assert_eq!(child_session.parent_session_id, None);
-    assert_eq!(child_session.base_branch, "main");
-    assert!(child_session.can_start_staged_session());
+    assert_eq!(
+        waiting_child_session.parent_session_id.as_deref(),
+        Some(session_id)
+    );
 
+    // Act
+    app.promote_externally_merged_session(session_id).await;
+    app.process_pending_app_events().await;
+    app.refresh_sessions_now().await;
+    app.sessions
+        .load_session_detail_into_state(app.services.db(), child_session_id)
+        .await;
+
+    // Assert
+    let promoted_child_session = app
+        .sessions
+        .session_or_err(child_session_id)
+        .expect("expected child session after promotion");
+    assert_eq!(promoted_child_session.parent_session_id, None);
+    assert_eq!(promoted_child_session.base_branch, "main");
+    assert!(promoted_child_session.can_start_staged_session());
     let db_sessions = app
         .services
         .db()
@@ -5692,4 +5843,227 @@ async fn test_apply_review_request_status_update_merged_restacks_stacked_child()
         .expect("missing persisted child session");
     assert_eq!(db_child_session.parent_session_id, None);
     assert_eq!(db_child_session.base_branch, "main");
+}
+
+#[tokio::test]
+async fn test_merged_mark_and_force_completion_surface_repository_warnings() {
+    // Arrange
+    let session_id = "session-merged";
+    let mut app = test_app_with_review_session(session_id).await;
+    let (repositories, pool) = AppRepositories::in_memory_with_pool().await;
+    pool.close().await;
+    install_repositories(&mut app, repositories);
+    install_failing_cleanup_git_client(&mut app);
+    let update = merged_review_request_update(session_id, Some("abc1234"), false);
+
+    // Act
+    app.apply_review_request_status_update(update).await;
+    app.sessions.sync_from_handles();
+    let output = app
+        .sessions
+        .session_or_err(session_id)
+        .expect("expected merged session")
+        .transcript
+        .as_ref()
+        .and_then(SessionTranscript::replay_text)
+        .unwrap_or_default();
+
+    // Assert
+    assert_eq!(
+        app.sessions
+            .session_or_err(session_id)
+            .expect("expected merged session")
+            .status,
+        Status::Merged
+    );
+    assert!(output.contains("Forge did not report the merged commit"));
+    assert!(output.contains("Merged session head persistence failed"));
+    assert!(output.contains("Queued operation cancellation failed"));
+    assert!(output.contains("review-request target branch"));
+    discard_pending_app_events(&mut app);
+
+    // Act
+    app.apply_app_events(AppEvent::GitStatusUpdated {
+        generation: app.sync_handle.current_generation() + 1,
+        merged_session_ids: vec![session_id.into()],
+        session_statuses: HashMap::new(),
+        status: None,
+    })
+    .await;
+    let waiting_status = app
+        .sessions
+        .session_handles_or_err(session_id)
+        .expect("expected session handles")
+        .status
+        .lock()
+        .expect("status lock should not be poisoned")
+        .to_owned();
+
+    // Assert
+    assert_eq!(waiting_status, Status::Merged);
+
+    // Act
+    let result = app.force_complete_merged_session(session_id).await;
+    app.wait_for_background_cleanup_tasks().await;
+    discard_pending_app_events(&mut app);
+    app.sessions.sync_from_handles();
+    let session = app
+        .sessions
+        .session_or_err(session_id)
+        .expect("expected forced session");
+    let output = session
+        .transcript
+        .as_ref()
+        .and_then(SessionTranscript::replay_text)
+        .unwrap_or_default();
+
+    // Assert
+    assert_eq!(result, Ok(()));
+    assert_eq!(session.status, Status::Done);
+    assert!(output.contains("no persisted review-request target branch"));
+    assert!(output.contains("Merged session head load failed"));
+    assert!(output.contains("Stacked child restack failed"));
+    assert!(output.contains("Worktree cleanup failed"));
+
+    // Act
+    crate::test_support::set_session_status_for_test(&mut app, session_id, Status::Merged);
+    app.apply_app_events(AppEvent::GitStatusUpdated {
+        generation: app.sync_handle.current_generation(),
+        merged_session_ids: vec![session_id.into()],
+        session_statuses: HashMap::new(),
+        status: None,
+    })
+    .await;
+    app.wait_for_background_cleanup_tasks().await;
+
+    // Assert
+    let final_status = app
+        .sessions
+        .session_handles_or_err(session_id)
+        .expect("expected session handles")
+        .status
+        .lock()
+        .expect("status lock should not be poisoned")
+        .to_owned();
+    assert_eq!(final_status, Status::Done);
+}
+
+#[tokio::test]
+async fn test_force_complete_merged_session_rejects_missing_and_untransitionable_sessions() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+        Arc::new(MockTmuxClient::new()),
+    )
+    .await;
+    let merged_session = crate::test_support::SessionFixtureBuilder::new()
+        .id("poisoned-session")
+        .status(Status::Merged)
+        .build();
+    app.sessions.push_session(merged_session);
+    app.sessions.push_session(
+        crate::test_support::SessionFixtureBuilder::new()
+            .id("orphan-session")
+            .status(Status::Merged)
+            .build(),
+    );
+    app.sessions.session_handles_mut().insert(
+        "poisoned-session".into(),
+        SessionHandles::new(Status::Merged),
+    );
+    let status = Arc::clone(
+        &app.sessions
+            .session_handles_or_err("poisoned-session")
+            .expect("expected session handles")
+            .status,
+    );
+    let poison_result = std::panic::catch_unwind(move || {
+        let _status = status.lock().expect("status lock should initially succeed");
+        std::panic::resume_unwind(Box::new("poison status lock"));
+    });
+    assert!(poison_result.is_err());
+
+    // Act
+    app.apply_review_request_status_update(merged_review_request_update(
+        "missing-session",
+        None,
+        false,
+    ))
+    .await;
+    app.apply_review_request_status_update(merged_review_request_update(
+        "poisoned-session",
+        None,
+        false,
+    ))
+    .await;
+    let missing_result = app.force_complete_merged_session("missing-session").await;
+    let poisoned_result = app.force_complete_merged_session("poisoned-session").await;
+    let orphan_result = app.force_complete_merged_session("orphan-session").await;
+    let missing_promotion = app
+        .promote_externally_merged_session("missing-session")
+        .await;
+    let orphan_promotion = app
+        .promote_externally_merged_session("orphan-session")
+        .await;
+
+    // Assert
+    assert!(missing_result.is_err());
+    assert!(app.sessions.session_or_err("missing-session").is_err());
+    assert_eq!(
+        poisoned_result,
+        Err("Merged session could not be forced to Done".to_string())
+    );
+    assert_eq!(
+        orphan_result,
+        Err("Merged session could not be forced to Done".to_string())
+    );
+    assert_eq!(missing_promotion, None);
+    assert_eq!(orphan_promotion, None);
+}
+
+#[test]
+fn merged_session_promotion_targets_require_status_review_link_and_merge_commit() {
+    // Arrange
+    let mut ready_session = crate::test_support::SessionFixtureBuilder::new()
+        .id("ready-session")
+        .status(Status::Merged)
+        .build();
+    ready_session.review_request = Some(ReviewRequest {
+        last_refreshed_at: 1,
+        summary: test_review_request_summary("#11", ReviewRequestState::Merged),
+    });
+    let mut missing_commit_session = crate::test_support::SessionFixtureBuilder::new()
+        .id("missing-commit")
+        .status(Status::Merged)
+        .build();
+    missing_commit_session.review_request = Some(ReviewRequest {
+        last_refreshed_at: 1,
+        summary: test_review_request_summary("#12", ReviewRequestState::Open),
+    });
+    let mut open_session = crate::test_support::SessionFixtureBuilder::new()
+        .id("open-session")
+        .status(Status::Review)
+        .build();
+    open_session.review_request = Some(ReviewRequest {
+        last_refreshed_at: 1,
+        summary: test_review_request_summary("#13", ReviewRequestState::Merged),
+    });
+    let unlinked_session = crate::test_support::SessionFixtureBuilder::new()
+        .id("unlinked-session")
+        .status(Status::Merged)
+        .build();
+    let sessions = crate::test_support::session_manager_with_sessions(vec![
+        ready_session,
+        missing_commit_session,
+        open_session,
+        unlinked_session,
+    ]);
+
+    // Act
+    let targets = App::merged_session_promotion_targets(&sessions);
+
+    // Assert
+    assert_eq!(targets.len(), 1);
+    assert_eq!(targets[0].session_id, SessionId::from("ready-session"));
+    assert_eq!(targets[0].merge_commit_sha, "merge123");
+    assert_eq!(targets[0].target_branch, "main");
 }

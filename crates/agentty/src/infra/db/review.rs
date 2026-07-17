@@ -15,6 +15,8 @@ pub struct SessionReviewRequestRow {
     pub forge_kind: String,
     /// Most recent successful refresh timestamp in Unix seconds.
     pub last_refreshed_at: i64,
+    /// Forge-reported merge commit used to confirm target-branch ancestry.
+    pub merge_commit_sha: Option<String>,
     /// Review request source branch.
     pub source_branch: String,
     /// Persisted normalized lifecycle state.
@@ -69,6 +71,7 @@ impl ReviewRepository for SqliteReviewRepository {
 SELECT display_id,
        forge_kind,
        last_refreshed_at,
+       merge_commit_sha,
        source_branch,
        state,
        status_summary,
@@ -99,6 +102,7 @@ INSERT INTO session_review_request (
     display_id,
     forge_kind,
     last_refreshed_at,
+    merge_commit_sha,
     source_branch,
     state,
     status_summary,
@@ -106,11 +110,12 @@ INSERT INTO session_review_request (
     title,
     web_url
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(session_id) DO UPDATE
 SET display_id = excluded.display_id,
     forge_kind = excluded.forge_kind,
     last_refreshed_at = excluded.last_refreshed_at,
+    merge_commit_sha = excluded.merge_commit_sha,
     source_branch = excluded.source_branch,
     state = excluded.state,
     status_summary = excluded.status_summary,
@@ -123,6 +128,7 @@ SET display_id = excluded.display_id,
             .bind(review_request.summary.display_id.as_str())
             .bind(review_request.summary.forge_kind.as_str())
             .bind(review_request.last_refreshed_at)
+            .bind(review_request.summary.merge_commit_sha.as_deref())
             .bind(review_request.summary.source_branch.as_str())
             .bind(review_request.summary.state.as_str())
             .bind(review_request.summary.status_summary.as_deref())
