@@ -6,6 +6,9 @@ use super::model::{
     AgentResponse, AgentResponseParseError, AgentResponseSummary, ProtocolRequestProfile,
 };
 
+/// Top-level keys the protocol recognizes in a structured response payload.
+const PROTOCOL_KEYS: &[&str] = &["answer", "questions", "summary"];
+
 /// Normalizes one parsed turn response according to the request profile.
 ///
 /// Interactive session turns expect a summary block on every response so the
@@ -20,8 +23,8 @@ pub fn normalize_turn_response(
     if matches!(protocol_profile, ProtocolRequestProfile::SessionTurn) && response.summary.is_none()
     {
         response.summary = Some(AgentResponseSummary {
-            turn: String::new(),
             session: String::new(),
+            turn: String::new(),
         });
     }
 
@@ -142,15 +145,6 @@ pub fn format_protocol_parse_debug_details(raw: &str) -> String {
     detail_lines.join("\n")
 }
 
-/// Attempts to parse one schema-driven structured JSON response.
-///
-/// The raw text must parse as a JSON object containing at least one
-/// recognized protocol key (`answer`, `questions`, or `summary`). Returns
-/// `None` when parsing fails or no recognized keys are present.
-fn parse_structured_json_response(raw: &str) -> Option<AgentResponse> {
-    parse_structured_json_response_with_reason(raw).ok()
-}
-
 /// Parses one schema-driven JSON response and returns the structured error
 /// detail when the payload cannot be parsed or validated.
 fn parse_structured_json_response_with_reason(
@@ -176,36 +170,12 @@ fn parse_structured_json_response_with_reason(
     })
 }
 
-/// Top-level keys the protocol recognizes in a structured response payload.
-const PROTOCOL_KEYS: &[&str] = &["answer", "questions", "summary"];
-
 /// Returns whether a parsed JSON value is an object containing at least one
 /// recognized protocol key.
 fn value_has_recognized_protocol_key(value: &Value) -> bool {
     value
         .as_object()
         .is_some_and(|object| PROTOCOL_KEYS.iter().any(|key| object.contains_key(*key)))
-}
-
-/// Parses one full protocol payload and then falls back to recovering a
-/// trailing schema object from wrapped provider output.
-fn parse_structured_json_response_with_recovery(raw: &str) -> Option<AgentResponse> {
-    parse_structured_json_response(raw).or_else(|| recover_embedded_structured_json_response(raw))
-}
-
-/// Recovers one trailing protocol payload from provider output that starts
-/// with extra prose before the final JSON object.
-///
-/// This intentionally keeps trailing text strict: once a candidate JSON object
-/// parses successfully, only whitespace may remain after it. The candidate
-/// must also contain at least one recognized protocol key.
-fn recover_embedded_structured_json_response(raw: &str) -> Option<AgentResponse> {
-    let value = find_last_embedded_json_value(raw)?;
-    if !value_has_recognized_protocol_key(&value) {
-        return None;
-    }
-
-    serde_json::from_value(value).ok()
 }
 
 /// Strips a leading markdown code fence and trailing closing fence from a
@@ -222,6 +192,36 @@ fn strip_markdown_code_fence(trimmed: &str) -> Option<&str> {
     }
 
     Some(inner)
+}
+
+/// Parses one full protocol payload and then falls back to recovering a
+/// trailing schema object from wrapped provider output.
+fn parse_structured_json_response_with_recovery(raw: &str) -> Option<AgentResponse> {
+    parse_structured_json_response(raw).or_else(|| recover_embedded_structured_json_response(raw))
+}
+
+/// Attempts to parse one schema-driven structured JSON response.
+///
+/// The raw text must parse as a JSON object containing at least one
+/// recognized protocol key (`answer`, `questions`, or `summary`). Returns
+/// `None` when parsing fails or no recognized keys are present.
+fn parse_structured_json_response(raw: &str) -> Option<AgentResponse> {
+    parse_structured_json_response_with_reason(raw).ok()
+}
+
+/// Recovers one trailing protocol payload from provider output that starts
+/// with extra prose before the final JSON object.
+///
+/// This intentionally keeps trailing text strict: once a candidate JSON object
+/// parses successfully, only whitespace may remain after it. The candidate
+/// must also contain at least one recognized protocol key.
+fn recover_embedded_structured_json_response(raw: &str) -> Option<AgentResponse> {
+    let value = find_last_embedded_json_value(raw)?;
+    if !value_has_recognized_protocol_key(&value) {
+        return None;
+    }
+
+    serde_json::from_value(value).ok()
 }
 
 /// Extracts the inner content from the last markdown code fence embedded in a
@@ -340,6 +340,15 @@ fn describe_json_type(value: &Value) -> &'static str {
     }
 }
 
+/// Formats one debug list as a comma-separated string or `(none)`.
+fn format_debug_list(items: &[String]) -> String {
+    if items.is_empty() {
+        return "(none)".to_string();
+    }
+
+    items.join(", ")
+}
+
 /// Returns one stable label for the serde JSON error category.
 fn describe_json_error_category(error: &serde_json::Error) -> &'static str {
     match error.classify() {
@@ -350,34 +359,40 @@ fn describe_json_error_category(error: &serde_json::Error) -> &'static str {
     }
 }
 
-/// Formats one debug list as a comma-separated string or `(none)`.
-fn format_debug_list(items: &[String]) -> String {
-    if items.is_empty() {
-        return "(none)".to_string();
-    }
-
-    items.join(", ")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    /// The debug report describes the payload without reproducing any of it,
-    /// so a turn error cannot print raw provider output into the transcript.
-    fn test_format_protocol_parse_debug_details_never_quotes_payload() {
+    /// Fills in empty summaries for session turns.
+    fn test_normalize_turn_response_fills_missing_summary_for_session_turn() {
         // Arrange
-        let raw = format!("{} SECRETTAIL", "payload-filler ".repeat(40));
+        let response = AgentResponse::plain("done");
 
         // Act
-        let details = format_protocol_parse_debug_details(&raw);
+        let normalized = normalize_turn_response(response, ProtocolRequestProfile::SessionTurn);
 
         // Assert
-        assert!(!details.contains("payload-filler"));
-        assert!(!details.contains("SECRETTAIL"));
-        assert!(details.contains(&format!("response_len: {} chars", raw.chars().count())));
-        assert!(details.contains("direct_json_error"));
+        assert_eq!(
+            normalized.summary,
+            Some(AgentResponseSummary {
+                session: String::new(),
+                turn: String::new(),
+            })
+        );
+    }
+
+    #[test]
+    /// Leaves one-shot prompt summaries unset.
+    fn test_normalize_turn_response_keeps_missing_summary_for_utility_prompt() {
+        // Arrange
+        let response = AgentResponse::plain("done");
+
+        // Act
+        let normalized = normalize_turn_response(response, ProtocolRequestProfile::UtilityPrompt);
+
+        // Assert
+        assert_eq!(normalized.summary, None);
     }
 
     #[test]
@@ -450,73 +465,6 @@ mod tests {
     }
 
     #[test]
-    /// Debug formatting reports JSON parser location details for plain-text
-    /// responses that never produced protocol JSON.
-    fn test_format_protocol_parse_debug_details_reports_plain_text_json_error() {
-        // Arrange
-        let raw = "plain text";
-
-        // Act
-        let details = format_protocol_parse_debug_details(raw);
-
-        // Assert
-        assert!(details.contains("response_len: 10 chars"));
-        assert!(details.contains("first_non_whitespace_char: 'p'"));
-        assert!(details.contains("direct_json_error_category: syntax"));
-        assert!(details.contains("direct_json_error_location: line 1, column 1"));
-        assert!(details.contains("embedded_json_candidate: none"));
-    }
-
-    #[test]
-    /// Debug formatting reports visible top-level keys when the response is
-    /// valid JSON but does not include any protocol fields.
-    fn test_format_protocol_parse_debug_details_reports_unrecognized_json_keys() {
-        // Arrange
-        let raw = r#"{"message":"not the expected shape"}"#;
-
-        // Act
-        let details = format_protocol_parse_debug_details(raw);
-
-        // Assert
-        assert!(details.contains("direct_json_type: object"));
-        assert!(details.contains("direct_json_keys: message"));
-        assert!(details.contains("direct_json_recognized_protocol_keys: (none)"));
-        assert!(details.contains("direct_json_missing_protocol_keys: answer, questions, summary"));
-    }
-
-    #[test]
-    /// Fills in empty summaries for session turns.
-    fn test_normalize_turn_response_fills_missing_summary_for_session_turn() {
-        // Arrange
-        let response = AgentResponse::plain("done");
-
-        // Act
-        let normalized = normalize_turn_response(response, ProtocolRequestProfile::SessionTurn);
-
-        // Assert
-        assert_eq!(
-            normalized.summary,
-            Some(AgentResponseSummary {
-                session: String::new(),
-                turn: String::new(),
-            })
-        );
-    }
-
-    #[test]
-    /// Leaves one-shot prompt summaries unset.
-    fn test_normalize_turn_response_keeps_missing_summary_for_utility_prompt() {
-        // Arrange
-        let response = AgentResponse::plain("done");
-
-        // Act
-        let normalized = normalize_turn_response(response, ProtocolRequestProfile::UtilityPrompt);
-
-        // Assert
-        assert_eq!(normalized.summary, None);
-    }
-
-    #[test]
     /// Strict parsing rejects JSON objects with only unrecognized fields
     /// because at least one protocol key must be present.
     fn test_parse_agent_response_strict_rejects_unrecognized_only_fields() {
@@ -536,6 +484,20 @@ mod tests {
     fn test_parse_agent_response_strict_rejects_empty_json_object() {
         // Arrange
         let raw = "{}";
+
+        // Act
+        let response = parse_agent_response_strict(raw);
+
+        // Assert
+        assert!(response.is_err());
+    }
+
+    #[test]
+    /// Strict parsing rejects an empty code fence instead of treating it as a
+    /// structured response.
+    fn test_parse_agent_response_strict_rejects_empty_code_fence() {
+        // Arrange
+        let raw = "```json\n\n```";
 
         // Act
         let response = parse_agent_response_strict(raw);
@@ -753,5 +715,57 @@ mod tests {
             response.expect("response should parse").answer,
             "Refined commit message"
         );
+    }
+
+    #[test]
+    /// The debug report describes the payload without reproducing any of it,
+    /// so a turn error cannot print raw provider output into the transcript.
+    fn test_format_protocol_parse_debug_details_never_quotes_payload() {
+        // Arrange
+        let raw = format!("{} SECRETTAIL", "payload-filler ".repeat(40));
+
+        // Act
+        let details = format_protocol_parse_debug_details(&raw);
+
+        // Assert
+        assert!(!details.contains("payload-filler"));
+        assert!(!details.contains("SECRETTAIL"));
+        assert!(details.contains(&format!("response_len: {} chars", raw.chars().count())));
+        assert!(details.contains("direct_json_error"));
+    }
+
+    #[test]
+    /// Debug formatting reports JSON parser location details for plain-text
+    /// responses that never produced protocol JSON.
+    fn test_format_protocol_parse_debug_details_reports_plain_text_json_error() {
+        // Arrange
+        let raw = "plain text";
+
+        // Act
+        let details = format_protocol_parse_debug_details(raw);
+
+        // Assert
+        assert!(details.contains("response_len: 10 chars"));
+        assert!(details.contains("first_non_whitespace_char: 'p'"));
+        assert!(details.contains("direct_json_error_category: syntax"));
+        assert!(details.contains("direct_json_error_location: line 1, column 1"));
+        assert!(details.contains("embedded_json_candidate: none"));
+    }
+
+    #[test]
+    /// Debug formatting reports visible top-level keys when the response is
+    /// valid JSON but does not include any protocol fields.
+    fn test_format_protocol_parse_debug_details_reports_unrecognized_json_keys() {
+        // Arrange
+        let raw = r#"{"message":"not the expected shape"}"#;
+
+        // Act
+        let details = format_protocol_parse_debug_details(raw);
+
+        // Assert
+        assert!(details.contains("direct_json_type: object"));
+        assert!(details.contains("direct_json_keys: message"));
+        assert!(details.contains("direct_json_recognized_protocol_keys: (none)"));
+        assert!(details.contains("direct_json_missing_protocol_keys: answer, questions, summary"));
     }
 }

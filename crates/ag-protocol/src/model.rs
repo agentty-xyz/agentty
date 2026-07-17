@@ -5,7 +5,7 @@ use std::fmt;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::QuestionItem;
+use super::question::QuestionItem;
 
 /// Hard cap on the number of clarification questions extracted from one agent
 /// response. Prevents runaway output from flooding the question UI even when
@@ -119,29 +119,6 @@ pub struct AgentResponse {
     pub summary: Option<AgentResponseSummary>,
 }
 
-/// Structured response parsing failure details.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AgentResponseParseError {
-    /// Response was empty or whitespace-only.
-    Empty,
-    /// Response was JSON, but it did not satisfy the structured protocol
-    /// contract.
-    InvalidFormat { reason: String },
-}
-
-impl fmt::Display for AgentResponseParseError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Empty => write!(formatter, "response is empty"),
-            Self::InvalidFormat { reason } => {
-                write!(formatter, "response is not valid protocol JSON: {reason}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for AgentResponseParseError {}
-
 impl AgentResponse {
     /// Creates a plain response from raw text as one `answer` string.
     pub fn plain(text: impl Into<String>) -> Self {
@@ -188,12 +165,28 @@ impl AgentResponse {
     }
 }
 
-/// Appends non-empty clarification question text in order.
-fn push_question_display_messages(display_messages: &mut Vec<String>, questions: &[QuestionItem]) {
-    for question in questions {
-        push_display_message(display_messages, &question.text);
+/// Structured response parsing failure details.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentResponseParseError {
+    /// Response was empty or whitespace-only.
+    Empty,
+    /// Response was JSON, but it did not satisfy the structured protocol
+    /// contract.
+    InvalidFormat { reason: String },
+}
+
+impl fmt::Display for AgentResponseParseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => write!(formatter, "response is empty"),
+            Self::InvalidFormat { reason } => {
+                write!(formatter, "response is not valid protocol JSON: {reason}")
+            }
+        }
     }
 }
+
+impl std::error::Error for AgentResponseParseError {}
 
 /// Appends one non-empty display message.
 fn push_display_message(display_messages: &mut Vec<String>, text: &str) {
@@ -204,9 +197,30 @@ fn push_display_message(display_messages: &mut Vec<String>, text: &str) {
     display_messages.push(text.to_string());
 }
 
+/// Appends non-empty clarification question text in order.
+fn push_question_display_messages(display_messages: &mut Vec<String>, questions: &[QuestionItem]) {
+    for question in questions {
+        push_display_message(display_messages, &question.text);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    /// Ensures the dynamic `questions` field description renders from the
+    /// checked-in prompt-schema template.
+    fn test_questions_field_description_renders_template_limit() {
+        // Arrange, Act
+        let description = questions_field_description();
+        let normalized_description = description.split_whitespace().collect::<Vec<_>>().join(" ");
+
+        // Assert
+        assert!(normalized_description.contains("Emit at most 5 items"));
+        assert!(normalized_description.contains("Execute the agreed work"));
+        assert!(!description.contains("{{ max_questions }}"));
+    }
 
     #[test]
     /// Ensures display text includes the answer and clarification questions in
@@ -243,19 +257,5 @@ mod tests {
 
         // Assert
         assert_eq!(questions.len(), MAX_QUESTIONS);
-    }
-
-    #[test]
-    /// Ensures the dynamic `questions` field description renders from the
-    /// checked-in prompt-schema template.
-    fn test_questions_field_description_renders_template_limit() {
-        // Arrange, Act
-        let description = questions_field_description();
-        let normalized_description = description.split_whitespace().collect::<Vec<_>>().join(" ");
-
-        // Assert
-        assert!(normalized_description.contains("Emit at most 5 items"));
-        assert!(normalized_description.contains("Execute the agreed work"));
-        assert!(!description.contains("{{ max_questions }}"));
     }
 }
