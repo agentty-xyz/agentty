@@ -447,6 +447,9 @@ occurrence, so duplicate lookalike text cannot substitute for the pasted token. 
 through prompt history with `Up` and `Down` preserves the attachment membership of the
 captured draft.
 
+On macOS, use `Ctrl+Z` rather than `Cmd+Z` for input undo. Terminal applications such as
+Ghostty may consume `Cmd+Z` before Agentty or a surrounding `tmux` session receives it.
+
 `@` file lookups keep the raw `@path/to/file` text visible in the composer and
 transcript; the agent-facing prompt rewrites them to quoted `path/to/file` tokens.
 
