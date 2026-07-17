@@ -26,7 +26,7 @@ pub(crate) fn render_app(
                 session_id: review.session_id,
                 text: review.text,
             });
-    let _theme_scope = style::scoped_active_theme(snapshot.settings.theme);
+    let _theme_scope = style::scoped_active_theme(snapshot.theme);
 
     super::render(
         frame,
@@ -37,6 +37,7 @@ pub(crate) fn render_app(
             active_project_id: snapshot.active_project_id,
             available_agent_clis: &snapshot.available_agent_clis,
             current_tab: snapshot.current_tab,
+            default_reasoning_level: snapshot.default_reasoning_level,
             git_branch: snapshot.git_branch,
             diff_layout_cache: render_cache_store.diff_layout_cache(),
             git_upstream_ref: snapshot.git_upstream_ref,
@@ -60,7 +61,7 @@ pub(crate) fn render_app(
             session_progress_messages: snapshot.session_progress_messages,
             session_update_versions: snapshot.session_update_versions,
             session_worktree_availability: snapshot.session_worktree_availability,
-            settings: snapshot.settings,
+            settings_screen: snapshot.settings_screen.as_ref(),
             stats_activity: snapshot.stats_activity,
             sessions: snapshot.sessions,
             status_bar_fyi_rotation_index: snapshot.status_bar_fyi_rotation_index,

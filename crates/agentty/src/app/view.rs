@@ -4,13 +4,13 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::app::session_state::SessionGitStatus;
-use crate::app::{
-    App, AssignedIssueState, RequestedReviewState, SettingsManager, Tab, UpdateStatus,
-};
-use crate::domain::agent::AgentCliInfo;
+use crate::app::{App, AssignedIssueState, RequestedReviewState, Tab, UpdateStatus};
+use crate::domain::agent::{AgentCliInfo, ReasoningLevel};
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session, SessionId};
+use crate::domain::theme::ColorTheme;
 use crate::presentation::app_mode::{AppMode, HelpContext};
+use crate::presentation::settings::SettingsScreenSnapshot;
 
 /// Focused-review display state for the visible session.
 pub(crate) struct SessionReviewView<'a> {
@@ -26,6 +26,7 @@ pub(crate) struct AppViewSnapshot<'a> {
     pub(crate) assigned_issues: &'a AssignedIssueState,
     pub(crate) available_agent_clis: Vec<AgentCliInfo>,
     pub(crate) current_tab: Tab,
+    pub(crate) default_reasoning_level: ReasoningLevel,
     pub(crate) git_branch: Option<&'a str>,
     pub(crate) git_status: Option<(u32, u32)>,
     pub(crate) git_upstream_ref: Option<&'a str>,
@@ -45,9 +46,10 @@ pub(crate) struct AppViewSnapshot<'a> {
     pub(crate) session_update_versions: &'a HashMap<SessionId, u64>,
     pub(crate) session_worktree_availability: &'a HashMap<SessionId, bool>,
     pub(crate) sessions: &'a [Session],
-    pub(crate) settings: &'a SettingsManager,
+    pub(crate) settings_screen: Option<SettingsScreenSnapshot>,
     pub(crate) stats_activity: &'a [DailyActivity],
     pub(crate) status_bar_fyi_rotation_index: u64,
+    pub(crate) theme: ColorTheme,
     pub(crate) update_status: Option<&'a UpdateStatus>,
     pub(crate) wall_clock_unix_seconds: i64,
     pub(crate) working_dir: &'a Path,
@@ -67,6 +69,9 @@ impl App {
         });
         let project = self.projects.render_parts();
         let sessions = self.sessions.render_parts();
+        let current_tab = self.tabs.current();
+        let settings_screen = (current_tab == Tab::Settings)
+            .then(|| self.settings_presentation.snapshot(&self.settings.view()));
 
         AppViewSnapshot {
             active_project_id: project.active_project_id,
@@ -74,7 +79,8 @@ impl App {
             assigned_issue_selected_index: self.assigned_issue_selected_index(),
             assigned_issues: &self.assigned_issues,
             available_agent_clis: self.services.available_agent_clis(),
-            current_tab: self.tabs.current(),
+            current_tab,
+            default_reasoning_level: self.settings.reasoning_level,
             git_branch: project.git_branch,
             git_status: project.git_status,
             git_upstream_ref: project.git_upstream_ref,
@@ -94,9 +100,10 @@ impl App {
             session_update_versions: &self.last_seen_session_update_versions,
             session_worktree_availability: sessions.session_worktree_availability,
             sessions: sessions.sessions,
-            settings: &self.settings,
+            settings_screen,
             stats_activity: sessions.stats_activity,
             status_bar_fyi_rotation_index,
+            theme: self.settings.theme,
             update_status: self.update_status.as_ref(),
             wall_clock_unix_seconds,
             working_dir: project.working_dir,
@@ -157,5 +164,21 @@ mod tests {
 
         // Assert
         assert_eq!(session_id, Some("session-id"));
+    }
+
+    #[tokio::test]
+    async fn view_snapshot_builds_settings_screen_only_for_settings_tab() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+
+        // Act
+        app.tabs.set(Tab::Sessions);
+        let sessions_tab_has_settings_screen = app.view_snapshot().settings_screen.is_some();
+        app.tabs.set(Tab::Settings);
+        let settings_tab_has_settings_screen = app.view_snapshot().settings_screen.is_some();
+
+        // Assert
+        assert!(!sessions_tab_has_settings_screen);
+        assert!(settings_tab_has_settings_screen);
     }
 }

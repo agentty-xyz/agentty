@@ -51,11 +51,11 @@ For file-level detail, read the module docstrings directly.
 - `main.rs` / `lib.rs`: Composition root — database bootstrap, `App` construction,
   runtime launch, and public module exports.
 - `app/`: Orchestration layer. Owns the `App` state, the `AppEvent` reducer, project and
-  settings managers, the merge queue, the sync orchestrator, branch publish, focused
-  review, and the session module (`app/session/`) with its per-session worker queues and
-  workflow steps (`lifecycle`, `turn`, `post_turn`, `merge`, `task`, `worker`). No
-  direct process, filesystem, or clock calls — everything external goes through `infra/`
-  traits.
+  settings persistence manager, the merge queue, the sync orchestrator, branch publish,
+  focused review, and the session module (`app/session/`) with its per-session worker
+  queues and workflow steps (`lifecycle`, `turn`, `post_turn`, `merge`, `task`,
+  `worker`). No direct process, filesystem, or clock calls — everything external goes
+  through `infra/` traits.
 - `domain/`: Pure business entities and logic — sessions and statuses, projects,
   settings keys, themes, structured questions, typed transcript messages, explicit
   transient-message slots and lifecycles, prompt-composer logic, the shared `InputState`
@@ -78,9 +78,12 @@ For file-level detail, read the module docstrings directly.
   `PresentationState`, including the shared `RenderCacheStore` used by input metrics and
   frame rendering.
 - `presentation.rs` and `presentation/`: Frontend-neutral interaction state shared by
-  runtime input and UI output. They expose mode, help-action, prompt, editor, scroll,
-  viewport, and semantic list-selection contracts without importing Ratatui or `ui/`
-  formatting.
+  runtime input and UI output. They expose mode, help-action, prompt, settings-screen
+  actions, editor, scroll, viewport, and semantic list-selection contracts without
+  importing Ratatui or `ui/` formatting. `presentation/settings.rs` owns settings row
+  selection, selectors, launch-configuration editing through the shared `InputState`,
+  and render-ready settings snapshots; it returns typed persistence operations to
+  `app/setting.rs`.
 - `ui/`: Rendering — frame composition, mode-to-page routing, pages under `ui/page/`,
   reusable widgets under `ui/component/`, application-to-frame projection in
   `ui/app_render.rs`, Agentty theme adapters for `ag-tui-text`, plus diff, layout,

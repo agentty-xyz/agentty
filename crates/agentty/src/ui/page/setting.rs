@@ -5,8 +5,8 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap};
 
-use crate::app::setting::{SettingsManager, SettingsSelectorDropdown};
 use crate::presentation::help_action;
+use crate::presentation::settings::{SettingsScreenSnapshot, SettingsSelectorDropdown};
 use crate::ui::{Component, Page, component, layout, overlay, style};
 
 /// Uses row-background highlighting without a textual cursor glyph.
@@ -22,15 +22,15 @@ const DROPDOWN_WIDTH_PERCENT: u16 = 58;
 
 /// Renders the settings page table and inline editing hints.
 pub struct SettingsPage<'a> {
-    manager: &'a SettingsManager,
+    snapshot: &'a SettingsScreenSnapshot,
     project_name: Option<String>,
 }
 
 impl<'a> SettingsPage<'a> {
-    /// Creates a settings page renderer bound to the active project settings.
-    pub fn new(manager: &'a SettingsManager, project_name: Option<String>) -> Self {
+    /// Creates a settings page renderer bound to the active settings snapshot.
+    pub(crate) fn new(snapshot: &'a SettingsScreenSnapshot, project_name: Option<String>) -> Self {
         Self {
-            manager,
+            snapshot,
             project_name,
         }
     }
@@ -48,17 +48,17 @@ impl Page for SettingsPage<'_> {
         let areas = layout::tab_page_areas(area);
 
         let selected_style = Style::default().bg(style::palette::surface_selection());
-        let global_rows = settings_table_rows(self.manager.global_settings_rows());
-        let project_rows = settings_table_rows(self.manager.project_settings_rows());
+        let global_rows = settings_table_rows(&self.snapshot.global_rows);
+        let project_rows = settings_table_rows(&self.snapshot.project_rows);
         let global_row_count = global_rows.len();
 
         let project_section_title = self.project_section_title();
         let global_section_title = "Global settings".to_string();
 
         let global_table_state =
-            section_table_state(self.manager.table_state.selected(), 0, global_row_count);
+            section_table_state(self.snapshot.selected_row_index, 0, global_row_count);
         let project_table_state = section_table_state(
-            self.manager.table_state.selected(),
+            self.snapshot.selected_row_index,
             global_row_count,
             project_rows.len(),
         );
@@ -101,23 +101,23 @@ impl Page for SettingsPage<'_> {
         f.render_stateful_widget(global_table, table_chunks[0], &mut global_table_state);
         f.render_stateful_widget(project_table, table_chunks[1], &mut project_table_state);
 
-        let footer = Paragraph::new(settings_footer_line(self.manager));
+        let footer = Paragraph::new(settings_footer_line(self.snapshot));
 
         f.render_widget(footer, areas.footer_area);
 
-        if let Some(selector_dropdown) = self.manager.selector_dropdown() {
+        if let Some(selector_dropdown) = &self.snapshot.selector_dropdown {
             render_settings_selector_dropdown(
                 f,
                 areas.main_area,
                 &table_chunks,
                 global_row_count,
-                &selector_dropdown,
+                selector_dropdown,
             );
         }
 
-        if let Some(launch_configuration_editor) = self.manager.launch_configuration_list_editor() {
+        if let Some(launch_configuration_editor) = &self.snapshot.launch_configuration_list_editor {
             component::launch_configuration_list_editor::LaunchConfigurationListEditor::new(
-                &launch_configuration_editor,
+                launch_configuration_editor,
             )
             .render(f, areas.main_area);
         }
@@ -364,10 +364,10 @@ fn settings_selector_dropdown_option_line(
 /// Selector dropdowns and command-list editing keep using the
 /// manager-provided hint string, while list mode uses the shared styled
 /// help-action rendering.
-fn settings_footer_line(manager: &SettingsManager) -> Line<'static> {
+fn settings_footer_line(snapshot: &SettingsScreenSnapshot) -> Line<'static> {
     settings_footer_line_for_mode(
-        manager.is_launch_configuration_list_editor_open() || manager.is_selector_dropdown_open(),
-        manager.footer_hint(),
+        snapshot.launch_configuration_list_editor.is_some() || snapshot.selector_dropdown.is_some(),
+        snapshot.footer_hint,
     )
 }
 
@@ -383,12 +383,15 @@ fn settings_footer_line_for_mode(uses_inline_hint: bool, footer_hint: &str) -> L
 }
 
 /// Builds single-line settings table rows.
-fn settings_table_rows(settings_rows: Vec<(&'static str, String)>) -> Vec<Row<'static>> {
+fn settings_table_rows<'a>(settings_rows: &'a [(&'static str, String)]) -> Vec<Row<'a>> {
     settings_rows
-        .into_iter()
+        .iter()
         .map(|(setting_name, setting_value)| {
-            Row::new(vec![Cell::from(setting_name), Cell::from(setting_value)])
-                .style(Style::default().fg(style::palette::text()))
+            Row::new(vec![
+                Cell::from(*setting_name),
+                Cell::from(setting_value.as_str()),
+            ])
+            .style(Style::default().fg(style::palette::text()))
         })
         .collect()
 }
@@ -396,7 +399,7 @@ fn settings_table_rows(settings_rows: Vec<(&'static str, String)>) -> Vec<Row<'s
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::setting::SettingsSelectorDropdownOption;
+    use crate::presentation::settings::SettingsSelectorDropdownOption;
 
     #[test]
     fn test_row_highlight_symbol_uses_background_only_selection() {
@@ -425,7 +428,8 @@ mod tests {
     #[test]
     fn test_render_uses_palette_text_for_setting_rows() {
         // Arrange
-        let rows = settings_table_rows(vec![("Theme", "Agentty Default".to_string())]);
+        let settings_rows = [("Theme", "Agentty Default".to_string())];
+        let rows = settings_table_rows(&settings_rows);
         let table = Table::new(
             rows,
             [Constraint::Percentage(50), Constraint::Percentage(50)],

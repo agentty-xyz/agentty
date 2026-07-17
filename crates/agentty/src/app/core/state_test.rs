@@ -25,6 +25,7 @@ use crate::domain::setting::SettingName;
 use crate::infra::db::AppRepositories;
 use crate::infra::project_discovery::{HOME_PROJECT_SCAN_MAX_RESULTS, RealProjectDiscoveryClient};
 use crate::infra::tmux::{MockTmuxClient, TmuxClient};
+use crate::presentation::settings::SettingsAction;
 
 /// Builds one reducer-ready turn projection for tests.
 fn test_turn_applied_state(
@@ -366,6 +367,11 @@ async fn test_switch_project_reloads_project_scoped_settings() {
     )
     .await
     .expect("failed to build app");
+    let settings_view = app.settings.view();
+    let _ = app
+        .settings_presentation
+        .apply(&settings_view, SettingsAction::Activate);
+    assert!(app.settings_presentation.is_selector_dropdown_open());
 
     // Act
     app.switch_project(second_project_id)
@@ -378,6 +384,13 @@ async fn test_switch_project_reloads_project_scoped_settings() {
         AgentModel::Gpt55
     );
     assert_eq!(app.settings.launch_configuration, "cargo test");
+    assert!(!app.settings_presentation.is_selector_dropdown_open());
+    assert_eq!(
+        app.settings_presentation
+            .snapshot(&app.settings.view())
+            .selected_row_index,
+        Some(0)
+    );
 }
 
 #[tokio::test]

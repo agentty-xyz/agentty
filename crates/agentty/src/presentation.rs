@@ -6,3 +6,4 @@ pub mod app_mode;
 pub mod help_action;
 /// Prompt composer history, attachment, and suggestion state.
 pub mod prompt;
+pub(crate) mod settings;

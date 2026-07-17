@@ -11,6 +11,7 @@ use crate::presentation::help_action::{
     HelpAction, project_list_actions, session_list_actions, settings_actions,
 };
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState};
+use crate::presentation::settings::SettingsAction;
 use crate::runtime::EventResult;
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
 use crate::runtime::mode::input_key;
@@ -25,12 +26,15 @@ use crate::runtime::mode::input_key;
 /// `Shift+Tab` cycles backward.
 pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResult> {
     if app.tabs.current() == Tab::Settings
-        && app.settings.is_launch_configuration_list_editor_open()
+        && app
+            .settings_presentation
+            .is_launch_configuration_list_editor_open()
     {
         return handle_settings_launch_configuration_list_editor(app, key).await;
     }
 
-    if app.tabs.current() == Tab::Settings && app.settings.is_selector_dropdown_open() {
+    if app.tabs.current() == Tab::Settings && app.settings_presentation.is_selector_dropdown_open()
+    {
         return handle_settings_selector_dropdown(app, key).await;
     }
 
@@ -72,14 +76,14 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
             Tab::Sessions => app.next(),
             Tab::Review => app.next_requested_review(),
             Tab::Issues => app.next_assigned_issue(),
-            Tab::Settings => app.settings.next(),
+            Tab::Settings => apply_settings_action(app, SettingsAction::Next).await,
         },
         KeyCode::Char('k') | KeyCode::Up => match app.tabs.current() {
             Tab::Projects => app.previous_project(),
             Tab::Sessions => app.previous(),
             Tab::Review => app.previous_requested_review(),
             Tab::Issues => app.previous_assigned_issue(),
-            Tab::Settings => app.settings.previous(),
+            Tab::Settings => apply_settings_action(app, SettingsAction::Previous).await,
         },
         KeyCode::Enter => return handle_enter_key(app).await,
         KeyCode::Char('c') if app.tabs.current() == Tab::Sessions => {
@@ -167,7 +171,7 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
             }
         }
         Tab::Settings => {
-            app.settings.handle_enter();
+            apply_settings_action(app, SettingsAction::Activate).await;
         }
         Tab::Review => {
             app.open_selected_requested_review();
@@ -187,21 +191,19 @@ async fn handle_settings_selector_dropdown(
 ) -> io::Result<EventResult> {
     match key.code {
         KeyCode::Esc => {
-            app.settings.close_selector_dropdown();
+            apply_settings_action(app, SettingsAction::Cancel).await;
         }
         KeyCode::Char(character) if character.eq_ignore_ascii_case(&'q') => {
-            app.settings.close_selector_dropdown();
+            apply_settings_action(app, SettingsAction::Cancel).await;
         }
         KeyCode::Char('j') | KeyCode::Down => {
-            app.settings.next_selector_dropdown_option();
+            apply_settings_action(app, SettingsAction::Next).await;
         }
         KeyCode::Char('k') | KeyCode::Up => {
-            app.settings.previous_selector_dropdown_option();
+            apply_settings_action(app, SettingsAction::Previous).await;
         }
         KeyCode::Enter => {
-            app.settings
-                .select_selector_dropdown_option(&app.services)
-                .await;
+            apply_settings_action(app, SettingsAction::Confirm).await;
         }
         _ => {}
     }
@@ -215,7 +217,7 @@ async fn handle_settings_launch_configuration_list_editor(
     key: KeyEvent,
 ) -> io::Result<EventResult> {
     if app
-        .settings
+        .settings_presentation
         .is_launch_configuration_list_editor_input_active()
     {
         return handle_settings_launch_configuration_input(app, key).await;
@@ -223,38 +225,31 @@ async fn handle_settings_launch_configuration_list_editor(
 
     match key.code {
         KeyCode::Esc => {
-            app.settings.close_launch_configuration_list_editor();
+            apply_settings_action(app, SettingsAction::Cancel).await;
         }
         KeyCode::Char(character) if character.eq_ignore_ascii_case(&'q') => {
-            app.settings.close_launch_configuration_list_editor();
+            apply_settings_action(app, SettingsAction::Cancel).await;
         }
         KeyCode::Char('j') | KeyCode::Down => {
-            app.settings.next_launch_configuration_list_editor_item();
+            apply_settings_action(app, SettingsAction::Next).await;
         }
         KeyCode::Char('k') | KeyCode::Up => {
-            app.settings
-                .previous_launch_configuration_list_editor_item();
+            apply_settings_action(app, SettingsAction::Previous).await;
         }
         KeyCode::Char('J') => {
-            app.settings
-                .move_selected_launch_configuration_down(&app.services)
-                .await;
+            apply_settings_action(app, SettingsAction::MoveLaunchConfigurationDown).await;
         }
         KeyCode::Char('K') => {
-            app.settings
-                .move_selected_launch_configuration_up(&app.services)
-                .await;
+            apply_settings_action(app, SettingsAction::MoveLaunchConfigurationUp).await;
         }
         KeyCode::Char('a') => {
-            app.settings.start_adding_launch_configuration();
+            apply_settings_action(app, SettingsAction::StartAddingLaunchConfiguration).await;
         }
         KeyCode::Char('e') | KeyCode::Enter => {
-            app.settings.start_editing_selected_launch_configuration();
+            apply_settings_action(app, SettingsAction::EditLaunchConfiguration).await;
         }
         KeyCode::Char('d') => {
-            app.settings
-                .delete_selected_launch_configuration(&app.services)
-                .await;
+            apply_settings_action(app, SettingsAction::DeleteLaunchConfiguration).await;
         }
         _ => {}
     }
@@ -269,24 +264,35 @@ async fn handle_settings_launch_configuration_input(
 ) -> io::Result<EventResult> {
     match key.code {
         KeyCode::Enter => {
-            app.settings
-                .confirm_launch_configuration_input(&app.services)
-                .await;
+            apply_settings_action(app, SettingsAction::Confirm).await;
         }
         KeyCode::Esc => {
-            app.settings.cancel_launch_configuration_input();
+            apply_settings_action(app, SettingsAction::Cancel).await;
         }
         _ => {
             if let Some(command) =
                 input_key::command_for_key(key, input_key::InputCapabilities::SINGLE_LINE)
             {
-                app.settings
-                    .apply_launch_configuration_input_command(command);
+                apply_settings_action(app, SettingsAction::Input(command)).await;
             }
         }
     }
 
     Ok(EventResult::Continue)
+}
+
+/// Applies a semantic settings-screen action and persists any requested value
+/// change through the narrow settings application service.
+async fn apply_settings_action(app: &mut App, action: SettingsAction) {
+    let operation = {
+        let view = app.settings.view();
+
+        app.settings_presentation.apply(&view, action)
+    };
+
+    if let Some(operation) = operation {
+        app.settings.apply_operation(operation).await;
+    }
 }
 
 /// Starts the sync action that applies to the visible list tab.
@@ -380,14 +386,21 @@ mod tests {
             .expect("failed to create session for settings tests");
         app.tabs.set(Tab::Settings);
         let launch_configuration_row_index = app
-            .settings
-            .settings_rows()
+            .settings_presentation
+            .snapshot(&app.settings.view())
+            .project_rows
             .iter()
             .position(|(setting_name, _)| *setting_name == "Launch Configurations")
+            .map(|project_index| project_index + 1)
             .expect("missing Launch Configurations setting row");
-        app.settings
-            .table_state
-            .select(Some(launch_configuration_row_index));
+        for _ in 0..launch_configuration_row_index {
+            handle(
+                &mut app,
+                KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+            )
+            .await
+            .expect("failed to select Launch Configurations setting row");
+        }
 
         (app, base_dir)
     }
@@ -971,8 +984,9 @@ mod tests {
             .await
             .expect("failed to handle key");
         let editor = app
-            .settings
-            .launch_configuration_list_editor()
+            .settings_presentation
+            .snapshot(&app.settings.view())
+            .launch_configuration_list_editor
             .expect("expected launch-configuration list editor");
 
         // Assert
@@ -984,19 +998,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_settings_previous_key_wraps_to_launch_configuration_row() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        app.tabs.set(Tab::Settings);
+
+        // Act
+        let event_result = handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to move settings selection");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert_eq!(
+            app.settings_presentation
+                .snapshot(&app.settings.view())
+                .selected_row_index,
+            Some(6)
+        );
+    }
+
+    #[tokio::test]
     async fn test_handle_enter_key_opens_settings_selector_dropdown() {
         // Arrange
         let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.tabs.set(Tab::Settings);
-        app.settings.table_state.select(Some(0));
 
         // Act
         let event_result = handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
             .await
             .expect("failed to handle key");
         let selector_dropdown = app
-            .settings
-            .selector_dropdown()
+            .settings_presentation
+            .snapshot(&app.settings.view())
+            .selector_dropdown
             .expect("expected settings selector dropdown");
 
         // Assert
@@ -1011,7 +1049,6 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.tabs.set(Tab::Settings);
-        app.settings.table_state.select(Some(0));
         handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
             .await
             .expect("failed to open settings selector dropdown");
@@ -1030,7 +1067,7 @@ mod tests {
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
         assert_eq!(app.settings.theme, ColorTheme::Green);
-        assert!(!app.settings.is_selector_dropdown_open());
+        assert!(!app.settings_presentation.is_selector_dropdown_open());
     }
 
     #[tokio::test]
@@ -1038,7 +1075,6 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.tabs.set(Tab::Settings);
-        app.settings.table_state.select(Some(0));
         handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
             .await
             .expect("failed to open settings selector dropdown");
@@ -1053,8 +1089,39 @@ mod tests {
 
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
-        assert!(!app.settings.is_selector_dropdown_open());
+        assert!(!app.settings_presentation.is_selector_dropdown_open());
         assert!(matches!(app.mode, AppMode::List));
+    }
+
+    #[tokio::test]
+    async fn test_settings_selector_previous_and_escape_close_dropdown() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        app.tabs.set(Tab::Settings);
+        handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("failed to open settings selector dropdown");
+        handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to move selector forward");
+
+        // Act
+        handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to move selector backward");
+        let event_result = handle(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .await
+            .expect("failed to close selector dropdown");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(!app.settings_presentation.is_selector_dropdown_open());
     }
 
     #[tokio::test]
@@ -1122,8 +1189,9 @@ mod tests {
         .await
         .expect("failed to handle key");
         let editor = app
-            .settings
-            .launch_configuration_list_editor()
+            .settings_presentation
+            .snapshot(&app.settings.view())
+            .launch_configuration_list_editor
             .expect("expected launch-configuration list editor");
         let input = editor.input.expect("expected active input");
 
@@ -1231,6 +1299,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_launch_configuration_editor_previous_move_up_and_q_close() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_for_settings().await;
+        app.settings.launch_configuration = "cargo test\nnpm run dev".to_string();
+        handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("failed to open settings command editor");
+        handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to select second command");
+
+        // Act
+        handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to select previous command");
+        handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to reselect second command");
+        handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('K'), KeyModifiers::SHIFT),
+        )
+        .await
+        .expect("failed to move command up");
+        let event_result = handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to close launch-configuration editor");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert_eq!(app.settings.launch_configuration, "npm run dev\ncargo test");
+        assert!(
+            !app.settings_presentation
+                .is_launch_configuration_list_editor_open()
+        );
+    }
+
+    #[tokio::test]
     async fn test_launch_configuration_list_editor_esc_closes_from_browse() {
         // Arrange
         let (mut app, _base_dir) = new_test_app_for_settings().await;
@@ -1245,7 +1363,10 @@ mod tests {
 
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
-        assert!(!app.settings.is_launch_configuration_list_editor_open());
+        assert!(
+            !app.settings_presentation
+                .is_launch_configuration_list_editor_open()
+        );
     }
 
     #[tokio::test]
@@ -1273,13 +1394,17 @@ mod tests {
             .await
             .expect("failed to handle Esc key");
         let editor = app
-            .settings
-            .launch_configuration_list_editor()
+            .settings_presentation
+            .snapshot(&app.settings.view())
+            .launch_configuration_list_editor
             .expect("expected launch-configuration list editor");
 
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
-        assert!(app.settings.is_launch_configuration_list_editor_open());
+        assert!(
+            app.settings_presentation
+                .is_launch_configuration_list_editor_open()
+        );
         assert!(editor.input.is_none());
         assert_eq!(app.settings.launch_configuration, "");
     }

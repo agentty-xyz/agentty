@@ -136,7 +136,7 @@ impl App {
             project_items,
             startup_working_dir.clone(),
         );
-        let settings = SettingsManager::new(&services, active_project_id).await;
+        let settings = Self::load_settings(&repositories, &services, active_project_id).await;
         let default_session_model = SessionManager::load_default_session_model(
             &services,
             Some(active_project_id),
@@ -167,6 +167,8 @@ impl App {
             mode: crate::presentation::app_mode::AppMode::List,
             needs_redraw: true,
             settings,
+            settings_presentation:
+                crate::presentation::settings::SettingsPresentationState::default(),
             tabs: crate::app::tab::TabManager::new(initial_tab),
             assigned_issue_generation: 0,
             assigned_issue_selected_index: None,
@@ -191,6 +193,20 @@ impl App {
             sync_main_runner,
             tmux_client: clients.tmux_client,
         })
+    }
+
+    /// Loads active-project settings from the feature-scoped dependencies.
+    async fn load_settings(
+        repositories: &AppRepositories,
+        services: &AppServices,
+        project_id: i64,
+    ) -> SettingsManager {
+        SettingsManager::from_repositories(
+            repositories.clone(),
+            services.available_agent_kinds(),
+            project_id,
+        )
+        .await
     }
 
     /// Loads persisted focused reviews for one project into the render cache.

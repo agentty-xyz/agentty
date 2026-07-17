@@ -64,6 +64,7 @@ use crate::infra::fs::{FsClient, RealFsClient};
 use crate::infra::project_discovery::{ProjectDiscoveryClient, RealProjectDiscoveryClient};
 use crate::infra::tmux::{RealTmuxClient, TmuxClient};
 use crate::presentation::app_mode::{AppMode, ChatFocus, ConfirmationViewMode};
+use crate::presentation::settings::SettingsPresentationState;
 
 /// Relative directory name used for session git worktrees within the
 /// `agentty` home directory.
@@ -221,6 +222,8 @@ pub struct App {
     /// Stores persisted and in-memory application settings for the active
     /// project.
     pub settings: SettingsManager,
+    /// Owns frontend-neutral selection and editor state for the settings tab.
+    pub(crate) settings_presentation: SettingsPresentationState,
     /// Manages the selected top-level list tab.
     pub tabs: TabManager,
     /// Monotonic assigned-issue refresh generation for rejecting stale task
@@ -685,7 +688,13 @@ impl App {
             project.path,
         );
         self.refresh_requested_reviews_if_inbox_tab(true);
-        self.settings = SettingsManager::new(&self.services, project.id).await;
+        self.settings = SettingsManager::from_repositories(
+            self.services.db().clone(),
+            self.services.available_agent_kinds(),
+            project.id,
+        )
+        .await;
+        self.settings_presentation = SettingsPresentationState::default();
         let default_session_model = SessionManager::load_default_session_model(
             &self.services,
             Some(project.id),
