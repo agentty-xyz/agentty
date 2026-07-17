@@ -724,7 +724,10 @@ mod tests {
         let footer_line = prompt_footer_line(&session, 0, ChatFocus::Chat);
 
         // Assert
-        assert_eq!(footer_line.to_string(), "Tab: focus | j/k: scroll");
+        assert_eq!(
+            footer_line.to_string(),
+            "Tab: focus | j/k: scroll | d: diff"
+        );
     }
 
     #[test]

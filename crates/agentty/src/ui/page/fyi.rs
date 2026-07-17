@@ -154,7 +154,7 @@ mod tests {
         let diff_mode = AppMode::Diff {
             diff: String::new(),
             file_explorer_selected_index: 0,
-            restore_question: None,
+            restore: None,
             scroll_cache: None,
             session_id: "session-id".into(),
             scroll_offset: 0,

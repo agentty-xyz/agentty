@@ -4118,6 +4118,63 @@ fn test_session_review_comments() -> E2eResult {
     Ok(())
 }
 
+/// Verify that pressing `d` while the chat transcript is focused in the reply
+/// composer opens the diff preview, and that leaving it restores the composer
+/// with the typed draft intact.
+#[test]
+fn diff_preview_opens_from_prompt_chat_focus() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("diff_preview_from_prompt")
+        .with_git()
+        .setup(seed_review_ready_session_with_review_request)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .press_key("Enter")
+                    .wait_for_text("Type your message", 5000)
+                    .write_text("follow up draft")
+                    .wait_for_text("follow up draft", 3000)
+                    .press_key("Tab")
+                    .wait_for_text("d: diff", 5000)
+                    .capture_labeled(
+                        "prompt_chat_focused",
+                        "Chat transcript focused in the reply composer",
+                    )
+                    .press_key("d")
+                    .wait_for_text("src/ +1 -0", 5000)
+                    .wait_for_stable_frame(300, 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "diff_from_prompt",
+                        "Diff preview opened from the reply composer",
+                    )
+                    .press_key("Esc")
+                    .wait_for_text("follow up draft", 5000)
+                    .viewing_pause_ms(1000)
+            },
+            |frame, report| {
+                let focused_frame = common::frame_from_capture(&report.captures[0]);
+                let focused_full = Region::full(focused_frame.cols(), focused_frame.rows());
+                assertion::assert_text_in_region(&focused_frame, "d: diff", &focused_full);
+
+                let diff_frame = common::frame_from_capture(&report.captures[1]);
+                let diff_full = Region::full(diff_frame.cols(), diff_frame.rows());
+                assertion::assert_text_in_region(&diff_frame, "src/ +1 -0", &diff_full);
+                assertion::assert_text_in_region(&diff_frame, "println!(\"review\")", &diff_full);
+                assertion::assert_text_in_region(&diff_frame, "j/k: select file", &diff_full);
+
+                // Leaving the diff restores the composer with the draft intact.
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "follow up draft", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
 /// Verify session output renders mermaid flowchart, entity-relationship, and
 /// sequence fenced blocks as Unicode diagrams instead of raw mermaid source.
 #[test]

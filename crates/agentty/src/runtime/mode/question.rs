@@ -7,11 +7,11 @@ use crate::domain::input::InputState;
 use crate::domain::question::{QuestionItem, QuestionProgress, default_option_index};
 use crate::domain::session::{SessionId, Status};
 use crate::domain::turn_prompt::TurnPrompt;
-use crate::presentation::app_mode::{AppMode, ChatFocus, QuestionModeSnapshot};
+use crate::presentation::app_mode::{AppMode, ChatFocus, DiffRestoreTarget, QuestionModeSnapshot};
 use crate::presentation::prompt::PromptAtMentionState;
 use crate::runtime::EventResult;
 use crate::runtime::mode::chat_scroll::{self, ChatScrollMetrics};
-use crate::runtime::mode::{at_mention, input_key};
+use crate::runtime::mode::{at_mention, diff, input_key};
 use crate::ui::RenderCacheStore;
 
 /// Default response stored when users skip one model question.
@@ -248,40 +248,13 @@ fn question_scroll_metrics(
 /// Snapshots the current question state so that exiting the diff view
 /// restores back to question mode instead of session view.
 async fn show_question_diff(app: &mut App, session_id: &str) {
-    let session = app
-        .sessions
-        .sessions()
-        .iter()
-        .find(|session| session.id == session_id);
-
-    let Some(session) = session else {
+    let Some(diff) = diff::session_diff(app, session_id).await else {
         return;
     };
 
-    let session_folder = session.folder.clone();
-    let base_branch = session.base_branch.clone();
+    let restore = take_question_snapshot(app).map(DiffRestoreTarget::Question);
 
-    let diff = app
-        .services
-        .git_client()
-        .diff(session_folder, base_branch)
-        .await
-        .unwrap_or_else(|error| format!("Failed to run git diff: {error}"));
-
-    if diff.trim().is_empty() {
-        return;
-    }
-
-    let snapshot = take_question_snapshot(app);
-
-    app.mode = AppMode::Diff {
-        diff,
-        file_explorer_selected_index: 0,
-        restore_question: snapshot,
-        scroll_cache: None,
-        session_id: session_id.into(),
-        scroll_offset: 0,
-    };
+    diff::enter_diff_mode(app, session_id, diff, restore);
 }
 
 /// Snapshots the current question-mode state for later restoration.
@@ -3059,7 +3032,7 @@ mod tests {
             app.mode,
             AppMode::Diff {
                 ref session_id,
-                restore_question: Some(_),
+                restore: Some(_),
                 ..
             } if session_id == "session-diff-question"
         ));

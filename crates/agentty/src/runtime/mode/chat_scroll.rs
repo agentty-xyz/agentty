@@ -28,9 +28,8 @@ pub(crate) struct ChatScrollMetrics {
 
 /// A semantic action for a key while a chat page owns the active focus.
 ///
-/// Prompt and question modes share transcript navigation and focus switching.
-/// Question mode additionally permits diff preview, while prompt mode consumes
-/// that action with the rest of its unsupported chat-focused keys.
+/// Prompt and question modes share transcript navigation, focus switching,
+/// and diff preview.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ChatFocusAction {
     /// Opens the session diff preview when the active mode allows it.

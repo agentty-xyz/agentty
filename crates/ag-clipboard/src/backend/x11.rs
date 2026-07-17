@@ -25,7 +25,7 @@ const INCR_TRANSFER_TIMEOUT: Duration = Duration::from_secs(30);
 const INCR_HEADER_LONG_LENGTH: u32 = 1;
 const MAX_CLIPBOARD_BYTE_COUNT: usize = 64 * 1024 * 1024;
 const MAX_CLIPBOARD_PROPERTY_LONG_LENGTH: u32 = 16 * 1024 * 1024;
-const SELECTION_TIMEOUT: Duration = Duration::from_millis(4000);
+const SELECTION_TIMEOUT: Duration = Duration::from_secs(4);
 
 x11rb::atom_manager! {
     AtomCollection: AtomCollectionCookie {

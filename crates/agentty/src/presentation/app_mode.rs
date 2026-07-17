@@ -97,6 +97,61 @@ impl QuestionModeSnapshot {
     }
 }
 
+/// Captured prompt-composer state for restoring after diff preview.
+///
+/// When the user opens diff preview from prompt mode (`d` key while the chat
+/// transcript is focused), the composer state is snapshotted here so it can be
+/// restored when leaving the diff view.
+pub struct PromptModeSnapshot {
+    pub at_mention_state: Option<PromptAtMentionState>,
+    pub attachment_state: PromptAttachmentState,
+    pub history_state: PromptHistoryState,
+    pub input: InputState,
+    pub scroll_offset: Option<u16>,
+    pub session_id: SessionId,
+    pub slash_state: PromptSlashState,
+}
+
+impl PromptModeSnapshot {
+    /// Restores this snapshot as `AppMode::Prompt` with `Input` focus.
+    #[must_use]
+    pub fn into_prompt_mode(self) -> AppMode {
+        AppMode::Prompt {
+            at_mention_state: self.at_mention_state,
+            attachment_state: self.attachment_state,
+            focus: ChatFocus::Input,
+            history_state: self.history_state,
+            slash_state: self.slash_state,
+            session_id: self.session_id,
+            input: self.input,
+            scroll_offset: self.scroll_offset,
+        }
+    }
+}
+
+/// Originating mode restored when leaving a diff preview.
+///
+/// A diff preview replaces the whole page, so the composer or question state it
+/// was opened from is captured here and restored on exit. `None` on the diff
+/// mode restores session view instead.
+pub enum DiffRestoreTarget {
+    /// Restore the prompt composer opened from prompt chat focus.
+    Prompt(PromptModeSnapshot),
+    /// Restore the question flow opened from question chat focus.
+    Question(QuestionModeSnapshot),
+}
+
+impl DiffRestoreTarget {
+    /// Reconstructs the originating `AppMode` for this restore target.
+    #[must_use]
+    pub fn into_mode(self) -> AppMode {
+        match self {
+            DiffRestoreTarget::Prompt(snapshot) => snapshot.into_prompt_mode(),
+            DiffRestoreTarget::Question(snapshot) => snapshot.into_question_mode(),
+        }
+    }
+}
+
 /// Tracks which panel has input focus on the session chat page.
 ///
 /// Both the prompt composer and the question panel share this focus model:
@@ -259,9 +314,10 @@ pub enum AppMode {
         diff: String,
         /// Selected file or folder in the left explorer tree.
         file_explorer_selected_index: usize,
-        /// Captured question state restored when leaving diff, if the diff was
-        /// opened from question mode. `None` restores to `View` mode.
-        restore_question: Option<QuestionModeSnapshot>,
+        /// Captured composer or question state restored when leaving diff, if
+        /// the diff was opened from an editing page. `None` restores to `View`
+        /// mode. Boxed to keep the `Diff` variant small.
+        restore: Option<Box<DiffRestoreTarget>>,
         /// Cached max scroll bound for the current content-area and selection.
         scroll_cache: Option<DiffScrollCache>,
         /// Vertical offset inside the rendered right panel.
@@ -339,9 +395,10 @@ pub enum HelpContext {
     Diff {
         diff: String,
         file_explorer_selected_index: usize,
-        /// Preserved question-mode snapshot so the help→diff→exit path can
-        /// still return to question mode when the diff was opened from there.
-        restore_question: Option<QuestionModeSnapshot>,
+        /// Preserved diff restore target so the help→diff→exit path can still
+        /// return to the originating page when the diff was opened from there.
+        /// Boxed to keep the `Diff` variant small.
+        restore: Option<Box<DiffRestoreTarget>>,
         session_id: SessionId,
         scroll_offset: u16,
     },
@@ -406,13 +463,13 @@ impl HelpContext {
             HelpContext::Diff {
                 diff,
                 file_explorer_selected_index,
-                restore_question,
+                restore,
                 session_id,
                 scroll_offset,
             } => AppMode::Diff {
                 diff,
                 file_explorer_selected_index,
-                restore_question,
+                restore,
                 scroll_cache: None,
                 session_id,
                 scroll_offset,

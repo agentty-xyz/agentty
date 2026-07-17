@@ -174,7 +174,7 @@ mod tests {
             context: HelpContext::Diff {
                 session_id: "s1".into(),
                 diff: "diff content".to_string(),
-                restore_question: None,
+                restore: None,
                 scroll_offset: 7,
                 file_explorer_selected_index: 0,
             },
@@ -193,7 +193,7 @@ mod tests {
             AppMode::Diff {
                 ref session_id,
                 ref diff,
-                restore_question: None,
+                restore: None,
                 scroll_cache: None,
                 scroll_offset: 7,
                 file_explorer_selected_index: 0,
