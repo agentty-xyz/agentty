@@ -3,17 +3,18 @@
 //! Spawns a provider CLI process per turn, streams stdout line-by-line as
 //! [`TurnEvent`]s, and parses the final process output when the process exits.
 
-use std::os::unix::process::ExitStatusExt as _;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use ag_protocol::{
     AgentResponse, AgentResponseSummary, ProtocolRequestProfile, TurnPrompt,
     build_protocol_repair_prompt,
 };
-use tokio::io::AsyncBufReadExt as _;
 use tokio::sync::mpsc;
 
-use crate::agent::cli::{error, stdin};
+use crate::agent::cli::error;
+use crate::agent::cli::execution::{
+    self, CliExecutionError, CliExecutionObserver, CliExitStatus, CollectingCliObserver,
+};
 use crate::agent::{self as agent, AgentBackend, BuildCommandRequest};
 use crate::channel::{
     AgentChannel, AgentError, AgentFuture, SessionRef, StartSessionRequest, TurnEvent, TurnRequest,
@@ -44,6 +45,39 @@ impl CliAgentChannel {
     /// process spawning without relying on a real provider binary.
     pub(crate) fn with_backend(backend: Arc<dyn agent::AgentBackend>, kind: AgentKind) -> Self {
         Self { backend, kind }
+    }
+}
+
+/// Bridges raw CLI execution observations into session turn events.
+struct CliTurnObserver {
+    /// Session event sink receiving PID and thought updates.
+    events: mpsc::UnboundedSender<TurnEvent>,
+    /// Provider family used to classify streamed stdout lines.
+    kind: AgentKind,
+}
+
+impl CliExecutionObserver for CliTurnObserver {
+    fn pid_updated(&self, child_pid: Option<u32>) {
+        let _ = self.events.send(TurnEvent::PidUpdate(child_pid));
+    }
+
+    fn stdout_line(&self, line: &str) {
+        let Some((text, is_response_content)) = agent::parse_stream_output_line(self.kind, line)
+        else {
+            return;
+        };
+        if is_response_content {
+            return;
+        }
+
+        let trimmed_text = text.trim();
+        if trimmed_text.is_empty() {
+            return;
+        }
+
+        let _ = self
+            .events
+            .send(TurnEvent::ThoughtDelta(trimmed_text.to_string()));
     }
 }
 
@@ -98,109 +132,38 @@ impl AgentChannel for CliAgentChannel {
         Box::pin(async move {
             let prompt_text = req.prompt.agent_text();
             let build_request = build_command_request(&req, &prompt_text);
-            let build_result = backend.build_command(build_request);
-            let stdin_payload_result = agent::build_command_stdin_payload(kind, build_request);
-            let command = build_result.map_err(|error| {
-                AgentError::Backend(format!("Failed to build command: {error}"))
-            })?;
-            let stdin_payload = stdin_payload_result.map_err(|error| {
-                AgentError::Backend(format!("Failed to build command stdin payload: {error}"))
-            })?;
-
-            let mut tokio_cmd = tokio::process::Command::from(command);
-            tokio_cmd.stdin(if stdin_payload.is_some() {
-                std::process::Stdio::piped()
-            } else {
-                std::process::Stdio::null()
-            });
-            tokio_cmd.stdout(std::process::Stdio::piped());
-            tokio_cmd.stderr(std::process::Stdio::piped());
-            tokio_cmd.kill_on_drop(true);
-
-            let mut child = tokio_cmd
-                .spawn()
-                .map_err(|error| AgentError::Io(format!("Failed to spawn process: {error}")))?;
-
-            // Notify the consumer of the child PID so cancellation signals can
-            // be sent while the process is running.
-            // Fire-and-forget: receiver may be dropped during shutdown.
-            let _ = events.send(TurnEvent::PidUpdate(child.id()));
-
-            let raw_stdout = Arc::new(Mutex::new(String::new()));
-            let raw_stderr = Arc::new(Mutex::new(String::new()));
-
-            let stdout_task = {
-                let stdout = child.stdout.take().ok_or_else(|| {
-                    AgentError::Io("stdout pipe unavailable after spawn".to_string())
-                })?;
-                let raw_stdout = Arc::clone(&raw_stdout);
-                let events = events.clone();
-
-                tokio::spawn(stream_stdout(stdout, kind, events, raw_stdout))
+            let observer = CliTurnObserver {
+                events: events.clone(),
+                kind,
             };
-
-            let stderr_task = {
-                let stderr = child.stderr.take().ok_or_else(|| {
-                    AgentError::Io("stderr pipe unavailable after spawn".to_string())
-                })?;
-                let raw_stderr = Arc::clone(&raw_stderr);
-
-                tokio::spawn(async move {
-                    let mut reader = tokio::io::BufReader::new(stderr).lines();
-                    while let Ok(Some(line)) = reader.next_line().await {
-                        if let Ok(mut buf) = raw_stderr.lock() {
-                            buf.push_str(&line);
-                            buf.push('\n');
-                        }
-                    }
-                })
-            };
-            let stdin_write_task = stdin::spawn_optional_stdin_write(
-                child.stdin.take(),
-                stdin_payload,
-                "stdin pipe unavailable after spawn",
-                AgentError::Io,
-            );
-
-            // Task join: panic in the spawned task is not recoverable here.
-            let _ = stdout_task.await;
-            // Task join: panic in the spawned task is not recoverable here.
-            let _ = stderr_task.await;
-
-            let exit_status = child.wait().await.ok();
-            stdin::await_optional_stdin_write(
-                stdin_write_task,
-                "stdin write task failed",
-                AgentError::Io,
+            let output = execution::execute_cli_command(
+                backend.as_ref(),
+                kind,
+                build_request,
+                &observer,
+                None,
             )
-            .await?;
+            .await
+            .map_err(map_cli_turn_execution_error)?;
 
-            // Clear the PID slot now that the child has exited.
-            // Fire-and-forget: receiver may be dropped during shutdown.
-            let _ = events.send(TurnEvent::PidUpdate(None));
-
-            let killed_by_signal = exit_status
-                .as_ref()
-                .is_some_and(|status| status.signal().is_some());
-
-            if killed_by_signal {
-                return Err(AgentError::Backend(
-                    "[Stopped] Agent interrupted by user.".to_string(),
-                ));
+            match output.exit_status {
+                CliExitStatus::Signaled(_) => {
+                    return Err(AgentError::Backend(
+                        "[Stopped] Agent interrupted by user.".to_string(),
+                    ));
+                }
+                CliExitStatus::NonZero(exit_code) => {
+                    return Err(format_cli_turn_exit_error(
+                        kind,
+                        exit_code,
+                        &output.stdout,
+                        &output.stderr,
+                    ));
+                }
+                CliExitStatus::Success => {}
             }
 
-            let stdout_text = raw_stdout.lock().map(|buf| buf.clone()).unwrap_or_default();
-            let stderr_text = raw_stderr.lock().map(|buf| buf.clone()).unwrap_or_default();
-            if exit_status.as_ref().is_some_and(|status| !status.success()) {
-                return Err(format_cli_turn_exit_error(
-                    kind,
-                    exit_status.and_then(|status| status.code()),
-                    &stdout_text,
-                    &stderr_text,
-                ));
-            }
-
-            let parsed = agent::parse_response(kind, &stdout_text, &stderr_text);
+            let parsed = agent::parse_response(kind, &output.stdout, &output.stderr);
             let assistant_message =
                 parse_or_repair_cli_response(kind, &parsed.content, &req, &backend, &events)
                     .await?;
@@ -319,45 +282,6 @@ fn non_empty_content(content: &str) -> Option<&str> {
     Some(trimmed_content)
 }
 
-/// Reads stdout line-by-line, classifying each line and forwarding loader
-/// updates.
-///
-/// Only non-response-content stream lines are forwarded as
-/// [`TurnEvent::ThoughtDelta`]. Final assistant transcript output is parsed
-/// from the accumulated raw stdout after the process exits. The raw bytes are
-/// also accumulated in `raw_buffer` for final response parsing.
-async fn stream_stdout(
-    stdout: tokio::process::ChildStdout,
-    kind: AgentKind,
-    events: mpsc::UnboundedSender<TurnEvent>,
-    raw_buffer: Arc<Mutex<String>>,
-) {
-    let mut reader = tokio::io::BufReader::new(stdout).lines();
-
-    while let Ok(Some(line)) = reader.next_line().await {
-        if let Ok(mut buf) = raw_buffer.lock() {
-            buf.push_str(&line);
-            buf.push('\n');
-        }
-
-        let Some((text, is_response_content)) = agent::parse_stream_output_line(kind, &line) else {
-            continue;
-        };
-
-        if is_response_content {
-            continue;
-        }
-
-        let trimmed_text = text.trim();
-        if trimmed_text.is_empty() {
-            continue;
-        }
-
-        // Fire-and-forget: receiver may be dropped during shutdown.
-        let _ = events.send(TurnEvent::ThoughtDelta(trimmed_text.to_string()));
-    }
-}
-
 /// Maximum wall-clock time for one protocol-repair CLI subprocess.
 ///
 /// Repair turns ask the agent to re-emit a single JSON object, so they
@@ -395,63 +319,58 @@ async fn execute_cli_repair_turn(
         reasoning_level,
         request_kind,
     };
-    let command = backend
-        .build_command(build_request)
-        .map_err(|error| format!("repair command build failed: {error}"))?;
-    let repair_stdin_payload = agent::build_command_stdin_payload(kind, build_request)
-        .map_err(|error| format!("repair stdin payload build failed: {error}"))?;
+    execute_cli_repair_command(backend, kind, build_request, REPAIR_TURN_TIMEOUT).await
+}
 
-    let mut tokio_command = tokio::process::Command::from(command);
-    tokio_command
-        .stdin(if repair_stdin_payload.is_some() {
-            std::process::Stdio::piped()
-        } else {
-            std::process::Stdio::null()
-        })
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true);
-
-    let mut child = tokio_command
-        .spawn()
-        .map_err(|error| format!("repair process spawn failed: {error}"))?;
-
-    let repair_stdin_write_task = stdin::spawn_optional_stdin_write(
-        child.stdin.take(),
-        repair_stdin_payload,
-        "repair stdin pipe unavailable after spawn",
-        std::convert::identity,
-    );
-
-    let output = tokio::time::timeout(REPAIR_TURN_TIMEOUT, child.wait_with_output())
-        .await
-        .map_err(|_| {
-            format!(
-                "repair process timed out after {}s",
-                REPAIR_TURN_TIMEOUT.as_secs()
-            )
-        })?
-        .map_err(|error| format!("repair process execution failed: {error}"))?;
-
-    stdin::await_optional_stdin_write(
-        repair_stdin_write_task,
-        "repair stdin write task failed",
-        std::convert::identity,
+/// Executes one prepared repair command with an explicit deadline.
+async fn execute_cli_repair_command(
+    backend: &dyn AgentBackend,
+    kind: AgentKind,
+    build_request: BuildCommandRequest<'_>,
+    timeout: std::time::Duration,
+) -> Result<String, String> {
+    let output = execution::execute_cli_command(
+        backend,
+        kind,
+        build_request,
+        &CollectingCliObserver,
+        Some(timeout),
     )
-    .await?;
+    .await
+    .map_err(|error| format!("repair {error}"))?;
 
-    if !output.status.success() {
-        return Err(format!(
-            "repair process exited with status {}",
-            output.status
-        ));
+    match output.exit_status {
+        CliExitStatus::NonZero(exit_code) => {
+            return Err(format!(
+                "repair process exited with code {}",
+                exit_code.map_or_else(|| "unknown".to_string(), |code| code.to_string())
+            ));
+        }
+        CliExitStatus::Signaled(signal) => {
+            return Err(format!("repair process was interrupted by signal {signal}"));
+        }
+        CliExitStatus::Success => {}
     }
 
-    let stdout_text = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr_text = String::from_utf8_lossy(&output.stderr).into_owned();
-    let parsed = agent::parse_response(kind, &stdout_text, &stderr_text);
+    let parsed = agent::parse_response(kind, &output.stdout, &output.stderr);
 
     Ok(parsed.content)
+}
+
+/// Maps shared execution failures into the existing channel error categories.
+fn map_cli_turn_execution_error(error: CliExecutionError) -> AgentError {
+    match error {
+        CliExecutionError::CommandBuild(error) => {
+            AgentError::Backend(format!("Failed to build command: {error}"))
+        }
+        CliExecutionError::Spawn(error) => {
+            AgentError::Io(format!("Failed to spawn process: {error}"))
+        }
+        CliExecutionError::StdinBuild(error) => {
+            AgentError::Backend(format!("Failed to build command stdin payload: {error}"))
+        }
+        error => AgentError::Io(error.to_string()),
+    }
 }
 
 /// Formats one failed CLI turn into a user-facing error.
@@ -516,6 +435,150 @@ mod tests {
         }
 
         events
+    }
+
+    #[test]
+    fn test_map_cli_turn_execution_error_preserves_error_categories() {
+        // Arrange
+        let command_error = CliExecutionError::CommandBuild(
+            crate::agent::AgentBackendError::CommandBuild("command".to_string()),
+        );
+        let spawn_error = CliExecutionError::Spawn(std::io::Error::other("spawn unavailable"));
+        let stdin_error = CliExecutionError::StdinBuild(
+            crate::agent::AgentBackendError::CommandBuild("stdin".to_string()),
+        );
+        let io_error = CliExecutionError::StdinWrite("write unavailable".to_string());
+
+        // Act
+        let command_message = map_cli_turn_execution_error(command_error).to_string();
+        let spawn_message = map_cli_turn_execution_error(spawn_error).to_string();
+        let stdin_message = map_cli_turn_execution_error(stdin_error).to_string();
+        let io_message = map_cli_turn_execution_error(io_error).to_string();
+
+        // Assert
+        assert_eq!(command_message, "Failed to build command: command");
+        assert_eq!(spawn_message, "Failed to spawn process: spawn unavailable");
+        assert_eq!(
+            stdin_message,
+            "Failed to build command stdin payload: stdin"
+        );
+        assert_eq!(io_message, "stdin delivery failed: write unavailable");
+    }
+
+    #[test]
+    fn test_cli_turn_observer_ignores_blank_progress_text() {
+        // Arrange
+        let (events, mut event_receiver) = mpsc::unbounded_channel();
+        let observer = CliTurnObserver {
+            events,
+            kind: AgentKind::Codex,
+        };
+
+        // Act
+        observer.stdout_line(r#"{"type":"item.updated","item":{"type":"reasoning","text":"   "}}"#);
+
+        // Assert
+        assert!(event_receiver.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_execute_cli_repair_turn_reports_non_zero_exit() {
+        // Arrange
+        let folder = tempdir().expect("failed to create temp dir");
+        let request_kind = AgentRequestKind::SessionStart;
+        let mut backend = MockAgentBackend::new();
+        backend.expect_build_command().returning(|_| {
+            let mut command = std::process::Command::new("sh");
+            command.arg("-c").arg("exit 7");
+
+            Ok(command)
+        });
+
+        // Act
+        let error = execute_cli_repair_turn(
+            &backend,
+            AgentKind::Codex,
+            folder.path(),
+            "test-model",
+            &request_kind,
+            ReasoningLevel::default(),
+            "repair",
+        )
+        .await
+        .expect_err("repair command should fail");
+
+        // Assert
+        assert_eq!(error, "repair process exited with code 7");
+    }
+
+    #[tokio::test]
+    async fn test_execute_cli_repair_turn_reports_signal() {
+        // Arrange
+        let folder = tempdir().expect("failed to create temp dir");
+        let request_kind = AgentRequestKind::SessionStart;
+        let mut backend = MockAgentBackend::new();
+        backend.expect_build_command().returning(|_| {
+            let mut command = std::process::Command::new("sh");
+            command.arg("-c").arg("kill -9 $$");
+
+            Ok(command)
+        });
+
+        // Act
+        let error = execute_cli_repair_turn(
+            &backend,
+            AgentKind::Codex,
+            folder.path(),
+            "test-model",
+            &request_kind,
+            ReasoningLevel::default(),
+            "repair",
+        )
+        .await
+        .expect_err("repair command should be interrupted");
+
+        // Assert
+        assert_eq!(error, "repair process was interrupted by signal 9");
+    }
+
+    #[tokio::test]
+    async fn test_execute_cli_repair_turn_cleans_up_stdin_writer_after_timeout() {
+        // Arrange
+        let folder = tempdir().expect("failed to create temp dir");
+        let request_kind = AgentRequestKind::SessionStart;
+        let repair_prompt = "repair ".repeat(200_000);
+        let prompt_payload = TurnPrompt::from_agent_data(repair_prompt.clone());
+        let build_request = BuildCommandRequest {
+            attachments: &prompt_payload.attachments,
+            folder: folder.path(),
+            main_checkout_root: None,
+            replay_transcript: None,
+            model: "test-model",
+            prompt: &repair_prompt,
+            reasoning_level: ReasoningLevel::default(),
+            request_kind: &request_kind,
+        };
+        let mut backend = MockAgentBackend::new();
+        backend.expect_build_command().returning(|request| {
+            assert!(request.prompt.len() > 1_000_000);
+            let mut command = std::process::Command::new("sh");
+            command.arg("-c").arg("while :; do :; done");
+
+            Ok(command)
+        });
+
+        // Act
+        let error = execute_cli_repair_command(
+            &backend,
+            AgentKind::Claude,
+            build_request,
+            Duration::from_millis(20),
+        )
+        .await
+        .expect_err("repair command should time out");
+
+        // Assert
+        assert!(error.starts_with("repair process timed out after"));
     }
 
     #[test]

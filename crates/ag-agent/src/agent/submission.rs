@@ -5,7 +5,6 @@
 //! transport so one-shot callers enforce the same schema contract as normal
 //! session turns.
 
-use std::os::unix::process::ExitStatusExt as _;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -16,7 +15,8 @@ use ag_protocol::{
 use async_trait::async_trait;
 
 use super::backend::{AgentBackend, BuildCommandRequest};
-use super::cli::{error, stdin};
+use super::cli::error;
+use super::cli::execution::{self, CliExecutionError, CliExecutionObserver, CliExitStatus};
 use super::{
     ParsedResponse, create_app_server_client, create_backend, parse_response, transport_mode,
 };
@@ -368,59 +368,45 @@ async fn execute_one_shot_command(
         reasoning_level: request.reasoning_level,
         request_kind: &request.request_kind,
     };
-    let command = backend
-        .build_command(build_request)
-        .map_err(|error| format!("Failed to build one-shot agent command: {error}"))?;
-    let stdin_payload = super::build_command_stdin_payload(request.agent_kind, build_request)
-        .map_err(|error| format!("Failed to build one-shot agent stdin payload: {error}"))?;
-    let mut tokio_command = tokio::process::Command::from(command);
-    tokio_command
-        .stdin(if stdin_payload.is_some() {
-            std::process::Stdio::piped()
-        } else {
-            std::process::Stdio::null()
-        })
-        .kill_on_drop(true);
-    let mut pid_guard = ChildPidGuard::new(request.child_pid);
-    let mut child = tokio_command
-        .spawn()
-        .map_err(|error| format!("Failed to execute one-shot agent command: {error}"))?;
-    pid_guard.update_from_child(&child);
-    let stdin_write_task = stdin::spawn_optional_stdin_write(
-        child.stdin.take(),
-        stdin_payload,
-        "one-shot stdin pipe unavailable after spawn",
-        std::convert::identity,
-    );
-    let output = child
-        .wait_with_output()
-        .await
-        .map_err(|error| format!("Failed to execute one-shot agent command: {error}"))?;
-    stdin::await_optional_stdin_write(
-        stdin_write_task,
-        "One-shot stdin write task failed",
-        std::convert::identity,
-    )
-    .await?;
+    let observer = OneShotCliObserver {
+        child_pid: request.child_pid,
+    };
+    let output =
+        execution::execute_cli_command(backend, request.agent_kind, build_request, &observer, None)
+            .await
+            .map_err(format_one_shot_execution_error)?;
 
-    if output.status.signal().is_some() {
-        return Err("One-shot agent command was interrupted".to_string());
+    match output.exit_status {
+        CliExitStatus::Signaled(_) => {
+            return Err("One-shot agent command was interrupted".to_string());
+        }
+        CliExitStatus::NonZero(exit_code) => {
+            return Err(format_one_shot_exit_error(
+                request.agent_kind,
+                exit_code,
+                &output.stdout,
+                &output.stderr,
+            ));
+        }
+        CliExitStatus::Success => {}
     }
 
-    let stdout_text = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr_text = String::from_utf8_lossy(&output.stderr).into_owned();
-    if !output.status.success() {
-        return Err(format_one_shot_exit_error(
-            request.agent_kind,
-            output.status.code(),
-            &stdout_text,
-            &stderr_text,
-        ));
-    }
-
-    let parsed_response = parse_response(request.agent_kind, &stdout_text, &stderr_text);
+    let parsed_response = parse_response(request.agent_kind, &output.stdout, &output.stderr);
 
     Ok(parsed_response)
+}
+
+/// Preserves the established one-shot context around shared execution errors.
+fn format_one_shot_execution_error(error: CliExecutionError) -> String {
+    match error {
+        CliExecutionError::CommandBuild(error) => {
+            format!("Failed to build one-shot agent command: {error}")
+        }
+        CliExecutionError::StdinBuild(error) => {
+            format!("Failed to build one-shot agent stdin payload: {error}")
+        }
+        error => format!("Failed to execute one-shot agent command: {error}"),
+    }
 }
 
 /// Formats one non-zero one-shot command exit into a user-facing error.
@@ -450,43 +436,23 @@ fn clear_child_pid_slot(child_pid: Option<&Mutex<Option<u32>>>) {
     }
 }
 
-/// Tracks the active one-shot subprocess identifier for cancel/stop flows.
-struct ChildPidGuard {
+/// Bridges shared CLI PID observations into the one-shot cancellation slot.
+struct OneShotCliObserver {
     child_pid: Option<Arc<Mutex<Option<u32>>>>,
 }
 
-impl ChildPidGuard {
-    /// Creates one PID guard for the optional shared child slot.
-    fn new(child_pid: Option<Arc<Mutex<Option<u32>>>>) -> Self {
-        Self { child_pid }
-    }
-
-    /// Copies the spawned child PID into the shared slot when available.
-    fn update_from_child(&mut self, child: &tokio::process::Child) {
-        let Some(pid) = child.id() else {
+impl CliExecutionObserver for OneShotCliObserver {
+    fn pid_updated(&self, active_child_pid: Option<u32>) {
+        let Some(child_pid_slot) = self.child_pid.as_deref() else {
             return;
         };
 
-        let Some(child_pid) = self.child_pid.as_deref() else {
-            return;
-        };
-
-        if let Ok(mut guard) = child_pid.lock() {
-            *guard = Some(pid);
+        if let Ok(mut guard) = child_pid_slot.lock() {
+            *guard = active_child_pid;
         }
     }
-}
 
-impl Drop for ChildPidGuard {
-    fn drop(&mut self) {
-        let Some(child_pid) = self.child_pid.as_deref() else {
-            return;
-        };
-
-        if let Ok(mut guard) = child_pid.lock() {
-            *guard = None;
-        }
-    }
+    fn stdout_line(&self, _line: &str) {}
 }
 
 #[cfg(test)]
@@ -529,6 +495,89 @@ mod tests {
         command.stderr(std::process::Stdio::piped());
 
         command
+    }
+
+    #[test]
+    fn test_format_one_shot_execution_error_preserves_build_context() {
+        // Arrange
+        let command_error = CliExecutionError::CommandBuild(
+            crate::agent::AgentBackendError::CommandBuild("command".to_string()),
+        );
+        let stdin_error = CliExecutionError::StdinBuild(
+            crate::agent::AgentBackendError::CommandBuild("stdin".to_string()),
+        );
+        let execution_error = CliExecutionError::StdinWrite("write".to_string());
+
+        // Act
+        let command_message = format_one_shot_execution_error(command_error);
+        let stdin_message = format_one_shot_execution_error(stdin_error);
+        let execution_message = format_one_shot_execution_error(execution_error);
+
+        // Assert
+        assert_eq!(
+            command_message,
+            "Failed to build one-shot agent command: command"
+        );
+        assert_eq!(
+            stdin_message,
+            "Failed to build one-shot agent stdin payload: stdin"
+        );
+        assert_eq!(
+            execution_message,
+            "Failed to execute one-shot agent command: stdin delivery failed: write"
+        );
+    }
+
+    #[test]
+    fn test_one_shot_cli_observer_updates_child_pid_slot() {
+        // Arrange
+        let child_pid = Arc::new(Mutex::new(None));
+        let observer = OneShotCliObserver {
+            child_pid: Some(Arc::clone(&child_pid)),
+        };
+
+        // Act
+        observer.pid_updated(Some(42));
+        let active_pid = *child_pid.lock().expect("PID lock should be available");
+        observer.stdout_line("collected output");
+        observer.pid_updated(None);
+        let cleared_pid = *child_pid.lock().expect("PID lock should be available");
+
+        // Assert
+        assert_eq!(active_pid, Some(42));
+        assert_eq!(cleared_pid, None);
+    }
+
+    #[tokio::test]
+    async fn test_submit_one_shot_with_backend_reports_signal_interruption() {
+        // Arrange
+        let temp_directory = tempdir().expect("failed to create temp dir");
+        let mut backend = MockAgentBackend::new();
+        backend.expect_build_command().returning(|_| {
+            let mut command = Command::new("sh");
+            command.arg("-c").arg("kill -9 $$");
+
+            Ok(command)
+        });
+
+        // Act
+        let error = submit_one_shot_with_backend(
+            &backend,
+            OneShotRequest {
+                agent_kind: AgentKind::Codex,
+                child_pid: None,
+                folder: temp_directory.path().to_path_buf(),
+                model: AgentModel::Gpt55,
+                prompt: "Generate title".to_string(),
+                request_kind: AgentRequestKind::UtilityPrompt,
+                reasoning_level: ReasoningLevel::default(),
+            },
+        )
+        .await
+        .expect_err("signal termination should interrupt the one-shot command");
+
+        // Assert
+        assert_eq!(error, "One-shot agent command was interrupted");
     }
 
     #[tokio::test]
@@ -960,33 +1009,6 @@ mod tests {
         );
         assert!(error.contains("`claude auth login`"));
         assert!(error.contains("`claude auth status`"));
-    }
-
-    #[tokio::test]
-    /// Verifies the child PID guard tracks a running process, ignores a
-    /// completed process without an id, and clears the slot when dropped.
-    async fn test_child_pid_guard_tracks_and_clears_child_process() {
-        // Arrange
-        let child_pid = Arc::new(Mutex::new(None));
-        let mut child = tokio::process::Command::new("sh")
-            .arg("-c")
-            .arg("exit 0")
-            .spawn()
-            .expect("test child should spawn");
-        let expected_pid = child.id().expect("running child should expose its pid");
-        let mut guard = ChildPidGuard::new(Some(Arc::clone(&child_pid)));
-
-        // Act
-        guard.update_from_child(&child);
-        let tracked_pid = *child_pid.lock().expect("child pid lock should succeed");
-        child.wait().await.expect("test child should exit");
-        guard.update_from_child(&child);
-        drop(guard);
-        let cleared_pid = *child_pid.lock().expect("child pid lock should succeed");
-
-        // Assert
-        assert_eq!(tracked_pid, Some(expected_pid));
-        assert_eq!(cleared_pid, None);
     }
 
     #[tokio::test]
