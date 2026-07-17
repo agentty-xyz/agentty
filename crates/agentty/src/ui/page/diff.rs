@@ -631,27 +631,13 @@ impl<'a> DiffPage<'a> {
             .collect()
     }
 
-    /// Returns the style used for added diff lines.
-    fn addition_line_style() -> Style {
-        Style::default()
-            .fg(style::palette::success())
-            .bg(style::palette::surface_success())
-    }
-
-    /// Returns the style used for removed diff lines.
-    fn deletion_line_style() -> Style {
-        Style::default()
-            .fg(style::palette::danger())
-            .bg(style::palette::surface_danger())
-    }
-
     /// Builds wrapped diff lines for the diff panel, optionally reserving one
     /// column for the scrollbar thumb.
     fn build_diff_lines(
         parsed: &[DiffLine<'_>],
         layout: diff_util::DiffRenderLayout,
     ) -> Vec<Line<'static>> {
-        let gutter_style = Style::default().fg(style::palette::text_subtle());
+        let gutter_style = diff_util::body_diff_line_gutter_style();
         let mut lines: Vec<Line<'static>> = Vec::with_capacity(parsed.len());
 
         for diff_line in parsed {
@@ -707,8 +693,8 @@ impl<'a> DiffPage<'a> {
         layout: diff_util::DiffRenderLayout,
         gutter_style: Style,
     ) {
-        let (sign, content_style) = Self::body_diff_line_style(diff_line.kind);
-        let gutter_text = Self::body_diff_line_gutter(diff_line, layout.gutter_width);
+        let (sign, content_style) = diff_util::body_diff_line_style(diff_line.kind);
+        let gutter_text = diff_util::body_diff_line_gutter(diff_line, layout.gutter_width);
         let content_available = layout.content_width.saturating_sub(layout.prefix_width);
         let chunks = diff_util::wrap_diff_content(diff_line.content, content_available);
 
@@ -726,32 +712,6 @@ impl<'a> DiffPage<'a> {
                 ]));
             }
         }
-    }
-
-    /// Returns the sign and style for one body diff line.
-    fn body_diff_line_style(kind: DiffLineKind) -> (&'static str, Style) {
-        match kind {
-            DiffLineKind::Addition => ("+", Self::addition_line_style()),
-            DiffLineKind::Deletion => ("-", Self::deletion_line_style()),
-            DiffLineKind::Context => (" ", Style::default().fg(style::palette::text_muted())),
-            DiffLineKind::FileHeader | DiffLineKind::HunkHeader => {
-                (" ", Style::default().fg(style::palette::text_muted()))
-            }
-        }
-    }
-
-    /// Builds the old/new line-number gutter for one body diff line.
-    fn body_diff_line_gutter(diff_line: &DiffLine<'_>, gutter_width: usize) -> String {
-        let old_str = match diff_line.old_line {
-            Some(num) => format!("{num:>gutter_width$}"),
-            None => " ".repeat(gutter_width),
-        };
-        let new_str = match diff_line.new_line {
-            Some(num) => format!("{num:>gutter_width$}"),
-            None => " ".repeat(gutter_width),
-        };
-
-        format!("{old_str}│{new_str} ")
     }
 }
 

@@ -127,6 +127,13 @@ pub(crate) enum AppEvent {
         /// Browser-openable review-request URL used to disambiguate rows.
         web_url: String,
     },
+    /// Indicates completion of a linked session review-request comment load.
+    SessionReviewCommentSnapshotLoaded {
+        /// Comment snapshot result from the background forge task.
+        result: Result<ag_forge::ReviewCommentSnapshot, String>,
+        /// Session whose comments were requested.
+        session_id: SessionId,
+    },
     /// Indicates compact live thinking text for an in-progress session.
     SessionProgressUpdated {
         progress_message: Option<String>,
@@ -233,6 +240,8 @@ pub(super) struct AppEventBatch {
     pub(super) session_reasoning_level_updates:
         HashMap<SessionId, crate::domain::agent::ReasoningLevel>,
     pub(super) session_progress_updates: HashMap<SessionId, Option<String>>,
+    pub(super) session_review_comment_snapshots:
+        HashMap<SessionId, Result<ag_forge::ReviewCommentSnapshot, String>>,
     pub(super) session_size_updates: HashMap<SessionId, (u64, u64, SessionSize)>,
     pub(super) stacked_parent_merge_child_rebases: HashSet<SessionId>,
     pub(super) stacked_parent_syncs_completed: HashSet<SessionId>,
@@ -390,6 +399,10 @@ impl AppEventBatch {
                 progress_message,
                 session_id,
             } => self.collect_session_progress_updated(session_id, progress_message),
+            AppEvent::SessionReviewCommentSnapshotLoaded { result, session_id } => {
+                self.session_review_comment_snapshots
+                    .insert(session_id, result);
+            }
             AppEvent::SyncMainCompleted { result } => self.collect_sync_main_completed(result),
             AppEvent::SyncMainConflictResolutionStarted { conflicted_files } => {
                 self.collect_sync_main_conflict_resolution_started(conflicted_files);
@@ -856,6 +869,9 @@ impl App {
         self.apply_session_progress_updates(std::mem::take(
             &mut event_batch.session_progress_updates,
         ));
+        self.apply_session_review_comment_snapshot_updates(std::mem::take(
+            &mut event_batch.session_review_comment_snapshots,
+        ));
 
         for (session_id, turn_applied_state) in event_batch.applied_turns {
             self.apply_agent_response_received(&session_id, &turn_applied_state);
@@ -915,6 +931,41 @@ impl App {
 
         if should_mark_dirty {
             self.mark_dirty();
+        }
+    }
+
+    /// Applies completed linked-session comment loads only while the matching
+    /// comments page remains visible.
+    fn apply_session_review_comment_snapshot_updates(
+        &mut self,
+        updates: HashMap<SessionId, Result<ag_forge::ReviewCommentSnapshot, String>>,
+    ) {
+        for (loaded_session_id, result) in updates {
+            let AppMode::ReviewComments {
+                comment_error,
+                comment_snapshot,
+                is_loading_comments,
+                session_id,
+                ..
+            } = &mut self.mode
+            else {
+                continue;
+            };
+            if *session_id != loaded_session_id {
+                continue;
+            }
+
+            *is_loading_comments = false;
+            match result {
+                Ok(snapshot) => {
+                    *comment_error = None;
+                    *comment_snapshot = Some(snapshot);
+                }
+                Err(error) => {
+                    *comment_error = Some(format!("Failed to load review comments: {error}"));
+                    *comment_snapshot = None;
+                }
+            }
         }
     }
 
@@ -1246,6 +1297,7 @@ impl App {
             || !event_batch.review_updates.is_empty()
             || !event_batch.session_model_updates.is_empty()
             || !event_batch.session_progress_updates.is_empty()
+            || !event_batch.session_review_comment_snapshots.is_empty()
             || !event_batch.session_reasoning_level_updates.is_empty()
             || !event_batch.session_size_updates.is_empty()
             || !event_batch.session_title_generation_finished.is_empty()
@@ -1411,6 +1463,10 @@ impl App {
                 ..
             }
             | AppMode::Diff {
+                session_id: view_id,
+                ..
+            }
+            | AppMode::ReviewComments {
                 session_id: view_id,
                 ..
             }
@@ -2045,6 +2101,84 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn test_session_review_comment_result_updates_matching_open_page() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        app.mode = AppMode::ReviewComments {
+            comment_error: None,
+            comment_snapshot: None,
+            diff: String::new(),
+            is_loading_comments: true,
+            selected_comment_index: 0,
+            session_id: "session-id".into(),
+            scroll_offset: 0,
+        };
+
+        // Act
+        app.apply_app_events(AppEvent::SessionReviewCommentSnapshotLoaded {
+            result: Ok(ag_forge::ReviewCommentSnapshot::default()),
+            session_id: "session-id".into(),
+        })
+        .await;
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::ReviewComments {
+                comment_error: None,
+                comment_snapshot: Some(_),
+                is_loading_comments: false,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_session_review_comment_result_ignores_stale_pages_and_surfaces_errors() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+
+        // Act
+        app.apply_app_events(AppEvent::SessionReviewCommentSnapshotLoaded {
+            result: Ok(ag_forge::ReviewCommentSnapshot::default()),
+            session_id: "closed-session".into(),
+        })
+        .await;
+        app.mode = AppMode::ReviewComments {
+            comment_error: None,
+            comment_snapshot: None,
+            diff: String::new(),
+            is_loading_comments: true,
+            selected_comment_index: 0,
+            session_id: "open-session".into(),
+            scroll_offset: 0,
+        };
+        app.apply_app_events(AppEvent::SessionReviewCommentSnapshotLoaded {
+            result: Ok(ag_forge::ReviewCommentSnapshot::default()),
+            session_id: "stale-session".into(),
+        })
+        .await;
+        app.apply_app_events(AppEvent::SessionReviewCommentSnapshotLoaded {
+            result: Err("authentication failed".to_string()),
+            session_id: "open-session".into(),
+        })
+        .await;
+
+        // Assert
+        assert!(app.is_viewing_session("open-session"));
+        assert!(!app.is_viewing_session("stale-session"));
+        assert!(matches!(
+            app.mode,
+            AppMode::ReviewComments {
+                comment_error: Some(ref error),
+                comment_snapshot: None,
+                is_loading_comments: false,
+                ..
+            } if error == "Failed to load review comments: authentication failed"
+        ));
+    }
 
     #[test]
     fn test_refresh_sessions_batch_sets_only_session_reload_scope() {

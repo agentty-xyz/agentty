@@ -111,6 +111,7 @@ fn visible_review_session_id(mode: &AppMode) -> Option<&str> {
         | AppMode::Prompt { session_id, .. }
         | AppMode::Question { session_id, .. }
         | AppMode::Diff { session_id, .. }
+        | AppMode::ReviewComments { session_id, .. }
         | AppMode::Help {
             context: HelpContext::View { session_id, .. } | HelpContext::Diff { session_id, .. },
             ..
@@ -131,5 +132,30 @@ fn visible_review_session_id(mode: &AppMode) -> Option<&str> {
         | AppMode::Confirmation { .. }
         | AppMode::SyncBlockedPopup { .. }
         | AppMode::Help { .. } => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn visible_review_session_id_includes_review_comments() {
+        // Arrange
+        let mode = AppMode::ReviewComments {
+            comment_error: None,
+            comment_snapshot: None,
+            diff: String::new(),
+            is_loading_comments: true,
+            selected_comment_index: 0,
+            session_id: "session-id".into(),
+            scroll_offset: 0,
+        };
+
+        // Act
+        let session_id = visible_review_session_id(&mode);
+
+        // Assert
+        assert_eq!(session_id, Some("session-id"));
     }
 }

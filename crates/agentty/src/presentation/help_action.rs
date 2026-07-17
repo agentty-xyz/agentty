@@ -418,6 +418,18 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
     actions
 }
 
+/// Returns full session-view help actions with linked review comments on `c`
+/// and terminal continuation on `C` when both actions are available.
+pub(crate) fn view_actions_with_review_comments(
+    state: ViewHelpState,
+    can_view_review_comments: bool,
+) -> Vec<HelpAction> {
+    let mut actions = view_actions(state);
+    append_review_comment_action(&mut actions, can_view_review_comments);
+
+    actions
+}
+
 /// Returns compact session-view footer actions for the page-level hint line.
 ///
 /// Review-oriented and running sessions keep sync controls discoverable in
@@ -442,6 +454,38 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
     actions.extend(VIEW_FOOTER_TRAILING_ACTIONS);
 
     actions
+}
+
+/// Returns compact session-view footer actions with linked review comments on
+/// `c` and terminal continuation on `C` when both actions are available.
+pub(crate) fn view_footer_actions_with_review_comments(
+    state: ViewHelpState,
+    can_view_review_comments: bool,
+) -> Vec<HelpAction> {
+    let mut actions = view_footer_actions(state);
+    append_review_comment_action(&mut actions, can_view_review_comments);
+
+    actions
+}
+
+/// Adds the comments shortcut before trailing navigation actions and remaps
+/// terminal continuation to `C` when both actions are available.
+fn append_review_comment_action(actions: &mut Vec<HelpAction>, is_available: bool) {
+    if !is_available {
+        return;
+    }
+
+    if let Some(continue_action) = actions
+        .iter_mut()
+        .find(|action| action.key == "c" && action.footer_label == "continue")
+    {
+        continue_action.key = "C";
+    }
+    let insertion_index = 1.min(actions.len());
+    actions.insert(
+        insertion_index,
+        HelpAction::new("comments", "c", "Show review comments"),
+    );
 }
 
 /// Appends the stop action shared by full help and compact footer rows.
@@ -698,6 +742,15 @@ pub(crate) fn diff_footer_actions() -> Vec<HelpAction> {
     ]
 }
 
+/// Returns compact read-only review-comment page actions.
+pub(crate) fn review_comment_footer_actions() -> Vec<HelpAction> {
+    vec![
+        HelpAction::new("back", "q/Esc", "Back to session"),
+        HelpAction::new("select comment", "j/k", "Select comment"),
+        HelpAction::new("scroll pane", "Up/Down", "Scroll comment details"),
+    ]
+}
+
 /// Returns list-mode actions shared by all tabs.
 fn list_base_actions() -> Vec<HelpAction> {
     Vec::from(LIST_BASE_ACTIONS)
@@ -717,6 +770,7 @@ fn publish_pull_request_help_action(action: PublishBranchAction) -> HelpAction {
 mod tests {
     use super::*;
     use crate::domain::session::PublishBranchAction;
+    use crate::test_support::SessionFixtureBuilder;
 
     #[test]
     fn test_project_list_actions_exclude_new_session_shortcut() {
@@ -1526,6 +1580,35 @@ mod tests {
     }
 
     #[test]
+    fn test_view_footer_actions_linked_review_uses_c_for_comments_before_other_actions() {
+        // Arrange
+        let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
+            can_mutate_session_branch: ViewActionAvailability::Enabled,
+            can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_open_worktree: ViewActionAvailability::Enabled,
+            reply_to_session: ViewActionAvailability::Enabled,
+            can_start_staged_session: ViewActionAvailability::Disabled,
+            publish_pull_request_action: None,
+            session_state: ViewSessionState::Done,
+        };
+
+        // Act
+        let actions = view_footer_actions_with_review_comments(state, true);
+
+        // Assert
+        assert_eq!(actions[1].key, "c");
+        assert_eq!(actions[1].popup_label, "Show review comments");
+        assert_eq!(actions.iter().filter(|action| action.key == "c").count(), 1);
+        assert!(actions.iter().any(|action| {
+            action.key == "C"
+                && action.footer_label == "continue"
+                && action.popup_label == "Continue in new session"
+        }));
+    }
+
+    #[test]
     fn test_view_footer_actions_canceled_hides_continue() {
         // Arrange
         let state = ViewHelpState {
@@ -1615,5 +1698,41 @@ mod tests {
 
         // Assert
         assert!(!actions.iter().any(|action| action.key == "Ctrl+c"));
+    }
+
+    #[test]
+    fn test_session_view_state_maps_agent_review_status() {
+        // Arrange
+        let session = SessionFixtureBuilder::new()
+            .status(Status::AgentReview)
+            .build();
+
+        // Act
+        let state = session_view_state(&session);
+
+        // Assert
+        assert_eq!(state, ViewSessionState::AgentReview);
+    }
+
+    #[test]
+    fn test_read_only_detail_and_diff_action_groups_expose_expected_keys() {
+        // Arrange, Act
+        let issue_keys = issue_detail_actions()
+            .iter()
+            .map(|action| action.key)
+            .collect::<Vec<_>>();
+        let diff_keys = diff_actions()
+            .iter()
+            .map(|action| action.key)
+            .collect::<Vec<_>>();
+        let comment_keys = review_comment_footer_actions()
+            .iter()
+            .map(|action| action.key)
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(issue_keys, ["q/Esc", "j/k", "Ctrl+d/u", "g/G"]);
+        assert_eq!(diff_keys, ["q/Esc", "j/k", "Up/Down", "?"]);
+        assert_eq!(comment_keys, ["q/Esc", "j/k", "Up/Down"]);
     }
 }

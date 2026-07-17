@@ -6,6 +6,7 @@ pub mod inbox;
 pub mod issue_detail;
 pub mod issue_list;
 pub mod project_list;
+pub mod review_comment;
 pub mod review_detail;
 pub mod session_chat;
 pub mod session_list;

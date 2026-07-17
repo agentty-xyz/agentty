@@ -467,7 +467,13 @@ orchestration paths:
   schedule cleanup again. Cleanup-critical git subprocesses are cancellable and bounded
   to 30 seconds; confirmed shutdown shares a five-second grace period across all tracked
   cleanup tasks before canceling unfinished work. The Inbox tab loads comment snapshots
-  on demand with generation-scoped deduplication.
+  on demand with generation-scoped deduplication. Session view also loads comments on
+  demand for its linked review request: `AppMode::ReviewComments` renders immediately
+  with a loading state, `TaskService` resolves the session worktree remote through the
+  injected git/forge boundaries, falls back to the persisted review-request URL after
+  terminal-session worktree cleanup, and uses the matching `AppEvent` to update only the
+  still-open comments page. Inline code context is derived from the already loaded
+  current diff.
 - Assigned-issue refresh: the Issues tab resolves the active project remote and runs a
   repository-scoped, generation-scoped `gh search issues` task through
   `ReviewRequestClient`; stale completions are discarded before the list cache is

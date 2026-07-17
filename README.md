@@ -135,6 +135,11 @@ user in the active project. Press `Enter` to load base issue details and the
 description; comments are not loaded in this iteration. Install `gh` and run
 `gh auth login` to enable it.
 
+For sessions linked to a GitHub pull request or GitLab merge request, press `c` in
+session view to browse review comments read-only. General comments and inline threads
+are listed on the left, with the selected conversation and attached current-diff context
+on the right.
+
 ## Documentation
 
 Documentation for installation and workflows is available at

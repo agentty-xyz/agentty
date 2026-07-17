@@ -89,6 +89,7 @@ struct ViewSessionSnapshot {
     publish_pull_request_action: Option<PublishBranchAction>,
     rebase_session_branch: ViewActionState,
     reply_to_session: ViewActionState,
+    review_comments: ViewActionState,
     session_state: ViewSessionState,
     session_status: Status,
     start_staged_session: ViewActionState,
@@ -145,6 +146,12 @@ impl ViewSessionSnapshot {
     /// Returns whether this session can accept a reply under stack rules.
     fn can_reply_to_session(&self) -> bool {
         self.reply_to_session.is_enabled()
+    }
+
+    /// Returns whether the session has a linked forge review request whose
+    /// comments can be opened read-only.
+    fn can_open_review_comments(&self) -> bool {
+        self.review_comments.is_enabled()
     }
 
     /// Returns whether this staged draft can start its first live turn.
@@ -333,8 +340,14 @@ async fn handle_primary_view_key(
         }
         KeyCode::Char('c')
             if key.modifiers == event::KeyModifiers::NONE
-                && view_session_snapshot.can_continue_terminal_session() =>
+                && view_session_snapshot.can_open_review_comments() =>
         {
+            let diff = load_view_session_diff(app, view_context).await;
+            app.open_session_review_comments(&view_context.session_id, diff);
+
+            return Some(false);
+        }
+        KeyCode::Char('c' | 'C') if is_continue_terminal_shortcut(key, view_session_snapshot) => {
             open_continue_confirmation(app, view_context);
 
             return Some(false);
@@ -374,6 +387,22 @@ async fn handle_primary_view_key(
     }
 
     Some(true)
+}
+
+fn is_continue_terminal_shortcut(
+    key: KeyEvent,
+    view_session_snapshot: &ViewSessionSnapshot,
+) -> bool {
+    let has_supported_modifiers = matches!(
+        key.modifiers,
+        event::KeyModifiers::NONE | event::KeyModifiers::SHIFT
+    );
+    let has_unambiguous_key =
+        key.code == KeyCode::Char('C') || !view_session_snapshot.can_open_review_comments();
+
+    has_supported_modifiers
+        && view_session_snapshot.can_continue_terminal_session()
+        && has_unambiguous_key
 }
 
 /// Handles workflow actions in session view such as diff, publish, review,
@@ -593,6 +622,7 @@ fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSe
             app.sessions
                 .can_reply_to_session_in_stack(view_context.session_id.as_str()),
         ),
+        review_comments: ViewActionState::from_bool(session.review_request.is_some()),
         session_state: help_action::session_view_state(session),
         session_status,
         start_staged_session: ViewActionState::from_bool(
@@ -917,6 +947,7 @@ fn open_view_help_overlay(
             can_rebase_session_branch: view_session_snapshot.can_rebase_session_branch(),
             can_reply_to_session: view_session_snapshot.can_reply_to_session(),
             can_start_staged_session: view_session_snapshot.can_start_staged_session(),
+            can_view_review_comments: view_session_snapshot.can_open_review_comments(),
             publish_pull_request_action: view_session_snapshot.publish_pull_request_action,
             session_id: view_context.session_id.clone(),
             session_state: view_session_snapshot.session_state,
@@ -1171,6 +1202,9 @@ mod tests {
     use super::*;
     use crate::app::review_loading_message;
     use crate::domain::agent::AgentModel;
+    use crate::domain::session::{
+        ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
+    };
     use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
     use crate::infra::tmux::{MockTmuxClient, TmuxClient};
     use crate::runtime::mode::session_output_metric;
@@ -2287,6 +2321,7 @@ mod tests {
             rebase_session_branch: ViewActionState::Enabled,
             open_worktree: ViewActionState::Enabled,
             reply_to_session: ViewActionState::Enabled,
+            review_comments: ViewActionState::Disabled,
             start_staged_session: ViewActionState::Disabled,
             follow_up_task_action: None,
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
@@ -2658,6 +2693,7 @@ mod tests {
             rebase_session_branch: ViewActionState::Enabled,
             open_worktree: ViewActionState::Disabled,
             reply_to_session: ViewActionState::Enabled,
+            review_comments: ViewActionState::Disabled,
             start_staged_session: ViewActionState::Disabled,
             follow_up_task_action: None,
             publish_pull_request_action: None,
@@ -2714,6 +2750,7 @@ mod tests {
             rebase_session_branch: ViewActionState::Enabled,
             open_worktree: ViewActionState::Enabled,
             reply_to_session: ViewActionState::Enabled,
+            review_comments: ViewActionState::Disabled,
             start_staged_session: ViewActionState::Disabled,
             follow_up_task_action: None,
             publish_pull_request_action: None,
@@ -2850,6 +2887,100 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_linked_terminal_session_routes_c_to_comments_and_shift_c_to_continue() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        let session = app
+            .sessions
+            .sessions_mut()
+            .iter_mut()
+            .find(|session| session.id == session_id)
+            .expect("session should exist");
+        session.review_request = Some(ReviewRequest {
+            last_refreshed_at: 0,
+            summary: ReviewRequestSummary {
+                display_id: "#42".to_string(),
+                forge_kind: ForgeKind::GitHub,
+                source_branch: "wt/linked-terminal".to_string(),
+                state: ReviewRequestState::Open,
+                status_summary: None,
+                target_branch: "main".to_string(),
+                title: "Linked terminal session".to_string(),
+                web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
+            },
+        });
+        app.mode = AppMode::View {
+            session_id: session_id.into(),
+            scroll_offset: Some(0),
+        };
+        let view_context = view_context(&mut app).expect("expected view context");
+        let pending_update = ViewPendingUpdate::from_context(&view_context);
+        let view_session_snapshot = ViewSessionSnapshot {
+            continue_terminal_session: ViewActionState::Enabled,
+            fork_session: ViewActionState::Disabled,
+            follow_up_task_action: None,
+            merge_session_branch: ViewActionState::Disabled,
+            mutate_session_branch: ViewActionState::Disabled,
+            open_worktree: ViewActionState::Disabled,
+            publish_pull_request_action: None,
+            rebase_session_branch: ViewActionState::Disabled,
+            reply_to_session: ViewActionState::Disabled,
+            review_comments: ViewActionState::Enabled,
+            session_state: ViewSessionState::Done,
+            session_status: Status::Done,
+            start_staged_session: ViewActionState::Disabled,
+        };
+
+        // Act
+        let lowercase_continues = is_continue_terminal_shortcut(
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+            &view_session_snapshot,
+        );
+        let uppercase_continues = is_continue_terminal_shortcut(
+            KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT),
+            &view_session_snapshot,
+        );
+
+        // Assert
+        assert!(!lowercase_continues);
+        assert!(uppercase_continues);
+
+        // Act
+        let comments_result = handle_primary_view_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+            &view_context,
+            &view_session_snapshot,
+            &pending_update,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(comments_result, Some(false));
+        assert!(matches!(app.mode, AppMode::ReviewComments { .. }));
+
+        // Act
+        let continue_result = handle_primary_view_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT),
+            &view_context,
+            &view_session_snapshot,
+            &pending_update,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(continue_result, Some(false));
+        assert!(matches!(
+            app.mode,
+            AppMode::Confirmation {
+                confirmation_intent: ConfirmationIntent::ContinueSession,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
     async fn test_handle_continue_key_does_not_open_confirmation_for_canceled_session() {
         // Arrange
         let (mut app, _base_dir, source_session_id) = new_test_app_with_session().await;
@@ -2904,6 +3035,7 @@ mod tests {
             rebase_session_branch: ViewActionState::Enabled,
             open_worktree: ViewActionState::Enabled,
             reply_to_session: ViewActionState::Enabled,
+            review_comments: ViewActionState::Disabled,
             start_staged_session: ViewActionState::Disabled,
             follow_up_task_action: None,
             publish_pull_request_action: None,
@@ -2961,6 +3093,7 @@ mod tests {
             rebase_session_branch: ViewActionState::Enabled,
             open_worktree: ViewActionState::Enabled,
             reply_to_session: ViewActionState::Enabled,
+            review_comments: ViewActionState::Disabled,
             start_staged_session: ViewActionState::Disabled,
             follow_up_task_action: None,
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
@@ -3015,6 +3148,7 @@ mod tests {
             rebase_session_branch: ViewActionState::Enabled,
             open_worktree: ViewActionState::Enabled,
             reply_to_session: ViewActionState::Enabled,
+            review_comments: ViewActionState::Disabled,
             start_staged_session: ViewActionState::Disabled,
             follow_up_task_action: None,
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
@@ -3087,6 +3221,7 @@ mod tests {
                 rebase_session_branch: ViewActionState::Enabled,
                 open_worktree: ViewActionState::Disabled,
                 reply_to_session: ViewActionState::Enabled,
+                review_comments: ViewActionState::Disabled,
                 start_staged_session: ViewActionState::Disabled,
                 follow_up_task_action: None,
                 publish_pull_request_action: None,

@@ -295,6 +295,7 @@ fn app_event_label(event: &AppEvent) -> &'static str {
         AppEvent::RequestedReviewCommentSnapshotLoaded { .. } => {
             "RequestedReviewCommentSnapshotLoaded"
         }
+        AppEvent::SessionReviewCommentSnapshotLoaded { .. } => "SessionReviewCommentSnapshotLoaded",
         AppEvent::SessionProgressUpdated { .. } => "SessionProgressUpdated",
         AppEvent::SyncMainCompleted { .. } => "SyncMainCompleted",
         AppEvent::SyncMainConflictResolutionStarted { .. } => "SyncMainConflictResolutionStarted",
@@ -319,6 +320,21 @@ mod tests {
     use std::future;
 
     use super::*;
+
+    #[test]
+    fn app_event_label_names_session_review_comment_snapshot_loads() {
+        // Arrange
+        let event = AppEvent::SessionReviewCommentSnapshotLoaded {
+            result: Err("forge unavailable".to_string()),
+            session_id: "session-id".into(),
+        };
+
+        // Act
+        let label = app_event_label(&event);
+
+        // Assert
+        assert_eq!(label, "SessionReviewCommentSnapshotLoaded");
+    }
 
     #[tokio::test]
     async fn cleanup_task_wait_cancels_work_after_shared_deadline() {

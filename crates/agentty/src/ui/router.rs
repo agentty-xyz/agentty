@@ -389,7 +389,8 @@ fn render_list_or_overlay_mode(
         | AppMode::Question { .. }
         | AppMode::PublishBranchInput { .. }
         | AppMode::LaunchConfigurationSelector { .. }
-        | AppMode::Diff { .. } => {
+        | AppMode::Diff { .. }
+        | AppMode::ReviewComments { .. } => {
             return false;
         }
     }
@@ -718,6 +719,31 @@ fn render_session_or_diff_mode(
                     scroll_offset: *scroll_offset,
                     session,
                 })
+                .render(f, area);
+            }
+        }
+        AppMode::ReviewComments {
+            comment_error,
+            comment_snapshot,
+            diff,
+            is_loading_comments,
+            selected_comment_index,
+            session_id,
+            scroll_offset,
+        } => {
+            if let Some(session) = sessions.iter().find(|session| &session.id == session_id) {
+                page::review_comment::ReviewCommentPage::new(
+                    page::review_comment::ReviewCommentPageInput {
+                        comment_error: comment_error.as_deref(),
+                        comment_snapshot: comment_snapshot.as_ref(),
+                        diff,
+                        is_loading_comments: *is_loading_comments,
+                        markdown_render_cache: aux.markdown_render_cache,
+                        scroll_offset: *scroll_offset,
+                        selected_comment_index: *selected_comment_index,
+                        session,
+                    },
+                )
                 .render(f, area);
             }
         }
@@ -1105,6 +1131,58 @@ mod tests {
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("Diff Session"));
         assert!(text.contains("No changes found."));
+    }
+
+    #[test]
+    fn render_session_or_diff_mode_renders_review_comments_for_matching_session() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(120, 30);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let session_id = "session-comments";
+        let sessions = vec![session_fixture(session_id)];
+        let mode = AppMode::ReviewComments {
+            comment_error: None,
+            comment_snapshot: None,
+            diff: String::new(),
+            is_loading_comments: true,
+            selected_comment_index: 0,
+            session_id: session_id.into(),
+            scroll_offset: 0,
+        };
+        let progress_messages = HashMap::new();
+        let cache = markdown::MarkdownRenderCache::default();
+        let diff_layout_cache = page::diff::DiffLayoutCache::default();
+        let output_layout_cache = component::session_output::SessionOutputLayoutCache::default();
+        let session_update_versions = HashMap::new();
+
+        // Act
+        terminal
+            .draw(|frame| {
+                render_session_or_diff_mode(
+                    frame,
+                    frame.area(),
+                    &mode,
+                    &sessions,
+                    RouteAuxContext {
+                        active_prompt_outputs: &HashMap::new(),
+                        default_reasoning_level: ReasoningLevel::default(),
+                        diff_layout_cache: &diff_layout_cache,
+                        markdown_render_cache: &cache,
+                        output_layout_cache: &output_layout_cache,
+                        review_snapshot: None,
+                        session_progress_messages: &progress_messages,
+                        session_update_versions: &session_update_versions,
+                        session_worktree_availability: &HashMap::new(),
+                        wall_clock_unix_seconds: 0,
+                    },
+                );
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("Comment — Router Session"));
+        assert!(text.contains("Loading review comments..."));
     }
 
     #[test]

@@ -191,7 +191,7 @@ impl SessionManager {
     }
 
     /// Derives a repository URL from one persisted review-request web URL.
-    fn review_request_repo_url(review_request: &ReviewRequest) -> Option<String> {
+    pub(crate) fn review_request_repo_url(review_request: &ReviewRequest) -> Option<String> {
         let web_url = review_request.summary.web_url.trim_end_matches('/');
 
         match review_request.summary.forge_kind {
@@ -243,6 +243,7 @@ impl SessionManager {
             | AppMode::Question { session_id, .. }
             | AppMode::View { session_id, .. }
             | AppMode::Diff { session_id, .. }
+            | AppMode::ReviewComments { session_id, .. }
             | AppMode::LaunchConfigurationSelector {
                 restore_view: ConfirmationViewMode { session_id, .. },
                 ..
@@ -722,6 +723,29 @@ mod tests {
 
         // Assert
         assert!(refresh_due);
+    }
+
+    #[test]
+    fn test_ensure_mode_session_exists_closes_missing_review_comments_page() {
+        // Arrange
+        let now = Instant::now();
+        let clock: Arc<dyn Clock> = Arc::new(FakeClock::new(now, SystemTime::UNIX_EPOCH));
+        let session_manager = session_manager_fixture(clock);
+        let mut mode = AppMode::ReviewComments {
+            comment_error: None,
+            comment_snapshot: None,
+            diff: String::new(),
+            is_loading_comments: true,
+            selected_comment_index: 0,
+            session_id: "missing-session".into(),
+            scroll_offset: 0,
+        };
+
+        // Act
+        session_manager.ensure_mode_session_exists(&mut mode);
+
+        // Assert
+        assert!(matches!(mode, AppMode::List));
     }
 
     /// Builds a session manager with deterministic time and empty state.

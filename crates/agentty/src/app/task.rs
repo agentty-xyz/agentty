@@ -41,6 +41,18 @@ pub(super) struct RequestedReviewCommentSnapshotTask {
     pub(super) working_dir: PathBuf,
 }
 
+/// Payload needed to load comments for a linked session review request.
+pub(super) struct SessionReviewCommentSnapshotTask {
+    /// Provider display id such as GitHub `#123` or GitLab `!123`.
+    pub(super) display_id: String,
+    /// Repository URL reconstructed from the persisted review-request link.
+    pub(super) fallback_repo_url: Option<String>,
+    /// Session whose comments should receive the completed snapshot.
+    pub(super) session_id: SessionId,
+    /// Session worktree used for remote detection and forge CLI context.
+    pub(super) working_dir: PathBuf,
+}
+
 /// Inputs needed to generate review assist text in the background.
 pub(super) struct ReviewAssistTaskInput {
     pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
@@ -208,6 +220,57 @@ impl TaskService {
         });
     }
 
+    /// Spawns one linked session review-comment load without blocking terminal
+    /// input or redraws.
+    pub(super) fn spawn_session_review_comment_snapshot_task(
+        task: SessionReviewCommentSnapshotTask,
+        app_event_tx: mpsc::UnboundedSender<AppEvent>,
+        git_client: Arc<dyn GitClient>,
+        review_request_client: Arc<dyn ReviewRequestClient>,
+    ) {
+        tokio::spawn(async move {
+            let result = Self::load_session_review_comment_snapshot(
+                task.working_dir,
+                task.fallback_repo_url,
+                task.display_id,
+                git_client.as_ref(),
+                review_request_client.as_ref(),
+            )
+            .await;
+            let _ = app_event_tx.send(AppEvent::SessionReviewCommentSnapshotLoaded {
+                result,
+                session_id: task.session_id,
+            });
+        });
+    }
+
+    /// Loads comments for one linked session review request, falling back to
+    /// its persisted forge URL when terminal-session cleanup removed the
+    /// worktree.
+    async fn load_session_review_comment_snapshot(
+        working_dir: PathBuf,
+        fallback_repo_url: Option<String>,
+        display_id: String,
+        git_client: &dyn GitClient,
+        review_request_client: &dyn ReviewRequestClient,
+    ) -> Result<ReviewCommentSnapshot, String> {
+        let remote =
+            match review_request_remote(working_dir, git_client, review_request_client).await {
+                Ok(remote) => remote,
+                Err(working_dir_error) => {
+                    let Some(repo_url) = fallback_repo_url else {
+                        return Err(working_dir_error);
+                    };
+
+                    review_request_client
+                        .detect_remote(repo_url)
+                        .map_err(|error| error.detail_message())?
+                }
+            };
+
+        load_review_comment_snapshot(remote, display_id, review_request_client).await
+    }
+
     /// Loads and normalizes the comment snapshot for one requested review.
     ///
     /// This is triggered lazily when users open a specific review detail page
@@ -221,11 +284,7 @@ impl TaskService {
     ) -> Result<ReviewCommentSnapshot, String> {
         let remote = review_request_remote(working_dir, git_client, review_request_client).await?;
 
-        review_request_client
-            .fetch_review_comment_snapshot(remote, display_id)
-            .await
-            .map(sorted_review_comment_snapshot)
-            .map_err(|error| error.detail_message())
+        load_review_comment_snapshot(remote, display_id, review_request_client).await
     }
 
     /// Spawns a one-shot background check for newer `agentty` versions on
@@ -532,6 +591,20 @@ async fn review_request_remote(
         .map_err(|error| error.detail_message())
 }
 
+/// Fetches and normalizes one review-comment snapshot from an already
+/// resolved forge remote.
+async fn load_review_comment_snapshot(
+    remote: ForgeRemote,
+    display_id: String,
+    review_request_client: &dyn ReviewRequestClient,
+) -> Result<ReviewCommentSnapshot, String> {
+    review_request_client
+        .fetch_review_comment_snapshot(remote, display_id)
+        .await
+        .map(sorted_review_comment_snapshot)
+        .map_err(|error| error.detail_message())
+}
+
 /// Sorts inline review-comment threads once before storing them for rendering.
 fn sorted_review_comment_snapshot(
     mut review_comment_snapshot: ReviewCommentSnapshot,
@@ -702,6 +775,74 @@ mod tests {
 
         // Assert
         assert_eq!(comment_snapshot, Ok(review_comment_snapshot()));
+    }
+
+    #[tokio::test]
+    async fn load_session_review_comment_snapshot_uses_persisted_url_without_worktree() {
+        // Arrange
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client.expect_repo_url().times(1).returning(|_| {
+            Box::pin(async {
+                Err(ag_git::GitError::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "session worktree was removed",
+                )))
+            })
+        });
+        let mut mock_review_request_client = MockReviewRequestClient::new();
+        mock_review_request_client
+            .expect_detect_remote()
+            .times(1)
+            .withf(|repo_url| repo_url == "https://github.com/agentty-xyz/agentty")
+            .returning(|_| Ok(forge_remote()));
+        mock_review_request_client
+            .expect_fetch_review_comment_snapshot()
+            .times(1)
+            .withf(|remote, display_id| {
+                remote.command_working_directory.is_none() && display_id == "#42"
+            })
+            .returning(|_, _| Box::pin(async { Ok(review_comment_snapshot()) }));
+
+        // Act
+        let comment_snapshot = TaskService::load_session_review_comment_snapshot(
+            PathBuf::from("/tmp/missing-session"),
+            Some("https://github.com/agentty-xyz/agentty".to_string()),
+            "#42".to_string(),
+            &mock_git_client,
+            &mock_review_request_client,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(comment_snapshot, Ok(review_comment_snapshot()));
+    }
+
+    #[tokio::test]
+    async fn load_session_review_comment_snapshot_returns_worktree_error_without_fallback() {
+        // Arrange
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client.expect_repo_url().once().returning(|_| {
+            Box::pin(async {
+                Err(ag_git::GitError::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "session worktree was removed",
+                )))
+            })
+        });
+        let mock_review_request_client = MockReviewRequestClient::new();
+
+        // Act
+        let result = TaskService::load_session_review_comment_snapshot(
+            PathBuf::from("/tmp/missing-session"),
+            None,
+            "#42".to_string(),
+            &mock_git_client,
+            &mock_review_request_client,
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(result, Err(error) if error.contains("session worktree was removed")));
     }
 
     #[tokio::test]
@@ -1165,6 +1306,18 @@ mod tests {
             path: path.to_string(),
             start_line: None,
         }
+    }
+
+    #[test]
+    fn review_comment_anchor_side_order_places_file_before_old_and_new_lines() {
+        // Arrange, Act
+        let file_order = review_comment_anchor_side_order(ReviewCommentAnchorSide::File);
+        let old_order = review_comment_anchor_side_order(ReviewCommentAnchorSide::Old);
+        let new_order = review_comment_anchor_side_order(ReviewCommentAnchorSide::New);
+
+        // Assert
+        assert!(file_order < old_order);
+        assert!(old_order < new_order);
     }
 
     #[test]
