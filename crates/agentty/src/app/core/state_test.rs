@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -77,6 +77,50 @@ async fn test_app_viewing_reconcile_session(
     app.mode = test_view_app_mode("session-1");
 
     app
+}
+
+/// Seeds one review-ready session and its persisted focused review.
+async fn seed_persisted_review_session(
+    database: &AppRepositories,
+    base_path: &Path,
+    project_id: i64,
+    session_id: &str,
+    diff_hash: &str,
+    review_text: &str,
+) {
+    database
+        .sessions()
+        .insert_session(
+            session_id,
+            AgentModel::Gpt55.as_str(),
+            "main",
+            &Status::Review.to_string(),
+            project_id,
+        )
+        .await
+        .expect("failed to insert review session");
+    fs::create_dir_all(session::session_folder(base_path, session_id).join(SESSION_DATA_DIR))
+        .expect("failed to create review session data dir");
+    database
+        .sessions()
+        .update_session_focused_review(
+            session_id,
+            Some(diff_hash.to_string()),
+            Some(review_text.to_string()),
+        )
+        .await
+        .expect("failed to persist focused review");
+}
+
+/// Inserts one completed focused review into an app cache for eviction tests.
+fn insert_test_ready_review(app: &mut App, session_id: &str) {
+    app.review_cache.insert(
+        session_id.into(),
+        ReviewCacheEntry::Ready {
+            diff_hash: 1,
+            text: "inactive review".to_string(),
+        },
+    );
 }
 
 /// Builds a successful branch-publish batch payload for one session.
@@ -300,6 +344,105 @@ async fn test_switch_project_reloads_project_scoped_settings() {
         AgentModel::Gpt55
     );
     assert_eq!(app.settings.launch_configuration, "cargo test");
+}
+
+#[tokio::test]
+async fn test_switch_project_restores_project_scoped_focused_reviews() {
+    // Arrange
+    let base_dir = tempdir().expect("failed to create temp dir");
+    let second_project_dir = tempdir().expect("failed to create second temp dir");
+    let base_path = base_dir.path().to_path_buf();
+    let database = AppRepositories::in_memory().await;
+    let first_project_id = database
+        .projects()
+        .upsert_project(&base_path.to_string_lossy(), None)
+        .await
+        .expect("failed to insert first project");
+    let second_project_id = database
+        .projects()
+        .upsert_project(&second_project_dir.path().to_string_lossy(), None)
+        .await
+        .expect("failed to insert second project");
+    let second_session_id = "second-review";
+    let loading_session_id = "loading-review";
+    let review_text = "## Review\nSecond project finding.";
+    seed_persisted_review_session(
+        &database,
+        &base_path,
+        second_project_id,
+        second_session_id,
+        "42",
+        review_text,
+    )
+    .await;
+    seed_persisted_review_session(
+        &database,
+        &base_path,
+        second_project_id,
+        loading_session_id,
+        "7",
+        "outdated persisted review",
+    )
+    .await;
+    database
+        .settings()
+        .set_active_project_id(first_project_id)
+        .await
+        .expect("failed to persist initial active project");
+    let mut app = App::new_with_clients(
+        base_path.clone(),
+        base_path,
+        None,
+        database,
+        crate::test_support::test_app_clients(),
+    )
+    .await
+    .expect("failed to build app");
+    let mut mock_git_client = ag_git::MockGitClient::new();
+    mock_git_client
+        .expect_detect_git_info()
+        .times(3)
+        .returning(|_| Box::pin(async { None }));
+    install_mock_git_client(&mut app, mock_git_client);
+    app.review_cache.insert(
+        loading_session_id.into(),
+        ReviewCacheEntry::Loading { diff_hash: 21 },
+    );
+    insert_test_ready_review(&mut app, "inactive-review");
+
+    // Act
+    app.switch_project(second_project_id)
+        .await
+        .expect("failed to switch project");
+
+    // Assert
+    assert!(matches!(
+        app.review_cache.get(second_session_id),
+        Some(ReviewCacheEntry::Ready { diff_hash: 42, text }) if text == review_text
+    ));
+    assert!(matches!(
+        app.review_cache.get(loading_session_id),
+        Some(ReviewCacheEntry::Loading { diff_hash: 21 })
+    ));
+    assert!(!app.review_cache.contains_key("inactive-review"));
+    assert_eq!(
+        app.sessions
+            .session_or_err(second_session_id)
+            .expect("second-project session should be loaded")
+            .transient_messages
+            .get(TransientMessageSlot::Review)
+            .map(|message| message.body.text()),
+        Some(review_text)
+    );
+    assert!(matches!(
+        app.sessions
+            .session_or_err(loading_session_id)
+            .expect("loading review session should be loaded")
+            .transient_messages
+            .get(TransientMessageSlot::Review)
+            .map(|message| &message.body),
+        Some(TransientMessageBody::Loading(_))
+    ));
 }
 
 #[tokio::test]
@@ -4795,6 +4938,11 @@ async fn apply_review_update_stores_failure_in_cache() {
     .await;
     let session_id = "session-review-fail";
     let error_message = "Review assist failed with exit code 1";
+    let mut session =
+        crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/session-review-fail"));
+    session.id = session_id.to_string().into();
+    session.status = Status::AgentReview;
+    app.sessions.push_session(session);
     app.review_cache.insert(
         session_id.to_string().into(),
         ReviewCacheEntry::Loading { diff_hash: 456 },

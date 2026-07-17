@@ -151,6 +151,7 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
                 app.sessions
                     .load_session_detail_into_state(app.services.db(), session_id.as_str())
                     .await;
+                app.restore_review_output(&session_id);
 
                 if let Some(session) = app.sessions.session_at(session_index)
                     && session.status == Status::Question
@@ -645,6 +646,11 @@ mod tests {
                 text: "Focused review".to_string(),
             },
         );
+        crate::test_support::set_session_status_for_test(
+            &mut app,
+            &expected_session_id,
+            Status::Review,
+        );
         app.tabs.set(Tab::Sessions);
         app.sessions.select_session_index(Some(0));
         app.mode = AppMode::List;
@@ -664,6 +670,13 @@ mod tests {
                 ..
             } if session_id == &expected_session_id
         ));
+        assert_eq!(
+            app.sessions.sessions()[0]
+                .transient_messages
+                .get(crate::domain::transient_message::TransientMessageSlot::Review)
+                .map(|message| message.body.text()),
+            Some("Focused review")
+        );
     }
 
     #[tokio::test]

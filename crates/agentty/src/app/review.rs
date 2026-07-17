@@ -11,7 +11,7 @@ use super::core::AppEvent;
 use super::task;
 use crate::app::session_state::SessionState;
 use crate::domain::agent::{AgentModel, AgentSelection};
-use crate::domain::session::{SessionId, Status};
+use crate::domain::session::{Session, SessionId, Status};
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::transient_message::{
     TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
@@ -143,43 +143,100 @@ pub(crate) fn hydrate_review_transients(
     review_model: AgentModel,
 ) {
     for session in session_state.sessions_mut() {
-        if !matches!(
-            session.status,
-            Status::Review | Status::Question | Status::AgentReview
-        ) {
+        hydrate_session_review_transient(review_cache, session, review_model);
+    }
+}
+
+/// Rehydrates one session's focused-review cache entry into its stable display
+/// slot, retracting stale display state when the cache no longer owns output.
+pub(crate) fn hydrate_review_transient(
+    review_cache: &HashMap<SessionId, ReviewCacheEntry>,
+    session_state: &mut SessionState,
+    session_id: &str,
+    review_model: AgentModel,
+) {
+    let Some(session) = session_state.session_mut_for_id(session_id) else {
+        return;
+    };
+
+    hydrate_session_review_transient(review_cache, session, review_model);
+}
+
+/// Evicts inactive completed review entries while retaining in-flight work.
+///
+/// A `Loading` entry must survive project switches so its eventual result can
+/// still be validated and persisted. Once that result arrives,
+/// [`apply_review_updates()`] replaces the entry and this pruning step removes
+/// it unless the session belongs to the currently loaded project.
+pub(crate) fn prune_review_cache(
+    review_cache: &mut HashMap<SessionId, ReviewCacheEntry>,
+    session_state: &SessionState,
+) {
+    let active_session_ids = session_state
+        .sessions()
+        .iter()
+        .map(|session| session.id.as_str())
+        .collect::<HashSet<_>>();
+
+    review_cache.retain(|session_id, cache_entry| {
+        active_session_ids.contains(session_id.as_str())
+            || matches!(cache_entry, ReviewCacheEntry::Loading { .. })
+    });
+}
+
+/// Synchronizes one session's focused-review display slot from the canonical
+/// cache state.
+fn hydrate_session_review_transient(
+    review_cache: &HashMap<SessionId, ReviewCacheEntry>,
+    session: &mut Session,
+    review_model: AgentModel,
+) {
+    if !matches!(
+        session.status,
+        Status::Review | Status::Question | Status::AgentReview
+    ) {
+        session
+            .transient_messages
+            .retract(TransientMessageSlot::Review);
+
+        return;
+    }
+    let Some(cache_entry) = review_cache.get(&session.id) else {
+        session
+            .transient_messages
+            .retract(TransientMessageSlot::Review);
+
+        return;
+    };
+    let (anchor, body) = match cache_entry {
+        ReviewCacheEntry::Loading { .. } => (
+            TransientMessageAnchor::Tail,
+            TransientMessageBody::Loading(review_loading_message(review_model)),
+        ),
+        ReviewCacheEntry::Ready { text, .. } => (
+            TransientMessageAnchor::AfterCompletedTurn,
+            TransientMessageBody::Markdown(text.clone()),
+        ),
+        ReviewCacheEntry::Failed { error, .. } => (
+            TransientMessageAnchor::AfterCompletedTurn,
+            TransientMessageBody::Plain(review_failure_message(error)),
+        ),
+        ReviewCacheEntry::Suppressed => {
             session
                 .transient_messages
                 .retract(TransientMessageSlot::Review);
 
-            continue;
+            return;
         }
-        let Some(cache_entry) = review_cache.get(&session.id) else {
-            continue;
-        };
-        let (anchor, body) = match cache_entry {
-            ReviewCacheEntry::Loading { .. } => (
-                TransientMessageAnchor::Tail,
-                TransientMessageBody::Loading(review_loading_message(review_model)),
-            ),
-            ReviewCacheEntry::Ready { text, .. } => (
-                TransientMessageAnchor::AfterCompletedTurn,
-                TransientMessageBody::Markdown(text.clone()),
-            ),
-            ReviewCacheEntry::Failed { error, .. } => (
-                TransientMessageAnchor::AfterCompletedTurn,
-                TransientMessageBody::Plain(review_failure_message(error)),
-            ),
-            ReviewCacheEntry::Suppressed => continue,
-        };
+    };
 
-        session.transient_messages.upsert(TransientMessage {
-            anchor,
-            body,
-            lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
-            slot: TransientMessageSlot::Review,
-            turn_position: session.latest_user_prompt_position(),
-        });
-    }
+    session.transient_messages.upsert(TransientMessage {
+        anchor,
+        body,
+        lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
+        slot: TransientMessageSlot::Review,
+        turn_position: session.latest_user_prompt_position(),
+    });
 }
 
 /// Builds the startup focused-review cache from persisted rows.
@@ -249,6 +306,8 @@ pub(crate) fn apply_review_updates(
             persistence_updates.push(persistence_update);
         }
     }
+
+    prune_review_cache(review_cache, session_state);
 
     persistence_updates
 }
@@ -500,6 +559,30 @@ mod tests {
         )])
     }
 
+    /// Builds one review-ready session with stale focused-review display text.
+    fn session_state_with_stale_review(session_id: &SessionId) -> SessionState {
+        let mut session = SessionFixtureBuilder::new()
+            .id(session_id.as_str())
+            .status(Status::Review)
+            .build();
+        session.transient_messages.upsert(TransientMessage {
+            anchor: TransientMessageAnchor::AfterCompletedTurn,
+            body: TransientMessageBody::Markdown("stale review".to_string()),
+            lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
+            slot: TransientMessageSlot::Review,
+            turn_position: None,
+        });
+
+        SessionState::new(
+            HashMap::new(),
+            vec![session],
+            SelectionState::default(),
+            Arc::new(RealClock),
+            0,
+            0,
+        )
+    }
+
     #[test]
     fn review_loading_message_uses_requested_model_name() {
         // Arrange
@@ -605,7 +688,151 @@ mod tests {
     }
 
     #[test]
-    fn apply_review_updates_returns_success_for_persistence() {
+    fn hydrate_review_transient_retracts_review_without_cache_entry() {
+        // Arrange
+        let session_id = SessionId::from("session-id");
+        let mut session_state = session_state_with_stale_review(&session_id);
+
+        // Act
+        hydrate_review_transient(
+            &HashMap::new(),
+            &mut session_state,
+            &session_id,
+            AgentModel::Gpt55,
+        );
+
+        // Assert
+        assert!(
+            session_state.sessions()[0]
+                .transient_messages
+                .get(TransientMessageSlot::Review)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn hydrate_review_transient_retracts_suppressed_review() {
+        // Arrange
+        let session_id = SessionId::from("session-id");
+        let review_cache = HashMap::from([(session_id.clone(), ReviewCacheEntry::Suppressed)]);
+        let mut session_state = session_state_with_stale_review(&session_id);
+
+        // Act
+        hydrate_review_transient(
+            &review_cache,
+            &mut session_state,
+            &session_id,
+            AgentModel::Gpt55,
+        );
+
+        // Assert
+        assert!(
+            session_state.sessions()[0]
+                .transient_messages
+                .get(TransientMessageSlot::Review)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn hydrate_review_transient_restores_failed_review() {
+        // Arrange
+        let session_id = SessionId::from("session-id");
+        let review_cache = HashMap::from([(
+            session_id.clone(),
+            ReviewCacheEntry::Failed {
+                diff_hash: 42,
+                error: "provider unavailable".to_string(),
+            },
+        )]);
+        let mut session_state = session_state_with_stale_review(&session_id);
+
+        // Act
+        hydrate_review_transient(
+            &review_cache,
+            &mut session_state,
+            &session_id,
+            AgentModel::Gpt55,
+        );
+
+        // Assert
+        assert_eq!(
+            session_state.sessions()[0]
+                .transient_messages
+                .get(TransientMessageSlot::Review)
+                .map(|message| &message.body),
+            Some(&TransientMessageBody::Plain(
+                "Review assist unavailable: provider unavailable".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn hydrate_review_transient_ignores_missing_session() {
+        // Arrange
+        let mut session_state = empty_session_state();
+
+        // Act
+        hydrate_review_transient(
+            &HashMap::new(),
+            &mut session_state,
+            "missing-session",
+            AgentModel::Gpt55,
+        );
+
+        // Assert
+        assert!(session_state.sessions().is_empty());
+    }
+
+    #[test]
+    fn prune_review_cache_retains_active_and_loading_entries() {
+        // Arrange
+        let active_session_id = SessionId::from("active-session");
+        let loading_session_id = SessionId::from("loading-session");
+        let mut review_cache = HashMap::from([
+            (
+                active_session_id.clone(),
+                ReviewCacheEntry::Ready {
+                    diff_hash: 1,
+                    text: "active review".to_string(),
+                },
+            ),
+            (
+                "inactive-ready".into(),
+                ReviewCacheEntry::Ready {
+                    diff_hash: 2,
+                    text: "inactive review".to_string(),
+                },
+            ),
+            (
+                "inactive-failed".into(),
+                ReviewCacheEntry::Failed {
+                    diff_hash: 3,
+                    error: "failed review".to_string(),
+                },
+            ),
+            ("inactive-suppressed".into(), ReviewCacheEntry::Suppressed),
+            (
+                loading_session_id.clone(),
+                ReviewCacheEntry::Loading { diff_hash: 4 },
+            ),
+        ]);
+        let session_state = session_state_with_stale_review(&active_session_id);
+
+        // Act
+        prune_review_cache(&mut review_cache, &session_state);
+
+        // Assert
+        assert_eq!(review_cache.len(), 2);
+        assert!(review_cache.contains_key(&active_session_id));
+        assert!(matches!(
+            review_cache.get(&loading_session_id),
+            Some(ReviewCacheEntry::Loading { diff_hash: 4 })
+        ));
+    }
+
+    #[test]
+    fn apply_review_updates_persists_and_evicts_inactive_success() {
         // Arrange
         let session_id = SessionId::from("session-persist-review");
         let diff_hash = 19;
@@ -623,10 +850,11 @@ mod tests {
             persistence_updates,
             vec![FocusedReviewPersistence {
                 diff_hash: Some(diff_hash),
-                session_id,
+                session_id: session_id.clone(),
                 text: Some(review_text.to_string()),
             }]
         );
+        assert!(!review_cache.contains_key(&session_id));
     }
 
     #[test]
@@ -666,7 +894,7 @@ mod tests {
         let diff_hash = 11;
         let review_text = "## Review\nCache-backed finding.";
         let mut review_cache = loading_review_cache(&session_id, diff_hash);
-        let mut session_state = empty_session_state();
+        let mut session_state = session_state_with_stale_review(&session_id);
         let review_updates = successful_review_update(&session_id, diff_hash, review_text);
 
         // Act
@@ -685,7 +913,7 @@ mod tests {
         let session_id = SessionId::from("session-suppressed-review");
         let diff_hash = 23;
         let mut review_cache = HashMap::from([(session_id.clone(), ReviewCacheEntry::Suppressed)]);
-        let mut session_state = empty_session_state();
+        let mut session_state = session_state_with_stale_review(&session_id);
         let review_updates =
             successful_review_update(&session_id, diff_hash, "## Review\nShould not be rendered.");
 

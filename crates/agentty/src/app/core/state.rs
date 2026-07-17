@@ -672,6 +672,13 @@ impl App {
         .await;
         self.sessions
             .set_default_session_model(default_session_model);
+        for (session_id, persisted_review) in
+            Self::load_focused_review_cache(self.services.db(), project.id).await
+        {
+            self.review_cache
+                .entry(session_id)
+                .or_insert(persisted_review);
+        }
         self.reload_projects().await;
         self.refresh_sessions_now().await;
 
@@ -1130,6 +1137,17 @@ impl App {
             self.review_cache.get(session_id),
             Some(ReviewCacheEntry::Loading { .. })
         )
+    }
+
+    /// Restores one session's cache-backed focused review into its visible
+    /// output slot when the session is reopened.
+    pub(crate) fn restore_review_output(&mut self, session_id: &str) {
+        app::review::hydrate_review_transient(
+            &self.review_cache,
+            self.sessions.state_mut(),
+            session_id,
+            self.settings.default_review_selection.model(),
+        );
     }
 
     /// Clears cached focused-review state and retracts its display slot.
@@ -1631,6 +1649,7 @@ impl App {
             .refresh_sessions_if_needed(&mut self.mode, &self.projects, &self.services)
             .await;
         if refreshed {
+            app::review::prune_review_cache(&mut self.review_cache, self.sessions.state());
             app::review::hydrate_review_transients(
                 &self.review_cache,
                 self.sessions.state_mut(),
@@ -1646,6 +1665,7 @@ impl App {
         self.sessions
             .refresh_sessions_now(&mut self.mode, &self.projects, &self.services)
             .await;
+        app::review::prune_review_cache(&mut self.review_cache, self.sessions.state());
         app::review::hydrate_review_transients(
             &self.review_cache,
             self.sessions.state_mut(),
@@ -1838,6 +1858,7 @@ impl App {
     /// clarification sessions.
     fn open_session_by_index(&mut self, target_session_id: &str, session_index: usize) {
         self.sessions.select_session_index(Some(session_index));
+        self.restore_review_output(target_session_id);
 
         let Some(session) = self.sessions.session_at(session_index) else {
             return;

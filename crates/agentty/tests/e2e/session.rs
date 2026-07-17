@@ -1005,6 +1005,40 @@ fn seed_review_ready_session_with_persisted_focused_review(
     Ok(())
 }
 
+/// Seeds two review-ready sessions with distinct persisted focused reviews so
+/// switching away and back can verify cache-backed output restoration.
+fn seed_sessions_with_persisted_focused_reviews(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session_with_persisted_focused_review(env)?;
+    common::seed_session(
+        env,
+        SessionSeed::regular("second-review-0001", "gpt-5.5", "main", "Review")
+            .with_title("Second persisted review"),
+    )?;
+
+    let runtime = common::seed_runtime()?;
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .update_session_focused_review(
+                "second-review-0001",
+                Some("84".to_string()),
+                Some(
+                    "## Review\n\n### Project Impact\n\n- Second persisted review finding.\n\n### \
+                     Suggestions\n\n- None."
+                        .to_string(),
+                ),
+            )
+            .await
+    })?;
+
+    std::fs::create_dir_all(env.agentty_root.join("wt").join("second-r"))?;
+
+    Ok(())
+}
+
 /// Seeds one running session so `Ctrl+c` can exercise the turn-stop path
 /// without needing a live agent backend.
 fn seed_running_stop_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
@@ -4267,6 +4301,70 @@ fn persisted_focused_review_survives_reload() -> E2eResult {
                 assert_eq!(impact_finding.rect.row, impact_header.rect.row + 1);
                 assert_eq!(empty_suggestion.rect.row, suggestions_header.rect.row + 1);
                 assertion::assert_not_visible(frame, "type \"/apply\" to verify and apply");
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify each session restores its own persisted focused review after users
+/// switch between session views.
+#[test]
+fn focused_reviews_survive_session_switching() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("focused_reviews_survive_session_switching")
+        .with_git()
+        .setup(seed_sessions_with_persisted_focused_reviews)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_text("Persisted focused review finding.", 5000)
+                    .capture_labeled("first_review", "First session focused review")
+                    .press_key("q")
+                    .press_key("j")
+                    .press_key("Enter")
+                    .wait_for_text("Second persisted review finding.", 5000)
+                    .capture_labeled("second_review", "Second session focused review")
+                    .press_key("q")
+                    .press_key("k")
+                    .press_key("Enter")
+                    .wait_for_text("Persisted focused review finding.", 5000)
+                    .capture_labeled("restored_first_review", "Restored first focused review")
+            },
+            |frame, report| {
+                assert_eq!(report.captures.len(), 3);
+                let first_frame = common::frame_from_capture(&report.captures[0]);
+                let second_frame = common::frame_from_capture(&report.captures[1]);
+                let restored_first_frame = common::frame_from_capture(&report.captures[2]);
+                let first_full = Region::full(first_frame.cols(), first_frame.rows());
+                let second_full = Region::full(second_frame.cols(), second_frame.rows());
+                let restored_first_full =
+                    Region::full(restored_first_frame.cols(), restored_first_frame.rows());
+                let final_full = Region::full(frame.cols(), frame.rows());
+
+                assertion::assert_text_in_region(
+                    &first_frame,
+                    "Persisted focused review finding.",
+                    &first_full,
+                );
+                assertion::assert_text_in_region(
+                    &second_frame,
+                    "Second persisted review finding.",
+                    &second_full,
+                );
+                assertion::assert_text_in_region(
+                    &restored_first_frame,
+                    "Persisted focused review finding.",
+                    &restored_first_full,
+                );
+                assertion::assert_text_in_region(
+                    frame,
+                    "Persisted focused review finding.",
+                    &final_full,
+                );
             },
         )?;
 

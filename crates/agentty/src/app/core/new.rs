@@ -193,9 +193,8 @@ impl App {
         })
     }
 
-    /// Loads persisted focused reviews for the startup project into the render
-    /// cache.
-    async fn load_focused_review_cache(
+    /// Loads persisted focused reviews for one project into the render cache.
+    pub(super) async fn load_focused_review_cache(
         repositories: &AppRepositories,
         active_project_id: i64,
     ) -> std::collections::HashMap<crate::domain::session::SessionId, review::ReviewCacheEntry>
