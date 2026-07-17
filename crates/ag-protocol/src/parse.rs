@@ -7,7 +7,7 @@ use super::model::{
 };
 
 /// Top-level keys the protocol recognizes in a structured response payload.
-const PROTOCOL_KEYS: &[&str] = &["answer", "questions", "summary"];
+const PROTOCOL_KEYS: &[&str] = &["answer", "questions", "review_comment_outcomes", "summary"];
 
 /// Normalizes one parsed turn response according to the request profile.
 ///
@@ -34,7 +34,8 @@ pub fn normalize_turn_response(
 /// Parses one raw assistant message strictly as protocol payload.
 ///
 /// The final assistant payload must match [`AgentResponse`] and contain at
-/// least one recognized protocol key (`answer`, `questions`, or `summary`).
+/// least one recognized protocol key (`answer`, `questions`,
+/// `review_comment_outcomes`, or `summary`).
 ///
 /// When a provider prepends stray prose before the final schema object, this
 /// still recovers the trailing protocol payload as long as nothing except
@@ -362,6 +363,7 @@ fn describe_json_error_category(error: &serde_json::Error) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{ReviewCommentOutcome, ReviewCommentResolution};
 
     #[test]
     /// Fills in empty summaries for session turns.
@@ -637,6 +639,31 @@ mod tests {
     }
 
     #[test]
+    /// Parser accepts a review-comment outcome without an `answer` key because
+    /// it is a recognized protocol field.
+    fn test_parse_agent_response_strict_accepts_review_outcome_without_answer() {
+        // Arrange
+        let raw = concat!(
+            r#"{"review_comment_outcomes":[{"reply":"Fixed it.","resolution":"fixed","#,
+            r#""thread_id":"thread-42"}]}"#
+        );
+
+        // Act
+        let response = parse_agent_response_strict(raw);
+
+        // Assert
+        let response = response.expect("parser should accept review-outcome-only payload");
+        assert_eq!(
+            response.review_comment_outcomes,
+            vec![ReviewCommentOutcome {
+                reply: "Fixed it.".to_string(),
+                resolution: ReviewCommentResolution::Fixed,
+                thread_id: "thread-42".to_string(),
+            }]
+        );
+    }
+
+    #[test]
     /// Parser accepts a payload with `summary` but no `answer` key,
     /// exercising the documented asymmetry where the parser is lenient
     /// (any recognized key suffices) while the prompt schema requires
@@ -766,6 +793,9 @@ mod tests {
         assert!(details.contains("direct_json_type: object"));
         assert!(details.contains("direct_json_keys: message"));
         assert!(details.contains("direct_json_recognized_protocol_keys: (none)"));
-        assert!(details.contains("direct_json_missing_protocol_keys: answer, questions, summary"));
+        assert!(details.contains(
+            "direct_json_missing_protocol_keys: answer, questions, review_comment_outcomes, \
+             summary"
+        ));
     }
 }

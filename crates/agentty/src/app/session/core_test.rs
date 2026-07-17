@@ -10,6 +10,9 @@ use ag_agent::{
     AgentRequestKind, AppServerClient, AppServerTurnResponse, MockAgentBackend, MockAgentChannel,
     MockAppServerClient, MockOneShotClient, TurnResult,
 };
+use ag_forge::{
+    ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread,
+};
 use ag_git as git;
 use ag_protocol::{
     AgentResponse, TurnPrompt, TurnPromptAttachment, TurnPromptTextSource,
@@ -19,6 +22,7 @@ use tempfile::tempdir;
 use tokio::sync::{Barrier, Notify};
 
 use super::*;
+use crate::app::prompt_intent::ReviewCommentSelection;
 use crate::app::review::{review_failure_message, review_loading_message};
 use crate::app::{App, AppEvent, ReviewCacheEntry, SyncSessionStartError, Tab};
 use crate::domain::agent::{
@@ -2487,6 +2491,127 @@ async fn test_reply() {
         .expect("failed to load session activity timestamps");
     assert!(output.contains("Reply"));
     assert_eq!(activity_timestamps.len(), 1);
+}
+
+#[tokio::test]
+async fn test_resolve_session_review_comments_enqueues_turn_and_clears_focused_review() {
+    // Arrange
+    let dir = tempdir().expect("failed to create temp dir");
+    let mut app = new_test_app_with_git(dir.path()).await;
+    let session_id: SessionId = app
+        .create_session()
+        .await
+        .expect("failed to create session")
+        .into();
+    app.sessions.sessions_mut()[0].status = Status::Review;
+    if let Some(handles) = app.sessions.session_handles().get(session_id.as_str()) {
+        *handles
+            .status
+            .lock()
+            .expect("status lock should be available") = Status::Review;
+    }
+    app.services
+        .db()
+        .sessions()
+        .update_session_status_with_timing_at(&session_id, "Review", 0)
+        .await
+        .expect("failed to persist review status");
+    app.review_cache.insert(
+        session_id.clone(),
+        ReviewCacheEntry::Ready {
+            diff_hash: 42,
+            text: "Focused review".to_string(),
+        },
+    );
+    app.services
+        .db()
+        .sessions()
+        .update_session_focused_review(
+            &session_id,
+            Some("42".to_string()),
+            Some("Focused review".to_string()),
+        )
+        .await
+        .expect("failed to persist focused review");
+    let snapshot = review_comment_resolution_snapshot();
+    let (done_tx, mut done_rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut mock_channel = MockAgentChannel::new();
+    mock_channel
+        .expect_run_turn()
+        .once()
+        .returning(move |_, request, _| {
+            assert!(request.prompt.text.contains("Thread ID: thread-42"));
+            let done_tx = done_tx.clone();
+
+            Box::pin(async move {
+                let _ = done_tx.send(());
+
+                Ok(TurnResult {
+                    assistant_message: AgentResponse::plain("Resolved the review comment."),
+                    context_reset: false,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    provider_conversation_id: None,
+                })
+            })
+        });
+    mock_channel
+        .expect_shutdown_session()
+        .returning(|_| Box::pin(async { Ok(()) }));
+    app.sessions
+        .worker_service
+        .test_agent_channels
+        .insert(session_id.clone(), Arc::new(mock_channel));
+
+    // Act
+    let enqueued = app
+        .resolve_session_review_comments(
+            &session_id,
+            &snapshot,
+            ReviewCommentSelection::Selected(0),
+        )
+        .await;
+    done_rx.recv().await.expect("turn should start");
+    wait_for_status(&mut app, &session_id, Status::Review).await;
+    let focused_reviews = app
+        .services
+        .db()
+        .sessions()
+        .load_session_focused_reviews_for_project(app.active_project_id())
+        .await
+        .expect("failed to load focused reviews");
+
+    // Assert
+    assert!(enqueued);
+    assert!(!app.review_cache.contains_key(&session_id));
+    assert!(focused_reviews.is_empty());
+    assert!(matches!(
+        &app.mode,
+        AppMode::View {
+            session_id: viewed_session_id,
+            ..
+        } if viewed_session_id == &session_id
+    ));
+}
+
+/// Builds one actionable inline review thread for session-resolution tests.
+fn review_comment_resolution_snapshot() -> ReviewCommentSnapshot {
+    ReviewCommentSnapshot {
+        pr_level_comments: Vec::new(),
+        threads: vec![ReviewCommentThread {
+            anchor_side: ReviewCommentAnchorSide::New,
+            comments: vec![ReviewComment {
+                author: "reviewer".to_string(),
+                body: "Add validation.".to_string(),
+            }],
+            id: "thread-42".to_string(),
+            is_outdated: Some(false),
+            is_resolved: false,
+            line: Some(12),
+            path: "src/main.rs".to_string(),
+            start_line: Some(11),
+        }],
+    }
 }
 
 #[tokio::test]

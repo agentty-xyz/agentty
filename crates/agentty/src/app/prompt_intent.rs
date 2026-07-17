@@ -1,6 +1,8 @@
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use ag_agent as agent;
+use ag_forge::{ReviewComment, ReviewCommentSnapshot, ReviewCommentThread};
 use tracing::warn;
 
 use crate::app::{App, ReviewCacheEntry, diff_content_hash};
@@ -19,6 +21,18 @@ use crate::presentation::prompt::{
 
 /// Checked-in prompt template submitted by the `/apply` slash command.
 const APPLY_REVIEW_PROMPT_TEMPLATE: &str = include_str!("template/apply_review_prompt.md");
+/// Checked-in prompt template submitted from the review-comments page.
+const RESOLVE_REVIEW_COMMENT_PROMPT_TEMPLATE: &str =
+    include_str!("template/resolve_review_comment_prompt.md");
+
+/// Review-comment subset selected for one agent resolution turn.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ReviewCommentSelection {
+    /// Resolve every unresolved, current thread plus every general comment.
+    AllUnresolved,
+    /// Resolve the selectable comment row at this flattened index.
+    Selected(usize),
+}
 
 /// App-layer prompt intent context derived from prompt-mode runtime state.
 ///
@@ -91,6 +105,54 @@ pub(crate) enum PromptIntentSessionMode {
 }
 
 impl App {
+    /// Submits one agent turn for the selected forge review comments.
+    ///
+    /// Returns `true` only when at least one actionable comment was rendered
+    /// and the session worker accepted the reply.
+    pub(crate) async fn resolve_session_review_comments(
+        &mut self,
+        session_id: &SessionId,
+        snapshot: &ReviewCommentSnapshot,
+        selection: ReviewCommentSelection,
+    ) -> bool {
+        let can_reply = self
+            .sessions
+            .sessions()
+            .iter()
+            .find(|session| session.id == *session_id)
+            .is_some_and(|session| {
+                session.status.allows_review_actions() || session.status == Status::Question
+            });
+        if !can_reply {
+            return false;
+        }
+
+        let Some((prompt, thread_ids)) = build_resolve_review_comment_prompt(snapshot, selection)
+        else {
+            return false;
+        };
+
+        self.clear_review_output(session_id.as_str());
+        let _ = self
+            .services
+            .db()
+            .sessions()
+            .update_session_focused_review(session_id, None, None)
+            .await;
+        let enqueued = self
+            .sessions
+            .reply_to_review_comments(&self.services, session_id, prompt, thread_ids)
+            .await;
+        if enqueued {
+            self.mode = AppMode::View {
+                scroll_offset: None,
+                session_id: session_id.clone(),
+            };
+        }
+
+        enqueued
+    }
+
     /// Handles the submit intent emitted by prompt-mode key routing.
     ///
     /// Slash-command submissions are resolved inside the app layer. Text
@@ -678,8 +740,109 @@ pub(crate) fn build_apply_review_prompt(suggestions: &str) -> TurnPrompt {
     TurnPrompt::from_text(prompt)
 }
 
+/// Builds an agent-facing review-comment prompt and its forge thread
+/// allowlist.
+///
+/// Resolved and outdated threads are excluded. General discussion comments
+/// are included as worktree inputs but have no forge-side outcome identifier.
+pub(crate) fn build_resolve_review_comment_prompt(
+    snapshot: &ReviewCommentSnapshot,
+    selection: ReviewCommentSelection,
+) -> Option<(TurnPrompt, Vec<String>)> {
+    let (general_comments, threads) = selected_review_comments(snapshot, selection);
+    if general_comments.is_empty() && threads.is_empty() {
+        return None;
+    }
+
+    let mut review_comments = String::new();
+    for (index, comment) in general_comments.into_iter().enumerate() {
+        let _ = writeln!(
+            review_comments,
+            "General comment {}\nAuthor: {}\nBody:\n{}\n",
+            index + 1,
+            comment.author,
+            comment.body
+        );
+    }
+    for thread in &threads {
+        append_review_thread_prompt(&mut review_comments, thread);
+    }
+
+    let thread_ids = threads
+        .into_iter()
+        .map(|thread| thread.id.clone())
+        .collect::<Vec<_>>();
+    let review_comments = review_comments.trim_end();
+    let fence = agent::diff_fence(review_comments);
+    let fenced_review_comments = format!("{fence}text\n{review_comments}\n{fence}");
+    let prompt = RESOLVE_REVIEW_COMMENT_PROMPT_TEMPLATE
+        .trim_end()
+        .replace("{{ fenced_review_comments }}", &fenced_review_comments);
+
+    Some((TurnPrompt::from_text(prompt), thread_ids))
+}
+
+/// Returns the general comments and actionable threads selected for a turn.
+fn selected_review_comments(
+    snapshot: &ReviewCommentSnapshot,
+    selection: ReviewCommentSelection,
+) -> (Vec<&ReviewComment>, Vec<&ReviewCommentThread>) {
+    match selection {
+        ReviewCommentSelection::AllUnresolved => (
+            snapshot.pr_level_comments.iter().collect(),
+            snapshot
+                .threads
+                .iter()
+                .filter(|thread| thread.is_actionable())
+                .collect(),
+        ),
+        ReviewCommentSelection::Selected(selected_index) => {
+            if let Some(comment) = snapshot.pr_level_comments.get(selected_index) {
+                return (vec![comment], Vec::new());
+            }
+
+            let thread_index = selected_index.saturating_sub(snapshot.pr_level_comments.len());
+            let threads = snapshot
+                .threads
+                .get(thread_index)
+                .filter(|thread| thread.is_actionable())
+                .into_iter()
+                .collect();
+
+            (Vec::new(), threads)
+        }
+    }
+}
+
+/// Appends one thread's stable identifier, anchor, and conversation text.
+fn append_review_thread_prompt(review_comments: &mut String, thread: &ReviewCommentThread) {
+    let _ = writeln!(review_comments, "Thread ID: {}", thread.id);
+    let _ = writeln!(review_comments, "Path: {}", thread.path);
+    let _ = writeln!(
+        review_comments,
+        "Anchor: {:?}, start line: {}, end line: {}",
+        thread.anchor_side,
+        thread
+            .start_line
+            .map_or_else(|| "none".to_string(), |line| line.to_string()),
+        thread
+            .line
+            .map_or_else(|| "none".to_string(), |line| line.to_string())
+    );
+    for comment in &thread.comments {
+        let _ = writeln!(
+            review_comments,
+            "Comment by {}:\n{}",
+            comment.author, comment.body
+        );
+    }
+    review_comments.push('\n');
+}
+
 #[cfg(test)]
 mod tests {
+    use ag_forge::ReviewCommentAnchorSide;
+
     use super::*;
     use crate::domain::composer::{
         PromptAttachment, PromptAttachmentState, PromptHistoryState, PromptSlashState,
@@ -726,6 +889,136 @@ mod tests {
         // Assert
         assert!(prompt.text.contains("````text\n"));
         assert!(prompt.text.contains("```markdown\nexample\n```"));
+    }
+
+    /// Ensures the all-comments prompt includes general discussion and only
+    /// unresolved, current thread IDs.
+    #[test]
+    fn test_build_resolve_review_comment_prompt_filters_non_actionable_threads() {
+        // Arrange
+        let snapshot = review_comment_snapshot();
+
+        // Act
+        let (prompt, thread_ids) =
+            build_resolve_review_comment_prompt(&snapshot, ReviewCommentSelection::AllUnresolved)
+                .expect("snapshot should contain actionable comments");
+
+        // Assert
+        assert_eq!(thread_ids, vec!["thread-current".to_string()]);
+        assert!(prompt.text.contains("General comment 1"));
+        assert!(prompt.text.contains("Thread ID: thread-current"));
+        assert!(prompt.text.contains("Path: src/current.rs"));
+        assert!(
+            prompt
+                .text
+                .contains("Anchor: New, start line: 11, end line: 12")
+        );
+        assert!(!prompt.text.contains("thread-resolved"));
+        assert!(!prompt.text.contains("thread-outdated"));
+        assert!(prompt.attachments.is_empty());
+        assert_eq!(prompt.text_source, TurnPromptTextSource::UserPrompt);
+    }
+
+    /// Ensures selected general and inline comments produce their respective
+    /// forge thread allowlists.
+    #[test]
+    fn test_build_resolve_review_comment_prompt_selects_general_comment() {
+        // Arrange
+        let snapshot = review_comment_snapshot();
+
+        // Act
+        let (prompt, thread_ids) =
+            build_resolve_review_comment_prompt(&snapshot, ReviewCommentSelection::Selected(0))
+                .expect("general comment should be selectable");
+        let (thread_prompt, selected_thread_ids) =
+            build_resolve_review_comment_prompt(&snapshot, ReviewCommentSelection::Selected(1))
+                .expect("current thread should be selectable");
+
+        // Assert
+        assert!(prompt.text.contains("General comment 1"));
+        assert!(!prompt.text.contains("Thread ID:"));
+        assert!(thread_ids.is_empty());
+        assert!(thread_prompt.text.contains("Thread ID: thread-current"));
+        assert_eq!(selected_thread_ids, vec!["thread-current".to_string()]);
+    }
+
+    /// Ensures selected non-actionable and out-of-range rows cannot start a
+    /// resolution turn.
+    #[test]
+    fn test_build_resolve_review_comment_prompt_rejects_non_actionable_selection() {
+        // Arrange
+        let snapshot = review_comment_snapshot();
+
+        // Act
+        let resolved =
+            build_resolve_review_comment_prompt(&snapshot, ReviewCommentSelection::Selected(2));
+        let outdated =
+            build_resolve_review_comment_prompt(&snapshot, ReviewCommentSelection::Selected(3));
+        let missing =
+            build_resolve_review_comment_prompt(&snapshot, ReviewCommentSelection::Selected(99));
+
+        // Assert
+        assert!(resolved.is_none());
+        assert!(outdated.is_none());
+        assert!(missing.is_none());
+    }
+
+    /// Ensures review data containing a Markdown fence is wrapped in a wider
+    /// fence before it reaches the agent.
+    #[test]
+    fn test_build_resolve_review_comment_prompt_escapes_comment_fence() {
+        // Arrange
+        let snapshot = ReviewCommentSnapshot {
+            pr_level_comments: vec![ReviewComment {
+                author: "reviewer".to_string(),
+                body: "Please preserve:\n```rust\nlet value = 1;\n```".to_string(),
+            }],
+            threads: Vec::new(),
+        };
+
+        // Act
+        let (prompt, _) =
+            build_resolve_review_comment_prompt(&snapshot, ReviewCommentSelection::AllUnresolved)
+                .expect("general comment should produce a prompt");
+
+        // Assert
+        assert!(prompt.text.contains("````text\n"));
+        assert!(prompt.text.contains("```rust\nlet value = 1;\n```"));
+    }
+
+    /// Ensures comment resolution does not enqueue a turn for a blocked
+    /// session or a selection without actionable review data.
+    #[tokio::test]
+    async fn test_resolve_session_review_comments_rejects_blocked_and_empty_selection() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
+        let session_id: SessionId = app
+            .create_session()
+            .await
+            .expect("session should be created")
+            .into();
+        let snapshot = review_comment_snapshot();
+
+        // Act
+        let blocked = app
+            .resolve_session_review_comments(
+                &session_id,
+                &snapshot,
+                ReviewCommentSelection::AllUnresolved,
+            )
+            .await;
+        app.sessions.sessions_mut()[0].status = Status::Review;
+        let empty_selection = app
+            .resolve_session_review_comments(
+                &session_id,
+                &snapshot,
+                ReviewCommentSelection::Selected(99),
+            )
+            .await;
+
+        // Assert
+        assert!(!blocked);
+        assert!(!empty_selection);
     }
 
     /// Ensures image files retained for input undo are included in the
@@ -781,5 +1074,43 @@ mod tests {
         assert!(pruned.is_empty());
         assert!(archived_prompt.is_none());
         assert!(submission.is_empty());
+    }
+
+    /// Builds review data with one comment followed by current, resolved, and
+    /// outdated inline threads.
+    fn review_comment_snapshot() -> ReviewCommentSnapshot {
+        ReviewCommentSnapshot {
+            pr_level_comments: vec![ReviewComment {
+                author: "general-reviewer".to_string(),
+                body: "Update the overview.".to_string(),
+            }],
+            threads: vec![
+                review_comment_thread("thread-current", "src/current.rs", false, Some(false)),
+                review_comment_thread("thread-resolved", "src/resolved.rs", true, Some(false)),
+                review_comment_thread("thread-outdated", "src/outdated.rs", false, Some(true)),
+            ],
+        }
+    }
+
+    /// Builds one inline review thread for prompt-selection tests.
+    fn review_comment_thread(
+        id: &str,
+        path: &str,
+        is_resolved: bool,
+        is_outdated: Option<bool>,
+    ) -> ReviewCommentThread {
+        ReviewCommentThread {
+            anchor_side: ReviewCommentAnchorSide::New,
+            comments: vec![ReviewComment {
+                author: "inline-reviewer".to_string(),
+                body: "Add validation.".to_string(),
+            }],
+            id: id.to_string(),
+            is_outdated,
+            is_resolved,
+            line: Some(12),
+            path: path.to_string(),
+            start_line: Some(11),
+        }
     }
 }

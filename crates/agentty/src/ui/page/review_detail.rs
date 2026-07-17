@@ -548,6 +548,7 @@ mod tests {
                     author: "bob".to_string(),
                     body: "Please cover this branch.".to_string(),
                 }],
+                id: "thread-id".to_string(),
                 is_outdated: Some(false),
                 is_resolved: false,
                 line: Some(42),

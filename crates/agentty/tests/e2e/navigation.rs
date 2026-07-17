@@ -88,7 +88,7 @@ if [ "$1" = "api" ] && [ "$2" = "--hostname" ] && [ "$4" = "graphql" ]; then
     *"number=42"*)
       sleep 3
       cat <<'JSON'
-{"data":{"repository":{"pullRequest":{"comments":{"nodes":[{"author":{"login":"alice"},"body":"General **review** comment."}]},"reviewThreads":{"nodes":[{"diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":7,"path":"crates/agentty/src/ui/page/review_detail.rs","startLine":null,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"bob"},"body":"Please show this selected review comment."}]}}]}}}}}
+{"data":{"repository":{"pullRequest":{"comments":{"nodes":[{"author":{"login":"alice"},"body":"General **review** comment."}]},"reviewThreads":{"nodes":[{"id":"thread-navigation","diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":7,"path":"crates/agentty/src/ui/page/review_detail.rs","startLine":null,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"bob"},"body":"Please show this selected review comment."}]}}]}}}}}
 JSON
       exit 0
       ;;

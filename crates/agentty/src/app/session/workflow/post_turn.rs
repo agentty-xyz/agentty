@@ -1,6 +1,6 @@
 //! Post-turn result application for session workers.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -8,7 +8,7 @@ use ag_agent as agent;
 use ag_agent::{AgentError, OneShotClient, TurnResult};
 use ag_forge as forge;
 use ag_git::GitClient;
-use ag_protocol::AgentResponse;
+use ag_protocol::{AgentResponse, ReviewCommentOutcome, ReviewCommentResolution};
 use serde_json;
 use tokio::sync::mpsc;
 use tracing::warn;
@@ -417,6 +417,10 @@ async fn apply_successful_turn_result(
     } else {
         Status::Question
     };
+    let review_comment_outcomes = fixed_review_comment_outcomes(
+        &turn_metadata.review_comment_thread_ids,
+        &assistant_message.review_comment_outcomes,
+    );
     // Fire-and-forget: receiver may be dropped during shutdown.
     let _ = context.app_event_tx.send(AppEvent::AgentResponseReceived {
         session_id: context.session_id.clone(),
@@ -436,7 +440,13 @@ async fn apply_successful_turn_result(
     })
     .await;
     let review_request_commit_message = commit_outcome.map(|outcome| outcome.commit_message);
-    start_published_branch_auto_push(context, turn_metadata, review_request_commit_message).await;
+    start_published_branch_auto_push(
+        context,
+        turn_metadata,
+        review_request_commit_message,
+        review_comment_outcomes,
+    )
+    .await;
     if target_status.allows_review_actions() && has_review_ready_stacked_children(context).await {
         let _ = context
             .app_event_tx
@@ -446,6 +456,32 @@ async fn apply_successful_turn_result(
     }
 
     Ok(target_status)
+}
+
+/// Returns deduplicated fixed outcomes whose thread identifiers were
+/// explicitly allowlisted for this turn.
+fn fixed_review_comment_outcomes(
+    allowed_thread_ids: &[String],
+    outcomes: &[ReviewCommentOutcome],
+) -> Vec<ReviewCommentOutcome> {
+    let allowed_thread_ids = allowed_thread_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    let mut accepted_thread_ids = HashSet::new();
+
+    outcomes
+        .iter()
+        .filter(|outcome| outcome.resolution == ReviewCommentResolution::Fixed)
+        .filter(|outcome| allowed_thread_ids.contains(outcome.thread_id.as_str()))
+        .filter(|outcome| !outcome.reply.trim().is_empty())
+        .filter(|outcome| accepted_thread_ids.insert(outcome.thread_id.clone()))
+        .map(|outcome| ReviewCommentOutcome {
+            reply: outcome.reply.trim().to_string(),
+            resolution: outcome.resolution,
+            thread_id: outcome.thread_id.clone(),
+        })
+        .collect()
 }
 
 /// Returns whether the completed session has materialized stacked children
@@ -486,6 +522,7 @@ async fn start_published_branch_auto_push(
     context: &PostTurnContext,
     turn_metadata: TurnMetadata,
     review_request_commit_message: Option<String>,
+    review_comment_outcomes: Vec<ReviewCommentOutcome>,
 ) {
     let Some(published_upstream_ref) = turn_metadata.published_upstream_ref else {
         return;
@@ -509,6 +546,7 @@ async fn start_published_branch_auto_push(
             folder: context.folder.clone(),
             git_client: Arc::clone(&context.git_client),
             published_upstream_ref,
+            review_comment_outcomes,
             review_request_client: Arc::clone(&context.review_request_client),
             review_request_commit_message,
             session_id: context.session_id.clone(),
@@ -624,6 +662,52 @@ mod tests {
         assert!(notice.ends_with("\n[error truncated]"));
     }
 
+    #[test]
+    fn test_fixed_review_comment_outcomes_filters_and_normalizes_agent_output() {
+        // Arrange
+        let allowed_thread_ids = vec!["thread-fixed".to_string(), "thread-other".to_string()];
+        let outcomes = vec![
+            ReviewCommentOutcome {
+                reply: "  Applied the validation.  ".to_string(),
+                resolution: ReviewCommentResolution::Fixed,
+                thread_id: "thread-fixed".to_string(),
+            },
+            ReviewCommentOutcome {
+                reply: "Duplicate outcome.".to_string(),
+                resolution: ReviewCommentResolution::Fixed,
+                thread_id: "thread-fixed".to_string(),
+            },
+            ReviewCommentOutcome {
+                reply: "No change needed.".to_string(),
+                resolution: ReviewCommentResolution::NoChangeNeeded,
+                thread_id: "thread-other".to_string(),
+            },
+            ReviewCommentOutcome {
+                reply: "Unknown thread.".to_string(),
+                resolution: ReviewCommentResolution::Fixed,
+                thread_id: "thread-unknown".to_string(),
+            },
+            ReviewCommentOutcome {
+                reply: "   ".to_string(),
+                resolution: ReviewCommentResolution::Fixed,
+                thread_id: "thread-other".to_string(),
+            },
+        ];
+
+        // Act
+        let accepted = fixed_review_comment_outcomes(&allowed_thread_ids, &outcomes);
+
+        // Assert
+        assert_eq!(
+            accepted,
+            vec![ReviewCommentOutcome {
+                reply: "Applied the validation.".to_string(),
+                resolution: ReviewCommentResolution::Fixed,
+                thread_id: "thread-fixed".to_string(),
+            }]
+        );
+    }
+
     #[tokio::test]
     async fn test_unfinished_rebase_check_fails_closed_when_operation_query_fails() {
         // Arrange
@@ -704,12 +788,14 @@ mod tests {
                     &context,
                     TurnMetadata {
                         published_upstream_ref: Some("origin/wt/session-id".to_string()),
+                        review_comment_thread_ids: Vec::new(),
                         session_agent: AgentSelection::new(
                             AgentKind::Antigravity,
                             AgentModel::Gemini3FlashPreview,
                         ),
                     },
                     None,
+                    Vec::new(),
                 )
                 .await;
             })

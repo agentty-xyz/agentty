@@ -742,13 +742,32 @@ pub(crate) fn diff_footer_actions() -> Vec<HelpAction> {
     ]
 }
 
-/// Returns compact read-only review-comment page actions.
-pub(crate) fn review_comment_footer_actions() -> Vec<HelpAction> {
-    vec![
+/// Returns compact review-comment page actions for the current selection.
+pub(crate) fn review_comment_footer_actions(
+    can_resolve_all: bool,
+    can_resolve_selected: bool,
+) -> Vec<HelpAction> {
+    let mut actions = vec![
         HelpAction::new("back", "q/Esc", "Back to session"),
         HelpAction::new("select comment", "j/k", "Select comment"),
         HelpAction::new("scroll pane", "Up/Down", "Scroll comment details"),
-    ]
+    ];
+    if can_resolve_selected {
+        actions.push(HelpAction::new(
+            "resolve selected",
+            "a",
+            "Resolve selected with agent",
+        ));
+    }
+    if can_resolve_all {
+        actions.push(HelpAction::new(
+            "resolve all",
+            "A",
+            "Resolve all with agent",
+        ));
+    }
+
+    actions
 }
 
 /// Returns list-mode actions shared by all tabs.
@@ -1725,7 +1744,7 @@ mod tests {
             .iter()
             .map(|action| action.key)
             .collect::<Vec<_>>();
-        let comment_keys = review_comment_footer_actions()
+        let comment_keys = review_comment_footer_actions(false, false)
             .iter()
             .map(|action| action.key)
             .collect::<Vec<_>>();
@@ -1734,5 +1753,15 @@ mod tests {
         assert_eq!(issue_keys, ["q/Esc", "j/k", "Ctrl+d/u", "g/G"]);
         assert_eq!(diff_keys, ["q/Esc", "j/k", "Up/Down", "?"]);
         assert_eq!(comment_keys, ["q/Esc", "j/k", "Up/Down"]);
+    }
+
+    #[test]
+    fn test_review_comment_actions_include_enabled_agent_resolution_keys() {
+        // Arrange, Act
+        let actions = review_comment_footer_actions(true, true);
+        let comment_keys = actions.iter().map(|action| action.key).collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(comment_keys, ["q/Esc", "j/k", "Up/Down", "a", "A"]);
     }
 }

@@ -25,8 +25,15 @@ const ASSIGNED_ISSUE_LIMIT: usize = 100;
 const REVIEW_THREADS_QUERY: &str =
     "query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: \
      $repo) { pullRequest(number: $number) { comments(first: 100) { nodes { author { login } body \
-     } } reviewThreads(first: 100) { nodes { diffSide isOutdated isResolved line path startLine \
-     subjectType comments(first: 100) { nodes { author { login } body } } } } } } }";
+     } } reviewThreads(first: 100) { nodes { id diffSide isOutdated isResolved line path \
+     startLine subjectType comments(first: 100) { nodes { author { login } body } } } } } } }";
+/// GraphQL mutation used to add one reply to a pull-request review thread.
+const REPLY_TO_THREAD_MUTATION: &str =
+    "mutation($threadId: ID!, $body: String!) { addPullRequestReviewThreadReply(input: { \
+     pullRequestReviewThreadId: $threadId, body: $body }) { comment { id } } }";
+/// GraphQL mutation used to resolve one pull-request review thread.
+const RESOLVE_THREAD_MUTATION: &str = "mutation($threadId: ID!) { resolveReviewThread(input: { \
+                                       threadId: $threadId }) { thread { id isResolved } } }";
 
 /// GitHub pull-request adapter that normalizes `gh` command output.
 #[derive(Clone)]
@@ -226,6 +233,51 @@ impl ReviewRequestAdapter for GitHubReviewRequestAdapter {
             "fetch review comments",
             parse_review_comment_snapshot_response,
         )
+    }
+
+    fn reply_to_authenticated_thread(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+        thread_id: String,
+        body: String,
+    ) -> ForgeFuture<Result<(), ReviewRequestError>> {
+        let operations = self.operations.clone();
+
+        Box::pin(async move {
+            parse_display_id(&display_id)?;
+            operations
+                .run_review_command(
+                    &remote,
+                    reply_to_thread_command(&remote, &thread_id, &body),
+                    "reply to pull-request review thread",
+                )
+                .await?;
+
+            Ok(())
+        })
+    }
+
+    fn resolve_authenticated_thread(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+        thread_id: String,
+    ) -> ForgeFuture<Result<(), ReviewRequestError>> {
+        let operations = self.operations.clone();
+
+        Box::pin(async move {
+            parse_display_id(&display_id)?;
+            operations
+                .run_review_command(
+                    &remote,
+                    resolve_thread_command(&remote, &thread_id),
+                    "resolve pull-request review thread",
+                )
+                .await?;
+
+            Ok(())
+        })
     }
 
     /// Lists open pull requests in `remote` that request review from the
@@ -536,6 +588,42 @@ fn review_threads_command(remote: &ForgeRemote, pull_request_number: &str) -> Fo
     )
 }
 
+/// Builds one `gh api graphql` mutation that replies to a review thread.
+fn reply_to_thread_command(remote: &ForgeRemote, thread_id: &str, body: &str) -> ForgeCommand {
+    github_command(
+        remote,
+        vec![
+            "api".to_string(),
+            "--hostname".to_string(),
+            remote.host.clone(),
+            "graphql".to_string(),
+            "-f".to_string(),
+            format!("query={REPLY_TO_THREAD_MUTATION}"),
+            "-f".to_string(),
+            format!("threadId={thread_id}"),
+            "-f".to_string(),
+            format!("body={body}"),
+        ],
+    )
+}
+
+/// Builds one `gh api graphql` mutation that resolves a review thread.
+fn resolve_thread_command(remote: &ForgeRemote, thread_id: &str) -> ForgeCommand {
+    github_command(
+        remote,
+        vec![
+            "api".to_string(),
+            "--hostname".to_string(),
+            remote.host.clone(),
+            "graphql".to_string(),
+            "-f".to_string(),
+            format!("query={RESOLVE_THREAD_MUTATION}"),
+            "-f".to_string(),
+            format!("threadId={thread_id}"),
+        ],
+    )
+}
+
 /// Parses the full review-comment snapshot from a GraphQL response.
 ///
 /// Threads are returned in the forge-reported order; callers sort by
@@ -593,6 +681,7 @@ fn review_comment_thread_from_node(node: GitHubReviewThreadNode) -> ReviewCommen
             .into_iter()
             .map(review_comment_from_node)
             .collect(),
+        id: node.id,
         is_outdated: Some(node.is_outdated),
         is_resolved: node.is_resolved,
         line,
@@ -870,6 +959,7 @@ struct GitHubReviewThreadNode {
     is_outdated: bool,
     #[serde(rename = "isResolved")]
     is_resolved: bool,
+    id: String,
     line: Option<u32>,
     path: String,
     #[serde(rename = "startLine")]
@@ -1515,6 +1605,7 @@ mod tests {
         // Assert
         assert_eq!(snapshot.threads.len(), 3);
         let unresolved = &snapshot.threads[0];
+        assert_eq!(unresolved.id, "thread-1");
         assert_eq!(unresolved.path, "src/foo.rs");
         assert_eq!(unresolved.line, Some(42));
         assert_eq!(unresolved.anchor_side, ReviewCommentAnchorSide::New);
@@ -1540,6 +1631,54 @@ mod tests {
         assert_eq!(snapshot.pr_level_comments[0].author, "carol");
         assert_eq!(snapshot.pr_level_comments[0].body, "Overall looks good.");
         assert_eq!(snapshot.pr_level_comments[1].author, "ghost");
+    }
+
+    #[tokio::test]
+    async fn review_thread_reply_and_resolution_run_graphql_mutations() {
+        // Arrange
+        let remote = github_remote();
+        let mut sequence = Sequence::new();
+        let mut command_runner = MockForgeCommandRunner::new();
+        command_runner
+            .expect_run()
+            .once()
+            .in_sequence(&mut sequence)
+            .withf({
+                let remote = remote.clone();
+
+                move |command| {
+                    command == &reply_to_thread_command(&remote, "thread-1", "Addressed.")
+                }
+            })
+            .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
+        command_runner
+            .expect_run()
+            .once()
+            .in_sequence(&mut sequence)
+            .withf({
+                let remote = remote.clone();
+
+                move |command| command == &resolve_thread_command(&remote, "thread-1")
+            })
+            .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
+        let adapter = GitHubReviewRequestAdapter::new(Arc::new(command_runner));
+
+        // Act
+        let reply_result = adapter
+            .reply_to_authenticated_thread(
+                remote.clone(),
+                "#42".to_string(),
+                "thread-1".to_string(),
+                "Addressed.".to_string(),
+            )
+            .await;
+        let resolution_result = adapter
+            .resolve_authenticated_thread(remote, "#42".to_string(), "thread-1".to_string())
+            .await;
+
+        // Assert
+        assert_eq!(reply_result, Ok(()));
+        assert_eq!(resolution_result, Ok(()));
     }
 
     #[test]

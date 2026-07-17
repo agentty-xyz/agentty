@@ -340,7 +340,8 @@ descendants it spawned.
 ## Agent Interaction Protocol Flow
 
 <a id="architecture-agent-interaction-protocol"></a> Provider output is normalized to
-one structured response protocol (`answer`, `questions`, optional `summary`):
+one structured response protocol (`answer`, `questions`, `review_comment_outcomes`, and
+optional `summary`):
 
 1. Prompt builders in `crates/ag-agent/src/agent/` ask `crates/ag-protocol/src/` to
    prepend the shared protocol preamble with a self-descriptive JSON schema. CLI turns
@@ -356,8 +357,9 @@ one structured response protocol (`answer`, `questions`, optional `summary`):
 1. Transports that enforce the schema natively receive it through
    `SchemaRequiredPolicy`. Codex needs every property listed in `required`; validators
    that enforce `required` literally, such as Claude's `--json-schema`, receive
-   `MinimumProtocolKeys` so only `answer` is mandatory and a reply that omits
-   `questions` or `summary` still validates.
+   `MinimumProtocolKeys` so only `answer` is mandatory and a reply that omits other
+   optional fields still validates. Ordinary turns leave `review_comment_outcomes`
+   empty; review-comment prompts provide the only accepted thread-ID allowlist.
 1. Final output must parse as the shared protocol JSON object. Claude, Gemini, and Codex
    session turns fail closed on invalid output; Antigravity tries one protocol-repair
    retry and then preserves non-empty plain text as `answer`.
@@ -498,7 +500,12 @@ orchestration paths:
   injected git/forge boundaries, falls back to the persisted review-request URL after
   terminal-session worktree cleanup, and uses the matching `AppEvent` to update only the
   still-open comments page. Inline code context is derived from the already loaded
-  current diff.
+  current diff. From a reply-capable session, `a` or `A` renders actionable comment data
+  into a `TurnPrompt` and records the supplied forge thread IDs in turn metadata.
+  Post-turn handling accepts only deduplicated `fixed` outcomes with an allowlisted ID
+  and nonblank reply. After auto-commit and a successful published-branch push, the
+  worker posts each reply and then resolves that thread through `ReviewRequestClient`;
+  failed pushes never mutate forge thread state.
 - Assigned-issue refresh: the Issues tab resolves the active project remote and runs a
   repository-scoped, generation-scoped `gh search issues` task through
   `ReviewRequestClient`; stale completions are discarded before the list cache is

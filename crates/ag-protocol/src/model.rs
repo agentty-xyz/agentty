@@ -76,6 +76,48 @@ pub struct AgentResponseSummary {
     pub turn: String,
 }
 
+/// Agent-reported disposition for one forge review thread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(
+    title = "ReviewCommentResolution",
+    description = "Disposition reported for one targeted forge review thread."
+)]
+pub enum ReviewCommentResolution {
+    /// The agent addressed the review thread in the worktree.
+    Fixed,
+    /// The agent determined that no code or documentation change was needed.
+    NoChangeNeeded,
+}
+
+/// Structured outcome for one forge review thread targeted by the turn.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[schemars(
+    title = "ReviewCommentOutcome",
+    description = "Structured outcome for one forge review thread explicitly included in the turn \
+                   prompt."
+)]
+pub struct ReviewCommentOutcome {
+    /// Concise forge reply explaining what changed or why no change was needed.
+    #[schemars(
+        title = "reply",
+        description = "Concise reply suitable for posting to the forge review thread."
+    )]
+    pub reply: String,
+    /// Whether the thread was fixed or did not require a change.
+    #[schemars(
+        title = "resolution",
+        description = "Whether the targeted thread was fixed or required no change."
+    )]
+    pub resolution: ReviewCommentResolution,
+    /// Opaque forge thread identifier copied exactly from the turn prompt.
+    #[schemars(
+        title = "thread_id",
+        description = "Opaque forge thread identifier copied exactly from the turn prompt."
+    )]
+    pub thread_id: String,
+}
+
 /// Wire-format protocol payload used for schema-driven provider output.
 ///
 /// Providers that support output schemas (for example, Codex app-server) are
@@ -108,6 +150,19 @@ pub struct AgentResponse {
     #[serde(default)]
     #[schemars(title = "questions")]
     pub questions: Vec<QuestionItem>,
+    /// Per-thread outcomes for an agent-driven forge comment-resolution turn.
+    ///
+    /// Ordinary session and utility turns leave this empty. Resolution
+    /// workflows accept only identifiers explicitly allowlisted in the turn
+    /// prompt before applying any forge-side effect.
+    #[serde(default)]
+    #[schemars(
+        title = "review_comment_outcomes",
+        description = "Per-thread outcomes for an agent-driven forge comment-resolution turn. \
+                       Emit an empty array unless the prompt explicitly supplies forge thread \
+                       IDs. Copy each reported `thread_id` exactly from the prompt."
+    )]
+    pub review_comment_outcomes: Vec<ReviewCommentOutcome>,
     /// Structured summary for session-discussion turns, or `None` for legacy
     /// payloads and one-shot prompts.
     #[serde(default)]
@@ -125,6 +180,7 @@ impl AgentResponse {
         Self {
             answer: text.into(),
             questions: Vec::new(),
+            review_comment_outcomes: Vec::new(),
             summary: None,
         }
     }
@@ -233,6 +289,7 @@ mod tests {
         let response = AgentResponse {
             answer: "Primary answer".to_string(),
             questions: vec![QuestionItem::new("Need one clarification.")],
+            review_comment_outcomes: Vec::new(),
             summary: None,
         };
 
@@ -244,6 +301,31 @@ mod tests {
     }
 
     #[test]
+    /// Preserves review-comment outcomes through the wire JSON contract.
+    fn test_agent_response_review_comment_outcomes_round_trip() {
+        // Arrange
+        let response = AgentResponse {
+            answer: "Addressed the comment.".to_string(),
+            questions: Vec::new(),
+            review_comment_outcomes: vec![ReviewCommentOutcome {
+                reply: "Added the missing validation.".to_string(),
+                resolution: ReviewCommentResolution::Fixed,
+                thread_id: "thread-42".to_string(),
+            }],
+            summary: None,
+        };
+
+        // Act
+        let serialized = serde_json::to_string(&response).expect("response should serialize");
+        let deserialized = serde_json::from_str::<AgentResponse>(&serialized)
+            .expect("response should deserialize");
+
+        // Assert
+        assert_eq!(deserialized, response);
+        assert!(serialized.contains(r#""resolution":"fixed""#));
+    }
+
+    #[test]
     /// Ensures question extraction respects the protocol question cap.
     fn test_agent_response_question_items_applies_question_cap() {
         // Arrange
@@ -252,6 +334,7 @@ mod tests {
             questions: (0..=MAX_QUESTIONS)
                 .map(|index| QuestionItem::new(format!("Question {index}")))
                 .collect(),
+            review_comment_outcomes: Vec::new(),
             summary: None,
         };
 

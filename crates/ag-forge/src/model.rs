@@ -338,14 +338,17 @@ pub enum ReviewCommentAnchorSide {
 /// One review thread anchored to a line of the review request diff.
 ///
 /// Threads group chronological `comments` that share the same anchor. Agentty
-/// renders these read-only in requested-review detail, grouped by file and
-/// sorted by `(path, line)` before display.
+/// renders these in requested-review detail, grouped by file and sorted by
+/// `(path, line)` before display. Session-linked review workflows also use the
+/// native `id` to reply and resolve a thread after its fix is pushed.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReviewCommentThread {
     /// Diff side used with `line` when placing this thread inline.
     pub anchor_side: ReviewCommentAnchorSide,
     /// Chronological reviewer comments attached to this thread.
     pub comments: Vec<ReviewComment>,
+    /// Opaque forge-native thread identifier used for replies and resolution.
+    pub id: String,
     /// Whether newer changes made the thread's original diff position stale,
     /// when the forge exposes that state.
     pub is_outdated: Option<bool>,
@@ -357,6 +360,14 @@ pub struct ReviewCommentThread {
     pub path: String,
     /// Optional first line for a multi-line thread on `anchor_side`.
     pub start_line: Option<u32>,
+}
+
+impl ReviewCommentThread {
+    /// Returns whether this thread is unresolved and still anchored to the
+    /// current review diff.
+    pub fn is_actionable(&self) -> bool {
+        !self.is_resolved && self.is_outdated != Some(true)
+    }
 }
 
 /// Full review-comments payload captured for one review request.
@@ -579,6 +590,34 @@ fn non_empty_detail(detail: Option<&str>) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn review_comment_thread() -> ReviewCommentThread {
+        ReviewCommentThread {
+            anchor_side: ReviewCommentAnchorSide::New,
+            comments: Vec::new(),
+            id: "thread-1".to_string(),
+            is_outdated: Some(false),
+            is_resolved: false,
+            line: Some(1),
+            path: "src/lib.rs".to_string(),
+            start_line: None,
+        }
+    }
+
+    #[test]
+    fn review_comment_thread_is_actionable_only_when_current_and_unresolved() {
+        // Arrange
+        let actionable = review_comment_thread();
+        let mut resolved = review_comment_thread();
+        resolved.is_resolved = true;
+        let mut outdated = review_comment_thread();
+        outdated.is_outdated = Some(true);
+
+        // Act, Assert
+        assert!(actionable.is_actionable());
+        assert!(!resolved.is_actionable());
+        assert!(!outdated.is_actionable());
+    }
 
     #[test]
     fn forge_kind_from_str_gitlab() {

@@ -1335,6 +1335,7 @@ mod tests {
                 author: "alice".to_string(),
                 body: "Please check this.".to_string(),
             }],
+            id: "thread-id".to_string(),
             is_outdated: Some(false),
             is_resolved: false,
             line: Some(7),

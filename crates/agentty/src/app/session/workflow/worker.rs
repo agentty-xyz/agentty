@@ -51,6 +51,8 @@ pub(super) struct TurnMetadata {
     /// Published-upstream reference captured when the turn was queued,
     /// consumed after turn completion by the auto-push workflow.
     pub(super) published_upstream_ref: Option<String>,
+    /// Forge review-thread identifiers explicitly targeted by this turn.
+    pub(super) review_comment_thread_ids: Vec<String>,
     /// Agent provider and model selected for the session when the turn was
     /// queued.
     pub(super) session_agent: AgentSelection,
@@ -870,6 +872,7 @@ impl SessionWorkerService {
                 prompt,
                 turn_metadata: TurnMetadata {
                     published_upstream_ref,
+                    review_comment_thread_ids: Vec::new(),
                     session_agent: context.session_agent,
                 },
             };
@@ -1132,6 +1135,7 @@ mod tests {
 
     use ag_agent::{MockAgentChannel, MockOneShotClient};
     use ag_git::{MockGitClient, RebaseStepResult};
+    use ag_protocol::{ReviewCommentOutcome, ReviewCommentResolution};
     use mockall::Sequence;
     use serde_json;
     use tempfile::tempdir;
@@ -1323,6 +1327,7 @@ mod tests {
             prompt: "prompt".into(),
             turn_metadata: TurnMetadata {
                 published_upstream_ref: None,
+                review_comment_thread_ids: Vec::new(),
                 session_agent: AgentSelection::new(
                     crate::domain::agent::AgentKind::Claude,
                     AgentModel::ClaudeSonnet5,
@@ -1336,6 +1341,7 @@ mod tests {
             prompt: "prompt".into(),
             turn_metadata: TurnMetadata {
                 published_upstream_ref: None,
+                review_comment_thread_ids: Vec::new(),
                 session_agent: AgentSelection::new(
                     crate::domain::agent::AgentKind::Claude,
                     AgentModel::ClaudeSonnet5,
@@ -1349,6 +1355,7 @@ mod tests {
             prompt: "prompt".into(),
             turn_metadata: TurnMetadata {
                 published_upstream_ref: None,
+                review_comment_thread_ids: Vec::new(),
                 session_agent: AgentSelection::new(
                     crate::domain::agent::AgentKind::Claude,
                     AgentModel::ClaudeSonnet5,
@@ -1376,6 +1383,7 @@ mod tests {
                 QuestionItem::new("Need a target branch?"),
                 QuestionItem::new("Need migration notes?"),
             ],
+            review_comment_outcomes: Vec::new(),
             summary: None,
         };
 
@@ -1401,6 +1409,7 @@ mod tests {
         let agent_response = AgentResponse {
             answer: String::new(),
             questions: vec![QuestionItem::new(numbered_questions)],
+            review_comment_outcomes: Vec::new(),
             summary: None,
         };
 
@@ -1420,6 +1429,7 @@ mod tests {
         let response = AgentResponse {
             answer: "Implemented the fix.".to_string(),
             questions: vec![QuestionItem::new("Need me to run tests?")],
+            review_comment_outcomes: Vec::new(),
             summary: None,
         };
 
@@ -1441,6 +1451,7 @@ mod tests {
         let response = AgentResponse {
             answer: String::new(),
             questions: vec![QuestionItem::new("Should I apply the patch?")],
+            review_comment_outcomes: Vec::new(),
             summary: None,
         };
 
@@ -1461,6 +1472,7 @@ mod tests {
         let response = AgentResponse {
             answer: String::new(),
             questions: vec![QuestionItem::new("\n")],
+            review_comment_outcomes: Vec::new(),
             summary: None,
         };
 
@@ -1479,6 +1491,7 @@ mod tests {
         let response = AgentResponse {
             answer: "Implemented the fix.".to_string(),
             questions: Vec::new(),
+            review_comment_outcomes: Vec::new(),
             summary: Some(AgentResponseSummary {
                 turn: "Updated the greeting flow.".to_string(),
                 session: "Session now greets users on startup.".to_string(),
@@ -1656,6 +1669,7 @@ mod tests {
                         assistant_message: AgentResponse {
                             answer: "done".to_string(),
                             questions: Vec::new(),
+                            review_comment_outcomes: Vec::new(),
                             summary: None,
                         },
                         context_reset: false,
@@ -1743,6 +1757,7 @@ mod tests {
                         assistant_message: AgentResponse {
                             answer: "done".to_string(),
                             questions: Vec::new(),
+                            review_comment_outcomes: Vec::new(),
                             summary: None,
                         },
                         context_reset: false,
@@ -1842,6 +1857,7 @@ mod tests {
                         assistant_message: AgentResponse {
                             answer: "done".to_string(),
                             questions: Vec::new(),
+                            review_comment_outcomes: Vec::new(),
                             summary: None,
                         },
                         context_reset: false,
@@ -1944,6 +1960,7 @@ mod tests {
                         assistant_message: AgentResponse {
                             answer: "done".to_string(),
                             questions: Vec::new(),
+                            review_comment_outcomes: Vec::new(),
                             summary: None,
                         },
                         context_reset: false,
@@ -2033,6 +2050,7 @@ mod tests {
                         assistant_message: AgentResponse {
                             answer: "done".to_string(),
                             questions: Vec::new(),
+                            review_comment_outcomes: Vec::new(),
                             summary: None,
                         },
                         context_reset: false,
@@ -2110,6 +2128,7 @@ mod tests {
     fn default_turn_metadata() -> TurnMetadata {
         TurnMetadata {
             published_upstream_ref: None,
+            review_comment_thread_ids: Vec::new(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
                 AgentModel::Gemini3FlashPreview,
@@ -2484,6 +2503,7 @@ mod tests {
             assistant_message: AgentResponse {
                 answer: "Implemented the change.".to_string(),
                 questions: Vec::new(),
+                review_comment_outcomes: Vec::new(),
                 summary: Some(AgentResponseSummary {
                     turn: "- Updated the worker flow.".to_string(),
                     session: "- Active review now reloads summary from persistence.".to_string(),
@@ -2498,6 +2518,7 @@ mod tests {
         // Act
         let turn_metadata = TurnMetadata {
             published_upstream_ref: None,
+            review_comment_thread_ids: Vec::new(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
                 AgentModel::Gemini3FlashPreview,
@@ -2576,6 +2597,7 @@ mod tests {
             &context,
             TurnMetadata {
                 published_upstream_ref: Some("origin/wt/session-id".to_string()),
+                review_comment_thread_ids: Vec::new(),
                 session_agent: AgentSelection::new(
                     crate::domain::agent::AgentKind::Antigravity,
                     crate::domain::agent::AgentModel::Gemini3FlashPreview,
@@ -2655,6 +2677,7 @@ mod tests {
             &context,
             TurnMetadata {
                 published_upstream_ref: Some("origin/wt/session-id".to_string()),
+                review_comment_thread_ids: Vec::new(),
                 session_agent: AgentSelection::new(
                     crate::domain::agent::AgentKind::Antigravity,
                     crate::domain::agent::AgentModel::Gemini3FlashPreview,
@@ -2815,6 +2838,64 @@ mod tests {
         mock_git_client
     }
 
+    /// Returns one git client that proves the branch push precedes forge
+    /// review-thread mutations.
+    fn review_resolution_git_client(sequence: &mut Sequence) -> MockGitClient {
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client
+            .expect_is_worktree_clean()
+            .once()
+            .returning(|_| Box::pin(async { Ok(true) }));
+        expect_safe_auto_push_state(&mut mock_git_client);
+        mock_git_client
+            .expect_push_current_branch_to_remote_branch()
+            .once()
+            .in_sequence(sequence)
+            .returning(|_, _| Box::pin(async { Ok("origin/wt/session-id".to_string()) }));
+        mock_git_client
+            .expect_repo_url()
+            .once()
+            .in_sequence(sequence)
+            .returning(|_| {
+                Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
+            });
+
+        mock_git_client
+    }
+
+    /// Returns one forge client that replies to and resolves the expected
+    /// review thread after the sequenced push.
+    fn review_resolution_client(
+        folder: PathBuf,
+        sequence: &mut Sequence,
+    ) -> forge::MockReviewRequestClient {
+        let mut review_request_client = forge::MockReviewRequestClient::new();
+        review_request_client
+            .expect_detect_remote()
+            .once()
+            .in_sequence(sequence)
+            .returning(|_| Ok(github_forge_remote()));
+        review_request_client
+            .expect_reply_to_thread()
+            .once()
+            .in_sequence(sequence)
+            .withf(move |remote, display_id, thread_id, body| {
+                remote.command_working_directory.as_deref() == Some(folder.as_path())
+                    && display_id == "#42"
+                    && thread_id == "thread-42"
+                    && body == "Added the missing validation."
+            })
+            .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
+        review_request_client
+            .expect_resolve_thread()
+            .once()
+            .in_sequence(sequence)
+            .withf(|_, display_id, thread_id| display_id == "#42" && thread_id == "thread-42")
+            .returning(|_, _, _| Box::pin(async { Ok(()) }));
+
+        review_request_client
+    }
+
     /// Returns one git client mock that commits successfully but fails the
     /// follow-up auto-push.
     fn auto_commit_git_client_with_push_failure(commit_message: &str) -> MockGitClient {
@@ -2931,6 +3012,7 @@ mod tests {
             assistant_message: AgentResponse {
                 answer: answer.to_string(),
                 questions: Vec::new(),
+                review_comment_outcomes: Vec::new(),
                 summary: None,
             },
             context_reset: false,
@@ -3005,6 +3087,7 @@ mod tests {
             assistant_message: AgentResponse {
                 answer: "Implemented the change.".to_string(),
                 questions: Vec::new(),
+                review_comment_outcomes: Vec::new(),
                 summary: None,
             },
             context_reset: false,
@@ -3016,6 +3099,7 @@ mod tests {
         // Act
         let turn_metadata = TurnMetadata {
             published_upstream_ref: Some("origin/wt/session-id".to_string()),
+            review_comment_thread_ids: Vec::new(),
             session_agent,
         };
         let status = apply_worker_turn_result(&context, turn_metadata, turn_result)
@@ -3048,6 +3132,102 @@ mod tests {
         assert_eq!(sync_events[0].0, "sess1");
         assert_eq!(sync_events[1].0, "sess1");
         assert_eq!(sync_events[0].1, sync_events[1].1);
+    }
+
+    #[tokio::test]
+    /// Verifies fixed, allowlisted outcomes are replied to and resolved only
+    /// after the completed turn reaches the published branch.
+    async fn test_apply_turn_result_resolves_fixed_review_threads_after_push() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let db = AppRepositories::in_memory().await;
+        insert_in_progress_session_with_review_request(&db).await;
+        let folder = base_dir.path().join("sess1");
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let session_agent =
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini3FlashPreview);
+        let mut sequence = Sequence::new();
+        let mock_git_client = review_resolution_git_client(&mut sequence);
+        let review_request_client = review_resolution_client(folder.clone(), &mut sequence);
+        let transcript = empty_transcript();
+        let context = SessionWorkerContext {
+            app_event_tx,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
+            cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+            channel: Arc::new(MockAgentChannel::new()),
+            child_pid: Arc::new(Mutex::new(None)),
+            clock: Arc::new(crate::infra::clock::RealClock),
+            db,
+            folder: base_dir.path().join("sess1"),
+            fs_client: Arc::new(fs::MockFsClient::new()),
+            git_client: Arc::new(mock_git_client),
+            transcript: Arc::clone(&transcript),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(review_request_client),
+            session_update_versions: Arc::default(),
+            session_id: "sess1".into(),
+            session_agent,
+            status: Arc::new(Mutex::new(Status::InProgress)),
+        };
+        let turn_result = TurnResult {
+            assistant_message: AgentResponse {
+                answer: "Implemented the change.".to_string(),
+                questions: Vec::new(),
+                review_comment_outcomes: vec![ReviewCommentOutcome {
+                    reply: "Added the missing validation.".to_string(),
+                    resolution: ReviewCommentResolution::Fixed,
+                    thread_id: "thread-42".to_string(),
+                }],
+                summary: None,
+            },
+            context_reset: false,
+            input_tokens: 0,
+            output_tokens: 0,
+            provider_conversation_id: None,
+        };
+
+        // Act
+        let status = apply_worker_turn_result(
+            &context,
+            TurnMetadata {
+                published_upstream_ref: Some("origin/wt/session-id".to_string()),
+                review_comment_thread_ids: vec!["thread-42".to_string()],
+                session_agent,
+            },
+            Ok(turn_result),
+        )
+        .await
+        .expect("turn result should succeed");
+        tokio::time::timeout(Duration::from_secs(1), async {
+            let mut completed = false;
+            while !completed {
+                let event = app_event_rx.recv().await.expect("missing app event");
+                completed = matches!(
+                    event,
+                    AppEvent::PublishedBranchSyncUpdated {
+                        sync_status: PublishedBranchSyncStatus::Succeeded,
+                        ..
+                    }
+                );
+            }
+        })
+        .await
+        .expect("timed out waiting for completed branch sync");
+        let notice = transcript
+            .lock()
+            .expect("transcript lock should be available")
+            .messages()
+            .last()
+            .expect("resolution notice should be appended")
+            .content
+            .clone();
+
+        // Assert
+        assert_eq!(status, Status::Review);
+        assert_eq!(
+            notice.trim(),
+            "[Review Comments] Replied to and resolved 1 review thread(s)."
+        );
     }
 
     #[tokio::test]
@@ -3112,6 +3292,7 @@ mod tests {
             assistant_message: AgentResponse {
                 answer: "Implemented the change.".to_string(),
                 questions: Vec::new(),
+                review_comment_outcomes: Vec::new(),
                 summary: None,
             },
             context_reset: false,
@@ -3123,6 +3304,7 @@ mod tests {
         // Act
         let turn_metadata = TurnMetadata {
             published_upstream_ref: Some("origin/wt/session-id".to_string()),
+            review_comment_thread_ids: Vec::new(),
             session_agent,
         };
         let status = apply_worker_turn_result(&context, turn_metadata, turn_result)
@@ -3206,6 +3388,7 @@ mod tests {
             assistant_message: AgentResponse {
                 answer: "Implemented the change.".to_string(),
                 questions: Vec::new(),
+                review_comment_outcomes: Vec::new(),
                 summary: None,
             },
             context_reset: false,
@@ -3217,6 +3400,7 @@ mod tests {
         // Act
         let turn_metadata = TurnMetadata {
             published_upstream_ref: Some("origin/wt/session-id".to_string()),
+            review_comment_thread_ids: Vec::new(),
             session_agent,
         };
         let status = apply_worker_turn_result(&context, turn_metadata, turn_result)
@@ -3306,6 +3490,7 @@ mod tests {
         // Act
         let turn_metadata = TurnMetadata {
             published_upstream_ref: Some("origin/wt/session-id".to_string()),
+            review_comment_thread_ids: Vec::new(),
             session_agent,
         };
         let status = apply_worker_turn_result(&context, turn_metadata, turn_result)
@@ -3401,6 +3586,7 @@ mod tests {
             assistant_message: AgentResponse {
                 answer: "Implemented the change.".to_string(),
                 questions: Vec::new(),
+                review_comment_outcomes: Vec::new(),
                 summary: Some(AgentResponseSummary {
                     turn: "- Attempted the update.".to_string(),
                     session: "- Session state should not project without persistence.".to_string(),
@@ -3415,6 +3601,7 @@ mod tests {
         // Act
         let turn_metadata = TurnMetadata {
             published_upstream_ref: None,
+            review_comment_thread_ids: Vec::new(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
                 AgentModel::Gemini3FlashPreview,
@@ -3505,6 +3692,7 @@ mod tests {
             assistant_message: AgentResponse {
                 answer: "Hey! How can I help you today?".to_string(),
                 questions: Vec::new(),
+                review_comment_outcomes: Vec::new(),
                 summary: Some(AgentResponseSummary {
                     turn: "No changes".to_string(),
                     session: "No changes".to_string(),
@@ -3519,6 +3707,7 @@ mod tests {
         // Act
         let turn_metadata = TurnMetadata {
             published_upstream_ref: None,
+            review_comment_thread_ids: Vec::new(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
                 AgentModel::Gemini3FlashPreview,
@@ -3589,6 +3778,7 @@ mod tests {
             assistant_message: AgentResponse {
                 answer: "Implemented the change.".to_string(),
                 questions: Vec::new(),
+                review_comment_outcomes: Vec::new(),
                 summary: None,
             },
             context_reset: true,
@@ -3600,6 +3790,7 @@ mod tests {
         // Act
         let turn_metadata = TurnMetadata {
             published_upstream_ref: None,
+            review_comment_thread_ids: Vec::new(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Codex,
                 AgentModel::Gpt55,
@@ -3701,6 +3892,7 @@ mod tests {
                         assistant_message: AgentResponse {
                             answer: "Resolved conflicts inside existing session.".to_string(),
                             questions: Vec::new(),
+                            review_comment_outcomes: Vec::new(),
                             summary: None,
                         },
                         context_reset: false,

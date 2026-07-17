@@ -94,7 +94,7 @@ where
             }
             AppMode::Question { .. } => handle_question_key(app, presentation, terminal, key).await,
             AppMode::ReviewComments { .. } => {
-                handle_review_comment_key(app, presentation, terminal, key)
+                handle_review_comment_key(app, presentation, terminal, key).await
             }
             AppMode::Diff { .. } => {
                 let size = terminal.size().map_err(backend_err)?;
@@ -151,7 +151,7 @@ where
 }
 
 /// Resolves the page content area and routes one review-comment key event.
-fn handle_review_comment_key<B: Backend>(
+async fn handle_review_comment_key<B: Backend>(
     app: &mut App,
     presentation: &PresentationState,
     terminal: &mut Terminal<B>,
@@ -169,7 +169,8 @@ where
         presentation.render_cache_store(),
         content_area,
         key,
-    ))
+    )
+    .await)
 }
 
 /// Returns the central content area after removing the global status and

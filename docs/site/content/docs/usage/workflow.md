@@ -48,14 +48,16 @@ In session chat view, the status-colored session title renders in a header row a
 output panel, with a metadata row showing the size bucket, `+added` / `-deleted` line
 totals, the cumulative active-work timer, the current model, the effective reasoning
 level, and token usage. A linked pull-request or merge-request URL appears in the header
-when present. Press `c` on a linked review request to open its read-only comments in a
-split page: comments and inline threads appear on the left, while the selected thread's
-metadata, attached current-diff context, and conversation appear on the right. The timer
-ticks only while the session is actively working. A linked terminal session keeps `C`
-available for starting a continuation draft. File-level comments show an explicit
-no-line-context message instead of a synthetic code anchor. Each session stores the
-project reasoning default when it is created, so later default changes affect new
-sessions without relabeling existing ones.
+when present. Press `c` on a linked review request to open its comments in a split page:
+comments and inline threads appear on the left, while the selected thread's metadata,
+attached current-diff context, and conversation appear on the right. In **Review**,
+**AgentReview**, or **Question**, press `a` to send the selected actionable comment to
+the active session agent or `A` to send every actionable comment. The timer ticks only
+while the session is actively working. A linked terminal session keeps `C` available for
+starting a continuation draft. File-level comments show an explicit no-line-context
+message instead of a synthetic code anchor. Each session stores the project reasoning
+default when it is created, so later default changes affect new sessions without
+relabeling existing ones.
 
 The top status bar shows the current version and update status, and rotates short
 page-scoped `FYI:` messages once per minute in the **Sessions** list and session chat
@@ -373,6 +375,13 @@ publish popup for the linked forge review request:
   update the review request title and description from the latest session commit message
   when they differ. Failed background pushes keep the manual `p` flow available for
   retry.
+- Agent-driven review-comment turns report one structured outcome for each supplied
+  inline thread. After Agentty commits the work and successfully pushes an already
+  published branch, it posts the agent's concise reply and resolves only allowlisted
+  threads reported as `fixed`. Threads reported as `no_change_needed`, unknown thread
+  IDs, blank replies, resolved threads, and outdated threads remain open. Reply or
+  resolution failures produce a `[Review Comments Warning]` transcript notice and do not
+  block the successful branch push.
 
 <a id="usage-review-request-prerequisites"></a> Publishing needs regular Git
 authentication (credential helper or PAT for HTTPS remotes, SSH key for SSH remotes)

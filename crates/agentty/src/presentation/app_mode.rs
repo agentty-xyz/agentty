@@ -357,8 +357,8 @@ pub enum AppMode {
         /// Session whose diff is currently visible.
         session_id: SessionId,
     },
-    /// Displays read-only forge review comments for one linked session review
-    /// request, with comment selection and current diff context.
+    /// Displays forge review comments for one linked session review request,
+    /// with agent-resolution actions and current diff context.
     ReviewComments {
         /// User-facing failure returned while loading review comments.
         comment_error: Option<String>,

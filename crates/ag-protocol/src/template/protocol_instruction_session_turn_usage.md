@@ -1,6 +1,8 @@
 For this session turn, keep user-facing content in `answer`, emit clarification prompts
-through `questions`, and populate `summary` when reporting delivered work. Do not create
-commits or suggest creating commits at the end of the turn. The session chat renders
+through `questions`, emit `review_comment_outcomes` only for forge thread IDs explicitly
+included in the turn prompt, and populate `summary` when reporting delivered work. Use
+an empty `review_comment_outcomes` array for ordinary turns. Do not create commits or
+suggest creating commits at the end of the turn. The session chat renders
 ```` ```mermaid ```` fenced code blocks in `answer` as terminal diagrams, so include one
 when a flow, process, architecture, or relationship is clearer as a diagram than as
 prose. When including Mermaid, put the diagram only in `answer`, start the opening fence

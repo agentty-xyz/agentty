@@ -294,10 +294,16 @@ mod tests {
         assert!(
             required_fields
                 .iter()
+                .any(|value| value.as_str() == Some("review_comment_outcomes"))
+        );
+        assert!(
+            required_fields
+                .iter()
                 .any(|value| value.as_str() == Some("summary"))
         );
         assert!(properties.contains_key("answer"));
         assert!(properties.contains_key("questions"));
+        assert!(properties.contains_key("review_comment_outcomes"));
         assert!(properties.contains_key("summary"));
     }
 
@@ -331,7 +337,7 @@ mod tests {
         assert_eq!(
             required_fields,
             &vec![Value::String("answer".to_string())],
-            "only `answer` should be required; demanding `questions` or `summary` rejects \
+            "only `answer` should be required; demanding optional response fields rejects \
              ordinary replies that omit them"
         );
     }
@@ -472,6 +478,16 @@ mod tests {
             .and_then(|value| value.get("QuestionItem"))
             .and_then(Value::as_object)
             .expect("question definition should exist");
+        let review_comment_outcome_definition = schema
+            .get("$defs")
+            .and_then(|value| value.get("ReviewCommentOutcome"))
+            .and_then(Value::as_object)
+            .expect("review comment outcome definition should exist");
+        let review_comment_resolution_definition = schema
+            .get("$defs")
+            .and_then(|value| value.get("ReviewCommentResolution"))
+            .and_then(Value::as_object)
+            .expect("review comment resolution definition should exist");
         let summary_definition = schema
             .get("$defs")
             .and_then(|value| value.get("AgentResponseSummary"))
@@ -482,6 +498,18 @@ mod tests {
         assert_eq!(
             question_definition.get("title").and_then(Value::as_str),
             Some("QuestionItem")
+        );
+        assert_eq!(
+            review_comment_outcome_definition
+                .get("title")
+                .and_then(Value::as_str),
+            Some("ReviewCommentOutcome")
+        );
+        assert_eq!(
+            review_comment_resolution_definition
+                .get("title")
+                .and_then(Value::as_str),
+            Some("ReviewCommentResolution")
         );
         assert_eq!(
             summary_definition.get("title").and_then(Value::as_str),
@@ -498,24 +526,10 @@ mod tests {
             .get("properties")
             .and_then(Value::as_object)
             .expect("response properties should exist");
-        let question_definition = schema
-            .get("$defs")
-            .and_then(|value| value.get("QuestionItem"))
-            .and_then(Value::as_object)
-            .expect("question definition should exist");
-        let question_properties = question_definition
-            .get("properties")
-            .and_then(Value::as_object)
-            .expect("question properties should exist");
-        let summary_definition = schema
-            .get("$defs")
-            .and_then(|value| value.get("AgentResponseSummary"))
-            .and_then(Value::as_object)
-            .expect("summary definition should exist");
-        let summary_properties = summary_definition
-            .get("properties")
-            .and_then(Value::as_object)
-            .expect("summary properties should exist");
+        let question_properties = schema_definition_properties(&schema, "QuestionItem");
+        let review_comment_outcome_properties =
+            schema_definition_properties(&schema, "ReviewCommentOutcome");
+        let summary_properties = schema_definition_properties(&schema, "AgentResponseSummary");
         let expected_questions_description = questions_field_description();
 
         // Assert
@@ -536,6 +550,14 @@ mod tests {
         );
         assert_schema_property_title_and_description(
             response_properties,
+            "review_comment_outcomes",
+            "review_comment_outcomes",
+            "Per-thread outcomes for an agent-driven forge comment-resolution turn. Emit an empty \
+             array unless the prompt explicitly supplies forge thread IDs. Copy each reported \
+             `thread_id` exactly from the prompt.",
+        );
+        assert_schema_property_title_and_description(
+            response_properties,
             "summary",
             "summary",
             "Structured summary for session-discussion turns, kept outside `answer` markdown. Use \
@@ -549,6 +571,24 @@ mod tests {
              instead of bundling multiple decisions into one item.",
         );
         assert_schema_property_title(question_properties, "options", "options");
+        assert_schema_property_title_and_description(
+            review_comment_outcome_properties,
+            "reply",
+            "reply",
+            "Concise reply suitable for posting to the forge review thread.",
+        );
+        assert_schema_property_title_and_description(
+            review_comment_outcome_properties,
+            "resolution",
+            "resolution",
+            "Whether the targeted thread was fixed or required no change.",
+        );
+        assert_schema_property_title_and_description(
+            review_comment_outcome_properties,
+            "thread_id",
+            "thread_id",
+            "Opaque forge thread identifier copied exactly from the turn prompt.",
+        );
         assert_schema_property_title_and_description(
             summary_properties,
             "turn",
@@ -691,6 +731,19 @@ mod tests {
             Value::Array(array) => array.iter().all(all_properties_objects_deny_additional),
             _ => true,
         }
+    }
+
+    /// Returns the properties object for one named schema definition.
+    fn schema_definition_properties<'a>(
+        schema: &'a Value,
+        definition_name: &str,
+    ) -> &'a serde_json::Map<String, Value> {
+        schema
+            .get("$defs")
+            .and_then(|value| value.get(definition_name))
+            .and_then(|value| value.get("properties"))
+            .and_then(Value::as_object)
+            .expect("schema definition properties should exist")
     }
 
     /// Asserts one property schema has the expected `title`.
