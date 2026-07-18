@@ -154,7 +154,9 @@ impl<'de> Deserialize<'de> for SessionId {
 pub enum Status {
     /// Session has been created but has not started its first agent turn yet.
     Draft,
+    /// An agent turn or its post-processing workflow is running.
     InProgress,
+    /// The session is ready for user review and follow-up work.
     Review,
     /// Session is generating focused-review output while keeping the
     /// review-oriented shortcuts available. Starting sync from this state
@@ -164,9 +166,13 @@ pub enum Status {
     Question,
     /// Session is waiting in the merge queue for its turn to merge.
     Queued,
+    /// The session branch is being rebased onto its target branch.
     Rebasing,
+    /// The session branch is being merged into its target branch.
     Merging,
+    /// The session completed successfully.
     Done,
+    /// The session was canceled before completion.
     Canceled,
 }
 
@@ -297,12 +303,18 @@ impl FromStr for Status {
 /// Size bucket derived from a session's git diff.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum SessionSize {
+    /// At most 10 changed lines.
     #[default]
     Xs,
+    /// Between 11 and 30 changed lines.
     S,
+    /// Between 31 and 80 changed lines.
     M,
+    /// Between 81 and 200 changed lines.
     L,
+    /// Between 201 and 500 changed lines.
     Xl,
+    /// More than 500 changed lines.
     Xxl,
 }
 

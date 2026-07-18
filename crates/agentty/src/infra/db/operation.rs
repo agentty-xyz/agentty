@@ -7,15 +7,25 @@ use crate::infra::db::{DbError, unix_timestamp_now};
 
 /// Persisted operation lifecycle state for one session command.
 pub struct SessionOperationRow {
+    /// Whether the owning workflow requested cancellation.
     pub cancel_requested: bool,
+    /// Completion timestamp in Unix seconds, when finished.
     pub finished_at: Option<i64>,
+    /// Most recent liveness timestamp in Unix seconds.
     pub heartbeat_at: Option<i64>,
+    /// Stable operation identifier.
     pub id: String,
+    /// Persisted operation-kind discriminator.
     pub kind: String,
+    /// Most recent failure or cancellation reason.
     pub last_error: Option<String>,
+    /// Queue-entry timestamp in Unix seconds.
     pub queued_at: i64,
+    /// Session that owns the operation.
     pub session_id: String,
+    /// Start timestamp in Unix seconds, when running.
     pub started_at: Option<i64>,
+    /// Persisted operation-lifecycle status.
     pub status: String,
 }
 

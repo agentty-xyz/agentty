@@ -2,12 +2,16 @@
 
 pub mod composer;
 pub mod file_entry;
+/// Editable text-input state and cursor operations.
 pub mod input;
+/// Persisted project entities and project-list ordering.
 pub mod project;
 pub mod question;
 pub mod review;
 pub mod selection;
+/// Session lifecycle entities, statistics, and identifiers.
 pub mod session;
+/// Canonical persisted session transcript messages.
 pub mod session_message;
 pub mod session_order;
 pub mod setting;

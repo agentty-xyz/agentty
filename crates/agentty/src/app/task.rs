@@ -4,12 +4,10 @@
 //! Recurring git-status and review-request polling lives in the sync
 //! orchestrator (`app/sync.rs`); this module keeps one-shot background tasks.
 
-use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::sync::Arc;
 
-use ag_agent as agent;
+use ag_agent::{self as agent, OneShotClient};
 use ag_forge::{ForgeRemote, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewRequestClient};
 use ag_git::GitClient;
 use ag_protocol::AgentResponse;
@@ -373,6 +371,16 @@ impl TaskService {
     /// Spawns one background review assist generation task and emits
     /// an event with either final review text or a failure description.
     pub(super) fn spawn_review_assist_task(input: ReviewAssistTaskInput) {
+        let one_shot_client: Arc<dyn OneShotClient> = Arc::new(agent::RealOneShotClient::new(None));
+
+        Self::spawn_review_assist_task_with_client(input, one_shot_client);
+    }
+
+    /// Spawns review assist generation through the provided one-shot boundary.
+    fn spawn_review_assist_task_with_client(
+        input: ReviewAssistTaskInput,
+        one_shot_client: Arc<dyn OneShotClient>,
+    ) {
         let ReviewAssistTaskInput {
             app_event_tx,
             diff_hash,
@@ -384,11 +392,12 @@ impl TaskService {
         } = input;
 
         tokio::spawn(async move {
-            let review_result = Self::review_assist_text(
+            let review_result = Self::review_assist_text_with_client(
                 &session_folder,
                 review_selection,
                 &review_diff,
                 session_chat_history.as_deref(),
+                one_shot_client.as_ref(),
             )
             .await;
 
@@ -396,38 +405,6 @@ impl TaskService {
             // Fire-and-forget: receiver may be dropped during shutdown.
             let _ = app_event_tx.send(app_event);
         });
-    }
-
-    /// Generates review assist text by running one model command with
-    /// read-only review constraints and parsing the final assistant response
-    /// content.
-    async fn review_assist_text(
-        session_folder: &Path,
-        review_selection: AgentSelection,
-        review_diff: &str,
-        session_chat_history: Option<&str>,
-    ) -> Result<String, AppError> {
-        Self::review_assist_text_with_submitter(
-            session_folder,
-            review_selection,
-            review_diff,
-            session_chat_history,
-            |review_folder, review_selection, review_prompt| {
-                Box::pin(async move {
-                    agent::submit_one_shot(agent::OneShotRequest {
-                        agent_kind: review_selection.kind(),
-                        child_pid: None,
-                        folder: review_folder,
-                        model: review_selection.model(),
-                        prompt: review_prompt,
-                        request_kind: ag_agent::AgentRequestKind::UtilityPrompt,
-                        reasoning_level: ReasoningLevel::default(),
-                    })
-                    .await
-                })
-            },
-        )
-        .await
     }
 
     /// Converts a raw version lookup result into the reducer event consumed by
@@ -442,30 +419,30 @@ impl TaskService {
         }
     }
 
-    /// Generates review assist text using an injected one-shot submitter so
+    /// Generates review assist text using an injected one-shot boundary so
     /// failure paths can be tested without subprocess execution.
-    async fn review_assist_text_with_submitter<Submitter>(
+    async fn review_assist_text_with_client(
         session_folder: &Path,
         review_selection: AgentSelection,
         review_diff: &str,
         session_chat_history: Option<&str>,
-        submitter: Submitter,
-    ) -> Result<String, AppError>
-    where
-        Submitter: for<'submit> FnOnce(
-            &'submit Path,
-            AgentSelection,
-            &'submit str,
-        ) -> Pin<
-            Box<dyn Future<Output = Result<AgentResponse, String>> + Send + 'submit>,
-        >,
-    {
+        one_shot_client: &dyn OneShotClient,
+    ) -> Result<String, AppError> {
         let review_prompt = Self::review_assist_prompt(review_diff, session_chat_history)?;
-        let agent_response = submitter(session_folder, review_selection, &review_prompt)
+        let submission = one_shot_client
+            .submit(agent::OneShotRequest {
+                agent_kind: review_selection.kind(),
+                child_pid: None,
+                folder: session_folder.to_path_buf(),
+                model: review_selection.model(),
+                prompt: review_prompt,
+                request_kind: ag_agent::AgentRequestKind::UtilityPrompt,
+                reasoning_level: ReasoningLevel::default(),
+            })
             .await
-            .map_err(AppError::Workflow)?;
+            .map_err(AppError::from)?;
 
-        Self::review_output_text(&agent_response)
+        Self::review_output_text(&submission.response)
     }
 
     /// Builds the final reducer event for one review-assist task outcome.
@@ -983,29 +960,84 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Ensures review assist surfaces one-shot submission failures as
-    /// [`AppError::Workflow`] without invoking a real subprocess.
-    async fn review_assist_text_with_submitter_returns_workflow_error_on_submit_failure() {
+    /// Ensures the detached review-assist task emits the completed review
+    /// through the app event channel.
+    async fn spawn_review_assist_task_with_client_emits_completed_review() {
+        // Arrange
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let mut one_shot_client = agent::MockOneShotClient::new();
+        one_shot_client
+            .expect_submit()
+            .times(1)
+            .returning(|request| {
+                assert_eq!(request.agent_kind, AgentKind::Claude);
+                assert!(
+                    request
+                        .prompt
+                        .contains("diff --git a/src/lib.rs b/src/lib.rs")
+                );
+
+                Ok(agent::OneShotSubmission {
+                    response: AgentResponse::plain("Review completed."),
+                    stats: agent::SessionStats::default(),
+                })
+            });
+        let input = ReviewAssistTaskInput {
+            app_event_tx,
+            diff_hash: 42,
+            review_diff: "diff --git a/src/lib.rs b/src/lib.rs".to_string(),
+            review_selection: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+            session_chat_history: None,
+            session_folder: PathBuf::from("/tmp/review-assist"),
+            session_id: "session-42".into(),
+        };
+
+        // Act
+        TaskService::spawn_review_assist_task_with_client(input, Arc::new(one_shot_client));
+        let app_event = tokio::time::timeout(Duration::from_secs(1), app_event_rx.recv())
+            .await
+            .expect("timed out waiting for review-assist event")
+            .expect("review-assist task should emit one event");
+
+        // Assert
+        assert_eq!(
+            app_event,
+            AppEvent::ReviewPrepared {
+                diff_hash: 42,
+                review_text: "Review completed.".to_string(),
+                session_id: "session-42".into(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    /// Ensures review assist preserves typed one-shot submission failures
+    /// without invoking a real subprocess.
+    async fn review_assist_text_with_client_returns_one_shot_error_on_submit_failure() {
         // Arrange
         let session_folder = Path::new("/tmp/review-assist-submit-error");
         let review_selection = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5);
         let review_diff = "diff --git a/src/lib.rs b/src/lib.rs";
+        let mut one_shot_client = agent::MockOneShotClient::new();
+        one_shot_client
+            .expect_submit()
+            .returning(|_| Err(agent::OneShotError::new("submit failed")));
 
         // Act
-        let result = TaskService::review_assist_text_with_submitter(
+        let result = TaskService::review_assist_text_with_client(
             session_folder,
             review_selection,
             review_diff,
             None,
-            |_, _, _| Box::pin(async { Err("submit failed".to_string()) }),
+            &one_shot_client,
         )
         .await;
 
         // Assert
         let error = result.expect_err("submit failure should be returned");
         assert!(
-            matches!(error, AppError::Workflow(_)),
-            "expected AppError::Workflow, got: {error:?}"
+            matches!(error, AppError::OneShot(_)),
+            "expected AppError::OneShot, got: {error:?}"
         );
         assert_eq!(error.to_string(), "submit failed");
     }
@@ -1014,27 +1046,30 @@ mod tests {
     /// Ensures review assist keeps the selected provider for shared Gemini
     /// model ids instead of resolving the model to the first available
     /// provider.
-    async fn review_assist_text_with_submitter_preserves_review_selection_provider() {
+    async fn review_assist_text_with_client_preserves_review_selection_provider() {
         // Arrange
         let session_folder = Path::new("/tmp/review-assist-provider");
         let review_selection =
             AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini35Flash);
         let review_diff = "diff --git a/src/lib.rs b/src/lib.rs";
+        let mut one_shot_client = agent::MockOneShotClient::new();
+        one_shot_client.expect_submit().returning(|request| {
+            assert_eq!(request.agent_kind, AgentKind::Antigravity);
+            assert_eq!(request.model, AgentModel::Gemini35Flash);
+
+            Ok(agent::OneShotSubmission {
+                response: AgentResponse::plain("Review completed."),
+                stats: agent::SessionStats::default(),
+            })
+        });
 
         // Act
-        let result = TaskService::review_assist_text_with_submitter(
+        let result = TaskService::review_assist_text_with_client(
             session_folder,
             review_selection,
             review_diff,
             None,
-            |_, submitted_selection, _| {
-                Box::pin(async move {
-                    assert_eq!(submitted_selection.kind(), AgentKind::Antigravity);
-                    assert_eq!(submitted_selection.model(), AgentModel::Gemini35Flash);
-
-                    Ok(AgentResponse::plain("Review completed."))
-                })
-            },
+            &one_shot_client,
         )
         .await;
 

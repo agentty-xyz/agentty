@@ -1,3 +1,5 @@
+//! Agentty command-line entry point and terminal runtime bootstrap.
+
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;

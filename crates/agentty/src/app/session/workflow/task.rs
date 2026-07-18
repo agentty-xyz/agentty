@@ -4,7 +4,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use ag_agent as agent;
+use ag_agent::{self as agent, OneShotClient};
 use ag_git::{self as git, GitClient};
 use askama::Template;
 use tokio::sync::mpsc;
@@ -164,6 +164,8 @@ pub(crate) struct RunAgentAssistTaskInput {
     pub(crate) folder: std::path::PathBuf,
     /// Session identifier for persisted updates.
     pub(crate) id: String,
+    /// Provider-neutral boundary for the isolated assist prompt.
+    pub(crate) one_shot_client: Arc<dyn OneShotClient>,
     /// One-shot assist prompt submitted to the agent.
     pub(crate) prompt: String,
     /// Session agent/model selection used for agent metadata and parsing.
@@ -601,6 +603,7 @@ impl SessionTaskService {
             &context.folder,
             &base_branch,
             auto_commit_agent,
+            context.one_shot_client.as_ref(),
             no_verify,
             Self::load_include_coauthored_by_agentty_setting(&context.db, &context.id).await,
         )
@@ -630,19 +633,8 @@ impl SessionTaskService {
     ) -> Result<(), SessionError> {
         let compacted_error = compact_commit_error_for_assist(commit_error);
         let prompt = Self::auto_commit_assist_prompt(&compacted_error)?;
-        let assist_context = AssistContext {
-            app_event_tx: context.app_event_tx.clone(),
-            child_pid: Arc::clone(&context.child_pid),
-            db: context.db.clone(),
-            folder: context.folder.clone(),
-            git_client: Arc::clone(&context.git_client),
-            id: context.id.clone(),
-            session_agent: context.session_agent,
-            session_update_versions: context.session_update_versions.clone(),
-            transcript: Arc::clone(&context.transcript),
-        };
 
-        run_agent_assist(&assist_context, &prompt)
+        run_agent_assist(context, &prompt)
             .await
             .map_err(|error| error.with_context("Commit assistance failed"))
     }
@@ -691,8 +683,8 @@ impl SessionTaskService {
         })
     }
 
-    /// Generates the canonical session commit message, commits the current
-    /// worktree state, and returns the rewritten `HEAD` details.
+    /// Generates and commits the canonical session commit message through an
+    /// injected one-shot client.
     ///
     /// # Errors
     /// Returns an error if the worktree is clean, the cumulative session diff
@@ -703,87 +695,7 @@ impl SessionTaskService {
         folder: &Path,
         base_branch: &str,
         session_agent: AgentSelection,
-        no_verify: bool,
-        include_coauthored_by_agentty: bool,
-    ) -> Result<SessionCommitOutcome, SessionError> {
-        if cfg!(test) {
-            let folder = folder.to_path_buf();
-            if git_client.is_worktree_clean(folder.clone()).await? {
-                return Err(SessionError::Workflow(
-                    "Nothing to commit: no changes detected".to_string(),
-                ));
-            }
-
-            let has_session_commit = git_client
-                .has_commits_since(folder.clone(), base_branch.to_string())
-                .await?;
-            let current_commit_message = if has_session_commit {
-                git_client.head_commit_message(folder.clone()).await?
-            } else {
-                None
-            };
-            let Some(current_commit_message) = current_commit_message.as_deref().map(str::trim)
-            else {
-                return Err(SessionError::Workflow(
-                    "Session commit generation requires an existing commit message during tests"
-                        .to_string(),
-                ));
-            };
-            if current_commit_message.is_empty() {
-                return Err(SessionError::Workflow(
-                    "Session commit generation requires a non-blank existing commit message \
-                     during tests"
-                        .to_string(),
-                ));
-            }
-            let commit_message = append_agentty_coauthor_trailer(
-                strip_agentty_coauthor_trailer(current_commit_message).trim(),
-                include_coauthored_by_agentty,
-            );
-            git_client
-                .commit_all_preserving_single_commit(
-                    folder.clone(),
-                    base_branch.to_string(),
-                    commit_message.clone(),
-                    git::SingleCommitMessageStrategy::Replace,
-                    no_verify,
-                )
-                .await?;
-            let commit_hash = git_client.head_short_hash(folder).await?;
-
-            return Ok(SessionCommitOutcome {
-                commit_hash,
-                commit_message,
-            });
-        }
-
-        let backend = agent::create_backend(session_agent.kind());
-
-        Self::commit_session_changes_with_backend(
-            git_client,
-            folder,
-            base_branch,
-            session_agent,
-            backend.as_ref(),
-            no_verify,
-            include_coauthored_by_agentty,
-        )
-        .await
-    }
-
-    /// Testable variant of [`SessionTaskService::commit_session_changes`] that
-    /// accepts an injected backend for deterministic prompt generation.
-    ///
-    /// # Errors
-    /// Returns an error if the worktree is clean, the cumulative session diff
-    /// cannot be generated, commit-message generation fails, or the git commit
-    /// cannot be created/amended.
-    async fn commit_session_changes_with_backend(
-        git_client: &dyn GitClient,
-        folder: &Path,
-        base_branch: &str,
-        session_agent: AgentSelection,
-        backend: &dyn agent::AgentBackend,
+        one_shot_client: &dyn OneShotClient,
         no_verify: bool,
         include_coauthored_by_agentty: bool,
     ) -> Result<SessionCommitOutcome, SessionError> {
@@ -805,12 +717,12 @@ impl SessionTaskService {
         } else {
             None
         };
-        let generated_commit_message = Self::generate_session_commit_message_with_backend(
+        let generated_commit_message = Self::generate_session_commit_message_with_client(
             folder.as_path(),
             session_agent,
             diff.as_str(),
             current_commit_message.as_deref(),
-            backend,
+            one_shot_client,
             include_coauthored_by_agentty,
         )
         .await?;
@@ -834,36 +746,34 @@ impl SessionTaskService {
     }
 
     /// Renders the session commit-message prompt, submits it to the injected
-    /// backend, validates the returned text, and appends the optional
+    /// one-shot client, validates the returned text, and appends the optional
     /// coauthor trailer in code.
     ///
     /// # Errors
     /// Returns an error when prompt rendering fails, the one-shot agent call
     /// fails, or fallback retry with a truncated diff fails after a
     /// context-window error.
-    async fn generate_session_commit_message_with_backend(
+    async fn generate_session_commit_message_with_client(
         folder: &Path,
         session_agent: AgentSelection,
         diff: &str,
         current_commit_message: Option<&str>,
-        backend: &dyn agent::AgentBackend,
+        one_shot_client: &dyn OneShotClient,
         include_coauthored_by_agentty: bool,
     ) -> Result<String, SessionError> {
         let prompt = Self::session_commit_message_prompt(diff, current_commit_message)?;
-        let submission = match Self::submit_utility_prompt_with_backend(
-            session_agent,
-            backend,
-            agent::OneShotRequest {
+        let submission = match one_shot_client
+            .submit(agent::OneShotRequest {
                 agent_kind: session_agent.kind(),
                 child_pid: None,
-                folder,
+                folder: folder.to_path_buf(),
                 model: session_agent.model(),
-                prompt: &prompt,
+                prompt,
                 request_kind: ag_agent::AgentRequestKind::UtilityPrompt,
                 reasoning_level: crate::domain::agent::ReasoningLevel::default(),
-            },
-        )
-        .await
+            })
+            .await
+            .map_err(SessionError::from)
         {
             Ok(submission) => submission,
             Err(error) if is_context_window_exceeded_error(&error) => {
@@ -873,20 +783,17 @@ impl SessionTaskService {
                 let truncated_prompt =
                     Self::session_commit_message_prompt(&truncated_diff, current_commit_message)?;
 
-                Self::submit_utility_prompt_with_backend(
-                    session_agent,
-                    backend,
-                    agent::OneShotRequest {
+                one_shot_client
+                    .submit(agent::OneShotRequest {
                         agent_kind: session_agent.kind(),
                         child_pid: None,
-                        folder,
+                        folder: folder.to_path_buf(),
                         model: session_agent.model(),
-                        prompt: &truncated_prompt,
+                        prompt: truncated_prompt,
                         request_kind: ag_agent::AgentRequestKind::UtilityPrompt,
                         reasoning_level: crate::domain::agent::ReasoningLevel::default(),
-                    },
-                )
-                .await?
+                    })
+                    .await?
             }
             Err(error) => return Err(error),
         };
@@ -914,45 +821,29 @@ impl SessionTaskService {
     pub(crate) async fn run_agent_assist_task(
         input: RunAgentAssistTaskInput,
     ) -> Result<(), SessionError> {
-        let backend = agent::create_backend(input.session_agent.kind());
-
-        Self::run_agent_assist_task_with_backend(input, backend.as_ref()).await
-    }
-
-    /// Executes one isolated assist prompt using the provided backend.
-    ///
-    /// # Errors
-    /// Returns an error when the one-shot prompt fails or returns invalid
-    /// protocol output.
-    async fn run_agent_assist_task_with_backend(
-        input: RunAgentAssistTaskInput,
-        backend: &dyn agent::AgentBackend,
-    ) -> Result<(), SessionError> {
         let RunAgentAssistTaskInput {
             app_event_tx,
             child_pid,
             db,
             folder,
             id,
+            one_shot_client,
             prompt,
             session_agent,
             session_update_versions,
             transcript,
         } = input;
-        let assist_submission = Self::submit_utility_prompt_with_backend(
-            session_agent,
-            backend,
-            agent::OneShotRequest {
+        let assist_submission = one_shot_client
+            .submit(agent::OneShotRequest {
                 agent_kind: session_agent.kind(),
-                child_pid: Some(child_pid.as_ref()),
-                folder: &folder,
+                child_pid: Some(child_pid),
+                folder,
                 model: session_agent.model(),
-                prompt: &prompt,
+                prompt,
                 request_kind: ag_agent::AgentRequestKind::UtilityPrompt,
                 reasoning_level: crate::domain::agent::ReasoningLevel::default(),
-            },
-        )
-        .await?;
+            })
+            .await?;
 
         let answer_text = assist_submission.response.to_answer_display_text();
         if !answer_text.trim().is_empty() {
@@ -1000,40 +891,6 @@ impl SessionTaskService {
         }
 
         Ok(())
-    }
-
-    /// Executes one isolated utility prompt, routing app-server-backed models
-    /// through the shared app-server client while preserving backend injection
-    /// for direct CLI providers in tests and production.
-    ///
-    /// # Errors
-    /// Returns an error when the one-shot prompt fails or the response does
-    /// not satisfy the structured protocol schema.
-    async fn submit_utility_prompt_with_backend(
-        session_agent: AgentSelection,
-        backend: &dyn agent::AgentBackend,
-        request: agent::OneShotRequest<'_>,
-    ) -> Result<agent::OneShotSubmission, SessionError> {
-        if agent::transport_mode(session_agent.kind()).uses_app_server() {
-            let app_server_client = agent::create_app_server_client(session_agent.kind(), None)
-                .ok_or_else(|| {
-                    SessionError::Workflow(format!(
-                        "{} provider did not provide an app-server client",
-                        session_agent.kind()
-                    ))
-                })?;
-
-            return agent::submit_one_shot_with_app_server_client(
-                app_server_client.as_ref(),
-                request,
-            )
-            .await
-            .map_err(SessionError::Workflow);
-        }
-
-        agent::submit_one_shot_with_backend(backend, request)
-            .await
-            .map_err(SessionError::Workflow)
     }
 
     /// Applies a status transition to memory and database when valid.
@@ -1320,6 +1177,9 @@ fn append_agentty_coauthor_trailer(
 /// one-shot flow due to provider context limits.
 fn is_context_window_exceeded_error(error: &SessionError) -> bool {
     match error {
+        SessionError::OneShot(error) => {
+            is_context_window_exceeded_error_message(&error.to_string())
+        }
         SessionError::Workflow(message) => is_context_window_exceeded_error_message(message),
         _ => false,
     }
@@ -1392,12 +1252,11 @@ fn truncate_session_diff_for_commit_message(diff: &str) -> Option<String> {
 mod tests {
     use std::fmt::Write as _;
     use std::path::PathBuf;
-    use std::process::Command;
     use std::sync::Mutex as StdMutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant, SystemTime};
 
-    use ag_agent::{AgentRequestKind, MockAgentBackend};
+    use ag_agent::MockOneShotClient;
     use ag_git::{GitError, MockGitClient};
 
     use super::*;
@@ -1443,20 +1302,21 @@ mod tests {
         }
     }
 
-    /// Builds one deterministic shell command used by mocked backends.
-    fn mock_shell_command(stdout: &str, stderr: &str, exit_code: i32) -> Command {
-        let mut command = Command::new("sh");
-        command.arg("-c").arg(
-            "printf '%s' \"$ASSIST_STDOUT\"; printf '%s' \"$ASSIST_STDERR\" >&2; exit \
-             \"$ASSIST_EXIT\"",
-        );
-        command.env("ASSIST_STDOUT", stdout);
-        command.env("ASSIST_STDERR", stderr);
-        command.env("ASSIST_EXIT", exit_code.to_string());
-        command.stdout(std::process::Stdio::piped());
-        command.stderr(std::process::Stdio::piped());
-
-        command
+    /// Builds one deterministic one-shot result for app workflow tests.
+    fn one_shot_submission(
+        answer: &str,
+        input_tokens: u64,
+        output_tokens: u64,
+    ) -> agent::OneShotSubmission {
+        agent::OneShotSubmission {
+            response: ag_protocol::AgentResponse::plain(answer),
+            stats: agent::SessionStats {
+                added_lines: 0,
+                deleted_lines: 0,
+                input_tokens,
+                output_tokens,
+            },
+        }
     }
 
     /// Inserts one review session used by assist-task tests.
@@ -1707,6 +1567,7 @@ mod tests {
                 clipboard_image_client_override: None,
                 fs_client: Arc::new(fs::MockFsClient::new()),
                 git_client: Arc::new(MockGitClient::new()),
+                one_shot_client_override: None,
                 repositories: database.clone(),
                 review_request_client: Arc::new(ag_forge::MockReviewRequestClient::new()),
             },
@@ -1858,35 +1719,24 @@ mod tests {
     /// Verifies plain-text one-shot output is rejected for session commit
     /// message generation after both the original parse and the
     /// protocol-repair retry fail.
-    async fn test_generate_session_commit_message_with_backend_rejects_plain_text_output() {
-        // Arrange — use a CLI-backed model so the mock backend is exercised.
-        // App-server-backed Codex models bypass `build_command` entirely and
-        // route through the shared app-server client.
+    async fn test_generate_session_commit_message_with_client_rejects_submission_error() {
+        // Arrange
         let temp_directory = tempfile::tempdir().expect("failed to create temp dir");
-        let mut backend = MockAgentBackend::new();
-        backend
-            .expect_build_command()
-            .times(2)
-            .returning(|request| {
-                assert!(matches!(
-                    request.request_kind,
-                    AgentRequestKind::UtilityPrompt
-                ));
-
-                Ok(mock_shell_command(
-                    "Refactor agent prompt and protocol handling",
-                    "",
-                    0,
-                ))
-            });
+        let mut one_shot_client = MockOneShotClient::new();
+        one_shot_client.expect_submit().returning(|_| {
+            Err(agent::OneShotError::new(
+                "One-shot agent output did not match the required JSON \
+                 schema\nresponse:\nRefactor agent prompt and protocol handling",
+            ))
+        });
 
         // Act
-        let error = SessionTaskService::generate_session_commit_message_with_backend(
+        let error = SessionTaskService::generate_session_commit_message_with_client(
             temp_directory.path(),
             AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
             "diff --git a/a.rs b/a.rs",
             None,
-            &backend,
+            &one_shot_client,
             false,
         )
         .await
@@ -1908,33 +1758,21 @@ mod tests {
     #[tokio::test]
     /// Verifies blank commit-message protocol output falls back to the
     /// continuity title and keeps auto-commit progressing.
-    async fn test_generate_session_commit_message_with_backend_falls_back_for_blank_answer() {
+    async fn test_generate_session_commit_message_with_client_falls_back_for_blank_answer() {
         // Arrange
         let temp_directory = tempfile::tempdir().expect("failed to create temp dir");
-        let mut backend = MockAgentBackend::new();
-        backend
-            .expect_build_command()
-            .times(1)
-            .returning(|request| {
-                assert!(matches!(
-                    request.request_kind,
-                    AgentRequestKind::UtilityPrompt
-                ));
-
-                Ok(mock_shell_command(
-                    r#"{"answer":"","questions":[],"summary":null}"#,
-                    "",
-                    0,
-                ))
-            });
+        let mut one_shot_client = MockOneShotClient::new();
+        one_shot_client
+            .expect_submit()
+            .returning(|_| Ok(one_shot_submission("", 0, 0)));
 
         // Act
-        let generated_message = SessionTaskService::generate_session_commit_message_with_backend(
+        let generated_message = SessionTaskService::generate_session_commit_message_with_client(
             temp_directory.path(),
             AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
             "diff --git a/a.rs b/a.rs",
             Some("Keep session commit accurate\n\n- Preserve existing behavior"),
-            &backend,
+            &one_shot_client,
             false,
         )
         .await
@@ -1947,27 +1785,23 @@ mod tests {
     #[tokio::test]
     /// Verifies large diffs are retried with truncation after a
     /// context-window-overflow one-shot failure.
-    async fn test_generate_session_commit_message_with_backend_retries_with_truncated_diff() {
+    async fn test_generate_session_commit_message_with_client_retries_with_truncated_diff() {
         // Arrange
         let temp_directory = tempfile::tempdir().expect("failed to create temp dir");
         let diff = "diff line\n".repeat(SESSION_COMMIT_DIFF_TRUNCATION_LIMIT + 1);
         let call_count = Arc::new(AtomicUsize::new(0));
-        let call_count_for_build = Arc::clone(&call_count);
-        let mut backend = MockAgentBackend::new();
-        backend
-            .expect_build_command()
+        let call_count_for_submit = Arc::clone(&call_count);
+        let mut one_shot_client = MockOneShotClient::new();
+        one_shot_client
+            .expect_submit()
             .times(2)
             .returning(move |request| {
-                let request_index = call_count_for_build.fetch_add(1, Ordering::SeqCst) + 1;
-                assert!(matches!(
-                    request.request_kind,
-                    AgentRequestKind::UtilityPrompt
-                ));
+                let request_index = call_count_for_submit.fetch_add(1, Ordering::SeqCst) + 1;
 
                 if request_index == 1 {
                     assert!(request.prompt.contains("diff line"));
 
-                    return Ok(mock_shell_command("", "contextWindowExceeded", 1));
+                    return Err(agent::OneShotError::new("contextWindowExceeded"));
                 }
 
                 assert!(
@@ -1977,20 +1811,16 @@ mod tests {
                 );
                 assert!(request.prompt.len() < SESSION_COMMIT_DIFF_TRUNCATION_LIMIT * 2);
 
-                Ok(mock_shell_command(
-                    r#"{"answer":"Truncated diff commit","questions":[],"summary":null}"#,
-                    "",
-                    0,
-                ))
+                Ok(one_shot_submission("Truncated diff commit", 0, 0))
             });
 
         // Act
-        let generated_message = SessionTaskService::generate_session_commit_message_with_backend(
+        let generated_message = SessionTaskService::generate_session_commit_message_with_client(
             temp_directory.path(),
             AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
             diff.as_str(),
             None,
-            &backend,
+            &one_shot_client,
             false,
         )
         .await
@@ -2006,8 +1836,9 @@ mod tests {
     /// diagnostics.
     fn test_is_context_window_exceeded_error_detects_window_limits() {
         // Arrange
-        let overflow_error =
-            SessionError::Workflow("Codex app-server failed: contextWindowExceeded".to_string());
+        let overflow_error = SessionError::OneShot(agent::OneShotError::new(
+            "Codex app-server failed: contextWindowExceeded",
+        ));
         let other_error = SessionError::Workflow("network timeout".to_string());
 
         // Act
@@ -2155,6 +1986,7 @@ mod tests {
             folder: PathBuf::from("/tmp/project"),
             git_client: Arc::new(mock_git_client),
             id: "session-id".to_string(),
+            one_shot_client: Arc::new(MockOneShotClient::new()),
             session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
             session_update_versions: Arc::default(),
             transcript: Arc::clone(&transcript),
@@ -2173,6 +2005,50 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Verifies auto-commit recovery submits the rendered failure prompt
+    /// through the context's injected one-shot client.
+    async fn test_run_commit_assist_for_error_uses_injected_one_shot_client() {
+        // Arrange
+        let database = AppRepositories::in_memory().await;
+        insert_review_session(&database, AgentModel::Gpt55.as_str()).await;
+        let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
+        let mut one_shot_client = MockOneShotClient::new();
+        one_shot_client
+            .expect_submit()
+            .times(1)
+            .returning(|request| {
+                assert!(request.prompt.contains("commit failed"));
+
+                Ok(one_shot_submission("Fixed the commit failure", 0, 0))
+            });
+        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+        let context = AssistContext {
+            app_event_tx,
+            child_pid: Arc::new(Mutex::new(None)),
+            db: database,
+            folder: PathBuf::from("/tmp/project"),
+            git_client: Arc::new(MockGitClient::new()),
+            id: "session-id".to_string(),
+            one_shot_client: Arc::new(one_shot_client),
+            session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+            session_update_versions: Arc::default(),
+            transcript: Arc::clone(&transcript),
+        };
+
+        // Act
+        let result =
+            SessionTaskService::run_commit_assist_for_error(&context, "commit failed").await;
+
+        // Assert
+        result.expect("commit assistance should succeed");
+        let replay_text = transcript
+            .lock()
+            .expect("transcript lock should succeed")
+            .replay_text();
+        assert_eq!(replay_text.as_deref(), Some("Fixed the commit failure\n\n"));
+    }
+
+    #[tokio::test]
     /// Verifies a missing configured hook emits an advisory after a successful
     /// normal commit instead of turning the commit into a failure.
     async fn test_handle_auto_commit_warns_when_pre_commit_hook_is_missing() {
@@ -2182,6 +2058,10 @@ mod tests {
             .expect_is_worktree_clean()
             .times(1)
             .returning(|_| Box::pin(async { Ok::<_, GitError>(false) }));
+        mock_git_client
+            .expect_diff()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok("diff --git a/a.rs b/a.rs".to_string()) }));
         mock_git_client
             .expect_has_commits_since()
             .times(1)
@@ -2212,6 +2092,11 @@ mod tests {
         insert_review_session(&database, AgentModel::Gpt55.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
+        let mut one_shot_client = MockOneShotClient::new();
+        one_shot_client
+            .expect_submit()
+            .times(1)
+            .returning(|_| Ok(one_shot_submission("Update project", 0, 0)));
         let context = AssistContext {
             app_event_tx,
             child_pid: Arc::new(Mutex::new(None)),
@@ -2219,6 +2104,7 @@ mod tests {
             folder: PathBuf::from("/tmp/project"),
             git_client: Arc::new(mock_git_client),
             id: "session-id".to_string(),
+            one_shot_client: Arc::new(one_shot_client),
             session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
             session_update_versions: Arc::default(),
             transcript: Arc::clone(&transcript),
@@ -2268,6 +2154,7 @@ mod tests {
             folder: PathBuf::from("/tmp/project"),
             git_client: Arc::new(mock_git_client),
             id: "session-id".to_string(),
+            one_shot_client: Arc::new(MockOneShotClient::new()),
             session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
             session_update_versions: Arc::default(),
             transcript: Arc::clone(&transcript),
@@ -2320,6 +2207,7 @@ mod tests {
             folder: PathBuf::from("/tmp/project"),
             git_client: Arc::new(mock_git_client),
             id: "session-id".to_string(),
+            one_shot_client: Arc::new(MockOneShotClient::new()),
             session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
             session_update_versions: Arc::default(),
             transcript: Arc::clone(&transcript),
@@ -2418,6 +2306,10 @@ mod tests {
             .times(1)
             .returning(|_| Box::pin(async { Ok::<_, GitError>(false) }));
         mock_git_client
+            .expect_diff()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok("diff --git a/a.rs b/a.rs".to_string()) }));
+        mock_git_client
             .expect_has_commits_since()
             .times(1)
             .returning(|_, _| Box::pin(async { Ok::<_, GitError>(true) }));
@@ -2449,6 +2341,14 @@ mod tests {
             .expect("failed to persist summary text");
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
         let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
+        let mut one_shot_client = MockOneShotClient::new();
+        one_shot_client.expect_submit().times(1).returning(|_| {
+            Ok(one_shot_submission(
+                "Refine README updates\n\n- Keep title aligned with commit",
+                0,
+                0,
+            ))
+        });
         let context = AssistContext {
             app_event_tx,
             child_pid: Arc::new(Mutex::new(None)),
@@ -2456,6 +2356,7 @@ mod tests {
             folder: PathBuf::from("/tmp/project"),
             git_client: Arc::new(mock_git_client),
             id: "session-id".to_string(),
+            one_shot_client: Arc::new(one_shot_client),
             session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
             session_update_versions: Arc::default(),
             transcript: Arc::clone(&transcript),
@@ -2628,36 +2529,29 @@ mod tests {
         let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
         let child_pid = Arc::new(Mutex::new(None));
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
-        let mut backend = MockAgentBackend::new();
-        backend.expect_build_command().times(1).returning(|request| {
-            assert!(matches!(
-                request.request_kind,
-                AgentRequestKind::UtilityPrompt
-            ));
-            assert_eq!(request.prompt, "Resolve conflict");
+        let mut one_shot_client = MockOneShotClient::new();
+        one_shot_client
+            .expect_submit()
+            .times(1)
+            .returning(|request| {
+                assert_eq!(request.prompt, "Resolve conflict");
 
-            Ok(mock_shell_command(
-                r#"{"result":"{\"answer\":\"Resolved the rebase conflict.\",\"questions\":[],\"summary\":null}","usage":{"input_tokens":11,"output_tokens":7}}"#,
-                "",
-                0,
-            ))
-        });
+                Ok(one_shot_submission("Resolved the rebase conflict.", 11, 7))
+            });
 
         // Act
-        let result = SessionTaskService::run_agent_assist_task_with_backend(
-            RunAgentAssistTaskInput {
-                app_event_tx,
-                child_pid: Arc::clone(&child_pid),
-                db: database.clone(),
-                folder: temp_dir.path().to_path_buf(),
-                id: "session-id".to_string(),
-                prompt: "Resolve conflict".to_string(),
-                session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus48),
-                session_update_versions: Arc::default(),
-                transcript: Arc::clone(&transcript),
-            },
-            &backend,
-        )
+        let result = SessionTaskService::run_agent_assist_task(RunAgentAssistTaskInput {
+            app_event_tx,
+            child_pid: Arc::clone(&child_pid),
+            db: database.clone(),
+            folder: temp_dir.path().to_path_buf(),
+            id: "session-id".to_string(),
+            one_shot_client: Arc::new(one_shot_client),
+            prompt: "Resolve conflict".to_string(),
+            session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus48),
+            session_update_versions: Arc::default(),
+            transcript: Arc::clone(&transcript),
+        })
         .await;
 
         // Assert
@@ -2693,38 +2587,27 @@ mod tests {
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
-        let mut backend = MockAgentBackend::new();
-        backend
-            .expect_build_command()
-            .times(2)
-            .returning(|request| {
-                assert!(matches!(
-                    request.request_kind,
-                    AgentRequestKind::UtilityPrompt
-                ));
-
-                Ok(mock_shell_command(
-                    r#"{"result":"plain text","usage":{"input_tokens":2,"output_tokens":1}}"#,
-                    "",
-                    0,
-                ))
-            });
+        let mut one_shot_client = MockOneShotClient::new();
+        one_shot_client.expect_submit().returning(|_| {
+            Err(agent::OneShotError::new(
+                "One-shot agent output did not match the required JSON schema\nresponse:\nplain \
+                 text",
+            ))
+        });
 
         // Act
-        let error = SessionTaskService::run_agent_assist_task_with_backend(
-            RunAgentAssistTaskInput {
-                app_event_tx,
-                child_pid: Arc::new(Mutex::new(None)),
-                db: database.clone(),
-                folder: temp_dir.path().to_path_buf(),
-                id: "session-id".to_string(),
-                prompt: "Resolve conflict".to_string(),
-                session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus48),
-                session_update_versions: Arc::default(),
-                transcript: Arc::clone(&transcript),
-            },
-            &backend,
-        )
+        let error = SessionTaskService::run_agent_assist_task(RunAgentAssistTaskInput {
+            app_event_tx,
+            child_pid: Arc::new(Mutex::new(None)),
+            db: database.clone(),
+            folder: temp_dir.path().to_path_buf(),
+            id: "session-id".to_string(),
+            one_shot_client: Arc::new(one_shot_client),
+            prompt: "Resolve conflict".to_string(),
+            session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus48),
+            session_update_versions: Arc::default(),
+            transcript: Arc::clone(&transcript),
+        })
         .await
         .expect_err("plain-text utility output should fail");
 
@@ -2758,27 +2641,26 @@ mod tests {
         insert_review_session(&database, AgentModel::ClaudeOpus48.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
-        let mut backend = MockAgentBackend::new();
-        backend
-            .expect_build_command()
-            .times(1)
-            .returning(|_| Ok(mock_shell_command("", "assist failed", 7)));
+        let mut one_shot_client = MockOneShotClient::new();
+        one_shot_client.expect_submit().returning(|_| {
+            Err(agent::OneShotError::new(
+                "One-shot agent command failed with exit code 7: assist failed",
+            ))
+        });
 
         // Act
-        let result = SessionTaskService::run_agent_assist_task_with_backend(
-            RunAgentAssistTaskInput {
-                app_event_tx,
-                child_pid: Arc::new(Mutex::new(None)),
-                db: database.clone(),
-                folder: temp_dir.path().to_path_buf(),
-                id: "session-id".to_string(),
-                prompt: "Resolve conflict".to_string(),
-                session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus48),
-                session_update_versions: Arc::default(),
-                transcript: Arc::new(Mutex::new(SessionTranscript::default())),
-            },
-            &backend,
-        )
+        let result = SessionTaskService::run_agent_assist_task(RunAgentAssistTaskInput {
+            app_event_tx,
+            child_pid: Arc::new(Mutex::new(None)),
+            db: database.clone(),
+            folder: temp_dir.path().to_path_buf(),
+            id: "session-id".to_string(),
+            one_shot_client: Arc::new(one_shot_client),
+            prompt: "Resolve conflict".to_string(),
+            session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus48),
+            session_update_versions: Arc::default(),
+            transcript: Arc::new(Mutex::new(SessionTranscript::default())),
+        })
         .await;
 
         // Assert

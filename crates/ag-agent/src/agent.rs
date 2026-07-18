@@ -38,9 +38,10 @@ pub use provider::{create_app_server_client, create_backend, transport_mode};
 pub(crate) use response_parser::{
     ParsedResponse, compact_codex_progress_message, is_codex_completion_status_message,
 };
+#[cfg(any(test, feature = "test-utils"))]
+pub use submission::MockOneShotClient;
 pub use submission::{
-    OneShotRequest, OneShotSubmission, submit_one_shot, submit_one_shot_with_app_server_client,
-    submit_one_shot_with_backend,
+    OneShotClient, OneShotError, OneShotRequest, OneShotSubmission, RealOneShotClient,
 };
 
 /// Removes provider-owned worktree artifacts derived from one session folder.

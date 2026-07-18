@@ -7,32 +7,51 @@ use crate::infra::db::{DbError, unix_timestamp_now};
 
 /// Row returned when loading a project from the `project` table.
 pub struct ProjectRow {
+    /// Creation timestamp in Unix seconds.
     pub created_at: i64,
+    /// Optional user-defined display name.
     pub display_name: Option<String>,
+    /// Last observed branch for the project checkout.
     pub git_branch: Option<String>,
+    /// Stable database identifier.
     pub id: i64,
+    /// Whether the project is pinned ahead of other projects.
     pub is_favorite: bool,
+    /// Most recent project-open timestamp in Unix seconds.
     pub last_opened_at: Option<i64>,
+    /// Persisted project checkout path.
     pub path: String,
+    /// Last metadata update timestamp in Unix seconds.
     pub updated_at: i64,
 }
 
 /// Row returned when loading one project with aggregated session statistics.
 pub struct ProjectListRow {
+    /// Number of sessions in an active lifecycle state.
     pub active_session_count: i64,
+    /// Project creation timestamp in Unix seconds.
     pub created_at: i64,
+    /// Optional user-defined display name.
     pub display_name: Option<String>,
+    /// Last observed branch for the project checkout.
     pub git_branch: Option<String>,
+    /// Stable project identifier.
     pub id: i64,
     /// Total input tokens accumulated by sessions in this project.
     pub input_tokens: i64,
+    /// Whether the project is pinned ahead of other projects.
     pub is_favorite: bool,
+    /// Most recent project-open timestamp in Unix seconds.
     pub last_opened_at: Option<i64>,
+    /// Most recent session update timestamp in Unix seconds.
     pub last_session_updated_at: Option<i64>,
     /// Total output tokens accumulated by sessions in this project.
     pub output_tokens: i64,
+    /// Persisted project checkout path.
     pub path: String,
+    /// Total sessions belonging to the project.
     pub session_count: i64,
+    /// Last project metadata update timestamp in Unix seconds.
     pub updated_at: i64,
 }
 

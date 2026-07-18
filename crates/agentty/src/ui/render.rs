@@ -17,7 +17,9 @@ use crate::ui::{component, layout, markdown, page, router};
 /// Focused-review display state projected from the app cache for one visible
 /// session.
 pub struct SessionReviewSnapshot<'a> {
+    /// Stable identifier of the session owning the cached review.
     pub session_id: &'a str,
+    /// Focused-review markdown, when generated.
     pub text: Option<&'a str>,
 }
 

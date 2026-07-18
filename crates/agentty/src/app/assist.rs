@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use ag_agent::OneShotClient;
 use ag_git::GitClient;
 use tokio::sync::mpsc;
 
@@ -37,6 +38,8 @@ pub(super) struct AssistContext {
     pub(super) git_client: Arc<dyn GitClient>,
     /// Session identifier receiving assist output updates.
     pub(super) id: String,
+    /// Provider-neutral boundary for isolated structured assist prompts.
+    pub(super) one_shot_client: Arc<dyn OneShotClient>,
     /// Agent/model selection used when invoking agent-assisted recovery.
     pub(super) session_agent: AgentSelection,
     /// Per-app session update versions shared with the main runtime.
@@ -133,6 +136,7 @@ pub(super) async fn run_agent_assist(
         db: context.db.clone(),
         folder: context.folder.clone(),
         id: context.id.clone(),
+        one_shot_client: Arc::clone(&context.one_shot_client),
         prompt: prompt.to_string(),
         session_agent: context.session_agent,
         session_update_versions: context.session_update_versions.clone(),
@@ -143,7 +147,60 @@ pub(super) async fn run_agent_assist(
 
 #[cfg(test)]
 mod tests {
+    use ag_agent::MockOneShotClient;
+    use ag_git::MockGitClient;
+    use tempfile::tempdir;
+
     use super::*;
+    use crate::domain::agent::{AgentKind, AgentModel};
+
+    #[tokio::test]
+    async fn test_run_agent_assist_uses_injected_one_shot_client() {
+        // Arrange
+        let temp_directory = tempdir().expect("failed to create temp dir");
+        let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
+        let mut one_shot_client = MockOneShotClient::new();
+        one_shot_client
+            .expect_submit()
+            .times(1)
+            .returning(|request| {
+                assert_eq!(request.prompt, "Resolve the conflict");
+
+                Ok(ag_agent::OneShotSubmission {
+                    response: ag_protocol::AgentResponse::plain("Conflict resolved"),
+                    stats: ag_agent::SessionStats {
+                        added_lines: 0,
+                        deleted_lines: 0,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                    },
+                })
+            });
+        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+        let context = AssistContext {
+            app_event_tx,
+            child_pid: Arc::new(Mutex::new(None)),
+            db: AppRepositories::in_memory().await,
+            folder: temp_directory.path().to_path_buf(),
+            git_client: Arc::new(MockGitClient::new()),
+            id: "session-id".to_string(),
+            one_shot_client: Arc::new(one_shot_client),
+            session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+            session_update_versions: Arc::default(),
+            transcript: Arc::clone(&transcript),
+        };
+
+        // Act
+        let result = run_agent_assist(&context, "Resolve the conflict").await;
+
+        // Assert
+        result.expect("assist should succeed");
+        let replay_text = transcript
+            .lock()
+            .expect("transcript lock should succeed")
+            .replay_text();
+        assert_eq!(replay_text.as_deref(), Some("Conflict resolved\n\n"));
+    }
 
     #[test]
     fn test_failure_tracker_observe_exceeds_after_identical_streak_limit() {

@@ -31,7 +31,9 @@ pub enum ConfirmationIntent {
 /// confirmations and overlays.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConfirmationViewMode {
+    /// Scroll position to restore in session view.
     pub scroll_offset: Option<u16>,
+    /// Session to reopen when the overlay closes.
     pub session_id: SessionId,
 }
 
@@ -49,17 +51,24 @@ impl ConfirmationViewMode {
 /// Cached scroll bounds for the current diff selection and content area.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DiffScrollCache {
+    /// Diff content rectangle used to compute the cached bound.
     pub content_area: ViewportRect,
+    /// File-tree selection for which the bound was computed.
     pub file_explorer_selected_index: usize,
+    /// Largest valid vertical scroll offset.
     pub max_scroll_offset: u16,
 }
 
 /// Frontend-neutral rectangular viewport coordinates.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ViewportRect {
+    /// Rectangle height in terminal cells.
     pub height: u16,
+    /// Rectangle width in terminal cells.
     pub width: u16,
+    /// Horizontal origin in terminal cells.
     pub x: u16,
+    /// Vertical origin in terminal cells.
     pub y: u16,
 }
 
@@ -69,13 +78,21 @@ pub struct ViewportRect {
 /// is focused), the full question state is snapshotted here so it can be
 /// restored when leaving the diff view.
 pub struct QuestionModeSnapshot {
+    /// Restorable file and directory mention dropdown state.
     pub at_mention_state: Option<PromptAtMentionState>,
+    /// Active question index.
     pub current_index: usize,
+    /// Editable response input and cursor state.
     pub input: InputState,
+    /// Ordered clarification questions.
     pub questions: Vec<QuestionItem>,
+    /// Collected responses aligned with `questions`.
     pub responses: Vec<String>,
+    /// Transcript scroll position to restore.
     pub scroll_offset: Option<u16>,
+    /// Highlighted predefined option, when any.
     pub selected_option_index: Option<usize>,
+    /// Session receiving the clarification response.
     pub session_id: SessionId,
 }
 
@@ -103,12 +120,19 @@ impl QuestionModeSnapshot {
 /// transcript is focused), the composer state is snapshotted here so it can be
 /// restored when leaving the diff view.
 pub struct PromptModeSnapshot {
+    /// Restorable file and directory mention dropdown state.
     pub at_mention_state: Option<PromptAtMentionState>,
+    /// Ordered local image attachments and their prompt placeholders.
     pub attachment_state: PromptAttachmentState,
+    /// Prompt-history navigation state, including any saved draft.
     pub history_state: PromptHistoryState,
+    /// Editable prompt input and cursor state.
     pub input: InputState,
+    /// Transcript scroll position to restore.
     pub scroll_offset: Option<u16>,
+    /// Session receiving the restored prompt.
     pub session_id: SessionId,
+    /// Slash-command selection state for the current input.
     pub slash_state: PromptSlashState,
 }
 
@@ -169,6 +193,7 @@ pub enum ChatFocus {
 
 /// Represents the active UI mode for the application.
 pub enum AppMode {
+    /// Displays the active top-level list tab.
     List,
     /// Displays a selected assigned issue while its base details load and
     /// after the detail request completes.
@@ -216,12 +241,16 @@ pub enum AppMode {
     Confirmation {
         /// Semantic action to execute when users choose `Yes`.
         confirmation_intent: ConfirmationIntent,
+        /// Body text explaining the decision.
         confirmation_message: String,
+        /// Short title for the confirmation popup.
         confirmation_title: String,
         /// View state to restore when dismissing a session-scoped
         /// confirmation.
         restore_view: Option<ConfirmationViewMode>,
+        /// Session affected by the action, when session-scoped.
         session_id: Option<SessionId>,
+        /// Highlighted `Yes` or `No` option index.
         selected_confirmation_index: usize,
     },
     /// Informational popup displayed above the list for sync outcomes,
@@ -304,8 +333,11 @@ pub enum AppMode {
         /// composer.
         scroll_offset: Option<u16>,
     },
+    /// Displays one session transcript without an active input panel.
     View {
+        /// Session whose transcript is visible.
         session_id: SessionId,
+        /// Scroll position applied to the transcript.
         scroll_offset: Option<u16>,
     },
     /// Focused diff view with file-tree navigation and independent scrolling.
@@ -368,8 +400,11 @@ pub enum AppMode {
         selected_option_index: Option<usize>,
     },
 
+    /// Displays context-sensitive keybindings above the originating page.
     Help {
+        /// Originating page state used for help content and restoration.
         context: HelpContext,
+        /// Vertical help-content scroll offset.
         scroll_offset: u16,
     },
 }
@@ -377,29 +412,50 @@ pub enum AppMode {
 /// Captures which page opened the help overlay so it can be restored on close.
 pub enum HelpContext {
     /// Generic list-mode help context with precomputed keybindings.
-    List { keybindings: Vec<HelpAction> },
+    List {
+        /// Keybinding entries for the active list tab.
+        keybindings: Vec<HelpAction>,
+    },
+    /// Session-view help context and action availability.
     View {
+        /// Whether the session may be forked.
         can_fork_session: bool,
+        /// Whether the session branch may enter the merge queue.
         can_merge_session_branch: bool,
+        /// Whether any session-branch mutation may begin.
         can_mutate_session_branch: bool,
+        /// Whether the session worktree may be opened externally.
         can_open_worktree: bool,
+        /// Whether the session branch may be rebased.
         can_rebase_session_branch: bool,
+        /// Whether a follow-up agent turn may be submitted.
         can_reply_to_session: bool,
+        /// Whether a staged draft session may begin its first turn.
         can_start_staged_session: bool,
+        /// Whether linked forge review comments may be opened.
         can_view_review_comments: bool,
+        /// Pull-request publication action currently available.
         publish_pull_request_action: Option<PublishBranchAction>,
+        /// Session whose view opened help.
         session_id: SessionId,
+        /// Session lifecycle projection used to derive help actions.
         session_state: ViewSessionState,
+        /// Transcript scroll position to restore.
         scroll_offset: Option<u16>,
     },
+    /// Diff-view help context and restorable diff state.
     Diff {
+        /// Raw git diff to restore after help closes.
         diff: String,
+        /// Selected file-tree row to restore.
         file_explorer_selected_index: usize,
         /// Preserved diff restore target so the help→diff→exit path can still
         /// return to the originating page when the diff was opened from there.
         /// Boxed to keep the `Diff` variant small.
         restore: Option<Box<DiffRestoreTarget>>,
+        /// Session whose diff is visible.
         session_id: SessionId,
+        /// Diff-panel scroll position to restore.
         scroll_offset: u16,
     },
 }

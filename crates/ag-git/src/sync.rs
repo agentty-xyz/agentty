@@ -36,7 +36,10 @@ pub enum PullRebaseResult {
     /// Pull and rebase completed successfully.
     Completed,
     /// Pull stopped because of merge conflicts.
-    Conflict { detail: String },
+    Conflict {
+        /// Git diagnostic describing the conflict state.
+        detail: String,
+    },
 }
 
 /// Stages all changes and commits them with the given message.

@@ -69,19 +69,46 @@ pub struct AssertionFailure {
 #[non_exhaustive]
 pub enum Expected {
     /// Text should be present at least once inside a region.
-    TextInRegion { needle: String },
+    TextInRegion {
+        /// Text expected inside the target region.
+        needle: String,
+    },
     /// Text should not appear anywhere in the frame.
-    NotVisible { needle: String },
+    NotVisible {
+        /// Text expected to be absent.
+        needle: String,
+    },
     /// Text should appear exactly `count` times in the frame.
-    MatchCount { needle: String, count: usize },
+    MatchCount {
+        /// Required number of matches.
+        count: usize,
+        /// Text whose matches are counted.
+        needle: String,
+    },
     /// First match of `needle` should have the given foreground color.
-    ForegroundColor { needle: String, color: CellColor },
+    ForegroundColor {
+        /// Expected foreground color.
+        color: CellColor,
+        /// Text whose first match is inspected.
+        needle: String,
+    },
     /// First match of `needle` should have the given background color.
-    BackgroundColor { needle: String, color: CellColor },
+    BackgroundColor {
+        /// Expected background color.
+        color: CellColor,
+        /// Text whose first match is inspected.
+        needle: String,
+    },
     /// First match of `needle` should be highlighted.
-    Highlighted { needle: String },
+    Highlighted {
+        /// Text whose first match should be highlighted.
+        needle: String,
+    },
     /// First match of `needle` should not be highlighted.
-    NotHighlighted { needle: String },
+    NotHighlighted {
+        /// Text whose first match should not be highlighted.
+        needle: String,
+    },
 }
 
 impl fmt::Display for AssertionFailure {

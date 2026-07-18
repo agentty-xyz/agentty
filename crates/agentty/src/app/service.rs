@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ag_agent::AppServerClient;
+use ag_agent::{AppServerClient, OneShotClient, RealOneShotClient};
 use ag_forge::ReviewRequestClient;
 use ag_git::GitClient;
 use tokio::sync::mpsc;
@@ -42,6 +42,9 @@ pub(crate) struct AppServiceDeps {
     pub(crate) fs_client: Arc<dyn FsClient>,
     /// Shared git client for async git operations.
     pub(crate) git_client: Arc<dyn GitClient>,
+    /// Optional isolated-prompt client override used by tests and injected
+    /// environments.
+    pub(crate) one_shot_client_override: Option<Arc<dyn OneShotClient>>,
     /// Shared repository bundle used by app workflows.
     pub(crate) repositories: AppRepositories,
     /// Shared forge review-request client.
@@ -60,6 +63,7 @@ pub struct AppServices {
     event_tx: mpsc::UnboundedSender<AppEvent>,
     fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
+    one_shot_client: Arc<dyn OneShotClient>,
     repositories: AppRepositories,
     review_request_client: Arc<dyn ReviewRequestClient>,
     session_update_versions: SessionUpdateVersionMap,
@@ -81,6 +85,7 @@ impl AppServices {
             clipboard_image_client_override,
             fs_client,
             git_client,
+            one_shot_client_override,
             repositories,
             review_request_client,
         } = deps;
@@ -88,6 +93,11 @@ impl AppServices {
             Arc::new(RealClipboardImageClient::new(
                 Arc::clone(&clock),
                 Arc::clone(&fs_client),
+            ))
+        });
+        let one_shot_client = one_shot_client_override.unwrap_or_else(|| {
+            Arc::new(RealOneShotClient::new(
+                app_server_client_override.as_ref().map(Arc::clone),
             ))
         });
 
@@ -102,6 +112,7 @@ impl AppServices {
             event_tx,
             fs_client,
             git_client,
+            one_shot_client,
             repositories,
             review_request_client,
             session_update_versions: Arc::default(),
@@ -147,6 +158,11 @@ impl AppServices {
     /// Returns the shared clipboard-image client for pasted image capture.
     pub(crate) fn clipboard_image_client(&self) -> Arc<dyn ClipboardImageClient> {
         Arc::clone(&self.clipboard_image_client)
+    }
+
+    /// Returns the shared client for isolated structured agent prompts.
+    pub(crate) fn one_shot_client(&self) -> Arc<dyn OneShotClient> {
+        Arc::clone(&self.one_shot_client)
     }
 
     /// Enqueues an app event onto the internal event bus with debug

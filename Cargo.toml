@@ -64,6 +64,7 @@ x11rb = "0.13"
 [workspace.lints.rust]
 unsafe_code = "deny"
 dead_code = "deny"
+missing_docs = "deny"
 unreachable_pub = "warn"
 
 [workspace.lints.clippy]

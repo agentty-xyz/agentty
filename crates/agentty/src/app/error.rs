@@ -19,6 +19,10 @@ pub enum AppError {
     #[error("{0}")]
     Git(#[from] ag_git::GitError),
 
+    /// An isolated agent prompt failed at the app layer.
+    #[error("{0}")]
+    OneShot(#[from] ag_agent::OneShotError),
+
     /// A workflow-specific or startup failure with a contextual message.
     #[error("{0}")]
     Workflow(String),
@@ -64,5 +68,18 @@ mod tests {
         // Assert
         assert!(matches!(error, AppError::Db(_)));
         assert!(error.to_string().contains("db file missing"));
+    }
+
+    #[test]
+    fn one_shot_error_converts_via_from() {
+        // Arrange
+        let one_shot_error = ag_agent::OneShotError::new("one-shot failed");
+
+        // Act
+        let error = AppError::from(one_shot_error);
+
+        // Assert
+        assert!(matches!(error, AppError::OneShot(_)));
+        assert_eq!(error.to_string(), "one-shot failed");
     }
 }

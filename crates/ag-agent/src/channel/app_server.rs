@@ -69,16 +69,18 @@ impl AgentChannel for AppServerAgentChannel {
         let client = Arc::clone(&self.client);
         let kind = self.kind;
         Box::pin(async move {
+            let continuation = req.continuation.into_parts();
             let request = AppServerTurnRequest {
                 folder: req.folder,
-                live_transcript: req.live_transcript,
+                live_transcript: continuation.live_transcript,
                 main_checkout_root: req.main_checkout_root,
                 model: req.model,
                 prompt: req.prompt,
                 request_kind: req.request_kind,
-                replay_transcript: req.replay_transcript,
-                provider_conversation_id: req.provider_conversation_id,
-                persisted_instruction_conversation_id: req.persisted_instruction_conversation_id,
+                replay_transcript: continuation.replay_transcript,
+                provider_conversation_id: continuation.provider_conversation_id,
+                persisted_instruction_conversation_id: continuation
+                    .persisted_instruction_conversation_id,
                 reasoning_level: req.reasoning_level,
                 session_id,
             };
@@ -286,16 +288,13 @@ mod tests {
 
     fn make_turn_request() -> TurnRequest {
         TurnRequest {
+            continuation: crate::channel::TurnContinuation::fresh(),
             folder: PathBuf::from("/tmp"),
-            live_transcript: None,
             main_checkout_root: Some(PathBuf::from("/tmp/main")),
             model: "gpt-5.5".to_string(),
-            request_kind: AgentRequestKind::SessionStart,
-            replay_transcript: None,
             prompt: "Do something".into(),
-            provider_conversation_id: None,
-            persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
+            request_kind: AgentRequestKind::SessionStart,
         }
     }
 
@@ -934,7 +933,12 @@ mod tests {
         let (events_tx, mut events_rx) = mpsc::unbounded_channel();
         let mut request = make_turn_request();
         request.reasoning_level = ReasoningLevel::Medium;
-        request.provider_conversation_id = Some("thread-abc".to_string());
+        request.continuation = crate::channel::TurnContinuation::provider(
+            None,
+            None,
+            Some("thread-abc".to_string()),
+            None,
+        );
 
         // Act
         let result = channel

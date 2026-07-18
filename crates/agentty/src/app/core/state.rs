@@ -73,11 +73,20 @@ pub const AGENTTY_WT_DIR: &str = "wt";
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum UpdateStatus {
     /// Background `npm i -g agentty@latest` is running.
-    InProgress { version: String },
+    InProgress {
+        /// Version currently being installed.
+        version: String,
+    },
     /// Update installed successfully; restart to use the new version.
-    Complete { version: String },
+    Complete {
+        /// Version that was installed.
+        version: String,
+    },
     /// Update failed; fall back to manual update hint.
-    Failed { version: String },
+    Failed {
+        /// Version whose installation failed.
+        version: String,
+    },
 }
 
 /// Immutable context displayed in sync-main popup content.
@@ -174,6 +183,19 @@ impl AppClients {
         app_server_client_override: Arc<dyn AppServerClient>,
     ) -> Self {
         self.app_server_client_override = Some(app_server_client_override);
+
+        self
+    }
+
+    /// Replaces the startup project-discovery boundary while preserving the
+    /// remaining clients.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_project_discovery_client(
+        mut self,
+        project_discovery_client: Arc<dyn ProjectDiscoveryClient>,
+    ) -> Self {
+        self.project_discovery_client = project_discovery_client;
 
         self
     }

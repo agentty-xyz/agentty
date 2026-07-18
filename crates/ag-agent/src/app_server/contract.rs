@@ -84,10 +84,15 @@ pub struct AppServerTurnRequest {
 /// Normalized result for one app-server turn.
 #[derive(Debug)]
 pub struct AppServerTurnResponse {
+    /// Final assistant payload returned by the provider runtime.
     pub assistant_message: String,
+    /// Whether the provider reset its native context during the turn.
     pub context_reset: bool,
+    /// Input token count reported for the completed turn.
     pub input_tokens: u64,
+    /// Output token count reported for the completed turn.
     pub output_tokens: u64,
+    /// Provider runtime process identifier when available.
     pub pid: Option<u32>,
     /// Provider-native thread/session id observed after the turn.
     pub provider_conversation_id: Option<String>,

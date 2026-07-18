@@ -21,6 +21,7 @@ exports gated by test features or test-only exports. The major boundaries:
 | `GitClient`            | `crates/ag-git/src/client.rs`                | Git and worktree operations (hook readiness, merge, rebase, diff, push, status, ahead/behind).                                                                                     |
 | `FsClient`             | `infra/fs.rs`                                | Async filesystem operations and path probes.                                                                                                                                       |
 | `AgentChannel`         | `crates/ag-agent/src/channel.rs`             | Provider-agnostic turn execution.                                                                                                                                                  |
+| `OneShotClient`        | `crates/ag-agent/src/agent/submission.rs`    | Isolated structured prompts, including transport routing, protocol repair, runtime cleanup, and usage aggregation.                                                                 |
 | `AgentBackend`         | `crates/ag-agent/src/agent/backend.rs`       | Per-provider setup and transport command construction.                                                                                                                             |
 | `AppServerClient`      | `crates/ag-agent/src/app_server/contract.rs` | Provider app-server RPC execution and session runtime lifecycle.                                                                                                                   |
 | `ReviewRequestClient`  | `crates/ag-forge/src/client.rs`              | Review-request orchestration through `gh`/`glab`, plus project-scoped assigned GitHub issue list/detail loading through `gh`.                                                      |
@@ -37,23 +38,24 @@ in unit tests. The runtime also accepts `Terminal<B: Backend>` via `run_with_bac
 enabling in-process TUI tests with `TestBackend`.
 
 The `ag-agent` crate keeps provider routers, parsers, and concrete transport adapters
-private. Tests that need backend-level injection use the feature-gated crate-root mocks
-and helper factories rather than deep channel module paths.
+private. Application workflows that submit isolated utility prompts inject
+`OneShotClient`; provider and transport tests use the feature-gated crate-root mocks and
+helper factories rather than deep module paths.
 
 ## Typed Errors Across Layers
 
 <a id="architecture-typed-error-enums"></a> Each infra boundary exposes a typed error
-enum (`DbError`, `GitError`, `AppServerError`, `AgentError`, `ClipboardError`, and so
-on) instead of opaque `String` errors. The private app-server transport error is wrapped
-by `AppServerError::Transport`, then by `AgentError::AppServer`, allowing
-`?`-propagation through the transport, provider, and channel layers without collapsing
-causal context into formatted strings.
+enum (`DbError`, `GitError`, `AppServerError`, `AgentError`, `OneShotError`,
+`ClipboardError`, and so on) instead of opaque `String` errors. The private app-server
+transport error is wrapped by `AppServerError::Transport`, then by
+`AgentError::AppServer`, allowing `?`-propagation through the transport, provider, and
+channel layers without collapsing causal context into formatted strings.
 
 <a id="architecture-app-layer-typed-errors"></a> The app layer propagates infra errors
 through `SessionError` (`app/session/error.rs`) and `AppError` (`app/error.rs`), both of
-which wrap the infra enums via `#[from]` plus a `Workflow(String)` variant for
-contextual app-level failures. At event and display boundaries, errors are converted to
-`String` via `Display` because those types require `Clone` and `Eq`.
+which wrap infra and `OneShotError` values via `#[from]` plus a `Workflow(String)`
+variant for contextual app-level failures. At event and display boundaries, errors are
+converted to `String` via `Display` because those types require `Clone` and `Eq`.
 
 ## Testing Guidance
 

@@ -74,30 +74,53 @@ pub struct ForkSessionSnapshot<'a> {
 /// through the `session_review_request` table when the session has been
 /// published for remote review.
 pub struct SessionRow {
+    /// Persisted added-line count from the latest diff stats refresh.
     pub added_lines: i64,
     /// Persisted agent provider kind selected for this session.
     pub agent: String,
+    /// Base branch used to create the session worktree.
     pub base_branch: String,
+    /// Session creation timestamp in Unix seconds.
     pub created_at: i64,
+    /// Persisted deleted-line count from the latest diff stats refresh.
     pub deleted_lines: i64,
+    /// Stable session identifier.
     pub id: String,
+    /// Open active-work interval start timestamp, if any.
     pub in_progress_started_at: Option<i64>,
+    /// Completed active-work duration in whole seconds.
     pub in_progress_total_seconds: i64,
+    /// Total input tokens accumulated for the session.
     pub input_tokens: i64,
+    /// Whether the session is still an explicit draft.
     pub is_draft: bool,
+    /// Persisted agent model identifier.
     pub model: String,
+    /// Total output tokens accumulated for the session.
     pub output_tokens: i64,
+    /// Parent session id when this is a one-level stacked draft.
     pub parent_session_id: Option<String>,
+    /// Owning project identifier, when present.
     pub project_id: Option<i64>,
+    /// Initial or staged prompt text.
     pub prompt: String,
+    /// Published upstream branch reference, when present.
     pub published_upstream_ref: Option<String>,
+    /// Serialized clarification-question payload, when present.
     pub questions: Option<String>,
+    /// Persisted session-specific reasoning override, when present.
     pub reasoning_level_override: Option<String>,
+    /// Joined forge review-request metadata, when present and complete.
     pub review_request: Option<SessionReviewRequestRow>,
+    /// Persisted size bucket string.
     pub size: String,
+    /// Persisted lifecycle status string.
     pub status: String,
+    /// Persisted structured summary text, when present.
     pub summary: Option<String>,
+    /// Optional display title.
     pub title: Option<String>,
+    /// Last update timestamp in Unix seconds.
     pub updated_at: i64,
 }
 

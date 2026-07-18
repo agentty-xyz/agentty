@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use ag_agent as agent;
+use ag_agent::{self as agent, OneShotClient};
 use ag_forge as forge;
 use ag_git::{self as git, GitClient};
 use ag_protocol::AgentResponseSummary;
@@ -168,6 +168,7 @@ struct MergeTaskInput {
     fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
     id: SessionId,
+    one_shot_client: Arc<dyn OneShotClient>,
     repo_root: PathBuf,
     session_agent: AgentSelection,
     session_update_versions: SessionUpdateVersionMap,
@@ -206,6 +207,7 @@ struct RebaseAssistInput {
     fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
     id: SessionId,
+    one_shot_client: Arc<dyn OneShotClient>,
     rebase_plan: RebasePlan,
     session_agent: AgentSelection,
     session_update_versions: SessionUpdateVersionMap,
@@ -237,6 +239,8 @@ pub(super) struct RebaseCommandInput {
     pub(super) git_client: Arc<dyn GitClient>,
     /// Session identifier receiving transcript/status updates.
     pub(super) id: SessionId,
+    /// Provider-neutral boundary used by pre-rebase auto-commit prompts.
+    pub(super) one_shot_client: Arc<dyn OneShotClient>,
     /// Forge boundary used for optional linked PR/MR metadata refresh after
     /// post-rebase auto-push.
     pub(super) review_request_client: Arc<dyn forge::ReviewRequestClient>,
@@ -482,31 +486,41 @@ trait SyncAssistClient: Send + Sync {
 }
 
 /// Production sync-assistance executor backed by real agent commands.
-struct RealSyncAssistClient;
+struct RealSyncAssistClient {
+    one_shot_client: Arc<dyn OneShotClient>,
+}
 
 impl RealSyncAssistClient {
+    /// Creates the production sync-assistance executor.
+    fn new() -> Self {
+        Self {
+            one_shot_client: Arc::new(agent::RealOneShotClient::new(None)),
+        }
+    }
+
     /// Runs one sync conflict assistance command through the shared one-shot
     /// agent submission path.
     ///
     /// # Errors
     /// Returns an error when the one-shot agent command fails.
     async fn run_assist_command(
+        one_shot_client: &dyn OneShotClient,
         folder: PathBuf,
         prompt: String,
         session_agent: AgentSelection,
     ) -> Result<(), SessionError> {
         // Success payload unused; run for side effects only.
-        let _ = agent::submit_one_shot(agent::OneShotRequest {
-            agent_kind: session_agent.kind(),
-            child_pid: None,
-            folder: &folder,
-            model: session_agent.model(),
-            prompt: &prompt,
-            request_kind: ag_agent::AgentRequestKind::UtilityPrompt,
-            reasoning_level: ReasoningLevel::default(),
-        })
-        .await
-        .map_err(SessionError::Workflow)?;
+        let _ = one_shot_client
+            .submit(agent::OneShotRequest {
+                agent_kind: session_agent.kind(),
+                child_pid: None,
+                folder,
+                model: session_agent.model(),
+                prompt,
+                request_kind: ag_agent::AgentRequestKind::UtilityPrompt,
+                reasoning_level: ReasoningLevel::default(),
+            })
+            .await?;
 
         Ok(())
     }
@@ -519,7 +533,11 @@ impl SyncAssistClient for RealSyncAssistClient {
         prompt: String,
         session_agent: AgentSelection,
     ) -> SyncAssistFuture<Result<(), SessionError>> {
-        Box::pin(async move { Self::run_assist_command(folder, prompt, session_agent).await })
+        let one_shot_client = Arc::clone(&self.one_shot_client);
+
+        Box::pin(async move {
+            Self::run_assist_command(one_shot_client.as_ref(), folder, prompt, session_agent).await
+        })
     }
 }
 
@@ -687,6 +705,7 @@ impl SessionMergeService {
             fs_client,
             git_client,
             id: id.clone(),
+            one_shot_client: services.one_shot_client(),
             repo_root,
             session_agent,
             session_update_versions,
@@ -1379,6 +1398,7 @@ impl SessionManager {
             fs_client: Arc::clone(&input.fs_client),
             git_client: Arc::clone(&input.git_client),
             id: input.id.clone(),
+            one_shot_client: Arc::clone(&input.one_shot_client),
             rebase_plan: RebasePlan::target(input.base_branch.clone()),
             session_agent: input.session_agent,
             session_update_versions: input.session_update_versions.clone(),
@@ -1570,7 +1590,7 @@ impl SessionManager {
         session_model: AgentModel,
     ) -> Result<SyncMainOutcome, SyncSessionStartError> {
         let fs_client: Arc<dyn FsClient> = Arc::new(fs::RealFsClient);
-        let sync_assist_client: Arc<dyn SyncAssistClient> = Arc::new(RealSyncAssistClient);
+        let sync_assist_client: Arc<dyn SyncAssistClient> = Arc::new(RealSyncAssistClient::new());
         let session_agent = crate::domain::agent::resolve_agent_selection_for_model(
             session_model,
             AgentKind::Antigravity,
@@ -1793,6 +1813,7 @@ impl SessionManager {
             fs_client,
             git_client,
             id,
+            one_shot_client,
             review_request_client,
             session_agent,
             session_update_versions,
@@ -1830,6 +1851,7 @@ impl SessionManager {
                 fs_client: Arc::clone(&fs_client),
                 git_client: Arc::clone(&git_client),
                 id: id.clone(),
+                one_shot_client,
                 rebase_plan,
                 session_agent,
                 session_update_versions: session_update_versions.clone(),
@@ -1969,6 +1991,7 @@ impl SessionManager {
             &input.folder,
             input.rebase_plan.target_label(),
             auto_commit_agent,
+            input.one_shot_client.as_ref(),
             false,
             include_coauthored_by_agentty,
         )
@@ -2902,6 +2925,7 @@ impl SessionManager {
             folder: input.folder.clone(),
             git_client: Arc::clone(&input.git_client),
             id: input.id.to_string(),
+            one_shot_client: Arc::clone(&input.one_shot_client),
             session_agent: input.session_agent,
             session_update_versions: input.session_update_versions.clone(),
             transcript: Arc::clone(&input.transcript),
@@ -2958,6 +2982,7 @@ impl SessionManager {
 
 #[cfg(test)]
 mod tests {
+    use ag_agent::MockOneShotClient;
     use ag_git::GitError;
     use mockall::Sequence;
     use tempfile::{TempDir, tempdir};
@@ -3009,6 +3034,79 @@ mod tests {
     /// Returns a fresh mocked filesystem client trait object for tests.
     fn test_fs_client() -> Arc<dyn FsClient> {
         Arc::new(create_passthrough_mock_fs_client())
+    }
+
+    /// Builds a deterministic one-shot boundary for pre-rebase auto-commit.
+    fn test_one_shot_client() -> Arc<dyn OneShotClient> {
+        let mut one_shot_client = MockOneShotClient::new();
+        one_shot_client.expect_submit().times(0..).returning(|_| {
+            Ok(agent::OneShotSubmission {
+                response: ag_protocol::AgentResponse::plain("Existing session commit"),
+                stats: agent::SessionStats {
+                    added_lines: 0,
+                    deleted_lines: 0,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                },
+            })
+        });
+
+        Arc::new(one_shot_client)
+    }
+
+    #[test]
+    fn test_real_sync_assist_client_new_owns_one_shot_client() {
+        // Arrange / Act
+        let sync_assist_client = RealSyncAssistClient::new();
+
+        // Assert
+        assert_eq!(Arc::strong_count(&sync_assist_client.one_shot_client), 1);
+    }
+
+    #[tokio::test]
+    async fn test_real_sync_assist_client_submits_utility_prompt() {
+        // Arrange
+        let folder = PathBuf::from("/tmp/sync-assist");
+        let expected_folder = folder.clone();
+        let mut one_shot_client = MockOneShotClient::new();
+        one_shot_client
+            .expect_submit()
+            .times(1)
+            .returning(move |request| {
+                assert_eq!(request.agent_kind, AgentKind::Claude);
+                assert_eq!(request.folder, expected_folder);
+                assert_eq!(request.model, AgentModel::ClaudeSonnet5);
+                assert_eq!(request.prompt, "Resolve sync conflicts");
+                assert_eq!(
+                    request.request_kind,
+                    ag_agent::AgentRequestKind::UtilityPrompt
+                );
+
+                Ok(agent::OneShotSubmission {
+                    response: ag_protocol::AgentResponse::plain("resolved"),
+                    stats: agent::SessionStats {
+                        added_lines: 0,
+                        deleted_lines: 0,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                    },
+                })
+            });
+        let sync_assist_client = RealSyncAssistClient {
+            one_shot_client: Arc::new(one_shot_client),
+        };
+
+        // Act
+        let result = sync_assist_client
+            .resolve_rebase_conflicts(
+                folder,
+                "Resolve sync conflicts".to_string(),
+                AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+            )
+            .await;
+
+        // Assert
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -3082,6 +3180,7 @@ mod tests {
                 fs_client: test_fs_client(),
                 git_client,
                 id: "session-123".into(),
+                one_shot_client: test_one_shot_client(),
                 transcript: empty_transcript(),
                 rebase_plan: RebasePlan::target("main".to_string()),
                 session_agent: AgentSelection::new(
@@ -3116,6 +3215,7 @@ mod tests {
                 fs_client: test_fs_client(),
                 git_client,
                 id: "session-123".into(),
+                one_shot_client: test_one_shot_client(),
                 transcript: empty_transcript(),
                 repo_root,
                 session_update_versions: Arc::default(),
@@ -3714,6 +3814,7 @@ mod tests {
             fs_client: test_fs_client(),
             git_client: Arc::new(git::RealGitClient),
             id: "session-123".into(),
+            one_shot_client: test_one_shot_client(),
             transcript: empty_transcript(),
             rebase_plan: RebasePlan::target("origin/main".to_string()),
             session_agent: AgentSelection::new(
@@ -3915,6 +4016,11 @@ mod tests {
             .times(1)
             .in_sequence(&mut sequence)
             .returning(|_| Box::pin(async { Ok(false) }));
+        mock_git_client
+            .expect_diff()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _| Box::pin(async { Ok("diff --git a/a.rs b/a.rs".to_string()) }));
         mock_git_client
             .expect_has_commits_since()
             .times(1)

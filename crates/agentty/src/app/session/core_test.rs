@@ -8,7 +8,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use ag_agent::{
     AgentRequestKind, AppServerClient, AppServerTurnResponse, MockAgentBackend, MockAgentChannel,
-    MockAppServerClient, TurnResult,
+    MockAppServerClient, MockOneShotClient, TurnResult,
 };
 use ag_git as git;
 use ag_protocol::{
@@ -572,12 +572,43 @@ fn install_mock_git_client(app: &mut App, mock_git_client: git::MockGitClient) {
             clipboard_image_client_override: None,
             fs_client,
             git_client: Arc::clone(&mock_git_client),
+            one_shot_client_override: Some(auto_commit_one_shot_client()),
             repositories: db,
             review_request_client,
         },
         available_agent_clis,
     );
     app.sessions.git_client = mock_git_client;
+}
+
+/// Builds a deterministic one-shot boundary for app-level auto-commit tests.
+fn auto_commit_one_shot_client() -> Arc<dyn ag_agent::OneShotClient> {
+    let mut one_shot_client = MockOneShotClient::new();
+    one_shot_client
+        .expect_submit()
+        .times(0..)
+        .returning(|request| {
+            if request
+                .prompt
+                .contains("Generate a concise, commit-style title")
+            {
+                return Err(ag_agent::OneShotError::new(
+                    "title generation is disabled in this fixture",
+                ));
+            }
+
+            Ok(ag_agent::OneShotSubmission {
+                response: AgentResponse::plain("Existing session commit"),
+                stats: ag_agent::SessionStats {
+                    added_lines: 0,
+                    deleted_lines: 0,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                },
+            })
+        });
+
+    Arc::new(one_shot_client)
 }
 
 /// Builds a test app with a caller-provided database, git context, and
@@ -3889,7 +3920,7 @@ async fn test_reply_with_backend_replays_history_once_after_model_switch() {
             captured
                 .lock()
                 .expect("lock poisoned")
-                .push(req.replay_transcript);
+                .push(req.continuation.replay_transcript().map(str::to_string));
         }
         let done = done_capture.clone();
         Box::pin(async move {
@@ -4077,7 +4108,7 @@ async fn test_spawn_session_task_auto_commits_changes() {
     expect_pre_commit_hook_ready(&mut mock_git_client);
     mock_git_client
         .expect_diff()
-        .times(2)
+        .times(3)
         .returning(|_, _| Box::pin(async { Ok(String::new()) }));
     mock_git_client
         .expect_fetch_remote()
@@ -4156,6 +4187,11 @@ async fn test_commit_changes_reuses_existing_session_commit_message_in_tests() {
         .in_sequence(&mut sequence)
         .returning(|_| Box::pin(async { Ok(false) }));
     mock_git_client
+        .expect_diff()
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_, _| Box::pin(async { Ok("diff --git a/a.rs b/a.rs".to_string()) }));
+    mock_git_client
         .expect_has_commits_since()
         .times(1)
         .in_sequence(&mut sequence)
@@ -4181,6 +4217,23 @@ async fn test_commit_changes_reuses_existing_session_commit_message_in_tests() {
         .times(1)
         .in_sequence(&mut sequence)
         .returning(|_| Box::pin(async { Ok("def5678".to_string()) }));
+    let mut one_shot_client = MockOneShotClient::new();
+    one_shot_client
+        .expect_submit()
+        .times(1)
+        .returning(|request| {
+            assert!(request.prompt.contains("Refine session work"));
+
+            Ok(ag_agent::OneShotSubmission {
+                response: AgentResponse::plain("Refine session work"),
+                stats: ag_agent::SessionStats {
+                    added_lines: 0,
+                    deleted_lines: 0,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                },
+            })
+        });
 
     // Act
     let outcome = SessionTaskService::commit_session_changes(
@@ -4188,6 +4241,7 @@ async fn test_commit_changes_reuses_existing_session_commit_message_in_tests() {
         &session_folder,
         "main",
         AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+        &one_shot_client,
         false,
         false,
     )
@@ -5014,6 +5068,10 @@ async fn test_rebase_session_auto_commits_uncommitted_changes() {
         .expect_is_worktree_clean()
         .times(1)
         .returning(|_| Box::pin(async { Ok(false) }));
+    mock_git_client
+        .expect_diff()
+        .times(1)
+        .returning(|_, _| Box::pin(async { Ok("diff --git a/a.rs b/a.rs".to_string()) }));
     mock_git_client
         .expect_has_commits_since()
         .times(1)

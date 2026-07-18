@@ -19,19 +19,28 @@ const SIGN_COLUMN_WIDTH: usize = 1;
 /// The kind of a line in a unified diff.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiffLineKind {
+    /// Git metadata identifying a changed file.
     FileHeader,
+    /// Unified-diff range header.
     HunkHeader,
+    /// Unchanged context line.
     Context,
+    /// Added line from the new file.
     Addition,
+    /// Deleted line from the old file.
     Deletion,
 }
 
 /// A parsed line from a unified diff, with optional old/new line numbers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DiffLine<'a> {
+    /// Semantic line classification.
     pub kind: DiffLineKind,
+    /// Line number in the old file, when applicable.
     pub old_line: Option<u32>,
+    /// Line number in the new file, when applicable.
     pub new_line: Option<u32>,
+    /// Diff content without the addition, deletion, or context prefix.
     pub content: &'a str,
 }
 
@@ -47,17 +56,24 @@ pub enum FileTreeItem {
 /// Shared page areas used by the diff view after applying its layout splits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DiffPageAreas {
+    /// Right-side diff content panel.
     pub diff_area: Rect,
+    /// Left-side changed-file explorer panel.
     pub file_list_area: Rect,
+    /// Bottom keybinding footer.
     pub footer_area: Rect,
 }
 
 /// Shared wrapping and viewport measurements for rendering the diff panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DiffRenderLayout {
+    /// Available row width after borders and scrollbar reservation.
     pub content_width: usize,
+    /// Width of each old or new line-number column.
     pub gutter_width: usize,
+    /// Combined width reserved before diff content.
     pub prefix_width: usize,
+    /// Number of visible rows inside the diff border.
     pub viewport_height: u16,
 }
 

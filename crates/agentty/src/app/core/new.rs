@@ -322,6 +322,7 @@ impl App {
                 clipboard_image_client_override: None,
                 fs_client: Arc::clone(&clients.fs_client),
                 git_client: Arc::clone(&clients.git_client),
+                one_shot_client_override: None,
                 repositories,
                 review_request_client: Arc::clone(&clients.review_request_client),
             },

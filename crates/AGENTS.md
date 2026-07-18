@@ -5,8 +5,8 @@ Contains the workspace member crates.
 ## Workspace Crates
 
 - `crates/ag-agent/` holds agent provider models, prompt templates, CLI and app-server
-  backend transports, provider-neutral channel contracts, and app-server routing shared
-  by Agentty.
+  backend transports, provider-neutral channel contracts, injectable one-shot
+  submission, and app-server routing shared by Agentty.
 - `crates/ag-clipboard/` holds read-only clipboard backends shared by Agentty prompt
   image capture.
 - `crates/ag-forge/` holds forge review-request types and provider integrations shared

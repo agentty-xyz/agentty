@@ -295,18 +295,20 @@ flowchart TD
 with prompt payloads owned by `ag-protocol` and re-exported through
 `domain/turn_prompt.rs`):
 
-| Type               | Purpose                                                                                                                                                               |
-| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `TurnRequest`      | Input payload: `reasoning_level`, folder, `live_transcript`, `main_checkout_root`, optional `replay_transcript`, model, `request_kind`, prompt, and provider context. |
-| `TurnEvent`        | Incremental stream events: `ThoughtDelta`, `Completed`, `Failed`, `PidUpdate`.                                                                                        |
-| `TurnResult`       | Normalized output: `assistant_message`, token counts, `provider_conversation_id`.                                                                                     |
-| `AgentRequestKind` | `SessionStart`, `SessionResume`, or `UtilityPrompt`; replay text lives on `TurnRequest` rather than the request kind.                                                 |
+| Type               | Purpose                                         |
+| ------------------ | ----------------------------------------------- |
+| `TurnRequest`      | Turn inputs and one continuation value.         |
+| `TurnContinuation` | Fresh, replay, or provider-resume context.      |
+| `TurnEvent`        | Thought, completion, failure, or PID event.     |
+| `TurnResult`       | Assistant output, usage, and provider id.       |
+| `AgentRequestKind` | Start, resume, account-read, or utility intent. |
 
 <a id="architecture-provider-conversation-id-flow"></a> App-server providers return a
 `provider_conversation_id` in `TurnResult`. Post-turn application persists it, along
-with an instruction-bootstrap marker, so later turns and runtime restarts can resume the
-native provider context and choose between resending the full prompt contract and a
-compact reminder.
+with an instruction-bootstrap marker. The next worker turn constructs one
+`TurnContinuation`, so channels receive only valid combinations for a fresh request,
+transcript replay, or native provider resume and can choose between resending the full
+prompt contract and a compact reminder.
 
 Codex keeps its app-server runtime resident between turns. Gemini ACP shuts down after
 each completed turn and replays the persisted transcript when a follow-up starts, so
@@ -394,50 +396,73 @@ their triggers:
 
 - **Terminal event reader thread** (runtime startup): polls crossterm and forwards
   terminal events into the runtime loop.
+
 - **Project sync orchestrator** (startup, project switch, ticks, list-mode `s`): owns
   one command queue per active project that serializes read-only `git fetch`,
   ahead/behind snapshots, review-request refreshes, and manual pull/rebase/push
   commands. Forge CLI calls are bounded to 30 seconds and cancel their subprocess on
   timeout so one unavailable provider cannot retain the queue indefinitely.
+
 - **Version check** (startup): reports npm update availability.
+
 - **Per-session worker loop** (first command enqueue): serializes all turn commands per
   session and manages channel lifecycle.
+
 - **Per-turn event consumer** (every turn): consumes the `TurnEvent` stream and
   coalesces loader updates.
+
 - **CLI stdout/stderr readers** (every CLI-backed turn): stream subprocess output into
   loader updates and final buffers.
+
 - **App-server stream bridge** (every app-server turn): bridges provider stream events
   into the unified turn event stream.
+
 - **Clipboard image persistence** (prompt image paste): reads a copied PNG file,
   clipboard image, or PNG path from `ag-clipboard` via `spawn_blocking`, stores it under
   `AGENTTY_ROOT/tmp/<session-id>/images/`, and inserts an inline `[Image #n]`
   placeholder. The backend supports macOS pasteboard, X11 reads, and Wayland reads via
   `wl-paste`; missing or unsupported backends report an inline paste error.
+
 - **Session title generation** (first start turn): runs a one-shot title prompt and
   persists a concise generated title.
+
 - **At-mention file indexing** (`@` in prompt or question input): lists session files
   for the mention picker, falling back to the project root for unstarted drafts.
+
 - **Session-size refresh** (`Enter` on a session in list mode): recomputes the diff-size
   bucket off the key-handling path.
+
 - **Branch-publish action** (session view `p`): returns to interactive session chat,
   then pushes with `--force-with-lease` and creates or refreshes the forge review
   request in the background; progress and completion render inline for that session,
   while the shared per-session branch-operation lock serializes it with auto-push.
+
 - **Deferred session cleanup** (session delete): removes the worktree folder and branch
   after database deletion.
+
 - **Session fork** (root session view `F`): creates a new worktree branch from the
   source session branch, copies `session_message` rows in one transaction, clears
   provider/review-request/stack linkage, and marks the fork for one-time transcript
   replay before its first reply. Stacked child sessions do not expose this action.
+
 - **Focused review assist** (entering review): runs the review prompt with the diff and
   saved user/agent chat history, then stores the result or error.
+
 - **Sync-main workflow** (list-mode `s`): pull/rebase/push of the project branch through
   the sync orchestrator, with assisted conflict resolution.
+
 - **Session merge task** (merge confirmation): rebase, squash merge with the session
   commit message, worktree cleanup.
+
 - **Session sync task** (view-mode `r`, stacked-parent fan-out): assisted rebase of the
   session branch; post-merge stacked-child syncs use `git rebase --onto` with the
   recorded parent commit as the old base.
+
+Title generation, focused review, commit-message generation, and conflict assistance
+submit owned `OneShotRequest` values through `OneShotClient`. Its production
+implementation owns provider routing, CLI/app-server selection, protocol repair, runtime
+cleanup, and usage aggregation; app workflow tests inject `MockOneShotClient` without
+constructing provider commands.
 
 ## Sync, Merge, and Rebase Flows
 

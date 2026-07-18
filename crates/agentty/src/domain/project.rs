@@ -4,13 +4,21 @@ use std::path::{Path, PathBuf};
 /// Persisted project metadata used for multi-project management.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Project {
+    /// Creation timestamp in Unix seconds.
     pub created_at: i64,
+    /// Optional user-defined display name.
     pub display_name: Option<String>,
+    /// Last observed branch for the project checkout.
     pub git_branch: Option<String>,
+    /// Stable database identifier.
     pub id: i64,
+    /// Whether the project is pinned ahead of other projects.
     pub is_favorite: bool,
+    /// Most recent project-open timestamp in Unix seconds.
     pub last_opened_at: Option<i64>,
+    /// Absolute path to the project checkout.
     pub path: PathBuf,
+    /// Last metadata update timestamp in Unix seconds.
     pub updated_at: i64,
 }
 

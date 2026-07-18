@@ -15,6 +15,7 @@ dependencies = [
  "ag-protocol",
  "agent-client-protocol",
  "askama",
+ "async-trait",
  "base64",
  "mockall",
  "rustix",
