@@ -33,6 +33,9 @@ editing shortcuts. Context-specific actions such as prompt submission, slash com
 | `Ctrl+Y` / `Ctrl+Shift+Z`                | Redo                                |
 | paste                                    | Insert text at the cursor           |
 
+On macOS, undo still uses `Ctrl+Z`, not `Cmd+Z`. Terminal applications such as Ghostty
+may consume `Cmd+Z` before Agentty or a surrounding `tmux` session receives it.
+
 Multiline prompt and question inputs also share vertical cursor movement and newline
 insertion. Single-line publish and launch-configuration inputs keep only the first line
 of pasted text.
