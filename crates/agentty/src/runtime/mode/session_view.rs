@@ -367,7 +367,8 @@ async fn handle_primary_view_key(
                 )),
                 InputState::default(),
                 pending_update.scroll_offset,
-            );
+            )
+            .await;
         }
         KeyCode::Char('/')
             if view_session_snapshot.can_launch_configuration_composer()
@@ -381,7 +382,8 @@ async fn handle_primary_view_key(
                 )),
                 InputState::with_text("/".to_string()),
                 pending_update.scroll_offset,
-            );
+            )
+            .await;
         }
         _ => return None,
     }
@@ -884,14 +886,21 @@ fn suppress_auto_review_for_stopped_turn(app: &mut App, session_id: &str) {
 /// Focused-review output/status is copied into prompt mode so canceling the
 /// composer returns to the same session transcript state. The caller supplies
 /// the initial composer buffer so session-view shortcuts like `/` can open the
-/// prompt with prefilled slash-command text.
-fn switch_view_to_prompt(
+/// prompt with prefilled slash-command text. A non-empty initial buffer
+/// intentionally replaces any saved composer for the session.
+async fn switch_view_to_prompt(
     app: &mut App,
     view_context: &ViewContext,
     history_state: PromptHistoryState,
     input: InputState,
     scroll_offset: Option<u16>,
 ) {
+    if input.is_empty() && app.restore_prompt_progress(&view_context.session_id).await {
+        return;
+    }
+
+    app.discard_prompt_progress(&view_context.session_id).await;
+
     app.mode = AppMode::Prompt {
         at_mention_state: None,
         attachment_state: PromptAttachmentState::default(),
@@ -922,7 +931,8 @@ async fn open_draft_prompt_with_pasted_image(
         history_state,
         InputState::default(),
         scroll_offset,
-    );
+    )
+    .await;
 
     app.handle_prompt_image_paste_intent(&PromptIntentContext {
         input_mode: PromptIntentInputMode::Text,
@@ -1202,6 +1212,8 @@ mod tests {
     };
     use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
     use crate::infra::tmux::{MockTmuxClient, TmuxClient};
+    use crate::presentation::app_mode::PromptModeSnapshot;
+    use crate::presentation::prompt::PromptSlashState;
     use crate::runtime::mode::session_output_metric;
     use crate::ui::component::session_output::SessionOutputLineContext;
     use crate::ui::page::session_chat::SessionChatPage;
@@ -1233,6 +1245,25 @@ mod tests {
     /// mocked tmux boundary.
     async fn new_test_app_with_session() -> (App, tempfile::TempDir, String) {
         new_test_app_with_session_and_tmux_client(Arc::new(MockTmuxClient::new())).await
+    }
+
+    /// Builds one reply-enabled review snapshot for primary-key routing tests.
+    fn reply_enabled_review_snapshot() -> ViewSessionSnapshot {
+        ViewSessionSnapshot {
+            continue_terminal_session: ViewActionState::Disabled,
+            fork_session: ViewActionState::Enabled,
+            merge_session_branch: ViewActionState::Enabled,
+            mutate_session_branch: ViewActionState::Enabled,
+            rebase_session_branch: ViewActionState::Enabled,
+            open_worktree: ViewActionState::Enabled,
+            reply_to_session: ViewActionState::Enabled,
+            review_comments: ViewActionState::Disabled,
+            start_staged_session: ViewActionState::Disabled,
+            follow_up_task_action: None,
+            publish_pull_request_action: None,
+            session_state: ViewSessionState::Review,
+            session_status: Status::Review,
+        }
     }
 
     /// Replaces the app-level clipboard-image dependency with one
@@ -1673,6 +1704,23 @@ mod tests {
             } if input.text() == "[Image #1]"
                 && session_id.as_str() == expected_session_id.as_str()
         ));
+    }
+
+    #[tokio::test]
+    async fn test_open_draft_prompt_with_pasted_image_ignores_missing_session() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        let view_context = ViewContext {
+            scroll_offset: Some(2),
+            session_id: "missing-session".into(),
+            session_index: usize::MAX,
+        };
+
+        // Act
+        open_draft_prompt_with_pasted_image(&mut app, &view_context, Some(2)).await;
+
+        // Assert
+        assert!(matches!(app.mode, AppMode::List));
     }
 
     #[tokio::test]
@@ -3042,7 +3090,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_view_key_slash_opens_prompt_with_prefilled_slash() {
+    async fn test_handle_view_key_enter_opens_empty_prompt_composer() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.mode = AppMode::View {
@@ -3051,21 +3099,58 @@ mod tests {
         };
         let view_context = view_context(&mut app).expect("expected view context");
         let mut pending_update = ViewPendingUpdate::from_context(&view_context);
-        let view_session_snapshot = ViewSessionSnapshot {
-            continue_terminal_session: ViewActionState::Disabled,
-            fork_session: ViewActionState::Enabled,
-            merge_session_branch: ViewActionState::Enabled,
-            mutate_session_branch: ViewActionState::Enabled,
-            rebase_session_branch: ViewActionState::Enabled,
-            open_worktree: ViewActionState::Enabled,
-            reply_to_session: ViewActionState::Enabled,
-            review_comments: ViewActionState::Disabled,
-            start_staged_session: ViewActionState::Disabled,
-            follow_up_task_action: None,
-            publish_pull_request_action: None,
-            session_state: ViewSessionState::Review,
-            session_status: Status::Review,
+        let view_session_snapshot = reply_enabled_review_snapshot();
+        let view_key_context = ViewKeyContext {
+            context: &view_context,
+            metrics: ChatScrollMetrics {
+                total_lines: 10,
+                view_height: 5,
+            },
+            session_snapshot: &view_session_snapshot,
         };
+
+        // Act
+        let should_apply = handle_view_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            view_key_context,
+            &mut pending_update,
+        )
+        .await;
+
+        // Assert
+        assert!(should_apply);
+        assert!(matches!(
+            app.mode,
+            AppMode::Prompt {
+                ref input,
+                ref session_id,
+                scroll_offset: Some(2),
+                ..
+            } if input.is_empty() && session_id == &view_context.session_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_slash_prompt_replacement_prevents_saved_prompt_restoration() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.mode = AppMode::View {
+            session_id: session_id.clone().into(),
+            scroll_offset: Some(2),
+        };
+        let view_context = view_context(&mut app).expect("expected view context");
+        app.save_prompt_progress(PromptModeSnapshot {
+            at_mention_state: None,
+            attachment_state: PromptAttachmentState::default(),
+            history_state: PromptHistoryState::new(Vec::new()),
+            input: InputState::with_text("saved reply".to_string()),
+            scroll_offset: Some(4),
+            session_id: session_id.into(),
+            slash_state: PromptSlashState::default(),
+        });
+        let mut pending_update = ViewPendingUpdate::from_context(&view_context);
+        let view_session_snapshot = reply_enabled_review_snapshot();
         let view_key_context = ViewKeyContext {
             context: &view_context,
             metrics: ChatScrollMetrics {
@@ -3083,10 +3168,7 @@ mod tests {
             &mut pending_update,
         )
         .await;
-
-        // Assert
-        assert!(should_apply);
-        assert!(matches!(
+        let opened_prefilled_slash = matches!(
             app.mode,
             AppMode::Prompt {
                 ref input,
@@ -3096,7 +3178,78 @@ mod tests {
             } if input.text() == "/"
                 && input.cursor == 1
                 && session_id == &view_context.session_id
+        );
+        app.mode = AppMode::View {
+            session_id: view_context.session_id.clone(),
+            scroll_offset: Some(2),
+        };
+        switch_view_to_prompt(
+            &mut app,
+            &view_context,
+            PromptHistoryState::new(Vec::new()),
+            InputState::default(),
+            Some(2),
+        )
+        .await;
+
+        // Assert
+        assert!(should_apply);
+        assert!(opened_prefilled_slash);
+        assert!(matches!(
+            app.mode,
+            AppMode::Prompt {
+                ref input,
+                ref session_id,
+                scroll_offset: Some(2),
+                ..
+            } if input.is_empty()
+                && session_id == &view_context.session_id
         ));
+        assert!(app.prompt_progress.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_switch_view_to_prompt_restores_saved_progress() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.mode = AppMode::View {
+            session_id: session_id.clone().into(),
+            scroll_offset: Some(2),
+        };
+        let view_context = view_context(&mut app).expect("expected view context");
+        app.save_prompt_progress(PromptModeSnapshot {
+            at_mention_state: None,
+            attachment_state: PromptAttachmentState::default(),
+            history_state: PromptHistoryState::new(vec!["previous".to_string()]),
+            input: InputState::with_text("saved reply".to_string()),
+            scroll_offset: Some(4),
+            session_id: session_id.into(),
+            slash_state: PromptSlashState::default(),
+        });
+
+        // Act
+        switch_view_to_prompt(
+            &mut app,
+            &view_context,
+            PromptHistoryState::new(Vec::new()),
+            InputState::default(),
+            Some(2),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Prompt {
+                focus: ChatFocus::Input,
+                history_state,
+                input,
+                scroll_offset: Some(4),
+                ..
+            } if history_state.entries == vec!["previous".to_string()]
+                && input.text() == "saved reply"
+        ));
+        assert!(app.prompt_progress.is_empty());
     }
 
     #[tokio::test]

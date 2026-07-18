@@ -191,9 +191,11 @@ While the composer is open, `Tab` moves focus to the chat transcript above it so
 conversation can be scrolled with `j` / `k`, `g` / `G`, and `Ctrl+D` / `Ctrl+U` without
 losing the typed draft. While that chat transcript is focused, `d` opens the diff
 preview for the session, and leaving it returns to the composer with the draft intact.
-Pressing `Tab` again returns focus to the composer. The same focus toggle and `d` diff
-preview are available while answering clarification questions. Long transcripts show a
-slim scrollbar on the right side of the output panel to indicate the current position.
+Pressing `q` returns to the sessions list and saves the complete composer; reopening the
+session restores the typed draft with input focus. Pressing `Tab` again returns focus to
+the composer. The same focus toggle, `d` diff preview, and `q` preservation flow are
+available while answering clarification questions. Long transcripts show a slim
+scrollbar on the right side of the output panel to indicate the current position.
 
 Pressing `r` during a running turn queues session sync on the same session worker. The
 session stays **InProgress** while the active turn runs, then moves to **Rebasing** when
@@ -492,8 +494,9 @@ record, and rendered as a title prefix in the **Sessions** list.
 ## Slash Commands
 
 <a id="usage-slash-commands"></a> Type these in the prompt input to access special
-actions. From an editable session view, press `/` to open the composer with the leading
-slash already inserted:
+actions. From an editable session view, press `/` to open a new composer with the
+leading slash already inserted. This replaces any prompt draft previously saved by
+returning to the sessions list:
 
 The command picker filters as you type and accepts contains or fuzzy abbreviations such
 as `/o` for `/model`.

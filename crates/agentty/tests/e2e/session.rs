@@ -2769,9 +2769,9 @@ ON CONFLICT(name) DO UPDATE SET value = excluded.value
     Ok(())
 }
 
-/// Verify that `Tab` moves focus between the prompt composer and the chat
-/// transcript, and that keys pressed while the transcript is focused scroll it
-/// instead of editing the typed draft.
+/// Verify that `Tab` moves focus from the prompt composer to the chat
+/// transcript, and that `q` returns to the sessions list while preserving the
+/// typed draft for reopening.
 #[test]
 fn session_prompt_chat_focus_toggle() -> E2eResult {
     // Arrange
@@ -2780,8 +2780,8 @@ fn session_prompt_chat_focus_toggle() -> E2eResult {
         .setup(seed_sessions_startup_tab)
         .zola(
             "Read the chat while composing",
-            "Press Tab to move focus from the message composer to the chat transcript and back \
-             without losing the typed draft.",
+            "Press Tab to read the chat, then return to Sessions and reopen the composer without \
+             losing the typed draft.",
             50,
         )
         .run(
@@ -2807,9 +2807,20 @@ fn session_prompt_chat_focus_toggle() -> E2eResult {
                         "chat_focused",
                         "Tab focuses the chat transcript for scrolling",
                     )
-                    .press_key("Tab")
+                    .press_key("q")
+                    .wait_for_text("new session", 5000)
+                    .viewing_pause_ms(1200)
+                    .capture_labeled(
+                        "sessions_list",
+                        "Q returns from the focused chat to the sessions list",
+                    )
+                    .press_key("Enter")
                     .wait_for_text("Enter: send", 5000)
                     .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "restored_composer",
+                        "Reopening the session restores the typed draft",
+                    )
             },
             |frame, report| {
                 // Assert
@@ -2826,6 +2837,11 @@ fn session_prompt_chat_focus_toggle() -> E2eResult {
                     "j/k: scroll",
                     &chat_focused_full,
                 );
+                assertion::assert_text_in_region(
+                    &chat_focused_frame,
+                    "q: sessions",
+                    &chat_focused_full,
+                );
                 // Chat focus exposes no cancel shortcut, so the composer draft
                 // cannot be lost while scrolling.
                 assertion::assert_not_visible(&chat_focused_frame, "Ctrl+C");
@@ -2840,6 +2856,7 @@ fn session_prompt_chat_focus_toggle() -> E2eResult {
                 assertion::assert_text_in_region(frame, "Enter: send", &full);
                 assertion::assert_text_in_region(frame, PROMPT_FOCUS_DRAFT_TEXT, &full);
                 assertion::assert_not_visible(frame, "j/k: scroll");
+                assertion::assert_not_visible(frame, "q: sessions");
 
                 // This session's worktree name comes from a fresh UUID, so the
                 // footer reads differently on every run. Pin the harness

@@ -14,6 +14,7 @@ use crate::app::review::ReviewUpdate;
 use crate::app::session_state::SessionGitStatus;
 use crate::app::{AppServiceDeps, diff_content_hash};
 use crate::domain::agent::AgentModel;
+use crate::domain::composer::PromptAttachment;
 use crate::domain::file_entry::FileEntry;
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
@@ -25,6 +26,7 @@ use crate::domain::setting::SettingName;
 use crate::infra::db::AppRepositories;
 use crate::infra::project_discovery::{HOME_PROJECT_SCAN_MAX_RESULTS, RealProjectDiscoveryClient};
 use crate::infra::tmux::{MockTmuxClient, TmuxClient};
+use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
 use crate::presentation::settings::SettingsAction;
 
 /// Builds one reducer-ready turn projection for tests.
@@ -55,6 +57,19 @@ fn test_view_app_mode(session_id: &str) -> AppMode {
     AppMode::View {
         session_id: session_id.into(),
         scroll_offset: None,
+    }
+}
+
+/// Builds one restorable prompt snapshot without attachments.
+fn test_prompt_mode_snapshot(session_id: SessionId) -> PromptModeSnapshot {
+    PromptModeSnapshot {
+        at_mention_state: None,
+        attachment_state: PromptAttachmentState::default(),
+        history_state: PromptHistoryState::new(Vec::new()),
+        input: InputState::with_text("saved reply".to_string()),
+        scroll_offset: None,
+        session_id,
+        slash_state: PromptSlashState::default(),
     }
 }
 
@@ -5363,12 +5378,142 @@ async fn delete_selected_session_clears_review_cache() {
             text: "cached review".to_string(),
         },
     );
+    app.save_prompt_progress(test_prompt_mode_snapshot(session_id.clone()));
 
     // Act
     app.delete_selected_session().await;
 
     // Assert
     assert!(!app.review_cache.contains_key(session_id.as_str()));
+    assert!(!app.prompt_progress.contains_key(session_id.as_str()));
+}
+
+#[tokio::test]
+async fn restore_prompt_progress_returns_false_without_saved_snapshot() {
+    // Arrange
+    let mut app = test_app_viewing_reconcile_session(
+        Status::Review,
+        Vec::new(),
+        "session-without-prompt-progress",
+    )
+    .await;
+
+    // Act
+    let restored = app.restore_prompt_progress("session-1").await;
+
+    // Assert
+    assert!(!restored);
+    assert!(app.prompt_progress.is_empty());
+}
+
+#[tokio::test]
+async fn restore_prompt_progress_retains_snapshot_when_session_is_missing() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    let session_id = SessionId::from("missing-session");
+    app.save_prompt_progress(test_prompt_mode_snapshot(session_id.clone()));
+
+    // Act
+    let restored = app.restore_prompt_progress(&session_id).await;
+
+    // Assert
+    assert!(!restored);
+    assert!(app.prompt_progress.contains_key(&session_id));
+}
+
+#[tokio::test]
+async fn restore_prompt_progress_retains_snapshot_for_question_session() {
+    // Arrange
+    let mut app = test_app_viewing_reconcile_session(
+        Status::Question,
+        vec![QuestionItem::new("Continue?")],
+        "question-prompt-progress",
+    )
+    .await;
+    let session_id = SessionId::from("session-1");
+    app.save_prompt_progress(test_prompt_mode_snapshot(session_id.clone()));
+
+    // Act
+    let restored = app.restore_prompt_progress(&session_id).await;
+
+    // Assert
+    assert!(!restored);
+    assert!(app.prompt_progress.contains_key(&session_id));
+}
+
+#[tokio::test]
+async fn restore_prompt_progress_retains_snapshot_while_stack_reply_is_blocked() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    let parent_session_id = SessionId::from("parent-session");
+    app.sessions.push_session(
+        crate::test_support::SessionFixtureBuilder::new()
+            .id(parent_session_id.clone())
+            .status(Status::Review)
+            .build(),
+    );
+    app.sessions.push_session(
+        crate::test_support::SessionFixtureBuilder::new()
+            .id("active-child")
+            .parent_session_id(Some(parent_session_id.clone()))
+            .status(Status::InProgress)
+            .build(),
+    );
+    app.save_prompt_progress(test_prompt_mode_snapshot(parent_session_id.clone()));
+
+    // Act
+    let restored = app.restore_prompt_progress(&parent_session_id).await;
+
+    // Assert
+    assert!(!restored);
+    assert!(app.prompt_progress.contains_key(&parent_session_id));
+}
+
+#[tokio::test]
+async fn restore_prompt_progress_cleans_attachments_for_merged_session() {
+    // Arrange
+    let session_id = SessionId::from("merged-session");
+    let attachment_path = crate::app::agentty_home()
+        .join("tmp")
+        .join(session_id.as_str())
+        .join("images")
+        .join("image-1.png");
+    let attachment_directory = attachment_path
+        .parent()
+        .expect("attachment path should have a parent")
+        .to_path_buf();
+    let mut fs_client = crate::infra::fs::MockFsClient::new();
+    fs_client.expect_is_dir().times(0..).return_const(true);
+    fs_client.expect_exists().times(0..).return_const(true);
+    fs_client
+        .expect_remove_file()
+        .once()
+        .with(eq(attachment_path.clone()))
+        .returning(|_| Box::pin(async { Ok(()) }));
+    fs_client
+        .expect_remove_dir()
+        .once()
+        .with(eq(attachment_directory))
+        .returning(|_| Box::pin(async { Ok(()) }));
+    let mut clients = crate::test_support::test_app_clients();
+    clients.fs_client = Arc::new(fs_client);
+    let (mut app, _base_dir) = crate::test_support::new_test_app_with_clients(clients).await;
+    app.sessions.push_session(
+        crate::test_support::SessionFixtureBuilder::new()
+            .id(session_id.clone())
+            .status(Status::Merged)
+            .build(),
+    );
+    let mut snapshot = test_prompt_mode_snapshot(session_id.clone());
+    snapshot.attachment_state.attachments = vec![PromptAttachment::new(1, attachment_path)];
+    app.save_prompt_progress(snapshot);
+
+    // Act
+    let restored = app.restore_prompt_progress(&session_id).await;
+
+    // Assert
+    assert!(!restored);
+    assert!(app.prompt_progress.is_empty());
 }
 
 /// Builds one test review request summary for background sync tests.
