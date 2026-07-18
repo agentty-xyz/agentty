@@ -7,16 +7,45 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.13.3] - 2026-07-17
+
 ### Added
 
+- agentty: add a review-comments view for linked GitHub pull requests and GitLab merge
+  requests, with selectable general comments, inline threads, current diff context, and
+  read-only navigation.
+- agentty: let session agents resolve selected or all actionable review comments, then
+  reply to and resolve fixed GitHub and GitLab threads after a successful branch push.
 - release: generate keyless Sigstore build provenance for final GitHub release artifacts
   and attach a Scorecard-discoverable bundle.
 
 ### Changed
 
+- agentty: open the session diff with `d` from prompt chat focus and restore the
+  composer draft, attachments, history, suggestions, and scroll state on return.
+- agentty: persist focused review output across session and project switches.
+- agentty: block local merge queueing when a forge review request is linked.
+- ag-agent: route utility prompts through a typed, injectable one-shot client and
+  encapsulate turn continuation state.
+- ag-protocol: reorganize protocol definitions by responsibility.
+- ag-clipboard: unify platform backend initialization and report invalid UTF-8 text as
+  backend errors on Wayland and X11.
+- ag-forge: simplify review-request adapter ownership and command workflows.
+- ci: enforce 100% patch coverage for pull requests and raise the workspace line
+  coverage threshold to 93%.
 - release: upload the complete artifact set through a retry-safe draft before
   publication so GitHub release immutability protects every shipped file.
 - docs: document GitHub release, asset, and provenance verification.
+- release: bump workspace crate metadata and lockfile package versions to `0.13.3`.
+
+### Fixed
+
+- agentty: keep an empty prompt open when `Backspace` is pressed.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
 
 ## [v0.13.2] - 2026-07-16
 
