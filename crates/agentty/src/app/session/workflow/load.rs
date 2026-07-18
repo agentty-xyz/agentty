@@ -481,7 +481,10 @@ fn should_skip_missing_folder_session(
         return false;
     }
 
-    if matches!(persisted_status, Status::Done | Status::Canceled) {
+    if matches!(
+        persisted_status,
+        Status::Merged | Status::Done | Status::Canceled
+    ) {
         return false;
     }
 
@@ -491,18 +494,21 @@ fn should_skip_missing_folder_session(
 
     !matches!(
         live_handle_status,
-        Some(Status::Merging | Status::Done | Status::Canceled)
+        Some(Status::Merging | Status::Merged | Status::Done | Status::Canceled)
     )
 }
 
 /// Merges one loaded status with the existing live-handle status.
 ///
 /// Existing handle status is kept for active transitions to prevent stale DB
-/// snapshots from clobbering in-memory updates. Persisted terminal statuses
-/// (`Done`, `Canceled`) take precedence so explicit DB transitions still appear
-/// after refresh.
+/// snapshots from clobbering in-memory updates. Persisted read-only and
+/// terminal statuses (`Merged`, `Done`, `Canceled`) take precedence so remote
+/// merge truth and explicit terminal transitions still appear after refresh.
 fn merge_loaded_session_status(status_from_db: Status, status_from_handle: Status) -> Status {
-    if matches!(status_from_db, Status::Done | Status::Canceled) {
+    if matches!(
+        status_from_db,
+        Status::Merged | Status::Done | Status::Canceled
+    ) {
         return status_from_db;
     }
 
@@ -1147,17 +1153,19 @@ mod tests {
     }
 
     #[test]
-    /// Verifies terminal DB statuses override stale in-memory handle statuses.
-    fn merge_loaded_session_status_prefers_terminal_status_from_db() {
+    /// Verifies read-only and terminal DB statuses override stale in-memory
+    /// handle statuses.
+    fn merge_loaded_session_status_prefers_read_only_and_terminal_status_from_db() {
         // Arrange
-        let status_from_db = Status::Done;
         let status_from_handle = Status::Draft;
 
         // Act
-        let merged_status = merge_loaded_session_status(status_from_db, status_from_handle);
+        let merged_status = merge_loaded_session_status(Status::Merged, status_from_handle);
+        let done_status = merge_loaded_session_status(Status::Done, status_from_handle);
 
         // Assert
-        assert_eq!(merged_status, Status::Done);
+        assert_eq!(merged_status, Status::Merged);
+        assert_eq!(done_status, Status::Done);
     }
 
     #[test]
@@ -1216,6 +1224,21 @@ mod tests {
 
         // Assert
         assert!(!should_skip);
+    }
+
+    #[test]
+    /// Verifies missing-folder rows stay visible when either persistence or
+    /// live state has already recorded a remote merge.
+    fn should_skip_missing_folder_session_keeps_merged_session() {
+        // Arrange, Act
+        let persisted_merged_should_skip =
+            should_skip_missing_folder_session(false, false, Status::Merged, Some(Status::Review));
+        let live_merged_should_skip =
+            should_skip_missing_folder_session(false, false, Status::Review, Some(Status::Merged));
+
+        // Assert
+        assert!(!persisted_merged_should_skip);
+        assert!(!live_merged_should_skip);
     }
 
     #[test]

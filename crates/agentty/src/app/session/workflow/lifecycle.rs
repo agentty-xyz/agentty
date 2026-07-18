@@ -1206,6 +1206,9 @@ impl SessionManager {
         let Ok(session) = self.session_or_err(session_id) else {
             return false;
         };
+        if session.status.is_read_only() {
+            return false;
+        }
         let session_agent = session.agent;
 
         self.reply_impl(services, session_id, prompt, Vec::new(), session_agent)
@@ -1227,6 +1230,9 @@ impl SessionManager {
         let Ok(session) = self.session_or_err(session_id) else {
             return false;
         };
+        if session.status.is_read_only() {
+            return false;
+        }
         let session_agent = session.agent;
 
         self.reply_impl(
@@ -1271,6 +1277,12 @@ impl SessionManager {
         if prompt.is_empty() {
             return Err(SessionError::Workflow(
                 "Cannot queue an empty chat message".to_string(),
+            ));
+        }
+
+        if self.session_or_err(session_id)?.status.is_read_only() {
+            return Err(SessionError::Workflow(
+                "Merged sessions cannot queue chat messages".to_string(),
             ));
         }
 
@@ -3409,6 +3421,43 @@ mod tests {
             "enqueue_message must not emit additional events (especially not RefreshSessions) so \
              the reducer skips the full DB-backed reload"
         );
+    }
+
+    #[tokio::test]
+    async fn merged_session_rejects_chat_submission_entry_points() {
+        // Arrange
+        let session = test_session("Prompt", Status::Merged, Some("Title"), "");
+        let database = database_with_session(&session).await;
+        let mut session_manager = session_manager_with_one_session(session);
+        let (services, mut event_rx) = test_services_with_event_receiver(
+            &database,
+            Arc::new(git::MockGitClient::new()),
+            Arc::new(forge::MockReviewRequestClient::new()),
+        );
+
+        // Act
+        let queue_result = session_manager.enqueue_message(&services, "session-id", "queued reply");
+        let reply_enqueued = session_manager
+            .reply(&services, "session-id", "reply")
+            .await;
+        let review_reply_enqueued = session_manager
+            .reply_to_review_comments(
+                &services,
+                "session-id",
+                "review reply",
+                vec!["thread-42".to_string()],
+            )
+            .await;
+
+        // Assert
+        assert!(matches!(
+            queue_result,
+            Err(SessionError::Workflow(message))
+                if message == "Merged sessions cannot queue chat messages"
+        ));
+        assert!(!reply_enqueued);
+        assert!(!review_reply_enqueued);
+        assert!(event_rx.try_recv().is_err());
     }
 
     #[tokio::test]

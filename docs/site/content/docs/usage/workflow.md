@@ -91,6 +91,7 @@ to the assist agent.
 | **Queued**      | Waiting in the merge queue.                                      |
 | **Rebasing**    | Session is syncing; follow-up messages queue behind the sync.    |
 | **Merging**     | Changes are being merged into the base branch.                   |
+| **Merged**      | Review merged remotely; waiting for manual local target sync.    |
 | **Done**        | Completed and merged; the worktree was removed.                  |
 | **Canceled**    | Canceled by the user; the worktree was removed.                  |
 
@@ -130,6 +131,7 @@ flowchart TB
     rebasing["Rebasing"]
     queued["Queued"]
     merging["Merging"]
+    merged["Merged"]
     done["Done"]
     canceled["Canceled"]
   end
@@ -163,7 +165,8 @@ flowchart TB
   queued --> merging
   merging --> done
   review -->|cancel| canceled
-  review -->|sync detects merge| done
+  review -->|forge reports merge| merged
+  merged -->|manual target sync| done
 
   class agent_review,rebasing auxiliary
   class done,canceled terminal
@@ -301,7 +304,8 @@ When a session without a linked review request merges, Agentty reuses the sessio
 clean main checkout and returns the session to **Review** if the preparatory rebase or
 squash-merge fails. After a pull request or merge request is linked, Agentty hides `m`
 and rejects local merge queueing; merge through the forge, and background review-request
-sync moves the session to **Done** when that remote merge completes.
+sync moves the session to read-only **Merged** when that remote merge completes. The
+session remains in Active until a successful manual main sync moves it to **Done**.
 
 When a session syncs (`r`), Agentty rebases the session branch: published sessions fetch
 first and rebase onto the remote base ref, unpublished sessions rebase onto the stored
@@ -405,8 +409,19 @@ sessions. The session list shows forge indicators next to the status label:
 | `✓ <id>`  | Review request `<id>` was merged.       |
 | `✗ <id>`  | Review request `<id>` was closed.       |
 
-When a sync detects that the review request was merged, the session moves straight to
-**Done**; a closed request moves it to **Canceled**.
+When background refresh detects that the review request was merged, the session moves to
+read-only **Merged** and remains in the Active group. Transcript and diff inspection
+stay available, while replies, session sync, merge, publishing, commands, and new
+follow-up tasks are disabled. Agentty does not archive or clean up the session during
+background refresh or startup.
+
+After the user manually syncs the review request's local target branch, Agentty moves
+the session to **Done**, archives it, cleans up its worktree in the background, and
+persists restack work for any stacked children. A failed sync or a sync of another
+branch leaves the session and its stack unchanged. Interrupted child restacks can resume
+after restart. If restack intent or archival cannot be persisted, the sync popup lists
+the session that remains in **Merged** so the user can inspect its workflow warning and
+retry safely. A closed request still moves an editable session to **Canceled**.
 
 ## Clarification Interaction Loop
 

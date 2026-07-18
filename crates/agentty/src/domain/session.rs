@@ -170,6 +170,9 @@ pub enum Status {
     Rebasing,
     /// The session branch is being merged into its target branch.
     Merging,
+    /// The linked review request merged remotely and waits for a manual sync
+    /// of its local target branch before archival.
+    Merged,
     /// The session completed successfully.
     Done,
     /// The session was canceled before completion.
@@ -178,7 +181,7 @@ pub enum Status {
 
 impl Status {
     /// Ordered list of all session statuses used for UI sizing and iteration.
-    pub const ALL: [Status; 10] = [
+    pub const ALL: [Status; 11] = [
         Status::Draft,
         Status::InProgress,
         Status::Review,
@@ -187,6 +190,7 @@ impl Status {
         Status::Queued,
         Status::Rebasing,
         Status::Merging,
+        Status::Merged,
         Status::Done,
         Status::Canceled,
     ];
@@ -199,6 +203,11 @@ impl Status {
     /// Returns whether this status can seed a follow-on continuation session.
     pub fn allows_terminal_continuation(self) -> bool {
         matches!(self, Status::Done)
+    }
+
+    /// Returns whether this lifecycle state permits only local inspection.
+    pub fn is_read_only(self) -> bool {
+        matches!(self, Status::Merged)
     }
 
     /// Returns whether this status is stable enough for a stacked draft child
@@ -217,6 +226,7 @@ impl Status {
                 | Status::Queued
                 | Status::Rebasing
                 | Status::Merging
+                | Status::Merged
         )
     }
 
@@ -230,6 +240,9 @@ impl Status {
         if self == next {
             return true;
         }
+        if self == Status::Merged {
+            return next == Status::Done;
+        }
 
         matches!(
             (self, next),
@@ -239,6 +252,10 @@ impl Status {
                 | (Status::Review, Status::AgentReview)
                 | (Status::AgentReview, Status::Review)
                 | (
+                    Status::Review | Status::AgentReview,
+                    Status::Merged | Status::Done
+                )
+                | (
                     Status::Review | Status::AgentReview | Status::Question,
                     Status::InProgress
                         | Status::Queued
@@ -246,7 +263,6 @@ impl Status {
                         | Status::Merging
                         | Status::Canceled
                 )
-                | (Status::Review | Status::AgentReview, Status::Done)
                 | (
                     Status::Queued,
                     Status::Merging | Status::Review | Status::AgentReview
@@ -274,6 +290,7 @@ impl fmt::Display for Status {
             Status::Queued => write!(f, "Queued"),
             Status::Rebasing => write!(f, "Rebasing"),
             Status::Merging => write!(f, "Merging"),
+            Status::Merged => write!(f, "Merged"),
             Status::Done => write!(f, "Done"),
             Status::Canceled => write!(f, "Canceled"),
         }
@@ -293,6 +310,7 @@ impl FromStr for Status {
             "Queued" => Ok(Status::Queued),
             "Rebasing" => Ok(Status::Rebasing),
             "Merging" => Ok(Status::Merging),
+            "Merged" => Ok(Status::Merged),
             "Done" => Ok(Status::Done),
             "Canceled" => Ok(Status::Canceled),
             _ => Err(format!("Unknown status: {s}")),
@@ -633,7 +651,10 @@ impl Session {
     pub fn allows_stacked_child_creation(&self) -> bool {
         self.parent_session_id.is_none()
             && !self.is_draft_session()
-            && !matches!(self.status, Status::Done | Status::Canceled)
+            && !matches!(
+                self.status,
+                Status::Merged | Status::Done | Status::Canceled
+            )
     }
 
     /// Returns whether this session can be forked into a new independent
@@ -966,7 +987,7 @@ impl<'a> SessionStack<'a> {
             session.parent_session_id.is_some()
                 && !matches!(
                     session.status,
-                    Status::Draft | Status::Done | Status::Canceled
+                    Status::Draft | Status::Merged | Status::Done | Status::Canceled
                 )
         })
     }
@@ -1101,6 +1122,7 @@ pub(crate) mod tests {
             .status(Status::Review)
             .build();
         let done_session = SessionFixtureBuilder::new().status(Status::Done).build();
+        let merged_session = SessionFixtureBuilder::new().status(Status::Merged).build();
         let canceled_session = SessionFixtureBuilder::new()
             .status(Status::Canceled)
             .build();
@@ -1108,12 +1130,14 @@ pub(crate) mod tests {
         // Act
         let allows_draft_child = draft_session.allows_stacked_child_creation();
         let allows_nested_child = child_session.allows_stacked_child_creation();
+        let allows_merged_child = merged_session.allows_stacked_child_creation();
         let allows_done_child = done_session.allows_stacked_child_creation();
         let allows_canceled_child = canceled_session.allows_stacked_child_creation();
 
         // Assert
         assert!(!allows_draft_child);
         assert!(!allows_nested_child);
+        assert!(!allows_merged_child);
         assert!(!allows_done_child);
         assert!(!allows_canceled_child);
     }
@@ -1607,6 +1631,7 @@ pub(crate) mod tests {
             Status::Queued,
             Status::Rebasing,
             Status::Merging,
+            Status::Merged,
             Status::Done,
             Status::Canceled,
         ];
@@ -1628,6 +1653,29 @@ pub(crate) mod tests {
 
         // Assert
         assert!(can_transition);
+    }
+
+    #[test]
+    fn merged_status_is_read_only_and_only_transitions_to_done() {
+        // Arrange
+        let merged_status = Status::Merged;
+        let review_status = Status::Review;
+
+        // Act
+        let merged_is_read_only = merged_status.is_read_only();
+        let review_is_read_only = review_status.is_read_only();
+        let review_can_merge = review_status.can_transition_to(merged_status);
+        let merged_can_finish = merged_status.can_transition_to(Status::Done);
+        let merged_can_repeat = merged_status.can_transition_to(Status::Merged);
+        let merged_can_reopen = merged_status.can_transition_to(Status::Review);
+
+        // Assert
+        assert!(merged_is_read_only);
+        assert!(!review_is_read_only);
+        assert!(review_can_merge);
+        assert!(merged_can_finish);
+        assert!(merged_can_repeat);
+        assert!(!merged_can_reopen);
     }
 
     #[test]

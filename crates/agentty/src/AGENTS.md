@@ -18,8 +18,9 @@
   - `Question` is set when a completed turn returns structured clarification questions.
   - When agent response finishes, all changes are auto-committed and status is set to
     `Review` or `Question`.
-  - `Done` can be entered after local merge cleanup succeeds, or when review request
-    sync detects an upstream merge.
+  - Review request sync records an upstream merge as read-only `Merged`; only a
+    successful manual target-branch sync advances it to `Done` and starts cleanup.
+  - `Done` can also be entered after local merge cleanup succeeds.
   - While agent is preparing a response, status is `InProgress`.
 
 ## Docs Sync

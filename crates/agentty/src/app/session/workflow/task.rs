@@ -1061,7 +1061,12 @@ impl SessionTaskService {
     fn status_requires_full_refresh(status: Status) -> bool {
         matches!(
             status,
-            Status::InProgress | Status::Review | Status::Merging | Status::Done | Status::Canceled
+            Status::InProgress
+                | Status::Review
+                | Status::Merging
+                | Status::Merged
+                | Status::Done
+                | Status::Canceled
         )
     }
 
@@ -1445,6 +1450,7 @@ mod tests {
             Status::InProgress,
             Status::Review,
             Status::Merging,
+            Status::Merged,
             Status::Done,
             Status::Canceled,
         ];

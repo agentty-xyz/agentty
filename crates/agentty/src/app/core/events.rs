@@ -841,30 +841,23 @@ impl App {
         let focused_review_persistence = apply_review_updates(
             &mut self.review_cache,
             self.sessions.state_mut(),
-            event_batch.review_updates,
+            std::mem::take(&mut event_batch.review_updates),
         );
         self.persist_focused_review_updates(focused_review_persistence)
             .await;
 
-        for branch_publish_action_update in event_batch.branch_publish_action_updates {
+        for branch_publish_action_update in
+            std::mem::take(&mut event_batch.branch_publish_action_updates)
+        {
             self.apply_branch_publish_action_update(branch_publish_action_update)
                 .await;
         }
 
-        let applied_review_request_status_update = event_batch
-            .review_request_status_updates
-            .iter()
-            .any(|update| update.generation == sync_generation_for_review_updates);
-        for review_request_status_update in event_batch.review_request_status_updates {
-            if review_request_status_update.generation != sync_generation_for_review_updates {
-                continue;
-            }
-            self.apply_review_request_status_update(review_request_status_update)
-                .await;
-        }
-        if applied_review_request_status_update {
-            self.publish_sync_context();
-        }
+        self.apply_review_request_status_updates_and_synced_merges(
+            &mut event_batch,
+            sync_generation_for_review_updates,
+        )
+        .await;
 
         self.apply_session_progress_updates(std::mem::take(
             &mut event_batch.session_progress_updates,
@@ -931,6 +924,35 @@ impl App {
 
         if should_mark_dirty {
             self.mark_dirty();
+        }
+    }
+
+    async fn apply_review_request_status_updates_and_synced_merges(
+        &mut self,
+        event_batch: &mut AppEventBatch,
+        sync_generation: u64,
+    ) {
+        let review_request_status_updates =
+            std::mem::take(&mut event_batch.review_request_status_updates);
+        let applied_review_request_status_update = review_request_status_updates
+            .iter()
+            .any(|update| update.generation == sync_generation);
+        for review_request_status_update in review_request_status_updates {
+            if review_request_status_update.generation != sync_generation {
+                continue;
+            }
+            self.apply_review_request_status_update(review_request_status_update)
+                .await;
+        }
+        if applied_review_request_status_update {
+            self.publish_sync_context();
+        }
+
+        if let Some(Ok(sync_main_outcome)) = event_batch.sync_main_result.as_mut() {
+            let default_branch = sync_main_outcome.default_branch.clone();
+            sync_main_outcome.deferred_merged_session_ids = self
+                .finalize_merged_sessions_after_main_sync(&default_branch)
+                .await;
         }
     }
 
@@ -1748,7 +1770,7 @@ impl App {
                 session_head_hash, ..
             } => {
                 if let Some(warning) = self
-                    .complete_externally_merged_session(&session_id, session_head_hash)
+                    .record_externally_merged_session(&session_id, session_head_hash)
                     .await
                 {
                     self.append_output_for_session(
@@ -1766,14 +1788,119 @@ impl App {
         }
     }
 
-    /// Marks one externally merged session `Done`, persists continuation
-    /// commit-hash metadata when available, and returns any warning from
-    /// worktree cleanup.
+    /// Records one externally merged session as read-only `Merged` without
+    /// starting local cleanup or stacked-child restacking.
+    pub(super) async fn record_externally_merged_session(
+        &self,
+        session_id: &str,
+        session_head_hash: Option<String>,
+    ) -> Option<String> {
+        let Ok(handles) = self.sessions.session_handles_or_err(session_id) else {
+            return None;
+        };
+        let mut warnings = Vec::new();
+
+        if let Some(session_head_hash) = session_head_hash
+            && let Err(error) = self
+                .services
+                .db()
+                .sessions()
+                .update_session_merged_commit_hash(session_id, Some(session_head_hash))
+                .await
+        {
+            warnings.push(format!("Merged commit hash persistence failed: {error}"));
+        }
+
+        let status_transition =
+            StatusTransition::from_services(&self.services, handles, session_id);
+        if !status_transition.apply(Status::Merged).await {
+            warnings.push("Could not mark the merged session read-only".to_string());
+        }
+
+        (!warnings.is_empty()).then(|| warnings.join("\n"))
+    }
+
+    /// Finalizes read-only merged sessions targeting the branch updated by a
+    /// successful user-triggered main sync.
+    async fn finalize_merged_sessions_after_main_sync(
+        &mut self,
+        default_branch: &str,
+    ) -> Vec<SessionId> {
+        let mut deferred_session_ids = Vec::new();
+        let session_ids = self
+            .sessions
+            .sessions()
+            .iter()
+            .filter(|session| {
+                session
+                    .review_request
+                    .as_ref()
+                    .is_some_and(|review_request| {
+                        review_request.summary.target_branch == default_branch
+                    })
+                    && self
+                        .sessions
+                        .session_handles_or_err(&session.id)
+                        .ok()
+                        .and_then(|handles| handles.status.lock().ok().map(|status| *status))
+                        == Some(Status::Merged)
+            })
+            .map(|session| session.id.clone())
+            .collect::<Vec<_>>();
+
+        for session_id in session_ids {
+            let session_head_hash = match self
+                .services
+                .db()
+                .sessions()
+                .load_session_merged_commit_hash(&session_id)
+                .await
+            {
+                Ok(session_head_hash) => session_head_hash,
+                Err(error) => {
+                    self.append_output_for_session(
+                        &session_id,
+                        &TranscriptNotice::ReviewRequestSyncWarning
+                            .format(format!("Merged commit hash load failed: {error}")),
+                    )
+                    .await;
+                    deferred_session_ids.push(session_id);
+
+                    continue;
+                }
+            };
+
+            if let Some(warning) = self
+                .complete_externally_merged_session(&session_id, session_head_hash)
+                .await
+            {
+                self.append_output_for_session(
+                    &session_id,
+                    &TranscriptNotice::ReviewRequestSyncWarning.format(warning),
+                )
+                .await;
+            }
+            if self
+                .sessions
+                .session_handles_or_err(&session_id)
+                .ok()
+                .and_then(|handles| handles.status.lock().ok().map(|status| *status))
+                == Some(Status::Merged)
+            {
+                deferred_session_ids.push(session_id);
+            }
+        }
+
+        deferred_session_ids
+    }
+
+    /// Marks one externally merged session `Done` after manual target sync,
+    /// persists child restack intent, and returns any finalization warning.
     ///
     /// The session is still moved to `Done` when cleanup fails because the
     /// merge already happened upstream, but the caller should surface the
     /// warning to the user.
-    async fn complete_externally_merged_session(
+    pub(super) async fn complete_externally_merged_session(
         &self,
         session_id: &str,
         session_head_hash: Option<String>,
@@ -1784,26 +1911,7 @@ impl App {
         let Ok(handles) = self.sessions.session_handles_or_err(session_id) else {
             return None;
         };
-        let should_schedule_cleanup = handles
-            .status
-            .lock()
-            .is_ok_and(|status| *status != Status::Done);
-
         let mut warnings = Vec::new();
-
-        let commit_hash_persistence_error = if let Some(session_head_hash) = &session_head_hash {
-            self.services
-                .db()
-                .sessions()
-                .update_session_merged_commit_hash(session_id, Some(session_head_hash.clone()))
-                .await
-                .err()
-        } else {
-            None
-        };
-        if let Some(error) = commit_hash_persistence_error {
-            warnings.push(format!("Merged commit hash persistence failed: {error}"));
-        }
 
         let folder = session.folder.clone();
         let base_branch = session.base_branch.clone();
@@ -1825,21 +1933,19 @@ impl App {
                 );
             }
             Err(error) => {
-                warnings.push(format!("Stacked child restack failed: {error}"));
+                return Some(format!("Stacked child restack intent failed: {error}"));
             }
         }
 
         let status_transition =
             StatusTransition::from_services(&self.services, handles, session_id);
         let status_applied = status_transition.apply(Status::Done).await;
-        if should_schedule_cleanup && status_applied {
-            self.spawn_externally_merged_session_cleanup(
-                session_id,
-                folder,
-                source_branch,
-                handles,
-            );
+        if !status_applied {
+            warnings.push("Could not archive the merged session".to_string());
+
+            return Some(warnings.join("\n"));
         }
+        self.spawn_externally_merged_session_cleanup(session_id, folder, source_branch, handles);
 
         (!warnings.is_empty()).then(|| warnings.join("\n"))
     }
@@ -2026,13 +2132,28 @@ impl App {
         let conflict_summary =
             Self::sync_conflict_summary(&sync_main_outcome.resolved_conflict_files);
 
-        sync_message::format_sync_success_message(
+        let mut message = sync_message::format_sync_success_message(
             &pulled_summary,
             &pulled_titles,
             &pushed_summary,
             &pushed_titles,
             &conflict_summary,
-        )
+        );
+        if !sync_main_outcome.deferred_merged_session_ids.is_empty() {
+            let session_ids = sync_main_outcome
+                .deferred_merged_session_ids
+                .iter()
+                .map(|session_id| format!("- `{session_id}`"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            message.push_str(
+                "\n\n## Merged sessions still waiting\nThese sessions could not be archived or \
+                 restacked. Review their workflow warning, then retry the sync:\n",
+            );
+            message.push_str(&session_ids);
+        }
+
+        message
     }
 
     /// Returns pulled commit titles formatted as an indented list.

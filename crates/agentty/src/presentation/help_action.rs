@@ -68,6 +68,9 @@ pub enum ViewSessionState {
     Done,
     /// Session was canceled locally; view mode stays read-only.
     Canceled,
+    /// Review request merged remotely; only read-only evidence and
+    /// navigation actions remain while local target sync is pending.
+    Merged,
     /// Session is currently running; queued replies, queued sync, and stop
     /// remain available while worktree-open and diff shortcuts are hidden.
     InProgress,
@@ -186,6 +189,7 @@ impl ViewActionSet {
             state.session_state,
             ViewSessionState::Review | ViewSessionState::AgentReview
         );
+        let can_show_diff = can_show_review || state.session_state == ViewSessionState::Merged;
 
         Self {
             continue_terminal_session: ViewActionAvailability::from_bool(matches!(
@@ -200,7 +204,7 @@ impl ViewActionSet {
             open_prompt: ViewActionAvailability::from_bool(can_open_prompt),
             open_worktree: ViewActionAvailability::from_bool(can_open_worktree),
             rebase_session: ViewActionAvailability::from_bool(can_rebase_session),
-            show_diff: ViewActionAvailability::from_bool(can_show_review),
+            show_diff: ViewActionAvailability::from_bool(can_show_diff),
             show_review: ViewActionAvailability::from_bool(can_show_review),
             stop_session: ViewActionAvailability::from_bool(
                 state.session_state == ViewSessionState::InProgress,
@@ -223,6 +227,7 @@ pub(crate) fn session_view_state(session: &Session) -> ViewSessionState {
         Status::Draft | Status::Question => ViewSessionState::Interactive,
         Status::Rebasing => ViewSessionState::Rebasing,
         Status::Merging | Status::Queued => ViewSessionState::MergeQueue,
+        Status::Merged => ViewSessionState::Merged,
         Status::Review => ViewSessionState::Review,
         Status::AgentReview => ViewSessionState::AgentReview,
     }
@@ -387,7 +392,12 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
 
     append_view_stop_action(&mut actions, action_set);
 
-    if state.can_start_staged_session.is_enabled() {
+    if state.can_start_staged_session.is_enabled()
+        && matches!(
+            state.session_state,
+            ViewSessionState::NewSession | ViewSessionState::StackedDraft
+        )
+    {
         actions.push(HelpAction::new("start", "s", "Start staged session"));
     }
 
@@ -522,7 +532,9 @@ fn append_view_review_actions(
         actions.push(HelpAction::new("fork", "F", "Fork session"));
     }
 
-    if let Some(publish_pull_request_action) = state.publish_pull_request_action {
+    if state.session_state != ViewSessionState::Merged
+        && let Some(publish_pull_request_action) = state.publish_pull_request_action
+    {
         actions.push(publish_pull_request_help_action(
             publish_pull_request_action,
         ));
@@ -925,6 +937,34 @@ mod tests {
 
         // Assert
         assert!(!actions.iter().any(|action| action.key == "o"));
+    }
+
+    #[test]
+    fn merged_view_actions_keep_diff_and_hide_mutating_actions() {
+        // Arrange
+        let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
+            can_mutate_session_branch: ViewActionAvailability::Enabled,
+            can_open_worktree: ViewActionAvailability::Enabled,
+            can_rebase_session_branch: ViewActionAvailability::Enabled,
+            reply_to_session: ViewActionAvailability::Enabled,
+            can_start_staged_session: ViewActionAvailability::Enabled,
+            publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
+            session_state: ViewSessionState::Merged,
+        };
+
+        // Act
+        let actions = view_actions(state);
+        let session = SessionFixtureBuilder::new().status(Status::Merged).build();
+        let session_state = session_view_state(&session);
+
+        // Assert
+        assert_eq!(session_state, ViewSessionState::Merged);
+        assert!(actions.iter().any(|action| action.key == "d"));
+        for key in ["Enter", "/", "o", "p", "f", "F", "m", "r", "s", "c"] {
+            assert!(!actions.iter().any(|action| action.key == key));
+        }
     }
 
     #[test]

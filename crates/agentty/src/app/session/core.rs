@@ -863,9 +863,12 @@ impl SessionManager {
             .iter()
             .find(|session| session.id == session_id)?;
 
-        session
-            .follow_up_task(position)
-            .map(crate::domain::session::SessionFollowUpTask::action)
+        let task = session.follow_up_task(position)?;
+        if session.status.is_read_only() && task.launched_session_id.is_none() {
+            return None;
+        }
+
+        Some(task.action())
     }
 
     /// Returns whether one session has more than one follow-up task.

@@ -1101,6 +1101,14 @@ impl App {
     /// submission. Returns `true` when the reply command was enqueued on the
     /// session worker.
     pub async fn reply(&mut self, session_id: &str, prompt: impl Into<TurnPrompt>) -> bool {
+        if self
+            .sessions
+            .session_or_err(session_id)
+            .is_ok_and(|session| session.status.is_read_only())
+        {
+            return false;
+        }
+
         self.clear_review_output(session_id);
         let _ = self
             .services
@@ -1337,6 +1345,17 @@ impl App {
 
             self.set_follow_up_task_launched_session_id(session_id, position, None)
                 .await?;
+        }
+
+        if self
+            .sessions
+            .session_or_err(session_id)?
+            .status
+            .is_read_only()
+        {
+            return Err(AppError::Workflow(
+                "Merged sessions cannot launch new follow-up tasks".to_string(),
+            ));
         }
 
         let sibling_session_id = self.create_session().await?;

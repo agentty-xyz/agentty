@@ -251,7 +251,11 @@ pub fn session_output_panel_border_style(status: Status) -> Style {
 pub(crate) fn session_output_uses_tachyon_loader(status: Status) -> bool {
     matches!(
         status,
-        Status::InProgress | Status::AgentReview | Status::Rebasing | Status::Merging
+        Status::InProgress
+            | Status::AgentReview
+            | Status::Rebasing
+            | Status::Merging
+            | Status::Merged
     )
 }
 
@@ -281,6 +285,7 @@ pub fn session_output_status_line(
             | Status::Queued
             | Status::Rebasing
             | Status::Merging
+            | Status::Merged
     ) {
         return None;
     }
@@ -344,6 +349,7 @@ fn session_output_status_message(
         Status::Queued => "Waiting in merge queue...".to_string(),
         Status::Rebasing => "Rebasing...".to_string(),
         Status::Merging => "Merging...".to_string(),
+        Status::Merged => "Waiting for manual local target sync...".to_string(),
         Status::Draft | Status::Review | Status::Question | Status::Done | Status::Canceled => {
             String::new()
         }
@@ -353,9 +359,11 @@ fn session_output_status_message(
 /// Returns the status indicator icon used for inline session-output messages.
 fn session_output_status_icon(status: Status) -> Icon {
     match status {
-        Status::InProgress | Status::AgentReview | Status::Rebasing | Status::Merging => {
-            Icon::TachyonLoader
-        }
+        Status::InProgress
+        | Status::AgentReview
+        | Status::Rebasing
+        | Status::Merging
+        | Status::Merged => Icon::TachyonLoader,
         Status::Queued
         | Status::Draft
         | Status::Review
@@ -465,6 +473,7 @@ mod tests {
             Status::AgentReview,
             Status::Rebasing,
             Status::Merging,
+            Status::Merged,
         ];
         let static_statuses = [
             Status::Draft,
@@ -482,5 +491,19 @@ mod tests {
         // Assert
         assert!(animated_results.into_iter().all(|uses_loader| uses_loader));
         assert!(static_results.into_iter().all(|uses_loader| !uses_loader));
+    }
+
+    #[test]
+    fn merged_session_output_explains_manual_sync_wait() {
+        // Arrange
+        let status = Status::Merged;
+
+        // Act
+        let message = session_output_status_message(status, None, None);
+        let icon = session_output_status_icon(status);
+
+        // Assert
+        assert_eq!(message, "Waiting for manual local target sync...");
+        assert!(matches!(icon, Icon::TachyonLoader));
     }
 }
