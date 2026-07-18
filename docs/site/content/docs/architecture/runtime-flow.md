@@ -240,7 +240,8 @@ restart-safe:
 - `Review/Question -> InProgress` (reply)
 - Root `Review/AgentReview -> Review` (forked session snapshot opens as a new
   review-ready session)
-- `Review -> Queued -> Merging -> Done` (merge queue path)
+- `Review -> Queued -> Merging -> Done` (local merge queue path for sessions without a
+  linked review request)
 - `Review/AgentReview -> Rebasing -> Review/Question` (session sync path; starting from
   `AgentReview` cancels pending focused-review output)
 - `InProgress -> Rebasing -> Review/Question` (session sync requested during a running
@@ -474,9 +475,11 @@ orchestration paths:
 
 - `sync main`: selected project branch pull/rebase/push with optional assisted conflict
   resolution, serialized through the shared sync orchestrator.
-- Session merge: queue-aware workflow — assisted rebase first, squash commit into the
-  base branch reusing the session-branch `HEAD` commit message, then worktree cleanup
-  and status `Done`.
+- Session merge: queue-aware workflow for sessions without a linked forge review request
+  — assisted rebase first, squash commit into the base branch reusing the session-branch
+  `HEAD` commit message, then worktree cleanup and status `Done`. Once a review request
+  is linked, the shared merge-eligibility policy hides the local action and rejects
+  direct queue attempts.
 - Session sync: assisted rebase onto the local base branch (unpublished) or the
   published upstream's remote base ref (published). Rebase-conflict prompts run through
   the existing session channel so the provider keeps conversation context while Agentty

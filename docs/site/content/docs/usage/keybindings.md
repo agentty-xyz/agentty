@@ -182,8 +182,9 @@ State-specific differences:
 - **Question** sessions hide `r` until they return to review-ready state.
 - Review-ready stacked parents with a materialized child keep `Enter`, `m`, and `r`
   while the stack is idle, but hide `/` until the child is terminal or no longer linked.
-- Sessions with a linked pull request or merge request use `c` to open its comments
-  page. Linked terminal sessions keep continuation available on `C`.
+- Sessions with a linked pull request or merge request use `c` to open its comments page
+  and hide `m`; merge the linked request through its forge instead of Agentty's local
+  merge queue. Linked terminal sessions keep continuation available on `C`.
 - **Done** sessions without a linked review request offer `c` to start a continuation
   draft (confirmation popup).
 - **Canceled**, **Queued**, and **Merging** sessions are otherwise read-only (`q`,

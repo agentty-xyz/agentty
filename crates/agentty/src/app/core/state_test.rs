@@ -155,6 +155,40 @@ async fn test_new_with_clients_fails_when_no_backend_cli_is_available() {
 }
 
 #[tokio::test]
+async fn merge_session_rejects_linked_review_request_before_queueing() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    let review_request = ReviewRequest {
+        last_refreshed_at: 0,
+        summary: ReviewRequestSummary {
+            display_id: "#42".to_string(),
+            forge_kind: ForgeKind::GitHub,
+            source_branch: "wt/session-id".to_string(),
+            state: ReviewRequestState::Open,
+            status_summary: None,
+            target_branch: "main".to_string(),
+            title: "Linked review request".to_string(),
+            web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
+        },
+    };
+    app.sessions.push_session(
+        crate::test_support::SessionFixtureBuilder::new()
+            .review_request(Some(review_request))
+            .build(),
+    );
+
+    // Act
+    let result = app.merge_session("session-id").await;
+
+    // Assert
+    let error = result.expect_err("linked review request should block merge queueing");
+    assert_eq!(
+        error.to_string(),
+        "Merge cannot run for linked review requests or while another stack session is active"
+    );
+}
+
+#[tokio::test]
 async fn review_comments_page_has_no_tick_driven_ui() {
     // Arrange
     let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
