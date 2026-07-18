@@ -7,6 +7,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- release: generate keyless Sigstore build provenance for final GitHub release artifacts
+  and attach a Scorecard-discoverable bundle.
+
+### Changed
+
+- release: upload the complete artifact set through a retry-safe draft before
+  publication so GitHub release immutability protects every shipped file.
+- docs: document GitHub release, asset, and provenance verification.
+
 ## [v0.13.2] - 2026-07-16
 
 ### Added
