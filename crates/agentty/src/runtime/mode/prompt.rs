@@ -348,13 +348,16 @@ async fn apply_prompt_input_command(app: &mut App, command: InputCommand) {
 }
 
 /// Returns the prompt-aware range for shared deletion commands.
+///
+/// Boundary deletions return `None` without evaluating an out-of-range cursor
+/// position.
 fn prompt_command_delete_range(
     input: &InputState,
     command: &InputCommand,
 ) -> Option<(usize, usize)> {
     match command {
         InputCommand::DeleteBackward => {
-            (input.cursor > 0).then_some((input.cursor - 1, input.cursor))
+            (input.cursor > 0).then(|| (input.cursor - 1, input.cursor))
         }
         InputCommand::DeleteCurrentLine => prompt_current_line_delete_range(input),
         InputCommand::DeleteForward => (input.cursor < input.text().chars().count())
@@ -2467,6 +2470,21 @@ mod tests {
             assert_eq!(input.text(), "secon");
             assert_eq!(history_state.selected_index, None);
             assert_eq!(history_state.draft_text, None);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_prompt_backspace_on_empty_input_is_noop() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("", None).await;
+
+        // Act
+        apply_prompt_input_command(&mut app, InputCommand::DeleteBackward).await;
+
+        // Assert
+        if let AppMode::Prompt { input, .. } = &app.mode {
+            assert!(input.is_empty());
+            assert_eq!(input.cursor, 0);
         }
     }
 
