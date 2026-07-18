@@ -2,13 +2,14 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 
 use crate::app::App;
+use crate::app::prompt_intent::ReviewCommentSelection;
 use crate::presentation::app_mode::AppMode;
 use crate::runtime::EventResult;
 use crate::ui::{RenderCacheStore, page};
 
-/// Handles selection, detail scrolling, and exit keys for the read-only
-/// session review-comment page.
-pub(crate) fn handle_with_cache(
+/// Handles agent-resolution, selection, detail scrolling, and exit keys for
+/// the session review-comment page.
+pub(crate) async fn handle_with_cache(
     app: &mut App,
     render_cache_store: &RenderCacheStore,
     content_area: Rect,
@@ -44,6 +45,31 @@ pub(crate) fn handle_with_cache(
         return EventResult::Continue;
     };
     let item_count = page::review_comment::review_comment_item_count(comment_snapshot.as_ref());
+    let resolution_selection = match key.code {
+        KeyCode::Char('a') if key.modifiers == KeyModifiers::NONE => {
+            Some(ReviewCommentSelection::Selected(selected_comment_index))
+        }
+        KeyCode::Char('A') if key.modifiers == KeyModifiers::SHIFT => {
+            Some(ReviewCommentSelection::AllUnresolved)
+        }
+        _ => None,
+    };
+    if let (Some(selection), Some(snapshot)) = (resolution_selection, comment_snapshot.as_ref()) {
+        let snapshot = snapshot.clone();
+        app.mode = AppMode::ReviewComments {
+            comment_error,
+            comment_snapshot,
+            diff,
+            is_loading_comments,
+            selected_comment_index,
+            session_id: session_id.clone(),
+            scroll_offset,
+        };
+        app.resolve_session_review_comments(&session_id, &snapshot, selection)
+            .await;
+
+        return EventResult::Continue;
+    }
 
     match key.code {
         KeyCode::Char('j') if key.modifiers == KeyModifiers::NONE => {
@@ -136,6 +162,7 @@ mod tests {
                     author: "bob".to_string(),
                     body: "Inline comment".to_string(),
                 }],
+                id: "thread-id".to_string(),
                 is_outdated: Some(false),
                 is_resolved: false,
                 line: Some(2),
@@ -165,7 +192,8 @@ mod tests {
             &RenderCacheStore::default(),
             Rect::new(0, 0, 80, 24),
             KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
-        );
+        )
+        .await;
 
         // Assert
         assert!(matches!(
@@ -198,7 +226,8 @@ mod tests {
             &RenderCacheStore::default(),
             Rect::new(0, 0, 80, 24),
             KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
-        );
+        )
+        .await;
 
         // Assert
         assert!(matches!(
@@ -230,7 +259,8 @@ mod tests {
             &RenderCacheStore::default(),
             Rect::new(0, 0, 80, 24),
             KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
-        );
+        )
+        .await;
 
         // Assert
         assert!(matches!(
@@ -263,7 +293,8 @@ mod tests {
             &RenderCacheStore::default(),
             Rect::new(0, 0, 80, 8),
             KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
-        );
+        )
+        .await;
 
         // Assert
         assert!(matches!(
@@ -295,19 +326,80 @@ mod tests {
             &RenderCacheStore::default(),
             Rect::new(0, 0, 80, 24),
             KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
-        );
+        )
+        .await;
         handle_with_cache(
             &mut app,
             &RenderCacheStore::default(),
             Rect::new(0, 0, 80, 24),
             KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
-        );
+        )
+        .await;
 
         // Assert
         assert!(matches!(
             app.mode,
             AppMode::ReviewComments {
                 scroll_offset: 1,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_agent_resolution_keys_preserve_page_when_session_cannot_reply() {
+        // Arrange
+        let mut selected_app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        selected_app.mode = AppMode::ReviewComments {
+            comment_error: None,
+            comment_snapshot: Some(comment_snapshot()),
+            diff: String::new(),
+            is_loading_comments: false,
+            selected_comment_index: 1,
+            session_id: "missing-session".into(),
+            scroll_offset: 3,
+        };
+        let mut all_app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        all_app.mode = AppMode::ReviewComments {
+            comment_error: None,
+            comment_snapshot: Some(comment_snapshot()),
+            diff: String::new(),
+            is_loading_comments: false,
+            selected_comment_index: 1,
+            session_id: "missing-session".into(),
+            scroll_offset: 3,
+        };
+
+        // Act
+        handle_with_cache(
+            &mut selected_app,
+            &RenderCacheStore::default(),
+            Rect::new(0, 0, 80, 24),
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+        )
+        .await;
+        handle_with_cache(
+            &mut all_app,
+            &RenderCacheStore::default(),
+            Rect::new(0, 0, 80, 24),
+            KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(
+            selected_app.mode,
+            AppMode::ReviewComments {
+                selected_comment_index: 1,
+                scroll_offset: 3,
+                ..
+            }
+        ));
+        assert!(matches!(
+            all_app.mode,
+            AppMode::ReviewComments {
+                selected_comment_index: 1,
+                scroll_offset: 3,
                 ..
             }
         ));
@@ -325,13 +417,15 @@ mod tests {
             &RenderCacheStore::default(),
             Rect::new(0, 0, 80, 24),
             KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
-        );
+        )
+        .await;
         handle_with_cache(
             &mut other_app,
             &RenderCacheStore::default(),
             Rect::new(0, 0, 80, 24),
             KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
-        );
+        )
+        .await;
 
         // Assert
         assert!(matches!(exit_app.mode, AppMode::List));

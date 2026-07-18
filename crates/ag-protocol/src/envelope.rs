@@ -382,7 +382,10 @@ mod tests {
         );
         assert!(rendered_prompt.contains("For this one-shot utility prompt"));
         assert!(!rendered_prompt.contains("mermaid"));
-        assert!(rendered_prompt.contains(r#"{"answer":"...","questions":[],"summary":null}"#));
+        assert!(rendered_prompt.contains(
+            r#"{"answer":"...","questions":[],"review_comment_outcomes":[],"summary":null}"#
+        ));
+        assert!(rendered_prompt.contains("\"review_comment_outcomes\""));
         assert!(rendered_prompt.contains("\"summary\""));
         assert!(rendered_prompt.ends_with(prompt));
     }
@@ -420,6 +423,10 @@ mod tests {
             ProtocolRequestProfile::SessionTurn,
             test_workspace_root(),
         );
+        let normalized_prompt = rendered_prompt
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
 
         // Assert
         assert!(rendered_prompt.contains("Protocol refresh reminder:"));
@@ -428,8 +435,8 @@ mod tests {
         assert!(rendered_prompt.contains("Do not run mutating git commands."));
         assert!(rendered_prompt.contains("inside the workspace root `/tmp/agentty-wt/session-1`"));
         assert!(rendered_prompt.contains("anything outside that root is read-only"));
-        assert!(rendered_prompt.contains("Mermaid diagrams must remain in `answer`"));
-        assert!(rendered_prompt.contains("fences without the `mermaid` info string"));
+        assert!(normalized_prompt.contains("Mermaid diagrams must remain in `answer`"));
+        assert!(normalized_prompt.contains("fences without the `mermaid` info string"));
         assert!(
             rendered_prompt
                 .contains("______________________________________________________________________")

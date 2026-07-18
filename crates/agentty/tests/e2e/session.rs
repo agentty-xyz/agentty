@@ -1455,7 +1455,7 @@ case "$*" in
     exit 0
     ;;
   *"api --hostname github.com graphql"*)
-    printf '%s\n' '{"data":{"repository":{"pullRequest":{"comments":{"nodes":[]},"reviewThreads":{"nodes":[{"diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":2,"path":"src/main.rs","startLine":1,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"alice"},"body":"Please explain why this review output is needed."}]}},{"diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":null,"path":"src/main.rs","startLine":null,"subjectType":"FILE","comments":{"nodes":[{"author":{"login":"bob"},"body":"Please review the whole file."}]}}]}}}}}'
+    printf '%s\n' '{"data":{"repository":{"pullRequest":{"comments":{"nodes":[]},"reviewThreads":{"nodes":[{"id":"thread-inline","diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":2,"path":"src/main.rs","startLine":1,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"alice"},"body":"Please explain why this review output is needed."}]}},{"id":"thread-file","diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":null,"path":"src/main.rs","startLine":null,"subjectType":"FILE","comments":{"nodes":[{"author":{"login":"bob"},"body":"Please review the whole file."}]}}]}}}}}'
     ;;
   *"pr view"*)
     printf '%s\n' '{"number":42,"title":"Review-ready session shortcuts","state":"OPEN","url":"https://github.com/agentty-xyz/agentty/pull/42","baseRefName":"main","headRefName":"wt/review-s","isDraft":false,"mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","mergedAt":null}'
@@ -1469,6 +1469,67 @@ esac
     )?;
     #[cfg(unix)]
     std::fs::set_permissions(&gh_path, std::fs::Permissions::from_mode(0o755))?;
+
+    Ok(())
+}
+
+/// Seeds the linked-review fixture with a delayed Claude turn so the feature
+/// scenario can observe the generated resolution prompt in progress.
+fn seed_review_comment_agent_resolution(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session_with_review_request(env)?;
+    let session_worktree = env.agentty_root.join("wt").join("review-s");
+    std::fs::remove_dir_all(&session_worktree)?;
+    let session_worktree_path = session_worktree.to_string_lossy().into_owned();
+    run_git(
+        &env.workdir,
+        &[
+            "worktree",
+            "add",
+            session_worktree_path.as_str(),
+            "wt/review-s",
+        ],
+    )?;
+    run_git(
+        &session_worktree,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/agentty-xyz/agentty.git",
+        ],
+    )?;
+    std::fs::create_dir_all(session_worktree.join("src"))?;
+    std::fs::write(
+        session_worktree.join("src/main.rs"),
+        "fn main() {\n    println!(\"review\");\n}\n",
+    )?;
+
+    let runtime = common::seed_runtime()?;
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .update_session_model("review-shortcut-0001", "claude-haiku-4-5-20251001")
+            .await
+    })?;
+
+    let claude_path = env.stub_bin.join("claude");
+    std::fs::write(
+        &claude_path,
+        r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+cat > /dev/null 2>&1
+sleep 10
+printf '%s\n' '{"type":"system","subtype":"init"}'
+printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Addressed the selected review thread."}]}}'
+printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Addressed the selected review thread.\",\"questions\":[],\"review_comment_outcomes\":[{\"reply\":\"Added the explanation.\",\"resolution\":\"fixed\",\"thread_id\":\"thread-inline\"}],\"summary\":null}","usage":{"input_tokens":5,"output_tokens":9}}'
+"#,
+    )?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
 
     Ok(())
 }
@@ -4075,8 +4136,8 @@ fn diff_preview_opens_from_session() -> E2eResult {
     Ok(())
 }
 
-/// Verify that a linked review request opens a read-only split comment page
-/// with the selected thread's current diff context.
+/// Verify that a linked review request opens a split comment page with the
+/// selected thread's current diff context.
 #[test]
 fn test_session_review_comments() -> E2eResult {
     // Arrange, Act, Assert
@@ -4203,6 +4264,54 @@ fn diff_preview_opens_from_prompt_chat_focus() -> E2eResult {
                 // Leaving the diff restores the composer with the draft intact.
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "follow up draft", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify an actionable review thread can be submitted to the active session
+/// agent from the comments page.
+#[test]
+fn session_review_comment_agent_resolution() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_review_comment_agent_resolution")
+        .with_git()
+        .zola(
+            "Agent review comment resolution",
+            "Address linked review comments with the active session agent.",
+            45,
+        )
+        .setup(seed_review_comment_agent_resolution)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .wait_for_text("c: comments", 5000)
+                    .press_key("c")
+                    .wait_for_text("a: resolve selected", 5000)
+                    .press_key("a")
+                    .wait_for_text("Address the following forge review comments", 5000)
+                    .wait_for_text("Working...", 5000)
+                    .wait_for_stable_frame(300, 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "agent_review_comment_resolution",
+                        "Review comment submitted to the session agent",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+
+                assertion::assert_text_in_region(
+                    frame,
+                    "Address the following forge review comments",
+                    &full,
+                );
+                assertion::assert_text_in_region(frame, "Thread ID: thread-inline", &full);
+                assertion::assert_text_in_region(frame, "Working...", &full);
             },
         )?;
 

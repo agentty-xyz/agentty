@@ -23,15 +23,17 @@ For file-level detail, read the module docstrings directly.
   submission boundary, provider availability probes, and crate-private CLI/app-server
   transport wiring.
 - `crates/ag-forge/`: Shared forge review-request library crate with normalized
-  review-request types, GitHub/GitLab remote detection, and the `gh`/`glab` adapters and
-  project-scoped assigned GitHub issue list/detail loading behind the
-  `ReviewRequestClient` and `ForgeCommandRunner` boundaries.
+  review-request and comment-thread types, GitHub/GitLab remote detection, thread
+  reply/resolution, and the `gh`/`glab` adapters and project-scoped assigned GitHub
+  issue list/detail loading behind the `ReviewRequestClient` and `ForgeCommandRunner`
+  boundaries.
 - `crates/ag-git/`: Shared git library crate with worktree creation, repository
   metadata, commit/diff/push/pull sync, rebase/conflict handling, and squash-merge
   workflows behind the `GitClient` boundary.
 - `crates/ag-protocol/`: Shared structured response protocol library crate with
   transport-neutral response models, schema generation, parser diagnostics, protocol
-  prompt envelopes, repair prompts, and turn prompt payload helpers.
+  prompt envelopes, repair prompts, review-comment outcomes, and turn prompt payload
+  helpers.
 - `crates/ag-tui-text/`: Shared Ratatui text-rendering library crate with markdown
   parsing/styling, bounded mermaid-to-terminal diagram rendering, and terminal-width
   wrapping/truncation helpers. Host applications inject semantic palette and cache
@@ -72,8 +74,9 @@ For file-level detail, read the module docstrings directly.
   thread, key dispatch, mode-focused handlers under `runtime/mode/`, and shared handlers
   for common interactions such as issue/review detail navigation, session-output
   metrics, transcript scrolling, `KeyEvent` mapping to domain input commands, and
-  read-only session review-comment selection. Runtime owns `PresentationState`,
-  including the shared `RenderCacheStore` used by input metrics and frame rendering.
+  session review-comment selection and agent-resolution shortcuts. Runtime owns
+  `PresentationState`, including the shared `RenderCacheStore` used by input metrics and
+  frame rendering.
 - `presentation.rs` and `presentation/`: Frontend-neutral interaction state shared by
   runtime input and UI output. They expose mode, help-action, prompt, editor, scroll,
   viewport, and semantic list-selection contracts without importing Ratatui or `ui/`

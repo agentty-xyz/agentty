@@ -119,6 +119,7 @@ mod tests {
                 author: "alice".to_string(),
                 body: "Please check this.".to_string(),
             }],
+            id: "thread-id".to_string(),
             is_outdated: Some(true),
             is_resolved: true,
             line: Some(12),
@@ -145,6 +146,7 @@ mod tests {
                 author: "alice".to_string(),
                 body: "Please check these lines.".to_string(),
             }],
+            id: "thread-id".to_string(),
             is_outdated: Some(false),
             is_resolved: false,
             line: Some(12),
@@ -216,6 +218,7 @@ mod tests {
         let thread = ReviewCommentThread {
             anchor_side: ReviewCommentAnchorSide::File,
             comments: Vec::new(),
+            id: "thread-id".to_string(),
             is_outdated: None,
             is_resolved: false,
             line: None,

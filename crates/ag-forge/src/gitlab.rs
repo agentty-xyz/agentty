@@ -158,6 +158,51 @@ impl ReviewRequestAdapter for GitLabReviewRequestAdapter {
         )
     }
 
+    fn reply_to_authenticated_thread(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+        thread_id: String,
+        body: String,
+    ) -> ForgeFuture<Result<(), ReviewRequestError>> {
+        let operations = self.operations.clone();
+
+        Box::pin(async move {
+            let merge_request_iid = parse_display_id(&display_id)?;
+            operations
+                .run_review_command(
+                    &remote,
+                    reply_to_thread_command(&remote, &merge_request_iid, &thread_id, &body),
+                    "reply to merge-request discussion",
+                )
+                .await?;
+
+            Ok(())
+        })
+    }
+
+    fn resolve_authenticated_thread(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+        thread_id: String,
+    ) -> ForgeFuture<Result<(), ReviewRequestError>> {
+        let operations = self.operations.clone();
+
+        Box::pin(async move {
+            let merge_request_iid = parse_display_id(&display_id)?;
+            operations
+                .run_review_command(
+                    &remote,
+                    resolve_thread_command(&remote, &merge_request_iid, &thread_id),
+                    "resolve merge-request discussion",
+                )
+                .await?;
+
+            Ok(())
+        })
+    }
+
     /// Lists open merge requests in `remote` that request review from the
     /// current authenticated GitLab user.
     fn list_authenticated_requested_reviews(
@@ -387,6 +432,78 @@ fn discussions_command(remote: &ForgeRemote, merge_request_iid: &str) -> ForgeCo
     )
 }
 
+/// Builds one `glab api` request that replies to a merge-request discussion.
+fn reply_to_thread_command(
+    remote: &ForgeRemote,
+    merge_request_iid: &str,
+    thread_id: &str,
+    body: &str,
+) -> ForgeCommand {
+    let endpoint = discussion_endpoint(remote, merge_request_iid, thread_id, Some("notes"));
+
+    gitlab_command(
+        remote,
+        "glab",
+        vec![
+            "api".to_string(),
+            "--hostname".to_string(),
+            remote.host.clone(),
+            "--method".to_string(),
+            "POST".to_string(),
+            "--raw-field".to_string(),
+            format!("body={body}"),
+            endpoint,
+        ],
+    )
+}
+
+/// Builds one `glab api` request that resolves a merge-request discussion.
+fn resolve_thread_command(
+    remote: &ForgeRemote,
+    merge_request_iid: &str,
+    thread_id: &str,
+) -> ForgeCommand {
+    let endpoint = discussion_endpoint(remote, merge_request_iid, thread_id, None);
+
+    gitlab_command(
+        remote,
+        "glab",
+        vec![
+            "api".to_string(),
+            "--hostname".to_string(),
+            remote.host.clone(),
+            "--method".to_string(),
+            "PUT".to_string(),
+            "--field".to_string(),
+            "resolved=true".to_string(),
+            endpoint,
+        ],
+    )
+}
+
+/// Returns the encoded GitLab discussion endpoint for one optional child
+/// resource.
+fn discussion_endpoint(
+    remote: &ForgeRemote,
+    merge_request_iid: &str,
+    thread_id: &str,
+    child_resource: Option<&str>,
+) -> String {
+    let encoded_project_path: String =
+        form_urlencoded::byte_serialize(remote.project_path().as_bytes()).collect();
+    let encoded_thread_id: String = form_urlencoded::byte_serialize(thread_id.as_bytes()).collect();
+    let mut endpoint = format!(
+        "/projects/{encoded_project_path}/merge_requests/{merge_request_iid}/discussions/\
+         {encoded_thread_id}"
+    );
+    if let Some(child_resource) = child_resource {
+        endpoint.push('/');
+        endpoint.push_str(child_resource);
+    }
+
+    endpoint
+}
+
 /// Parses merge-request discussions into inline threads and MR-level comments.
 fn parse_review_comment_snapshot_response(stdout: &str) -> Result<ReviewCommentSnapshot, String> {
     let discussions: Vec<GitLabDiscussion> = serde_json::from_str(stdout)
@@ -404,7 +521,7 @@ fn parse_review_comment_snapshot_response(stdout: &str) -> Result<ReviewCommentS
             continue;
         }
 
-        if let Some(thread) = review_comment_thread_from_discussion(&notes) {
+        if let Some(thread) = review_comment_thread_from_discussion(&discussion.id, &notes) {
             threads.push(thread);
         } else {
             pr_level_comments.extend(notes.drain(..).map(review_comment_from_note));
@@ -420,6 +537,7 @@ fn parse_review_comment_snapshot_response(stdout: &str) -> Result<ReviewCommentS
 /// Converts one GitLab discussion into an inline thread when it carries a diff
 /// note position.
 fn review_comment_thread_from_discussion(
+    discussion_id: &str,
     notes: &[GitLabDiscussionNote],
 ) -> Option<ReviewCommentThread> {
     let anchor_note = notes.iter().find(|note| {
@@ -435,6 +553,7 @@ fn review_comment_thread_from_discussion(
             .cloned()
             .map(review_comment_from_note)
             .collect(),
+        id: discussion_id.to_string(),
         is_outdated: None,
         is_resolved: anchor_note.resolved,
         line,
@@ -696,6 +815,7 @@ impl GitLabMetadataResponse {
 /// GitLab merge-request discussion returned by the discussions API.
 #[derive(Clone, Deserialize)]
 struct GitLabDiscussion {
+    id: String,
     notes: Vec<GitLabDiscussionNote>,
 }
 
@@ -1153,6 +1273,7 @@ mod tests {
         // Assert
         assert_eq!(snapshot.threads.len(), 1);
         let thread = &snapshot.threads[0];
+        assert_eq!(thread.id, "discussion-1");
         assert_eq!(thread.path, "src/main.rs");
         assert_eq!(thread.line, Some(12));
         assert_eq!(thread.anchor_side, ReviewCommentAnchorSide::New);
@@ -1164,6 +1285,58 @@ mod tests {
 
         assert_eq!(snapshot.pr_level_comments.len(), 1);
         assert_eq!(snapshot.pr_level_comments[0].author, "carol");
+    }
+
+    #[tokio::test]
+    async fn review_thread_reply_and_resolution_run_discussion_requests() {
+        // Arrange
+        let remote = gitlab_remote();
+        let thread_id = "discussion/1";
+        let mut sequence = Sequence::new();
+        let mut command_runner = MockForgeCommandRunner::new();
+        command_runner
+            .expect_run()
+            .once()
+            .in_sequence(&mut sequence)
+            .withf({
+                let remote = remote.clone();
+
+                move |command| {
+                    command == &reply_to_thread_command(&remote, "42", "discussion/1", "Addressed.")
+                }
+            })
+            .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
+        command_runner
+            .expect_run()
+            .once()
+            .in_sequence(&mut sequence)
+            .withf({
+                let remote = remote.clone();
+
+                move |command| command == &resolve_thread_command(&remote, "42", "discussion/1")
+            })
+            .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
+        let adapter = GitLabReviewRequestAdapter::new(Arc::new(command_runner));
+
+        // Act
+        let reply_result = adapter
+            .reply_to_authenticated_thread(
+                remote.clone(),
+                "!42".to_string(),
+                thread_id.to_string(),
+                "Addressed.".to_string(),
+            )
+            .await;
+        let resolution_result = adapter
+            .resolve_authenticated_thread(remote, "!42".to_string(), thread_id.to_string())
+            .await;
+
+        // Assert
+        assert_eq!(reply_result, Ok(()));
+        assert_eq!(resolution_result, Ok(()));
+        let encoded_endpoint =
+            discussion_endpoint(&gitlab_remote(), "42", "discussion/1", Some("notes"));
+        assert!(encoded_endpoint.contains("discussion%2F1/notes"));
     }
 
     #[test]

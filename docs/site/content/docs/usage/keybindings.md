@@ -182,8 +182,8 @@ State-specific differences:
 - **Question** sessions hide `r` until they return to review-ready state.
 - Review-ready stacked parents with a materialized child keep `Enter`, `m`, and `r`
   while the stack is idle, but hide `/` until the child is terminal or no longer linked.
-- Sessions with a linked pull request or merge request use `c` to open its read-only
-  comments page. Linked terminal sessions keep continuation available on `C`.
+- Sessions with a linked pull request or merge request use `c` to open its comments
+  page. Linked terminal sessions keep continuation available on `C`.
 - **Done** sessions without a linked review request offer `c` to start a continuation
   draft (confirmation popup).
 - **Canceled**, **Queued**, and **Merging** sessions are otherwise read-only (`q`,
@@ -205,11 +205,17 @@ conversation. File-level comments explicitly show that they have no attached cod
 instead of highlighting an arbitrary diff row. Inline snippets use the same gutters and
 added/removed line colors as diff view.
 
-| Key           | Action                       |
-| ------------- | ---------------------------- |
-| `q` / `Esc`   | Return to session view       |
-| `j` / `k`     | Select previous/next comment |
-| `Up` / `Down` | Scroll selected comment info |
+| Key           | Action                                             |
+| ------------- | -------------------------------------------------- |
+| `q` / `Esc`   | Return to session view                             |
+| `j` / `k`     | Select previous/next comment                       |
+| `Up` / `Down` | Scroll selected comment info                       |
+| `a`           | Address the selected actionable comment with agent |
+| `A`           | Address all actionable comments with the agent     |
+
+`a` and `A` appear only while the session can accept a turn. Resolved and outdated
+inline threads are not actionable; general discussion comments can be sent to the agent
+but cannot be resolved automatically because they have no forge thread ID.
 
 ## Publish Popup
 

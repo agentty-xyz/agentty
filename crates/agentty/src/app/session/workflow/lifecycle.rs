@@ -62,9 +62,10 @@ const USER_PROMPT_CONTINUATION_PREFIX: &str = "   ";
 /// Input bag for constructing a queued session command.
 struct BuildSessionCommandInput {
     is_first_message: bool,
-    published_upstream_ref: Option<String>,
     prompt: TurnPrompt,
+    published_upstream_ref: Option<String>,
     replay_transcript: Option<String>,
+    review_comment_thread_ids: Vec<String>,
     session_agent: AgentSelection,
 }
 
@@ -1165,6 +1166,7 @@ impl SessionManager {
             prompt: prompt.clone(),
             turn_metadata: TurnMetadata {
                 published_upstream_ref: None,
+                review_comment_thread_ids: Vec::new(),
                 session_agent,
             },
         };
@@ -1206,8 +1208,35 @@ impl SessionManager {
         };
         let session_agent = session.agent;
 
-        self.reply_impl(services, session_id, prompt, session_agent)
+        self.reply_impl(services, session_id, prompt, Vec::new(), session_agent)
             .await
+    }
+
+    /// Submits a follow-up prompt with an allowlist of forge review threads
+    /// eligible for post-push reply and resolution.
+    ///
+    /// Returns `true` when the command reaches the session worker.
+    pub async fn reply_to_review_comments(
+        &mut self,
+        services: &AppServices,
+        session_id: &str,
+        prompt: impl Into<TurnPrompt>,
+        review_comment_thread_ids: Vec<String>,
+    ) -> bool {
+        let prompt = prompt.into();
+        let Ok(session) = self.session_or_err(session_id) else {
+            return false;
+        };
+        let session_agent = session.agent;
+
+        self.reply_impl(
+            services,
+            session_id,
+            prompt,
+            review_comment_thread_ids,
+            session_agent,
+        )
+        .await
     }
 
     /// Stages one chat prompt into the in-memory queue for the active turn or
@@ -1803,6 +1832,7 @@ impl SessionManager {
         services: &AppServices,
         session_id: &str,
         prompt: TurnPrompt,
+        review_comment_thread_ids: Vec<String>,
         session_agent: AgentSelection,
     ) -> bool {
         let Ok(session_index) = self.session_index_or_err(session_id) else {
@@ -1869,9 +1899,10 @@ impl SessionManager {
 
         let command = Self::build_session_command(BuildSessionCommandInput {
             is_first_message,
-            published_upstream_ref,
             prompt: effective_prompt.clone(),
+            published_upstream_ref,
             replay_transcript,
+            review_comment_thread_ids,
             session_agent,
         });
         self.enqueue_reply_command(
@@ -2104,9 +2135,10 @@ impl SessionManager {
     fn build_session_command(input: BuildSessionCommandInput) -> SessionCommand {
         let BuildSessionCommandInput {
             is_first_message,
-            published_upstream_ref,
             prompt,
+            published_upstream_ref,
             replay_transcript,
+            review_comment_thread_ids,
             session_agent,
         } = input;
         let operation_id = Uuid::new_v4().to_string();
@@ -2123,6 +2155,7 @@ impl SessionManager {
             prompt,
             turn_metadata: TurnMetadata {
                 published_upstream_ref,
+                review_comment_thread_ids,
                 session_agent,
             },
         }
@@ -3002,7 +3035,7 @@ mod test_support {
             self.worker_service
                 .test_agent_channels
                 .insert(session_id.to_string().into(), channel);
-            self.reply_impl(services, session_id, prompt, session_agent)
+            self.reply_impl(services, session_id, prompt, Vec::new(), session_agent)
                 .await;
         }
     }
@@ -4094,6 +4127,34 @@ mod tests {
         // Assert
         assert!(image_path.exists());
         assert!(image_directory.exists());
+    }
+
+    /// Ensures the review-comment reply entry point rejects stale session
+    /// identifiers before attempting to enqueue worker commands.
+    #[tokio::test]
+    async fn test_reply_to_review_comments_returns_false_for_missing_session() {
+        // Arrange
+        let session = test_session("Initial prompt", Status::Review, Some("Title"), "");
+        let database = database_with_session(&session).await;
+        let mut session_manager = session_manager_with_one_session(session);
+        let services = test_services(
+            &database,
+            Arc::new(git::MockGitClient::new()),
+            Arc::new(forge::MockReviewRequestClient::new()),
+        );
+
+        // Act
+        let enqueued = session_manager
+            .reply_to_review_comments(
+                &services,
+                "missing-session",
+                "Resolve this thread",
+                vec!["thread-42".to_string()],
+            )
+            .await;
+
+        // Assert
+        assert!(!enqueued);
     }
 
     #[test]

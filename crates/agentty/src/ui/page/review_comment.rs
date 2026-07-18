@@ -10,7 +10,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
-use crate::domain::session::Session;
+use crate::domain::session::{Session, Status};
 use crate::presentation::help_action;
 use crate::ui::component::vertical_scrollbar::VerticalScrollbar;
 use crate::ui::diff_util::{DiffLine, DiffLineKind};
@@ -18,7 +18,7 @@ use crate::ui::{Component, Page, diff_util, help_format, markdown, review_commen
 
 const CODE_CONTEXT_RADIUS: usize = 3;
 
-/// Read-only split page for a session's linked review-request comments.
+/// Split page for inspecting and agent-resolving linked review comments.
 pub struct ReviewCommentPage<'a> {
     comment_error: Option<&'a str>,
     comment_snapshot: Option<&'a ReviewCommentSnapshot>,
@@ -163,8 +163,17 @@ impl Page for ReviewCommentPage<'_> {
         self.render_comment_list(frame, areas.file_list_area);
         self.render_comment_detail(frame, areas.diff_area);
 
+        let can_reply =
+            self.session.status.allows_review_actions() || self.session.status == Status::Question;
+        let can_resolve_all =
+            can_reply && review_comment_has_actionable_items(self.comment_snapshot);
+        let can_resolve_selected = can_reply
+            && review_comment_selected_is_actionable(
+                self.comment_snapshot,
+                self.selected_comment_index,
+            );
         let footer = Paragraph::new(help_format::footer_line(
-            &help_action::review_comment_footer_actions(),
+            &help_action::review_comment_footer_actions(can_resolve_all, can_resolve_selected),
         ));
         frame.render_widget(footer, areas.footer_area);
     }
@@ -204,6 +213,39 @@ pub(crate) fn review_comment_item_count(snapshot: Option<&ReviewCommentSnapshot>
             .pr_level_comments
             .len()
             .saturating_add(snapshot.threads.len())
+    })
+}
+
+/// Returns whether the selected general comment or inline thread can be sent
+/// to the session agent.
+pub(crate) fn review_comment_selected_is_actionable(
+    snapshot: Option<&ReviewCommentSnapshot>,
+    selected_comment_index: usize,
+) -> bool {
+    let Some(snapshot) = snapshot else {
+        return false;
+    };
+    if selected_comment_index < snapshot.pr_level_comments.len() {
+        return true;
+    }
+
+    snapshot
+        .threads
+        .get(selected_comment_index.saturating_sub(snapshot.pr_level_comments.len()))
+        .is_some_and(ReviewCommentThread::is_actionable)
+}
+
+/// Returns whether the snapshot contains any general comment or actionable
+/// inline thread.
+pub(crate) fn review_comment_has_actionable_items(
+    snapshot: Option<&ReviewCommentSnapshot>,
+) -> bool {
+    snapshot.is_some_and(|snapshot| {
+        !snapshot.pr_level_comments.is_empty()
+            || snapshot
+                .threads
+                .iter()
+                .any(ReviewCommentThread::is_actionable)
     })
 }
 
@@ -559,6 +601,7 @@ mod tests {
                 author: "alice".to_string(),
                 body: "Please explain this output.".to_string(),
             }],
+            id: "thread-id".to_string(),
             is_outdated: Some(false),
             is_resolved: false,
             line: Some(line),
@@ -574,6 +617,7 @@ mod tests {
                 author: "bob".to_string(),
                 body: "Please review the whole file.".to_string(),
             }],
+            id: "thread-id".to_string(),
             is_outdated: Some(false),
             is_resolved: false,
             line: None,
@@ -990,5 +1034,60 @@ mod tests {
 
         // Assert
         assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn test_review_comment_actionability_excludes_resolved_outdated_and_missing_rows() {
+        // Arrange
+        let mut current = inline_thread(2);
+        current.id = "current".to_string();
+        let mut resolved = inline_thread(3);
+        resolved.id = "resolved".to_string();
+        resolved.is_resolved = true;
+        let mut outdated = inline_thread(4);
+        outdated.id = "outdated".to_string();
+        outdated.is_outdated = Some(true);
+        let snapshot = ReviewCommentSnapshot {
+            pr_level_comments: vec![ReviewComment {
+                author: "bob".to_string(),
+                body: "General note".to_string(),
+            }],
+            threads: vec![current, resolved, outdated],
+        };
+
+        // Act
+        let general_is_actionable = review_comment_selected_is_actionable(Some(&snapshot), 0);
+        let current_is_actionable = review_comment_selected_is_actionable(Some(&snapshot), 1);
+        let resolved_is_actionable = review_comment_selected_is_actionable(Some(&snapshot), 2);
+        let outdated_is_actionable = review_comment_selected_is_actionable(Some(&snapshot), 3);
+        let missing_is_actionable = review_comment_selected_is_actionable(Some(&snapshot), 99);
+        let snapshot_has_actionable_items = review_comment_has_actionable_items(Some(&snapshot));
+
+        // Assert
+        assert!(general_is_actionable);
+        assert!(current_is_actionable);
+        assert!(!resolved_is_actionable);
+        assert!(!outdated_is_actionable);
+        assert!(!missing_is_actionable);
+        assert!(snapshot_has_actionable_items);
+        assert!(!review_comment_selected_is_actionable(None, 0));
+        assert!(!review_comment_has_actionable_items(None));
+    }
+
+    #[test]
+    fn test_review_comment_actionability_is_false_without_general_or_current_threads() {
+        // Arrange
+        let mut resolved = inline_thread(2);
+        resolved.is_resolved = true;
+        let snapshot = ReviewCommentSnapshot {
+            pr_level_comments: Vec::new(),
+            threads: vec![resolved],
+        };
+
+        // Act
+        let has_actionable_items = review_comment_has_actionable_items(Some(&snapshot));
+
+        // Assert
+        assert!(!has_actionable_items);
     }
 }

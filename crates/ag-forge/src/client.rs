@@ -110,6 +110,31 @@ pub trait ReviewRequestClient: Send + Sync {
         display_id: String,
     ) -> ForgeFuture<Result<ReviewCommentSnapshot, ReviewRequestError>>;
 
+    /// Adds one reply to an existing review thread.
+    ///
+    /// # Errors
+    /// Returns a provider-specific review-request error when the reply cannot
+    /// be posted.
+    fn reply_to_thread(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+        thread_id: String,
+        body: String,
+    ) -> ForgeFuture<Result<(), ReviewRequestError>>;
+
+    /// Marks one existing review thread resolved.
+    ///
+    /// # Errors
+    /// Returns a provider-specific review-request error when the thread cannot
+    /// be resolved.
+    fn resolve_thread(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+        thread_id: String,
+    ) -> ForgeFuture<Result<(), ReviewRequestError>>;
+
     /// Lists open review requests asking the current authenticated user to
     /// review the selected repository.
     ///
@@ -280,6 +305,29 @@ impl ReviewRequestClient for RealReviewRequestClient {
         })
     }
 
+    fn reply_to_thread(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+        thread_id: String,
+        body: String,
+    ) -> ForgeFuture<Result<(), ReviewRequestError>> {
+        self.call_with_authenticated_adapter(remote, move |adapter, remote| {
+            adapter.reply_to_authenticated_thread(remote, display_id, thread_id, body)
+        })
+    }
+
+    fn resolve_thread(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+        thread_id: String,
+    ) -> ForgeFuture<Result<(), ReviewRequestError>> {
+        self.call_with_authenticated_adapter(remote, move |adapter, remote| {
+            adapter.resolve_authenticated_thread(remote, display_id, thread_id)
+        })
+    }
+
     fn list_requested_reviews(
         &self,
         remote: ForgeRemote,
@@ -343,6 +391,23 @@ pub(crate) trait ReviewRequestAdapter: Send + Sync {
         remote: ForgeRemote,
         display_id: String,
     ) -> ForgeFuture<Result<ReviewCommentSnapshot, ReviewRequestError>>;
+
+    /// Adds one reply after authentication.
+    fn reply_to_authenticated_thread(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+        thread_id: String,
+        body: String,
+    ) -> ForgeFuture<Result<(), ReviewRequestError>>;
+
+    /// Resolves one review thread after authentication.
+    fn resolve_authenticated_thread(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+        thread_id: String,
+    ) -> ForgeFuture<Result<(), ReviewRequestError>>;
 
     /// Lists requested reviews after authentication.
     fn list_authenticated_requested_reviews(
@@ -552,6 +617,58 @@ mod tests {
                 host: "github.com".to_string(),
             }
         );
+    }
+
+    #[tokio::test]
+    async fn review_thread_mutations_authenticate_and_route_to_github_adapter() {
+        // Arrange
+        let remote = github_remote();
+        let mut sequence = Sequence::new();
+        let mut command_runner = MockForgeCommandRunner::new();
+        for expected_mutation in ["addPullRequestReviewThreadReply", "resolveReviewThread"] {
+            command_runner
+                .expect_run()
+                .once()
+                .in_sequence(&mut sequence)
+                .withf(|command| {
+                    command_arguments_are(
+                        command,
+                        "gh",
+                        &["auth", "status", "--hostname", "github.com"],
+                    )
+                })
+                .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
+            command_runner
+                .expect_run()
+                .once()
+                .in_sequence(&mut sequence)
+                .withf(move |command| {
+                    command.executable == "gh"
+                        && command
+                            .arguments
+                            .iter()
+                            .any(|argument| argument.contains(expected_mutation))
+                })
+                .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
+        }
+        let client = RealReviewRequestClient::new(Arc::new(command_runner));
+
+        // Act
+        let reply_result = client
+            .reply_to_thread(
+                remote.clone(),
+                "#42".to_string(),
+                "thread-1".to_string(),
+                "Addressed.".to_string(),
+            )
+            .await;
+        let resolution_result = client
+            .resolve_thread(remote, "#42".to_string(), "thread-1".to_string())
+            .await;
+
+        // Assert
+        assert_eq!(reply_result, Ok(()));
+        assert_eq!(resolution_result, Ok(()));
     }
 
     #[tokio::test]

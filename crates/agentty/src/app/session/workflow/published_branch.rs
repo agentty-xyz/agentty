@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use ag_forge as forge;
 use ag_git::GitClient;
+use ag_protocol::ReviewCommentOutcome;
 use tokio::sync::{OwnedMutexGuard, mpsc};
 use uuid::Uuid;
 
@@ -37,6 +38,8 @@ pub(super) struct PublishedBranchAutoPushStartInput {
     pub(super) git_client: Arc<dyn GitClient>,
     /// Published upstream reference that provides the remote branch target.
     pub(super) published_upstream_ref: String,
+    /// Fixed review-thread outcomes eligible for post-push forge updates.
+    pub(super) review_comment_outcomes: Vec<ReviewCommentOutcome>,
     /// Forge boundary used for optional linked PR/MR metadata refresh.
     pub(super) review_request_client: Arc<dyn forge::ReviewRequestClient>,
     /// Optional auto-commit message used to refresh linked PR/MR metadata.
@@ -62,6 +65,11 @@ pub(super) fn start_published_branch_auto_push(input: PublishedBranchAutoPushSta
                 commit_message: Some(commit_message),
                 review_request_client: Arc::clone(&input.review_request_client),
             });
+    let review_comment_resolution =
+        (!input.review_comment_outcomes.is_empty()).then(|| ReviewCommentResolutionInput {
+            outcomes: input.review_comment_outcomes,
+            review_request_client: Arc::clone(&input.review_request_client),
+        });
 
     let _ = input
         .app_event_tx
@@ -78,6 +86,7 @@ pub(super) fn start_published_branch_auto_push(input: PublishedBranchAutoPushSta
         folder: input.folder,
         git_client: input.git_client,
         published_upstream_ref: input.published_upstream_ref,
+        review_comment_resolution,
         review_request_metadata_sync,
         session_id: input.session_id,
         session_update_versions: input.session_update_versions,
@@ -103,6 +112,8 @@ pub(super) struct PublishedBranchAutoPushInput {
     pub(super) git_client: Arc<dyn GitClient>,
     /// Published upstream reference that provides the remote branch target.
     pub(super) published_upstream_ref: String,
+    /// Optional review-thread outcomes applied only after a successful push.
+    pub(super) review_comment_resolution: Option<ReviewCommentResolutionInput>,
     /// Optional metadata sync payload used after a successful post-turn push.
     pub(super) review_request_metadata_sync: Option<ReviewRequestMetadataSyncInput>,
     /// Session id whose branch is being pushed.
@@ -122,6 +133,14 @@ pub(super) struct ReviewRequestMetadataSyncInput {
     /// Known auto-commit message, or `None` to resolve it after the push.
     pub(super) commit_message: Option<String>,
     /// Forge boundary used to refresh linked PR/MR metadata after a push.
+    pub(super) review_request_client: Arc<dyn forge::ReviewRequestClient>,
+}
+
+/// Owned dependencies for forge thread replies and resolution after push.
+pub(super) struct ReviewCommentResolutionInput {
+    /// Fixed, allowlisted outcomes reported by the completed agent turn.
+    pub(super) outcomes: Vec<ReviewCommentOutcome>,
+    /// Forge boundary used to post replies and resolve review threads.
     pub(super) review_request_client: Arc<dyn forge::ReviewRequestClient>,
 }
 
@@ -150,6 +169,9 @@ async fn run_published_branch_auto_push_task(input: PublishedBranchAutoPushInput
             if let Some(metadata_sync_input) = input.review_request_metadata_sync.as_ref() {
                 sync_linked_review_request_metadata_after_push(&input, metadata_sync_input).await;
             }
+            if let Some(resolution_input) = input.review_comment_resolution.as_ref() {
+                resolve_review_comments_after_push(&input, resolution_input).await;
+            }
 
             let message = TranscriptNotice::BranchPush
                 .format("Auto-pushed published branch after completed turn.");
@@ -176,6 +198,137 @@ async fn run_published_branch_auto_push_task(input: PublishedBranchAutoPushInput
                 });
         }
     }
+}
+
+/// Posts agent-authored replies and resolves their allowlisted review threads
+/// after the updated branch is visible on the forge.
+async fn resolve_review_comments_after_push(
+    input: &PublishedBranchAutoPushInput,
+    resolution_input: &ReviewCommentResolutionInput,
+) {
+    let linked_review_request = match load_open_review_request(input).await {
+        Ok(Some(linked_review_request)) => linked_review_request,
+        Ok(None) => return,
+        Err(error) => {
+            append_review_comment_resolution_notice(input, 0, resolution_input.outcomes.len())
+                .await;
+            tracing::warn!(
+                session_id = %input.session_id,
+                %error,
+                "failed to load linked review request for review-thread resolution"
+            );
+
+            return;
+        }
+    };
+    let repo_url = match input.git_client.repo_url(input.folder.clone()).await {
+        Ok(repo_url) => repo_url,
+        Err(error) => {
+            append_review_comment_resolution_notice(input, 0, resolution_input.outcomes.len())
+                .await;
+            tracing::warn!(
+                session_id = %input.session_id,
+                %error,
+                "failed to resolve repository remote for review-thread resolution"
+            );
+
+            return;
+        }
+    };
+    let remote = match resolution_input
+        .review_request_client
+        .detect_remote(repo_url)
+        .map(|remote| remote.with_command_working_directory(input.folder.clone()))
+    {
+        Ok(remote) => remote,
+        Err(error) => {
+            append_review_comment_resolution_notice(input, 0, resolution_input.outcomes.len())
+                .await;
+            let error_detail = error.detail_message();
+            tracing::warn!(
+                session_id = %input.session_id,
+                error = %error_detail,
+                "failed to detect forge remote for review-thread resolution"
+            );
+
+            return;
+        }
+    };
+
+    let mut resolved_count = 0;
+    for outcome in &resolution_input.outcomes {
+        let reply_result = resolution_input
+            .review_request_client
+            .reply_to_thread(
+                remote.clone(),
+                linked_review_request.summary.display_id.clone(),
+                outcome.thread_id.clone(),
+                outcome.reply.clone(),
+            )
+            .await;
+        if let Err(error) = reply_result {
+            let error_detail = error.detail_message();
+            tracing::warn!(
+                session_id = %input.session_id,
+                thread_id = %outcome.thread_id,
+                error = %error_detail,
+                "failed to reply to resolved review thread"
+            );
+
+            continue;
+        }
+
+        let resolve_result = resolution_input
+            .review_request_client
+            .resolve_thread(
+                remote.clone(),
+                linked_review_request.summary.display_id.clone(),
+                outcome.thread_id.clone(),
+            )
+            .await;
+        match resolve_result {
+            Ok(()) => resolved_count += 1,
+            Err(error) => {
+                let error_detail = error.detail_message();
+                tracing::warn!(
+                    session_id = %input.session_id,
+                    thread_id = %outcome.thread_id,
+                    error = %error_detail,
+                    "failed to resolve replied review thread"
+                );
+            }
+        }
+    }
+
+    append_review_comment_resolution_notice(input, resolved_count, resolution_input.outcomes.len())
+        .await;
+}
+
+/// Appends a concise durable result for post-push review-thread updates.
+async fn append_review_comment_resolution_notice(
+    input: &PublishedBranchAutoPushInput,
+    resolved_count: usize,
+    total_count: usize,
+) {
+    let message = if resolved_count == total_count {
+        TranscriptNotice::ReviewComments.format(format!(
+            "Replied to and resolved {resolved_count} review thread(s)."
+        ))
+    } else {
+        TranscriptNotice::ReviewCommentsWarning.format(format!(
+            "Resolved {resolved_count} of {total_count} review thread(s). Reopen review comments \
+             to retry the remaining threads."
+        ))
+    };
+    SessionTaskService::append_workflow_notice(
+        &input.transcript,
+        &input.db,
+        &input.app_event_tx,
+        &input.session_update_versions,
+        &input.session_id,
+        &message,
+    )
+    .await;
 }
 
 /// Syncs linked open review-request metadata after the new commit has reached
@@ -358,4 +511,311 @@ fn warn_review_request_metadata_sync(input: &PublishedBranchAutoPushInput, error
         error,
         "failed to sync linked review-request metadata"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use ag_forge::MockReviewRequestClient;
+    use ag_git::{GitError, MockGitClient};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn review_comment_resolution_reports_reply_and_resolution_failures() {
+        // Arrange
+        let db = linked_review_request_db().await;
+        let mut git_client = MockGitClient::new();
+        git_client.expect_repo_url().once().returning(|_| {
+            Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
+        });
+        let mut review_request_client = MockReviewRequestClient::new();
+        review_request_client
+            .expect_detect_remote()
+            .once()
+            .returning(|_| Ok(github_remote()));
+        review_request_client
+            .expect_reply_to_thread()
+            .withf(|_, _, thread_id, _| thread_id == "reply-fails")
+            .once()
+            .returning(|_, _, _, _| {
+                Box::pin(async {
+                    Err(forge::ReviewRequestError::OperationFailed {
+                        forge_kind: forge::ForgeKind::GitHub,
+                        message: "reply rejected".to_string(),
+                    })
+                })
+            });
+        review_request_client
+            .expect_reply_to_thread()
+            .withf(|_, _, thread_id, _| thread_id == "resolve-fails")
+            .once()
+            .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
+        review_request_client
+            .expect_resolve_thread()
+            .withf(|_, _, thread_id| thread_id == "resolve-fails")
+            .once()
+            .returning(|_, _, _| {
+                Box::pin(async {
+                    Err(forge::ReviewRequestError::OperationFailed {
+                        forge_kind: forge::ForgeKind::GitHub,
+                        message: "resolve rejected".to_string(),
+                    })
+                })
+            });
+        let (input, transcript) = resolution_test_input(
+            db,
+            git_client,
+            review_request_client,
+            vec![fixed_outcome("reply-fails"), fixed_outcome("resolve-fails")],
+        );
+        let resolution_input = input
+            .review_comment_resolution
+            .as_ref()
+            .expect("resolution input should exist");
+
+        // Act
+        resolve_review_comments_after_push(&input, resolution_input).await;
+
+        // Assert
+        assert_eq!(
+            last_transcript_message(&transcript),
+            "[Review Comments Warning] Resolved 0 of 2 review thread(s). Reopen review comments \
+             to retry the remaining threads."
+        );
+    }
+
+    #[tokio::test]
+    async fn review_comment_resolution_reports_repository_remote_failure() {
+        // Arrange
+        let db = linked_review_request_db().await;
+        let mut git_client = MockGitClient::new();
+        git_client.expect_repo_url().once().returning(|_| {
+            Box::pin(async {
+                Err(GitError::CommandFailed {
+                    command: "git remote get-url origin".to_string(),
+                    stderr: "missing remote".to_string(),
+                })
+            })
+        });
+        let (input, transcript) = resolution_test_input(
+            db,
+            git_client,
+            MockReviewRequestClient::new(),
+            vec![fixed_outcome("thread-1")],
+        );
+        let resolution_input = input
+            .review_comment_resolution
+            .as_ref()
+            .expect("resolution input should exist");
+
+        // Act
+        resolve_review_comments_after_push(&input, resolution_input).await;
+
+        // Assert
+        assert_eq!(
+            last_transcript_message(&transcript),
+            "[Review Comments Warning] Resolved 0 of 1 review thread(s). Reopen review comments \
+             to retry the remaining threads."
+        );
+    }
+
+    #[tokio::test]
+    async fn review_comment_resolution_reports_remote_detection_failure() {
+        // Arrange
+        let db = linked_review_request_db().await;
+        let mut git_client = MockGitClient::new();
+        git_client
+            .expect_repo_url()
+            .once()
+            .returning(|_| Box::pin(async { Ok("ssh://example.com/owner/repo.git".to_string()) }));
+        let mut review_request_client = MockReviewRequestClient::new();
+        review_request_client
+            .expect_detect_remote()
+            .once()
+            .returning(|repo_url| Err(forge::ReviewRequestError::UnsupportedRemote { repo_url }));
+        let (input, transcript) = resolution_test_input(
+            db,
+            git_client,
+            review_request_client,
+            vec![fixed_outcome("thread-1")],
+        );
+        let resolution_input = input
+            .review_comment_resolution
+            .as_ref()
+            .expect("resolution input should exist");
+
+        // Act
+        resolve_review_comments_after_push(&input, resolution_input).await;
+
+        // Assert
+        assert_eq!(
+            last_transcript_message(&transcript),
+            "[Review Comments Warning] Resolved 0 of 1 review thread(s). Reopen review comments \
+             to retry the remaining threads."
+        );
+    }
+
+    #[tokio::test]
+    async fn review_comment_resolution_skips_sessions_without_open_linked_review() {
+        // Arrange
+        let db = AppRepositories::in_memory().await;
+        insert_session(&db).await;
+        let mut git_client = MockGitClient::new();
+        git_client.expect_repo_url().never();
+        let (input, transcript) = resolution_test_input(
+            db,
+            git_client,
+            MockReviewRequestClient::new(),
+            vec![fixed_outcome("thread-1")],
+        );
+        let resolution_input = input
+            .review_comment_resolution
+            .as_ref()
+            .expect("resolution input should exist");
+
+        // Act
+        resolve_review_comments_after_push(&input, resolution_input).await;
+
+        // Assert
+        assert!(transcript.lock().expect("transcript lock").is_empty());
+    }
+
+    #[tokio::test]
+    async fn review_comment_resolution_reports_linked_review_load_failure() {
+        // Arrange
+        let (db, pool) = AppRepositories::in_memory_with_pool().await;
+        insert_session(&db).await;
+        pool.close().await;
+        let mut git_client = MockGitClient::new();
+        git_client.expect_repo_url().never();
+        let (input, transcript) = resolution_test_input(
+            db,
+            git_client,
+            MockReviewRequestClient::new(),
+            vec![fixed_outcome("thread-1")],
+        );
+        let resolution_input = input
+            .review_comment_resolution
+            .as_ref()
+            .expect("resolution input should exist");
+
+        // Act
+        resolve_review_comments_after_push(&input, resolution_input).await;
+
+        // Assert
+        assert_eq!(
+            last_transcript_message(&transcript),
+            "[Review Comments Warning] Resolved 0 of 1 review thread(s). Reopen review comments \
+             to retry the remaining threads."
+        );
+    }
+
+    /// Builds one detached-push input for direct review-resolution tests.
+    fn resolution_test_input(
+        db: AppRepositories,
+        git_client: MockGitClient,
+        review_request_client: MockReviewRequestClient,
+        outcomes: Vec<ReviewCommentOutcome>,
+    ) -> (PublishedBranchAutoPushInput, Arc<Mutex<SessionTranscript>>) {
+        let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
+        let input = PublishedBranchAutoPushInput {
+            app_event_tx: mpsc::unbounded_channel().0,
+            db,
+            folder: PathBuf::from("/tmp/project"),
+            git_client: Arc::new(git_client),
+            published_upstream_ref: "origin/wt/session-id".to_string(),
+            review_comment_resolution: Some(ReviewCommentResolutionInput {
+                outcomes,
+                review_request_client: Arc::new(review_request_client),
+            }),
+            review_request_metadata_sync: None,
+            session_id: "session-id".into(),
+            session_update_versions: Arc::default(),
+            sync_operation_id: "sync-id".to_string(),
+            transcript: Arc::clone(&transcript),
+        };
+
+        (input, transcript)
+    }
+
+    /// Builds one fixed outcome accepted by the post-turn allowlist.
+    fn fixed_outcome(thread_id: &str) -> ReviewCommentOutcome {
+        ReviewCommentOutcome {
+            reply: format!("Addressed {thread_id}."),
+            resolution: ag_protocol::ReviewCommentResolution::Fixed,
+            thread_id: thread_id.to_string(),
+        }
+    }
+
+    /// Inserts one session linked to an open GitHub pull request.
+    async fn linked_review_request_db() -> AppRepositories {
+        let db = AppRepositories::in_memory().await;
+        insert_session(&db).await;
+        db.reviews()
+            .update_session_review_request(
+                "session-id",
+                Some(ReviewRequest {
+                    last_refreshed_at: 100,
+                    summary: forge::ReviewRequestSummary {
+                        display_id: "#42".to_string(),
+                        forge_kind: forge::ForgeKind::GitHub,
+                        source_branch: "wt/session-id".to_string(),
+                        state: ReviewRequestState::Open,
+                        status_summary: None,
+                        target_branch: "main".to_string(),
+                        title: "Review title".to_string(),
+                        web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
+                    },
+                }),
+            )
+            .await
+            .expect("failed to link review request");
+
+        db
+    }
+
+    /// Inserts the session row required by review and transcript stores.
+    async fn insert_session(db: &AppRepositories) {
+        let project_id = db
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to insert project");
+        db.sessions()
+            .insert_session(
+                "session-id",
+                "gemini-3-flash-preview",
+                "main",
+                "Review",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+    }
+
+    /// Returns one GitHub remote used by the forge mock.
+    fn github_remote() -> forge::ForgeRemote {
+        forge::ForgeRemote {
+            command_working_directory: None,
+            forge_kind: forge::ForgeKind::GitHub,
+            host: "github.com".to_string(),
+            namespace: "agentty-xyz".to_string(),
+            project: "agentty".to_string(),
+            repo_url: "https://github.com/agentty-xyz/agentty.git".to_string(),
+            web_url: "https://github.com/agentty-xyz/agentty".to_string(),
+        }
+    }
+
+    /// Reads the latest live transcript message.
+    fn last_transcript_message(transcript: &Arc<Mutex<SessionTranscript>>) -> String {
+        transcript
+            .lock()
+            .expect("transcript lock")
+            .messages()
+            .last()
+            .expect("workflow notice")
+            .content
+            .trim()
+            .to_string()
+    }
 }

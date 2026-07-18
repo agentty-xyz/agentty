@@ -19,6 +19,7 @@ pub use envelope::{
 };
 pub use model::{
     AgentResponse, AgentResponseParseError, AgentResponseSummary, ProtocolRequestProfile,
+    ReviewCommentOutcome, ReviewCommentResolution,
 };
 pub use parse::{
     format_protocol_parse_debug_details, normalize_turn_response, parse_agent_response_strict,
