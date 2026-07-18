@@ -28,7 +28,6 @@ type SeedSessionRow<'a> = (
     i64,
     i64,
     &'a str,
-    &'a str,
     i64,
 );
 
@@ -52,10 +51,11 @@ fn generate_marketing_demo_gif() -> DemoResult {
     let env = make_demo_env(&demo_root)?;
 
     install_scripted_claude_stub(&env)?;
+    install_scripted_codex_stub(&env)?;
     install_agent_availability_stubs(&env)?;
     symlink_agentty_into_stub_bin(&env)?;
 
-    let fake_project_paths = create_fake_project_dirs(&demo_root)?;
+    let fake_project_paths = create_fake_project_dirs(&env)?;
     // Agentty reads `current_dir()` which is canonicalized; seed using the
     // same canonical form the app will upsert itself.
     let canonical_cwd = env.workdir.canonicalize()?;
@@ -106,13 +106,13 @@ fn make_fresh_demo_root() -> std::io::Result<PathBuf> {
     Ok(root)
 }
 
-/// Builds a `BuilderEnv` whose workdir is named `my_project` so the project
+/// Builds a `BuilderEnv` whose workdir is named `opencloudtool` so the project
 /// row and path shown in the demo read cleanly while discovery uses a
 /// deterministic isolated home directory.
 fn make_demo_env(demo_root: &Path) -> std::io::Result<BuilderEnv> {
     let agentty_root = demo_root.join("agentty_root");
     let home_dir = demo_root.join("home");
-    let workdir = demo_root.join("my_project");
+    let workdir = demo_root.join("opencloudtool");
     let stub_bin = demo_root.join("stub-bin");
 
     std::fs::create_dir_all(&agentty_root)?;
@@ -131,23 +131,26 @@ fn make_demo_env(demo_root: &Path) -> std::io::Result<BuilderEnv> {
     Ok(env)
 }
 
-/// Creates the filesystem directories that correspond to the seeded fake
-/// project rows. Rows whose paths do not exist on disk are filtered out of
-/// the Projects tab by `AppStartup::visible_project_rows`.
-fn create_fake_project_dirs(demo_root: &Path) -> std::io::Result<Vec<PathBuf>> {
-    let fake_parent = demo_root.join("projects");
-    std::fs::create_dir_all(&fake_parent)?;
-    let paths = ["notes", "api-service", "playground"]
-        .iter()
-        .map(|name| {
-            let path = fake_parent.join(name);
-            std::fs::create_dir_all(&path)?;
+/// Creates the `agentty` git repository shown below the current project in
+/// the opening Projects list.
+fn create_fake_project_dirs(env: &BuilderEnv) -> std::io::Result<Vec<PathBuf>> {
+    let demo_root = env
+        .workdir
+        .parent()
+        .ok_or_else(|| std::io::Error::other("missing demo root"))?;
+    let path = demo_root.join("agentty");
+    let git_clone = Command::new("git")
+        .args(["clone", "-q"])
+        .arg(&env.workdir)
+        .arg(&path)
+        .status()?;
+    if !git_clone.success() {
+        return Err(std::io::Error::other(
+            "failed to clone demo agentty project",
+        ));
+    }
 
-            Ok(path)
-        })
-        .collect::<std::io::Result<Vec<_>>>()?;
-
-    Ok(paths)
+    Ok(vec![path])
 }
 
 /// Overwrites the `claude` stub in `stub_bin` with a script that ignores its
@@ -155,14 +158,48 @@ fn create_fake_project_dirs(demo_root: &Path) -> std::io::Result<Vec<PathBuf>> {
 /// protocol output with a canned reply.
 fn install_scripted_claude_stub(env: &BuilderEnv) -> std::io::Result<()> {
     let claude_path = env.stub_bin.join("claude");
-    // Reply text is hard-coded to match session 1's prompt ("Add rate
-    // limiting to the auth API"). Session 2 in the tape never finishes, so
-    // the same canned output never renders on-screen for it.
-    let reply = "I added a token-bucket rate limiter middleware on the auth routes. Each client \
-                 IP is capped at 10 requests per second with a 20-request burst, and overflow \
-                 returns 429 with a Retry-After header.";
+    // Reply text is hard-coded to match session 1's stacked-commits prompt.
+    // Session 2 in the tape never finishes, so the same canned output never
+    // renders on-screen for it.
+    let reply = r"Stacked sessions let you build dependent features in parallel while Agentty keeps your branches clean with a single evolving commit per session.
+
+```mermaid
+flowchart LR
+    A[Base branch] --> B[Parent commit P]
+    B --> C[Child commit C]
+    B --> D[Base after parent merge]
+    D --> E[Child C replayed]
+```";
+    let response = serde_json::json!({
+        "answer": reply,
+        "questions": [],
+        "summary": {
+            "turn": "Traced the documented workflow and implementation for stack creation, commit amendment, automatic rebasing, publishing, parent merge, and cancellation.",
+            "session": "Explained Agentty’s stacked-session commit model; no workspace files were changed."
+        }
+    });
+    let assistant_event = serde_json::json!({
+        "type": "assistant",
+        "message": {
+            "role": "assistant",
+            "content": [{"type": "text", "text": reply}]
+        }
+    });
+    let result_event = serde_json::json!({
+        "type": "result",
+        "subtype": "success",
+        "result": response.to_string(),
+        "usage": {"input_tokens": 5, "output_tokens": 42}
+    });
     let script = format!(
         r#"#!/bin/sh
+if [ "$1" = "update" ]; then
+    exit 0
+fi
+if [ "$1" = "--version" ]; then
+    printf '%s\n' 'claude 2.1.7'
+    exit 0
+fi
 # Consume stdin so the parent's writer does not block.
 cat > /dev/null 2>&1
 # "Thinking" pause: long enough for the viewer to see InProgress and the
@@ -174,9 +211,9 @@ cat > /dev/null 2>&1
 sleep 4
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
 sleep 1
-printf '%s\n' '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{reply}"}}]}}}}'
+printf '%s\n' '{assistant_event}'
 sleep 1
-printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{reply}\",\"questions\":[],\"summary\":null}}","usage":{{"input_tokens":5,"output_tokens":42}}}}'
+printf '%s\n' '{result_event}'
 "#
     );
     std::fs::write(&claude_path, &script)?;
@@ -189,25 +226,70 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{r
     Ok(())
 }
 
-/// Installs do-nothing executable stubs for the non-Claude agent CLIs
-/// (`agy`, `codex`) into `stub_bin`.
+/// Installs a scripted Codex app-server stub that completes bootstrap and
+/// leaves the demo's second turn running until VHS exits.
+fn install_scripted_codex_stub(env: &BuilderEnv) -> std::io::Result<()> {
+    let codex_path = env.stub_bin.join("codex");
+    let script = r#"#!/bin/sh
+if [ "$1" = "update" ]; then
+    exit 0
+fi
+if [ "$1" = "--version" ]; then
+    printf '%s\n' 'codex-cli 0.114.0'
+    exit 0
+fi
+
+extract_id() {
+    printf '%s\n' "$1" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p'
+}
+
+while IFS= read -r request; do
+    case "$request" in
+        *'"method":"initialize"'*)
+            request_id=$(extract_id "$request")
+            printf '{"id":"%s","result":{}}\n' "$request_id"
+            ;;
+        *'"method":"thread/start"'*)
+            request_id=$(extract_id "$request")
+            printf '{"id":"%s","result":{"thread":{"id":"demo-thread"}}}\n' "$request_id"
+            ;;
+        *'"method":"turn/start"'*)
+            request_id=$(extract_id "$request")
+            printf '{"id":"%s","result":{"turn":{"id":"demo-turn"}}}\n' "$request_id"
+            printf '%s\n' '{"method":"turn/started","params":{"turn":{"id":"demo-turn"}}}'
+            sleep 30
+            ;;
+    esac
+done
+"#;
+    std::fs::write(&codex_path, script)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&codex_path, std::fs::Permissions::from_mode(0o755))?;
+    }
+
+    Ok(())
+}
+
+/// Installs an Antigravity (`agy`) stub with a deterministic version into
+/// `stub_bin`.
 ///
 /// Agent availability is probed purely by looking for each backend's
 /// executable on `PATH` (`RealAgentAvailabilityProbe`), so placing these
 /// stubs makes every agent kind — Antigravity, Claude, and Codex — appear in
-/// the `/model` agent picker. The stubs are never executed by the demo
-/// because both live sessions resolve to Claude (the explicit
-/// `claude-opus-4-8` pick and the default `claude-haiku-4-5-20251001`); they
-/// only need to exist as executable files for the probe to detect them.
+/// the `/model` agent picker. The stub handles startup's update and version
+/// probes but is never used for a session.
 fn install_agent_availability_stubs(env: &BuilderEnv) -> std::io::Result<()> {
-    for executable_name in ["agy", "codex"] {
-        let stub_path = env.stub_bin.join(executable_name);
-        std::fs::write(&stub_path, "#!/bin/sh\nexit 0\n")?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&stub_path, std::fs::Permissions::from_mode(0o755))?;
-        }
+    let stub_path = env.stub_bin.join("agy");
+    std::fs::write(
+        &stub_path,
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'agy 0.42.0'; fi\nexit 0\n",
+    )?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub_path, std::fs::Permissions::from_mode(0o755))?;
     }
 
     Ok(())
@@ -231,14 +313,13 @@ fn symlink_agentty_into_stub_bin(env: &BuilderEnv) -> std::io::Result<()> {
 }
 
 /// Seeds fake projects, pre-existing sessions in mixed statuses (`Done`,
-/// `Review`) backed by different agent models, and pins a
-/// `claude-haiku-4-5-20251001` default model on the cwd project.
+/// `Review`) backed by different agent models, dashboard activity and usage,
+/// and pins a `claude-fable-5` default model on the selected project.
 ///
-/// The first live session uses `/model` to switch explicitly to
-/// `claude-opus-4-8`, while the second keeps the haiku default; both resolve
-/// to the Claude backend so they reach the scripted `claude` stub. The
-/// pre-seeded rows never run, so their models are only ever read by the list
-/// renderer to decide the per-row agent badge.
+/// The first live session explicitly selects the Fable default, while the
+/// second selects Codex `gpt-5.6-sol`. The pre-seeded rows never run, so their
+/// models are only ever read by the list renderer to decide the per-row agent
+/// badge.
 fn seed_database(
     env: &BuilderEnv,
     fake_project_paths: &[PathBuf],
@@ -252,18 +333,24 @@ fn seed_database(
         let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
         let database = Database::open(&db_path).await?;
 
-        for (path, branch) in fake_project_paths.iter().zip(["main", "develop", "main"]) {
-            let id = database
-                .projects()
-                .upsert_project(&path.display().to_string(), Some(branch.to_string()))
-                .await?;
-            database.projects().touch_project_last_opened(id).await?;
-        }
+        let selected_project_path = fake_project_paths
+            .first()
+            .ok_or("missing demo agentty project path")?;
+        let selected_project_id = database
+            .projects()
+            .upsert_project(
+                &selected_project_path.display().to_string(),
+                Some("main".to_string()),
+            )
+            .await?;
+        database
+            .projects()
+            .touch_project_last_opened(selected_project_id)
+            .await?;
 
-        // Pre-register the cwd project so we can attach project-scoped
-        // default-model settings before launch. Agentty's own startup upsert
-        // matches on `path` and will reuse this row.
-        let cwd_project_id = database
+        // Pre-register the cwd project so Agentty's startup upsert reuses it
+        // as the initially active first row.
+        database
             .projects()
             .upsert_project(
                 &canonical_cwd.display().to_string(),
@@ -291,13 +378,14 @@ VALUES (?, ?, ?)
 ON CONFLICT(project_id, name) DO UPDATE SET value = excluded.value
 ",
             )
-            .bind(cwd_project_id)
+            .bind(selected_project_id)
             .bind(name)
-            .bind("claude-haiku-4-5-20251001");
+            .bind("claude-fable-5");
             connection.execute(query).await?;
         }
 
-        seed_pre_existing_sessions(&mut connection, cwd_project_id, &env.agentty_root).await?;
+        seed_pre_existing_sessions(&mut connection, selected_project_id, &env.agentty_root).await?;
+        seed_dashboard_activity(&mut connection).await?;
 
         connection.close().await?;
 
@@ -331,48 +419,45 @@ async fn seed_pre_existing_sessions(
         });
 
     // (id, title, model, status, base_branch, added_lines, deleted_lines,
-    //  prompt, output, age_seconds)
+    //  prompt, age_seconds)
     let rows: &[SeedSessionRow<'_>] = &[
         (
             "aaaa1111-aaaa-1111-aaaa-111111111111",
             "Refactor request handlers",
-            "gemini-3.5-flash",
+            "gemini-3.1-pro-preview",
             "Review",
             "main",
             89,
             45,
             "Refactor the request handler pipeline to share middleware.",
-            "Ready for your review — see diff.",
             600,
         ),
         (
             "bbbb2222-bbbb-2222-bbbb-222222222222",
             "Add dark mode",
-            "gpt-5.5",
+            "gpt-5.6-terra",
             "Done",
             "main",
             127,
             33,
             "Add a dark theme with a toggle in settings.",
-            "Merged.",
             3_600,
         ),
         (
             "cccc3333-cccc-3333-cccc-333333333333",
             "Fix auth token refresh",
-            "claude-sonnet-5",
+            "claude-fable-5",
             "Done",
             "main",
             42,
             18,
             "Fix the token refresh race that logs users out.",
-            "Merged.",
             7_200,
         ),
     ];
 
     let wt_base = agentty_root.join("wt");
-    for (id, title, model, status, base_branch, added, deleted, prompt, output, age) in rows {
+    for (id, title, model, status, base_branch, added, deleted, prompt, age) in rows {
         let created = now_seconds - age;
         if !matches!(*status, "Done" | "Canceled") {
             let stub_worktree = wt_base.join(&id[..8]);
@@ -381,10 +466,10 @@ async fn seed_pre_existing_sessions(
         let query = sqlx::query(
             r"
 INSERT INTO session (
-    id, base_branch, status, project_id, model, title, prompt, output,
-    added_lines, deleted_lines, created_at, updated_at
+    id, base_branch, status, project_id, model, title, prompt,
+    added_lines, deleted_lines, input_tokens, output_tokens, created_at, updated_at
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ",
         )
         .bind(id)
@@ -394,13 +479,94 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         .bind(model)
         .bind(title)
         .bind(prompt)
-        .bind(output)
         .bind(added)
         .bind(deleted)
+        .bind(8_400 + age)
+        .bind(2_100 + age / 2)
         .bind(created)
         .bind(created);
         connection.execute(query).await?;
     }
+
+    Ok(())
+}
+
+/// Seeds recent and historical session-creation events so the opening
+/// activity heatmap and work-pace streaks are visibly populated.
+async fn seed_dashboard_activity(connection: &mut sqlx::SqliteConnection) -> DemoResult {
+    let now_seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| {
+            i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
+        });
+    let day_seconds = 86_400_i64;
+    let active_day_offsets = [0_i64, 1, 2, 3, 5, 8, 9, 12, 16, 21, 27, 34, 41, 55, 69];
+
+    for (index, day_offset) in active_day_offsets.into_iter().enumerate() {
+        let events_for_day = index % 4 + 1;
+        for event_index in 0..events_for_day {
+            let timestamp = now_seconds
+                .saturating_sub(day_offset.saturating_mul(day_seconds))
+                .saturating_sub(i64::try_from(event_index).unwrap_or_default() * 1_800);
+            let session_id = format!("demo-activity-{day_offset:02}-{event_index:02}");
+            let query = sqlx::query(
+                r"
+INSERT INTO session (
+    id, agent, model, base_branch, status, title, prompt, created_at, updated_at
+)
+VALUES (?, 'codex', 'gpt-5.6-sol', 'main', 'Done', 'Dashboard activity seed', '', ?, ?)
+ON CONFLICT(id) DO NOTHING
+",
+            )
+            .bind(&session_id)
+            .bind(timestamp)
+            .bind(timestamp);
+            connection.execute(query).await?;
+
+            let query = sqlx::query(
+                r"
+INSERT INTO session_activity (session_id, created_at)
+VALUES (?, ?)
+ON CONFLICT(session_id) DO NOTHING
+",
+            )
+            .bind(session_id)
+            .bind(timestamp);
+            connection.execute(query).await?;
+        }
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn dashboard_activity_seed_uses_stable_session_ids() -> DemoResult {
+    // Arrange
+    let temp = tempfile::TempDir::new()?;
+    let db_path = temp.path().join("agentty.db");
+    let database = Database::open(&db_path).await?;
+    drop(database);
+    let mut connection = SqliteConnectOptions::new()
+        .filename(&db_path)
+        .connect()
+        .await?;
+
+    // Act
+    seed_dashboard_activity(&mut connection).await?;
+    seed_dashboard_activity(&mut connection).await?;
+
+    // Assert
+    let activity_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM session_activity")
+        .fetch_one(&mut connection)
+        .await?;
+    let null_session_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM session_activity WHERE session_id IS NULL")
+            .fetch_one(&mut connection)
+            .await?;
+    assert_eq!(activity_count, 36);
+    assert_eq!(null_session_count, 0);
+
+    connection.close().await?;
 
     Ok(())
 }
@@ -414,27 +580,28 @@ fn repo_demo_dir() -> PathBuf {
 
 /// Hand-crafts a VHS tape that shows the user typing `agentty`, landing on
 /// a Sessions list pre-seeded with a mixed-agent fleet, then spinning up
-/// two new Claude-backed sessions, returning to the list, and opening the
-/// first session once it transitions to `Review`.
+/// two sessions backed by different agents, returning to the list, and
+/// opening the first session once it transitions to `Review`.
 ///
 /// Each session starts from the `New Session` type picker (confirming
-/// `Regular`). The first session walks the `/model` picker's agent stage —
-/// which lists every available agent (Antigravity, Claude, Codex) — down to
-/// Claude and selects `claude-opus-4-8`; the second keeps the
-/// project default (`claude-haiku-4-5-20251001`) so two distinct Claude
-/// models appear in flight at once.
+/// `Regular`). The first session explicitly keeps the current Claude default,
+/// `claude-fable-5`. The second walks the `/model` picker to Codex and selects
+/// `gpt-5.6-sol`, so two current agents work in parallel.
 fn build_demo_tape(env: &BuilderEnv, gif_path: &Path) -> String {
     let agentty_root = env.agentty_root.display().to_string();
     let path_env = {
-        let system_path = std::env::var("PATH").unwrap_or_default();
-        let mut parts = vec![env.stub_bin.clone()];
-        parts.extend(std::env::split_paths(&system_path));
+        let parts = [
+            env.stub_bin.clone(),
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/bin"),
+        ];
         std::env::join_paths(parts).map_or_else(
             |_| env.stub_bin.display().to_string(),
             |value| value.to_string_lossy().into_owned(),
         )
     };
     let workdir = env.workdir.display().to_string();
+    let second_session = second_session_tape_steps();
 
     format!(
         r#"Set Shell "bash"
@@ -458,6 +625,9 @@ Sleep 80ms
 Type "export HOME='{root}'"
 Enter
 Sleep 80ms
+Type "unset NO_COLOR"
+Enter
+Sleep 80ms
 Type "cd '{cwd}'"
 Enter
 Sleep 80ms
@@ -470,10 +640,13 @@ Sleep 600ms
 Type "agentty"
 Sleep 400ms
 Enter
-Sleep 1500ms
+Sleep 2600ms
 
-# Projects tab lands first; switch to the Sessions fleet.
-Tab
+# Projects tab lands first; linger on its populated dashboard, move down to
+# agentty, and select it. Enter opens that project's Sessions fleet.
+Type "j"
+Sleep 1300ms
+Enter
 Sleep 2200ms
 
 # Session 1: New Session picker -> Regular.
@@ -482,8 +655,7 @@ Sleep 900ms
 Enter
 Sleep 500ms
 
-# Open /model and walk the agent stage (Antigravity, Claude, Codex) down to
-# Claude, then pick claude-opus-4-8.
+# Open /model, choose Claude, and keep its default claude-fable-5 model.
 Type "/model"
 Sleep 500ms
 Enter
@@ -497,7 +669,7 @@ Sleep 700ms
 Enter
 Sleep 700ms
 
-Type "Add rate limiting to the auth API"
+Type "Explain how agentty's stacked commits work"
 Sleep 900ms
 Enter
 Sleep 2500ms
@@ -505,11 +677,43 @@ Sleep 2500ms
 Type "q"
 Sleep 2500ms
 
-# Session 2: New Session picker -> Regular, keep the haiku default.
+{second_session}
+
+Hide
+Type "q"
+Sleep 400ms
+"#,
+        gif = gif_path.display(),
+        root = agentty_root,
+        path = path_env,
+        cwd = workdir,
+        second_session = second_session,
+    )
+}
+
+/// Returns the tape steps that launch the parallel Codex session and then
+/// reopen the completed Fable session.
+fn second_session_tape_steps() -> &'static str {
+    r#"# Session 2: New Session picker -> Regular, then choose Codex gpt-5.6-sol.
 Type "a"
 Sleep 900ms
 Enter
 Sleep 500ms
+
+Type "/model"
+Sleep 500ms
+Enter
+Sleep 700ms
+
+Down
+Sleep 200ms
+Down
+Sleep 400ms
+Enter
+Sleep 700ms
+
+Enter
+Sleep 700ms
 
 Type "Add pagination to the users list endpoint"
 Sleep 900ms
@@ -521,18 +725,8 @@ Sleep 1500ms
 
 # Session 2 (the newer row) sits at the top with the cursor on it; step
 # down onto session 1 and open it once it reaches Review.
-Down
+Type "j"
 Sleep 400ms
 Enter
-Sleep 3500ms
-
-Hide
-Type "q"
-Sleep 400ms
-"#,
-        gif = gif_path.display(),
-        root = agentty_root,
-        path = path_env,
-        cwd = workdir,
-    )
+Sleep 3500ms"#
 }
