@@ -16,8 +16,9 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 use super::published_branch::{self, PublishedBranchAutoPushInput};
+use super::task::SessionCommitInput;
 use super::worker::{SessionCommand, has_unfinished_rebase_operation};
-use super::{SessionTaskService, StatusTransition, session_branch};
+use super::{SessionTaskService, StatusTransition, intent, session_branch};
 use crate::app::assist::{
     AssistContext, AssistPolicy, FailureTracker, append_assist_header, format_detail_lines,
     run_agent_assist,
@@ -181,7 +182,7 @@ struct MergeTaskInput {
 struct SuccessfulMergeCompletion<'a> {
     /// Event channel used for status and stacked-child rebase notifications.
     app_event_tx: &'a mpsc::UnboundedSender<AppEvent>,
-    /// Canonical session commit message used for title and summary sync.
+    /// Canonical session commit message used for final summary sync.
     authoritative_commit_message: Option<&'a str>,
     /// Branch that received the squash merge.
     base_branch: &'a str,
@@ -1275,7 +1276,6 @@ impl SessionManager {
             input.id,
             input.authoritative_commit_message,
             input.merged_commit_hash,
-            input.app_event_tx,
         )
         .await?;
         let restacked_child_session_ids = Self::restack_child_sessions_after_parent_merge(
@@ -1351,16 +1351,8 @@ impl SessionManager {
         session_id: &str,
         authoritative_commit_message: Option<&str>,
         merged_commit_hash: Option<&str>,
-        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
     ) -> Result<(), SessionError> {
         if let Some(commit_message) = authoritative_commit_message {
-            Self::update_session_title_from_commit_message(
-                db,
-                session_id,
-                commit_message,
-                app_event_tx,
-            )
-            .await;
             Self::update_done_session_summary_from_commit_message(db, session_id, commit_message)
                 .await;
         }
@@ -1994,26 +1986,23 @@ impl SessionManager {
             input.session_agent,
         )
         .await;
-        match SessionTaskService::commit_session_changes(
-            input.git_client.as_ref(),
-            &input.folder,
-            input.rebase_plan.target_label(),
-            auto_commit_agent,
-            input.one_shot_client.as_ref(),
-            false,
+        let intent_snapshot =
+            intent::SessionIntentSnapshot::from_session(&input.db, &input.id, &input.transcript)
+                .await;
+        match SessionTaskService::commit_session_changes(SessionCommitInput {
+            base_branch: input.rebase_plan.target_label(),
+            cumulative_summary: intent_snapshot.cumulative_summary(),
+            folder: &input.folder,
+            git_client: input.git_client.as_ref(),
             include_coauthored_by_agentty,
-        )
+            no_verify: false,
+            one_shot_client: input.one_shot_client.as_ref(),
+            session_agent: auto_commit_agent,
+            user_requests: intent_snapshot.user_requests(),
+        })
         .await
         {
             Ok(outcome) => {
-                Self::update_session_title_from_commit_message(
-                    &input.db,
-                    &input.id,
-                    &outcome.commit_message,
-                    &input.app_event_tx,
-                )
-                .await;
-
                 let commit_message = TranscriptNotice::Commit
                     .format_line(format!("committed with hash `{}`", outcome.commit_hash));
                 SessionTaskService::emit_session_workflow_notice(
@@ -2259,32 +2248,6 @@ impl SessionManager {
         });
     }
 
-    /// Updates the persisted session title from the canonical commit message.
-    pub(crate) async fn update_session_title_from_commit_message(
-        db: &AppRepositories,
-        session_id: &str,
-        commit_message: &str,
-        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
-    ) {
-        let title = Self::session_title_from_commit_message(commit_message);
-
-        if let Err(error) = db.sessions().update_session_title(session_id, &title).await {
-            warn!(
-                session_id = session_id,
-                error = %error,
-                "failed to persist session title from commit message"
-            );
-        }
-
-        if app_event_tx.send(AppEvent::RefreshSessions).is_err() {
-            warn!(
-                session_id = session_id,
-                "failed to refresh sessions after commit-title update because the app event \
-                 receiver is closed"
-            );
-        }
-    }
-
     /// Updates the persisted done-session summary by formatting the latest
     /// persisted agent session-summary text, extracting `summary.session`
     /// from raw JSON payloads when needed, and canonical commit message into
@@ -2321,22 +2284,6 @@ impl SessionManager {
             .await
             .ok()
             .flatten()
-    }
-
-    /// Extracts the first non-empty line from one session commit message for
-    /// use as the session title.
-    fn session_title_from_commit_message(commit_message: &str) -> String {
-        let trimmed_message = commit_message.trim();
-        if trimmed_message.is_empty() {
-            return "Apply session updates".to_string();
-        }
-
-        trimmed_message
-            .lines()
-            .map(str::trim)
-            .find(|line| !line.is_empty())
-            .unwrap_or("Apply session updates")
-            .to_string()
     }
 
     /// Builds the persisted done-session summary with markdown sections.
@@ -3451,42 +3398,6 @@ mod tests {
     }
 
     #[test]
-    fn test_session_title_from_commit_message() {
-        // Arrange
-        let commit_message = "Refine merge flow\n\n- Update title handling";
-
-        // Act
-        let title = SessionManager::session_title_from_commit_message(commit_message);
-
-        // Assert
-        assert_eq!(title, "Refine merge flow");
-    }
-
-    #[test]
-    fn test_session_title_from_commit_message_skips_blank_prefix() {
-        // Arrange
-        let commit_message = "\n\nRefine merge flow\n\n- Update title handling";
-
-        // Act
-        let title = SessionManager::session_title_from_commit_message(commit_message);
-
-        // Assert
-        assert_eq!(title, "Refine merge flow");
-    }
-
-    #[test]
-    fn test_session_title_from_commit_message_empty_uses_fallback() {
-        // Arrange
-        let commit_message = "  \n";
-
-        // Act
-        let title = SessionManager::session_title_from_commit_message(commit_message);
-
-        // Assert
-        assert_eq!(title, "Apply session updates");
-    }
-
-    #[test]
     fn test_session_summary_with_commit_message_builds_markdown_sections() {
         // Arrange
         let session_summary = Some("- Session branch now handles refresh races.");
@@ -3538,61 +3449,6 @@ mod tests {
             summary,
             "# Summary\n\nSession now greets users on startup.\n\n# Commit\n\nRefine session \
              summary"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_update_session_title_from_commit_message_preserves_existing_summary() {
-        // Arrange
-        let database = AppRepositories::in_memory().await;
-        let project_id = database
-            .projects()
-            .upsert_project("/tmp/project", Some("main".to_string()))
-            .await
-            .expect("failed to upsert project");
-        database
-            .sessions()
-            .insert_session(
-                "session-id",
-                AgentModel::ClaudeSonnet5.as_str(),
-                "main",
-                "Review",
-                project_id,
-            )
-            .await
-            .expect("failed to insert session");
-        let existing_summary = "- Session branch updates README.";
-        database
-            .sessions()
-            .update_session_summary("session-id", existing_summary)
-            .await
-            .expect("failed to persist existing summary");
-        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
-        let commit_message = "Refine session commit message\n\n- Keep title in sync";
-
-        // Act
-        SessionManager::update_session_title_from_commit_message(
-            &database,
-            "session-id",
-            commit_message,
-            &app_event_tx,
-        )
-        .await;
-        let sessions = database
-            .sessions()
-            .load_sessions()
-            .await
-            .expect("failed to load sessions");
-
-        // Assert
-        assert_eq!(
-            sessions[0].title.as_deref(),
-            Some("Refine session commit message")
-        );
-        assert_eq!(sessions[0].summary.as_deref(), Some(existing_summary));
-        assert_eq!(
-            app_event_rx.try_recv().ok(),
-            Some(AppEvent::RefreshSessions)
         );
     }
 

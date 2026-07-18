@@ -201,8 +201,8 @@ derived data instead of recomputing the render twice per frame.
    commit. After a successful normal commit, the app checks hook readiness again and
    persists the first copy of each distinct `[Commit Warning]` when configured
    validation did not run, avoiding repeated identical notices across later turns.
-   Installed-hook failures continue through normal commit error handling. The session
-   title is synced from the commit text.
+   Installed-hook failures continue through normal commit error handling. Session-title
+   generation remains independent from the commit message.
 1. If the session already tracks a published upstream branch and no chat message or sync
    operation is queued, a per-session branch-operation guard transfers to the detached
    auto-push until it finishes. Every sync request holds the same guard through status
@@ -428,8 +428,14 @@ their triggers:
   placeholder. The backend supports macOS pasteboard, X11 reads, and Wayland reads via
   `wl-paste`; missing or unsupported backends report an inline paste error.
 
-- **Session title generation** (first start turn): runs a one-shot title prompt and
-  persists a concise generated title.
+- **Session title generation** (every turn): runs a one-shot title prompt from bounded
+  cumulative intent context. Short sessions include all persisted user requests; long
+  sessions combine the persisted cumulative summary with first/latest request excerpts.
+  The generated title is conditionally persisted while the latest user-prompt position
+  still matches. Each session worker retains at most one live title task and aborts it
+  when a newer turn starts. Starting a staged session cancels its tracked draft-title
+  task before the first live turn, preventing late draft output from replacing a live
+  title.
 
 - **At-mention file indexing** (`@` in prompt or question input): lists session files
   for the mention picker, falling back to the project root for unstarted drafts.

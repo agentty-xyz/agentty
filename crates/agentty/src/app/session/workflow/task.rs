@@ -10,6 +10,7 @@ use askama::Template;
 use tokio::sync::mpsc;
 use tracing::warn;
 
+use super::intent;
 use crate::app::assist::{
     AssistContext, AssistPolicy, FailureTracker, append_assist_header, format_detail_lines,
     run_agent_assist,
@@ -57,6 +58,8 @@ struct SessionCommitMessagePromptTemplate<'a> {
     /// Full cumulative diff payload wrapped in a Markdown fence sized for its
     /// content.
     fenced_diff: &'a str,
+    /// Bounded cumulative session-intent context wrapped as prompt data.
+    fenced_user_requests: &'a str,
 }
 
 /// Stateless helpers for session process execution and output handling.
@@ -150,6 +153,45 @@ pub(crate) struct SessionCommitOutcome {
     pub(crate) commit_hash: String,
     /// Canonical commit title/body stored on the session branch `HEAD`.
     pub(crate) commit_message: String,
+}
+
+/// Inputs for generating and applying the canonical session commit.
+pub(crate) struct SessionCommitInput<'a> {
+    /// Branch or ref used as the cumulative diff base.
+    pub(crate) base_branch: &'a str,
+    /// Persisted cumulative summary used when request history needs
+    /// compaction.
+    pub(crate) cumulative_summary: Option<&'a str>,
+    /// Session worktree containing the pending changes.
+    pub(crate) folder: &'a Path,
+    /// Git boundary used for diff and commit operations.
+    pub(crate) git_client: &'a dyn GitClient,
+    /// Whether the generated commit receives Agentty's coauthor trailer.
+    pub(crate) include_coauthored_by_agentty: bool,
+    /// Whether tests skip local commit hooks.
+    pub(crate) no_verify: bool,
+    /// Provider-neutral boundary for commit-message generation.
+    pub(crate) one_shot_client: &'a dyn OneShotClient,
+    /// Agent/model selection used for commit-message generation.
+    pub(crate) session_agent: AgentSelection,
+    /// Ordered session requests used directly or compacted for prompt context.
+    pub(crate) user_requests: &'a [String],
+}
+
+type SessionCommitMessagePromptRenderer =
+    fn(&str, Option<&str>, &[String], Option<&str>) -> Result<String, SessionError>;
+
+/// Inputs for one commit-message utility-model submission and retry.
+struct SessionCommitMessageGenerationInput<'a> {
+    cumulative_summary: Option<&'a str>,
+    current_commit_message: Option<&'a str>,
+    diff: &'a str,
+    folder: &'a Path,
+    include_coauthored_by_agentty: bool,
+    one_shot_client: &'a dyn OneShotClient,
+    prompt_renderer: SessionCommitMessagePromptRenderer,
+    session_agent: AgentSelection,
+    user_requests: &'a [String],
 }
 
 /// Inputs needed to execute an agent-assisted edit task.
@@ -317,13 +359,6 @@ impl SessionTaskService {
         let outcome = match Self::commit_changes_with_assist(&context).await {
             Ok(Some(outcome)) => {
                 Self::append_pre_commit_hook_warning(&context).await;
-                SessionManager::update_session_title_from_commit_message(
-                    &context.db,
-                    &context.id,
-                    &outcome.commit_message,
-                    &context.app_event_tx,
-                )
-                .await;
 
                 let message = TranscriptNotice::Commit
                     .format_line(format!("committed with hash `{}`", outcome.commit_hash));
@@ -597,16 +632,28 @@ impl SessionTaskService {
         let auto_commit_agent =
             Self::load_auto_commit_agent_setting(&context.db, &context.id, context.session_agent)
                 .await;
-
-        Self::commit_session_changes(
-            context.git_client.as_ref(),
-            &context.folder,
-            &base_branch,
-            auto_commit_agent,
-            context.one_shot_client.as_ref(),
-            no_verify,
-            Self::load_include_coauthored_by_agentty_setting(&context.db, &context.id).await,
+        let intent_snapshot = intent::SessionIntentSnapshot::from_session(
+            &context.db,
+            &context.id,
+            &context.transcript,
         )
+        .await;
+
+        Self::commit_session_changes(SessionCommitInput {
+            base_branch: &base_branch,
+            cumulative_summary: intent_snapshot.cumulative_summary(),
+            folder: &context.folder,
+            git_client: context.git_client.as_ref(),
+            include_coauthored_by_agentty: Self::load_include_coauthored_by_agentty_setting(
+                &context.db,
+                &context.id,
+            )
+            .await,
+            no_verify,
+            one_shot_client: context.one_shot_client.as_ref(),
+            session_agent: auto_commit_agent,
+            user_requests: intent_snapshot.user_requests(),
+        })
         .await
     }
 
@@ -658,7 +705,7 @@ impl SessionTaskService {
         format_detail_lines(commit_error)
     }
 
-    /// Renders the commit-message generation prompt from the markdown
+    /// Renders the commit-message generation prompt from the Markdown
     /// template.
     ///
     /// # Errors
@@ -666,14 +713,19 @@ impl SessionTaskService {
     fn session_commit_message_prompt(
         diff: &str,
         current_commit_message: Option<&str>,
+        user_requests: &[String],
+        cumulative_summary: Option<&str>,
     ) -> Result<String, SessionError> {
         let stripped_current_commit_message =
             current_commit_message.map_or_else(String::new, strip_agentty_coauthor_trailer);
         let fence = agent::diff_fence(diff);
         let fenced_diff = format!("{fence}diff\n{diff}\n{fence}");
+        let fenced_user_requests =
+            intent::fenced_user_request_history(user_requests, cumulative_summary);
         let template = SessionCommitMessagePromptTemplate {
             current_commit_message: stripped_current_commit_message.trim(),
             fenced_diff: &fenced_diff,
+            fenced_user_requests: &fenced_user_requests,
         };
 
         template.render().map_err(|error| {
@@ -691,14 +743,19 @@ impl SessionTaskService {
     /// cannot be generated, commit-message generation fails, or the git commit
     /// cannot be created/amended.
     pub(crate) async fn commit_session_changes(
-        git_client: &dyn GitClient,
-        folder: &Path,
-        base_branch: &str,
-        session_agent: AgentSelection,
-        one_shot_client: &dyn OneShotClient,
-        no_verify: bool,
-        include_coauthored_by_agentty: bool,
+        input: SessionCommitInput<'_>,
     ) -> Result<SessionCommitOutcome, SessionError> {
+        let SessionCommitInput {
+            base_branch,
+            cumulative_summary,
+            folder,
+            git_client,
+            include_coauthored_by_agentty,
+            no_verify,
+            one_shot_client,
+            session_agent,
+            user_requests,
+        } = input;
         let folder = folder.to_path_buf();
         if git_client.is_worktree_clean(folder.clone()).await? {
             return Err(SessionError::Workflow(
@@ -718,12 +775,17 @@ impl SessionTaskService {
             None
         };
         let generated_commit_message = Self::generate_session_commit_message_with_client(
-            folder.as_path(),
-            session_agent,
-            diff.as_str(),
-            current_commit_message.as_deref(),
-            one_shot_client,
-            include_coauthored_by_agentty,
+            SessionCommitMessageGenerationInput {
+                cumulative_summary,
+                current_commit_message: current_commit_message.as_deref(),
+                diff: diff.as_str(),
+                folder: folder.as_path(),
+                include_coauthored_by_agentty,
+                one_shot_client,
+                prompt_renderer: Self::session_commit_message_prompt,
+                session_agent,
+                user_requests,
+            },
         )
         .await?;
 
@@ -754,14 +816,25 @@ impl SessionTaskService {
     /// fails, or fallback retry with a truncated diff fails after a
     /// context-window error.
     async fn generate_session_commit_message_with_client(
-        folder: &Path,
-        session_agent: AgentSelection,
-        diff: &str,
-        current_commit_message: Option<&str>,
-        one_shot_client: &dyn OneShotClient,
-        include_coauthored_by_agentty: bool,
+        input: SessionCommitMessageGenerationInput<'_>,
     ) -> Result<String, SessionError> {
-        let prompt = Self::session_commit_message_prompt(diff, current_commit_message)?;
+        let SessionCommitMessageGenerationInput {
+            cumulative_summary,
+            current_commit_message,
+            diff,
+            folder,
+            include_coauthored_by_agentty,
+            one_shot_client,
+            prompt_renderer,
+            session_agent,
+            user_requests,
+        } = input;
+        let prompt = prompt_renderer(
+            diff,
+            current_commit_message,
+            user_requests,
+            cumulative_summary,
+        )?;
         let submission = match one_shot_client
             .submit(agent::OneShotRequest {
                 agent_kind: session_agent.kind(),
@@ -780,8 +853,12 @@ impl SessionTaskService {
                 let Some(truncated_diff) = truncate_session_diff_for_commit_message(diff) else {
                     return Err(error);
                 };
-                let truncated_prompt =
-                    Self::session_commit_message_prompt(&truncated_diff, current_commit_message)?;
+                let truncated_prompt = prompt_renderer(
+                    &truncated_diff,
+                    current_commit_message,
+                    user_requests,
+                    cumulative_summary,
+                )?;
 
                 one_shot_client
                     .submit(agent::OneShotRequest {
@@ -1635,22 +1712,36 @@ mod tests {
     }
 
     #[test]
-    /// Verifies session commit-message prompts include continuity, the
-    /// cumulative diff, and current skill-directory guidance.
+    /// Verifies session commit-message prompts include complete user intent,
+    /// continuity, the cumulative diff, and current skill-directory guidance.
     fn test_session_commit_message_prompt_includes_continuity_and_diff() {
         // Arrange
         let diff = "diff --git a/a.rs b/a.rs";
         let current_commit_message = Some("Keep session commit accurate");
+        let user_requests = vec![
+            "Preserve the initial session intent".to_string(),
+            "Also update the generated title".to_string(),
+        ];
 
         // Act
-        let prompt =
-            SessionTaskService::session_commit_message_prompt(diff, current_commit_message)
-                .expect("prompt should render");
+        let prompt = SessionTaskService::session_commit_message_prompt(
+            diff,
+            current_commit_message,
+            &user_requests,
+            None,
+        )
+        .expect("prompt should render");
 
         // Assert
+        assert!(prompt.contains("Request 1:\nPreserve the initial session intent"));
+        assert!(prompt.contains("Request 2:\nAlso update the generated title"));
+        assert!(prompt.contains(
+            "Consider all intent represented by the cumulative summary and ordered request context"
+        ));
         assert!(prompt.contains("Keep session commit accurate"));
         assert!(prompt.contains(diff));
-        assert!(prompt.contains("required protocol JSON object"));
+        assert!(prompt.contains("Return the full response"));
+        assert!(prompt.contains("required protocol JSON"));
         assert!(prompt.contains("Apply this precedence order"));
         assert!(prompt.contains("`.agents/skills/`"));
         assert!(!prompt.contains("`.gemini/skills/`"));
@@ -1680,9 +1771,13 @@ mod tests {
         let current_commit_message: Option<&str> = None;
 
         // Act
-        let prompt =
-            SessionTaskService::session_commit_message_prompt(diff, current_commit_message)
-                .expect("prompt should render");
+        let prompt = SessionTaskService::session_commit_message_prompt(
+            diff,
+            current_commit_message,
+            &[],
+            None,
+        )
+        .expect("prompt should render");
 
         // Assert
         assert!(
@@ -1713,12 +1808,43 @@ mod tests {
         let prompt = SessionTaskService::session_commit_message_prompt(
             diff,
             Some(current_commit_message.as_str()),
+            &[],
+            None,
         )
         .expect("prompt should render");
 
         // Assert
         assert!(!prompt.contains(SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER));
         assert!(prompt.contains("Keep session commit accurate"));
+    }
+
+    #[tokio::test]
+    /// Verifies initial prompt-rendering errors return before model
+    /// submission.
+    async fn test_generate_session_commit_message_with_client_returns_initial_prompt_error() {
+        // Arrange
+        let temp_directory = tempfile::tempdir().expect("failed to create temp dir");
+        let one_shot_client = MockOneShotClient::new();
+
+        // Act
+        let error = SessionTaskService::generate_session_commit_message_with_client(
+            SessionCommitMessageGenerationInput {
+                cumulative_summary: None,
+                current_commit_message: None,
+                diff: "diff --git a/a.rs b/a.rs",
+                folder: temp_directory.path(),
+                include_coauthored_by_agentty: false,
+                one_shot_client: &one_shot_client,
+                prompt_renderer: failing_session_commit_message_prompt,
+                session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+                user_requests: &[],
+            },
+        )
+        .await
+        .expect_err("initial prompt rendering should fail");
+
+        // Assert
+        assert!(error.to_string().contains("failed test prompt rendering"));
     }
 
     #[tokio::test]
@@ -1738,12 +1864,17 @@ mod tests {
 
         // Act
         let error = SessionTaskService::generate_session_commit_message_with_client(
-            temp_directory.path(),
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
-            "diff --git a/a.rs b/a.rs",
-            None,
-            &one_shot_client,
-            false,
+            SessionCommitMessageGenerationInput {
+                cumulative_summary: None,
+                current_commit_message: None,
+                diff: "diff --git a/a.rs b/a.rs",
+                folder: temp_directory.path(),
+                include_coauthored_by_agentty: false,
+                one_shot_client: &one_shot_client,
+                prompt_renderer: SessionTaskService::session_commit_message_prompt,
+                session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+                user_requests: &[],
+            },
         )
         .await
         .expect_err("plain-text one-shot commit message should fail");
@@ -1774,12 +1905,19 @@ mod tests {
 
         // Act
         let generated_message = SessionTaskService::generate_session_commit_message_with_client(
-            temp_directory.path(),
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
-            "diff --git a/a.rs b/a.rs",
-            Some("Keep session commit accurate\n\n- Preserve existing behavior"),
-            &one_shot_client,
-            false,
+            SessionCommitMessageGenerationInput {
+                cumulative_summary: None,
+                current_commit_message: Some(
+                    "Keep session commit accurate\n\n- Preserve existing behavior",
+                ),
+                diff: "diff --git a/a.rs b/a.rs",
+                folder: temp_directory.path(),
+                include_coauthored_by_agentty: false,
+                one_shot_client: &one_shot_client,
+                prompt_renderer: SessionTaskService::session_commit_message_prompt,
+                session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+                user_requests: &[],
+            },
         )
         .await
         .expect("blank answer should fall back to continuity title");
@@ -1795,6 +1933,12 @@ mod tests {
         // Arrange
         let temp_directory = tempfile::tempdir().expect("failed to create temp dir");
         let diff = "diff line\n".repeat(SESSION_COMMIT_DIFF_TRUNCATION_LIMIT + 1);
+        let user_requests = vec![
+            format!("Initial intent {}", "a".repeat(20_000)),
+            "Preserve the middle requirement".to_string(),
+            format!("Latest refinement {}", "z".repeat(20_000)),
+        ];
+        let cumulative_summary = "Preserve the initial intent and middle requirement";
         let call_count = Arc::new(AtomicUsize::new(0));
         let call_count_for_submit = Arc::clone(&call_count);
         let mut one_shot_client = MockOneShotClient::new();
@@ -1803,6 +1947,13 @@ mod tests {
             .times(2)
             .returning(move |request| {
                 let request_index = call_count_for_submit.fetch_add(1, Ordering::SeqCst) + 1;
+                assert!(request.prompt.contains("Cumulative session summary:"));
+                assert!(request.prompt.contains(cumulative_summary));
+                assert!(
+                    request
+                        .prompt
+                        .contains("1 intermediate request details represented")
+                );
 
                 if request_index == 1 {
                     assert!(request.prompt.contains("diff line"));
@@ -1822,12 +1973,17 @@ mod tests {
 
         // Act
         let generated_message = SessionTaskService::generate_session_commit_message_with_client(
-            temp_directory.path(),
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
-            diff.as_str(),
-            None,
-            &one_shot_client,
-            false,
+            SessionCommitMessageGenerationInput {
+                cumulative_summary: Some(cumulative_summary),
+                current_commit_message: None,
+                diff: diff.as_str(),
+                folder: temp_directory.path(),
+                include_coauthored_by_agentty: false,
+                one_shot_client: &one_shot_client,
+                prompt_renderer: SessionTaskService::session_commit_message_prompt,
+                session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+                user_requests: &user_requests,
+            },
         )
         .await
         .expect("truncated retry should succeed");
@@ -1835,6 +1991,40 @@ mod tests {
         // Assert
         assert_eq!(generated_message, "Truncated diff commit");
         assert_eq!(call_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    /// Verifies prompt-rendering errors from the context-window retry are
+    /// returned without a second model submission.
+    async fn test_generate_session_commit_message_with_client_returns_retry_prompt_error() {
+        // Arrange
+        let temp_directory = tempfile::tempdir().expect("failed to create temp dir");
+        let diff = "diff line\n".repeat(SESSION_COMMIT_DIFF_TRUNCATION_LIMIT + 1);
+        let mut one_shot_client = MockOneShotClient::new();
+        one_shot_client
+            .expect_submit()
+            .times(1)
+            .returning(|_| Err(agent::OneShotError::new("contextWindowExceeded")));
+
+        // Act
+        let error = SessionTaskService::generate_session_commit_message_with_client(
+            SessionCommitMessageGenerationInput {
+                cumulative_summary: None,
+                current_commit_message: None,
+                diff: diff.as_str(),
+                folder: temp_directory.path(),
+                include_coauthored_by_agentty: false,
+                one_shot_client: &one_shot_client,
+                prompt_renderer: fail_truncated_session_commit_message_prompt,
+                session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+                user_requests: &[],
+            },
+        )
+        .await
+        .expect_err("retry prompt rendering should fail");
+
+        // Assert
+        assert!(error.to_string().contains("failed retry prompt rendering"));
     }
 
     #[test]
@@ -2298,9 +2488,9 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies successful auto-commit updates the title while preserving the
-    /// persisted agent session summary text.
-    async fn test_handle_auto_commit_preserves_agent_session_summary() {
+    /// Verifies successful auto-commit preserves the independently generated
+    /// title and persisted agent session summary text.
+    async fn test_handle_auto_commit_preserves_title_and_agent_session_summary() {
         // Arrange
         let mut mock_git_client = MockGitClient::new();
         mock_git_client
@@ -2339,6 +2529,11 @@ mod tests {
             .returning(|_| Box::pin(async { Ok::<_, GitError>("abc1234".to_string()) }));
         let database = AppRepositories::in_memory().await;
         insert_review_session(&database, AgentModel::Gpt55.as_str()).await;
+        database
+            .sessions()
+            .update_session_title("session-id", "Preserve complete session intent")
+            .await
+            .expect("failed to persist generated title");
         let summary_payload = "- Session branch updates README formatting.".to_string();
         database
             .sessions()
@@ -2377,7 +2572,10 @@ mod tests {
             .expect("failed to load sessions");
 
         // Assert
-        assert_eq!(sessions[0].title.as_deref(), Some("Refine README updates"));
+        assert_eq!(
+            sessions[0].title.as_deref(),
+            Some("Preserve complete session intent")
+        );
         assert_eq!(
             sessions[0].summary.as_deref(),
             Some("- Session branch updates README formatting.")
@@ -2674,5 +2872,36 @@ mod tests {
         let error_text = result.expect_err("expected non-zero exit to fail");
         assert!(error_text.to_string().contains("exit code 7"));
         assert!(error_text.to_string().contains("assist failed"));
+    }
+
+    fn failing_session_commit_message_prompt(
+        _diff: &str,
+        _current_commit_message: Option<&str>,
+        _user_requests: &[String],
+        _cumulative_summary: Option<&str>,
+    ) -> Result<String, SessionError> {
+        Err(SessionError::Workflow(
+            "failed test prompt rendering".to_string(),
+        ))
+    }
+
+    fn fail_truncated_session_commit_message_prompt(
+        diff: &str,
+        current_commit_message: Option<&str>,
+        user_requests: &[String],
+        cumulative_summary: Option<&str>,
+    ) -> Result<String, SessionError> {
+        if diff.contains(SESSION_COMMIT_DIFF_TRUNCATED_SECTION_MARKER) {
+            return Err(SessionError::Workflow(
+                "failed retry prompt rendering".to_string(),
+            ));
+        }
+
+        SessionTaskService::session_commit_message_prompt(
+            diff,
+            current_commit_message,
+            user_requests,
+            cumulative_summary,
+        )
     }
 }

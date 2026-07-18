@@ -76,6 +76,27 @@ const MISSING_DECISION_CONTEXT_POLICY_TEXT: &str =
 const MISSING_RESOLVED_DECISION_HISTORY_TEXT: &str =
     "Focused review prompt omitted the resolved session decision.";
 
+/// Title of the first session used by persisted focused-review switching.
+const PERSISTED_FOCUSED_REVIEW_SESSION_TITLE: &str = "Review-ready session shortcuts";
+
+/// Title of the second session used by persisted focused-review switching.
+const SECOND_PERSISTED_FOCUSED_REVIEW_SESSION_TITLE: &str = "Second persisted review";
+
+/// First request used to prove later title generation retains initial intent.
+const INTENT_HISTORY_INITIAL_REQUEST: &str = "Preserve original lifecycle intent";
+
+/// Stable branch for the seeded intent-history session worktree.
+const INTENT_HISTORY_SESSION_BRANCH: &str = "wt/intent-h";
+
+/// Stable id for the seeded intent-history session.
+const INTENT_HISTORY_SESSION_ID: &str = "intent-history-0001";
+
+/// Follow-up request used to prove title generation sees the complete history.
+const INTENT_HISTORY_FOLLOW_UP_REQUEST: &str = "Also keep later refinements in view";
+
+/// Title emitted only when both ordered user requests reach the title prompt.
+const INTENT_HISTORY_TITLE: &str = "Keep all intent";
+
 /// Returns every scrollbar row and the subset occupied by its thumb in the
 /// session output's rightmost column.
 fn session_output_scrollbar_rows(frame: &TerminalFrame) -> (Vec<u16>, Vec<u16>) {
@@ -174,6 +195,122 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Crea
     seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])?;
 
     Ok(())
+}
+
+/// Seeds prior intent and installs a Claude stub that requires both user
+/// requests before returning the final intent title.
+fn seed_intent_history_session_with_claude_stub(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    seed_intent_history_session(env)?;
+    install_intent_history_claude_stub(env)
+}
+
+/// Seeds one review-ready session with the initial request already persisted.
+fn seed_intent_history_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    common::seed_session(
+        env,
+        SessionSeed::regular(
+            INTENT_HISTORY_SESSION_ID,
+            "claude-haiku-4-5-20251001",
+            "main",
+            "Review",
+        )
+        .with_title(INTENT_HISTORY_INITIAL_REQUEST),
+    )?;
+
+    let runtime = common::seed_runtime()?;
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .update_session_prompt(INTENT_HISTORY_SESSION_ID, INTENT_HISTORY_INITIAL_REQUEST)
+            .await?;
+        database
+            .sessions()
+            .append_session_message(
+                INTENT_HISTORY_SESSION_ID,
+                SessionMessageKind::UserPrompt,
+                INTENT_HISTORY_INITIAL_REQUEST,
+            )
+            .await?;
+        database
+            .sessions()
+            .append_session_message(
+                INTENT_HISTORY_SESSION_ID,
+                SessionMessageKind::AssistantAnswer,
+                "Initial request completed",
+            )
+            .await
+    })?;
+
+    let session_worktree =
+        test_support::session_folder(&env.agentty_root.join("wt"), INTENT_HISTORY_SESSION_ID);
+    let session_worktree_path = session_worktree.to_string_lossy().into_owned();
+    run_git(
+        &env.workdir,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            INTENT_HISTORY_SESSION_BRANCH,
+            session_worktree_path.as_str(),
+            "main",
+        ],
+    )?;
+
+    Ok(())
+}
+
+/// Installs the deterministic Claude stub used by the intent-history session.
+fn install_intent_history_claude_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    for executable_name in ["agy", "codex", "gemini"] {
+        std::fs::remove_file(env.stub_bin.join(executable_name))?;
+    }
+
+    let claude_path = env.stub_bin.join("claude");
+    let script = format!(
+        r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+prompt=$(cat)
+case "$prompt" in
+  *'Generate a concise, commit-style title'*)
+    case "$prompt" in
+      *'{INTENT_HISTORY_INITIAL_REQUEST}'*'{INTENT_HISTORY_FOLLOW_UP_REQUEST}'*)
+        answer='{INTENT_HISTORY_TITLE}'
+        ;;
+      *)
+        answer='Preserve lifecycle intent'
+        ;;
+    esac
+    ;;
+  *'{INTENT_HISTORY_FOLLOW_UP_REQUEST}'*)
+    answer='Follow-up request completed'
+    ;;
+  *)
+    printf 'initial\n' > intent-history.txt
+    answer='Initial request completed'
+    ;;
+esac
+printf '%s\n' '{{"type":"system","subtype":"init"}}'
+printf '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"%s"}}]}}}}\n' "$answer"
+printf '{{"type":"result","subtype":"success","result":"{{\\\"answer\\\":\\\"%s\\\",\\\"questions\\\":[],\\\"summary\\\":null}}","usage":{{"input_tokens":5,"output_tokens":9}}}}\n' "$answer"
+"#
+    );
+    std::fs::write(&claude_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+
+    seed_project_settings(
+        env,
+        &[
+            ("DefaultSmartAgent", "claude"),
+            ("DefaultSmartModel", "claude-haiku-4-5-20251001"),
+            ("DefaultFastAgent", "claude"),
+            ("DefaultFastModel", "claude-haiku-4-5-20251001"),
+        ],
+    )
 }
 
 /// Seeds one review-ready session whose transcript contains a markdown table.
@@ -468,7 +605,7 @@ fn seed_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
     common::seed_session(
         env,
         SessionSeed::regular("review-shortcut-0001", "gpt-5.5", "main", "Review")
-            .with_title("Review-ready session shortcuts"),
+            .with_title(PERSISTED_FOCUSED_REVIEW_SESSION_TITLE),
     )?;
 
     let runtime = common::seed_runtime()?;
@@ -1019,7 +1156,7 @@ fn seed_sessions_with_persisted_focused_reviews(
     common::seed_session(
         env,
         SessionSeed::regular("second-review-0001", "gpt-5.5", "main", "Review")
-            .with_title("Second persisted review"),
+            .with_title(SECOND_PERSISTED_FOCUSED_REVIEW_SESSION_TITLE),
     )?;
 
     let runtime = common::seed_runtime()?;
@@ -1743,6 +1880,43 @@ fn session_list_empty_state() -> E2eResult {
                 assertion::assert_not_visible(frame, "Merge queue");
                 assertion::assert_not_visible(frame, "Archive");
                 assertion::assert_not_visible(frame, "No sessions");
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify follow-up turns regenerate the visible session title from the
+/// complete request history.
+#[test]
+fn test_session_intent_aware_title_generation() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_intent_aware_title_generation")
+        .with_git()
+        .setup(seed_intent_history_session_with_claude_stub)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_text("Enter: reply", 5000)
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .write_text(INTENT_HISTORY_FOLLOW_UP_REQUEST)
+                    .wait_for_text(INTENT_HISTORY_FOLLOW_UP_REQUEST, 3000)
+                    .press_key("Enter")
+                    .press_key("q")
+                    .step(common::wait_for_session_list_footer())
+                    .wait_for_text(INTENT_HISTORY_TITLE, 30000)
+                    .capture_labeled(
+                        "complete_intent_title",
+                        "Session title reflects both requests instead of commit wording",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, INTENT_HISTORY_TITLE, &full);
             },
         )?;
 
@@ -4498,17 +4672,22 @@ fn focused_reviews_survive_session_switching() -> E2eResult {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .press_key("Enter")
+                    .wait_for_text(PERSISTED_FOCUSED_REVIEW_SESSION_TITLE, 5000)
+                    .compose(&common::open_selected_session_view())
                     .wait_for_text("Persisted focused review finding.", 5000)
                     .capture_labeled("first_review", "First session focused review")
-                    .press_key("q")
+                    .compose(&common::return_to_session_list())
+                    .wait_for_text(SECOND_PERSISTED_FOCUSED_REVIEW_SESSION_TITLE, 5000)
                     .press_key("j")
-                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .compose(&common::open_selected_session_view())
                     .wait_for_text("Second persisted review finding.", 5000)
                     .capture_labeled("second_review", "Second session focused review")
-                    .press_key("q")
+                    .compose(&common::return_to_session_list())
+                    .wait_for_text(PERSISTED_FOCUSED_REVIEW_SESSION_TITLE, 5000)
                     .press_key("k")
-                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .compose(&common::open_selected_session_view())
                     .wait_for_text("Persisted focused review finding.", 5000)
                     .capture_labeled("restored_first_review", "Restored first focused review")
             },

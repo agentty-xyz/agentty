@@ -283,10 +283,14 @@ tracked separately from the source session.
 ### Commit and Merge Behavior
 
 After each successful turn with file changes, Agentty keeps the session branch at one
-evolving commit: it regenerates the commit message from the cumulative session diff
-using the project's `Default Fast Model`, applies the `Coauthored by Agentty` setting,
-amends `HEAD`, and refreshes the session title from the commit text. If a later turn
-reverts every change, the empty session commit is dropped. Commit and merge notices
+evolving commit: it regenerates the commit message from the cumulative session diff and
+cumulative session-intent context using the project's `Default Fast Model`, applies the
+`Coauthored by Agentty` setting, and amends `HEAD`. Short sessions keep the complete
+ordered request history in that context; long sessions use the persisted cumulative
+summary with bounded first/latest request excerpts. Agentty separately regenerates the
+session title from the same bounded context at every turn, so commit wording does not
+replace the intent-focused title or make utility prompts grow without limit. If a later
+turn reverts every change, the empty session commit is dropped. Commit and merge notices
 appear as transient status rows rather than persisted transcript messages.
 
 When a project contains `.pre-commit-config.yaml` or `.pre-commit-config.yml`, Agentty

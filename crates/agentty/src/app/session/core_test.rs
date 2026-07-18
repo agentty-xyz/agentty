@@ -24,6 +24,7 @@ use tokio::sync::{Barrier, Notify};
 use super::*;
 use crate::app::prompt_intent::{ReviewCommentResolutionOutcome, ReviewCommentSelection};
 use crate::app::review::{review_failure_message, review_loading_message};
+use crate::app::session::workflow::task::SessionCommitInput;
 use crate::app::{App, AppEvent, ReviewCacheEntry, SyncSessionStartError, Tab};
 use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ReasoningLevel,
@@ -4302,6 +4303,10 @@ async fn test_spawn_session_task_auto_commits_changes() {
 async fn test_commit_changes_reuses_existing_session_commit_message_in_tests() {
     // Arrange
     let session_folder = PathBuf::from("/tmp/session-worktree");
+    let user_requests = [
+        "Preserve initial intent".to_string(),
+        "Add follow-up coverage".to_string(),
+    ];
     let mut mock_git_client = git::MockGitClient::new();
     let mut sequence = mockall::Sequence::new();
     mock_git_client
@@ -4346,6 +4351,8 @@ async fn test_commit_changes_reuses_existing_session_commit_message_in_tests() {
         .times(1)
         .returning(|request| {
             assert!(request.prompt.contains("Refine session work"));
+            assert!(request.prompt.contains("Preserve initial intent"));
+            assert!(request.prompt.contains("Add follow-up coverage"));
 
             Ok(ag_agent::OneShotSubmission {
                 response: AgentResponse::plain("Refine session work"),
@@ -4359,15 +4366,17 @@ async fn test_commit_changes_reuses_existing_session_commit_message_in_tests() {
         });
 
     // Act
-    let outcome = SessionTaskService::commit_session_changes(
-        &mock_git_client,
-        &session_folder,
-        "main",
-        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
-        &one_shot_client,
-        false,
-        false,
-    )
+    let outcome = SessionTaskService::commit_session_changes(SessionCommitInput {
+        base_branch: "main",
+        cumulative_summary: None,
+        folder: &session_folder,
+        git_client: &mock_git_client,
+        include_coauthored_by_agentty: false,
+        no_verify: false,
+        one_shot_client: &one_shot_client,
+        session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+        user_requests: &user_requests,
+    })
     .await
     .expect("failed to commit existing session message");
 

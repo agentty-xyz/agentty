@@ -15,7 +15,7 @@ use uuid::Uuid;
 use super::task::SessionTranscriptMessageAppend;
 use super::worker::{SessionCommand, TurnMetadata};
 use super::{
-    SessionTaskService, StatusTransition, draft, isolation, session_branch, session_folder,
+    SessionTaskService, StatusTransition, draft, intent, isolation, session_branch, session_folder,
     unix_timestamp_from_system_time,
 };
 use crate::app::session::SessionError;
@@ -86,7 +86,7 @@ struct DeletedSessionCleanup {
 #[derive(Template)]
 #[template(path = "session_title_generation_prompt.md", escape = "none")]
 struct SessionTitleGenerationPromptTemplate<'a> {
-    prompt: &'a str,
+    fenced_user_requests: &'a str,
 }
 
 /// Identifies one tracked draft-title generation task completion event.
@@ -95,24 +95,40 @@ struct TitleGenerationTaskCompletion {
     session_id: SessionId,
 }
 
+/// Snapshot condition that must still match before a generated title is
+/// persisted.
+pub(super) enum SessionTitleGenerationGuard {
+    /// Persisted draft prompt text must still match the staged snapshot.
+    PersistedPrompt(String),
+    /// Latest persisted user prompt must still occupy this transcript
+    /// position.
+    UserPromptPosition(i64),
+}
+
 /// Inputs for one detached session-title generation task.
 pub(super) struct SessionTitleGenerationTaskInput {
     /// Event sink used to publish task completion and session refreshes.
     pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    /// Persisted cumulative summary used when request history needs
+    /// compaction.
+    pub(super) cumulative_summary: Option<String>,
     /// Repository bundle used to persist a generated title.
     pub(super) db: db::AppRepositories,
     /// Project folder used as the isolated prompt working directory.
     pub(super) folder: PathBuf,
+    /// Snapshot condition preventing stale title tasks from overwriting newer
+    /// intent.
+    pub(super) guard: SessionTitleGenerationGuard,
     /// Provider-neutral boundary for the isolated title prompt.
     pub(super) one_shot_client: Arc<dyn OneShotClient>,
-    /// Prompt snapshot used to generate and validate the title.
-    pub(super) prompt: String,
     /// Agent/model selection used for title generation.
     pub(super) session_agent: AgentSelection,
     /// Session receiving the generated title.
     pub(super) session_id: SessionId,
     /// Optional generation used to ignore superseded draft-title tasks.
     pub(super) tracked_generation: Option<u64>,
+    /// Ordered user requests used to generate the cumulative intent title.
+    pub(super) user_requests: Vec<String>,
 }
 
 impl SessionManager {
@@ -944,13 +960,17 @@ impl SessionManager {
         let title_generation_task =
             Self::spawn_session_title_generation_task(SessionTitleGenerationTaskInput {
                 app_event_tx: services.event_sender(),
+                cumulative_summary: None,
                 db: services.db().clone(),
                 folder: title_generation_folder,
+                guard: SessionTitleGenerationGuard::PersistedPrompt(
+                    title_generation_prompt.clone(),
+                ),
                 one_shot_client: services.one_shot_client(),
-                prompt: title_generation_prompt,
                 session_agent: title_generation_agent,
                 session_id: persisted_session_id.clone(),
                 tracked_generation: Some(title_generation_task_generation),
+                user_requests: vec![title_generation_prompt],
             });
         self.replace_title_generation_task(
             &persisted_session_id,
@@ -1066,6 +1086,7 @@ impl SessionManager {
             }
         };
 
+        self.abort_title_generation_task(session_id);
         self.start_session(services, session_id, prompt).await?;
 
         if let Ok(session_index) = self.session_index_or_err(session_id)
@@ -1095,8 +1116,8 @@ impl SessionManager {
     /// Submits the first prompt for a blank session and starts the agent.
     ///
     /// The first prompt is persisted as both session prompt and session title.
-    /// A detached one-shot title-generation task from the start-turn worker
-    /// may replace that initial title once.
+    /// A detached one-shot title-generation task refreshes that fallback from
+    /// bounded cumulative intent context at every turn.
     ///
     /// # Errors
     /// Returns an error if the session is missing, its worktree cannot be
@@ -1999,8 +2020,8 @@ impl SessionManager {
     ///
     /// This writes the initial prompt/title.
     ///
-    /// Title generation itself is triggered once from the start-turn worker
-    /// path as soon as the first turn starts running.
+    /// Title generation itself is triggered from the turn worker as soon as
+    /// each turn starts running.
     async fn persist_first_message_metadata(
         &self,
         services: &AppServices,
@@ -2235,23 +2256,26 @@ impl SessionManager {
     /// Spawns one detached model command that generates a session title for
     /// one prompt snapshot.
     ///
-    /// The generated title is persisted only when the session prompt still
-    /// matches the prompt used to generate it, then a `RefreshSessions` event
-    /// is emitted so list-mode snapshots pick up the new title. Callers that
-    /// can supersede draft-title generation should retain the returned task
-    /// handle and abort any older in-flight task before replacing it.
+    /// The generated title is persisted only when the draft prompt or latest
+    /// live user-prompt position still matches the intent snapshot used to
+    /// generate it, then a `RefreshSessions` event is emitted so list-mode
+    /// snapshots pick up the new title. Callers that can supersede draft-title
+    /// generation should retain the returned task handle and abort any older
+    /// in-flight task before replacing it.
     pub(super) fn spawn_session_title_generation_task(
         input: SessionTitleGenerationTaskInput,
     ) -> tokio::task::JoinHandle<()> {
         let SessionTitleGenerationTaskInput {
             app_event_tx,
+            cumulative_summary,
             db,
             folder,
+            guard,
             one_shot_client,
-            prompt,
             session_agent,
             session_id: persisted_session_id,
             tracked_generation,
+            user_requests,
         } = input;
         let tracked_completion =
             tracked_generation.map(|generation| TitleGenerationTaskCompletion {
@@ -2260,9 +2284,10 @@ impl SessionManager {
             });
 
         tokio::spawn(async move {
-            let Ok(title_generation_prompt) =
-                SessionManager::session_title_generation_prompt(&prompt)
-            else {
+            let Ok(title_generation_prompt) = SessionManager::session_title_generation_prompt(
+                &user_requests,
+                cumulative_summary.as_deref(),
+            ) else {
                 SessionManager::emit_title_generation_finished_event(
                     &app_event_tx,
                     tracked_completion.as_ref(),
@@ -2295,7 +2320,10 @@ impl SessionManager {
                 return;
             };
 
-            if generated_title == prompt {
+            if user_requests
+                .iter()
+                .any(|user_request| generated_title == user_request.trim())
+            {
                 SessionManager::emit_title_generation_finished_event(
                     &app_event_tx,
                     tracked_completion.as_ref(),
@@ -2303,10 +2331,13 @@ impl SessionManager {
                 return;
             }
 
-            match db
-                .sessions()
-                .update_session_title_for_prompt(&persisted_session_id, &prompt, &generated_title)
-                .await
+            match SessionManager::persist_generated_session_title(
+                &db,
+                &persisted_session_id,
+                guard,
+                &generated_title,
+            )
+            .await
             {
                 Ok(true) => {
                     if app_event_tx.send(AppEvent::RefreshSessions).is_err() {
@@ -2331,6 +2362,31 @@ impl SessionManager {
                 tracked_completion.as_ref(),
             );
         })
+    }
+
+    /// Persists a generated title only while its intent snapshot is current.
+    async fn persist_generated_session_title(
+        db: &db::AppRepositories,
+        session_id: &str,
+        guard: SessionTitleGenerationGuard,
+        generated_title: &str,
+    ) -> Result<bool, db::DbError> {
+        match guard {
+            SessionTitleGenerationGuard::PersistedPrompt(expected_prompt) => {
+                db.sessions()
+                    .update_session_title_for_prompt(session_id, &expected_prompt, generated_title)
+                    .await
+            }
+            SessionTitleGenerationGuard::UserPromptPosition(expected_position) => {
+                db.sessions()
+                    .update_session_title_for_latest_user_prompt(
+                        session_id,
+                        expected_position,
+                        generated_title,
+                    )
+                    .await
+            }
+        }
     }
 
     /// Emits one tracked title-generation completion event when the task was
@@ -2381,12 +2437,19 @@ impl SessionManager {
         Some(submission.response.to_answer_display_text())
     }
 
-    /// Builds the title-generation instruction prompt from the user message.
+    /// Builds the title-generation instruction prompt from every user request.
     ///
     /// # Errors
     /// Returns an error if Askama template rendering fails.
-    fn session_title_generation_prompt(prompt: &str) -> Result<String, SessionError> {
-        let template = SessionTitleGenerationPromptTemplate { prompt };
+    fn session_title_generation_prompt(
+        user_requests: &[String],
+        cumulative_summary: Option<&str>,
+    ) -> Result<String, SessionError> {
+        let fenced_user_requests =
+            intent::fenced_user_request_history(user_requests, cumulative_summary);
+        let template = SessionTitleGenerationPromptTemplate {
+            fenced_user_requests: &fenced_user_requests,
+        };
 
         template.render().map_err(|error| {
             SessionError::Workflow(format!(
@@ -3057,10 +3120,11 @@ mod test_support {
 mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
+    use std::time::Duration;
 
     use ag_agent::MockOneShotClient;
     use ag_forge as forge;
-    use tokio::sync::mpsc;
+    use tokio::sync::{mpsc, oneshot};
 
     use super::*;
     use crate::app::session::SessionDefaults;
@@ -3632,6 +3696,86 @@ mod tests {
         assert!(persisted_session.prompt.is_empty());
         assert!(session_manager.sessions()[0].prompt.is_empty());
         assert!(session_manager.sessions()[0].draft_attachments.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_start_staged_session_aborts_late_draft_title_task_before_live_start() {
+        // Arrange
+        struct AbortSignal(Option<oneshot::Sender<()>>);
+
+        impl Drop for AbortSignal {
+            fn drop(&mut self) {
+                if let Some(sender) = self.0.take() {
+                    let _ = sender.send(());
+                }
+            }
+        }
+
+        let mut session = test_session(
+            "Preserve the staged request",
+            Status::Draft,
+            Some("Staged request"),
+            "",
+        );
+        session.is_draft = true;
+        let database = database_with_session(&session).await;
+        let mut session_manager = session_manager_with_one_session(session);
+        let (title_task_started_tx, title_task_started_rx) = oneshot::channel();
+        let (title_task_aborted_tx, title_task_aborted_rx) = oneshot::channel();
+        let title_generation_task = tokio::spawn(async move {
+            let _abort_signal = AbortSignal(Some(title_task_aborted_tx));
+            let _ = title_task_started_tx.send(());
+            loop {
+                tokio::task::yield_now().await;
+            }
+        });
+        title_task_started_rx
+            .await
+            .expect("draft title task should start");
+        session_manager.replace_title_generation_task("session-id", 1, title_generation_task);
+        let mut mock_fs_client = fs::MockFsClient::new();
+        mock_fs_client.expect_is_dir().once().return_const(false);
+        let (live_start_waiting_tx, mut live_start_waiting_rx) = mpsc::unbounded_channel();
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_find_git_repo_root()
+            .once()
+            .returning(move |_| {
+                let _ = live_start_waiting_tx.send(());
+
+                Box::pin(std::future::pending())
+            });
+        let services = test_services_with_fs_client(
+            &database,
+            Arc::new(mock_fs_client),
+            Arc::new(mock_git_client),
+            Arc::new(forge::MockReviewRequestClient::new()),
+        );
+
+        // Act
+        let start_future = session_manager.start_staged_session(&services, "session-id");
+        tokio::pin!(start_future);
+        let start_race_result = tokio::time::timeout(Duration::from_secs(1), async {
+            tokio::select! {
+                abort_result = async {
+                    live_start_waiting_rx
+                        .recv()
+                        .await
+                        .expect("live start should reach the controlled wait point");
+
+                    title_task_aborted_rx.await
+                } => Ok(abort_result),
+                start_result = &mut start_future => Err(start_result),
+            }
+        })
+        .await
+        .expect("draft title task should abort before live startup continues");
+
+        // Assert
+        assert!(
+            matches!(&start_race_result, Ok(Ok(()))),
+            "draft title task should abort while live start waits, got {start_race_result:?}"
+        );
     }
 
     #[tokio::test]
@@ -4327,25 +4471,120 @@ mod tests {
     }
 
     #[test]
-    /// Ensures title-generation prompt rendering includes session request text.
-    fn test_session_title_generation_prompt_includes_request() {
+    /// Ensures title-generation prompt rendering includes the complete ordered
+    /// session request history.
+    fn test_session_title_generation_prompt_includes_request_history() {
         // Arrange
-        let request_prompt = "Refactor session lifecycle updates";
+        let user_requests = vec![
+            "Refactor session lifecycle updates".to_string(),
+            "Also preserve the initial intent".to_string(),
+        ];
 
         // Act
-        let title_prompt = SessionManager::session_title_generation_prompt(request_prompt)
+        let title_prompt = SessionManager::session_title_generation_prompt(&user_requests, None)
             .expect("title generation prompt should render");
 
         // Assert
         assert!(title_prompt.contains("Generate a concise, commit-style title"));
         assert!(title_prompt.contains("Describe what the user wants to do"));
+        assert!(title_prompt.contains(
+            "Consider all intent represented by the cumulative summary and ordered request context"
+        ));
         assert!(title_prompt.contains("Keep it high-level and intent-focused."));
         assert!(title_prompt.contains("Do not include long file names"));
         assert!(title_prompt.contains("Do not describe your own progress"));
         assert!(title_prompt.contains("Do not use first-person phrasing"));
         assert!(title_prompt.contains("Put only the title text in `answer`"));
         assert!(!title_prompt.contains("Return only the title text."));
-        assert!(title_prompt.contains(request_prompt));
+        assert!(title_prompt.contains("Request 1:\nRefactor session lifecycle updates"));
+        assert!(title_prompt.contains("Request 2:\nAlso preserve the initial intent"));
+    }
+
+    #[tokio::test]
+    /// Ensures generated-title persistence supports draft prompt snapshots and
+    /// rejects stale live user-prompt positions.
+    async fn test_persist_generated_session_title_guards_intent_snapshot() {
+        // Arrange
+        let database = AppRepositories::in_memory().await;
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to upsert project");
+        database
+            .sessions()
+            .insert_session(
+                "session-id",
+                AgentModel::ClaudeSonnet5.as_str(),
+                "main",
+                "Draft",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        database
+            .sessions()
+            .update_session_prompt("session-id", "Draft request")
+            .await
+            .expect("failed to persist draft request");
+
+        // Act
+        let draft_update_applied = SessionManager::persist_generated_session_title(
+            &database,
+            "session-id",
+            SessionTitleGenerationGuard::PersistedPrompt("Draft request".to_string()),
+            "Summarize the draft request",
+        )
+        .await
+        .expect("failed to apply draft title");
+        database
+            .sessions()
+            .append_session_message(
+                "session-id",
+                SessionMessageKind::UserPrompt,
+                "Initial live request",
+            )
+            .await
+            .expect("failed to persist live request");
+        let live_update_applied = SessionManager::persist_generated_session_title(
+            &database,
+            "session-id",
+            SessionTitleGenerationGuard::UserPromptPosition(0),
+            "Summarize the live request",
+        )
+        .await
+        .expect("failed to apply live title");
+        database
+            .sessions()
+            .append_session_message(
+                "session-id",
+                SessionMessageKind::UserPrompt,
+                "Follow-up live request",
+            )
+            .await
+            .expect("failed to persist follow-up request");
+        let stale_update_applied = SessionManager::persist_generated_session_title(
+            &database,
+            "session-id",
+            SessionTitleGenerationGuard::UserPromptPosition(0),
+            "Stale title",
+        )
+        .await
+        .expect("failed to reject stale live title");
+
+        // Assert
+        let sessions = database
+            .sessions()
+            .load_sessions()
+            .await
+            .expect("failed to load sessions");
+        assert!(draft_update_applied);
+        assert!(live_update_applied);
+        assert!(!stale_update_applied);
+        assert_eq!(
+            sessions[0].title.as_deref(),
+            Some("Summarize the live request")
+        );
     }
 
     #[test]

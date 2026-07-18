@@ -603,6 +603,84 @@ async fn test_update_session_title_for_prompt_requires_matching_prompt() {
     );
 }
 
+/// Verifies generated live-session titles only overwrite the session title
+/// while their latest user-prompt snapshot remains current.
+#[tokio::test]
+async fn test_update_session_title_for_latest_user_prompt_rejects_stale_position() {
+    // Arrange
+    let database = Database::open_in_memory()
+        .await
+        .expect("failed to open in-memory db");
+    let project_id = database
+        .projects()
+        .upsert_project("/tmp/project", Some("main".to_string()))
+        .await
+        .expect("failed to insert project");
+    insert_session_fixture(&database, "session-a", "main", "Review", project_id).await;
+    database
+        .sessions()
+        .append_session_message(
+            "session-a",
+            SessionMessageKind::UserPrompt,
+            "Initial request",
+        )
+        .await
+        .expect("failed to persist initial request");
+
+    // Act
+    let initial_update_applied = database
+        .sessions()
+        .update_session_title_for_latest_user_prompt(
+            "session-a",
+            0,
+            "Implement the initial request",
+        )
+        .await
+        .expect("failed to apply current title update");
+    database
+        .sessions()
+        .append_session_message(
+            "session-a",
+            SessionMessageKind::AssistantAnswer,
+            "Initial response",
+        )
+        .await
+        .expect("failed to persist initial response");
+    database
+        .sessions()
+        .append_session_message(
+            "session-a",
+            SessionMessageKind::UserPrompt,
+            "Follow-up request",
+        )
+        .await
+        .expect("failed to persist follow-up request");
+    let stale_update_applied = database
+        .sessions()
+        .update_session_title_for_latest_user_prompt("session-a", 0, "Stale title")
+        .await
+        .expect("failed to reject stale title update");
+    let latest_update_applied = database
+        .sessions()
+        .update_session_title_for_latest_user_prompt(
+            "session-a",
+            2,
+            "Implement the complete request",
+        )
+        .await
+        .expect("failed to apply latest title update");
+
+    // Assert
+    let session_row = load_session_row(&database, "session-a").await;
+    assert!(initial_update_applied);
+    assert!(!stale_update_applied);
+    assert!(latest_update_applied);
+    assert_eq!(
+        session_row.title.as_deref(),
+        Some("Implement the complete request")
+    );
+}
+
 /// Verifies timing-aware status transitions accumulate repeated
 /// `InProgress` intervals.
 #[tokio::test]

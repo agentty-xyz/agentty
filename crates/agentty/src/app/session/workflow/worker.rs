@@ -741,11 +741,18 @@ impl SessionWorkerService {
         mut receiver: mpsc::UnboundedReceiver<SessionCommand>,
     ) {
         tokio::spawn(async move {
+            let mut live_title_generation_task = turn::LiveTitleGenerationTask::default();
+
             while let Some(command) = receiver.recv().await {
                 let mut next_command = Some(command);
                 while let Some(command) = next_command.take() {
-                    let result =
-                        Self::process_session_command(&context, &one_shot_client, command).await;
+                    let result = Self::process_session_command(
+                        &context,
+                        &one_shot_client,
+                        &mut live_title_generation_task,
+                        command,
+                    )
+                    .await;
                     if matches!(result, Some(Err(SessionError::StoppedByUser(_)))) {
                         context.clear_queued_messages();
                         Self::emit_queue_session_updated(&context);
@@ -758,9 +765,13 @@ impl SessionWorkerService {
                         continue;
                     }
 
-                    next_command =
-                        Self::drain_queued_messages(&context, &one_shot_client, &mut receiver)
-                            .await;
+                    next_command = Self::drain_queued_messages(
+                        &context,
+                        &one_shot_client,
+                        &mut live_title_generation_task,
+                        &mut receiver,
+                    )
+                    .await;
                 }
             }
 
@@ -785,6 +796,7 @@ impl SessionWorkerService {
     async fn process_session_command(
         context: &SessionWorkerContext,
         one_shot_client: &Arc<dyn OneShotClient>,
+        live_title_generation_task: &mut turn::LiveTitleGenerationTask,
         command: SessionCommand,
     ) -> Option<Result<(), SessionError>> {
         let operation_id = command.operation_id().to_string();
@@ -801,7 +813,13 @@ impl SessionWorkerService {
             return None;
         }
 
-        let result = Self::execute_session_command(context, one_shot_client, command).await;
+        let result = Self::execute_session_command(
+            context,
+            one_shot_client,
+            live_title_generation_task,
+            command,
+        )
+        .await;
         match &result {
             Ok(()) => {
                 // Best-effort: operation tracking metadata is non-critical.
@@ -838,6 +856,7 @@ impl SessionWorkerService {
     async fn drain_queued_messages(
         context: &SessionWorkerContext,
         one_shot_client: &Arc<dyn OneShotClient>,
+        live_title_generation_task: &mut turn::LiveTitleGenerationTask,
         receiver: &mut mpsc::UnboundedReceiver<SessionCommand>,
     ) -> Option<SessionCommand> {
         loop {
@@ -876,7 +895,13 @@ impl SessionWorkerService {
                     session_agent: context.session_agent,
                 },
             };
-            let result = Self::process_session_command(context, one_shot_client, command).await;
+            let result = Self::process_session_command(
+                context,
+                one_shot_client,
+                live_title_generation_task,
+                command,
+            )
+            .await;
             if matches!(result, Some(Err(SessionError::StoppedByUser(_)))) {
                 context.clear_queued_messages();
                 Self::emit_queue_session_updated(context);
@@ -904,6 +929,7 @@ impl SessionWorkerService {
     async fn execute_session_command(
         context: &SessionWorkerContext,
         one_shot_client: &Arc<dyn OneShotClient>,
+        live_title_generation_task: &mut turn::LiveTitleGenerationTask,
         command: SessionCommand,
     ) -> Result<(), SessionError> {
         match command {
@@ -920,6 +946,7 @@ impl SessionWorkerService {
                 turn::run_channel_turn(
                     context,
                     Arc::clone(one_shot_client),
+                    live_title_generation_task,
                     turn_metadata,
                     request_kind,
                     replay_transcript,
@@ -1146,7 +1173,8 @@ mod tests {
         persisted_session_summary_payload, status_update_after_turn_result,
     };
     use super::super::turn::{
-        consume_turn_events, run_channel_turn, run_turn_with_cancellation, terminate_child_process,
+        LiveTitleGenerationTask, consume_turn_events, run_channel_turn, run_turn_with_cancellation,
+        terminate_child_process,
     };
     use super::*;
     use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
@@ -1594,11 +1622,13 @@ mod tests {
         };
 
         cancel_token_after_short_delay(Arc::clone(&cancel_token));
+        let mut live_title_generation_task = LiveTitleGenerationTask::default();
 
         // Act
         let result = run_channel_turn(
             &context,
             auto_commit_one_shot_client(),
+            &mut live_title_generation_task,
             default_turn_metadata(),
             AgentRequestKind::SessionStart,
             None,
@@ -1719,11 +1749,14 @@ mod tests {
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
+        let mut live_title_generation_task = LiveTitleGenerationTask::default();
+
         // Act — the turn should complete normally because
         // `run_channel_turn` swaps in a fresh token.
         let result = run_channel_turn(
             &context,
             auto_commit_one_shot_client(),
+            &mut live_title_generation_task,
             default_turn_metadata(),
             AgentRequestKind::SessionStart,
             None,
@@ -1819,10 +1852,13 @@ mod tests {
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
+        let mut live_title_generation_task = LiveTitleGenerationTask::default();
+
         // Act
         let result = run_channel_turn(
             &context,
             auto_commit_one_shot_client(),
+            &mut live_title_generation_task,
             default_turn_metadata(),
             AgentRequestKind::SessionStart,
             None,
@@ -1920,10 +1956,13 @@ mod tests {
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
+        let mut live_title_generation_task = LiveTitleGenerationTask::default();
+
         // Act
         let result = run_channel_turn(
             &context,
             auto_commit_one_shot_client(),
+            &mut live_title_generation_task,
             default_turn_metadata(),
             AgentRequestKind::SessionStart,
             None,
@@ -2008,10 +2047,13 @@ mod tests {
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
+        let mut live_title_generation_task = LiveTitleGenerationTask::default();
+
         // Act
         let result = run_channel_turn(
             &context,
             auto_commit_one_shot_client(),
+            &mut live_title_generation_task,
             default_turn_metadata(),
             AgentRequestKind::SessionStart,
             None,
@@ -2102,10 +2144,13 @@ mod tests {
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
+        let mut live_title_generation_task = LiveTitleGenerationTask::default();
+
         // Act
         let result = run_channel_turn(
             &context,
             auto_commit_one_shot_client(),
+            &mut live_title_generation_task,
             default_turn_metadata(),
             AgentRequestKind::SessionStart,
             None,
@@ -4623,9 +4668,11 @@ mod tests {
 
         // Act
         let one_shot_client = auto_commit_one_shot_client();
+        let mut live_title_generation_task = LiveTitleGenerationTask::default();
         let next_command = SessionWorkerService::drain_queued_messages(
             &context,
             &one_shot_client,
+            &mut live_title_generation_task,
             &mut command_rx,
         )
         .await;
@@ -4673,9 +4720,11 @@ mod tests {
 
         // Act
         let one_shot_client = auto_commit_one_shot_client();
+        let mut live_title_generation_task = LiveTitleGenerationTask::default();
         let drain_future = SessionWorkerService::drain_queued_messages(
             &context,
             &one_shot_client,
+            &mut live_title_generation_task,
             &mut command_rx,
         );
         let enqueue_command_future = async {
@@ -4773,9 +4822,11 @@ mod tests {
 
         // Act
         let one_shot_client = auto_commit_one_shot_client();
+        let mut live_title_generation_task = LiveTitleGenerationTask::default();
         let next_command = SessionWorkerService::drain_queued_messages(
             &context,
             &one_shot_client,
+            &mut live_title_generation_task,
             &mut command_rx,
         )
         .await;
@@ -4840,9 +4891,11 @@ mod tests {
 
         // Act
         let one_shot_client = auto_commit_one_shot_client();
+        let mut live_title_generation_task = LiveTitleGenerationTask::default();
         let next_command = SessionWorkerService::drain_queued_messages(
             &context,
             &one_shot_client,
+            &mut live_title_generation_task,
             &mut command_rx,
         )
         .await;

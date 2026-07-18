@@ -540,6 +540,15 @@ pub trait SessionRepository: Send + Sync {
         title: &str,
     ) -> Result<bool, DbError>;
 
+    /// Updates the display title only when the newest persisted user prompt
+    /// still occupies the expected transcript position.
+    async fn update_session_title_for_latest_user_prompt(
+        &self,
+        id: &str,
+        expected_position: i64,
+        title: &str,
+    ) -> Result<bool, DbError>;
+
     /// Overrides the `created_at` timestamp for one session row.
     #[cfg(test)]
     async fn update_session_created_at(&self, id: &str, created_at: i64) -> Result<(), DbError>;
@@ -2065,6 +2074,35 @@ WHERE id = ?
             id,
             expected_prompt,
         )
+        .execute(&self.0)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn update_session_title_for_latest_user_prompt(
+        &self,
+        id: &str,
+        expected_position: i64,
+        title: &str,
+    ) -> Result<bool, DbError> {
+        let result = sqlx::query(
+            r"
+UPDATE session
+SET title = ?
+WHERE id = ?
+  AND (
+      SELECT MAX(position)
+      FROM session_message
+      WHERE session_id = ?
+        AND kind = 'user_prompt'
+  ) = ?
+",
+        )
+        .bind(title)
+        .bind(id)
+        .bind(id)
+        .bind(expected_position)
         .execute(&self.0)
         .await?;
 

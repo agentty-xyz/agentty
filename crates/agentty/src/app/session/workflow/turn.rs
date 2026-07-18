@@ -9,12 +9,13 @@ use ag_agent::{
     TurnRequest, TurnResult,
 };
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
-use super::lifecycle::SessionTitleGenerationTaskInput;
+use super::lifecycle::{SessionTitleGenerationGuard, SessionTitleGenerationTaskInput};
 use super::worker::{SessionWorkerContext, TurnMetadata};
-use super::{SessionTaskService, StatusTransition, isolation, post_turn};
+use super::{SessionTaskService, StatusTransition, intent, isolation, post_turn};
 use crate::app::session::SessionError;
 use crate::app::{AppEvent, SessionManager, setting};
 use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel};
@@ -31,6 +32,38 @@ use crate::infra::process;
 /// into an unbounded drain. Events beyond this budget remain queued for the
 /// consumer's next await/try-receive cycle.
 const TURN_EVENT_PROGRESS_COALESCE_BUDGET: usize = 64;
+
+/// Owns the sole live title-generation task for one session worker.
+///
+/// Replacing or dropping this tracker aborts unfinished work so rapid turns
+/// cannot fan out redundant title-generation requests.
+#[derive(Default)]
+pub(super) struct LiveTitleGenerationTask {
+    join_handle: Option<JoinHandle<()>>,
+}
+
+impl LiveTitleGenerationTask {
+    /// Replaces the tracked task after aborting any unfinished predecessor.
+    fn replace(&mut self, join_handle: JoinHandle<()>) {
+        self.abort();
+        self.join_handle = Some(join_handle);
+    }
+
+    /// Aborts and forgets the tracked task when it is still running.
+    fn abort(&mut self) {
+        if let Some(join_handle) = self.join_handle.take()
+            && !join_handle.is_finished()
+        {
+            join_handle.abort();
+        }
+    }
+}
+
+impl Drop for LiveTitleGenerationTask {
+    fn drop(&mut self) {
+        self.abort();
+    }
+}
 
 /// Live transcript source exposed to provider transports for replay.
 #[derive(Debug)]
@@ -133,9 +166,10 @@ impl MainCheckoutSnapshot {
 ///
 /// When `request_kind` is [`AgentRequestKind::SessionResume`], the session
 /// is first transitioned to `InProgress` (start turns set `InProgress` in
-/// the lifecycle before enqueueing). Start turns schedule detached title
-/// generation immediately before the main turn request runs. Progress
-/// events update the UI indicator; `PidUpdate` events update the shared PID
+/// the lifecycle before enqueueing). Every turn replaces the worker's tracked
+/// title generation with one request built from bounded cumulative intent
+/// context immediately before the main turn request runs. Progress events
+/// update the UI indicator; `PidUpdate` events update the shared PID
 /// slot used for cancellation. If the turn fails, the error is appended to
 /// session output before transitioning to `Review`; user-stopped turns
 /// skip that fallback so the UI cancellation path can finalize `Canceled`.
@@ -148,6 +182,7 @@ impl MainCheckoutSnapshot {
 pub(super) async fn run_channel_turn(
     context: &SessionWorkerContext,
     one_shot_client: Arc<dyn OneShotClient>,
+    live_title_generation_task: &mut LiveTitleGenerationTask,
     turn_metadata: TurnMetadata,
     request_kind: AgentRequestKind,
     replay_transcript: Option<String>,
@@ -229,12 +264,11 @@ pub(super) async fn run_channel_turn(
         Arc::clone(&context.child_pid),
     ));
 
-    spawn_start_turn_title_generation(
+    spawn_turn_title_generation(
         context,
         Arc::clone(&one_shot_client),
+        live_title_generation_task,
         session_project_id,
-        &request_kind,
-        &prompt.text,
         turn_metadata.session_agent,
     )
     .await;
@@ -564,18 +598,25 @@ async fn append_main_checkout_warning(context: &SessionWorkerContext, warning: S
     .await;
 }
 
-/// Spawns first-turn session title generation from the initial user prompt.
-async fn spawn_start_turn_title_generation(
+/// Spawns session title generation from bounded cumulative intent context.
+async fn spawn_turn_title_generation(
     context: &SessionWorkerContext,
     one_shot_client: Arc<dyn OneShotClient>,
+    live_title_generation_task: &mut LiveTitleGenerationTask,
     session_project_id: Option<i64>,
-    request_kind: &AgentRequestKind,
-    prompt: &str,
     session_agent: AgentSelection,
 ) {
-    if !matches!(request_kind, AgentRequestKind::SessionStart) {
+    live_title_generation_task.abort();
+
+    let intent_snapshot = intent::SessionIntentSnapshot::from_session(
+        &context.db,
+        &context.session_id,
+        &context.transcript,
+    )
+    .await;
+    let Some(latest_user_prompt_position) = intent_snapshot.latest_user_prompt_position() else {
         return;
-    }
+    };
 
     let title_agent = setting::load_default_fast_agent_selection_from_repositories(
         &context.db,
@@ -585,17 +626,20 @@ async fn spawn_start_turn_title_generation(
     )
     .await;
 
-    let _title_generation_task =
+    let title_generation_task =
         SessionManager::spawn_session_title_generation_task(SessionTitleGenerationTaskInput {
             app_event_tx: context.app_event_tx.clone(),
+            cumulative_summary: intent_snapshot.cumulative_summary().map(str::to_string),
             db: context.db.clone(),
             folder: context.folder.clone(),
+            guard: SessionTitleGenerationGuard::UserPromptPosition(latest_user_prompt_position),
             one_shot_client,
-            prompt: prompt.to_string(),
             session_agent: title_agent,
             session_id: context.session_id.clone(),
             tracked_generation: None,
+            user_requests: intent_snapshot.user_requests().to_vec(),
         });
+    live_title_generation_task.replace(title_generation_task);
 }
 
 /// Returns one normalized thinking text line.
@@ -606,4 +650,68 @@ fn normalize_thinking_stream_text(text: &str) -> Option<String> {
     }
 
     Some(trimmed_text.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
+    use super::*;
+
+    struct PendingAbortTask {
+        aborted: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl Future for PendingAbortTask {
+        type Output = ();
+
+        fn poll(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Self::Output> {
+            Poll::Pending
+        }
+    }
+
+    impl Drop for PendingAbortTask {
+        fn drop(&mut self) {
+            self.aborted
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_live_title_generation_task_aborts_replaced_and_dropped_tasks() {
+        // Arrange
+        let first_task_aborted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let second_task_aborted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut live_title_generation_task = LiveTitleGenerationTask::default();
+        live_title_generation_task.replace(pending_task_with_abort_flag(Arc::clone(
+            &first_task_aborted,
+        )));
+        tokio::task::yield_now().await;
+
+        // Act
+        live_title_generation_task.replace(pending_task_with_abort_flag(Arc::clone(
+            &second_task_aborted,
+        )));
+        tokio::task::yield_now().await;
+        drop(live_title_generation_task);
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !first_task_aborted.load(std::sync::atomic::Ordering::SeqCst)
+                || !second_task_aborted.load(std::sync::atomic::Ordering::SeqCst)
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("title tasks should abort promptly");
+
+        // Assert
+        assert!(first_task_aborted.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(second_task_aborted.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    fn pending_task_with_abort_flag(aborted: Arc<std::sync::atomic::AtomicBool>) -> JoinHandle<()> {
+        tokio::spawn(PendingAbortTask { aborted })
+    }
 }
