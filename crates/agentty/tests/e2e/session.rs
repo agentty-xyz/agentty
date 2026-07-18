@@ -4898,6 +4898,38 @@ fn prompt_typing_shows_text() -> E2eResult {
     Ok(())
 }
 
+/// Verify that pressing `Backspace` after deleting all prompt text leaves the
+/// empty prompt open.
+#[test]
+fn prompt_backspace_on_empty_input() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("prompt_empty_backspace").with_git().run(
+        |scenario| {
+            scenario
+                .compose(&common::wait_for_agentty_startup())
+                .compose(&common::switch_to_tab("Sessions"))
+                .press_key("a")
+                .press_key("Enter")
+                .wait_for_stable_frame(300, 5000)
+                .write_text("bug")
+                .wait_for_text("bug", 3000)
+                .press_key("Backspace")
+                .press_key("Backspace")
+                .press_key("Backspace")
+                .press_key("Backspace")
+                .wait_for_text("Type your message", 3000)
+                .capture_labeled("empty_prompt", "Empty prompt after one extra Backspace")
+        },
+        |frame, _report| {
+            let full = Region::full(frame.cols(), frame.rows());
+            assertion::assert_text_in_region(frame, "Type your message", &full);
+            assertion::assert_text_in_region(frame, "Enter: send", &full);
+        },
+    )?;
+
+    Ok(())
+}
+
 /// Verify that Alt+Enter inserts a newline in the prompt input,
 /// producing multiline content.
 ///
