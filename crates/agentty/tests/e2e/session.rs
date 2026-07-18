@@ -3960,8 +3960,8 @@ fn review_request_publish_runs_in_background() -> E2eResult {
     Ok(())
 }
 
-/// Verify that review-ready sessions no longer expose a manual review-request
-/// sync shortcut because linked review requests refresh in the background.
+/// Verify that linked review requests refresh in the background without a
+/// manual review-request sync shortcut and disable local merge queueing.
 #[test]
 fn review_request_sync_runs_in_background() -> E2eResult {
     // Arrange, Act, Assert
@@ -3997,6 +3997,7 @@ fn review_request_sync_runs_in_background() -> E2eResult {
                     !view_text.contains("s: Sync"),
                     "manual sync help action should be absent"
                 );
+                assertion::assert_not_visible(frame, "m: add to merge queue");
             },
         )?;
 

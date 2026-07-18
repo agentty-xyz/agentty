@@ -869,16 +869,18 @@ pub(crate) fn can_mutate_session_branch_in_stack(sessions: &[Session], session_i
 /// Returns whether a session can enter the merge queue while preserving stack
 /// consistency.
 ///
-/// Merging a parent with idle materialized children is allowed because the
-/// successful parent merge retargets and syncs the children afterward. Active
-/// stack members still block the request so the stack does not run competing
-/// branch work.
+/// A linked forge review request disables local merge queueing so the remote
+/// review remains the only merge path. Otherwise, merging a parent with idle
+/// materialized children is allowed because the successful parent merge
+/// retargets and syncs the children afterward. Active stack members still
+/// block the request so the stack does not run competing branch work.
 pub(crate) fn can_merge_session_branch_in_stack(sessions: &[Session], session_id: &str) -> bool {
     let Some(stack) = SessionStack::for_session(sessions, session_id) else {
         return false;
     };
 
-    !stack.has_branch_mutating_member_except(session_id)
+    stack.requested_session.review_request.is_none()
+        && !stack.has_branch_mutating_member_except(session_id)
 }
 
 /// Returns whether a session can start session sync while preserving stack
@@ -1346,6 +1348,36 @@ pub(crate) mod tests {
 
         // Assert
         assert!(!can_merge_review_child);
+    }
+
+    #[test]
+    fn test_can_merge_session_branch_in_stack_blocks_linked_review_request() {
+        // Arrange
+        let review_request = ReviewRequest {
+            last_refreshed_at: 0,
+            summary: ReviewRequestSummary {
+                display_id: "#42".to_string(),
+                forge_kind: ForgeKind::GitHub,
+                source_branch: "wt/session-id".to_string(),
+                state: ReviewRequestState::Open,
+                status_summary: None,
+                target_branch: "main".to_string(),
+                title: "Review request".to_string(),
+                web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
+            },
+        };
+        let session = SessionFixtureBuilder::new()
+            .id("linked-session")
+            .review_request(Some(review_request))
+            .status(Status::Review)
+            .build();
+        let sessions = vec![session];
+
+        // Act
+        let can_merge_session = can_merge_session_branch_in_stack(&sessions, "linked-session");
+
+        // Assert
+        assert!(!can_merge_session);
     }
 
     #[test]

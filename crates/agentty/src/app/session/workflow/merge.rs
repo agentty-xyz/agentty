@@ -637,7 +637,9 @@ impl SessionMergeService {
         }
         if !manager.can_merge_session_branch_in_stack(session_id) {
             return Err(SessionError::Workflow(
-                "Merge can only run when no other stack session is active".to_string(),
+                "Merge cannot run for linked review requests or while another stack session is \
+                 active"
+                    .to_string(),
             ));
         }
 
@@ -3053,6 +3055,30 @@ mod tests {
         });
 
         Arc::new(one_shot_client)
+    }
+
+    #[tokio::test]
+    async fn test_merge_session_rejects_linked_review_request_before_workflow_start() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        app.sessions.push_session(
+            crate::test_support::SessionFixtureBuilder::new()
+                .review_request(Some(linked_github_review_request()))
+                .build(),
+        );
+
+        // Act
+        let result = app
+            .sessions
+            .merge_session("session-id", &app.projects, &app.services)
+            .await;
+
+        // Assert
+        let error = result.expect_err("linked review request should block merge workflow");
+        assert_eq!(
+            error.to_string(),
+            "Merge cannot run for linked review requests or while another stack session is active"
+        );
     }
 
     #[test]

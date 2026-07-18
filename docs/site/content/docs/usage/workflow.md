@@ -296,9 +296,12 @@ commit succeeds without the configured hook, the session output records a
 unchanged warning in the same session. Installed hooks remain enabled and their failures
 still stop the commit.
 
-When a session merges, Agentty reuses the session branch `HEAD` commit message for the
-final squash commit on the base branch. Merging requires a clean main checkout and
-returns the session to **Review** if the preparatory rebase or squash-merge fails.
+When a session without a linked review request merges, Agentty reuses the session branch
+`HEAD` commit message for the final squash commit on the base branch. Merging requires a
+clean main checkout and returns the session to **Review** if the preparatory rebase or
+squash-merge fails. After a pull request or merge request is linked, Agentty hides `m`
+and rejects local merge queueing; merge through the forge, and background review-request
+sync moves the session to **Done** when that remote merge completes.
 
 When a session syncs (`r`), Agentty rebases the session branch: published sessions fetch
 first and rebase onto the remote base ref, unpublished sessions rebase onto the stored

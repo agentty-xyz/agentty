@@ -2010,7 +2010,8 @@ impl App {
     /// Sessions are eligible while actively under review or already marked as
     /// `Queued` (for example, after app restart). A parent with idle
     /// materialized children can enter merge queueing because merge completion
-    /// retargets those children; active stack work still blocks the request.
+    /// retargets those children; linked forge review requests and active stack
+    /// work still block the request.
     ///
     /// # Errors
     /// Returns an error when the session does not exist or has an ineligible
@@ -2024,7 +2025,9 @@ impl App {
         }
         if !self.sessions.can_merge_session_branch_in_stack(session_id) {
             return Err(AppError::Workflow(
-                "Merge can only run when no other stack session is active".to_string(),
+                "Merge cannot run for linked review requests or while another stack session is \
+                 active"
+                    .to_string(),
             ));
         }
 
