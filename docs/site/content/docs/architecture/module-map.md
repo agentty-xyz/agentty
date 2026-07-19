@@ -52,10 +52,11 @@ For file-level detail, read the module docstrings directly.
   runtime launch, and public module exports.
 - `app/`: Orchestration layer. Owns the `App` state, the `AppEvent` reducer, project and
   settings persistence manager, the merge queue, the sync orchestrator, branch publish,
-  focused review, and the session module (`app/session/`) with its per-session worker
-  queues and workflow steps (`lifecycle`, `turn`, `post_turn`, `merge`, `task`,
-  `worker`). No direct process, filesystem, or clock calls — everything external goes
-  through `infra/` traits.
+  review, typed prompt workflow requests and outcomes, and the session module
+  (`app/session/`) with its per-session worker queues and workflow steps (`lifecycle`,
+  `turn`, `post_turn`, `merge`, `task`, `worker`). Prompt composers, slash-menu state,
+  and mode navigation remain presentation-owned. No direct process, filesystem, or clock
+  calls — everything external goes through `infra/` traits.
 - `domain/`: Pure business entities and logic — sessions and statuses, projects,
   settings keys, themes, structured questions, typed transcript messages, explicit
   transient-message slots and lifecycles, prompt-composer logic, the shared `InputState`
@@ -105,6 +106,8 @@ For file-level detail, read the module docstrings directly.
   synchronizes selection at the frame projection boundary.
 - `app/` must not import runtime mode handlers. Shared interaction calculations belong
   in `domain/` or `presentation.rs`, while application task registries belong in `app/`.
+- Runtime converts presentation-owned prompt state into typed app requests, then applies
+  returned navigation and composer effects. `app/` must not inspect or mutate `AppMode`.
 - Business entities and enums live in `domain/`.
 - External side effects live in `infra/` behind mockable traits; see
   [Testability Boundaries](@/docs/architecture/testability-boundaries.md).

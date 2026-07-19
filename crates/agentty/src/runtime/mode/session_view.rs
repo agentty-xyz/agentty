@@ -6,9 +6,6 @@ use ratatui::backend::Backend;
 use ratatui::layout::Rect;
 use tracing::warn;
 
-use crate::app::prompt_intent::{
-    PromptIntentContext, PromptIntentInputMode, PromptIntentSessionMode,
-};
 use crate::app::session::{SessionTaskService, remote_branch_name_from_upstream_ref};
 use crate::app::{self, App, AppEvent, ReviewCacheEntry, diff_content_hash};
 use crate::domain::input::InputState;
@@ -924,14 +921,7 @@ async fn open_draft_prompt_with_pasted_image(
         scroll_offset,
     );
 
-    app.handle_prompt_image_paste_intent(&PromptIntentContext {
-        input_mode: PromptIntentInputMode::Text,
-        scroll_offset,
-        session_id: view_context.session_id.clone(),
-        session_index: view_context.session_index,
-        session_mode: PromptIntentSessionMode::NewDraft,
-    })
-    .await;
+    prompt::paste_image_into_active_prompt(app, &view_context.session_id).await;
 }
 
 /// Opens the help overlay while preserving the currently viewed session state.

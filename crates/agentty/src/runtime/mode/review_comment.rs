@@ -2,7 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 
 use crate::app::App;
-use crate::app::prompt_intent::ReviewCommentSelection;
+use crate::app::prompt_intent::{ReviewCommentResolutionOutcome, ReviewCommentSelection};
 use crate::presentation::app_mode::AppMode;
 use crate::runtime::EventResult;
 use crate::ui::{RenderCacheStore, page};
@@ -65,8 +65,10 @@ pub(crate) async fn handle_with_cache(
             session_id: session_id.clone(),
             scroll_offset,
         };
-        app.resolve_session_review_comments(&session_id, &snapshot, selection)
+        let outcome = app
+            .resolve_session_review_comments(&session_id, &snapshot, selection)
             .await;
+        apply_review_comment_resolution_outcome(app, outcome);
 
         return EventResult::Continue;
     }
@@ -120,6 +122,19 @@ pub(crate) async fn handle_with_cache(
     EventResult::Continue
 }
 
+/// Applies presentation navigation returned by the review-comment workflow.
+fn apply_review_comment_resolution_outcome(app: &mut App, outcome: ReviewCommentResolutionOutcome) {
+    match outcome {
+        ReviewCommentResolutionOutcome::KeepReviewComments => {}
+        ReviewCommentResolutionOutcome::ShowSession { session_id } => {
+            app.mode = AppMode::View {
+                session_id,
+                scroll_offset: None,
+            };
+        }
+    }
+}
+
 /// Returns the next wrapped selection index.
 fn next_selected_index(selected_index: usize, item_count: usize) -> usize {
     if item_count == 0 {
@@ -149,6 +164,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::domain::session::SessionId;
 
     fn comment_snapshot() -> ReviewCommentSnapshot {
         ReviewCommentSnapshot {
@@ -402,6 +418,30 @@ mod tests {
                 scroll_offset: 3,
                 ..
             }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_apply_review_comment_resolution_outcome_shows_session() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        let session_id = SessionId::from("session-id");
+
+        // Act
+        apply_review_comment_resolution_outcome(
+            &mut app,
+            ReviewCommentResolutionOutcome::ShowSession {
+                session_id: session_id.clone(),
+            },
+        );
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                session_id: viewed_session_id,
+                scroll_offset: None,
+            } if viewed_session_id == session_id
         ));
     }
 
