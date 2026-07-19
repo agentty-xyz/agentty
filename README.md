@@ -1,4 +1,6 @@
-# Agentty
+<div align="center">
+
+<h1>Agentty</h1>
 
 ![NPM Version](https://img.shields.io/npm/v/agentty)
 [![codecov](https://codecov.io/gh/agentty-xyz/agentty/graph/badge.svg?token=YRGKGTM0HP)](https://codecov.io/gh/agentty-xyz/agentty)
@@ -15,9 +17,15 @@ AI-assisted software development**. Built with Rust and [Ratatui](https://ratatu
 and refined through its own day-to-day use, it brings agents, review, and iteration into
 one focused terminal workflow.
 
-<p align="center">
-  <img src="docs/site/static/demo/demo.gif" alt="Agentty demo" width="900" />
-</p>
+[Installation](#installation) · [Supported CLI Agents](#supported-cli-agents) ·
+[Usage](#usage) · [Documentation](#documentation) · [Contributing](#contributing) ·
+[License](#license)
+
+<img src="docs/site/static/demo/demo.gif" alt="Agentty demo" width="900" />
+
+</div>
+
+______________________________________________________________________
 
 ## Installation
 
