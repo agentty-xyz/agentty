@@ -657,6 +657,14 @@ svg {
     margin-bottom: 0.9rem;
 }
 
+.feature-symbol {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 1.4rem;
+    font-weight: 700;
+    line-height: 1.4rem;
+}
+
 .feature-title {
     margin: 0 0 0.5rem;
     color: var(--color-text);
