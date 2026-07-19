@@ -7,10 +7,22 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.13.4] - 2026-07-18
+
 ### Changed
 
+- agentty: use `Ctrl+Z` as the shared input undo shortcut.
 - agentty: keep remotely merged review sessions read-only in Active until manual target
   sync archives them and restacks any child sessions.
+- deps: update `ignore` from `0.4.27` to `0.4.28`.
+- ci: update `taiki-e/install-action` from `2.82.11` to `2.83.1`.
+- release: bump workspace crate metadata and lockfile package versions to `0.13.4`.
+
+### Contributors
+
+- @andagaev
+- @dependabot
+- @minev-dev
 
 ## [v0.13.3] - 2026-07-17
 
