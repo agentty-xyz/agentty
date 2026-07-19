@@ -7,8 +7,8 @@ use ratatui::widgets::TableState;
 
 use crate::app::session::session_branch;
 use crate::app::session_state::SessionGitStatus;
-use crate::app::{AssignedIssueState, RequestedReviewState, SettingsManager, Tab, UpdateStatus};
-use crate::domain::agent::AgentCliInfo;
+use crate::app::{AssignedIssueState, RequestedReviewState, Tab, UpdateStatus};
+use crate::domain::agent::{AgentCliInfo, ReasoningLevel};
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session, SessionId};
 use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
@@ -51,6 +51,8 @@ pub struct RenderContext<'a> {
     pub available_agent_clis: &'a [AgentCliInfo],
     /// Active top-level tab selection.
     pub current_tab: Tab,
+    /// Active project-scoped reasoning level used by session pages.
+    pub default_reasoning_level: ReasoningLevel,
     /// Current local branch name for the active project.
     pub git_branch: Option<&'a str>,
     /// Shared cache for parsed and rendered diff-page layouts.
@@ -98,8 +100,8 @@ pub struct RenderContext<'a> {
     /// Whether each rendered session currently has a materialized worktree on
     /// disk, keyed by session id.
     pub session_worktree_availability: &'a HashMap<SessionId, bool>,
-    /// Mutable project-scoped settings snapshot.
-    pub settings: &'a SettingsManager,
+    /// Settings-screen projection when the active tab can render it.
+    pub(crate) settings_screen: Option<&'a crate::presentation::settings::SettingsScreenSnapshot>,
     /// Daily session activity series used by dashboard activity summaries.
     pub stats_activity: &'a [DailyActivity],
     /// Session rows available for rendering.

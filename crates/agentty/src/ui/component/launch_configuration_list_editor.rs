@@ -5,10 +5,10 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
-use crate::app::setting::{
+use crate::domain::input::InputState;
+use crate::presentation::settings::{
     LaunchConfigurationListEditorMode, LaunchConfigurationListEditorSnapshot,
 };
-use crate::domain::input::InputState;
 use crate::ui::style::palette;
 use crate::ui::{Component, overlay};
 

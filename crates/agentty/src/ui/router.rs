@@ -4,12 +4,13 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::widgets::TableState;
 
-use crate::app::{AssignedIssueState, RequestedReviewState, SettingsManager, Tab};
+use crate::app::{AssignedIssueState, RequestedReviewState, Tab};
 use crate::domain::agent::{AgentCliInfo, ReasoningLevel};
 use crate::domain::input::InputState;
 use crate::domain::project::{ProjectListItem, ordered_project_items};
 use crate::domain::session::{DailyActivity, Session, SessionId};
 use crate::presentation::app_mode::{AppMode, ConfirmationIntent, ConfirmationViewMode};
+use crate::presentation::settings::SettingsScreenSnapshot;
 use crate::ui::overlay::{
     HelpOverlayRenderContext, SyncBlockedPopupRenderContext, ViewInfoPopupRenderContext,
 };
@@ -52,7 +53,7 @@ impl<'state> ListBackgroundRenderContext<'_, 'state> {
     /// Returns the active project-scoped reasoning level for list-restored
     /// session backgrounds.
     pub(crate) fn default_reasoning_level(&self) -> ReasoningLevel {
-        self.shared.settings.reasoning_level
+        self.shared.default_reasoning_level
     }
 
     /// Returns the shared session rows available to list-backed overlays.
@@ -71,6 +72,7 @@ pub(crate) struct RouteSharedContext<'a> {
     /// Locally available agent CLI executables and detected versions.
     available_agent_clis: &'a [AgentCliInfo],
     current_tab: Tab,
+    default_reasoning_level: ReasoningLevel,
     /// Cached most-recently-opened ordering over `projects`.
     mru_project_order: &'a [usize],
     project_table_state: &'a mut TableState,
@@ -79,7 +81,7 @@ pub(crate) struct RouteSharedContext<'a> {
     requested_review_table_state: &'a mut TableState,
     requested_reviews: &'a RequestedReviewState,
     sessions: &'a [Session],
-    settings: &'a SettingsManager,
+    settings_screen: Option<&'a SettingsScreenSnapshot>,
     stats_activity: &'a [DailyActivity],
     table_state: &'a mut TableState,
 }
@@ -237,6 +239,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         active_prompt_outputs,
         available_agent_clis,
         current_tab,
+        default_reasoning_level,
         diff_layout_cache,
         markdown_render_cache,
         mode,
@@ -251,7 +254,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         session_progress_messages,
         session_update_versions,
         session_worktree_availability,
-        settings,
+        settings_screen,
         stats_activity,
         sessions,
         table_state,
@@ -266,6 +269,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         assigned_issues,
         available_agent_clis,
         current_tab,
+        default_reasoning_level,
         mru_project_order,
         project_table_state,
         projects,
@@ -273,14 +277,14 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         requested_review_table_state,
         requested_reviews,
         sessions,
-        settings,
+        settings_screen,
         stats_activity,
         table_state,
     };
 
     let aux = RouteAuxContext {
         active_prompt_outputs,
-        default_reasoning_level: shared.settings.reasoning_level,
+        default_reasoning_level,
         diff_layout_cache,
         markdown_render_cache,
         output_layout_cache,
@@ -907,7 +911,7 @@ pub(crate) fn render_list_background(
             page::session_list::SessionListPage::new(
                 shared.sessions,
                 &mut *shared.table_state,
-                shared.settings.reasoning_level,
+                shared.default_reasoning_level,
                 wall_clock_unix_seconds,
             )
             .render(f, chunks[1]);
@@ -931,8 +935,10 @@ pub(crate) fn render_list_background(
         Tab::Settings => {
             let active_project_name =
                 active_project_name(shared.active_project_id, shared.projects);
-            page::setting::SettingsPage::new(shared.settings, active_project_name)
-                .render(f, chunks[1]);
+            if let Some(settings_screen) = shared.settings_screen {
+                page::setting::SettingsPage::new(settings_screen, active_project_name)
+                    .render(f, chunks[1]);
+            }
         }
     }
 }
@@ -955,6 +961,10 @@ mod tests {
     use crate::domain::agent::ReasoningLevel;
     use crate::domain::session::Status;
     use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
+    use crate::presentation::settings::{
+        LaunchConfigurationListEditorMode, LaunchConfigurationListEditorSnapshot,
+        SettingsSelectorDropdown, SettingsSelectorDropdownOption,
+    };
     use crate::test_support::SessionFixtureBuilder;
 
     /// Builds one deterministic session fixture for router render tests.
@@ -984,6 +994,101 @@ mod tests {
             .iter()
             .map(ratatui::buffer::Cell::symbol)
             .collect()
+    }
+
+    fn settings_screen_with_overlays() -> SettingsScreenSnapshot {
+        SettingsScreenSnapshot {
+            footer_hint: "Editing settings",
+            global_rows: vec![("Theme", "Agentty Default".to_string())],
+            launch_configuration_list_editor: Some(LaunchConfigurationListEditorSnapshot {
+                commands: vec!["cargo test".to_string()],
+                input: None,
+                mode: LaunchConfigurationListEditorMode::Browse,
+                selected_index: 0,
+            }),
+            project_rows: vec![("Launch Configurations", "cargo test".to_string())],
+            selected_row_index: Some(0),
+            selector_dropdown: Some(SettingsSelectorDropdown {
+                options: vec![SettingsSelectorDropdownOption {
+                    label: "Agentty Default".to_string(),
+                }],
+                row_index: 0,
+                selected_index: 0,
+            }),
+        }
+    }
+
+    fn render_list_tab(
+        current_tab: Tab,
+        settings_screen: Option<&SettingsScreenSnapshot>,
+    ) -> (String, ReasoningLevel) {
+        let backend = ratatui::backend::TestBackend::new(120, 30);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let mut assigned_issue_table_state = TableState::default();
+        let assigned_issues = AssignedIssueState::default();
+        let available_agent_clis = Vec::new();
+        let mut project_table_state = TableState::default();
+        let projects = Vec::new();
+        let mut requested_review_table_state = TableState::default();
+        let requested_reviews = RequestedReviewState::default();
+        let sessions = Vec::new();
+        let stats_activity = Vec::new();
+        let mut table_state = TableState::default();
+        let mut shared = RouteSharedContext {
+            active_project_id: 1,
+            assigned_issue_selected_index: None,
+            assigned_issue_table_state: &mut assigned_issue_table_state,
+            assigned_issues: &assigned_issues,
+            available_agent_clis: &available_agent_clis,
+            current_tab,
+            default_reasoning_level: ReasoningLevel::Max,
+            mru_project_order: &[],
+            project_table_state: &mut project_table_state,
+            projects: &projects,
+            requested_review_selected_index: None,
+            requested_review_table_state: &mut requested_review_table_state,
+            requested_reviews: &requested_reviews,
+            sessions: &sessions,
+            settings_screen,
+            stats_activity: &stats_activity,
+            table_state: &mut table_state,
+        };
+        let default_reasoning_level = shared.list_background().default_reasoning_level();
+
+        terminal
+            .draw(|frame| {
+                render_list_background(frame, frame.area(), shared.list_background(), 0);
+            })
+            .expect("failed to draw list tab");
+
+        (
+            buffer_text(terminal.backend().buffer()),
+            default_reasoning_level,
+        )
+    }
+
+    #[test]
+    fn render_list_background_renders_settings_snapshot_and_overlays() {
+        // Arrange
+        let settings_screen = settings_screen_with_overlays();
+
+        // Act
+        let (text, _) = render_list_tab(Tab::Settings, Some(&settings_screen));
+
+        // Assert
+        assert!(text.contains("Launch Configurations"));
+        assert!(text.contains("cargo test"));
+    }
+
+    #[test]
+    fn render_list_background_projects_reasoning_into_sessions_page() {
+        // Arrange
+
+        // Act
+        let (_, default_reasoning_level) = render_list_tab(Tab::Sessions, None);
+
+        // Assert
+        assert_eq!(default_reasoning_level, ReasoningLevel::Max);
     }
 
     #[test]

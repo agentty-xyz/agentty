@@ -15,6 +15,7 @@ use tracing::debug;
 use crate::app::{App, AppEvent};
 use crate::domain::input::InputCommand;
 use crate::presentation::app_mode::AppMode;
+use crate::presentation::settings::SettingsAction;
 use crate::runtime::{EventResult, FRAME_INTERVAL, PresentationState, key_handler, mode};
 
 /// Maximum terminal input events processed in one foreground cycle.
@@ -288,12 +289,14 @@ async fn process_paste_event(app: &mut App, pasted_text: &str) {
 
     if matches!(&app.mode, AppMode::List)
         && app
-            .settings
+            .settings_presentation
             .is_launch_configuration_list_editor_input_active()
     {
         let text = mode::input_key::normalize_single_line_pasted_text(pasted_text);
-        app.settings
-            .apply_launch_configuration_input_command(InputCommand::InsertText(text));
+        let view = app.settings.view();
+        let _ = app
+            .settings_presentation
+            .apply(&view, SettingsAction::Input(InputCommand::InsertText(text)));
     }
 }
 
@@ -587,18 +590,26 @@ mod tests {
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.tabs.set(crate::app::Tab::Settings);
         for _ in 0..6 {
-            app.settings.next();
+            let view = app.settings.view();
+            let _ = app.settings_presentation.apply(&view, SettingsAction::Next);
         }
-        app.settings.handle_enter();
-        app.settings.start_adding_launch_configuration();
+        let view = app.settings.view();
+        let _ = app
+            .settings_presentation
+            .apply(&view, SettingsAction::Activate);
+        let view = app.settings.view();
+        let _ = app
+            .settings_presentation
+            .apply(&view, SettingsAction::StartAddingLaunchConfiguration);
 
         // Act
         process_paste_event(&mut app, "cargo nextest run\r\nignored").await;
 
         // Assert
         let editor = app
-            .settings
-            .launch_configuration_list_editor()
+            .settings_presentation
+            .snapshot(&app.settings.view())
+            .launch_configuration_list_editor
             .expect("launch-configuration editor should be open");
         assert!(matches!(
             editor.input,

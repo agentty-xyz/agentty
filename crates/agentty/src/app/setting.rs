@@ -4,11 +4,10 @@ use crate::app::AppServices;
 use crate::domain::agent::{
     self, AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ReasoningLevel,
 };
-use crate::domain::input::{InputCommand, InputState};
-use crate::domain::selection::SelectionState;
 use crate::domain::setting::SettingName;
 use crate::domain::theme::ColorTheme;
 use crate::infra::db::AppRepositories;
+use crate::presentation::settings::{SettingsOperation, SettingsView};
 
 /// Loads the persisted smart-model default used for new sessions.
 ///
@@ -133,171 +132,6 @@ pub(crate) async fn load_default_smart_agent_selection_from_repositories(
     fallback_selection
 }
 
-/// Render-ready option for an open settings selector dropdown.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SettingsSelectorDropdownOption {
-    pub label: String,
-}
-
-/// Render-ready snapshot for the currently open settings selector dropdown.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SettingsSelectorDropdown {
-    pub options: Vec<SettingsSelectorDropdownOption>,
-    pub row_index: usize,
-    pub selected_index: usize,
-}
-
-/// Active interaction mode for the `Launch Configurations` list editor.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum LaunchConfigurationListEditorMode {
-    Add,
-    Browse,
-    Edit,
-}
-
-/// Render-ready snapshot for the `Launch Configurations` list editor overlay.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct LaunchConfigurationListEditorSnapshot {
-    pub commands: Vec<String>,
-    pub input: Option<InputState>,
-    pub mode: LaunchConfigurationListEditorMode,
-    pub selected_index: usize,
-}
-
-/// Declares how a settings row is edited.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SettingControl {
-    CommandList,
-    Selector,
-}
-
-/// Backing table rows for the settings page.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SettingRow {
-    ReasoningLevel,
-    DefaultSmartModel,
-    DefaultFastModel,
-    DefaultReviewModel,
-    IncludeCoauthoredByAgentty,
-    LaunchConfiguration,
-    Theme,
-}
-
-impl SettingRow {
-    const ALL: [Self; 7] = [
-        Self::Theme,
-        Self::ReasoningLevel,
-        Self::DefaultSmartModel,
-        Self::DefaultFastModel,
-        Self::DefaultReviewModel,
-        Self::IncludeCoauthoredByAgentty,
-        Self::LaunchConfiguration,
-    ];
-    /// Rows persisted once for the whole application.
-    const GLOBAL: [Self; 1] = [Self::Theme];
-    /// Rows persisted separately for each active project.
-    const PROJECT: [Self; 6] = [
-        Self::ReasoningLevel,
-        Self::DefaultSmartModel,
-        Self::DefaultFastModel,
-        Self::DefaultReviewModel,
-        Self::IncludeCoauthoredByAgentty,
-        Self::LaunchConfiguration,
-    ];
-    const ROW_COUNT: usize = Self::ALL.len();
-
-    /// Builds a row selector from the table row index.
-    fn from_index(index: usize) -> Self {
-        Self::ALL
-            .get(index)
-            .copied()
-            .unwrap_or(Self::ReasoningLevel)
-    }
-
-    /// Returns the display label for the row.
-    fn label(self) -> &'static str {
-        match self {
-            Self::ReasoningLevel => "Default Reasoning Level",
-            Self::DefaultSmartModel => "Default Smart Model",
-            Self::DefaultFastModel => "Default Fast Model",
-            Self::DefaultReviewModel => "Default Review Model",
-            Self::IncludeCoauthoredByAgentty => "Coauthored by Agentty",
-            Self::LaunchConfiguration => "Launch Configurations",
-            Self::Theme => "Theme",
-        }
-    }
-
-    /// Returns how this row is edited.
-    fn control(self) -> SettingControl {
-        match self {
-            Self::ReasoningLevel
-            | Self::DefaultSmartModel
-            | Self::DefaultFastModel
-            | Self::DefaultReviewModel
-            | Self::IncludeCoauthoredByAgentty
-            | Self::Theme => SettingControl::Selector,
-            Self::LaunchConfiguration => SettingControl::CommandList,
-        }
-    }
-
-    /// Returns this row's table index.
-    fn table_index(self) -> usize {
-        Self::ALL
-            .iter()
-            .position(|row| *row == self)
-            .unwrap_or_default()
-    }
-}
-
-/// Tracks the active selector dropdown and highlighted option.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct SelectorDropdownState {
-    row: SettingRow,
-    selected_index: usize,
-}
-
-/// Tracks state for the `Launch Configurations` list editor overlay.
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct LaunchConfigurationListEditorState {
-    commands: Vec<String>,
-    input: InputState,
-    mode: LaunchConfigurationListEditorMode,
-    selected_index: usize,
-}
-
-impl LaunchConfigurationListEditorState {
-    /// Creates a list editor state from the persisted newline-delimited
-    /// command setting.
-    fn from_launch_configuration(launch_configuration: &str) -> Self {
-        Self {
-            commands: parse_launch_configurations(launch_configuration),
-            input: InputState::default(),
-            mode: LaunchConfigurationListEditorMode::Browse,
-            selected_index: 0,
-        }
-    }
-
-    /// Returns the selected index clamped to the currently available command
-    /// rows.
-    fn selected_index(&self) -> usize {
-        self.selected_index
-            .min(self.commands.len().saturating_sub(1))
-    }
-
-    /// Moves selection to a valid command row after a list mutation.
-    fn clamp_selected_index(&mut self) {
-        self.selected_index = self.selected_index();
-    }
-
-    /// Returns whether the editor is in single-line input mode.
-    fn is_input_mode(&self) -> bool {
-        matches!(
-            self.mode,
-            LaunchConfigurationListEditorMode::Add | LaunchConfigurationListEditorMode::Edit
-        )
-    }
-}
-
 /// Manages user-configurable application settings.
 pub struct SettingsManager {
     /// Default agent/model selection used by fast-path workflows.
@@ -313,8 +147,6 @@ pub struct SettingsManager {
     ///
     /// Currently applied to Codex and Claude turns.
     pub reasoning_level: ReasoningLevel,
-    /// Frontend-neutral selected-row state for the settings page.
-    pub table_state: SelectionState,
     /// Active terminal color theme for the whole application.
     pub theme: ColorTheme,
     available_agent_kinds: Vec<AgentKind>,
@@ -324,30 +156,42 @@ pub struct SettingsManager {
     /// New projects start with this disabled until the user explicitly enables
     /// it.
     include_coauthored_by_agentty: bool,
-    launch_configuration_list_editor: Option<LaunchConfigurationListEditorState>,
     /// Active project identifier that owns these persisted settings.
     project_id: i64,
-    selector_dropdown: Option<SelectorDropdownState>,
+    repositories: AppRepositories,
     use_last_used_model_as_default: bool,
 }
 
 impl SettingsManager {
-    /// Creates a settings manager and loads persisted values from the database.
-    pub async fn new(services: &AppServices, project_id: i64) -> Self {
-        let available_agent_kinds = services.available_agent_kinds();
+    /// Loads persisted settings using only the repositories and available
+    /// provider capability required by this feature.
+    pub async fn from_repositories(
+        repositories: AppRepositories,
+        available_agent_kinds: Vec<AgentKind>,
+        project_id: i64,
+    ) -> Self {
         let default_smart_fallback = fallback_selection_for_available_model(
             AgentKind::Antigravity.default_model(),
             &available_agent_kinds,
         );
-        let default_smart_agent =
-            load_default_smart_agent_setting(services, Some(project_id), default_smart_fallback)
-                .await;
+        let default_smart_agent = load_default_smart_agent_selection_from_repositories(
+            &repositories,
+            Some(project_id),
+            default_smart_fallback,
+            &available_agent_kinds,
+        )
+        .await;
 
-        let default_fast_agent =
-            load_default_fast_agent_setting(services, Some(project_id), default_smart_agent).await;
+        let default_fast_agent = load_default_fast_agent_selection_from_repositories(
+            &repositories,
+            Some(project_id),
+            default_smart_agent,
+            &available_agent_kinds,
+        )
+        .await;
 
         let default_review_agent = load_model_selection_setting(
-            services.db(),
+            &repositories,
             Some(project_id),
             SettingName::DefaultReviewAgent,
             SettingName::DefaultReviewModel,
@@ -357,34 +201,34 @@ impl SettingsManager {
         .map_or(default_smart_agent, |selection| {
             resolve_available_selection(selection, &available_agent_kinds)
         });
-        let reasoning_level = load_reasoning_level_setting(services, Some(project_id)).await;
+        let reasoning_level = repositories
+            .settings()
+            .load_project_reasoning_level(project_id)
+            .await
+            .unwrap_or_default();
 
-        let launch_configuration = services
-            .db()
+        let launch_configuration = repositories
             .settings()
             .get_project_setting(project_id, SettingName::LaunchConfiguration)
             .await
             .unwrap_or(None)
             .unwrap_or_default();
 
-        let include_coauthored_by_agentty = load_project_bool_setting(
-            services,
+        let include_coauthored_by_agentty = load_project_bool_setting_from_repositories(
+            &repositories,
             Some(project_id),
             SettingName::IncludeCoauthoredByAgentty,
             false,
         )
         .await;
-        let use_last_used_model_as_default = load_project_bool_setting(
-            services,
+        let use_last_used_model_as_default = load_project_bool_setting_from_repositories(
+            &repositories,
             Some(project_id),
             SettingName::LastUsedModelAsDefault,
             false,
         )
         .await;
-        let theme = load_theme_setting(services).await;
-
-        let mut table_state = SelectionState::default();
-        table_state.select(Some(0));
+        let theme = load_theme_setting_from_repositories(&repositories).await;
 
         Self {
             default_fast_selection: default_fast_agent,
@@ -392,303 +236,12 @@ impl SettingsManager {
             default_smart_selection: default_smart_agent,
             launch_configuration,
             reasoning_level,
-            table_state,
             theme,
             available_agent_kinds,
             include_coauthored_by_agentty,
-            launch_configuration_list_editor: None,
             project_id,
-            selector_dropdown: None,
+            repositories,
             use_last_used_model_as_default,
-        }
-    }
-
-    /// Moves the settings selection to the next row.
-    pub fn next(&mut self) {
-        if !self.is_launch_configuration_list_editor_open() && !self.is_selector_dropdown_open() {
-            let next_index = (self.selected_row_index() + 1) % SettingRow::ROW_COUNT;
-            self.table_state.select(Some(next_index));
-        }
-    }
-
-    /// Moves the settings selection to the previous row.
-    pub fn previous(&mut self) {
-        if !self.is_launch_configuration_list_editor_open() && !self.is_selector_dropdown_open() {
-            let current_index = self.selected_row_index();
-            let previous_index = if current_index == 0 {
-                SettingRow::ROW_COUNT - 1
-            } else {
-                current_index - 1
-            };
-            self.table_state.select(Some(previous_index));
-        }
-    }
-
-    /// Handles the primary action for the selected setting row.
-    pub fn handle_enter(&mut self) {
-        let selected_row = self.selected_row();
-
-        match selected_row.control() {
-            SettingControl::Selector => {
-                self.open_selector_dropdown(selected_row);
-            }
-            SettingControl::CommandList => {
-                self.open_launch_configuration_list_editor();
-            }
-        }
-    }
-
-    /// Returns whether the `Launch Configurations` list editor is active.
-    #[must_use]
-    pub fn is_launch_configuration_list_editor_open(&self) -> bool {
-        self.launch_configuration_list_editor.is_some()
-    }
-
-    /// Returns whether the `Launch Configurations` editor is currently
-    /// accepting single-line text input.
-    #[must_use]
-    pub fn is_launch_configuration_list_editor_input_active(&self) -> bool {
-        self.launch_configuration_list_editor
-            .as_ref()
-            .is_some_and(LaunchConfigurationListEditorState::is_input_mode)
-    }
-
-    /// Returns whether a selector dropdown is currently open.
-    #[must_use]
-    pub fn is_selector_dropdown_open(&self) -> bool {
-        self.selector_dropdown.is_some()
-    }
-
-    /// Returns the render-ready `Launch Configurations` editor snapshot, when
-    /// it is open.
-    #[must_use]
-    pub fn launch_configuration_list_editor(
-        &self,
-    ) -> Option<LaunchConfigurationListEditorSnapshot> {
-        let editor = self.launch_configuration_list_editor.as_ref()?;
-        let input = editor.is_input_mode().then(|| editor.input.clone());
-
-        Some(LaunchConfigurationListEditorSnapshot {
-            commands: editor.commands.clone(),
-            input,
-            mode: editor.mode,
-            selected_index: editor.selected_index(),
-        })
-    }
-
-    /// Returns the render-ready selector dropdown snapshot, when one is open.
-    #[must_use]
-    pub fn selector_dropdown(&self) -> Option<SettingsSelectorDropdown> {
-        let selector_dropdown = self.selector_dropdown?;
-        let options = self.selector_options_for_row(selector_dropdown.row);
-        if options.is_empty() {
-            return None;
-        }
-
-        let selected_index = selector_dropdown
-            .selected_index
-            .min(options.len().saturating_sub(1));
-
-        Some(SettingsSelectorDropdown {
-            options: options
-                .into_iter()
-                .map(|option| SettingsSelectorDropdownOption {
-                    label: option.label,
-                })
-                .collect(),
-            row_index: selector_dropdown.row.table_index(),
-            selected_index,
-        })
-    }
-
-    /// Moves the active selector dropdown highlight to the next option.
-    pub fn next_selector_dropdown_option(&mut self) {
-        self.move_selector_dropdown_option(SelectorDropdownDirection::Next);
-    }
-
-    /// Moves the active selector dropdown highlight to the previous option.
-    pub fn previous_selector_dropdown_option(&mut self) {
-        self.move_selector_dropdown_option(SelectorDropdownDirection::Previous);
-    }
-
-    /// Closes the active selector dropdown without changing the setting value.
-    pub fn close_selector_dropdown(&mut self) {
-        self.selector_dropdown = None;
-    }
-
-    /// Applies the highlighted selector dropdown option and closes the
-    /// dropdown.
-    pub async fn select_selector_dropdown_option(&mut self, services: &AppServices) {
-        let Some(selector_dropdown) = self.selector_dropdown else {
-            return;
-        };
-
-        let options = self.selector_options_for_row(selector_dropdown.row);
-        let selected_value = options
-            .get(
-                selector_dropdown
-                    .selected_index
-                    .min(options.len().saturating_sub(1)),
-            )
-            .map(|option| option.value);
-
-        if let Some(selected_value) = selected_value {
-            self.apply_selector_value(services, selector_dropdown.row, selected_value)
-                .await;
-        }
-
-        self.close_selector_dropdown();
-    }
-
-    /// Closes the `Launch Configurations` list editor without saving any active
-    /// add/edit input.
-    pub fn close_launch_configuration_list_editor(&mut self) {
-        self.launch_configuration_list_editor = None;
-    }
-
-    /// Moves the `Launch Configurations` editor selection to the next command.
-    pub fn next_launch_configuration_list_editor_item(&mut self) {
-        self.move_launch_configuration_list_editor_selection(
-            LaunchConfigurationListDirection::Next,
-        );
-    }
-
-    /// Moves the `Launch Configurations` editor selection to the previous
-    /// command.
-    pub fn previous_launch_configuration_list_editor_item(&mut self) {
-        self.move_launch_configuration_list_editor_selection(
-            LaunchConfigurationListDirection::Previous,
-        );
-    }
-
-    /// Starts adding a command in the launch-configuration editor.
-    pub fn start_adding_launch_configuration(&mut self) {
-        let Some(editor) = &mut self.launch_configuration_list_editor else {
-            return;
-        };
-
-        editor.input = InputState::default();
-        editor.mode = LaunchConfigurationListEditorMode::Add;
-    }
-
-    /// Starts editing the selected command. If no command exists yet, this
-    /// starts add mode.
-    pub fn start_editing_selected_launch_configuration(&mut self) {
-        let Some(editor) = &mut self.launch_configuration_list_editor else {
-            return;
-        };
-
-        if editor.commands.is_empty() {
-            editor.input = InputState::default();
-            editor.mode = LaunchConfigurationListEditorMode::Add;
-
-            return;
-        }
-
-        let selected_index = editor.selected_index();
-        let selected_command = editor.commands[selected_index].clone();
-        editor.selected_index = selected_index;
-        editor.input = InputState::with_text(selected_command);
-        editor.mode = LaunchConfigurationListEditorMode::Edit;
-    }
-
-    /// Cancels add/edit input and returns to command browsing.
-    pub fn cancel_launch_configuration_input(&mut self) {
-        let Some(editor) = &mut self.launch_configuration_list_editor else {
-            return;
-        };
-
-        editor.input = InputState::default();
-        editor.mode = LaunchConfigurationListEditorMode::Browse;
-    }
-
-    /// Applies one shared editing command to the active launch-configuration
-    /// input field.
-    pub fn apply_launch_configuration_input_command(&mut self, command: InputCommand) {
-        let Some(editor) = &mut self.launch_configuration_list_editor else {
-            return;
-        };
-
-        if editor.is_input_mode() {
-            editor.input.apply(command);
-        }
-    }
-
-    /// Confirms the active add/edit input and persists the normalized command
-    /// list.
-    pub async fn confirm_launch_configuration_input(&mut self, services: &AppServices) {
-        if self.apply_launch_configuration_input() {
-            self.persist_launch_configuration_setting(services).await;
-        }
-    }
-
-    /// Deletes the selected launch configuration and persists the normalized
-    /// command list.
-    pub async fn delete_selected_launch_configuration(&mut self, services: &AppServices) {
-        if self.delete_selected_launch_configuration_from_editor() {
-            self.persist_launch_configuration_setting(services).await;
-        }
-    }
-
-    /// Moves the selected launch configuration down and persists the normalized
-    /// command list.
-    pub async fn move_selected_launch_configuration_down(&mut self, services: &AppServices) {
-        if self.reorder_selected_launch_configuration(LaunchConfigurationReorderDirection::Down) {
-            self.persist_launch_configuration_setting(services).await;
-        }
-    }
-
-    /// Moves the selected launch configuration up and persists the normalized
-    /// command list.
-    pub async fn move_selected_launch_configuration_up(&mut self, services: &AppServices) {
-        if self.reorder_selected_launch_configuration(LaunchConfigurationReorderDirection::Up) {
-            self.persist_launch_configuration_setting(services).await;
-        }
-    }
-
-    /// Returns settings table rows as `(name, value)` pairs.
-    #[must_use]
-    pub fn settings_rows(&self) -> Vec<(&'static str, String)> {
-        SettingRow::ALL
-            .iter()
-            .map(|row| (row.label(), self.display_value_for_row(*row)))
-            .collect()
-    }
-
-    /// Returns the global-scoped settings rows.
-    #[must_use]
-    pub fn global_settings_rows(&self) -> Vec<(&'static str, String)> {
-        SettingRow::GLOBAL
-            .iter()
-            .map(|row| (row.label(), self.display_value_for_row(*row)))
-            .collect()
-    }
-
-    /// Returns project-scoped settings rows.
-    #[must_use]
-    pub fn project_settings_rows(&self) -> Vec<(&'static str, String)> {
-        SettingRow::PROJECT
-            .iter()
-            .map(|row| (row.label(), self.display_value_for_row(*row)))
-            .collect()
-    }
-
-    /// Returns the footer hint text for the settings page.
-    #[must_use]
-    pub fn footer_hint(&self) -> &'static str {
-        if self
-            .launch_configuration_list_editor
-            .as_ref()
-            .is_some_and(LaunchConfigurationListEditorState::is_input_mode)
-        {
-            "Launch Configurations: type a command, Enter save, Esc cancel"
-        } else if self.is_launch_configuration_list_editor_open() {
-            "Launch Configurations: j/k move, a add, e/Enter edit, d delete, J/K reorder, Esc/q \
-             close"
-        } else if self.is_selector_dropdown_open() {
-            "Selecting setting value: j/k move, Enter select, Esc/q close"
-        } else {
-            "Settings: Enter opens selectors or command editor"
         }
     }
 
@@ -700,368 +253,66 @@ impl SettingsManager {
         parse_launch_configurations(self.launch_configuration.as_str())
     }
 
-    /// Returns the currently selected row index.
-    fn selected_row_index(&self) -> usize {
-        self.table_state
-            .selected()
-            .unwrap_or(0)
-            .min(SettingRow::ROW_COUNT - 1)
-    }
-
-    /// Returns the currently selected settings row.
-    fn selected_row(&self) -> SettingRow {
-        SettingRow::from_index(self.selected_row_index())
-    }
-
-    /// Opens a selector dropdown for the provided row.
-    fn open_selector_dropdown(&mut self, row: SettingRow) {
-        if !matches!(row.control(), SettingControl::Selector) {
-            return;
-        }
-
-        let options = self.selector_options_for_row(row);
-        if options.is_empty() {
-            return;
-        }
-
-        let selected_index = self.current_selector_option_index(row, &options);
-        self.selector_dropdown = Some(SelectorDropdownState {
-            row,
-            selected_index,
-        });
-    }
-
-    /// Moves the active selector dropdown highlight in the requested
-    /// direction.
-    fn move_selector_dropdown_option(&mut self, direction: SelectorDropdownDirection) {
-        let Some(selector_dropdown) = self.selector_dropdown else {
-            return;
-        };
-
-        let option_count = self.selector_options_for_row(selector_dropdown.row).len();
-        if option_count == 0 {
-            self.close_selector_dropdown();
-
-            return;
-        }
-
-        let selected_index = match direction {
-            SelectorDropdownDirection::Next => {
-                (selector_dropdown.selected_index + 1) % option_count
-            }
-            SelectorDropdownDirection::Previous => {
-                if selector_dropdown.selected_index == 0 {
-                    option_count - 1
-                } else {
-                    selector_dropdown.selected_index - 1
-                }
-            }
-        };
-
-        self.selector_dropdown = Some(SelectorDropdownState {
-            row: selector_dropdown.row,
-            selected_index,
-        });
-    }
-
-    /// Builds all options for the selector row in UI display order.
-    fn selector_options_for_row(&self, row: SettingRow) -> Vec<SettingSelectorOption> {
-        match row {
-            SettingRow::ReasoningLevel => ReasoningLevel::ALL
-                .iter()
-                .copied()
-                .map(|reasoning_level| SettingSelectorOption {
-                    label: reasoning_level.codex().to_string(),
-                    value: SettingSelectorValue::ReasoningLevel(reasoning_level),
-                })
+    /// Returns an immutable projection for the settings screen.
+    pub(crate) fn view(&self) -> SettingsView {
+        SettingsView {
+            available_model_selections: selectable_model_options(&self.available_agent_kinds)
+                .into_iter()
+                .map(ModelSelectorOption::selection)
                 .collect(),
-            SettingRow::DefaultSmartModel => self.default_smart_model_selector_options(),
-            SettingRow::DefaultFastModel | SettingRow::DefaultReviewModel => {
-                self.explicit_model_selector_options()
-            }
-            SettingRow::IncludeCoauthoredByAgentty => vec![
-                SettingSelectorOption {
-                    label: bool_setting_display(false),
-                    value: SettingSelectorValue::Bool(false),
-                },
-                SettingSelectorOption {
-                    label: bool_setting_display(true),
-                    value: SettingSelectorValue::Bool(true),
-                },
-            ],
-            SettingRow::LaunchConfiguration => Vec::new(),
-            SettingRow::Theme => ColorTheme::ALL
-                .iter()
-                .copied()
-                .map(|theme| SettingSelectorOption {
-                    label: theme.label().to_string(),
-                    value: SettingSelectorValue::Theme(theme),
-                })
-                .collect(),
+            default_fast_selection: self.default_fast_selection,
+            default_review_selection: self.default_review_selection,
+            default_smart_selection: self.default_smart_selection,
+            include_coauthored_by_agentty: self.include_coauthored_by_agentty,
+            launch_configuration: self.launch_configuration.clone(),
+            reasoning_level: self.reasoning_level,
+            theme: self.theme,
+            use_last_used_model_as_default: self.use_last_used_model_as_default,
         }
     }
 
-    /// Builds selector options for the smart-model setting, including the
-    /// dynamic last-used option.
-    fn default_smart_model_selector_options(&self) -> Vec<SettingSelectorOption> {
-        let mut options = self.explicit_model_selector_options();
-        options.push(SettingSelectorOption {
-            label: "Last used model as default".to_string(),
-            value: SettingSelectorValue::LastUsedModel,
-        });
-
-        options
-    }
-
-    /// Builds model selector options for locally available agent providers.
-    fn explicit_model_selector_options(&self) -> Vec<SettingSelectorOption> {
-        self.selectable_model_options()
-            .into_iter()
-            .map(|option| {
-                let selection = option.selection();
-
-                SettingSelectorOption {
-                    label: display_model_selector_value(selection),
-                    value: SettingSelectorValue::ModelSelection(selection),
-                }
-            })
-            .collect()
-    }
-
-    /// Finds the option index that currently matches the persisted row value.
-    fn current_selector_option_index(
-        &self,
-        row: SettingRow,
-        options: &[SettingSelectorOption],
-    ) -> usize {
-        options
-            .iter()
-            .position(|option| option.is_current_for(self, row))
-            .unwrap_or_default()
-    }
-
-    /// Applies one selected dropdown value to the target row.
-    async fn apply_selector_value(
-        &mut self,
-        services: &AppServices,
-        row: SettingRow,
-        value: SettingSelectorValue,
-    ) {
-        match (row, value) {
-            (SettingRow::ReasoningLevel, SettingSelectorValue::ReasoningLevel(reasoning_level)) => {
-                self.reasoning_level = reasoning_level;
-                self.persist_reasoning_level_setting(services).await;
-            }
-            (SettingRow::DefaultSmartModel, SettingSelectorValue::LastUsedModel) => {
-                self.use_last_used_model_as_default = true;
-                self.persist_default_smart_model_settings(services).await;
-            }
-            (SettingRow::DefaultSmartModel, SettingSelectorValue::ModelSelection(selection)) => {
-                self.default_smart_selection = selection;
-                self.use_last_used_model_as_default = false;
-                self.persist_default_smart_model_settings(services).await;
-            }
-            (SettingRow::DefaultFastModel, SettingSelectorValue::ModelSelection(selection)) => {
+    /// Applies and persists one value change requested by the settings screen.
+    pub(crate) async fn apply_operation(&mut self, operation: SettingsOperation) {
+        match operation {
+            SettingsOperation::DefaultFastSelection(selection) => {
                 self.default_fast_selection = selection;
-                self.persist_default_fast_model_setting(services).await;
+                self.persist_default_fast_model_setting().await;
             }
-            (SettingRow::DefaultReviewModel, SettingSelectorValue::ModelSelection(selection)) => {
+            SettingsOperation::DefaultReviewSelection(selection) => {
                 self.default_review_selection = selection;
-                self.persist_default_review_model_setting(services).await;
+                self.persist_default_review_model_setting().await;
             }
-            (SettingRow::IncludeCoauthoredByAgentty, SettingSelectorValue::Bool(is_enabled)) => {
-                self.include_coauthored_by_agentty = is_enabled;
-                self.persist_include_coauthored_by_agentty_setting(services)
-                    .await;
+            SettingsOperation::DefaultSmartSelection {
+                selection,
+                use_last_used_model_as_default,
+            } => {
+                self.default_smart_selection = selection;
+                self.use_last_used_model_as_default = use_last_used_model_as_default;
+                self.persist_default_smart_model_settings().await;
             }
-            (SettingRow::Theme, SettingSelectorValue::Theme(theme)) => {
-                self.theme = theme;
-                self.persist_theme_setting(services).await;
+            SettingsOperation::IncludeCoauthoredByAgentty(value) => {
+                self.include_coauthored_by_agentty = value;
+                self.persist_include_coauthored_by_agentty_setting().await;
             }
-            _ => {}
-        }
-    }
-
-    /// Opens the command list editor from the persisted launch-configuration
-    /// setting.
-    fn open_launch_configuration_list_editor(&mut self) {
-        self.launch_configuration_list_editor = Some(
-            LaunchConfigurationListEditorState::from_launch_configuration(
-                self.launch_configuration.as_str(),
-            ),
-        );
-    }
-
-    /// Moves the launch-configuration editor selection in the requested
-    /// direction.
-    fn move_launch_configuration_list_editor_selection(
-        &mut self,
-        direction: LaunchConfigurationListDirection,
-    ) {
-        let Some(editor) = &mut self.launch_configuration_list_editor else {
-            return;
-        };
-
-        if editor.commands.is_empty() || editor.is_input_mode() {
-            return;
-        }
-
-        let command_count = editor.commands.len();
-        editor.selected_index = match direction {
-            LaunchConfigurationListDirection::Next => (editor.selected_index + 1) % command_count,
-            LaunchConfigurationListDirection::Previous => {
-                if editor.selected_index == 0 {
-                    command_count - 1
-                } else {
-                    editor.selected_index - 1
-                }
+            SettingsOperation::LaunchConfiguration(value) => {
+                self.launch_configuration = value;
+                self.persist_launch_configuration_setting().await;
             }
-        };
-    }
-
-    /// Applies the active add/edit input to the command list.
-    fn apply_launch_configuration_input(&mut self) -> bool {
-        let Some(editor) = &mut self.launch_configuration_list_editor else {
-            return false;
-        };
-
-        if !editor.is_input_mode() {
-            return false;
-        }
-
-        let command = editor.input.text().trim().to_string();
-        match editor.mode {
-            LaunchConfigurationListEditorMode::Add => {
-                if !command.is_empty() {
-                    editor.commands.push(command);
-                    editor.selected_index = editor.commands.len().saturating_sub(1);
-                }
+            SettingsOperation::ReasoningLevel(value) => {
+                self.reasoning_level = value;
+                self.persist_reasoning_level_setting().await;
             }
-            LaunchConfigurationListEditorMode::Edit => {
-                if editor.commands.is_empty() {
-                    if !command.is_empty() {
-                        editor.commands.push(command);
-                        editor.selected_index = 0;
-                    }
-                } else {
-                    let selected_index = editor.selected_index();
-                    if command.is_empty() {
-                        editor.commands.remove(selected_index);
-                        editor.clamp_selected_index();
-                    } else {
-                        editor.commands[selected_index] = command;
-                        editor.selected_index = selected_index;
-                    }
-                }
+            SettingsOperation::Theme(value) => {
+                self.theme = value;
+                self.persist_theme_setting().await;
             }
-            LaunchConfigurationListEditorMode::Browse => {}
-        }
-
-        editor.input = InputState::default();
-        editor.mode = LaunchConfigurationListEditorMode::Browse;
-        self.sync_launch_configuration_from_editor();
-
-        true
-    }
-
-    /// Deletes the selected command from the launch-configuration editor.
-    fn delete_selected_launch_configuration_from_editor(&mut self) -> bool {
-        let Some(editor) = &mut self.launch_configuration_list_editor else {
-            return false;
-        };
-
-        if editor.commands.is_empty() || editor.is_input_mode() {
-            return false;
-        }
-
-        let selected_index = editor.selected_index();
-        editor.commands.remove(selected_index);
-        editor.clamp_selected_index();
-        self.sync_launch_configuration_from_editor();
-
-        true
-    }
-
-    /// Reorders the selected command in the launch-configuration editor.
-    fn reorder_selected_launch_configuration(
-        &mut self,
-        direction: LaunchConfigurationReorderDirection,
-    ) -> bool {
-        let Some(editor) = &mut self.launch_configuration_list_editor else {
-            return false;
-        };
-
-        if editor.commands.len() < 2 || editor.is_input_mode() {
-            return false;
-        }
-
-        let selected_index = editor.selected_index();
-        let next_index = match direction {
-            LaunchConfigurationReorderDirection::Down => {
-                if selected_index + 1 >= editor.commands.len() {
-                    return false;
-                }
-
-                selected_index + 1
-            }
-            LaunchConfigurationReorderDirection::Up => {
-                if selected_index == 0 {
-                    return false;
-                }
-
-                selected_index - 1
-            }
-        };
-
-        editor.commands.swap(selected_index, next_index);
-        editor.selected_index = next_index;
-        self.sync_launch_configuration_from_editor();
-
-        true
-    }
-
-    /// Synchronizes the persisted `launch_configuration` string from the
-    /// editor's normalized command list.
-    fn sync_launch_configuration_from_editor(&mut self) {
-        if let Some(editor) = &mut self.launch_configuration_list_editor {
-            editor.commands = normalize_launch_configurations(&editor.commands);
-            editor.clamp_selected_index();
-            self.launch_configuration = join_launch_configurations(&editor.commands);
-        }
-    }
-
-    /// Returns the text displayed for a row value.
-    fn display_value_for_row(&self, row: SettingRow) -> String {
-        match row {
-            SettingRow::ReasoningLevel => self.reasoning_level.codex().to_string(),
-            SettingRow::DefaultSmartModel => {
-                if self.use_last_used_model_as_default {
-                    "Last used model as default".to_string()
-                } else {
-                    display_model_selector_value(self.default_smart_selection)
-                }
-            }
-            SettingRow::DefaultFastModel => {
-                display_model_selector_value(self.default_fast_selection)
-            }
-            SettingRow::DefaultReviewModel => {
-                display_model_selector_value(self.default_review_selection)
-            }
-            SettingRow::IncludeCoauthoredByAgentty => {
-                bool_setting_display(self.include_coauthored_by_agentty)
-            }
-            SettingRow::LaunchConfiguration => {
-                display_launch_configuration_summary(&self.launch_configuration)
-            }
-            SettingRow::Theme => self.theme.label().to_string(),
         }
     }
 
     /// Persists the current `LaunchConfiguration` setting value.
-    async fn persist_launch_configuration_setting(&self, services: &AppServices) {
-        // Best-effort: settings persistence failure is non-critical.
-        let _ = services
-            .db()
+    async fn persist_launch_configuration_setting(&self) {
+        let _ = self
+            .repositories
             .settings()
             .upsert_project_setting(
                 self.project_id,
@@ -1071,19 +322,13 @@ impl SettingsManager {
             .await;
     }
 
-    /// Returns all selectable model options whose provider is locally
-    /// runnable.
-    fn selectable_model_options(&self) -> Vec<ModelSelectorOption> {
-        selectable_model_options(&self.available_agent_kinds)
-    }
-
     /// Atomically persists smart-model selector values (`DefaultSmartAgent`,
     /// `DefaultSmartModel`, and `LastUsedModelAsDefault`).
-    async fn persist_default_smart_model_settings(&self, services: &AppServices) {
+    async fn persist_default_smart_model_settings(&self) {
         let last_used_model_as_default_value = self.use_last_used_model_as_default.to_string();
 
-        if let Err(error) = services
-            .db()
+        if let Err(error) = self
+            .repositories
             .settings()
             .upsert_project_settings(
                 self.project_id,
@@ -1113,10 +358,10 @@ impl SettingsManager {
     }
 
     /// Persists the reasoning-level selector value (`ReasoningLevel`).
-    async fn persist_reasoning_level_setting(&self, services: &AppServices) {
+    async fn persist_reasoning_level_setting(&self) {
         // Best-effort: settings persistence failure is non-critical.
-        let _ = services
-            .db()
+        let _ = self
+            .repositories
             .settings()
             .set_project_reasoning_level(self.project_id, self.reasoning_level)
             .await;
@@ -1124,9 +369,9 @@ impl SettingsManager {
 
     /// Atomically persists the fast-model selector values (`DefaultFastAgent`
     /// and `DefaultFastModel`).
-    async fn persist_default_fast_model_setting(&self, services: &AppServices) {
-        if let Err(error) = services
-            .db()
+    async fn persist_default_fast_model_setting(&self) {
+        if let Err(error) = self
+            .repositories
             .settings()
             .upsert_project_settings(
                 self.project_id,
@@ -1153,9 +398,9 @@ impl SettingsManager {
 
     /// Atomically persists the review-model selector values
     /// (`DefaultReviewAgent` and `DefaultReviewModel`).
-    async fn persist_default_review_model_setting(&self, services: &AppServices) {
-        if let Err(error) = services
-            .db()
+    async fn persist_default_review_model_setting(&self) {
+        if let Err(error) = self
+            .repositories
             .settings()
             .upsert_project_settings(
                 self.project_id,
@@ -1182,12 +427,12 @@ impl SettingsManager {
 
     /// Persists the coauthor-trailer toggle for generated session commit
     /// messages.
-    async fn persist_include_coauthored_by_agentty_setting(&self, services: &AppServices) {
+    async fn persist_include_coauthored_by_agentty_setting(&self) {
         let include_coauthored_by_agentty = self.include_coauthored_by_agentty.to_string();
 
         // Best-effort: settings persistence failure is non-critical.
-        let _ = services
-            .db()
+        let _ = self
+            .repositories
             .settings()
             .upsert_project_setting(
                 self.project_id,
@@ -1198,81 +443,14 @@ impl SettingsManager {
     }
 
     /// Persists the global terminal color theme selection.
-    async fn persist_theme_setting(&self, services: &AppServices) {
+    async fn persist_theme_setting(&self) {
         // Best-effort: settings persistence failure is non-critical.
-        let _ = services
-            .db()
+        let _ = self
+            .repositories
             .settings()
             .upsert_setting(SettingName::Theme, self.theme.as_str())
             .await;
     }
-}
-
-/// Launch-configuration editor list navigation direction.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum LaunchConfigurationListDirection {
-    Next,
-    Previous,
-}
-
-/// Launch-configuration editor reorder direction.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum LaunchConfigurationReorderDirection {
-    Down,
-    Up,
-}
-
-/// Selector dropdown navigation direction.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SelectorDropdownDirection {
-    Next,
-    Previous,
-}
-
-/// One selectable value in a settings dropdown.
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct SettingSelectorOption {
-    label: String,
-    value: SettingSelectorValue,
-}
-
-impl SettingSelectorOption {
-    /// Returns whether this option represents the manager's current row value.
-    fn is_current_for(&self, manager: &SettingsManager, row: SettingRow) -> bool {
-        match (row, self.value) {
-            (SettingRow::ReasoningLevel, SettingSelectorValue::ReasoningLevel(reasoning_level)) => {
-                manager.reasoning_level == reasoning_level
-            }
-            (SettingRow::DefaultSmartModel, SettingSelectorValue::LastUsedModel) => {
-                manager.use_last_used_model_as_default
-            }
-            (SettingRow::DefaultSmartModel, SettingSelectorValue::ModelSelection(selection)) => {
-                !manager.use_last_used_model_as_default
-                    && manager.default_smart_selection == selection
-            }
-            (SettingRow::DefaultFastModel, SettingSelectorValue::ModelSelection(selection)) => {
-                manager.default_fast_selection == selection
-            }
-            (SettingRow::DefaultReviewModel, SettingSelectorValue::ModelSelection(selection)) => {
-                manager.default_review_selection == selection
-            }
-            (SettingRow::IncludeCoauthoredByAgentty, SettingSelectorValue::Bool(is_enabled)) => {
-                manager.include_coauthored_by_agentty == is_enabled
-            }
-            (SettingRow::Theme, SettingSelectorValue::Theme(theme)) => manager.theme == theme,
-            _ => false,
-        }
-    }
-}
-
-/// Typed value carried by a selector dropdown option.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SettingSelectorValue {
-    Bool(bool),
-    LastUsedModel,
-    ModelSelection(AgentSelection),
-    ReasoningLevel(ReasoningLevel),
-    Theme(ColorTheme),
 }
 
 /// One provider-owned model option shown by settings selectors.
@@ -1301,26 +479,10 @@ fn parse_launch_configurations(launch_configuration_setting: &str) -> Vec<String
         .collect()
 }
 
-/// Trims command entries and drops empty commands.
-fn normalize_launch_configurations(commands: &[String]) -> Vec<String> {
-    commands
-        .iter()
-        .map(|command| command.trim())
-        .filter(|command| !command.is_empty())
-        .map(std::string::ToString::to_string)
-        .collect()
-}
-
-/// Joins normalized command entries into the persisted setting value.
-fn join_launch_configurations(commands: &[String]) -> String {
-    normalize_launch_configurations(commands).join("\n")
-}
-
-/// Loads one project-scoped boolean setting, falling back to
-/// `default_value` when the project is missing or the persisted value is
-/// absent or invalid.
-async fn load_project_bool_setting(
-    services: &AppServices,
+/// Loads one project-scoped boolean setting through the narrow repository
+/// dependency used by [`SettingsManager`].
+async fn load_project_bool_setting_from_repositories(
+    repositories: &AppRepositories,
     project_id: Option<i64>,
     setting_name: SettingName,
     default_value: bool,
@@ -1329,42 +491,13 @@ async fn load_project_bool_setting(
         return default_value;
     };
 
-    services
-        .db()
+    repositories
         .settings()
         .get_project_setting(project_id, setting_name)
         .await
         .unwrap_or(None)
         .and_then(|setting_value| setting_value.parse::<bool>().ok())
         .unwrap_or(default_value)
-}
-
-/// Returns the human-readable value shown for one boolean selector row.
-fn bool_setting_display(setting_value: bool) -> String {
-    if setting_value {
-        "Enabled".to_string()
-    } else {
-        "Disabled".to_string()
-    }
-}
-
-/// Returns a model selector value prefixed with the option's real agent.
-fn display_model_selector_value(selection: AgentSelection) -> String {
-    format!("{}/{}", selection.kind(), selection.model().as_str())
-}
-
-/// Returns the compact table summary for configured launch configurations.
-fn display_launch_configuration_summary(launch_configuration_setting: &str) -> String {
-    let commands = parse_launch_configurations(launch_configuration_setting);
-    let Some(first_command) = commands.first() else {
-        return "(none)".to_string();
-    };
-
-    if commands.len() == 1 {
-        return first_command.clone();
-    }
-
-    format!("{} (+{} more)", first_command, commands.len() - 1)
 }
 
 /// Returns all selectable model options in settings display order for the
@@ -1497,33 +630,9 @@ fn fallback_selection_for_available_model(
     AgentSelection::new(agent_kind, model)
 }
 
-/// Loads the persisted reasoning-level setting.
-///
-/// Falls back to [`ReasoningLevel::default`] when the setting is missing
-/// or cannot be parsed.
-async fn load_reasoning_level_setting(
-    services: &AppServices,
-    project_id: Option<i64>,
-) -> ReasoningLevel {
-    let Some(project_id) = project_id else {
-        return ReasoningLevel::default();
-    };
-
-    services
-        .db()
-        .settings()
-        .load_project_reasoning_level(project_id)
-        .await
-        .unwrap_or_default()
-}
-
-/// Loads the persisted terminal color theme.
-///
-/// Unknown or missing values fall back to [`ColorTheme::default`], preserving
-/// the existing palette for current users.
-async fn load_theme_setting(services: &AppServices) -> ColorTheme {
-    services
-        .db()
+/// Loads the persisted terminal color theme through the settings repository.
+async fn load_theme_setting_from_repositories(repositories: &AppRepositories) -> ColorTheme {
+    repositories
         .settings()
         .get_setting(SettingName::Theme)
         .await
@@ -1544,8 +653,12 @@ mod tests {
 
     use super::*;
     use crate::db::AppRepositories;
-    use crate::domain::selection::SelectionState;
+    use crate::domain::input::InputCommand;
     use crate::infra::fs;
+    use crate::presentation::settings::{
+        LaunchConfigurationListEditorMode, LaunchConfigurationListEditorSnapshot, SettingsAction,
+        SettingsPresentationState, SettingsSelectorDropdown,
+    };
 
     /// Builds app services backed by an in-memory database for settings tests.
     async fn test_services() -> (AppServices, i64) {
@@ -1576,39 +689,234 @@ mod tests {
         (services, project_id)
     }
 
-    /// Selects one settings row by its table index.
-    fn select_row(manager: &mut SettingsManager, row_index: usize) {
-        manager.table_state.select(Some(row_index));
+    /// Test-local settings screen harness that composes production value and
+    /// presentation boundaries without extending `SettingsManager`.
+    struct SettingsTestHarness {
+        manager: Option<SettingsManager>,
+        presentation: SettingsPresentationState,
+        view: SettingsView,
     }
 
-    fn new_settings_manager() -> SettingsManager {
-        let mut table_state = SelectionState::default();
-        table_state.select(Some(0));
+    impl SettingsTestHarness {
+        fn new() -> Self {
+            let default_selection = AgentSelection::new(
+                AgentKind::Antigravity,
+                AgentKind::Antigravity.default_model(),
+            );
 
-        SettingsManager {
-            default_fast_selection: AgentSelection::new(
-                AgentKind::Antigravity,
-                AgentKind::Antigravity.default_model(),
-            ),
-            default_review_selection: AgentSelection::new(
-                AgentKind::Antigravity,
-                AgentKind::Antigravity.default_model(),
-            ),
-            default_smart_selection: AgentSelection::new(
-                AgentKind::Antigravity,
-                AgentKind::Antigravity.default_model(),
-            ),
-            launch_configuration: String::new(),
-            reasoning_level: ReasoningLevel::High,
-            table_state,
-            theme: ColorTheme::Current,
-            available_agent_kinds: AgentKind::ALL.to_vec(),
-            include_coauthored_by_agentty: false,
-            launch_configuration_list_editor: None,
-            project_id: 1,
-            selector_dropdown: None,
-            use_last_used_model_as_default: false,
+            Self {
+                manager: None,
+                presentation: SettingsPresentationState::default(),
+                view: SettingsView {
+                    available_model_selections: selectable_model_options(AgentKind::ALL)
+                        .into_iter()
+                        .map(ModelSelectorOption::selection)
+                        .collect(),
+                    default_fast_selection: default_selection,
+                    default_review_selection: default_selection,
+                    default_smart_selection: default_selection,
+                    include_coauthored_by_agentty: false,
+                    launch_configuration: String::new(),
+                    reasoning_level: ReasoningLevel::High,
+                    theme: ColorTheme::Current,
+                    use_last_used_model_as_default: false,
+                },
+            }
         }
+
+        fn from_manager(manager: SettingsManager) -> Self {
+            Self {
+                view: manager.view(),
+                manager: Some(manager),
+                presentation: SettingsPresentationState::default(),
+            }
+        }
+
+        fn apply(&mut self, action: SettingsAction) -> Option<SettingsOperation> {
+            self.presentation.apply(&self.view, action)
+        }
+
+        async fn apply_and_persist(&mut self, action: SettingsAction) {
+            let Some(operation) = self.apply(action) else {
+                return;
+            };
+
+            self.persist_operation(operation).await;
+        }
+
+        async fn persist_operation(&mut self, operation: SettingsOperation) {
+            let manager = self
+                .manager
+                .as_mut()
+                .expect("persisted settings test requires a manager");
+            manager.apply_operation(operation).await;
+            self.view = manager.view();
+        }
+
+        fn fixture_view_mut(&mut self) -> &mut SettingsView {
+            assert!(
+                self.manager.is_none(),
+                "persisted settings fixtures must be seeded through repositories"
+            );
+
+            &mut self.view
+        }
+
+        fn settings(&self) -> &SettingsManager {
+            self.manager
+                .as_ref()
+                .expect("test requires repository-backed settings")
+        }
+
+        fn next(&mut self) {
+            let _ = self.apply(SettingsAction::Next);
+        }
+
+        fn previous(&mut self) {
+            let _ = self.apply(SettingsAction::Previous);
+        }
+
+        fn handle_enter(&mut self) {
+            let _ = self.apply(SettingsAction::Activate);
+        }
+
+        fn is_launch_configuration_list_editor_open(&self) -> bool {
+            self.presentation.is_launch_configuration_list_editor_open()
+        }
+
+        fn is_selector_dropdown_open(&self) -> bool {
+            self.presentation.is_selector_dropdown_open()
+        }
+
+        fn launch_configuration_list_editor(
+            &self,
+        ) -> Option<LaunchConfigurationListEditorSnapshot> {
+            self.presentation
+                .snapshot(&self.view)
+                .launch_configuration_list_editor
+        }
+
+        fn launch_configurations(&self) -> Vec<String> {
+            parse_launch_configurations(self.view.launch_configuration.as_str())
+        }
+
+        fn selector_dropdown(&self) -> Option<SettingsSelectorDropdown> {
+            self.presentation.snapshot(&self.view).selector_dropdown
+        }
+
+        fn start_adding_launch_configuration(&mut self) {
+            let _ = self.apply(SettingsAction::StartAddingLaunchConfiguration);
+        }
+
+        fn start_editing_selected_launch_configuration(&mut self) {
+            let _ = self.apply(SettingsAction::EditLaunchConfiguration);
+        }
+
+        fn cancel_launch_configuration_input(&mut self) {
+            let _ = self.apply(SettingsAction::Cancel);
+        }
+
+        fn apply_launch_configuration_input_command(&mut self, command: InputCommand) {
+            let _ = self.apply(SettingsAction::Input(command));
+        }
+
+        fn next_launch_configuration_list_editor_item(&mut self) {
+            self.next();
+        }
+
+        fn next_selector_dropdown_option(&mut self) {
+            self.next();
+        }
+
+        async fn confirm_launch_configuration_input(&mut self) {
+            self.apply_and_persist(SettingsAction::Confirm).await;
+        }
+
+        async fn delete_selected_launch_configuration(&mut self) {
+            self.apply_and_persist(SettingsAction::DeleteLaunchConfiguration)
+                .await;
+        }
+
+        async fn move_selected_launch_configuration_down(&mut self) {
+            self.apply_and_persist(SettingsAction::MoveLaunchConfigurationDown)
+                .await;
+        }
+
+        async fn move_selected_launch_configuration_up(&mut self) {
+            self.apply_and_persist(SettingsAction::MoveLaunchConfigurationUp)
+                .await;
+        }
+
+        async fn select_selector_dropdown_option(&mut self) {
+            self.apply_and_persist(SettingsAction::Confirm).await;
+        }
+
+        fn settings_rows(&self) -> Vec<(&'static str, String)> {
+            let snapshot = self.presentation.snapshot(&self.view);
+
+            snapshot
+                .global_rows
+                .into_iter()
+                .chain(snapshot.project_rows)
+                .collect()
+        }
+
+        fn global_settings_rows(&self) -> Vec<(&'static str, String)> {
+            self.presentation.snapshot(&self.view).global_rows
+        }
+
+        fn project_settings_rows(&self) -> Vec<(&'static str, String)> {
+            self.presentation.snapshot(&self.view).project_rows
+        }
+
+        fn footer_hint(&self) -> &'static str {
+            self.presentation.snapshot(&self.view).footer_hint
+        }
+    }
+
+    /// Selects one settings row through the screen navigation action.
+    fn select_row(manager: &mut SettingsTestHarness, row_index: usize) {
+        for _ in 0..row_index {
+            manager.next();
+        }
+    }
+
+    /// Creates an in-memory settings-screen fixture.
+    fn new_settings_manager() -> SettingsTestHarness {
+        SettingsTestHarness::new()
+    }
+
+    /// Loads a settings screen through the production repository boundary.
+    async fn settings_manager(services: &AppServices, project_id: i64) -> SettingsTestHarness {
+        let manager = SettingsManager::from_repositories(
+            services.db().clone(),
+            services.available_agent_kinds(),
+            project_id,
+        )
+        .await;
+
+        SettingsTestHarness::from_manager(manager)
+    }
+
+    /// Persists a launch-configuration fixture before loading the production
+    /// settings boundary.
+    async fn settings_manager_with_launch_configuration(
+        services: &AppServices,
+        project_id: i64,
+        launch_configuration: &str,
+    ) -> SettingsTestHarness {
+        services
+            .db()
+            .settings()
+            .upsert_project_setting(
+                project_id,
+                SettingName::LaunchConfiguration,
+                launch_configuration,
+            )
+            .await
+            .expect("failed to persist launch-configuration fixture");
+
+        settings_manager(services, project_id).await
     }
 
     #[test]
@@ -1944,26 +1252,27 @@ mod tests {
             .expect("failed to persist theme setting");
 
         // Act
-        let manager = SettingsManager::new(&services, project_id).await;
+        let manager = settings_manager(&services, project_id).await;
+        let settings = manager.settings();
 
         // Assert
         assert_eq!(
-            manager.default_smart_selection,
+            settings.default_smart_selection,
             AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55)
         );
         assert_eq!(
-            manager.default_fast_selection,
+            settings.default_fast_selection,
             AgentSelection::new(AgentKind::Codex, AgentModel::Gpt53CodexSpark)
         );
         assert_eq!(
-            manager.default_review_selection,
+            settings.default_review_selection,
             AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus48)
         );
-        assert_eq!(manager.launch_configuration, "nvim .");
-        assert_eq!(manager.reasoning_level, ReasoningLevel::Low);
-        assert_eq!(manager.theme, ColorTheme::Green);
-        assert!(!manager.include_coauthored_by_agentty);
-        assert!(manager.use_last_used_model_as_default);
+        assert_eq!(settings.launch_configuration, "nvim .");
+        assert_eq!(settings.reasoning_level, ReasoningLevel::Low);
+        assert_eq!(settings.theme, ColorTheme::Green);
+        assert!(!settings.include_coauthored_by_agentty);
+        assert!(settings.use_last_used_model_as_default);
     }
 
     #[tokio::test]
@@ -1982,10 +1291,10 @@ mod tests {
             .expect("failed to persist invalid flag");
 
         // Act
-        let manager = SettingsManager::new(&services, project_id).await;
+        let manager = settings_manager(&services, project_id).await;
 
         // Assert
-        assert!(!manager.use_last_used_model_as_default);
+        assert!(!manager.settings().use_last_used_model_as_default);
     }
 
     #[tokio::test]
@@ -2004,10 +1313,10 @@ mod tests {
             .expect("failed to persist invalid coauthor flag");
 
         // Act
-        let manager = SettingsManager::new(&services, project_id).await;
+        let manager = settings_manager(&services, project_id).await;
 
         // Assert
-        assert!(!manager.include_coauthored_by_agentty);
+        assert!(!manager.settings().include_coauthored_by_agentty);
     }
 
     #[tokio::test]
@@ -2022,10 +1331,10 @@ mod tests {
             .expect("failed to persist invalid theme");
 
         // Act
-        let manager = SettingsManager::new(&services, project_id).await;
+        let manager = settings_manager(&services, project_id).await;
 
         // Assert
-        assert_eq!(manager.theme, ColorTheme::Current);
+        assert_eq!(manager.settings().theme, ColorTheme::Current);
     }
 
     #[tokio::test]
@@ -2040,10 +1349,83 @@ mod tests {
             .expect("failed to persist theme setting");
 
         // Act
-        let manager = SettingsManager::new(&services, project_id).await;
+        let manager = settings_manager(&services, project_id).await;
 
         // Assert
-        assert_eq!(manager.theme, ColorTheme::DarkHorizon);
+        assert_eq!(manager.settings().theme, ColorTheme::DarkHorizon);
+    }
+
+    #[tokio::test]
+    async fn apply_operation_persists_fast_review_and_reasoning_settings() {
+        // Arrange
+        let (services, project_id) = test_services().await;
+        let mut manager = settings_manager(&services, project_id).await;
+        let fast_selection = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55);
+        let review_selection = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus48);
+
+        // Act
+        manager
+            .persist_operation(SettingsOperation::DefaultFastSelection(fast_selection))
+            .await;
+        manager
+            .persist_operation(SettingsOperation::DefaultReviewSelection(review_selection))
+            .await;
+        manager
+            .persist_operation(SettingsOperation::ReasoningLevel(ReasoningLevel::Max))
+            .await;
+
+        // Assert
+        assert_eq!(manager.settings().default_fast_selection, fast_selection);
+        assert_eq!(
+            manager.settings().default_review_selection,
+            review_selection
+        );
+        assert_eq!(manager.settings().reasoning_level, ReasoningLevel::Max);
+        assert_eq!(
+            services
+                .db()
+                .settings()
+                .get_project_setting(project_id, SettingName::DefaultFastAgent)
+                .await
+                .expect("failed to load fast agent"),
+            Some(AgentKind::Codex.name().to_string())
+        );
+        assert_eq!(
+            services
+                .db()
+                .settings()
+                .get_project_setting(project_id, SettingName::DefaultFastModel)
+                .await
+                .expect("failed to load fast model"),
+            Some(AgentModel::Gpt55.as_str().to_string())
+        );
+        assert_eq!(
+            services
+                .db()
+                .settings()
+                .get_project_setting(project_id, SettingName::DefaultReviewAgent)
+                .await
+                .expect("failed to load review agent"),
+            Some(AgentKind::Claude.name().to_string())
+        );
+        assert_eq!(
+            services
+                .db()
+                .settings()
+                .get_project_setting(project_id, SettingName::DefaultReviewModel)
+                .await
+                .expect("failed to load review model"),
+            Some(AgentModel::ClaudeOpus48.as_str().to_string())
+        );
+        assert_eq!(
+            services
+                .db()
+                .settings()
+                .load_project_reasoning_level(project_id)
+                .await
+                .expect("failed to load reasoning level"),
+            ReasoningLevel::Max
+        );
     }
 
     #[test]
@@ -2055,7 +1437,13 @@ mod tests {
         manager.next();
 
         // Assert
-        assert_eq!(manager.table_state.selected(), Some(1));
+        assert_eq!(
+            manager
+                .presentation
+                .snapshot(&manager.view)
+                .selected_row_index,
+            Some(1)
+        );
     }
 
     #[test]
@@ -2067,7 +1455,13 @@ mod tests {
         manager.previous();
 
         // Assert
-        assert_eq!(manager.table_state.selected(), Some(6));
+        assert_eq!(
+            manager
+                .presentation
+                .snapshot(&manager.view)
+                .selected_row_index,
+            Some(6)
+        );
     }
 
     #[test]
@@ -2126,12 +1520,9 @@ mod tests {
     fn footer_hint_returns_launch_configuration_input_hint_when_input_is_active() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.launch_configuration_list_editor = Some(LaunchConfigurationListEditorState {
-            commands: Vec::new(),
-            input: InputState::default(),
-            mode: LaunchConfigurationListEditorMode::Add,
-            selected_index: 0,
-        });
+        select_row(&mut manager, 6);
+        manager.handle_enter();
+        manager.start_adding_launch_configuration();
 
         // Act
         let footer_hint = manager.footer_hint();
@@ -2147,10 +1538,7 @@ mod tests {
     fn footer_hint_returns_selector_dropdown_hint_when_dropdown_is_open() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.selector_dropdown = Some(SelectorDropdownState {
-            row: SettingRow::Theme,
-            selected_index: 0,
-        });
+        manager.handle_enter();
 
         // Act
         let footer_hint = manager.footer_hint();
@@ -2166,7 +1554,7 @@ mod tests {
     fn launch_configurations_returns_single_trimmed_command() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.launch_configuration = "  cargo test  ".to_string();
+        manager.fixture_view_mut().launch_configuration = "  cargo test  ".to_string();
 
         // Act
         let launch_configurations = manager.launch_configurations();
@@ -2179,7 +1567,8 @@ mod tests {
     fn launch_configurations_splits_newline_entries() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.launch_configuration = " cargo test \n npm run dev \n".to_string();
+        manager.fixture_view_mut().launch_configuration =
+            " cargo test \n npm run dev \n".to_string();
 
         // Act
         let launch_configurations = manager.launch_configurations();
@@ -2195,7 +1584,7 @@ mod tests {
     fn launch_configurations_does_not_split_double_pipe_entries() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.launch_configuration = "cargo test || npm run dev".to_string();
+        manager.fixture_view_mut().launch_configuration = "cargo test || npm run dev".to_string();
 
         // Act
         let launch_configurations = manager.launch_configurations();
@@ -2223,7 +1612,7 @@ mod tests {
     fn settings_rows_show_single_launch_configuration_summary() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.launch_configuration = "http://localhost:5173".to_string();
+        manager.fixture_view_mut().launch_configuration = "http://localhost:5173".to_string();
 
         // Act
         let rows = manager.settings_rows();
@@ -2236,7 +1625,8 @@ mod tests {
     fn settings_rows_show_multiple_launch_configuration_summary() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.launch_configuration = "cargo test\nnpm run dev\nlazygit".to_string();
+        manager.fixture_view_mut().launch_configuration =
+            "cargo test\nnpm run dev\nlazygit".to_string();
 
         // Act
         let rows = manager.settings_rows();
@@ -2249,7 +1639,7 @@ mod tests {
     fn settings_rows_show_last_used_model_as_default_value_when_enabled() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.use_last_used_model_as_default = true;
+        manager.fixture_view_mut().use_last_used_model_as_default = true;
 
         // Act
         let rows = manager.settings_rows();
@@ -2262,7 +1652,7 @@ mod tests {
     fn settings_rows_show_default_smart_model_with_agent_prefix() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.default_smart_selection =
+        manager.fixture_view_mut().default_smart_selection =
             AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31ProPreview);
 
         // Act
@@ -2276,8 +1666,12 @@ mod tests {
     fn settings_rows_show_default_smart_model_with_real_gemini_agent() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.available_agent_kinds = vec![AgentKind::Gemini];
-        manager.default_smart_selection =
+        let view = manager.fixture_view_mut();
+        view.available_model_selections = selectable_model_options(&[AgentKind::Gemini])
+            .into_iter()
+            .map(ModelSelectorOption::selection)
+            .collect();
+        view.default_smart_selection =
             AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31ProPreview);
 
         // Act
@@ -2291,7 +1685,8 @@ mod tests {
     fn settings_rows_show_default_fast_model_value() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.default_fast_selection = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55);
+        manager.fixture_view_mut().default_fast_selection =
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55);
 
         // Act
         let rows = manager.settings_rows();
@@ -2304,7 +1699,7 @@ mod tests {
     fn settings_rows_show_default_review_model_value() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.default_review_selection =
+        manager.fixture_view_mut().default_review_selection =
             AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus48);
 
         // Act
@@ -2318,7 +1713,7 @@ mod tests {
     fn settings_rows_show_coauthored_by_agentty_value() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.include_coauthored_by_agentty = false;
+        manager.fixture_view_mut().include_coauthored_by_agentty = false;
 
         // Act
         let rows = manager.settings_rows();
@@ -2331,7 +1726,7 @@ mod tests {
     fn settings_rows_show_reasoning_level_value() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.reasoning_level = ReasoningLevel::Max;
+        manager.fixture_view_mut().reasoning_level = ReasoningLevel::Max;
 
         // Act
         let rows = manager.settings_rows();
@@ -2344,7 +1739,7 @@ mod tests {
     fn settings_rows_show_theme_value() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.theme = ColorTheme::Green;
+        manager.fixture_view_mut().theme = ColorTheme::Green;
 
         // Act
         let rows = manager.settings_rows();
@@ -2357,7 +1752,7 @@ mod tests {
     fn handle_enter_opens_launch_configuration_list_editor() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.launch_configuration = "nvim .".to_string();
+        manager.fixture_view_mut().launch_configuration = "nvim .".to_string();
         select_row(&mut manager, 6);
 
         // Act
@@ -2383,8 +1778,30 @@ mod tests {
         manager.previous();
 
         // Assert
-        assert_eq!(manager.table_state.selected(), Some(6));
+        assert_eq!(
+            manager
+                .presentation
+                .snapshot(&manager.view)
+                .selected_row_index,
+            Some(6)
+        );
         assert!(manager.is_launch_configuration_list_editor_open());
+    }
+
+    #[test]
+    fn navigation_actions_do_not_request_launch_configuration_persistence() {
+        // Arrange
+        let mut manager = new_settings_manager();
+        select_row(&mut manager, 6);
+        manager.handle_enter();
+
+        // Act
+        let next_operation = manager.apply(SettingsAction::Next);
+        let previous_operation = manager.apply(SettingsAction::Previous);
+
+        // Assert
+        assert_eq!(next_operation, None);
+        assert_eq!(previous_operation, None);
     }
 
     #[test]
@@ -2399,7 +1816,13 @@ mod tests {
         manager.previous();
 
         // Assert
-        assert_eq!(manager.table_state.selected(), Some(0));
+        assert_eq!(
+            manager
+                .presentation
+                .snapshot(&manager.view)
+                .selected_row_index,
+            Some(0)
+        );
         assert!(manager.is_selector_dropdown_open());
     }
 
@@ -2407,7 +1830,7 @@ mod tests {
     fn cancel_launch_configuration_input_returns_to_browse_without_changing_value() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.launch_configuration = "old command".to_string();
+        manager.fixture_view_mut().launch_configuration = "old command".to_string();
         select_row(&mut manager, 6);
         manager.handle_enter();
         manager.start_adding_launch_configuration();
@@ -2420,7 +1843,7 @@ mod tests {
         let editor = manager
             .launch_configuration_list_editor()
             .expect("expected launch-configuration list editor");
-        assert_eq!(manager.launch_configuration, "old command");
+        assert_eq!(manager.view.launch_configuration, "old command");
         assert_eq!(editor.mode, LaunchConfigurationListEditorMode::Browse);
         assert!(editor.input.is_none());
     }
@@ -2429,7 +1852,7 @@ mod tests {
     async fn confirm_launch_configuration_input_adds_trimmed_command_and_persists_value() {
         // Arrange
         let (services, project_id) = test_services().await;
-        let mut manager = SettingsManager::new(&services, project_id).await;
+        let mut manager = settings_manager(&services, project_id).await;
         select_row(&mut manager, 6);
         manager.handle_enter();
         manager.start_adding_launch_configuration();
@@ -2438,10 +1861,10 @@ mod tests {
         manager.apply_launch_configuration_input_command(InputCommand::InsertText(
             " nvim ".to_string(),
         ));
-        manager.confirm_launch_configuration_input(&services).await;
+        manager.confirm_launch_configuration_input().await;
 
         // Assert
-        assert_eq!(manager.launch_configuration, "nvim");
+        assert_eq!(manager.settings().launch_configuration, "nvim");
         assert_eq!(
             services
                 .db()
@@ -2457,8 +1880,12 @@ mod tests {
     async fn confirm_launch_configuration_input_edits_selected_command_and_persists_value() {
         // Arrange
         let (services, project_id) = test_services().await;
-        let mut manager = SettingsManager::new(&services, project_id).await;
-        manager.launch_configuration = "cargo test\nnpm run dev".to_string();
+        let mut manager = settings_manager_with_launch_configuration(
+            &services,
+            project_id,
+            "cargo test\nnpm run dev",
+        )
+        .await;
         select_row(&mut manager, 6);
         manager.handle_enter();
         manager.next_launch_configuration_list_editor_item();
@@ -2472,10 +1899,13 @@ mod tests {
         }
 
         // Act
-        manager.confirm_launch_configuration_input(&services).await;
+        manager.confirm_launch_configuration_input().await;
 
         // Assert
-        assert_eq!(manager.launch_configuration, "cargo test\nlazygit");
+        assert_eq!(
+            manager.settings().launch_configuration,
+            "cargo test\nlazygit"
+        );
         assert_eq!(
             services
                 .db()
@@ -2491,8 +1921,12 @@ mod tests {
     async fn confirm_launch_configuration_input_drops_empty_edited_command() {
         // Arrange
         let (services, project_id) = test_services().await;
-        let mut manager = SettingsManager::new(&services, project_id).await;
-        manager.launch_configuration = "cargo test\nnpm run dev".to_string();
+        let mut manager = settings_manager_with_launch_configuration(
+            &services,
+            project_id,
+            "cargo test\nnpm run dev",
+        )
+        .await;
         select_row(&mut manager, 6);
         manager.handle_enter();
         manager.start_editing_selected_launch_configuration();
@@ -2502,10 +1936,10 @@ mod tests {
         }
 
         // Act
-        manager.confirm_launch_configuration_input(&services).await;
+        manager.confirm_launch_configuration_input().await;
 
         // Assert
-        assert_eq!(manager.launch_configuration, "npm run dev");
+        assert_eq!(manager.settings().launch_configuration, "npm run dev");
         assert_eq!(
             services
                 .db()
@@ -2521,19 +1955,24 @@ mod tests {
     async fn delete_selected_launch_configuration_persists_remaining_commands() {
         // Arrange
         let (services, project_id) = test_services().await;
-        let mut manager = SettingsManager::new(&services, project_id).await;
-        manager.launch_configuration = "cargo test\nnpm run dev\nlazygit".to_string();
+        let mut manager = settings_manager_with_launch_configuration(
+            &services,
+            project_id,
+            "cargo test\nnpm run dev\nlazygit",
+        )
+        .await;
         select_row(&mut manager, 6);
         manager.handle_enter();
         manager.next_launch_configuration_list_editor_item();
 
         // Act
-        manager
-            .delete_selected_launch_configuration(&services)
-            .await;
+        manager.delete_selected_launch_configuration().await;
 
         // Assert
-        assert_eq!(manager.launch_configuration, "cargo test\nlazygit");
+        assert_eq!(
+            manager.settings().launch_configuration,
+            "cargo test\nlazygit"
+        );
         assert_eq!(
             services
                 .db()
@@ -2549,22 +1988,24 @@ mod tests {
     async fn move_selected_launch_configuration_down_persists_reordered_commands() {
         // Arrange
         let (services, project_id) = test_services().await;
-        let mut manager = SettingsManager::new(&services, project_id).await;
-        manager.launch_configuration = "cargo test\nnpm run dev\nlazygit".to_string();
+        let mut manager = settings_manager_with_launch_configuration(
+            &services,
+            project_id,
+            "cargo test\nnpm run dev\nlazygit",
+        )
+        .await;
         select_row(&mut manager, 6);
         manager.handle_enter();
 
         // Act
-        manager
-            .move_selected_launch_configuration_down(&services)
-            .await;
+        manager.move_selected_launch_configuration_down().await;
 
         // Assert
         let editor = manager
             .launch_configuration_list_editor()
             .expect("expected launch-configuration list editor");
         assert_eq!(
-            manager.launch_configuration,
+            manager.settings().launch_configuration,
             "npm run dev\ncargo test\nlazygit"
         );
         assert_eq!(editor.selected_index, 1);
@@ -2583,16 +2024,16 @@ mod tests {
     async fn selector_dropdown_selects_coauthor_setting_and_persists_value() {
         // Arrange
         let (services, project_id) = test_services().await;
-        let mut manager = SettingsManager::new(&services, project_id).await;
+        let mut manager = settings_manager(&services, project_id).await;
         select_row(&mut manager, 5);
 
         // Act
         manager.handle_enter();
         manager.next_selector_dropdown_option();
-        manager.select_selector_dropdown_option(&services).await;
+        manager.select_selector_dropdown_option().await;
 
         // Assert
-        assert!(manager.include_coauthored_by_agentty);
+        assert!(manager.settings().include_coauthored_by_agentty);
         assert!(!manager.is_selector_dropdown_open());
         assert_eq!(
             services
@@ -2609,7 +2050,7 @@ mod tests {
     async fn selector_dropdown_selects_theme_setting_and_persists_value() {
         // Arrange
         let (services, project_id) = test_services().await;
-        let mut manager = SettingsManager::new(&services, project_id).await;
+        let mut manager = settings_manager(&services, project_id).await;
         select_row(&mut manager, 0);
 
         // Act
@@ -2622,8 +2063,8 @@ mod tests {
         assert_eq!(dropdown.options[1].label, "Agentty Green");
 
         manager.next_selector_dropdown_option();
-        manager.select_selector_dropdown_option(&services).await;
-        let selected_theme = manager.theme;
+        manager.select_selector_dropdown_option().await;
+        let selected_theme = manager.settings().theme;
         let persisted_theme = services
             .db()
             .settings()
@@ -2643,7 +2084,7 @@ mod tests {
     async fn launch_configuration_editor_apis_are_noops_without_open_editor() {
         // Arrange
         let (services, project_id) = test_services().await;
-        let mut manager = SettingsManager::new(&services, project_id).await;
+        let mut manager = settings_manager(&services, project_id).await;
 
         // Act
         manager.start_adding_launch_configuration();
@@ -2655,19 +2096,14 @@ mod tests {
         manager.apply_launch_configuration_input_command(InputCommand::MoveRight);
         manager.apply_launch_configuration_input_command(InputCommand::MoveHome);
         manager.apply_launch_configuration_input_command(InputCommand::MoveEnd);
-        manager.confirm_launch_configuration_input(&services).await;
-        manager
-            .delete_selected_launch_configuration(&services)
-            .await;
-        manager
-            .move_selected_launch_configuration_down(&services)
-            .await;
-        manager
-            .move_selected_launch_configuration_up(&services)
-            .await;
+        manager.confirm_launch_configuration_input().await;
+        manager.delete_selected_launch_configuration().await;
+        manager.move_selected_launch_configuration_down().await;
+        manager.move_selected_launch_configuration_up().await;
 
         // Assert
-        assert!(manager.launch_configuration.is_empty());
+        assert!(manager.settings().launch_configuration.is_empty());
+        assert!(!manager.is_selector_dropdown_open());
         assert_eq!(
             services
                 .db()
@@ -2683,11 +2119,35 @@ mod tests {
     async fn selector_dropdown_persists_last_used_flag_and_explicit_smart_model() {
         // Arrange
         let (services, project_id) = test_services().await;
-        let mut manager = SettingsManager::new(&services, project_id).await;
         let options = selectable_model_options(AgentKind::ALL);
         let last_option = *options.last().expect("model options should not be empty");
-        manager.default_smart_selection = last_option.selection();
-        manager.use_last_used_model_as_default = false;
+        services
+            .db()
+            .settings()
+            .upsert_project_setting(
+                project_id,
+                SettingName::DefaultSmartAgent,
+                last_option.agent_kind.name(),
+            )
+            .await
+            .expect("failed to persist smart agent fixture");
+        services
+            .db()
+            .settings()
+            .upsert_project_setting(
+                project_id,
+                SettingName::DefaultSmartModel,
+                last_option.model.as_str(),
+            )
+            .await
+            .expect("failed to persist smart model fixture");
+        services
+            .db()
+            .settings()
+            .upsert_project_setting(project_id, SettingName::LastUsedModelAsDefault, "false")
+            .await
+            .expect("failed to persist last-used fixture");
+        let mut manager = settings_manager(&services, project_id).await;
         select_row(&mut manager, 2);
 
         // Act
@@ -2697,10 +2157,10 @@ mod tests {
             .expect("expected smart model selector dropdown");
         assert_eq!(dropdown.selected_index, options.len() - 1);
         manager.next_selector_dropdown_option();
-        manager.select_selector_dropdown_option(&services).await;
+        manager.select_selector_dropdown_option().await;
 
         // Assert
-        assert!(manager.use_last_used_model_as_default);
+        assert!(manager.settings().use_last_used_model_as_default);
         assert_eq!(
             services
                 .db()
@@ -2714,11 +2174,14 @@ mod tests {
         // Act
         manager.handle_enter();
         manager.next_selector_dropdown_option();
-        manager.select_selector_dropdown_option(&services).await;
+        manager.select_selector_dropdown_option().await;
 
         // Assert
-        assert!(!manager.use_last_used_model_as_default);
-        assert_eq!(manager.default_smart_selection, options[0].selection());
+        assert!(!manager.settings().use_last_used_model_as_default);
+        assert_eq!(
+            manager.settings().default_smart_selection,
+            options[0].selection()
+        );
         assert_eq!(
             services
                 .db()
