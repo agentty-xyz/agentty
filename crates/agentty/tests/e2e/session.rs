@@ -1010,7 +1010,12 @@ fn seed_review_ready_session_with_persisted_focused_review(
 fn seed_sessions_with_persisted_focused_reviews(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    seed_review_ready_session_with_persisted_focused_review(env)?;
+    // The session list orders by `updated_at DESC, created_at DESC, id`, and
+    // both timestamps have one-second resolution. Seed `second-review-0001`
+    // first so `review-shortcut-0001` is row 0 under either outcome: when both
+    // seeds land in the same second the `id` tiebreak selects it, and when a
+    // second boundary falls between them its newer `updated_at` selects it.
+    // Seeding in the other order makes row 0 depend on that boundary.
     common::seed_session(
         env,
         SessionSeed::regular("second-review-0001", "gpt-5.5", "main", "Review")
@@ -1035,6 +1040,8 @@ fn seed_sessions_with_persisted_focused_reviews(
     })?;
 
     std::fs::create_dir_all(env.agentty_root.join("wt").join("second-r"))?;
+
+    seed_review_ready_session_with_persisted_focused_review(env)?;
 
     Ok(())
 }
