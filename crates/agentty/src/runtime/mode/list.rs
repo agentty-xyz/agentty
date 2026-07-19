@@ -157,12 +157,14 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
                     .await;
                 app.restore_review_output(&session_id);
 
-                if let Some(session) = app.sessions.session_at(session_index)
-                    && session.status == Status::Question
-                {
-                    let questions = session.questions.clone();
+                let questions = app
+                    .sessions
+                    .session_at(session_index)
+                    .filter(|session| session.status == Status::Question)
+                    .map(|session| session.questions.clone());
+                if let Some(questions) = questions {
                     app.enter_question_mode(session_id.as_str(), questions);
-                } else {
+                } else if !app.restore_prompt_progress(session_id.as_str()).await {
                     app.mode = AppMode::View {
                         session_id,
                         scroll_offset: None,
@@ -376,6 +378,8 @@ mod tests {
     use crate::app::{AppEvent, MockSyncMainRunner, SyncMainOutcome, SyncSessionStartError};
     use crate::domain::question::QuestionItem;
     use crate::domain::theme::ColorTheme;
+    use crate::presentation::app_mode::PromptModeSnapshot;
+    use crate::presentation::prompt::PromptSlashState;
 
     /// Builds a settings-focused test app with the `Launch Configurations` row
     /// selected.
@@ -420,6 +424,19 @@ mod tests {
                 });
             });
         app.sync_main_runner = std::sync::Arc::new(mock_sync_main_runner);
+    }
+
+    /// Builds one saved composer snapshot for list-reopen tests.
+    fn saved_prompt_snapshot(session_id: &str, input_text: &str) -> PromptModeSnapshot {
+        PromptModeSnapshot {
+            at_mention_state: None,
+            attachment_state: PromptAttachmentState::default(),
+            history_state: PromptHistoryState::new(Vec::new()),
+            input: InputState::with_text(input_text.to_string()),
+            scroll_offset: Some(3),
+            session_id: session_id.into(),
+            slash_state: PromptSlashState::default(),
+        }
     }
 
     #[tokio::test]
@@ -747,6 +764,70 @@ mod tests {
                 && responses.is_empty()
                 && input.text().is_empty()
         ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_enter_key_restores_saved_prompt_progress() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        app.save_prompt_progress(saved_prompt_snapshot(&session_id, "saved draft"));
+        app.tabs.set(Tab::Sessions);
+        app.sessions.select_session_index(Some(0));
+        app.mode = AppMode::List;
+
+        // Act
+        let event_result = handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("failed to handle key");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(
+            &app.mode,
+            AppMode::Prompt {
+                focus: ChatFocus::Input,
+                input,
+                scroll_offset: Some(3),
+                session_id: restored_session_id,
+                ..
+            } if input.text() == "saved draft" && restored_session_id == &session_id
+        ));
+        assert!(app.prompt_progress.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_handle_enter_key_discards_saved_prompt_for_terminal_session() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        app.save_prompt_progress(saved_prompt_snapshot(&session_id, "stale draft"));
+        crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Canceled);
+        app.tabs.set(Tab::Sessions);
+        app.sessions.select_session_index(Some(0));
+        app.mode = AppMode::List;
+
+        // Act
+        let event_result = handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("failed to handle key");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(
+            &app.mode,
+            AppMode::View {
+                session_id: restored_session_id,
+                ..
+            } if restored_session_id == &session_id
+        ));
+        assert!(app.prompt_progress.is_empty());
     }
 
     #[tokio::test]

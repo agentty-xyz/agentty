@@ -37,10 +37,11 @@ const PROMPT_FOOTER_ACTIONS: [help_action::HelpAction; 4] = [
 /// focused for scrolling.
 ///
 /// Mirrors question mode's chat-focus footer: scrolling first, then the `d`
-/// diff-preview shortcut.
-const PROMPT_CHAT_FOCUS_FOOTER_ACTIONS: [help_action::HelpAction; 2] = [
+/// diff-preview shortcut and the `q` return to the sessions list.
+const PROMPT_CHAT_FOCUS_FOOTER_ACTIONS: [help_action::HelpAction; 3] = [
     help_action::HelpAction::new("scroll", "j/k", "Scroll chat"),
     help_action::HelpAction::new("diff", "d", "Diff"),
+    help_action::HelpAction::new("sessions", "q", "Sessions"),
 ];
 
 /// Builds the prompt-mode footer help line shown below the composer.

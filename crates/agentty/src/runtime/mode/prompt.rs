@@ -71,7 +71,8 @@ enum PromptInputMode {
 /// `Tab` moves focus between the composer and the chat transcript above it,
 /// unless the `@`-mention dropdown is open and claims the key for completion.
 /// While the transcript holds focus, scroll keys navigate it and the composer
-/// text stays untouched.
+/// text stays untouched. Pressing `q` from transcript focus returns to the
+/// sessions list and saves the complete composer for the next reopen.
 pub(crate) async fn handle_with_cache<B: Backend>(
     app: &mut App,
     render_cache_store: &RenderCacheStore,
@@ -93,6 +94,12 @@ where
         return Ok(EventResult::Continue);
     }
 
+    if is_plain_char_key(key, 'q') && prompt_chat_is_focused(app) {
+        exit_to_list_saving_progress(app);
+
+        return Ok(EventResult::Continue);
+    }
+
     if handle_chat_focus_key(app, render_cache_store, terminal, &prompt_context, key).await? {
         return Ok(EventResult::Continue);
     }
@@ -100,6 +107,24 @@ where
     handle_editing_key(app, terminal, key, &prompt_context).await?;
 
     Ok(EventResult::Continue)
+}
+
+/// Returns whether the prompt transcript currently owns keyboard focus.
+fn prompt_chat_is_focused(app: &App) -> bool {
+    matches!(
+        app.mode,
+        AppMode::Prompt {
+            focus: ChatFocus::Chat,
+            ..
+        }
+    )
+}
+
+/// Saves the complete prompt composer and returns to the sessions list.
+fn exit_to_list_saving_progress(app: &mut App) {
+    if let Some(snapshot) = take_prompt_snapshot(app) {
+        app.save_prompt_progress(snapshot);
+    }
 }
 
 /// Handles keys while the chat transcript above the composer holds focus.
@@ -1504,27 +1529,54 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_chat_focused_keys_scroll_transcript_without_editing_draft() {
+    async fn test_q_in_chat_focus_saves_prompt_for_restore() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("draft text", None).await;
+        let session_id = app.sessions.sessions()[0].id.clone();
         press_prompt_key(&mut app, KeyCode::Tab).await;
 
-        // Act — `g` jumps to the transcript top, and `q` must not reach the
-        // composer as text while the transcript is focused.
+        // Act — `g` updates the transcript position before `q` saves the
+        // complete composer and returns to the list.
         press_prompt_key(&mut app, KeyCode::Char('g')).await;
         press_prompt_key(&mut app, KeyCode::Char('q')).await;
 
+        // Assert — the cached composer keeps the draft and scroll position,
+        // then restores with input focus and consumes the cache entry.
+        assert!(matches!(app.mode, AppMode::List));
+        let saved_prompt = app
+            .prompt_progress
+            .get(&session_id)
+            .expect("prompt progress should be saved");
+        assert_eq!(saved_prompt.input.text(), "draft text");
+        assert_eq!(saved_prompt.scroll_offset, Some(0));
+
+        assert!(app.restore_prompt_progress(&session_id).await);
+        assert!(matches!(
+            &app.mode,
+            AppMode::Prompt {
+                focus: ChatFocus::Input,
+                input,
+                scroll_offset: Some(0),
+                ..
+            } if input.text() == "draft text"
+        ));
+        assert!(app.prompt_progress.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_q_in_input_focus_edits_prompt() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("draft", None).await;
+
+        // Act
+        press_prompt_key(&mut app, KeyCode::Char('q')).await;
+
         // Assert
-        let AppMode::Prompt {
-            input,
-            scroll_offset,
-            ..
-        } = &app.mode
-        else {
-            unreachable!("expected AppMode::Prompt");
-        };
-        assert_eq!(*scroll_offset, Some(0));
-        assert_eq!(input.text(), "draft text");
+        assert!(matches!(
+            &app.mode,
+            AppMode::Prompt { input, .. } if input.text() == "draftq"
+        ));
+        assert!(app.prompt_progress.is_empty());
     }
 
     #[tokio::test]

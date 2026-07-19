@@ -63,7 +63,7 @@ use crate::infra::db;
 use crate::infra::fs::{FsClient, RealFsClient};
 use crate::infra::project_discovery::{ProjectDiscoveryClient, RealProjectDiscoveryClient};
 use crate::infra::tmux::{RealTmuxClient, TmuxClient};
-use crate::presentation::app_mode::{AppMode, ChatFocus, ConfirmationViewMode};
+use crate::presentation::app_mode::{AppMode, ChatFocus, ConfirmationViewMode, PromptModeSnapshot};
 use crate::presentation::settings::SettingsPresentationState;
 
 /// Relative directory name used for session git worktrees within the
@@ -233,6 +233,10 @@ pub struct App {
     pub(super) assigned_issue_selected_index: Option<usize>,
     /// Caches open GitHub issues assigned to the authenticated user.
     pub(crate) assigned_issues: AssignedIssueState,
+    /// Saves prompt composers per session so leaving chat focus with `q` and
+    /// reopening the session restores the complete typed draft. Entries are
+    /// consumed on restore and removed when their session is deleted.
+    pub(crate) prompt_progress: HashMap<SessionId, PromptModeSnapshot>,
     /// Saves partially answered clarification progress per session so
     /// already-submitted answers survive leaving question mode with `q` and
     /// reopening the session. Entries are consumed on restore and cleared
@@ -1391,6 +1395,7 @@ impl App {
 
         if let Some(session_id) = session_id {
             app::at_mention_task::clear_pending_load(&session_id);
+            self.discard_prompt_progress(&session_id).await;
             self.review_cache.remove(&session_id);
         }
 
@@ -1409,6 +1414,7 @@ impl App {
 
         if let Some(session_id) = session_id {
             app::at_mention_task::clear_pending_load(&session_id);
+            self.discard_prompt_progress(&session_id).await;
             self.review_cache.remove(&session_id);
         }
 
@@ -2031,6 +2037,74 @@ impl App {
             selected_option_index,
             session_id: SessionId::from(session_id),
         };
+    }
+
+    /// Saves one prompt composer for restoration after returning to the
+    /// sessions list.
+    pub(crate) fn save_prompt_progress(&mut self, snapshot: PromptModeSnapshot) {
+        let session_id = snapshot.session_id.clone();
+
+        self.prompt_progress.insert(session_id, snapshot);
+    }
+
+    /// Discards a saved prompt composer and cleans up its attachment files.
+    pub(crate) async fn discard_prompt_progress(&mut self, session_id: &str) {
+        let Some(snapshot) = self.prompt_progress.remove(session_id) else {
+            return;
+        };
+
+        let attachments = snapshot
+            .attachment_state
+            .attachments
+            .into_iter()
+            .chain(snapshot.attachment_state.archived_attachments)
+            .collect();
+        self.cleanup_prompt_attachments(attachments).await;
+    }
+
+    /// Restores and consumes the saved prompt composer for `session_id`.
+    ///
+    /// Returns `true` when a saved composer was found and installed as the
+    /// active mode. Restored composers always focus the input panel so typing
+    /// can resume immediately. Snapshots for queued, merging, or terminal
+    /// sessions are discarded with their attachment files instead.
+    pub(crate) async fn restore_prompt_progress(&mut self, session_id: &str) -> bool {
+        let Some(status) = self
+            .sessions
+            .session_for_id(session_id)
+            .map(|session| session.status)
+        else {
+            return false;
+        };
+        if !matches!(
+            status,
+            Status::Draft
+                | Status::InProgress
+                | Status::Review
+                | Status::AgentReview
+                | Status::Rebasing
+        ) {
+            if matches!(
+                status,
+                Status::Queued | Status::Merging | Status::Merged | Status::Done | Status::Canceled
+            ) {
+                self.discard_prompt_progress(session_id).await;
+            }
+
+            return false;
+        }
+
+        if status != Status::Draft && !self.sessions.can_reply_to_session_in_stack(session_id) {
+            return false;
+        }
+
+        let Some(snapshot) = self.prompt_progress.remove(session_id) else {
+            return false;
+        };
+
+        self.mode = snapshot.into_prompt_mode();
+
+        true
     }
 
     /// Validates whether a session is currently eligible for merge queueing.

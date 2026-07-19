@@ -726,7 +726,7 @@ mod tests {
         // Assert
         assert_eq!(
             footer_line.to_string(),
-            "Tab: focus | j/k: scroll | d: diff"
+            "Tab: focus | j/k: scroll | d: diff | q: sessions"
         );
     }
 

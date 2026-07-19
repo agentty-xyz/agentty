@@ -173,6 +173,7 @@ impl App {
             assigned_issue_generation: 0,
             assigned_issue_selected_index: None,
             assigned_issues: crate::app::AssignedIssueState::default(),
+            prompt_progress: std::collections::HashMap::new(),
             projects,
             services,
             sessions,
