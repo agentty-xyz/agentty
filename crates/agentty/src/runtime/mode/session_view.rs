@@ -649,6 +649,7 @@ fn is_view_worktree_open_allowed(status: Status) -> bool {
     !matches!(
         status,
         Status::Done
+            | Status::Merged
             | Status::Canceled
             | Status::InProgress
             | Status::Rebasing
@@ -664,6 +665,7 @@ fn is_view_action_allowed(status: Status) -> bool {
     !matches!(
         status,
         Status::Done
+            | Status::Merged
             | Status::InProgress
             | Status::Rebasing
             | Status::Merging
@@ -686,7 +688,7 @@ fn is_view_chat_allowed(status: Status) -> bool {
 
 /// Returns whether the `d` shortcut can open the diff view.
 fn is_view_diff_allowed(status: Status) -> bool {
-    status.allows_review_actions()
+    status.allows_review_actions() || status == Status::Merged
 }
 
 /// Returns whether the `f` shortcut can open review content.
@@ -1319,7 +1321,7 @@ mod tests {
     #[test]
     fn test_is_view_worktree_open_allowed_returns_false_for_merge_queue_statuses() {
         // Arrange
-        let merge_queue_statuses = [Status::Queued, Status::Merging];
+        let merge_queue_statuses = [Status::Queued, Status::Merging, Status::Merged];
 
         // Act
         let can_open_for_statuses: Vec<bool> = merge_queue_statuses
@@ -1337,18 +1339,21 @@ mod tests {
         let canceled_status = Status::Canceled;
         let review_status = Status::Review;
         let in_progress_status = Status::InProgress;
+        let merged_status = Status::Merged;
         let done_status = Status::Done;
 
         // Act
         let canceled_allowed = is_view_action_allowed(canceled_status);
         let review_allowed = is_view_action_allowed(review_status);
         let in_progress_allowed = is_view_action_allowed(in_progress_status);
+        let merged_allowed = is_view_action_allowed(merged_status);
         let done_allowed = is_view_action_allowed(done_status);
 
         // Assert
         assert!(!canceled_allowed);
         assert!(review_allowed);
         assert!(!in_progress_allowed);
+        assert!(!merged_allowed);
         assert!(!done_allowed);
     }
 
@@ -1374,19 +1379,22 @@ mod tests {
     }
 
     #[test]
-    fn test_is_view_diff_allowed_only_for_review_status() {
+    fn test_is_view_diff_allowed_for_review_and_merged_status() {
         // Arrange
         let review_status = Status::Review;
+        let merged_status = Status::Merged;
         let new_status = Status::Draft;
         let in_progress_status = Status::InProgress;
 
         // Act
         let review_allowed = is_view_diff_allowed(review_status);
+        let merged_allowed = is_view_diff_allowed(merged_status);
         let new_allowed = is_view_diff_allowed(new_status);
         let in_progress_allowed = is_view_diff_allowed(in_progress_status);
 
         // Assert
         assert!(review_allowed);
+        assert!(merged_allowed);
         assert!(!new_allowed);
         assert!(!in_progress_allowed);
     }

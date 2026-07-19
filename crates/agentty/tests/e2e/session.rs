@@ -1541,6 +1541,16 @@ fn seed_slow_merged_review_request_status(
 ) -> Result<(), Box<dyn std::error::Error>> {
     seed_review_ready_session_with_review_request(env)?;
 
+    let sync_origin = env.agentty_root.join("sync-origin.git");
+    std::fs::create_dir_all(&sync_origin)?;
+    run_git(&sync_origin, &["init", "--bare", "."])?;
+    let sync_origin_path = sync_origin.to_string_lossy().into_owned();
+    run_git(
+        &env.workdir,
+        &["remote", "add", "origin", sync_origin_path.as_str()],
+    )?;
+    run_git(&env.workdir, &["push", "--set-upstream", "origin", "main"])?;
+
     let gh_path = env.stub_bin.join("gh");
     std::fs::write(
         &gh_path,
@@ -4004,12 +4014,12 @@ fn review_request_sync_runs_in_background() -> E2eResult {
     Ok(())
 }
 
-/// Verify that externally merged status updates reach `Done` without waiting
-/// for slow worktree cleanup and the terminal remains navigable.
+/// Verify that a remote merge stays read-only `Merged` until the user syncs
+/// main, then moves to `Done` without waiting for slow worktree cleanup.
 #[test]
-fn test_merged_review_request_cleanup_responsive() -> E2eResult {
+fn test_merged_review_request_waits_for_manual_sync() -> E2eResult {
     // Arrange, Act, Assert
-    FeatureTest::new("merged_review_request_cleanup_responsive")
+    FeatureTest::new("merged_review_request_manual_sync")
         .with_git()
         .setup(seed_slow_merged_review_request_status)
         .run(
@@ -4017,21 +4027,50 @@ fn test_merged_review_request_cleanup_responsive() -> E2eResult {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .wait_for_text("Done", 2500)
+                    .wait_for_text("Merged", 10_000)
                     .capture_labeled(
                         "merged_status",
-                        "Merged session reaches Done before worktree cleanup finishes",
+                        "Merged session waits in Active for manual main sync",
                     )
-                    .press_key("Tab")
-                    .wait_for_text("Review Requests", 1000)
+                    .compose(&common::open_selected_session_view())
+                    .press_key("?")
+                    .wait_for_stable_frame(300, 5000)
                     .capture_labeled(
-                        "responsive_navigation",
-                        "Tab navigation remains responsive during worktree cleanup",
+                        "merged_read_only_actions",
+                        "Merged session exposes only read-only review actions",
+                    )
+                    .press_key("?")
+                    .press_key("q")
+                    .press_key("s")
+                    .wait_for_text("Sync complete", 10_000)
+                    .press_key("Enter")
+                    .wait_for_text("Done", 10_000)
+                    .capture_labeled(
+                        "merged_done_after_sync",
+                        "Manual main sync archives the merged session",
                     )
             },
-            |frame, _report| {
+            |frame, report| {
+                assert_eq!(report.captures.len(), 3);
+                let merged_frame = common::frame_from_capture(&report.captures[0]);
+                let merged_full = Region::full(merged_frame.cols(), merged_frame.rows());
+                assertion::assert_text_in_region(&merged_frame, "Active", &merged_full);
+                assertion::assert_text_in_region(&merged_frame, "Merged", &merged_full);
+
+                let read_only_frame = common::frame_from_capture(&report.captures[1]);
+                let read_only_full = Region::full(read_only_frame.cols(), read_only_frame.rows());
+                assertion::assert_text_in_region(&read_only_frame, "Show diff", &read_only_full);
+                let read_only_text = read_only_frame.text_in_region(&read_only_full);
+                for mutating_action in ["Reply", "Open commands menu", "Add to merge queue", "Sync"]
+                {
+                    assert!(
+                        !read_only_text.contains(mutating_action),
+                        "Merged help must hide `{mutating_action}`"
+                    );
+                }
+
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Review Requests", &full);
+                assertion::assert_text_in_region(frame, "Done", &full);
             },
         )?;
 
@@ -4053,7 +4092,11 @@ fn merged_review_request_cleanup_does_not_block_quit() -> E2eResult {
     let scenario = Scenario::new("merged_cleanup_quit")
         .compose(&common::wait_for_agentty_startup())
         .compose(&common::switch_to_tab("Sessions"))
-        .wait_for_text("Done", 2500)
+        .wait_for_text("Merged", 10_000)
+        .press_key("s")
+        .wait_for_text("Sync complete", 10_000)
+        .press_key("Enter")
+        .wait_for_text("Done", 10_000)
         .compose(&common::open_quit_dialog())
         .press_key("y");
 

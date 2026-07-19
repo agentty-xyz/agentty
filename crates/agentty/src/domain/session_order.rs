@@ -348,6 +348,7 @@ mod tests {
             crate::test_support::titled_session_fixture("done-1", Status::Done),
             crate::test_support::titled_session_fixture("canceled-1", Status::Canceled),
             crate::test_support::titled_session_fixture("active-2", Status::Draft),
+            crate::test_support::titled_session_fixture("merged-1", Status::Merged),
         ];
 
         // Act
@@ -365,6 +366,7 @@ mod tests {
                 "merge-1".to_string(),
                 "active-1".to_string(),
                 "active-2".to_string(),
+                "merged-1".to_string(),
                 "done-1".to_string(),
                 "canceled-1".to_string(),
             ]
@@ -411,6 +413,7 @@ mod tests {
             crate::test_support::titled_session_fixture("done-1", Status::Done),
             crate::test_support::titled_session_fixture("canceled-1", Status::Canceled),
             crate::test_support::titled_session_fixture("active-2", Status::Draft),
+            crate::test_support::titled_session_fixture("merged-1", Status::Merged),
         ];
 
         // Act
@@ -432,6 +435,7 @@ mod tests {
                 "Active".to_string(),
                 "active-1".to_string(),
                 "active-2".to_string(),
+                "merged-1".to_string(),
                 "Archive".to_string(),
                 "done-1".to_string(),
                 "canceled-1".to_string(),

@@ -385,7 +385,7 @@ pub fn status_color(status: Status) -> Color {
         Status::Question => palette::question(),
         Status::Queued => palette::accent_soft(),
         Status::Rebasing | Status::Merging => palette::accent(),
-        Status::Done => palette::success(),
+        Status::Merged | Status::Done => palette::success(),
         Status::Canceled => palette::danger(),
     }
 }
@@ -398,7 +398,7 @@ pub fn status_icon(status: Status) -> Icon {
         Status::InProgress | Status::AgentReview | Status::Rebasing | Status::Merging => {
             Icon::current_spinner()
         }
-        Status::Done => Icon::Check,
+        Status::Merged | Status::Done => Icon::Check,
         Status::Canceled => Icon::Cross,
     }
 }
@@ -474,15 +474,17 @@ mod tests {
     }
 
     #[test]
-    fn status_color_returns_success_for_done() {
+    fn status_color_returns_success_for_merged_and_done() {
         // Arrange
         let _theme_scope = scoped_active_theme(ColorTheme::Current);
 
         // Act
-        let color = status_color(Status::Done);
+        let merged_color = status_color(Status::Merged);
+        let done_color = status_color(Status::Done);
 
         // Assert
-        assert_eq!(color, palette::success());
+        assert_eq!(merged_color, palette::success());
+        assert_eq!(done_color, palette::success());
     }
 
     #[test]
@@ -716,12 +718,14 @@ mod tests {
     }
 
     #[test]
-    fn status_icon_returns_check_for_done() {
-        // Arrange / Act
-        let icon = status_icon(Status::Done);
+    fn status_icon_returns_check_for_merged_and_done() {
+        // Arrange, Act
+        let merged_icon = status_icon(Status::Merged);
+        let done_icon = status_icon(Status::Done);
 
         // Assert
-        assert!(matches!(icon, Icon::Check));
+        assert!(matches!(merged_icon, Icon::Check));
+        assert!(matches!(done_icon, Icon::Check));
     }
 
     #[test]

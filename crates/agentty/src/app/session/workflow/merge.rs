@@ -554,6 +554,10 @@ pub(crate) enum SyncSessionStartError {
 /// Summary of one completed main-branch sync run.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SyncMainOutcome {
+    /// Local branch updated by the completed manual sync.
+    pub(crate) default_branch: String,
+    /// Merged sessions that could not be archived after the branch update.
+    pub(crate) deferred_merged_session_ids: Vec<SessionId>,
     /// Commit titles discovered upstream and pulled during sync.
     pub(crate) pulled_commit_titles: Vec<String>,
     /// Number of commits rebased from upstream into the local branch.
@@ -1697,6 +1701,8 @@ impl SessionManager {
         );
 
         Ok(SyncMainOutcome {
+            default_branch,
+            deferred_merged_session_ids: Vec::new(),
             pulled_commit_titles,
             pulled_commits,
             pushed_commit_titles,
@@ -3356,6 +3362,8 @@ mod tests {
     /// Returns the expected result for the successful assisted sync fixture.
     fn successful_sync_conflict_outcome() -> SyncMainOutcome {
         SyncMainOutcome {
+            default_branch: "main".to_string(),
+            deferred_merged_session_ids: Vec::new(),
             pulled_commit_titles: vec![
                 "Update changelog format".to_string(),
                 "Fix sync popup copy".to_string(),

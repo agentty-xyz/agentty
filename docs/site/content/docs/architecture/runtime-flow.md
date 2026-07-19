@@ -118,8 +118,9 @@ loader updates), and applies side effects in stable order. Key behaviors:
   home-directory project discovery runs only during `App::new()`.
 - Git-status and review-request events carry a sync-context generation so stale
   completions are discarded after the active project or session changes.
-- Externally merged review requests transition sessions to `Done`; closed requests
-  transition them to `Canceled`.
+- Externally merged review requests transition sessions to read-only `Merged`; only a
+  successful user-triggered sync of the request's local target advances them to `Done`.
+  Closed requests transition editable sessions to `Canceled`.
 - Terminal statuses (`Done`, `Canceled`) drop per-session worker senders so workers can
   shut down their runtimes.
 
@@ -490,25 +491,32 @@ orchestration paths:
   later navigation. It holds the same branch-operation lock as post-turn auto-push, so
   overlapping requests queue rather than running concurrent force-pushes.
 - Background review-request sync: review-ready sessions with a published branch or
-  linked request are polled; merged requests move the session to `Done`, closed requests
-  to `Canceled`. Externally merged worktree and branch cleanup runs as a tracked
-  background task after the terminal transition so input and redraws do not wait for git
-  or filesystem removal. Repeated merged results for an already-`Done` session do not
-  schedule cleanup again. Cleanup-critical git subprocesses are cancellable and bounded
-  to 30 seconds; confirmed shutdown shares a five-second grace period across all tracked
-  cleanup tasks before canceling unfinished work. The Inbox tab loads comment snapshots
-  on demand with generation-scoped deduplication. Session view also loads comments on
-  demand for its linked review request: `AppMode::ReviewComments` renders immediately
-  with a loading state, `TaskService` resolves the session worktree remote through the
-  injected git/forge boundaries, falls back to the persisted review-request URL after
-  terminal-session worktree cleanup, and uses the matching `AppEvent` to update only the
-  still-open comments page. Inline code context is derived from the already loaded
-  current diff. From a reply-capable session, `a` or `A` renders actionable comment data
-  into a `TurnPrompt` and records the supplied forge thread IDs in turn metadata.
-  Post-turn handling accepts only deduplicated `fixed` outcomes with an allowlisted ID
-  and nonblank reply. After auto-commit and a successful published-branch push, the
-  worker posts each reply and then resolves that thread through `ReviewRequestClient`;
-  failed pushes never mutate forge thread state.
+  linked request are polled; merged requests persist the reviewed session-head hash and
+  move the session to read-only `Merged`, while closed requests move to `Canceled`.
+  `Merged` remains in the Active group and background refresh never archives, cleans up,
+  or restacks it. The manual target-branch sync path refreshes forge state before its
+  git work and applies terminal review updates only after sync succeeds. It then
+  finalizes matching `Merged` sessions by durably detaching stacked children, moving the
+  parent to `Done`, emitting child-restack work, and scheduling tracked worktree
+  cleanup. The successful `SyncMainOutcome` owns the exact synced branch, so the event
+  model cannot represent success without a finalization target. Restack or archival
+  persistence failures leave the parent safely in `Merged` and are listed in the sync
+  completion popup for retry. A failed sync or a successful sync of another branch
+  leaves the merged stack unchanged. Cleanup-critical git subprocesses are cancellable
+  and bounded to 30 seconds; confirmed shutdown shares a five-second grace period across
+  all tracked cleanup tasks before canceling unfinished work. The Inbox tab loads
+  comment snapshots on demand with generation-scoped deduplication. Session view also
+  loads comments on demand for its linked review request: `AppMode::ReviewComments`
+  renders immediately with a loading state, `TaskService` resolves the session worktree
+  remote through the injected git/forge boundaries, falls back to the persisted
+  review-request URL after terminal-session worktree cleanup, and uses the matching
+  `AppEvent` to update only the still-open comments page. Inline code context is derived
+  from the already loaded current diff. From a reply-capable session, `a` or `A` renders
+  actionable comment data into a `TurnPrompt` and records the supplied forge thread IDs
+  in turn metadata. Post-turn handling accepts only deduplicated `fixed` outcomes with
+  an allowlisted ID and nonblank reply. After auto-commit and a successful
+  published-branch push, the worker posts each reply and then resolves that thread
+  through `ReviewRequestClient`; failed pushes never mutate forge thread state.
 - Assigned-issue refresh: the Issues tab resolves the active project remote and runs a
   repository-scoped, generation-scoped `gh search issues` task through
   `ReviewRequestClient`; stale completions are discarded before the list cache is
