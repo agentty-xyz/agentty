@@ -791,7 +791,7 @@ mod tests {
 
         // Assert
         let text = buffer_text(terminal.backend().buffer());
-        assert!(text.contains("c: continue"));
+        assert!(text.contains("C: continue"));
     }
 
     /// Verifies canceled terminal sessions render without a continuation
@@ -819,7 +819,7 @@ mod tests {
 
         // Assert
         let text = buffer_text(terminal.backend().buffer());
-        assert!(!text.contains("c: continue"));
+        assert!(!text.contains("C: continue"));
     }
 
     /// Verifies running sessions advertise sync as a queued action while

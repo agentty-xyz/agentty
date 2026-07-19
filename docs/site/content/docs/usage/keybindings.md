@@ -191,8 +191,7 @@ State-specific differences:
 - **Merged** sessions remain in Active and expose only read-only navigation, linked
   review comments, and `d` for the diff until list-mode `s` successfully syncs their
   local target branch.
-- **Done** sessions without a linked review request offer `c` to start a continuation
-  draft (confirmation popup).
+- **Done** sessions offer `C` to start a continuation draft (confirmation popup).
 - **Canceled**, **Queued**, and **Merging** sessions are otherwise read-only (`q`,
   scroll, help). Linked review requests remain available from any session state with
   `c`.

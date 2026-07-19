@@ -478,19 +478,12 @@ pub(crate) fn view_footer_actions_with_review_comments(
     actions
 }
 
-/// Adds the comments shortcut before trailing navigation actions and remaps
-/// terminal continuation to `C` when both actions are available.
+/// Adds the comments shortcut before trailing navigation actions.
 fn append_review_comment_action(actions: &mut Vec<HelpAction>, is_available: bool) {
     if !is_available {
         return;
     }
 
-    if let Some(continue_action) = actions
-        .iter_mut()
-        .find(|action| action.key == "c" && action.footer_label == "continue")
-    {
-        continue_action.key = "C";
-    }
     let insertion_index = 1.min(actions.len());
     actions.insert(
         insertion_index,
@@ -545,7 +538,7 @@ fn append_view_review_actions(
 /// footer rows.
 fn append_view_continue_action(actions: &mut Vec<HelpAction>, action_set: ViewActionSet) {
     if action_set.continue_terminal_session.is_enabled() {
-        actions.push(HelpAction::new("continue", "c", "Continue in new session"));
+        actions.push(HelpAction::new("continue", "C", "Continue in new session"));
     }
 }
 
@@ -1305,7 +1298,11 @@ mod tests {
         let actions = view_actions(state);
 
         // Assert
-        assert!(actions.iter().any(|action| action.key == "c"));
+        assert!(actions.iter().any(|action| {
+            action.key == "C"
+                && action.footer_label == "continue"
+                && action.popup_label == "Continue in new session"
+        }));
         assert!(!actions.iter().any(|action| action.key == "p"));
         assert!(!actions.iter().any(|action| action.key == "Enter"));
         assert!(!actions.iter().any(|action| action.key == "d"));
@@ -1608,7 +1605,7 @@ mod tests {
         let actions = view_actions(state);
 
         // Assert
-        assert!(!actions.iter().any(|action| action.key == "c"));
+        assert!(!actions.iter().any(|action| action.key == "C"));
         assert!(!actions.iter().any(|action| action.key == "p"));
         assert!(!actions.iter().any(|action| action.key == "Enter"));
         assert!(!actions.iter().any(|action| action.key == "o"));
@@ -1635,7 +1632,7 @@ mod tests {
         let ordered_keys = actions.iter().map(|action| action.key).collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(&ordered_keys[..4], ["q", "c", "j/k", "?"]);
+        assert_eq!(&ordered_keys[..4], ["q", "C", "j/k", "?"]);
     }
 
     #[test]

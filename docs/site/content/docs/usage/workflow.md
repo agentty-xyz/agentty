@@ -325,7 +325,7 @@ is skipped there.
 
 ### Continuing a Done Session
 
-Pressing `c` on a **Done** session opens a confirmation, then creates a brand-new draft
+Pressing `C` on a **Done** session opens a confirmation, then creates a brand-new draft
 session with a continuation message staged from the merged commit hash (or the saved
 summary when the hash is unavailable). **Canceled** sessions remain terminal and
 read-only.

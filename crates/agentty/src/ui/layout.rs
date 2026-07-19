@@ -663,7 +663,7 @@ mod tests {
         let help_text = view_footer_text(&session, true);
 
         // Assert
-        assert!(help_text.contains("c: continue"));
+        assert!(help_text.contains("C: continue"));
     }
 
     #[test]
@@ -1213,7 +1213,7 @@ mod tests {
         // Assert
         assert_eq!(
             done_line.to_string(),
-            "Press 'c' to continue in a new session."
+            "Press 'C' to continue in a new session."
         );
     }
 
