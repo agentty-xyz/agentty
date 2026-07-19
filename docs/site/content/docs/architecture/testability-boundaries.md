@@ -40,7 +40,12 @@ enabling in-process TUI tests with `TestBackend`.
 The `ag-agent` crate keeps provider routers, parsers, and concrete transport adapters
 private. Application workflows that submit isolated utility prompts inject
 `OneShotClient`; provider and transport tests use the feature-gated crate-root mocks and
-helper factories rather than deep module paths.
+helper factories rather than deep module paths. CLI-backed session turns, one-shot
+prompts, and protocol-repair retries share one crate-private raw subprocess executor for
+command construction, stdin delivery, PID lifetime, stream collection, and exit
+classification. Adapter-specific observers translate those raw events into session
+updates, while one-shot callers consume the collected raw output; response parsing and
+repair policy stay in the owning adapter.
 
 ## Typed Errors Across Layers
 

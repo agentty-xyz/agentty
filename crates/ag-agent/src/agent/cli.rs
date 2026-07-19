@@ -5,4 +5,5 @@
 //! utility prompts without duplicating subprocess details.
 
 pub(crate) mod error;
+pub(crate) mod execution;
 pub(crate) mod stdin;
