@@ -245,7 +245,9 @@ docker run --rm --platform linux/amd64 \
 ```
 
 Review the changed GIF and `.{name}.hash` sidecar, then refresh the PNG poster for every
-regenerated GIF (section 4) before committing all three together.
+regenerated GIF (section 4) before committing all three together. Successful generation
+removes the previous same-named PNG intentionally so a stale poster cannot pass the
+nonempty-poster integrity check; a failed recording preserves the last valid poster.
 
 ### Host recording caveats
 
