@@ -3746,7 +3746,7 @@ fn session_output_scrollbar_is_visible() -> E2eResult {
     Ok(())
 }
 
-/// Verify that pressing `c` in a terminal session opens a confirmation and,
+/// Verify that pressing `C` in a terminal session opens a confirmation and,
 /// after acceptance, stages the continuation message before focusing an empty
 /// draft composer.
 #[test]
@@ -3767,8 +3767,9 @@ fn terminal_session_continue_opens_seeded_prompt() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("Enter")
-                    .wait_for_text("q: back", 5000)
-                    .press_key("c")
+                    .wait_for_text("C: continue", 5000)
+                    .wait_for_text("Press 'C' to continue in a new session.", 3000)
+                    .press_key("C")
                     .wait_for_text("Confirm Continue", 3000)
                     .viewing_pause_ms(1500)
                     .capture_labeled(
