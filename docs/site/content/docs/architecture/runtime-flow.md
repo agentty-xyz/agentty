@@ -118,6 +118,9 @@ loader updates), and applies side effects in stable order. Key behaviors:
   home-directory project discovery runs only during `App::new()`.
 - Git-status and review-request events carry a sync-context generation so stale
   completions are discarded after the active project or session changes.
+- Diff markdown preview reads carry the selected session, path, and request generation
+  in `AppEvent::DiffPreviewLoaded`; the reducer applies them only to the matching
+  loading diff or help-overlay snapshot.
 - Externally merged review requests transition sessions to read-only `Merged`; only a
   successful user-triggered sync of the request's local target advances them to `Done`.
   Closed requests transition editable sessions to `Canceled`.

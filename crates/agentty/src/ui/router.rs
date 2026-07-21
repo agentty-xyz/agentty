@@ -712,6 +712,7 @@ fn render_session_or_diff_mode(
         AppMode::Diff {
             diff,
             file_explorer_selected_index,
+            preview,
             restore: _,
             scroll_cache: _,
             scroll_offset,
@@ -722,6 +723,8 @@ fn render_session_or_diff_mode(
                     diff,
                     diff_layout_cache: aux.diff_layout_cache,
                     file_explorer_selected_index: *file_explorer_selected_index,
+                    markdown_render_cache: aux.markdown_render_cache,
+                    preview,
                     scroll_offset: *scroll_offset,
                     session,
                 })
@@ -1094,6 +1097,87 @@ mod tests {
     }
 
     #[test]
+    fn render_help_mode_restores_markdown_diff_preview_background() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(120, 30);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let session_id = "session-help-diff";
+        let sessions = vec![session_fixture(session_id)];
+        let mode = AppMode::Help {
+            context: crate::presentation::app_mode::HelpContext::Diff {
+                diff: "diff --git a/README.md b/README.md\n+# Preview".to_string(),
+                file_explorer_selected_index: 0,
+                preview: crate::presentation::app_mode::DiffPreview::Ready {
+                    content: "# Preview".to_string(),
+                    path: "README.md".to_string(),
+                    request_id: 1,
+                },
+                restore: None,
+                scroll_offset: 0,
+                session_id: session_id.into(),
+            },
+            scroll_offset: 0,
+        };
+        let mut assigned_issue_table_state = TableState::default();
+        let assigned_issues = AssignedIssueState::default();
+        let mut project_table_state = TableState::default();
+        let mut requested_review_table_state = TableState::default();
+        let requested_reviews = RequestedReviewState::default();
+        let mut table_state = TableState::default();
+        let mut shared = RouteSharedContext {
+            active_project_id: 1,
+            assigned_issue_selected_index: None,
+            assigned_issue_table_state: &mut assigned_issue_table_state,
+            assigned_issues: &assigned_issues,
+            available_agent_clis: &[],
+            current_tab: Tab::Sessions,
+            default_reasoning_level: ReasoningLevel::default(),
+            mru_project_order: &[],
+            project_table_state: &mut project_table_state,
+            projects: &[],
+            requested_review_selected_index: None,
+            requested_review_table_state: &mut requested_review_table_state,
+            requested_reviews: &requested_reviews,
+            sessions: &sessions,
+            settings_screen: None,
+            stats_activity: &[],
+            table_state: &mut table_state,
+        };
+        let diff_layout_cache = page::diff::DiffLayoutCache::default();
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let output_layout_cache = component::session_output::SessionOutputLayoutCache::default();
+
+        // Act
+        let mut handled = false;
+        terminal
+            .draw(|frame| {
+                handled = render_list_or_overlay_mode(
+                    frame,
+                    frame.area(),
+                    &mode,
+                    &mut shared,
+                    RouteAuxContext {
+                        active_prompt_outputs: &HashMap::new(),
+                        default_reasoning_level: ReasoningLevel::default(),
+                        diff_layout_cache: &diff_layout_cache,
+                        markdown_render_cache: &markdown_render_cache,
+                        output_layout_cache: &output_layout_cache,
+                        review_snapshot: None,
+                        session_progress_messages: &HashMap::new(),
+                        session_update_versions: &HashMap::new(),
+                        session_worktree_availability: &HashMap::new(),
+                        wall_clock_unix_seconds: 0,
+                    },
+                );
+            })
+            .expect("failed to draw diff help mode");
+
+        // Assert
+        assert!(handled);
+        assert!(buffer_text(terminal.backend().buffer()).contains("Keybindings"));
+    }
+
+    #[test]
     fn render_session_or_diff_mode_renders_view_session_content() {
         // Arrange
         let backend = ratatui::backend::TestBackend::new(120, 30);
@@ -1227,6 +1311,7 @@ mod tests {
         let mode = AppMode::Diff {
             diff: String::new(),
             file_explorer_selected_index: 0,
+            preview: crate::presentation::app_mode::DiffPreview::default(),
             restore: None,
             scroll_cache: None,
             session_id: session_id.into(),

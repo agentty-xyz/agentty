@@ -34,7 +34,9 @@ pub(crate) use repo::{main_checkout_working_tree, main_repo_root, repo_url};
 #[cfg(test)]
 pub(crate) use sleeper::MockSleeper;
 pub(crate) use sleeper::{Sleeper, ThreadSleeper};
-pub use sync::{BranchTrackingMap, PullRebaseResult, SingleCommitMessageStrategy};
+pub use sync::{
+    BranchTrackingMap, PullRebaseResult, SingleCommitMessageStrategy, WorktreeFileContent,
+};
 pub(crate) use sync::{
     branch_tracking_statuses, check_pre_commit_hook_ready, commit_all,
     commit_all_preserving_single_commit, current_upstream_reference, delete_branch, diff,

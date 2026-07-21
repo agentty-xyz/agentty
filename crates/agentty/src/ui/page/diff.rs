@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::hash::Hasher;
+use std::path::Path;
 use std::sync::Arc;
 
 use ag_tui_text::text_util::{self, inline_text};
@@ -12,6 +13,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use rustc_hash::FxHasher;
 
 use crate::domain::session::Session;
+use crate::presentation::app_mode::{DiffPreview, DiffPreviewUnavailableReason};
 use crate::presentation::help_action;
 use crate::ui::component::file_explorer::FileExplorer;
 use crate::ui::component::vertical_scrollbar::VerticalScrollbar;
@@ -20,7 +22,7 @@ use crate::ui::component::vertical_scrollbar::{SCROLLBAR_THUMB_SYMBOL, SCROLLBAR
 use crate::ui::diff_util::{
     DiffLine, DiffLineKind, FileTreeItem, diff_header_new_path, parse_diff_lines,
 };
-use crate::ui::{Component, Page, diff_util, style};
+use crate::ui::{Component, Page, diff_util, markdown, style};
 
 const WRAPPED_CHUNK_START_INDEX: usize = 0;
 const DIFF_CONTENT_CACHE_ENTRY_LIMIT: usize = 8;
@@ -136,6 +138,19 @@ impl DiffContentSnapshot {
         self.tree_items.len()
     }
 
+    /// Returns the selected repository-relative markdown file path.
+    pub(crate) fn selected_markdown_path(&self, selected_index: usize) -> Option<&str> {
+        let FileTreeItem::File(path) = self.tree_items.get(selected_index)? else {
+            return None;
+        };
+        let extension = Path::new(path).extension()?.to_str()?;
+        if !extension.eq_ignore_ascii_case("md") {
+            return None;
+        }
+
+        Some(path)
+    }
+
     /// Returns the label and added/removed line totals for the active
     /// file-tree selection, or the whole diff when the selection is stale.
     fn selected_change_summary(&self, selected_index: usize) -> &DiffSelectionChangeSummary {
@@ -172,13 +187,16 @@ impl DiffContentSnapshot {
     ) -> (DiffSelectionChangeSummary, Vec<DiffSelectionChangeSummary>) {
         let mut all_files_totals = DiffChangeTotals::default();
         let mut current_path = None;
-        let mut file_totals: HashMap<&str, DiffChangeTotals> = HashMap::new();
+        let mut file_totals: HashMap<String, DiffChangeTotals> = HashMap::new();
 
         for diff_line in parsed_lines {
             if diff_line.kind == DiffLineKind::FileHeader
                 && diff_line.content.starts_with("diff --git")
             {
                 current_path = diff_header_new_path(diff_line.content);
+                if let Some(path) = &current_path {
+                    file_totals.entry(path.clone()).or_default();
+                }
 
                 continue;
             }
@@ -188,8 +206,11 @@ impl DiffContentSnapshot {
             };
             all_files_totals.add(line_totals);
 
-            if let Some(path) = current_path {
-                file_totals.entry(path).or_default().add(line_totals);
+            if let Some(totals) = current_path
+                .as_ref()
+                .and_then(|path| file_totals.get_mut(path))
+            {
+                totals.add(line_totals);
             }
         }
 
@@ -217,7 +238,7 @@ impl DiffContentSnapshot {
 
     /// Aggregates file-level change totals into folder-prefix totals.
     fn folder_totals(
-        file_totals: &HashMap<&str, DiffChangeTotals>,
+        file_totals: &HashMap<String, DiffChangeTotals>,
     ) -> HashMap<String, DiffChangeTotals> {
         let mut folder_totals: HashMap<String, DiffChangeTotals> = HashMap::new();
 
@@ -246,7 +267,7 @@ impl DiffContentSnapshot {
     /// Looks up cached change totals for one file-tree item.
     fn tree_item_change_totals(
         item: &FileTreeItem,
-        file_totals: &HashMap<&str, DiffChangeTotals>,
+        file_totals: &HashMap<String, DiffChangeTotals>,
         folder_totals: &HashMap<String, DiffChangeTotals>,
     ) -> DiffChangeTotals {
         match item {
@@ -280,6 +301,13 @@ pub(crate) struct DiffResolvedLayout {
     pub(crate) lines: Arc<[Line<'static>]>,
     pub(crate) render_layout: diff_util::DiffRenderLayout,
     pub(crate) show_scrollbar: bool,
+}
+
+/// Final markdown-preview rows selected for the current panel width.
+struct DiffPreviewLayout {
+    lines: Arc<[Line<'static>]>,
+    show_scrollbar: bool,
+    viewport_height: u16,
 }
 
 /// Cached parsed diff snapshot entry.
@@ -499,6 +527,10 @@ pub struct DiffPage<'a> {
     pub diff_layout_cache: &'a DiffLayoutCache,
     /// Selected file-tree row in the left panel.
     pub file_explorer_selected_index: usize,
+    /// Shared cache for rendered markdown preview rows.
+    pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
+    /// Rendered-markdown preview state for the selected file.
+    pub preview: &'a DiffPreview,
     /// Vertical scroll offset inside the diff panel.
     pub scroll_offset: u16,
     /// Session whose diff is being rendered.
@@ -514,6 +546,10 @@ pub struct DiffPageInput<'a> {
     pub diff_layout_cache: &'a DiffLayoutCache,
     /// Selected file-tree row in the left panel.
     pub file_explorer_selected_index: usize,
+    /// Shared cache for rendered markdown preview rows.
+    pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
+    /// Rendered-markdown preview state for the selected file.
+    pub preview: &'a DiffPreview,
     /// Vertical scroll offset inside the diff panel.
     pub scroll_offset: u16,
     /// Session whose diff is being rendered.
@@ -527,6 +563,8 @@ impl<'a> DiffPage<'a> {
             diff,
             diff_layout_cache,
             file_explorer_selected_index,
+            markdown_render_cache,
+            preview,
             scroll_offset,
             session,
         } = input;
@@ -535,6 +573,8 @@ impl<'a> DiffPage<'a> {
             diff,
             diff_layout_cache,
             file_explorer_selected_index,
+            markdown_render_cache,
+            preview,
             scroll_offset,
             session,
         }
@@ -614,6 +654,50 @@ impl<'a> DiffPage<'a> {
                 diff_util::diff_scrollbar_area(area, layout.render_layout.viewport_height);
 
             VerticalScrollbar::new(scroll_offset, layout.line_count).render(f, scrollbar_area);
+        }
+    }
+
+    /// Renders ready markdown content or a preview availability notice.
+    fn render_preview_content(&self, frame: &mut Frame, area: Rect, path: &str) {
+        let title = Line::from(Span::styled(
+            format!(" Preview — {} ", inline_text(path)),
+            Style::default().fg(style::palette::warning()),
+        ));
+        match self.preview {
+            DiffPreview::Ready { content, .. } => {
+                let layout = diff_preview_layout(content, area, self.markdown_render_cache);
+                let scroll_offset = diff_util::clamp_diff_scroll_offset(
+                    self.scroll_offset,
+                    layout.lines.len(),
+                    layout.viewport_height,
+                );
+                let paint_lines = Self::borrowed_visible_lines(
+                    &layout.lines,
+                    scroll_offset,
+                    layout.viewport_height,
+                );
+                let paragraph = Paragraph::new(paint_lines).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(title)
+                        .border_style(style::border_style()),
+                );
+                frame.render_widget(paragraph, area);
+
+                if layout.show_scrollbar {
+                    let scrollbar_area =
+                        diff_util::diff_scrollbar_area(area, layout.viewport_height);
+                    VerticalScrollbar::new(scroll_offset, layout.lines.len())
+                        .render(frame, scrollbar_area);
+                }
+            }
+            DiffPreview::Loading { .. } => {
+                render_preview_notice(frame, area, title, " Loading preview… ");
+            }
+            DiffPreview::Unavailable { reason, .. } => {
+                render_preview_notice(frame, area, title, preview_unavailable_message(reason));
+            }
+            DiffPreview::Off { .. } | DiffPreview::Unsupported { .. } => {}
         }
     }
 
@@ -726,9 +810,29 @@ pub(crate) fn diff_view_max_scroll_offset(
     selected_index: usize,
     terminal_area: Rect,
     diff_layout_cache: &DiffLayoutCache,
+    markdown_render_cache: &markdown::MarkdownRenderCache,
+    preview: &DiffPreview,
 ) -> u16 {
     let diff_area = diff_util::diff_page_areas(terminal_area).diff_area;
     let content = diff_layout_cache.content(diff);
+    if preview_path_for_selection(preview, &content, selected_index).is_some() {
+        return match preview {
+            DiffPreview::Ready {
+                content: markdown_content,
+                ..
+            } => {
+                let layout =
+                    diff_preview_layout(markdown_content, diff_area, markdown_render_cache);
+
+                diff_util::clamp_diff_scroll_offset(
+                    u16::MAX,
+                    layout.lines.len(),
+                    layout.viewport_height,
+                )
+            }
+            _ => 0,
+        };
+    }
     let layout = diff_layout_cache.resolved_layout(&content, selected_index, diff_area);
     if layout.render_layout.viewport_height == 0 {
         return 0;
@@ -750,18 +854,84 @@ impl Page for DiffPage<'_> {
             .selected_index(self.file_explorer_selected_index)
             .render(f, areas.file_list_area);
 
-        self.render_diff_content(
-            f,
-            areas.diff_area,
-            &content,
-            self.session.stats.added_lines,
-            self.session.stats.deleted_lines,
-        );
+        if let Some(path) =
+            preview_path_for_selection(self.preview, &content, self.file_explorer_selected_index)
+        {
+            self.render_preview_content(f, areas.diff_area, path);
+        } else {
+            self.render_diff_content(
+                f,
+                areas.diff_area,
+                &content,
+                self.session.stats.added_lines,
+                self.session.stats.deleted_lines,
+            );
+        }
 
         let help_message = Paragraph::new(crate::ui::help_format::footer_line(
             &help_action::diff_footer_actions(),
         ));
         f.render_widget(help_message, areas.footer_area);
+    }
+}
+
+/// Returns the preview path when it still matches the active markdown row.
+fn preview_path_for_selection<'a>(
+    preview: &'a DiffPreview,
+    content: &DiffContentSnapshot,
+    selected_index: usize,
+) -> Option<&'a str> {
+    let selected_path = content.selected_markdown_path(selected_index)?;
+    let preview_path = preview.path()?;
+    if preview_path != selected_path {
+        return None;
+    }
+
+    Some(preview_path)
+}
+
+/// Resolves cached markdown rows with a scrollbar-width second pass.
+fn diff_preview_layout(
+    content: &str,
+    area: Rect,
+    markdown_render_cache: &markdown::MarkdownRenderCache,
+) -> DiffPreviewLayout {
+    let viewport_height = area.height.saturating_sub(2);
+    let content_width = usize::from(area.width.saturating_sub(2));
+    let lines_without_scrollbar = markdown_render_cache.render(content, content_width);
+    let show_scrollbar =
+        diff_util::diff_has_scrollable_overflow(lines_without_scrollbar.len(), viewport_height);
+    let lines = if show_scrollbar {
+        markdown_render_cache.render(content, content_width.saturating_sub(1))
+    } else {
+        lines_without_scrollbar
+    };
+
+    DiffPreviewLayout {
+        show_scrollbar: diff_util::diff_has_scrollable_overflow(lines.len(), viewport_height),
+        lines,
+        viewport_height,
+    }
+}
+
+/// Renders one bordered preview loading or availability message.
+fn render_preview_notice(frame: &mut Frame, area: Rect, title: Line<'static>, message: &str) {
+    let paragraph = Paragraph::new(Line::from(message.to_string())).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(title)
+            .border_style(style::border_style()),
+    );
+    frame.render_widget(paragraph, area);
+}
+
+/// Returns the concise notice for one unavailable preview reason.
+fn preview_unavailable_message(reason: &DiffPreviewUnavailableReason) -> &str {
+    match reason {
+        DiffPreviewUnavailableReason::Deleted => " File deleted in this change. ",
+        DiffPreviewUnavailableReason::Binary => " Binary file — no preview. ",
+        DiffPreviewUnavailableReason::TooLarge => " File too large to preview. ",
+        DiffPreviewUnavailableReason::LoadFailed(error) => error,
     }
 }
 
@@ -802,6 +972,26 @@ mod tests {
             diff,
             diff_layout_cache: test_diff_layout_cache(),
             file_explorer_selected_index,
+            markdown_render_cache: test_markdown_render_cache(),
+            preview: test_diff_preview(),
+            scroll_offset,
+            session,
+        })
+    }
+
+    fn new_diff_page_with_preview<'a>(
+        session: &'a Session,
+        diff: &'a str,
+        scroll_offset: u16,
+        file_explorer_selected_index: usize,
+        preview: &'a DiffPreview,
+    ) -> DiffPage<'a> {
+        DiffPage::new(DiffPageInput {
+            diff,
+            diff_layout_cache: test_diff_layout_cache(),
+            file_explorer_selected_index,
+            markdown_render_cache: test_markdown_render_cache(),
+            preview,
             scroll_offset,
             session,
         })
@@ -809,6 +999,14 @@ mod tests {
 
     fn test_diff_layout_cache() -> &'static DiffLayoutCache {
         Box::leak(Box::new(DiffLayoutCache::default()))
+    }
+
+    fn test_markdown_render_cache() -> &'static markdown::MarkdownRenderCache {
+        Box::leak(Box::new(markdown::MarkdownRenderCache::default()))
+    }
+
+    fn test_diff_preview() -> &'static DiffPreview {
+        Box::leak(Box::new(DiffPreview::default()))
     }
 
     fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
@@ -899,6 +1097,79 @@ mod tests {
         assert_eq!(stale_summary.label, "all files");
         assert_eq!(stale_summary.added_lines, 3);
         assert_eq!(stale_summary.removed_lines, 1);
+    }
+
+    #[test]
+    fn test_selected_markdown_path_accepts_case_insensitive_file_extension_only() {
+        // Arrange
+        let cache = DiffLayoutCache::default();
+        let content = cache.content(concat!(
+            "diff --git a/docs/GUIDE.MD b/docs/GUIDE.MD\n+guide\n",
+            "diff --git a/src/main.rs b/src/main.rs\n+code\n",
+        ));
+
+        // Act
+        let folder = content.selected_markdown_path(0);
+        let markdown = content.selected_markdown_path(1);
+        let rust = content.selected_markdown_path(3);
+        let stale = content.selected_markdown_path(usize::MAX);
+
+        // Assert
+        assert_eq!(folder, None);
+        assert_eq!(markdown, Some("docs/GUIDE.MD"));
+        assert_eq!(rust, None);
+        assert_eq!(stale, None);
+    }
+
+    #[test]
+    fn test_selected_markdown_preview_path_decodes_git_quoted_filename() {
+        // Arrange
+        let cache = DiffLayoutCache::default();
+        let content = cache.content(concat!(
+            "diff --git \"a/docs/\\346\\227\\245\\346\\234\\254.md\" ",
+            "\"b/docs/\\346\\227\\245\\346\\234\\254.md\"\n+preview\n",
+        ));
+        let preview = DiffPreview::Ready {
+            content: "# Preview".to_string(),
+            path: "docs/日本.md".to_string(),
+            request_id: 1,
+        };
+
+        // Act
+        let selected_path = content.selected_markdown_path(1);
+        let preview_path = preview_path_for_selection(&preview, &content, 1);
+
+        // Assert
+        assert_eq!(selected_path, Some("docs/日本.md"));
+        assert_eq!(preview_path, Some("docs/日本.md"));
+    }
+
+    #[test]
+    fn test_disabled_preview_states_do_not_resolve_or_render_preview_content() {
+        // Arrange
+        let session = session_fixture();
+        let cache = DiffLayoutCache::default();
+        let content = cache.content(SAMPLE_DIFF);
+        let previews = [
+            DiffPreview::Off { request_id: 1 },
+            DiffPreview::Unsupported { request_id: 2 },
+        ];
+        let backend = ratatui::backend::TestBackend::new(80, 20);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        for preview in &previews {
+            assert!(preview_path_for_selection(preview, &content, 1).is_none());
+            terminal
+                .draw(|frame| {
+                    new_diff_page_with_preview(&session, SAMPLE_DIFF, 0, 1, preview)
+                        .render_preview_content(frame, frame.area(), "README.md");
+                })
+                .expect("failed to draw disabled preview state");
+        }
+
+        // Assert
+        assert!(buffer_text(terminal.backend().buffer()).trim().is_empty());
     }
 
     #[test]
@@ -1064,6 +1335,220 @@ mod tests {
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains(SCROLLBAR_TRACK_SYMBOL));
         assert!(text.contains(SCROLLBAR_THUMB_SYMBOL));
+    }
+
+    #[test]
+    fn test_render_ready_preview_uses_shared_markdown_and_mermaid_renderer() {
+        // Arrange
+        let session = session_fixture();
+        let diff = "diff --git a/README.md b/README.md\n+preview";
+        let preview = DiffPreview::Ready {
+            content: concat!(
+                "# Preview Title\n\n",
+                "| Name | Value |\n| --- | --- |\n| mode | ready |\n\n",
+                "```mermaid\ngraph TD\nA[Input] --> B[Rendered]\n```\n",
+            )
+            .to_string(),
+            path: "README.md".to_string(),
+            request_id: 1,
+        };
+        let mut diff_page = new_diff_page_with_preview(&session, diff, 0, 0, &preview);
+        let backend = ratatui::backend::TestBackend::new(120, 30);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                Page::render(&mut diff_page, frame, area);
+            })
+            .expect("failed to draw markdown preview");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("Preview — README.md"));
+        assert!(text.contains("Preview Title"));
+        assert!(text.contains("mode"));
+        assert!(text.contains("Input"));
+        assert!(text.contains("Rendered"));
+        assert!(!text.contains("+preview"));
+    }
+
+    #[test]
+    fn test_render_preview_loading_and_unavailable_notices() {
+        // Arrange
+        let session = session_fixture();
+        let diff = "diff --git a/README.md b/README.md\n+preview";
+        let previews = [
+            (
+                DiffPreview::Loading {
+                    path: "README.md".to_string(),
+                    request_id: 1,
+                },
+                "Loading preview…",
+            ),
+            (
+                DiffPreview::Unavailable {
+                    path: "README.md".to_string(),
+                    reason: DiffPreviewUnavailableReason::Deleted,
+                    request_id: 2,
+                },
+                "File deleted in this change.",
+            ),
+            (
+                DiffPreview::Unavailable {
+                    path: "README.md".to_string(),
+                    reason: DiffPreviewUnavailableReason::Binary,
+                    request_id: 3,
+                },
+                "Binary file — no preview.",
+            ),
+            (
+                DiffPreview::Unavailable {
+                    path: "README.md".to_string(),
+                    reason: DiffPreviewUnavailableReason::TooLarge,
+                    request_id: 4,
+                },
+                "File too large to preview.",
+            ),
+            (
+                DiffPreview::Unavailable {
+                    path: "README.md".to_string(),
+                    reason: DiffPreviewUnavailableReason::LoadFailed(
+                        "Preview read failed".to_string(),
+                    ),
+                    request_id: 5,
+                },
+                "Preview read failed",
+            ),
+        ];
+
+        // Act
+        let rendered_text = previews
+            .iter()
+            .map(|(preview, _)| {
+                let mut diff_page = new_diff_page_with_preview(&session, diff, 0, 0, preview);
+                let backend = ratatui::backend::TestBackend::new(100, 16);
+                let mut terminal =
+                    ratatui::Terminal::new(backend).expect("failed to create terminal");
+                terminal
+                    .draw(|frame| {
+                        let area = frame.area();
+                        Page::render(&mut diff_page, frame, area);
+                    })
+                    .expect("failed to draw preview notice");
+
+                buffer_text(terminal.backend().buffer())
+            })
+            .collect::<Vec<_>>();
+
+        // Assert
+        for ((_, expected), text) in previews.iter().zip(rendered_text) {
+            assert!(text.contains(expected));
+            assert!(text.contains("Preview — README.md"));
+        }
+    }
+
+    #[test]
+    fn test_render_preview_falls_back_when_path_no_longer_matches_selection() {
+        // Arrange
+        let session = session_fixture();
+        let diff = "diff --git a/README.md b/README.md\n+current diff";
+        let preview = DiffPreview::Ready {
+            content: "# Stale preview".to_string(),
+            path: "OTHER.md".to_string(),
+            request_id: 1,
+        };
+        let mut diff_page = new_diff_page_with_preview(&session, diff, 0, 0, &preview);
+        let backend = ratatui::backend::TestBackend::new(100, 16);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                Page::render(&mut diff_page, frame, area);
+            })
+            .expect("failed to draw diff fallback");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("current diff"));
+        assert!(!text.contains("Stale preview"));
+    }
+
+    #[test]
+    fn test_render_preview_scrollbar_and_max_scroll_share_layout() {
+        // Arrange
+        let session = session_fixture();
+        let diff = "diff --git a/README.md b/README.md\n+preview";
+        let markdown_content = (0..80)
+            .map(|index| format!("- preview line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let preview = DiffPreview::Ready {
+            content: markdown_content,
+            path: "README.md".to_string(),
+            request_id: 1,
+        };
+        let diff_layout_cache = DiffLayoutCache::default();
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let mut diff_page = DiffPage::new(DiffPageInput {
+            diff,
+            diff_layout_cache: &diff_layout_cache,
+            file_explorer_selected_index: 0,
+            markdown_render_cache: &markdown_render_cache,
+            preview: &preview,
+            scroll_offset: 12,
+            session: &session,
+        });
+        let terminal_area = Rect::new(0, 0, 80, 12);
+        let backend = ratatui::backend::TestBackend::new(80, 12);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        let max_scroll_offset = diff_view_max_scroll_offset(
+            diff,
+            0,
+            terminal_area,
+            &diff_layout_cache,
+            &markdown_render_cache,
+            &preview,
+        );
+        terminal
+            .draw(|frame| Page::render(&mut diff_page, frame, terminal_area))
+            .expect("failed to draw scrollable preview");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(max_scroll_offset > 0);
+        assert!(text.contains(SCROLLBAR_TRACK_SYMBOL));
+        assert!(text.contains(SCROLLBAR_THUMB_SYMBOL));
+    }
+
+    #[test]
+    fn test_preview_notice_has_zero_max_scroll_offset() {
+        // Arrange
+        let diff = "diff --git a/README.md b/README.md\n+preview";
+        let diff_layout_cache = DiffLayoutCache::default();
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let preview = DiffPreview::Loading {
+            path: "README.md".to_string(),
+            request_id: 1,
+        };
+
+        // Act
+        let max_scroll_offset = diff_view_max_scroll_offset(
+            diff,
+            0,
+            Rect::new(0, 0, 80, 12),
+            &diff_layout_cache,
+            &markdown_render_cache,
+            &preview,
+        );
+
+        // Assert
+        assert_eq!(max_scroll_offset, 0);
     }
 
     #[test]

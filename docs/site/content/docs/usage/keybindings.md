@@ -248,15 +248,23 @@ have no forge thread ID.
 Pressing `d` from session view opens diff mode with the right panel showing the git
 diff.
 
-| Key           | Action               |
-| ------------- | -------------------- |
-| `q` / `Esc`   | Back to session      |
-| `j` / `k`     | Select file          |
-| `Up` / `Down` | Scroll selected diff |
-| `?`           | Help                 |
+| Key           | Action                      |
+| ------------- | --------------------------- |
+| `q` / `Esc`   | Back to session             |
+| `j` / `k`     | Select file                 |
+| `p`           | Toggle markdown preview     |
+| `Up` / `Down` | Scroll selected right panel |
+| `?`           | Help                        |
 
 <a id="usage-diff-totals"></a> The diff panel title includes aggregate `+added` and
 `-removed` line totals plus the selected file or folder's added/removed counts.
+
+On a selected `.md` file, `p` replaces the raw patch with the rendered post-change
+worktree file. Headings, lists, tables, code blocks, and supported Mermaid diagrams use
+the same renderer as session output. Preview stays enabled while navigating: another
+markdown file loads automatically, while folders and other file types continue showing
+their normal diff. Deleted, binary, oversized, and unreadable markdown files show a
+short availability notice. Press `p` again to return to raw diff lines.
 
 ## Prompt Input
 

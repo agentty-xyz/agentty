@@ -7,9 +7,9 @@ use std::pin::Pin;
 use super::error::GitError;
 use super::merge::SquashMergeOutcome;
 use super::rebase::{InProgressGitOperation, RebaseStepResult};
-#[cfg(test)]
-use super::sync;
-use super::sync::{BranchTrackingMap, PullRebaseResult, SingleCommitMessageStrategy};
+use super::sync::{
+    BranchTrackingMap, PullRebaseResult, SingleCommitMessageStrategy, WorktreeFileContent,
+};
 use super::{
     abort_rebase, branch_tracking_statuses, check_pre_commit_hook_ready, commit_all,
     commit_all_preserving_single_commit, create_worktree, current_upstream_reference,
@@ -20,7 +20,7 @@ use super::{
     list_upstream_commit_titles, main_checkout_working_tree, main_repo_root, pull_rebase,
     push_current_branch, push_current_branch_to_remote_branch, rebase, rebase_continue,
     rebase_onto_start, rebase_start, ref_hash, remote_branch_exists, remove_worktree, repo_url,
-    squash_merge, squash_merge_diff, stage_all, tracked_worktree_status, worktree_status,
+    squash_merge, squash_merge_diff, stage_all, sync, tracked_worktree_status, worktree_status,
 };
 
 /// Boxed async result used by [`GitClient`] trait methods.
@@ -260,6 +260,16 @@ pub trait GitClient: Send + Sync {
     /// # Errors
     /// Returns an error when refs are invalid or diff generation fails.
     fn diff(&self, repo_path: PathBuf, base_branch: String) -> GitFuture<Result<String, GitError>>;
+
+    /// Reads one repository-relative worktree file for a bounded text preview.
+    ///
+    /// # Errors
+    /// Returns an error when the path is unsafe or the file cannot be read.
+    fn read_worktree_file(
+        &self,
+        repo_path: PathBuf,
+        relative_path: String,
+    ) -> GitFuture<Result<WorktreeFileContent, GitError>>;
 
     /// Returns whether the worktree in `repo_path` has no local changes.
     ///
@@ -599,6 +609,14 @@ impl GitClient for RealGitClient {
         Box::pin(async move { diff(repo_path, base_branch).await })
     }
 
+    fn read_worktree_file(
+        &self,
+        repo_path: PathBuf,
+        relative_path: String,
+    ) -> GitFuture<Result<WorktreeFileContent, GitError>> {
+        Box::pin(async move { sync::read_worktree_file(repo_path, relative_path).await })
+    }
+
     fn is_worktree_clean(&self, repo_path: PathBuf) -> GitFuture<Result<bool, GitError>> {
         Box::pin(async move { is_worktree_clean(repo_path).await })
     }
@@ -763,6 +781,24 @@ mod tests {
         fs::write(repo_path.join("README.md"), "test repo").expect("failed to write file");
         run_git_command(repo_path, &["add", "README.md"]);
         run_git_command(repo_path, &["commit", "-m", "Initial commit"]);
+    }
+
+    #[tokio::test]
+    async fn test_real_git_client_reads_worktree_file() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        fs::write(dir.path().join("README.md"), "# Preview")
+            .expect("failed to write markdown file");
+        let client = RealGitClient;
+
+        // Act
+        let result = client
+            .read_worktree_file(dir.path().to_path_buf(), "README.md".to_string())
+            .await
+            .expect("failed to read worktree file");
+
+        // Assert
+        assert_eq!(result, WorktreeFileContent::Text("# Preview".to_string()));
     }
 
     #[tokio::test]

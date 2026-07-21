@@ -59,6 +59,113 @@ pub struct DiffScrollCache {
     pub max_scroll_offset: u16,
 }
 
+/// Rendered markdown preview state for the active diff-tree selection.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DiffPreview {
+    /// Preview mode is disabled while retaining the last request generation.
+    Off {
+        /// Last request generation, retained to invalidate older completions.
+        request_id: u64,
+    },
+    /// Preview mode is enabled, but the current tree item is not markdown.
+    Unsupported {
+        /// Request generation that invalidated the prior selection load.
+        request_id: u64,
+    },
+    /// Markdown content is loading from the session worktree.
+    Loading {
+        /// Repository-relative markdown path being loaded.
+        path: String,
+        /// Generation assigned to this background read.
+        request_id: u64,
+    },
+    /// Renderable post-change markdown content is ready.
+    Ready {
+        /// Complete post-change markdown text.
+        content: String,
+        /// Repository-relative markdown path represented by `content`.
+        path: String,
+        /// Generation completed by this content.
+        request_id: u64,
+    },
+    /// The selected markdown file cannot be previewed.
+    Unavailable {
+        /// Repository-relative markdown path that could not be previewed.
+        path: String,
+        /// Classified user-facing reason the preview is unavailable.
+        reason: DiffPreviewUnavailableReason,
+        /// Generation completed by this unavailable result.
+        request_id: u64,
+    },
+}
+
+impl DiffPreview {
+    /// Returns whether preview remains enabled across tree selection changes.
+    #[must_use]
+    pub fn is_enabled(&self) -> bool {
+        !matches!(self, Self::Off { .. })
+    }
+
+    /// Returns the request generation retained by this preview state.
+    #[must_use]
+    pub fn request_id(&self) -> u64 {
+        match self {
+            Self::Off { request_id }
+            | Self::Unsupported { request_id }
+            | Self::Loading { request_id, .. }
+            | Self::Ready { request_id, .. }
+            | Self::Unavailable { request_id, .. } => *request_id,
+        }
+    }
+
+    /// Returns the repository-relative path represented by an active load or
+    /// result.
+    #[must_use]
+    pub fn path(&self) -> Option<&str> {
+        match self {
+            Self::Loading { path, .. }
+            | Self::Ready { path, .. }
+            | Self::Unavailable { path, .. } => Some(path),
+            Self::Off { .. } | Self::Unsupported { .. } => None,
+        }
+    }
+
+    /// Returns a fresh non-zero request generation for a new selection load.
+    #[must_use]
+    pub fn next_request_id(&self) -> u64 {
+        let next_request_id = self.request_id().wrapping_add(1);
+
+        next_request_id.max(1)
+    }
+
+    /// Disables preview while invalidating any outstanding request.
+    #[must_use]
+    pub fn disabled(&self) -> Self {
+        Self::Off {
+            request_id: self.next_request_id(),
+        }
+    }
+}
+
+impl Default for DiffPreview {
+    fn default() -> Self {
+        Self::Off { request_id: 0 }
+    }
+}
+
+/// User-facing reason a selected markdown file has no rendered preview.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DiffPreviewUnavailableReason {
+    /// The selected file was deleted from the post-change worktree.
+    Deleted,
+    /// The selected file is not valid UTF-8 text.
+    Binary,
+    /// The selected file exceeds the bounded preview read size.
+    TooLarge,
+    /// The worktree read failed for another reason.
+    LoadFailed(String),
+}
+
 /// Frontend-neutral rectangular viewport coordinates.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ViewportRect {
@@ -348,6 +455,8 @@ pub enum AppMode {
         diff: String,
         /// Selected file or folder in the left explorer tree.
         file_explorer_selected_index: usize,
+        /// Sticky rendered-markdown preview state for the selected file.
+        preview: DiffPreview,
         /// Captured composer or question state restored when leaving diff, if
         /// the diff was opened from an editing page. `None` restores to `View`
         /// mode. Boxed to keep the `Diff` variant small.
@@ -451,6 +560,8 @@ pub enum HelpContext {
         diff: String,
         /// Selected file-tree row to restore.
         file_explorer_selected_index: usize,
+        /// Rendered-markdown preview state to restore.
+        preview: DiffPreview,
         /// Preserved diff restore target so the help→diff→exit path can still
         /// return to the originating page when the diff was opened from there.
         /// Boxed to keep the `Diff` variant small.
@@ -521,12 +632,14 @@ impl HelpContext {
             HelpContext::Diff {
                 diff,
                 file_explorer_selected_index,
+                preview,
                 restore,
                 session_id,
                 scroll_offset,
             } => AppMode::Diff {
                 diff,
                 file_explorer_selected_index,
+                preview,
                 restore,
                 scroll_cache: None,
                 session_id,
@@ -673,5 +786,57 @@ mod tests {
         assert_eq!(bindings.len(), 2);
         assert!(bindings.iter().any(|binding| binding.key == "q"));
         assert!(bindings.iter().any(|binding| binding.key == "?"));
+    }
+
+    #[test]
+    fn test_diff_preview_tracks_enabled_state_and_request_generation() {
+        // Arrange
+        let states = [
+            DiffPreview::Off { request_id: 0 },
+            DiffPreview::Unsupported { request_id: 1 },
+            DiffPreview::Loading {
+                path: "README.md".to_string(),
+                request_id: 2,
+            },
+            DiffPreview::Ready {
+                content: "# Ready".to_string(),
+                path: "README.md".to_string(),
+                request_id: 3,
+            },
+            DiffPreview::Unavailable {
+                path: "README.md".to_string(),
+                reason: DiffPreviewUnavailableReason::Deleted,
+                request_id: 4,
+            },
+        ];
+
+        // Act
+        let enabled = states
+            .iter()
+            .map(DiffPreview::is_enabled)
+            .collect::<Vec<_>>();
+        let request_ids = states
+            .iter()
+            .map(DiffPreview::request_id)
+            .collect::<Vec<_>>();
+        let paths = states.iter().map(DiffPreview::path).collect::<Vec<_>>();
+        let next_request_id = states[4].next_request_id();
+        let disabled = states[3].disabled();
+
+        // Assert
+        assert_eq!(enabled, [false, true, true, true, true]);
+        assert_eq!(request_ids, [0, 1, 2, 3, 4]);
+        assert_eq!(
+            paths,
+            [
+                None,
+                None,
+                Some("README.md"),
+                Some("README.md"),
+                Some("README.md")
+            ]
+        );
+        assert_eq!(next_request_id, 5);
+        assert_eq!(disabled, DiffPreview::Off { request_id: 4 });
     }
 }

@@ -188,6 +188,15 @@ impl AppClients {
         self
     }
 
+    /// Replaces the git boundary for deterministic app tests.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_git_client(mut self, git_client: Arc<dyn GitClient>) -> Self {
+        self.git_client = git_client;
+
+        self
+    }
+
     /// Replaces the startup project-discovery boundary while preserving the
     /// remaining clients.
     #[cfg(test)]
