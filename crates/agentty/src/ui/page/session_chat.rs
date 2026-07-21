@@ -316,7 +316,7 @@ impl<'a> SessionChatPage<'a> {
         let help_message = Paragraph::new(
             session_format::session_view_footer_line_with_review_comments(
                 view_help_state,
-                session.review_request.is_some(),
+                session.has_review_request(),
             ),
         );
         f.render_widget(help_message, bottom_area);
