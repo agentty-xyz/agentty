@@ -492,6 +492,56 @@ fn test_assigned_github_issues() -> E2eResult {
     Ok(())
 }
 
+/// Verify an assigned GitHub issue can start a session with its link.
+#[test]
+fn test_address_assigned_github_issue() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("address_assigned_github_issue")
+        .with_git()
+        .with_terminal_size(120, 36)
+        .setup(seed_assigned_github_issues)
+        .zola(
+            "Address an assigned GitHub issue",
+            "Start an agent session from an assigned issue with its link included.",
+            46,
+        )
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::switch_to_tab("Inbox"))
+                    .compose(&common::switch_to_tab("Issues"))
+                    .wait_for_text("Keep issue list compact", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Description", 5000)
+                    .capture_labeled("issue_detail", "Issue detail with address action")
+                    .press_key("a")
+                    .wait_for_text(
+                        "Address this issue: https://github.com/agentty-xyz/agentty/issues/124",
+                        10000,
+                    )
+                    .viewing_pause_ms(1500)
+                    .capture_labeled("issue_session", "New session addressing the issue")
+            },
+            |frame, report| {
+                assert_eq!(report.captures.len(), 2);
+                let issue_frame = common::frame_from_capture(&report.captures[0]);
+                let issue_full = Region::full(issue_frame.cols(), issue_frame.rows());
+                assertion::assert_text_in_region(&issue_frame, "a: address", &issue_full);
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(
+                    frame,
+                    "Address this issue: https://github.com/agentty-xyz/agentty/issues/124",
+                    &full,
+                );
+            },
+        )?;
+
+    Ok(())
+}
+
 /// Verify that pressing `q` opens a quit confirmation dialog.
 ///
 /// The dialog should display the title "Confirm Quit" and the message

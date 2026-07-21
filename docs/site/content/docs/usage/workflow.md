@@ -34,8 +34,13 @@ tabs. Press `Tab` to move forward or `Shift+Tab` to move backward:
   active project repository. The table labels the non-empty result group **Assigned to
   you**. Press `s` to refresh, use `j` / `k` to move through the first `100` results,
   and press `Enter` to load a read-only detail page with base metadata and the
-  description. Comments are not loaded in this iteration. Install the GitHub CLI and run
-  `gh auth login` to enable this tab.
+  description. From issue details, press `a` to create and start a regular session whose
+  first prompt instructs the agent to address the issue and includes its URL. If session
+  creation fails, the issue details remain open and show the failure inline, even when
+  the detail fetch finishes later. If prompt submission fails after creation, Agentty
+  opens the recoverable session with the error in its transcript. Comments are not
+  loaded in this iteration. Install the GitHub CLI and run `gh auth login` to enable
+  this tab.
 - **Settings**: Configure the color theme, default reasoning level, smart/fast/review
   model defaults, the optional `Last used model as default` mode, the session commit
   coauthor trailer, and `Launch Configurations` for the active project.

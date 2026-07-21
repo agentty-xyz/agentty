@@ -2224,6 +2224,58 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn test_issue_detail_success_preserves_action_error() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        let project_id = app.projects.active_project_id();
+        let generation = app.assigned_issue_generation;
+        app.mode = AppMode::IssueDetail {
+            action_error: Some("Failed to start issue session: unavailable".to_string()),
+            detail: None,
+            error: None,
+            issue: ag_forge::AssignedIssue {
+                display_id: "#124".to_string(),
+                repository: "agentty-xyz/agentty".to_string(),
+                title: "Keep issue details reachable".to_string(),
+                updated_at: None,
+                web_url: "https://github.com/agentty-xyz/agentty/issues/124".to_string(),
+            },
+            scroll_offset: 0,
+        };
+
+        // Act
+        app.apply_issue_detail_update(IssueDetailUpdate {
+            display_id: "#124".to_string(),
+            generation,
+            project_id,
+            result: Ok(ag_forge::IssueDetail {
+                assignees: Vec::new(),
+                author: "octocat".to_string(),
+                body: Some("Loaded after the action failed.".to_string()),
+                created_at: None,
+                display_id: "#124".to_string(),
+                labels: Vec::new(),
+                repository: "agentty-xyz/agentty".to_string(),
+                state: "OPEN".to_string(),
+                title: "Keep issue details reachable".to_string(),
+                updated_at: None,
+                web_url: "https://github.com/agentty-xyz/agentty/issues/124".to_string(),
+            }),
+        });
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::IssueDetail {
+                action_error: Some(ref action_error),
+                detail: Some(_),
+                error: None,
+                ..
+            } if action_error == "Failed to start issue session: unavailable"
+        ));
+    }
+
+    #[tokio::test]
     async fn test_session_review_comment_result_updates_matching_open_page() {
         // Arrange
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;

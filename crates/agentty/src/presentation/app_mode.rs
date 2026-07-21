@@ -198,6 +198,8 @@ pub enum AppMode {
     /// Displays a selected assigned issue while its base details load and
     /// after the detail request completes.
     IssueDetail {
+        /// User-facing issue-session action failure.
+        action_error: Option<String>,
         /// Loaded base details, excluding comments.
         detail: Option<IssueDetail>,
         /// User-facing detail-load failure.

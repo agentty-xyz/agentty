@@ -411,6 +411,7 @@ fn render_detail_mode(
 ) {
     match mode {
         AppMode::IssueDetail {
+            action_error,
             detail,
             error,
             issue,
@@ -419,6 +420,7 @@ fn render_detail_mode(
             issue,
             detail.as_ref(),
             error.as_deref(),
+            action_error.as_deref(),
             markdown_render_cache,
             *scroll_offset,
         )
@@ -1183,6 +1185,34 @@ mod tests {
         // Assert
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("sentinel"));
+    }
+
+    #[test]
+    fn render_detail_mode_renders_issue_action_error() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(80, 20);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let mode = AppMode::IssueDetail {
+            action_error: Some("Failed to start issue session".to_string()),
+            detail: None,
+            error: None,
+            issue: crate::test_support::assigned_issue_fixture(),
+            scroll_offset: 0,
+        };
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+
+        // Act
+        terminal
+            .draw(|frame| {
+                render_detail_mode(frame, frame.area(), &mode, &markdown_render_cache);
+            })
+            .expect("failed to draw issue detail");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("Issue #124"));
+        assert!(text.contains("Failed to start issue session"));
+        assert!(text.contains("Loading issue details..."));
     }
 
     #[test]

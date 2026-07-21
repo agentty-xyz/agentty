@@ -58,7 +58,8 @@ where
                     presentation.render_cache_store(),
                     content_area,
                     key,
-                ))
+                )
+                .await)
             }
             AppMode::SessionCreation { .. } => {
                 unreachable!("session creation mode is handled before dispatch matching")
@@ -1430,6 +1431,34 @@ mod tests {
                 scroll_offset: None,
             } if session_id == "session-id"
         ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_key_event_routes_issue_detail_back_shortcut() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        app.mode = AppMode::IssueDetail {
+            action_error: Some("Failed to start issue session".to_string()),
+            detail: None,
+            error: None,
+            issue: crate::test_support::assigned_issue_fixture(),
+            scroll_offset: 0,
+        };
+        let backend = ratatui::backend::TestBackend::new(120, 30);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        let event_result = handle_key_event(
+            &mut app,
+            &PresentationState::default(),
+            &mut terminal,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(event_result, Ok(EventResult::Continue)));
+        assert!(matches!(app.mode, AppMode::List));
     }
 
     #[tokio::test]
