@@ -2,20 +2,25 @@
 
 Record a demo GIF for every feature test, and keep it in sync with the UI automatically.
 
-A feature test runs its scenario twice. The PTY run is the test: it captures text frames
-into a `ProofReport`, and every assertion reads those frames. The VHS run is the
-picture: the same scenario is compiled into a `.tape` and replayed by `vhs` to record
-the GIF. Nothing is ever asserted about the GIF.
+A feature test always runs its scenario through the PTY. That is the test: it captures
+text frames into a `ProofReport`, and every assertion reads those frames. `generate`
+mode also runs a stale scenario through VHS, while `force` mode always does so: the same
+steps are compiled into a `.tape` and replayed to record the GIF. Nothing is ever
+asserted about the GIF.
 
 ```mermaid
 graph TD
   S["Scenario steps"] --> PTY["PTY run"]
   PTY --> A["assert - the test"]
   PTY --> H["frame hash"]
-  H --> D{"matches sidecar?"}
+  H --> M{"mode?"}
+  M -->|check| G["pass or fail freshness"]
+  M -->|generate| D{"matches sidecar?"}
+  M -->|force| VHS
   D -->|yes| SKIP["keep committed gif"]
   D -->|no| VHS["vhs records new gif"]
-  VHS --> C["CI commits gif + hash"]
+  VHS --> R["developer reviews artifacts"]
+  R --> C["commit gif hash and poster"]
 ```
 
 ## Freshness
@@ -74,14 +79,20 @@ frame and stales every committed GIF hash at once.
 Redaction applies to the hash only — captured frames, assertions, and the recorded GIF
 still show the real value.
 
-## Recording in CI (planned)
+## Canonical container workflow
 
-No workflow installs `vhs` yet, so today a GIF is only ever recorded when someone opts
-in locally.
+Agentty checks feature GIF freshness in one pinned `linux/amd64` container defined by
+`docker/e2e.Dockerfile`. Presubmit, postsubmit, and release workflows pull the same GHCR
+image by digest, mount the checkout read-only, and run the suite in `check` mode. CI
+never records, rewrites, or commits feature artifacts.
 
-The intended end state is that presubmit installs `vhs`, runs the suite with `generate`,
-and commits the re-recorded GIFs alongside the change that moved the UI. Fork pull
-requests cannot be pushed to, so they would upload the GIFs as an artifact instead.
+When an intentional UI change makes a sidecar stale, a developer runs the affected test
+in that container with a writable checkout and `generate` mode. Only missing or stale
+GIFs are recorded. The developer reviews the changed GIF and hash sidecar, refreshes the
+matching PNG poster, and commits the three artifacts with the UI change.
 
-CI is then the only committer of GIFs. VHS output is not byte-identical across
-platforms, so recording locally and committing would churn every GIF.
+Use the exact digest-pinned recording command in `skills/feature-test/SKILL.md`. It runs
+the local container as the host UID and GID so Linux bind mounts remain writable, while
+CI keeps the image's fixed non-root user and read-only checkout. Recording in the same
+container that performs the freshness check prevents host-specific output from churning
+committed artifacts.

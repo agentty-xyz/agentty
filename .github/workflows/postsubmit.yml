@@ -10,6 +10,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  E2E_IMAGE: ghcr.io/agentty-xyz/agentty-e2e@sha256:d348629b6c449d33f5285c9ef2b7ea0ac3c47fcf264b1ec7f3f4c58a6952a696
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -134,10 +135,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Build the pinned E2E image
-        run: >-
-          docker build --platform linux/amd64
-          --file docker/e2e.Dockerfile --tag agentty-e2e docker
+      - name: Pull the pinned E2E image
+        run: docker pull "$E2E_IMAGE"
 
       # The checkout is mounted read-only so `TESTTY_GIF_MODE=check` (set by
       # the hook) verifies committed GIF hash sidecars without rewriting them.
@@ -146,5 +145,5 @@ jobs:
           docker run --rm --platform linux/amd64
           --mount type=bind,source="$PWD",target=/workspace,readonly
           --env CARGO_TARGET_DIR=/tmp/target
-          agentty-e2e
+          "$E2E_IMAGE"
           prek run test-agentty-e2e --all-files --hook-stage manual
