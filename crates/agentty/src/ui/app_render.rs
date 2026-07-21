@@ -38,6 +38,7 @@ pub(crate) fn render_app(
             available_agent_clis: &snapshot.available_agent_clis,
             current_tab: snapshot.current_tab,
             default_reasoning_level: snapshot.default_reasoning_level,
+            frame_time: snapshot.frame_time,
             git_branch: snapshot.git_branch,
             diff_layout_cache: render_cache_store.diff_layout_cache(),
             git_upstream_ref: snapshot.git_upstream_ref,
@@ -67,7 +68,6 @@ pub(crate) fn render_app(
             status_bar_fyi_rotation_index: snapshot.status_bar_fyi_rotation_index,
             table_state: session_table_state,
             working_dir: snapshot.working_dir,
-            wall_clock_unix_seconds: snapshot.wall_clock_unix_seconds,
         },
     );
 }

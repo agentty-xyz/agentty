@@ -6,6 +6,8 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use ag_agent::{self as agent, OneShotClient};
 use ag_forge::{ForgeRemote, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewRequestClient};
@@ -13,16 +15,23 @@ use ag_git::GitClient;
 use ag_protocol::AgentResponse;
 use askama::Template;
 use tokio::sync::mpsc;
+use tracing::warn;
 
 use crate::app::error::AppError;
-use crate::app::{AppEvent, UpdateStatus};
+use crate::app::{AppEvent, UpdateStatus, at_mention_task};
 use crate::domain::agent::{AgentCliInfo, AgentKind, AgentSelection, ReasoningLevel};
+use crate::domain::file_entry::FileEntry;
 use crate::domain::session::SessionId;
-use crate::infra::version;
+use crate::infra::{file_index, version};
+
+/// Delay applied before a fresh `@`-mention filesystem walk starts.
+const AT_MENTION_LOAD_DEBOUNCE: Duration = Duration::from_millis(75);
+/// Monotonic counter used to distinguish stale and current at-mention loads.
+static NEXT_AT_MENTION_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Stateless helpers for app-scoped one-shot background tasks and app-server
 /// session execution.
-pub(super) struct TaskService;
+pub(crate) struct TaskService;
 
 /// Payload needed to run one requested-review comment snapshot task and route
 /// its completion back to the matching list generation.
@@ -75,6 +84,79 @@ struct ReviewAssistPromptTemplate<'a> {
 }
 
 impl TaskService {
+    /// Publishes cached `@`-mention entries immediately or starts one
+    /// debounced filesystem-index task for a cache miss.
+    pub(crate) fn spawn_at_mention_entries_task(
+        app_event_tx: mpsc::UnboundedSender<AppEvent>,
+        cached_entries: Option<Vec<FileEntry>>,
+        lookup_root: PathBuf,
+        session_id: SessionId,
+    ) {
+        if let Some(entries) = cached_entries {
+            Self::publish_at_mention_entries(&app_event_tx, entries, &session_id, "cached");
+
+            return;
+        }
+
+        let request_id = NEXT_AT_MENTION_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+        let tracked_session_id = session_id.clone();
+        let task_session_id = session_id.clone();
+        let handle = tokio::spawn(async move {
+            tokio::time::sleep(AT_MENTION_LOAD_DEBOUNCE).await;
+
+            let load_handle =
+                tokio::task::spawn_blocking(move || file_index::list_files(&lookup_root));
+            let entries = Self::join_at_mention_entries(load_handle, &session_id).await;
+
+            Self::publish_at_mention_entries(&app_event_tx, entries, &session_id, "loaded");
+            at_mention_task::finish_pending_load(&task_session_id, request_id);
+        });
+
+        at_mention_task::track_pending_load(tracked_session_id, request_id, handle);
+    }
+
+    /// Resolves one blocking file-index task, falling back to an empty index
+    /// when the worker cannot be joined.
+    async fn join_at_mention_entries(
+        load_handle: tokio::task::JoinHandle<Vec<FileEntry>>,
+        session_id: &SessionId,
+    ) -> Vec<FileEntry> {
+        match load_handle.await {
+            Ok(entries) => entries,
+            Err(error) => {
+                warn!(
+                    session_id = %session_id,
+                    error = %error,
+                    "failed to join at-mention file index task"
+                );
+
+                Vec::new()
+            }
+        }
+    }
+
+    /// Publishes one at-mention index snapshot through the app event bus.
+    fn publish_at_mention_entries(
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+        entries: Vec<FileEntry>,
+        session_id: &SessionId,
+        source: &str,
+    ) {
+        if app_event_tx
+            .send(AppEvent::AtMentionEntriesLoaded {
+                entries,
+                session_id: session_id.clone(),
+            })
+            .is_err()
+        {
+            warn!(
+                session_id = %session_id,
+                source,
+                "failed to publish at-mention entries because the app event receiver is closed"
+            );
+        }
+    }
+
     /// Spawns an assigned GitHub issue refresh for the active project.
     pub(super) fn spawn_assigned_issues_task(
         generation: u64,
@@ -637,6 +719,38 @@ mod tests {
         fn available_agent_clis(&self) -> Vec<AgentCliInfo> {
             std::panic::resume_unwind(Box::new("version probe failed".to_string()));
         }
+    }
+
+    #[tokio::test]
+    async fn join_at_mention_entries_returns_empty_index_for_panicking_worker() {
+        // Arrange
+        let load_handle = tokio::task::spawn_blocking(|| -> Vec<FileEntry> {
+            std::panic::resume_unwind(Box::new("file index failed".to_string()));
+        });
+
+        // Act
+        let entries = TaskService::join_at_mention_entries(load_handle, &"session-id".into()).await;
+
+        // Assert
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn publish_at_mention_entries_tolerates_closed_event_receiver() {
+        // Arrange
+        let (app_event_tx, app_event_rx) = mpsc::unbounded_channel();
+        drop(app_event_rx);
+
+        // Act
+        TaskService::publish_at_mention_entries(
+            &app_event_tx,
+            Vec::new(),
+            &"session-id".into(),
+            "cached",
+        );
+
+        // Assert
+        assert!(app_event_tx.is_closed());
     }
 
     #[tokio::test]

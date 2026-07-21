@@ -3,8 +3,7 @@
 use async_trait::async_trait;
 use sqlx::SqlitePool;
 
-use crate::domain::session::DailyActivity;
-use crate::infra::db::{DbError, unix_timestamp_now};
+use crate::infra::db::DbError;
 
 /// Session-activity persistence boundary used by app orchestration and tests.
 #[cfg_attr(test, mockall::automock)]
@@ -26,15 +25,8 @@ pub trait ActivityRepository: Send + Sync {
         timestamp_seconds: i64,
     ) -> Result<(), DbError>;
 
-    /// Persists one session-creation activity event at the current Unix
-    /// timestamp.
-    async fn insert_session_creation_activity_now(&self, session_id: &str) -> Result<(), DbError>;
-
-    /// Loads aggregated session-creation activity counts keyed by local day.
-    async fn load_session_activity(&self) -> Result<Vec<DailyActivity>, DbError>;
-
-    #[cfg(test)]
-    /// Loads persisted activity event timestamps used for activity stats.
+    /// Loads persisted session-creation timestamps for clock-aware activity
+    /// aggregation.
     async fn load_session_activity_timestamps(&self) -> Result<Vec<i64>, DbError>;
 }
 
@@ -49,23 +41,6 @@ impl SqliteActivityRepository {
     }
 }
 
-/// Row returned when loading aggregated session activity by local day.
-struct DailyActivityQueryRow {
-    day_key: i64,
-    session_count: i64,
-}
-
-impl DailyActivityQueryRow {
-    /// Converts one aggregate query row into the public daily activity model.
-    fn into_daily_activity(self) -> DailyActivity {
-        DailyActivity {
-            day_key: self.day_key,
-            session_count: u32::try_from(self.session_count).unwrap_or(u32::MAX),
-        }
-    }
-}
-
-#[cfg(test)]
 /// Row returned when loading one session activity timestamp.
 struct TimestampValueRow {
     created_at: i64,
@@ -121,36 +96,6 @@ ON CONFLICT(session_id) DO NOTHING
         Ok(())
     }
 
-    async fn insert_session_creation_activity_now(&self, session_id: &str) -> Result<(), DbError> {
-        self.insert_session_creation_activity_at(session_id, unix_timestamp_now())
-            .await
-    }
-
-    async fn load_session_activity(&self) -> Result<Vec<DailyActivity>, DbError> {
-        let rows = sqlx::query_as!(
-            DailyActivityQueryRow,
-            r#"
-SELECT CAST(
-           unixepoch(datetime(created_at, 'unixepoch', 'localtime', 'start of day', 'utc')) / 86400
-           AS INTEGER
-       ) AS "day_key!: _",
-       COUNT(*) AS "session_count!: _"
-FROM session_activity
-WHERE created_at IS NOT NULL
-GROUP BY 1
-ORDER BY 1
-"#
-        )
-        .fetch_all(&self.0)
-        .await?;
-
-        Ok(rows
-            .into_iter()
-            .map(DailyActivityQueryRow::into_daily_activity)
-            .collect())
-    }
-
-    #[cfg(test)]
     async fn load_session_activity_timestamps(&self) -> Result<Vec<i64>, DbError> {
         let rows = sqlx::query_as!(
             TimestampValueRow,

@@ -12,6 +12,7 @@ use crate::domain::agent::{AgentCliInfo, ReasoningLevel};
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session, SessionId};
 use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
+use crate::presentation::frame_time::FrameTime;
 use crate::ui::{component, layout, markdown, page, router};
 
 /// Focused-review display state projected from the app cache for one visible
@@ -53,6 +54,8 @@ pub struct RenderContext<'a> {
     pub current_tab: Tab,
     /// Active project-scoped reasoning level used by session pages.
     pub default_reasoning_level: ReasoningLevel,
+    /// One coherent wall-clock snapshot used by this render pass.
+    pub(crate) frame_time: FrameTime,
     /// Current local branch name for the active project.
     pub git_branch: Option<&'a str>,
     /// Shared cache for parsed and rendered diff-page layouts.
@@ -112,9 +115,6 @@ pub struct RenderContext<'a> {
     pub update_status: Option<&'a UpdateStatus>,
     /// Absolute one-minute rotation slot used for page-scoped status-bar FYIs.
     pub status_bar_fyi_rotation_index: u64,
-    /// Current wall-clock time expressed as Unix seconds for deterministic
-    /// render-time timers.
-    pub wall_clock_unix_seconds: i64,
     /// Working directory for the active project.
     pub working_dir: &'a Path,
 }

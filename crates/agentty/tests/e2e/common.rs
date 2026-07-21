@@ -516,7 +516,12 @@ pub(crate) const TESTTY_GIF_MODE_ENV_VAR: &str = "TESTTY_GIF_MODE";
 ///
 /// Mirrors `agentty::infra::clock::CLOCK_UNIX_ENV_VAR`, which is private to
 /// the binary crate and therefore not importable from this integration test.
-const PINNED_CLOCK_ENV_VAR: &str = "AGENTTY_CLOCK_UNIX";
+pub(crate) const PINNED_CLOCK_ENV_VAR: &str = "AGENTTY_CLOCK_UNIX";
+/// Environment variable that pins the UTC offset paired with the feature clock.
+///
+/// Mirrors `agentty::infra::clock::CLOCK_UTC_OFFSET_SECONDS_ENV_VAR`, which is
+/// private to the binary crate and therefore not importable from this test.
+pub(crate) const PINNED_CLOCK_UTC_OFFSET_ENV_VAR: &str = "AGENTTY_CLOCK_UTC_OFFSET_SECONDS";
 /// Environment variable that disables terminal color detection.
 ///
 /// Feature GIF hashes include formatted terminal frames, including cell
@@ -536,7 +541,9 @@ const NO_COLOR_ENV_VALUE: &str = "1";
 /// count divides evenly by both rotating hint-set lengths, so every page shows
 /// the first hint of its set. Any fixed value yields stable hashes; this one
 /// also keeps the recorded hint predictable.
-const PINNED_CLOCK_UNIX_SECONDS: u64 = 1_782_864_000;
+pub(crate) const PINNED_CLOCK_UNIX_SECONDS: i64 = 1_782_864_000;
+/// UTC offset used by every feature run so host timezones cannot alter frames.
+pub(crate) const PINNED_CLOCK_UTC_OFFSET_SECONDS: i64 = 0;
 /// Prefix agentty prints in front of a session's generated worktree hash.
 ///
 /// Mirrors `agentty::app::session::SESSION_BRANCH_PREFIX`, which is private to
@@ -795,10 +802,16 @@ impl FeatureTest {
     /// The name is used as the GIF filename stem and Zola page filename.
     pub(crate) fn new(name: impl Into<String>) -> Self {
         Self {
-            child_env: vec![(
-                PINNED_CLOCK_ENV_VAR.to_string(),
-                PINNED_CLOCK_UNIX_SECONDS.to_string(),
-            )],
+            child_env: vec![
+                (
+                    PINNED_CLOCK_ENV_VAR.to_string(),
+                    PINNED_CLOCK_UNIX_SECONDS.to_string(),
+                ),
+                (
+                    PINNED_CLOCK_UTC_OFFSET_ENV_VAR.to_string(),
+                    PINNED_CLOCK_UTC_OFFSET_SECONDS.to_string(),
+                ),
+            ],
             inherit_system_path: true,
             name: name.into(),
             setup: None,
@@ -1308,6 +1321,29 @@ mod tests {
                 env.stub_bin.join(executable_name).is_file(),
                 "missing {executable_name} test stub",
             );
+        }
+    }
+
+    #[test]
+    fn feature_test_pins_wall_clock_and_utc_offset() {
+        // Arrange
+        let expected_environment = [
+            (
+                PINNED_CLOCK_ENV_VAR.to_string(),
+                PINNED_CLOCK_UNIX_SECONDS.to_string(),
+            ),
+            (
+                PINNED_CLOCK_UTC_OFFSET_ENV_VAR.to_string(),
+                PINNED_CLOCK_UTC_OFFSET_SECONDS.to_string(),
+            ),
+        ];
+
+        // Act
+        let feature_test = FeatureTest::new("deterministic_clock");
+
+        // Assert
+        for environment_entry in expected_environment {
+            assert!(feature_test.child_env.contains(&environment_entry));
         }
     }
 

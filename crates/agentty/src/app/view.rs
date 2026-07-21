@@ -4,12 +4,14 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::app::session_state::SessionGitStatus;
-use crate::app::{App, AssignedIssueState, RequestedReviewState, Tab, UpdateStatus};
+use crate::app::{App, AssignedIssueState, RequestedReviewState, Tab, UpdateStatus, session};
 use crate::domain::agent::{AgentCliInfo, ReasoningLevel};
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session, SessionId};
 use crate::domain::theme::ColorTheme;
+use crate::infra::clock;
 use crate::presentation::app_mode::{AppMode, HelpContext};
+use crate::presentation::frame_time::FrameTime;
 use crate::presentation::settings::SettingsScreenSnapshot;
 
 /// Focused-review display state for the visible session.
@@ -27,6 +29,7 @@ pub(crate) struct AppViewSnapshot<'a> {
     pub(crate) available_agent_clis: Vec<AgentCliInfo>,
     pub(crate) current_tab: Tab,
     pub(crate) default_reasoning_level: ReasoningLevel,
+    pub(crate) frame_time: FrameTime,
     pub(crate) git_branch: Option<&'a str>,
     pub(crate) git_status: Option<(u32, u32)>,
     pub(crate) git_upstream_ref: Option<&'a str>,
@@ -51,14 +54,20 @@ pub(crate) struct AppViewSnapshot<'a> {
     pub(crate) status_bar_fyi_rotation_index: u64,
     pub(crate) theme: ColorTheme,
     pub(crate) update_status: Option<&'a UpdateStatus>,
-    pub(crate) wall_clock_unix_seconds: i64,
     pub(crate) working_dir: &'a Path,
 }
 
 impl App {
     /// Projects immutable application state for one frontend frame.
     pub(crate) fn view_snapshot(&self) -> AppViewSnapshot<'_> {
-        let wall_clock_unix_seconds = self.wall_clock_unix_seconds();
+        let clock_client = self.services.clock();
+        let system_time = clock_client.now_system_time();
+        let wall_clock_unix_seconds = session::unix_timestamp_from_system_time(system_time);
+        let frame_time = FrameTime::new(
+            wall_clock_unix_seconds,
+            clock::unix_timestamp_millis(system_time),
+            clock_client.local_utc_offset_seconds(wall_clock_unix_seconds),
+        );
         let status_bar_fyi_rotation_index =
             u64::try_from(wall_clock_unix_seconds.div_euclid(60)).unwrap_or_default();
         let visible_session_id = visible_review_session_id(&self.mode);
@@ -81,6 +90,7 @@ impl App {
             available_agent_clis: self.services.available_agent_clis(),
             current_tab,
             default_reasoning_level: self.settings.reasoning_level,
+            frame_time,
             git_branch: project.git_branch,
             git_status: project.git_status,
             git_upstream_ref: project.git_upstream_ref,
@@ -105,7 +115,6 @@ impl App {
             status_bar_fyi_rotation_index,
             theme: self.settings.theme,
             update_status: self.update_status.as_ref(),
-            wall_clock_unix_seconds,
             working_dir: project.working_dir,
         }
     }

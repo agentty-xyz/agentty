@@ -1,5 +1,4 @@
 use std::fmt;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Stable loader glyph painted by the Tachyonfx session-output effect.
 pub(crate) const TACHYON_LOADER_GLYPH: &str = "▌▌▌";
@@ -33,17 +32,6 @@ impl Icon {
     /// Returns the stable `Spinner` loader icon used before Tachyonfx painting.
     pub fn current_spinner() -> Self {
         Icon::Spinner
-    }
-
-    /// Returns the current spinner frame index derived from wall-clock time
-    /// for Tachyon loader animation timing.
-    pub fn current_spinner_frame() -> usize {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-
-        Self::spinner_frame_from_millis(now)
     }
 
     /// Returns the spinner frame index for a millisecond timestamp.

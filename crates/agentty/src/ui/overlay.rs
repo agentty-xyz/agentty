@@ -9,6 +9,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding};
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::session::{Session, SessionId};
 use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
+use crate::presentation::frame_time::FrameTime;
 use crate::ui::router::{ListBackgroundRenderContext, render_list_background};
 use crate::ui::style::palette;
 use crate::ui::{Component, Page, SessionReviewSnapshot, component, markdown, page};
@@ -98,7 +99,7 @@ pub(crate) struct ViewInfoPopupRenderContext<'a> {
     /// Popup title.
     pub(crate) title: &'a str,
     /// Render-time clock used for deterministic timers.
-    pub(crate) wall_clock_unix_seconds: i64,
+    pub(crate) frame_time: FrameTime,
 }
 
 /// Borrowed parameters for rendering the help overlay and its background page.
@@ -122,7 +123,7 @@ pub(crate) struct HelpOverlayRenderContext<'a, 'state> {
     /// Latest observable update versions keyed by session id.
     pub(crate) session_update_versions: &'a HashMap<SessionId, u64>,
     /// Render-time clock used for deterministic timers.
-    pub(crate) wall_clock_unix_seconds: i64,
+    pub(crate) frame_time: FrameTime,
 }
 
 /// Borrowed parameters for rendering the background behind the help overlay.
@@ -144,7 +145,7 @@ struct HelpBackgroundRenderContext<'a, 'state> {
     /// Latest observable update versions keyed by session id.
     session_update_versions: &'a HashMap<SessionId, u64>,
     /// Render-time clock used for deterministic timers.
-    wall_clock_unix_seconds: i64,
+    frame_time: FrameTime,
 }
 
 /// Renders the list background and generic confirmation overlay.
@@ -153,9 +154,9 @@ pub(crate) fn render_confirmation_overlay(
     area: Rect,
     mode: &AppMode,
     list_background: ListBackgroundRenderContext<'_, '_>,
-    wall_clock_unix_seconds: i64,
+    frame_time: FrameTime,
 ) {
-    render_list_background(f, area, list_background, wall_clock_unix_seconds);
+    render_list_background(f, area, list_background, frame_time);
 
     let AppMode::Confirmation {
         confirmation_message,
@@ -181,11 +182,11 @@ pub(crate) fn render_session_creation_overlay(
     area: Rect,
     list_background: ListBackgroundRenderContext<'_, '_>,
     selected_option_index: usize,
-    wall_clock_unix_seconds: i64,
+    frame_time: FrameTime,
 ) {
     let can_create_stacked_session = list_background.can_create_stacked_session();
 
-    render_list_background(f, area, list_background, wall_clock_unix_seconds);
+    render_list_background(f, area, list_background, frame_time);
 
     component::session_creation_overlay::SessionCreationOverlay::new(
         selected_option_index,
@@ -200,9 +201,9 @@ pub(crate) fn render_pre_commit_hook_warning(
     area: Rect,
     list_background: ListBackgroundRenderContext<'_, '_>,
     message: &str,
-    wall_clock_unix_seconds: i64,
+    frame_time: FrameTime,
 ) {
-    render_list_background(f, area, list_background, wall_clock_unix_seconds);
+    render_list_background(f, area, list_background, frame_time);
 
     component::info_overlay::InfoOverlay::new("Pre-commit hook warning", message).render(f, area);
 }
@@ -213,12 +214,12 @@ pub(crate) fn render_project_switcher_overlay(
     area: Rect,
     list_background: ListBackgroundRenderContext<'_, '_>,
     selected_option_index: usize,
-    wall_clock_unix_seconds: i64,
+    frame_time: FrameTime,
 ) {
     let active_project_id = list_background.active_project_id();
     let mru_project_items = list_background.mru_projects();
 
-    render_list_background(f, area, list_background, wall_clock_unix_seconds);
+    render_list_background(f, area, list_background, frame_time);
 
     component::project_switcher_overlay::ProjectSwitcherOverlay::new(
         &mru_project_items,
@@ -233,7 +234,7 @@ pub(crate) fn render_sync_blocked_popup(
     f: &mut Frame,
     area: Rect,
     list_background: ListBackgroundRenderContext<'_, '_>,
-    wall_clock_unix_seconds: i64,
+    frame_time: FrameTime,
     context: SyncBlockedPopupRenderContext<'_>,
 ) {
     let SyncBlockedPopupRenderContext {
@@ -244,13 +245,16 @@ pub(crate) fn render_sync_blocked_popup(
         title,
     } = context;
 
-    render_list_background(f, area, list_background, wall_clock_unix_seconds);
+    render_list_background(f, area, list_background, frame_time);
 
     let popup_message = sync_popup_message(default_branch, message, project_name);
 
     component::info_overlay::InfoOverlay::new(title, &popup_message)
         .is_loading(is_loading)
         .loading_label("Sync in progress...")
+        .spinner_frame(crate::ui::icon::Icon::spinner_frame_from_millis(
+            frame_time.unix_millis(),
+        ))
         .render(f, area);
 }
 
@@ -274,7 +278,7 @@ pub(crate) fn render_view_info_popup(
         session_update_versions,
         sessions,
         title,
-        wall_clock_unix_seconds,
+        frame_time,
     } = context;
     let background_mode = restore_view.clone().into_view_mode();
 
@@ -303,7 +307,7 @@ pub(crate) fn render_view_info_popup(
             session_index,
             session_update_version,
             sessions,
-            wall_clock_unix_seconds,
+            frame_time,
         })
         .can_open_worktree(can_open_worktree)
         .render(f, area);
@@ -312,6 +316,9 @@ pub(crate) fn render_view_info_popup(
     component::info_overlay::InfoOverlay::new(title, message)
         .is_loading(is_loading)
         .loading_label(loading_label)
+        .spinner_frame(crate::ui::icon::Icon::spinner_frame_from_millis(
+            frame_time.unix_millis(),
+        ))
         .render(f, area);
 }
 
@@ -345,7 +352,7 @@ pub(crate) fn render_help(f: &mut Frame, area: Rect, context: HelpOverlayRenderC
         scroll_offset,
         session_progress_messages,
         session_update_versions,
-        wall_clock_unix_seconds,
+        frame_time,
     } = context;
 
     render_help_background(
@@ -360,7 +367,7 @@ pub(crate) fn render_help(f: &mut Frame, area: Rect, context: HelpOverlayRenderC
             review_snapshot,
             session_progress_messages,
             session_update_versions,
-            wall_clock_unix_seconds,
+            frame_time,
         },
     );
     component::help_overlay::HelpOverlay::new(help_context)
@@ -511,13 +518,13 @@ fn render_help_background(f: &mut Frame, area: Rect, context: HelpBackgroundRend
         review_snapshot,
         session_progress_messages,
         session_update_versions,
-        wall_clock_unix_seconds,
+        frame_time,
     } = context;
     let sessions = list_background.sessions();
 
     match resolve_help_background(help_context, sessions) {
         Some(ResolvedHelpBackground::List) => {
-            render_list_background(f, area, list_background, wall_clock_unix_seconds);
+            render_list_background(f, area, list_background, frame_time);
         }
         Some(ResolvedHelpBackground::View {
             session_id,
@@ -549,7 +556,7 @@ fn render_help_background(f: &mut Frame, area: Rect, context: HelpBackgroundRend
                 session_index,
                 session_update_version,
                 sessions,
-                wall_clock_unix_seconds,
+                frame_time,
             })
             .render(f, area);
         }

@@ -16,7 +16,10 @@ use assert_cmd::cargo::cargo_bin;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection, Executor};
 
-use crate::common::BuilderEnv;
+use crate::common::{
+    BuilderEnv, PINNED_CLOCK_ENV_VAR, PINNED_CLOCK_UNIX_SECONDS, PINNED_CLOCK_UTC_OFFSET_ENV_VAR,
+    PINNED_CLOCK_UTC_OFFSET_SECONDS,
+};
 
 type DemoResult = Result<(), Box<dyn std::error::Error>>;
 type SeedSessionRow<'a> = (
@@ -384,8 +387,14 @@ ON CONFLICT(project_id, name) DO UPDATE SET value = excluded.value
             connection.execute(query).await?;
         }
 
-        seed_pre_existing_sessions(&mut connection, selected_project_id, &env.agentty_root).await?;
-        seed_dashboard_activity(&mut connection).await?;
+        seed_pre_existing_sessions(
+            &mut connection,
+            selected_project_id,
+            &env.agentty_root,
+            PINNED_CLOCK_UNIX_SECONDS,
+        )
+        .await?;
+        seed_dashboard_activity(&mut connection, PINNED_CLOCK_UNIX_SECONDS).await?;
 
         connection.close().await?;
 
@@ -411,13 +420,8 @@ async fn seed_pre_existing_sessions(
     connection: &mut sqlx::SqliteConnection,
     cwd_project_id: i64,
     agentty_root: &Path,
+    now_seconds: i64,
 ) -> DemoResult {
-    let now_seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| {
-            i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
-        });
-
     // (id, title, model, status, base_branch, added_lines, deleted_lines,
     //  prompt, age_seconds)
     let rows: &[SeedSessionRow<'_>] = &[
@@ -493,12 +497,10 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 
 /// Seeds recent and historical session-creation events so the opening
 /// activity heatmap and work-pace streaks are visibly populated.
-async fn seed_dashboard_activity(connection: &mut sqlx::SqliteConnection) -> DemoResult {
-    let now_seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| {
-            i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
-        });
+async fn seed_dashboard_activity(
+    connection: &mut sqlx::SqliteConnection,
+    now_seconds: i64,
+) -> DemoResult {
     let day_seconds = 86_400_i64;
     let active_day_offsets = [0_i64, 1, 2, 3, 5, 8, 9, 12, 16, 21, 27, 34, 41, 55, 69];
 
@@ -540,11 +542,15 @@ ON CONFLICT(session_id) DO NOTHING
 }
 
 #[tokio::test]
-async fn dashboard_activity_seed_uses_stable_session_ids() -> DemoResult {
+async fn dashboard_and_session_seeds_use_pinned_clock_and_stable_ids() -> DemoResult {
     // Arrange
     let temp = tempfile::TempDir::new()?;
     let db_path = temp.path().join("agentty.db");
     let database = Database::open(&db_path).await?;
+    let project_id = database
+        .projects()
+        .upsert_project("/tmp/demo-project", Some("main".to_string()))
+        .await?;
     drop(database);
     let mut connection = SqliteConnectOptions::new()
         .filename(&db_path)
@@ -552,8 +558,15 @@ async fn dashboard_activity_seed_uses_stable_session_ids() -> DemoResult {
         .await?;
 
     // Act
-    seed_dashboard_activity(&mut connection).await?;
-    seed_dashboard_activity(&mut connection).await?;
+    seed_pre_existing_sessions(
+        &mut connection,
+        project_id,
+        temp.path(),
+        PINNED_CLOCK_UNIX_SECONDS,
+    )
+    .await?;
+    seed_dashboard_activity(&mut connection, PINNED_CLOCK_UNIX_SECONDS).await?;
+    seed_dashboard_activity(&mut connection, PINNED_CLOCK_UNIX_SECONDS).await?;
 
     // Assert
     let activity_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM session_activity")
@@ -563,12 +576,48 @@ async fn dashboard_activity_seed_uses_stable_session_ids() -> DemoResult {
         sqlx::query_scalar("SELECT COUNT(*) FROM session_activity WHERE session_id IS NULL")
             .fetch_one(&mut connection)
             .await?;
+    let latest_activity_timestamp: Option<i64> =
+        sqlx::query_scalar("SELECT MAX(created_at) FROM session_activity")
+            .fetch_one(&mut connection)
+            .await?;
+    let latest_seeded_session_timestamp: i64 =
+        sqlx::query_scalar("SELECT created_at FROM session WHERE id = ?")
+            .bind("aaaa1111-aaaa-1111-aaaa-111111111111")
+            .fetch_one(&mut connection)
+            .await?;
     assert_eq!(activity_count, 36);
     assert_eq!(null_session_count, 0);
+    assert_eq!(latest_activity_timestamp, Some(PINNED_CLOCK_UNIX_SECONDS));
+    assert_eq!(
+        latest_seeded_session_timestamp,
+        PINNED_CLOCK_UNIX_SECONDS - 600
+    );
 
     connection.close().await?;
 
     Ok(())
+}
+
+#[test]
+fn demo_tape_pins_wall_clock_and_utc_offset() {
+    // Arrange
+    let env = BuilderEnv {
+        agentty_root: PathBuf::from("/tmp/demo-agentty"),
+        home_dir: PathBuf::from("/tmp/demo-home"),
+        stub_bin: PathBuf::from("/tmp/demo-bin"),
+        workdir: PathBuf::from("/tmp/demo-workdir"),
+    };
+
+    // Act
+    let tape = build_demo_tape(&env, Path::new("/tmp/demo.gif"));
+
+    // Assert
+    assert!(tape.contains(&format!(
+        "export {PINNED_CLOCK_ENV_VAR}='{PINNED_CLOCK_UNIX_SECONDS}'"
+    )));
+    assert!(tape.contains(&format!(
+        "export {PINNED_CLOCK_UTC_OFFSET_ENV_VAR}='{PINNED_CLOCK_UTC_OFFSET_SECONDS}'"
+    )));
 }
 
 /// Returns the on-disk destination directory for the marketing demo GIF.
@@ -617,6 +666,12 @@ Output "{gif}"
 
 Hide
 Type "export AGENTTY_ROOT='{root}'"
+Enter
+Sleep 80ms
+Type "export {clock_env}='{clock_seconds}'"
+Enter
+Sleep 80ms
+Type "export {clock_offset_env}='{clock_offset_seconds}'"
 Enter
 Sleep 80ms
 Type "export PATH='{path}'"
@@ -685,6 +740,10 @@ Sleep 400ms
 "#,
         gif = gif_path.display(),
         root = agentty_root,
+        clock_env = PINNED_CLOCK_ENV_VAR,
+        clock_seconds = PINNED_CLOCK_UNIX_SECONDS,
+        clock_offset_env = PINNED_CLOCK_UTC_OFFSET_ENV_VAR,
+        clock_offset_seconds = PINNED_CLOCK_UTC_OFFSET_SECONDS,
         path = path_env,
         cwd = workdir,
         second_session = second_session,

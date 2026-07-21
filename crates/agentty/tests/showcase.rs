@@ -487,7 +487,10 @@ async fn seed_database_populates_showcase_dashboard_and_timer() -> ShowcaseResul
         .iter()
         .find(|project| project.path == workdir.to_string_lossy())
         .ok_or("missing showcase project")?;
-    let activity = database.activity().load_session_activity().await?;
+    let activity_timestamps = database
+        .activity()
+        .load_session_activity_timestamps()
+        .await?;
     let sessions = database
         .sessions()
         .load_sessions_for_project(showcase_project.id)
@@ -511,13 +514,7 @@ async fn seed_database_populates_showcase_dashboard_and_timer() -> ShowcaseResul
     assert_eq!(showcase_project.input_tokens, 36_600);
     assert_eq!(showcase_project.output_tokens, 12_000);
     assert_eq!(showcase_project.session_count, 7);
-    assert_eq!(
-        activity
-            .iter()
-            .map(|daily_activity| daily_activity.session_count)
-            .sum::<u32>(),
-        36
-    );
+    assert_eq!(activity_timestamps.len(), 36);
     assert!(running_session.in_progress_started_at.is_some());
     assert_eq!(review_messages.len(), 3);
     assert_eq!(
