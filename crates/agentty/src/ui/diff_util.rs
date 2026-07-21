@@ -6,8 +6,7 @@ use crate::ui::style;
 
 const BORDER_HORIZONTAL_WIDTH: u16 = 2;
 const DIFF_GIT_FILE_HEADER_PREFIX: &str = "diff --git";
-const DIFF_GIT_PATH_PREFIX: &str = "diff --git a/";
-const DIFF_GIT_PATH_SEPARATOR: &str = " b/";
+const DIFF_GIT_HEADER_PREFIX: &str = "diff --git ";
 const FOOTER_HEIGHT: u16 = 1;
 const GUTTER_EXTRA_WIDTH: usize = 2;
 const LINE_NUMBER_COLUMN_COUNT: usize = 2;
@@ -155,17 +154,27 @@ pub fn parse_diff_lines(diff: &str) -> Vec<DiffLine<'_>> {
     result
 }
 
-/// Extracts the old and new repository-relative paths from a standard
+/// Extracts and decodes the old and new repository-relative paths from a
 /// `diff --git a/<old> b/<new>` file header.
-pub fn diff_header_paths(header_line: &str) -> Option<(&str, &str)> {
-    let stripped = header_line.strip_prefix(DIFF_GIT_PATH_PREFIX)?;
-    let (old_path, new_path) = stripped.split_once(DIFF_GIT_PATH_SEPARATOR)?;
+///
+/// Git C-quotes paths containing non-ASCII or other special bytes. Those
+/// quoted tokens are decoded before their `a/` and `b/` prefixes are removed.
+pub fn diff_header_paths(header_line: &str) -> Option<(String, String)> {
+    let encoded_paths = header_line.strip_prefix(DIFF_GIT_HEADER_PREFIX)?;
+    let (old_path, remaining) = parse_git_path_token(encoded_paths)?;
+    let remaining = remaining.strip_prefix(' ')?;
+    let (new_path, trailing) = parse_git_path_token(remaining.trim_start())?;
+    if !trailing.is_empty() {
+        return None;
+    }
+    let old_path = old_path.strip_prefix("a/")?.to_string();
+    let new_path = new_path.strip_prefix("b/")?.to_string();
 
     Some((old_path, new_path))
 }
 
 /// Extracts the new/right-side repository-relative path from a diff header.
-pub fn diff_header_new_path(header_line: &str) -> Option<&str> {
+pub fn diff_header_new_path(header_line: &str) -> Option<String> {
     let (_, new_path) = diff_header_paths(header_line)?;
 
     Some(new_path)
@@ -979,6 +988,68 @@ fn parse_range(range: &str) -> Option<(u32, u32)> {
     }
 }
 
+/// Decodes one quoted or unquoted path token and returns the unconsumed input.
+fn parse_git_path_token(input: &str) -> Option<(String, &str)> {
+    if !input.starts_with('"') {
+        let token_end = input.find(' ').unwrap_or(input.len());
+        let token = input.get(..token_end)?;
+        if token.is_empty() {
+            return None;
+        }
+
+        return Some((token.to_string(), input.get(token_end..)?));
+    }
+
+    let bytes = input.as_bytes();
+    let mut decoded = Vec::new();
+    let mut byte_index = 1;
+    while byte_index < bytes.len() {
+        match bytes[byte_index] {
+            b'"' => {
+                let path = String::from_utf8(decoded).ok()?;
+                let remaining = input.get(byte_index.saturating_add(1)..)?;
+
+                return Some((path, remaining));
+            }
+            b'\\' => {
+                byte_index = byte_index.saturating_add(1);
+                let escaped = *bytes.get(byte_index)?;
+                let decoded_byte = match escaped {
+                    b'a' => b'\x07',
+                    b'b' => b'\x08',
+                    b't' => b'\t',
+                    b'n' => b'\n',
+                    b'v' => b'\x0b',
+                    b'f' => b'\x0c',
+                    b'r' => b'\r',
+                    b'\\' => b'\\',
+                    b'"' => b'"',
+                    b'0'..=b'7' => {
+                        let mut octal_value = escaped - b'0';
+                        for _ in 1..3 {
+                            let Some(next_digit @ b'0'..=b'7') = bytes.get(byte_index + 1).copied()
+                            else {
+                                break;
+                            };
+                            byte_index += 1;
+                            octal_value = octal_value
+                                .saturating_mul(8)
+                                .saturating_add(next_digit - b'0');
+                        }
+                        octal_value
+                    }
+                    _ => return None,
+                };
+                decoded.push(decoded_byte);
+            }
+            byte => decoded.push(byte),
+        }
+        byte_index = byte_index.saturating_add(1);
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -987,6 +1058,99 @@ mod tests {
     const DIFF_NESTED_HEADER: &str =
         "diff --git a/src/ui/component/file_explorer.rs b/src/ui/component/file_explorer.rs";
     const DIFF_README_HEADER: &str = "diff --git a/README.md b/README.md";
+
+    #[test]
+    fn test_diff_header_paths_decodes_git_quoted_non_ascii_paths() {
+        // Arrange
+        let header = concat!(
+            "diff --git \"a/docs/\\346\\227\\245\\346\\234\\254.md\" ",
+            "\"b/docs/\\346\\227\\245\\346\\234\\254.md\"",
+        );
+
+        // Act
+        let paths = diff_header_paths(header);
+        let new_path = diff_header_new_path(header);
+
+        // Assert
+        assert_eq!(
+            paths,
+            Some(("docs/日本.md".to_string(), "docs/日本.md".to_string()))
+        );
+        assert_eq!(new_path, Some("docs/日本.md".to_string()));
+    }
+
+    #[test]
+    fn test_diff_header_paths_decodes_spaces_and_c_escapes() {
+        // Arrange
+        let spaced_header = "diff --git \"a/docs/old file.md\" \"b/docs/new file.md\"";
+        let escape_cases = [
+            (r#""a/\a" tail"#, "a/\x07"),
+            (r#""a/\b" tail"#, "a/\x08"),
+            (r#""a/\t" tail"#, "a/\t"),
+            (r#""a/\n" tail"#, "a/\n"),
+            (r#""a/\v" tail"#, "a/\x0b"),
+            (r#""a/\f" tail"#, "a/\x0c"),
+            (r#""a/\r" tail"#, "a/\r"),
+            (r#""a/\\" tail"#, "a/\\"),
+            (r#""a/\"" tail"#, "a/\""),
+            (r#""a/\7x" tail"#, "a/\x07x"),
+        ];
+
+        // Act
+        let spaced_paths = diff_header_paths(spaced_header);
+        let decoded_escapes = escape_cases
+            .iter()
+            .map(|(encoded, _)| parse_git_path_token(encoded))
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(
+            spaced_paths,
+            Some((
+                "docs/old file.md".to_string(),
+                "docs/new file.md".to_string(),
+            ))
+        );
+        for ((_, expected), decoded) in escape_cases.iter().zip(decoded_escapes) {
+            assert_eq!(decoded, Some(((*expected).to_string(), " tail")));
+        }
+    }
+
+    #[test]
+    fn test_git_path_token_and_header_reject_malformed_input() {
+        // Arrange
+        let malformed_tokens = [
+            "",
+            r#""unterminated"#,
+            r#""a/\q""#,
+            r#""a/\"#,
+            r#""a/\377""#,
+        ];
+        let malformed_headers = [
+            "not a diff header",
+            "diff --git a/only-one-path",
+            "diff --git a/old.md b/new.md trailing",
+            "diff --git old.md b/new.md",
+            "diff --git a/old.md new.md",
+            "diff --git \"a/old.md\"\"b/new.md\"",
+        ];
+
+        // Act
+        let unquoted = parse_git_path_token("a/old.md b/new.md");
+        let rejected_tokens = malformed_tokens
+            .iter()
+            .map(|token| parse_git_path_token(token))
+            .collect::<Vec<_>>();
+        let rejected_headers = malformed_headers
+            .iter()
+            .map(|header| diff_header_paths(header))
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(unquoted, Some(("a/old.md".to_string(), " b/new.md")));
+        assert!(rejected_tokens.iter().all(Option::is_none));
+        assert!(rejected_headers.iter().all(Option::is_none));
+    }
 
     #[test]
     fn test_parse_hunk_header_basic() {

@@ -7,6 +7,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- agentty: add a rendered markdown and Mermaid preview toggle for changed markdown files
+  in diff view.
+
 ## [v0.13.4] - 2026-07-18
 
 ### Changed

@@ -154,6 +154,7 @@ mod tests {
         let diff_mode = AppMode::Diff {
             diff: String::new(),
             file_explorer_selected_index: 0,
+            preview: crate::presentation::app_mode::DiffPreview::default(),
             restore: None,
             scroll_cache: None,
             session_id: "session-id".into(),

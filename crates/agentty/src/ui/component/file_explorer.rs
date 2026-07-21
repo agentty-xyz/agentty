@@ -7,12 +7,10 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 
-use crate::ui::diff_util::{DiffLine, DiffLineKind, FileTreeItem};
+use crate::ui::diff_util::{DiffLine, DiffLineKind, FileTreeItem, diff_header_paths};
 use crate::ui::{Component, style};
 
 const DIFF_GIT_FILE_HEADER_PREFIX: &str = "diff --git";
-const DIFF_GIT_PATH_PREFIX: &str = "diff --git a/";
-const DIFF_GIT_PATH_SEPARATOR: &str = " b/";
 const DIFF_GIT_FALLBACK_PREFIX: &str = "diff --git ";
 const FILE_EXPLORER_TITLE: &str = " Files ";
 const NO_FILES_LABEL: &str = "No files";
@@ -215,29 +213,17 @@ impl FileExplorer {
     /// Parses a diff header into a normalized path representation for tree
     /// insertion.
     fn parse_path(file_header_line: &str) -> Option<ParsedPath> {
-        if let Some(stripped_header) = file_header_line.strip_prefix(DIFF_GIT_PATH_PREFIX) {
-            if let Some((old_path, new_path)) = stripped_header.split_once(DIFF_GIT_PATH_SEPARATOR)
-            {
-                let path_segments = Self::split_path_segments(new_path);
-                if path_segments.is_empty() {
-                    return None;
-                }
-
-                let rename_from = if old_path == new_path {
-                    None
-                } else {
-                    Some(old_path.to_string())
-                };
-
-                return Some(ParsedPath {
-                    path_segments,
-                    rename_from,
-                });
+        if let Some((old_path, new_path)) = diff_header_paths(file_header_line) {
+            let path_segments = Self::split_path_segments(&new_path);
+            if path_segments.is_empty() {
+                return None;
             }
 
+            let rename_from = (old_path != new_path).then_some(old_path);
+
             return Some(ParsedPath {
-                path_segments: vec![stripped_header.to_string()],
-                rename_from: None,
+                path_segments,
+                rename_from,
             });
         }
 
@@ -387,6 +373,10 @@ mod tests {
     const DIFF_README_HEADER: &str = "diff --git a/README.md b/README.md";
     const DIFF_NESTED_HEADER: &str =
         "diff --git a/src/ui/component/file_explorer.rs b/src/ui/component/file_explorer.rs";
+    const DIFF_QUOTED_MARKDOWN_HEADER: &str = concat!(
+        "diff --git \"a/docs/\\346\\227\\245\\346\\234\\254.md\" ",
+        "\"b/docs/\\346\\227\\245\\346\\234\\254.md\"",
+    );
     const EXPECTED_SRC_FOLDER_LINE: &str = "└ src/";
     const EXPECTED_MAIN_FILE_LINE: &str = "  └ main.rs";
     const EXPECTED_NEW_FILE_LINE: &str = "  └ new.rs";
@@ -625,5 +615,45 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert_eq!(items[0], FileTreeItem::Folder("src/".to_string()));
         assert_eq!(items[1], FileTreeItem::File("src/new.rs".to_string()));
+    }
+
+    #[test]
+    fn test_file_tree_items_decode_git_quoted_paths() {
+        // Arrange
+        let parsed_lines = vec![DiffLine {
+            kind: DiffLineKind::FileHeader,
+            old_line: None,
+            new_line: None,
+            content: DIFF_QUOTED_MARKDOWN_HEADER,
+        }];
+
+        // Act
+        let items = FileExplorer::file_tree_items(&parsed_lines);
+
+        // Assert
+        assert_eq!(
+            items,
+            vec![
+                FileTreeItem::Folder("docs/".to_string()),
+                FileTreeItem::File("docs/日本.md".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_file_tree_items_ignore_empty_new_path() {
+        // Arrange
+        let parsed_lines = vec![DiffLine {
+            kind: DiffLineKind::FileHeader,
+            old_line: None,
+            new_line: None,
+            content: "diff --git a/old.md b/",
+        }];
+
+        // Act
+        let items = FileExplorer::file_tree_items(&parsed_lines);
+
+        // Assert
+        assert!(items.is_empty());
     }
 }

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::io::Read;
+use std::path::{Component, Path, PathBuf};
 use std::process::Output;
 
 #[cfg(unix)]
@@ -18,7 +19,21 @@ use super::repo::{
 pub type BranchTrackingMap = HashMap<String, Option<(u32, u32)>>;
 
 const COMMIT_ALL_HOOK_RETRY_ATTEMPTS: usize = 5;
+const MAX_WORKTREE_FILE_BYTE_COUNT: usize = 1024 * 1024;
 const PRE_COMMIT_CONFIG_FILES: [&str; 2] = [".pre-commit-config.yaml", ".pre-commit-config.yml"];
+
+/// Bounded content returned when reading a worktree file for presentation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum WorktreeFileContent {
+    /// The file contains valid UTF-8 text within the preview byte limit.
+    Text(String),
+    /// The file does not exist in the current worktree.
+    Missing,
+    /// The file is not valid UTF-8 text.
+    Binary,
+    /// The file exceeds the preview byte limit.
+    TooLarge,
+}
 
 /// Controls how single-commit session branches treat the commit message when
 /// amending `HEAD`.
@@ -321,6 +336,72 @@ pub(crate) async fn diff(repo_path: PathBuf, base_branch: String) -> Result<Stri
         )
     })
     .await?
+}
+
+/// Reads one repository-relative worktree file with a fixed memory bound.
+///
+/// The path must contain only normal relative components. Canonical path
+/// validation also rejects symlinks that resolve outside `repo_path`.
+///
+/// # Errors
+/// Returns a [`GitError`] when the path is unsafe, repository path resolution
+/// fails, or the selected file cannot be read.
+pub(crate) async fn read_worktree_file(
+    repo_path: PathBuf,
+    relative_path: String,
+) -> Result<WorktreeFileContent, GitError> {
+    spawn_blocking(move || read_worktree_file_sync(&repo_path, &relative_path)).await?
+}
+
+/// Performs the bounded worktree read on a blocking worker thread.
+fn read_worktree_file_sync(
+    repo_path: &Path,
+    relative_path: &str,
+) -> Result<WorktreeFileContent, GitError> {
+    let relative_file_path = Path::new(relative_path);
+    if relative_path.is_empty()
+        || relative_file_path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(GitError::OutputParse(format!(
+            "Unsafe worktree file path: {relative_path}"
+        )));
+    }
+
+    let canonical_repo_path = std::fs::canonicalize(repo_path)?;
+    let candidate_path = repo_path.join(relative_file_path);
+    let canonical_file_path = match std::fs::canonicalize(candidate_path) {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(WorktreeFileContent::Missing);
+        }
+        Err(error) => return Err(error.into()),
+    };
+    if !canonical_file_path.starts_with(canonical_repo_path) {
+        return Err(GitError::OutputParse(format!(
+            "Worktree file resolves outside repository: {relative_path}"
+        )));
+    }
+
+    let file = std::fs::File::open(canonical_file_path)?;
+    let mut bytes = Vec::with_capacity(MAX_WORKTREE_FILE_BYTE_COUNT.min(8192));
+    file.take((MAX_WORKTREE_FILE_BYTE_COUNT as u64).saturating_add(1))
+        .read_to_end(&mut bytes)?;
+
+    Ok(worktree_file_content(bytes))
+}
+
+/// Classifies bytes read through the bounded worktree-file reader.
+fn worktree_file_content(bytes: Vec<u8>) -> WorktreeFileContent {
+    if bytes.len() > MAX_WORKTREE_FILE_BYTE_COUNT {
+        return WorktreeFileContent::TooLarge;
+    }
+
+    match String::from_utf8(bytes) {
+        Ok(content) => WorktreeFileContent::Text(content),
+        Err(_) => WorktreeFileContent::Binary,
+    }
 }
 
 /// Copies one repository index beside its source and returns the temporary
@@ -1420,6 +1501,120 @@ mod tests {
         assert!(diff_output.contains("untracked change"));
         assert_eq!(cached_diff_after, cached_diff_before);
         assert_eq!(status_after, status_before);
+    }
+
+    #[tokio::test]
+    async fn read_worktree_file_returns_text_for_safe_nested_path() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        let docs_dir = temp_dir.path().join("docs");
+        fs::create_dir(&docs_dir).expect("failed to create docs directory");
+        fs::write(docs_dir.join("README.md"), "# Preview\n")
+            .expect("failed to write markdown file");
+
+        // Act
+        let result =
+            read_worktree_file(temp_dir.path().to_path_buf(), "docs/README.md".to_string()).await;
+
+        // Assert
+        assert_eq!(
+            result.expect("worktree read should succeed"),
+            WorktreeFileContent::Text("# Preview\n".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn read_worktree_file_classifies_missing_binary_and_oversize_files() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        fs::write(temp_dir.path().join("binary.md"), [0xff, 0xfe])
+            .expect("failed to write binary file");
+        fs::write(
+            temp_dir.path().join("large.md"),
+            vec![b'a'; MAX_WORKTREE_FILE_BYTE_COUNT + 1],
+        )
+        .expect("failed to write oversize file");
+
+        // Act
+        let missing =
+            read_worktree_file(temp_dir.path().to_path_buf(), "missing.md".to_string()).await;
+        let binary =
+            read_worktree_file(temp_dir.path().to_path_buf(), "binary.md".to_string()).await;
+        let too_large =
+            read_worktree_file(temp_dir.path().to_path_buf(), "large.md".to_string()).await;
+
+        // Assert
+        assert_eq!(
+            missing.expect("missing read should succeed"),
+            WorktreeFileContent::Missing
+        );
+        assert_eq!(
+            binary.expect("binary read should succeed"),
+            WorktreeFileContent::Binary
+        );
+        assert_eq!(
+            too_large.expect("oversize read should succeed"),
+            WorktreeFileContent::TooLarge
+        );
+    }
+
+    #[tokio::test]
+    async fn read_worktree_file_rejects_unsafe_relative_paths() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        let absolute_path = temp_dir.path().join("README.md");
+
+        // Act
+        let empty = read_worktree_file(temp_dir.path().to_path_buf(), String::new()).await;
+        let parent =
+            read_worktree_file(temp_dir.path().to_path_buf(), "../README.md".to_string()).await;
+        let absolute = read_worktree_file(
+            temp_dir.path().to_path_buf(),
+            absolute_path.to_string_lossy().into_owned(),
+        )
+        .await;
+
+        // Assert
+        for result in [empty, parent, absolute] {
+            assert!(
+                matches!(result, Err(GitError::OutputParse(message)) if message.contains("Unsafe worktree file path"))
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn read_worktree_file_rejects_symlinks_outside_repository() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        let outside_dir = tempdir().expect("failed to create outside temp dir");
+        let outside_file = outside_dir.path().join("outside.md");
+        fs::write(&outside_file, "outside").expect("failed to write outside file");
+        std::os::unix::fs::symlink(&outside_file, temp_dir.path().join("link.md"))
+            .expect("failed to create outside symlink");
+
+        // Act
+        let result = read_worktree_file(temp_dir.path().to_path_buf(), "link.md".to_string()).await;
+
+        // Assert
+        assert!(
+            matches!(result, Err(GitError::OutputParse(message)) if message.contains("resolves outside repository"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn read_worktree_file_maps_non_missing_path_resolution_errors() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        std::os::unix::fs::symlink("loop.md", temp_dir.path().join("loop.md"))
+            .expect("failed to create symlink loop");
+
+        // Act
+        let result = read_worktree_file(temp_dir.path().to_path_buf(), "loop.md".to_string()).await;
+
+        // Assert
+        assert!(matches!(result, Err(GitError::Io(_))));
     }
 
     #[test]

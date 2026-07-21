@@ -1411,6 +1411,33 @@ fn seed_review_worktree_with_diff(env: &BuilderEnv) -> Result<(), Box<dyn std::e
     Ok(())
 }
 
+/// Seeds a review-ready worktree whose only change is previewable markdown.
+fn seed_markdown_diff_preview(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session(env)?;
+
+    let session_worktree = env.agentty_root.join("wt").join("review-s");
+    run_git(&session_worktree, &["init", "-b", "main"])?;
+    run_git(
+        &session_worktree,
+        &["config", "user.email", "test@test.com"],
+    )?;
+    run_git(&session_worktree, &["config", "user.name", "Test"])?;
+    std::fs::create_dir_all(session_worktree.join("docs"))?;
+    std::fs::write(session_worktree.join("docs/日本.md"), "# Before\n")?;
+    run_git(&session_worktree, &["add", "."])?;
+    run_git(&session_worktree, &["commit", "-m", "init"])?;
+    std::fs::write(
+        session_worktree.join("docs/日本.md"),
+        concat!(
+            "# Rendered Markdown Preview\n\n",
+            "| Mode | Output |\n| --- | --- |\n| Preview | Markdown |\n\n",
+            "```mermaid\ngraph TD\nSource[Source] --> Preview[Preview]\n```\n",
+        ),
+    )?;
+
+    Ok(())
+}
+
 /// Runs one git command in `working_directory`, returning an error with stderr
 /// detail when git fails.
 fn run_git(working_directory: &Path, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
@@ -4199,6 +4226,71 @@ fn diff_preview_opens_from_session() -> E2eResult {
                 assertion::assert_text_in_region(frame, "src/ +1 -0", &full);
                 assertion::assert_text_in_region(frame, "println!(\"review\")", &full);
                 assertion::assert_text_in_region(frame, "j/k: select file", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that `p` toggles a changed markdown file between raw diff and a
+/// rendered markdown/mermaid preview.
+#[test]
+fn test_markdown_diff_preview() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("markdown_diff_preview")
+        .with_git()
+        .zola(
+            "Rendered markdown diff preview",
+            "Preview changed markdown and Mermaid diagrams directly from the diff view.",
+            46,
+        )
+        .setup(seed_markdown_diff_preview)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .press_key("d")
+                    .wait_for_text("# Rendered Markdown Preview", 5000)
+                    .press_key("j")
+                    .press_key("p")
+                    .wait_for_text("Preview — docs/日本.md", 5000)
+                    .wait_for_text("Rendered Markdown Preview", 5000)
+                    .wait_for_stable_frame(300, 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "markdown_preview",
+                        "Rendered markdown and Mermaid diagram in the diff view",
+                    )
+                    .press_key("p")
+                    .wait_for_text("# Rendered Markdown Preview", 5000)
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled("raw_diff", "Raw diff restored after toggling preview off")
+            },
+            |frame, report| {
+                let preview_frame = common::frame_from_capture(&report.captures[0]);
+                let preview_full = Region::full(preview_frame.cols(), preview_frame.rows());
+                assertion::assert_text_in_region(
+                    &preview_frame,
+                    "Preview — docs/日本.md",
+                    &preview_full,
+                );
+                assertion::assert_text_in_region(
+                    &preview_frame,
+                    "Rendered Markdown Preview",
+                    &preview_full,
+                );
+                assertion::assert_text_in_region(&preview_frame, "Source", &preview_full);
+                assertion::assert_text_in_region(&preview_frame, "Preview", &preview_full);
+                let preview_text = preview_frame.text_in_region(&preview_full);
+                assert!(preview_text.contains('┌'));
+                assert!(preview_text.contains('▼'));
+                assertion::assert_not_visible(&preview_frame, "graph TD");
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "# Rendered Markdown Preview", &full);
+                assertion::assert_text_in_region(frame, "p: preview", &full);
             },
         )?;
 

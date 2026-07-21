@@ -734,6 +734,7 @@ pub(crate) fn diff_actions() -> Vec<HelpAction> {
     vec![
         HelpAction::new("back", "q/Esc", "Back to session"),
         HelpAction::new("select file", "j/k", "Select file"),
+        HelpAction::new("preview", "p", "Toggle markdown preview"),
         HelpAction::new("scroll pane", "Up/Down", "Scroll right panel"),
         HelpAction::new("help", "?", "Help"),
     ]
@@ -744,6 +745,7 @@ pub(crate) fn diff_footer_actions() -> Vec<HelpAction> {
     vec![
         HelpAction::new("back", "q/Esc", "Back to session"),
         HelpAction::new("select file", "j/k", "Select file"),
+        HelpAction::new("preview", "p", "Toggle markdown preview"),
         HelpAction::new("help", "?", "Help"),
     ]
 }
@@ -1789,7 +1791,7 @@ mod tests {
 
         // Assert
         assert_eq!(issue_keys, ["q/Esc", "a", "j/k", "Ctrl+d/u", "g/G"]);
-        assert_eq!(diff_keys, ["q/Esc", "j/k", "Up/Down", "?"]);
+        assert_eq!(diff_keys, ["q/Esc", "j/k", "p", "Up/Down", "?"]);
         assert_eq!(comment_keys, ["q/Esc", "j/k", "Up/Down"]);
     }
 

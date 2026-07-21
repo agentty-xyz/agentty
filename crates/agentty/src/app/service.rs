@@ -298,6 +298,7 @@ fn app_event_label(event: &AppEvent) -> &'static str {
         AppEvent::AssignedIssuesLoaded { .. } => "AssignedIssuesLoaded",
         AppEvent::IssueDetailLoaded { .. } => "IssueDetailLoaded",
         AppEvent::AtMentionEntriesLoaded { .. } => "AtMentionEntriesLoaded",
+        AppEvent::DiffPreviewLoaded { .. } => "DiffPreviewLoaded",
         AppEvent::GitStatusUpdated { .. } => "GitStatusUpdated",
         AppEvent::VersionAvailabilityUpdated { .. } => "VersionAvailabilityUpdated",
         AppEvent::AgentCliVersionsUpdated { .. } => "AgentCliVersionsUpdated",
@@ -350,6 +351,23 @@ mod tests {
 
         // Assert
         assert_eq!(label, "SessionReviewCommentSnapshotLoaded");
+    }
+
+    #[test]
+    fn app_event_label_names_diff_preview_loads() {
+        // Arrange
+        let event = AppEvent::DiffPreviewLoaded {
+            path: "README.md".to_string(),
+            request_id: 1,
+            result: Ok(ag_git::WorktreeFileContent::Missing),
+            session_id: "session-id".into(),
+        };
+
+        // Act
+        let label = app_event_label(&event);
+
+        // Assert
+        assert_eq!(label, "DiffPreviewLoaded");
     }
 
     #[tokio::test]

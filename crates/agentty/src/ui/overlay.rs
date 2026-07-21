@@ -455,6 +455,7 @@ enum ResolvedHelpBackground<'a> {
     Diff {
         diff: &'a str,
         file_explorer_selected_index: usize,
+        preview: &'a crate::presentation::app_mode::DiffPreview,
         scroll_offset: u16,
         session: &'a Session,
     },
@@ -482,6 +483,7 @@ fn resolve_help_background<'a>(
         HelpContext::Diff {
             diff,
             file_explorer_selected_index,
+            preview,
             scroll_offset,
             session_id,
             ..
@@ -491,6 +493,7 @@ fn resolve_help_background<'a>(
             .map(|session| ResolvedHelpBackground::Diff {
                 diff,
                 file_explorer_selected_index: *file_explorer_selected_index,
+                preview,
                 scroll_offset: *scroll_offset,
                 session,
             }),
@@ -553,12 +556,15 @@ fn render_help_background(f: &mut Frame, area: Rect, context: HelpBackgroundRend
         Some(ResolvedHelpBackground::Diff {
             diff,
             file_explorer_selected_index,
+            preview,
             session,
             scroll_offset,
         }) => page::diff::DiffPage::new(page::diff::DiffPageInput {
             diff,
             diff_layout_cache,
             file_explorer_selected_index,
+            markdown_render_cache,
+            preview,
             scroll_offset,
             session,
         })
@@ -772,6 +778,7 @@ mod tests {
         let help_context = HelpContext::Diff {
             session_id: "missing-session".into(),
             diff: "diff --git a/file b/file".to_string(),
+            preview: crate::presentation::app_mode::DiffPreview::default(),
             restore: None,
             scroll_offset: 0,
             file_explorer_selected_index: 0,

@@ -36,7 +36,10 @@ use crate::domain::session::{
 };
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::transient_message::TransientMessageBody;
-use crate::presentation::app_mode::{AppMode, ChatFocus, ConfirmationViewMode};
+use crate::presentation::app_mode::{
+    AppMode, ChatFocus, ConfirmationViewMode, DiffPreview, DiffPreviewUnavailableReason,
+    HelpContext,
+};
 use crate::presentation::prompt::PromptAtMentionState;
 use crate::presentation::review_comment as review_comment_selection;
 
@@ -69,6 +72,17 @@ pub(crate) enum AppEvent {
     /// Indicates background-loaded prompt at-mention entries for one session.
     AtMentionEntriesLoaded {
         entries: Vec<FileEntry>,
+        session_id: SessionId,
+    },
+    /// Indicates completion of one bounded diff-preview worktree read.
+    DiffPreviewLoaded {
+        /// Selected repository-relative markdown path.
+        path: String,
+        /// Request generation used to reject stale completions.
+        request_id: u64,
+        /// Bounded worktree-file result.
+        result: Result<ag_git::WorktreeFileContent, String>,
+        /// Session whose diff preview requested the file.
         session_id: SessionId,
     },
     /// Indicates the latest project-branch and session-branch ahead/behind
@@ -230,6 +244,7 @@ pub(super) struct AppEventBatch {
     pub(super) agent_cli_updates: Option<Vec<AgentCliInfo>>,
     pub(super) at_mention_entries_updates: HashMap<SessionId, Vec<FileEntry>>,
     pub(super) branch_publish_action_updates: Vec<BranchPublishActionUpdate>,
+    pub(super) diff_preview_updates: Vec<DiffPreviewUpdate>,
     pub(super) git_status_update: Option<GitStatusBatchUpdate>,
     pub(super) latest_available_version_update: Option<LatestAvailableVersionUpdate>,
     pub(super) published_branch_sync_updates: Vec<(SessionId, PublishedBranchSyncUpdate)>,
@@ -273,6 +288,14 @@ pub(super) struct IssueDetailUpdate {
     pub(super) generation: u64,
     pub(super) project_id: i64,
     pub(super) result: Result<ag_forge::IssueDetail, String>,
+}
+
+/// Completed diff-preview file read ready for stale-safe reducer application.
+pub(super) struct DiffPreviewUpdate {
+    pub(super) path: String,
+    pub(super) request_id: u64,
+    pub(super) result: Result<ag_git::WorktreeFileContent, String>,
+    pub(super) session_id: SessionId,
 }
 
 /// Optional aggregate git status payload from the latest status event in one
@@ -396,6 +419,17 @@ impl AppEventBatch {
     /// refresh events have been handled.
     fn collect_runtime_event(&mut self, event: AppEvent) {
         match event {
+            AppEvent::DiffPreviewLoaded {
+                path,
+                request_id,
+                result,
+                session_id,
+            } => self.diff_preview_updates.push(DiffPreviewUpdate {
+                path,
+                request_id,
+                result,
+                session_id,
+            }),
             AppEvent::SessionProgressUpdated {
                 progress_message,
                 session_id,
@@ -1089,6 +1123,10 @@ impl App {
             self.apply_issue_detail_update(issue_detail);
         }
 
+        for diff_preview_update in std::mem::take(&mut event_batch.diff_preview_updates) {
+            self.apply_diff_preview_update(&diff_preview_update);
+        }
+
         if let Some((generation, project_id, result)) = event_batch.requested_reviews.take()
             && project_id == self.projects.active_project_id()
             && self
@@ -1153,6 +1191,70 @@ impl App {
                 *error = Some(format!("Failed to load issue details: {message}"));
             }
         }
+    }
+
+    /// Applies a worktree read only to its still-loading diff selection.
+    fn apply_diff_preview_update(&mut self, update: &DiffPreviewUpdate) {
+        match &mut self.mode {
+            AppMode::Diff {
+                preview,
+                scroll_cache,
+                session_id,
+                ..
+            } if *session_id == update.session_id => {
+                if Self::resolve_diff_preview(preview, update) {
+                    *scroll_cache = None;
+                }
+            }
+            AppMode::Help {
+                context:
+                    HelpContext::Diff {
+                        preview,
+                        session_id,
+                        ..
+                    },
+                ..
+            } if *session_id == update.session_id => {
+                Self::resolve_diff_preview(preview, update);
+            }
+            _ => {}
+        }
+    }
+
+    /// Resolves one matching loading state into ready or unavailable content.
+    fn resolve_diff_preview(preview: &mut DiffPreview, update: &DiffPreviewUpdate) -> bool {
+        if !matches!(
+            preview,
+            DiffPreview::Loading { path, request_id }
+                if path == &update.path && *request_id == update.request_id
+        ) {
+            return false;
+        }
+
+        let unavailable = |reason| DiffPreview::Unavailable {
+            path: update.path.clone(),
+            reason,
+            request_id: update.request_id,
+        };
+        *preview = match &update.result {
+            Ok(ag_git::WorktreeFileContent::Text(content)) => DiffPreview::Ready {
+                content: content.clone(),
+                path: update.path.clone(),
+                request_id: update.request_id,
+            },
+            Ok(ag_git::WorktreeFileContent::Missing) => {
+                unavailable(DiffPreviewUnavailableReason::Deleted)
+            }
+            Ok(ag_git::WorktreeFileContent::Binary) => {
+                unavailable(DiffPreviewUnavailableReason::Binary)
+            }
+            Ok(ag_git::WorktreeFileContent::TooLarge) => {
+                unavailable(DiffPreviewUnavailableReason::TooLarge)
+            }
+            Err(error) => unavailable(DiffPreviewUnavailableReason::LoadFailed(error.clone())),
+        };
+
+        true
     }
 
     /// Clears the in-flight marker for one requested-review comment snapshot
@@ -1319,6 +1421,7 @@ impl App {
             || !event_batch.applied_turns.is_empty()
             || !event_batch.at_mention_entries_updates.is_empty()
             || !event_batch.branch_publish_action_updates.is_empty()
+            || !event_batch.diff_preview_updates.is_empty()
             || !event_batch.published_branch_sync_updates.is_empty()
             || !event_batch.review_request_status_updates.is_empty()
             || event_batch.requested_reviews.is_some()
@@ -2543,5 +2646,206 @@ mod tests {
 
         // Assert
         assert!(App::app_event_batch_changes_observable_state(&event_batch));
+    }
+
+    #[tokio::test]
+    async fn test_diff_preview_events_map_all_worktree_results() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        let outcomes = [
+            Ok(ag_git::WorktreeFileContent::Text("# Preview".to_string())),
+            Ok(ag_git::WorktreeFileContent::Missing),
+            Ok(ag_git::WorktreeFileContent::Binary),
+            Ok(ag_git::WorktreeFileContent::TooLarge),
+            Err("read failed".to_string()),
+        ];
+        let resolve_diff_state = |mode: &AppMode| match mode {
+            AppMode::Diff {
+                preview,
+                scroll_cache,
+                ..
+            } => Some((preview.clone(), scroll_cache.is_none())),
+            _ => None,
+        };
+
+        // Act
+        let mut resolved_previews = Vec::new();
+        for (request_id, result) in (1_u64..).zip(outcomes) {
+            app.mode = AppMode::Diff {
+                diff: "diff --git a/README.md b/README.md\n+preview".to_string(),
+                file_explorer_selected_index: 0,
+                preview: DiffPreview::Loading {
+                    path: "README.md".to_string(),
+                    request_id,
+                },
+                restore: None,
+                scroll_cache: Some(crate::presentation::app_mode::DiffScrollCache {
+                    content_area: crate::presentation::app_mode::ViewportRect {
+                        height: 24,
+                        width: 80,
+                        x: 0,
+                        y: 0,
+                    },
+                    file_explorer_selected_index: 0,
+                    max_scroll_offset: 4,
+                }),
+                scroll_offset: 2,
+                session_id: "session-id".into(),
+            };
+            app.apply_app_events(AppEvent::DiffPreviewLoaded {
+                path: "README.md".to_string(),
+                request_id,
+                result,
+                session_id: "session-id".into(),
+            })
+            .await;
+            let (preview, scroll_cache_cleared) = resolve_diff_state(&app.mode)
+                .expect("diff preview result should preserve diff mode");
+            assert!(scroll_cache_cleared);
+            resolved_previews.push(preview);
+        }
+
+        // Assert
+        assert!(resolve_diff_state(&AppMode::List).is_none());
+        assert_eq!(resolved_previews.len(), 5);
+        assert!(matches!(
+            &resolved_previews[0],
+            DiffPreview::Ready { content, .. } if content == "# Preview"
+        ));
+        assert!(matches!(
+            &resolved_previews[1],
+            DiffPreview::Unavailable {
+                reason: DiffPreviewUnavailableReason::Deleted,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &resolved_previews[2],
+            DiffPreview::Unavailable {
+                reason: DiffPreviewUnavailableReason::Binary,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &resolved_previews[3],
+            DiffPreview::Unavailable {
+                reason: DiffPreviewUnavailableReason::TooLarge,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &resolved_previews[4],
+            DiffPreview::Unavailable {
+                reason: DiffPreviewUnavailableReason::LoadFailed(error),
+                ..
+            } if error == "read failed"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_diff_preview_event_ignores_stale_mode_session_path_and_request() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        let loading = || DiffPreview::Loading {
+            path: "README.md".to_string(),
+            request_id: 4,
+        };
+        let event = |path: &str, request_id: u64, session_id: &str| AppEvent::DiffPreviewLoaded {
+            path: path.to_string(),
+            request_id,
+            result: Ok(ag_git::WorktreeFileContent::Text("stale".to_string())),
+            session_id: session_id.into(),
+        };
+        let diff_mode = |preview| AppMode::Diff {
+            diff: "diff".to_string(),
+            file_explorer_selected_index: 0,
+            preview,
+            restore: None,
+            scroll_cache: None,
+            scroll_offset: 0,
+            session_id: "session-id".into(),
+        };
+
+        // Act
+        app.mode = diff_mode(loading());
+        app.apply_app_events(event("OTHER.md", 4, "session-id"))
+            .await;
+        let stale_path_ignored = matches!(
+            app.mode,
+            AppMode::Diff {
+                preview: DiffPreview::Loading { .. },
+                ..
+            }
+        );
+        app.mode = diff_mode(loading());
+        app.apply_app_events(event("README.md", 5, "session-id"))
+            .await;
+        let stale_request_ignored = matches!(
+            app.mode,
+            AppMode::Diff {
+                preview: DiffPreview::Loading { .. },
+                ..
+            }
+        );
+        app.mode = diff_mode(loading());
+        app.apply_app_events(event("README.md", 4, "other-session"))
+            .await;
+        let stale_session_ignored = matches!(
+            app.mode,
+            AppMode::Diff {
+                preview: DiffPreview::Loading { .. },
+                ..
+            }
+        );
+        app.mode = AppMode::List;
+        app.apply_app_events(event("README.md", 4, "session-id"))
+            .await;
+
+        // Assert
+        assert!(stale_path_ignored);
+        assert!(stale_request_ignored);
+        assert!(stale_session_ignored);
+        assert!(matches!(app.mode, AppMode::List));
+    }
+
+    #[tokio::test]
+    async fn test_diff_preview_event_resolves_while_help_is_open() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        app.mode = AppMode::Help {
+            context: HelpContext::Diff {
+                diff: "diff --git a/README.md b/README.md\n+preview".to_string(),
+                file_explorer_selected_index: 0,
+                preview: DiffPreview::Loading {
+                    path: "README.md".to_string(),
+                    request_id: 8,
+                },
+                restore: None,
+                scroll_offset: 0,
+                session_id: "session-id".into(),
+            },
+            scroll_offset: 0,
+        };
+
+        // Act
+        app.apply_app_events(AppEvent::DiffPreviewLoaded {
+            path: "README.md".to_string(),
+            request_id: 8,
+            result: Ok(ag_git::WorktreeFileContent::Text("# Ready".to_string())),
+            session_id: "session-id".into(),
+        })
+        .await;
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::Help {
+                context: HelpContext::Diff {
+                    preview: DiffPreview::Ready { ref content, .. },
+                    ..
+                },
+                ..
+            } if content == "# Ready"
+        ));
     }
 }

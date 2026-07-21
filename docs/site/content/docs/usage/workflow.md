@@ -197,11 +197,16 @@ While the composer is open, `Tab` moves focus to the chat transcript above it so
 conversation can be scrolled with `j` / `k`, `g` / `G`, and `Ctrl+D` / `Ctrl+U` without
 losing the typed draft. While that chat transcript is focused, `d` opens the diff
 preview for the session, and leaving it returns to the composer with the draft intact.
-Pressing `q` returns to the sessions list and saves the complete composer; reopening the
-session restores the typed draft with input focus. Pressing `Tab` again returns focus to
-the composer. The same focus toggle, `d` diff preview, and `q` preservation flow are
-available while answering clarification questions. Long transcripts show a slim
-scrollbar on the right side of the output panel to indicate the current position.
+Inside diff view, select a changed markdown file and press `p` to render its complete
+post-change worktree content, including supported Mermaid diagrams. Preview remains
+active across file navigation; non-markdown selections keep showing raw diff lines, and
+files that are deleted, binary, too large, or unreadable show a concise notice. Press
+`p` again to restore the patch view. Pressing `q` returns to the sessions list and saves
+the complete composer; reopening the session restores the typed draft with input focus.
+Pressing `Tab` again returns focus to the composer. The same focus toggle, `d` diff
+preview, and `q` preservation flow are available while answering clarification
+questions. Long transcripts show a slim scrollbar on the right side of the output panel
+to indicate the current position.
 
 Pressing `r` during a running turn queues session sync on the same session worker. The
 session stays **InProgress** while the active turn runs, then moves to **Rebasing** when
