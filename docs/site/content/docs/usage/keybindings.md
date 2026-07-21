@@ -205,23 +205,24 @@ Publish (`p`), sync (`r`), and stacked behavior are described in
 ## Review Comments
 
 The review-comments page uses the same split layout as diff view. The left panel lists
-general comments and inline threads; the right panel shows the selected comment's author
-and thread state, current diff context for its attached line or range, and then the
-conversation. File-level comments explicitly show that they have no attached code line
-instead of highlighting an arbitrary diff row. Inline snippets use the same gutters and
-added/removed line colors as diff view.
+unresolved threads, resolved threads, and standalone review-request comments in separate
+groups; the right panel shows the selected comment's author and thread state, current
+diff context for its attached line or range, and then the conversation. File-level
+comments explicitly show that they have no attached code line instead of highlighting an
+arbitrary diff row. Inline snippets use the same gutters and added/removed line colors
+as diff view.
 
-| Key           | Action                                             |
-| ------------- | -------------------------------------------------- |
-| `q` / `Esc`   | Return to session view                             |
-| `j` / `k`     | Select previous/next comment                       |
-| `Up` / `Down` | Scroll selected comment info                       |
-| `a`           | Address the selected actionable comment with agent |
-| `A`           | Address all actionable comments with the agent     |
+| Key           | Action                                            |
+| ------------- | ------------------------------------------------- |
+| `q` / `Esc`   | Return to session view                            |
+| `j` / `k`     | Select previous/next comment                      |
+| `Up` / `Down` | Scroll selected comment info                      |
+| `a`           | Address the selected actionable thread with agent |
+| `A`           | Address all actionable threads with the agent     |
 
 `a` and `A` appear only while the session can accept a turn. Resolved and outdated
-inline threads are not actionable; general discussion comments can be sent to the agent
-but cannot be resolved automatically because they have no forge thread ID.
+inline threads are not actionable. Standalone comments are also read-only because they
+have no forge thread ID.
 
 ## Publish Popup
 

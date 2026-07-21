@@ -2,7 +2,7 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use ag_agent as agent;
-use ag_forge::{ReviewComment, ReviewCommentSnapshot, ReviewCommentThread};
+use ag_forge::{ReviewCommentSnapshot, ReviewCommentThread};
 use tracing::warn;
 
 use crate::app::{App, ReviewCacheEntry, diff_content_hash};
@@ -21,12 +21,12 @@ const RESOLVE_REVIEW_COMMENT_PROMPT_TEMPLATE: &str =
     include_str!("template/resolve_review_comment_prompt.md");
 
 /// Review-comment subset selected for one agent resolution turn.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ReviewCommentSelection {
-    /// Resolve every unresolved, current thread plus every general comment.
+    /// Resolve every unresolved, current inline thread.
     AllUnresolved,
-    /// Resolve the selectable comment row at this flattened index.
-    Selected(usize),
+    /// Resolve one inline thread identified by its forge-native ID.
+    SelectedThread(String),
 }
 
 /// Presentation navigation requested after a review-comment resolution attempt.
@@ -461,27 +461,18 @@ pub(crate) fn build_apply_review_prompt(suggestions: &str) -> TurnPrompt {
 /// Builds an agent-facing review-comment prompt and its forge thread
 /// allowlist.
 ///
-/// Resolved and outdated threads are excluded. General discussion comments
-/// are included as worktree inputs but have no forge-side outcome identifier.
+/// Resolved and outdated threads are excluded. Standalone discussion comments
+/// are read-only because they have no forge-side thread identifier.
 pub(crate) fn build_resolve_review_comment_prompt(
     snapshot: &ReviewCommentSnapshot,
     selection: ReviewCommentSelection,
 ) -> Option<(TurnPrompt, Vec<String>)> {
-    let (general_comments, threads) = selected_review_comments(snapshot, selection);
-    if general_comments.is_empty() && threads.is_empty() {
+    let threads = selected_review_comment_threads(snapshot, selection);
+    if threads.is_empty() {
         return None;
     }
 
     let mut review_comments = String::new();
-    for (index, comment) in general_comments.into_iter().enumerate() {
-        let _ = writeln!(
-            review_comments,
-            "General comment {}\nAuthor: {}\nBody:\n{}\n",
-            index + 1,
-            comment.author,
-            comment.body
-        );
-    }
     for thread in &threads {
         append_review_thread_prompt(&mut review_comments, thread);
     }
@@ -500,35 +491,24 @@ pub(crate) fn build_resolve_review_comment_prompt(
     Some((TurnPrompt::from_text(prompt), thread_ids))
 }
 
-/// Returns the general comments and actionable threads selected for a turn.
-fn selected_review_comments(
+/// Returns the actionable inline threads selected for a turn.
+fn selected_review_comment_threads(
     snapshot: &ReviewCommentSnapshot,
     selection: ReviewCommentSelection,
-) -> (Vec<&ReviewComment>, Vec<&ReviewCommentThread>) {
+) -> Vec<&ReviewCommentThread> {
     match selection {
-        ReviewCommentSelection::AllUnresolved => (
-            snapshot.pr_level_comments.iter().collect(),
-            snapshot
-                .threads
-                .iter()
-                .filter(|thread| thread.is_actionable())
-                .collect(),
-        ),
-        ReviewCommentSelection::Selected(selected_index) => {
-            if let Some(comment) = snapshot.pr_level_comments.get(selected_index) {
-                return (vec![comment], Vec::new());
-            }
-
-            let thread_index = selected_index.saturating_sub(snapshot.pr_level_comments.len());
-            let threads = snapshot
-                .threads
-                .get(thread_index)
-                .filter(|thread| thread.is_actionable())
-                .into_iter()
-                .collect();
-
-            (Vec::new(), threads)
-        }
+        ReviewCommentSelection::AllUnresolved => snapshot
+            .threads
+            .iter()
+            .filter(|thread| thread.is_actionable())
+            .collect(),
+        ReviewCommentSelection::SelectedThread(selected_thread_id) => snapshot
+            .threads
+            .iter()
+            .find(|thread| thread.id == selected_thread_id)
+            .filter(|thread| thread.is_actionable())
+            .into_iter()
+            .collect(),
     }
 }
 
@@ -559,7 +539,7 @@ fn append_review_thread_prompt(review_comments: &mut String, thread: &ReviewComm
 
 #[cfg(test)]
 mod tests {
-    use ag_forge::ReviewCommentAnchorSide;
+    use ag_forge::{ReviewComment, ReviewCommentAnchorSide};
 
     use super::*;
 
@@ -603,8 +583,8 @@ mod tests {
         assert!(prompt.text.contains("````text\n"));
         assert!(prompt.text.contains("```markdown\nexample\n```"));
     }
-    /// Ensures the all-comments prompt includes general discussion and only
-    /// unresolved, current thread IDs.
+    /// Ensures the all-comments prompt includes only unresolved, current
+    /// thread IDs.
     #[test]
     fn test_build_resolve_review_comment_prompt_filters_non_actionable_threads() {
         // Arrange
@@ -617,7 +597,7 @@ mod tests {
 
         // Assert
         assert_eq!(thread_ids, vec!["thread-current".to_string()]);
-        assert!(prompt.text.contains("General comment 1"));
+        assert!(!prompt.text.contains("Update the overview."));
         assert!(prompt.text.contains("Thread ID: thread-current"));
         assert!(prompt.text.contains("Path: src/current.rs"));
         assert!(
@@ -631,27 +611,22 @@ mod tests {
         assert_eq!(prompt.text_source, TurnPromptTextSource::UserPrompt);
     }
 
-    /// Ensures selected general and inline comments produce their respective
-    /// forge thread allowlists.
+    /// Ensures a selected inline thread produces its forge thread allowlist.
     #[test]
-    fn test_build_resolve_review_comment_prompt_selects_general_comment() {
+    fn test_build_resolve_review_comment_prompt_selects_inline_thread() {
         // Arrange
         let snapshot = review_comment_snapshot();
 
         // Act
-        let (prompt, thread_ids) =
-            build_resolve_review_comment_prompt(&snapshot, ReviewCommentSelection::Selected(0))
-                .expect("general comment should be selectable");
-        let (thread_prompt, selected_thread_ids) =
-            build_resolve_review_comment_prompt(&snapshot, ReviewCommentSelection::Selected(1))
-                .expect("current thread should be selectable");
+        let (prompt, thread_ids) = build_resolve_review_comment_prompt(
+            &snapshot,
+            ReviewCommentSelection::SelectedThread("thread-current".to_string()),
+        )
+        .expect("current thread should be selectable");
 
         // Assert
-        assert!(prompt.text.contains("General comment 1"));
-        assert!(!prompt.text.contains("Thread ID:"));
-        assert!(thread_ids.is_empty());
-        assert!(thread_prompt.text.contains("Thread ID: thread-current"));
-        assert_eq!(selected_thread_ids, vec!["thread-current".to_string()]);
+        assert!(prompt.text.contains("Thread ID: thread-current"));
+        assert_eq!(thread_ids, vec!["thread-current".to_string()]);
     }
 
     /// Ensures selected non-actionable and out-of-range rows cannot start a
@@ -662,12 +637,18 @@ mod tests {
         let snapshot = review_comment_snapshot();
 
         // Act
-        let resolved =
-            build_resolve_review_comment_prompt(&snapshot, ReviewCommentSelection::Selected(2));
-        let outdated =
-            build_resolve_review_comment_prompt(&snapshot, ReviewCommentSelection::Selected(3));
-        let missing =
-            build_resolve_review_comment_prompt(&snapshot, ReviewCommentSelection::Selected(99));
+        let resolved = build_resolve_review_comment_prompt(
+            &snapshot,
+            ReviewCommentSelection::SelectedThread("thread-resolved".to_string()),
+        );
+        let outdated = build_resolve_review_comment_prompt(
+            &snapshot,
+            ReviewCommentSelection::SelectedThread("thread-outdated".to_string()),
+        );
+        let missing = build_resolve_review_comment_prompt(
+            &snapshot,
+            ReviewCommentSelection::SelectedThread("thread-missing".to_string()),
+        );
 
         // Assert
         assert!(resolved.is_none());
@@ -680,18 +661,18 @@ mod tests {
     #[test]
     fn test_build_resolve_review_comment_prompt_escapes_comment_fence() {
         // Arrange
+        let mut thread =
+            review_comment_thread("thread-current", "src/current.rs", false, Some(false));
+        thread.comments[0].body = "Please preserve:\n```rust\nlet value = 1;\n```".to_string();
         let snapshot = ReviewCommentSnapshot {
-            pr_level_comments: vec![ReviewComment {
-                author: "reviewer".to_string(),
-                body: "Please preserve:\n```rust\nlet value = 1;\n```".to_string(),
-            }],
-            threads: Vec::new(),
+            pr_level_comments: Vec::new(),
+            threads: vec![thread],
         };
 
         // Act
         let (prompt, _) =
             build_resolve_review_comment_prompt(&snapshot, ReviewCommentSelection::AllUnresolved)
-                .expect("general comment should produce a prompt");
+                .expect("current thread should produce a prompt");
 
         // Assert
         assert!(prompt.text.contains("````text\n"));
@@ -860,7 +841,7 @@ mod tests {
             .resolve_session_review_comments(
                 &session_id,
                 &snapshot,
-                ReviewCommentSelection::Selected(99),
+                ReviewCommentSelection::SelectedThread("thread-missing".to_string()),
             )
             .await;
 

@@ -38,6 +38,7 @@ use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::transient_message::TransientMessageBody;
 use crate::presentation::app_mode::{AppMode, ChatFocus, ConfirmationViewMode};
 use crate::presentation::prompt::PromptAtMentionState;
+use crate::presentation::review_comment as review_comment_selection;
 
 /// Internal app events emitted by background workers and workflows.
 ///
@@ -967,6 +968,7 @@ impl App {
                 comment_error,
                 comment_snapshot,
                 is_loading_comments,
+                selected_comment_index,
                 session_id,
                 ..
             } = &mut self.mode
@@ -980,6 +982,11 @@ impl App {
             *is_loading_comments = false;
             match result {
                 Ok(snapshot) => {
+                    *selected_comment_index = review_comment_selection::retarget_selected_index(
+                        comment_snapshot.as_ref(),
+                        *selected_comment_index,
+                        &snapshot,
+                    );
                     *comment_error = None;
                     *comment_snapshot = Some(snapshot);
                 }
@@ -2221,6 +2228,10 @@ impl App {
 
 #[cfg(test)]
 mod tests {
+    use ag_forge::{
+        ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread,
+    };
+
     use super::*;
 
     #[tokio::test]
@@ -2253,6 +2264,46 @@ mod tests {
                 is_loading_comments: false,
                 ..
             }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_session_review_comment_refresh_retargets_selected_thread() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        let previous_snapshot = review_comment_snapshot([
+            review_comment_thread("selected", false),
+            review_comment_thread("other", false),
+        ]);
+        let updated_snapshot = review_comment_snapshot([
+            review_comment_thread("selected", true),
+            review_comment_thread("other", false),
+        ]);
+        app.mode = AppMode::ReviewComments {
+            comment_error: None,
+            comment_snapshot: Some(previous_snapshot),
+            diff: String::new(),
+            is_loading_comments: true,
+            selected_comment_index: 0,
+            session_id: "session-id".into(),
+            scroll_offset: 0,
+        };
+
+        // Act
+        app.apply_app_events(AppEvent::SessionReviewCommentSnapshotLoaded {
+            result: Ok(updated_snapshot),
+            session_id: "session-id".into(),
+        })
+        .await;
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::ReviewComments {
+                comment_snapshot: Some(ref snapshot),
+                selected_comment_index: 1,
+                ..
+            } if review_comment_selection::selected_thread_id(snapshot, 1) == Some("selected")
         ));
     }
 
@@ -2299,6 +2350,33 @@ mod tests {
                 ..
             } if error == "Failed to load review comments: authentication failed"
         ));
+    }
+
+    /// Builds a comment snapshot from inline thread fixtures.
+    fn review_comment_snapshot<const THREAD_COUNT: usize>(
+        threads: [ReviewCommentThread; THREAD_COUNT],
+    ) -> ReviewCommentSnapshot {
+        ReviewCommentSnapshot {
+            pr_level_comments: Vec::new(),
+            threads: Vec::from(threads),
+        }
+    }
+
+    /// Builds one current or resolved review-comment thread.
+    fn review_comment_thread(id: &str, is_resolved: bool) -> ReviewCommentThread {
+        ReviewCommentThread {
+            anchor_side: ReviewCommentAnchorSide::New,
+            comments: vec![ReviewComment {
+                author: "reviewer".to_string(),
+                body: "Review comment".to_string(),
+            }],
+            id: id.to_string(),
+            is_outdated: Some(false),
+            is_resolved,
+            line: Some(1),
+            path: "src/main.rs".to_string(),
+            start_line: None,
+        }
     }
 
     #[test]
