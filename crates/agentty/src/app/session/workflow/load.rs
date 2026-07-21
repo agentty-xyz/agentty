@@ -10,8 +10,9 @@ use crate::app::SessionManager;
 use crate::domain::agent::{AgentSelection, ReasoningLevel, parse_persisted_session_agent_model};
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
-    DailyActivity, ReviewRequest, ReviewRequestSummary, Session, SessionFollowUpTask,
-    SessionHandles, SessionId, SessionSize, SessionStats, Status,
+    DailyActivity, ReviewRequest, ReviewRequestSummary, Session, SessionDiffState,
+    SessionDiffStats, SessionFollowUpTask, SessionHandles, SessionId, SessionSize, SessionStats,
+    Status,
 };
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use crate::domain::transient_message::TransientMessageStore;
@@ -239,29 +240,29 @@ impl SessionManager {
         }));
     }
 
-    /// Computes diff-derived session size and line-count totals from one
-    /// worktree folder using the injected filesystem boundary.
+    /// Computes diff-derived session metadata from one worktree folder using
+    /// the injected filesystem and Git boundaries.
+    ///
+    /// Missing folders and Git failures return [`SessionDiffStats::Unknown`]
+    /// so callers retain diagnostic diff access without overwriting the last
+    /// known line totals.
     pub(crate) async fn session_diff_stats_for_folder(
         fs_client: &dyn FsClient,
         git_client: &dyn GitClient,
         folder: &Path,
         base_branch: &str,
-    ) -> (SessionSize, u64, u64) {
+    ) -> SessionDiffStats {
         if !fs_client.is_dir(folder.to_path_buf()) {
-            return (SessionSize::Xs, 0, 0);
+            return SessionDiffStats::Unknown;
         }
 
         let folder = folder.to_path_buf();
         let base_branch = base_branch.to_string();
-        let diff = git_client
-            .diff(folder, base_branch)
-            .await
-            .ok()
-            .unwrap_or_default();
+        let Ok(diff) = git_client.diff(folder, base_branch).await else {
+            return SessionDiffStats::Unknown;
+        };
 
-        let (added_lines, deleted_lines) = SessionStats::line_change_counts(&diff);
-
-        (SessionSize::from_diff(&diff), added_lines, deleted_lines)
+        SessionDiffStats::from_diff(&diff)
     }
 
     /// Loads transcript-scale detail for one session into the in-memory
@@ -313,6 +314,11 @@ impl SessionManager {
             stats: SessionStats {
                 added_lines: input.row.added_lines.cast_unsigned(),
                 deleted_lines: input.row.deleted_lines.cast_unsigned(),
+                diff_state: match input.row.has_diff {
+                    Some(true) => SessionDiffState::Present,
+                    Some(false) => SessionDiffState::Empty,
+                    None => SessionDiffState::Unknown,
+                },
                 input_tokens: input.row.input_tokens.cast_unsigned(),
                 output_tokens: input.row.output_tokens.cast_unsigned(),
             },
@@ -579,6 +585,8 @@ mod tests {
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
 
+    use ag_git::{GitError, MockGitClient};
+
     use super::*;
     use crate::domain::session::{ForgeKind, ReviewRequestState, ReviewRequestSummary};
     use crate::infra::db::SessionReviewRequestRow;
@@ -604,6 +612,63 @@ mod tests {
         assistant_transcript(content)
             .replay_text()
             .expect("assistant transcript should have replay text")
+    }
+
+    #[tokio::test]
+    async fn session_diff_stats_preserve_binary_presence_and_git_errors() {
+        // Arrange
+        let folder = PathBuf::from("/tmp/session");
+        let existing_folder_client = create_folder_lookup_mock(vec![folder.clone()]);
+        let missing_folder_client = create_folder_lookup_mock(Vec::new());
+        let mut binary_diff_client = MockGitClient::new();
+        binary_diff_client.expect_diff().times(1).returning(|_, _| {
+            Box::pin(async {
+                Ok("diff --git a/image.png b/image.png\nBinary files differ\n".to_string())
+            })
+        });
+        let mut failing_diff_client = MockGitClient::new();
+        failing_diff_client
+            .expect_diff()
+            .times(1)
+            .returning(|_, _| {
+                Box::pin(async { Err(GitError::OutputParse("diff failed".to_string())) })
+            });
+
+        // Act
+        let binary_stats = SessionManager::session_diff_stats_for_folder(
+            &existing_folder_client,
+            &binary_diff_client,
+            &folder,
+            "main",
+        )
+        .await;
+        let error_stats = SessionManager::session_diff_stats_for_folder(
+            &existing_folder_client,
+            &failing_diff_client,
+            &folder,
+            "main",
+        )
+        .await;
+        let missing_folder_stats = SessionManager::session_diff_stats_for_folder(
+            &missing_folder_client,
+            &MockGitClient::new(),
+            &folder,
+            "main",
+        )
+        .await;
+
+        // Assert
+        assert_eq!(
+            binary_stats,
+            SessionDiffStats::Known {
+                added_lines: 0,
+                deleted_lines: 0,
+                has_diff: true,
+                session_size: SessionSize::Xs,
+            }
+        );
+        assert_eq!(error_stats, SessionDiffStats::Unknown);
+        assert_eq!(missing_folder_stats, SessionDiffStats::Unknown);
     }
 
     /// Returns a filesystem mock that reports the supplied directories as
@@ -652,6 +717,10 @@ mod tests {
             .append_session_message(session_id, SessionMessageKind::AssistantAnswer, "DB Output")
             .await
             .expect("failed to append persisted message");
+        db.sessions()
+            .mark_session_diff_unknown(session_id)
+            .await
+            .expect("failed to mark session diff unknown");
 
         let base_path = Path::new("/virtual/session-base");
         let session_dir = session_folder(base_path, session_id);
@@ -687,6 +756,7 @@ mod tests {
             assistant_replay_text(&live_output)
         );
         assert_eq!(session.status, live_status);
+        assert_eq!(session.stats.diff_state, SessionDiffState::Unknown);
 
         let handle = handles
             .get(session_id)
@@ -1293,6 +1363,7 @@ mod tests {
             base_branch: "main".to_string(),
             created_at: 0,
             deleted_lines: 0,
+            has_diff: Some(false),
             id: "session-a".to_string(),
             in_progress_started_at: None,
             in_progress_total_seconds: 0,

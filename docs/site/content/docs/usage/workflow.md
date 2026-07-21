@@ -195,8 +195,11 @@ messages. The queue is in-memory only and is discarded if `agentty` restarts.
 
 While the composer is open, `Tab` moves focus to the chat transcript above it so the
 conversation can be scrolled with `j` / `k`, `g` / `G`, and `Ctrl+D` / `Ctrl+U` without
-losing the typed draft. While that chat transcript is focused, `d` opens the diff
-preview for the session, and leaving it returns to the composer with the draft intact.
+losing the typed draft. While that chat transcript is focused, the `d` diff-preview hint
+appears unless the latest successful refresh found an empty diff against the session's
+base branch; `d` opens text, binary, metadata-only, or diagnostic diff output. Leaving
+the preview returns to the composer with the draft intact.
+
 Inside diff view, select a changed markdown file and press `p` to render its complete
 post-change worktree content, including supported Mermaid diagrams. Preview remains
 active across file navigation; non-markdown selections keep showing raw diff lines, and
@@ -289,7 +292,9 @@ existed at fork time. Stacked child sessions hide `F` because their branch remai
 to the parent stack workflow. Provider-native conversation IDs, focused-review cache,
 published branch state, linked review-request metadata, stack parent links, active-work
 timing, and token usage are reset on the fork so future replies and publishing are
-tracked separately from the source session.
+tracked separately from the source session. Diff availability is recomputed from the
+fork's new worktree, so uncommitted source-worktree changes are not advertised on the
+fork.
 
 ### Commit and Merge Behavior
 

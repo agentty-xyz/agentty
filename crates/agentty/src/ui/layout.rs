@@ -359,7 +359,7 @@ mod tests {
     use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
     use crate::domain::file_entry::FileEntry;
     use crate::domain::input::InputState;
-    use crate::domain::session::{COMMITTING_PROGRESS_LABEL, Session, Status};
+    use crate::domain::session::{COMMITTING_PROGRESS_LABEL, Session, SessionDiffState, Status};
     use crate::domain::theme::ColorTheme;
     use crate::presentation::app_mode::ChatFocus;
     use crate::presentation::help_action::{self, ViewActionAvailability, ViewHelpState};
@@ -718,14 +718,21 @@ mod tests {
     #[test]
     fn test_prompt_footer_line_shows_scroll_actions_while_chat_is_focused() {
         // Arrange
-        let session = session_fixture();
+        let mut session = session_fixture();
+        session.stats.diff_state = SessionDiffState::Empty;
 
         // Act
-        let footer_line = prompt_footer_line(&session, 0, ChatFocus::Chat);
+        let unchanged_footer_line = prompt_footer_line(&session, 0, ChatFocus::Chat);
+        session.stats.diff_state = SessionDiffState::Present;
+        let changed_footer_line = prompt_footer_line(&session, 0, ChatFocus::Chat);
 
         // Assert
         assert_eq!(
-            footer_line.to_string(),
+            unchanged_footer_line.to_string(),
+            "Tab: focus | j/k: scroll | q: sessions"
+        );
+        assert_eq!(
+            changed_footer_line.to_string(),
             "Tab: focus | j/k: scroll | d: diff | q: sessions"
         );
     }
@@ -1151,12 +1158,19 @@ mod tests {
         // Arrange
 
         // Act
-        let chat_focus_line = question_help_footer_line(ChatFocus::Chat, false, false);
-        let answer_focus_line = question_help_footer_line(ChatFocus::Input, false, false);
+        let unchanged_chat_focus_line =
+            question_help_footer_line(ChatFocus::Chat, false, false, false);
+        let changed_chat_focus_line =
+            question_help_footer_line(ChatFocus::Chat, true, false, false);
+        let answer_focus_line = question_help_footer_line(ChatFocus::Input, false, false, false);
 
         // Assert
         assert_eq!(
-            chat_focus_line.to_string(),
+            unchanged_chat_focus_line.to_string(),
+            "Tab: focus | j/k: scroll | q: sessions"
+        );
+        assert_eq!(
+            changed_chat_focus_line.to_string(),
             "Tab: focus | j/k: scroll | d: diff | q: sessions"
         );
         assert_eq!(
@@ -1176,9 +1190,9 @@ mod tests {
 
         // Act
         let answer_focus_with_options =
-            question_help_footer_line(ChatFocus::Input, true, false).to_string();
+            question_help_footer_line(ChatFocus::Input, false, true, false).to_string();
         let answer_focus_with_overlay =
-            question_help_footer_line(ChatFocus::Input, false, true).to_string();
+            question_help_footer_line(ChatFocus::Input, false, false, true).to_string();
 
         // Assert
         assert_eq!(

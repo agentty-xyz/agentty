@@ -289,13 +289,15 @@ short availability notice. Press `p` again to return to raw diff lines.
 | `@`                                 | Open file picker                    |
 | `/`                                 | Open slash commands                 |
 
-While the chat output is focused, `d` opens the current-session diff preview, `j` / `k`
-/ `Up` / `Down` scroll the transcript, `g` / `G` jump to the top or bottom, `Ctrl+D` /
-`Ctrl+U` scroll by half a page, `Tab` returns focus to the composer, and `q` returns to
-the sessions list. The typed draft is preserved when leaving with `q`: reopening the
-session restores the composer with input focus. Other keys pressed in chat focus never
-edit the draft, and `Ctrl+C` is ignored. Leaving the diff preview also returns to the
-composer with the draft intact.
+While the chat output is focused, the `d` diff-preview hint is hidden only when the
+latest successful refresh found an empty diff against the session's base branch. The
+shortcut remains available for text, binary, metadata-only, and diagnostic diff output.
+`j` / `k` / `Up` / `Down` scroll the transcript, `g` / `G` jump to the top or bottom,
+`Ctrl+D` / `Ctrl+U` scroll by half a page, `Tab` returns focus to the composer, and `q`
+returns to the sessions list. The typed draft is preserved when leaving with `q`:
+reopening the session restores the composer with input focus. Other keys pressed in chat
+focus never edit the draft, and `Ctrl+C` is ignored. Leaving the diff preview also
+returns to the composer with the draft intact.
 
 Prompt input keeps regular text paste on terminal `Event::Paste`. The dedicated image
 paste shortcuts insert highlighted `[Image #n]` tokens directly in the composer and send
@@ -360,7 +362,7 @@ When chat output is focused (press `Tab` to switch):
 | `j` / `k` / `Up` / `Down` | Scroll chat output                |
 | `g` / `G`                 | Scroll to top / bottom            |
 | `Ctrl+d` / `Ctrl+u`       | Half page down / up               |
-| `d`                       | Open current-session diff preview |
+| `d`                       | Open available diff or diagnostic |
 | `Tab`                     | Return focus to answer input      |
 | `q`                       | Return to sessions list           |
 

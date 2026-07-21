@@ -424,6 +424,15 @@ impl SessionManager {
             )));
         }
 
+        SessionTaskService::refresh_persisted_session_diff_stats(
+            services.db(),
+            services.fs_client().as_ref(),
+            services.git_client().as_ref(),
+            &session_id,
+            &folder,
+        )
+        .await;
+
         self.mark_history_replay_pending(&session_id);
         services.emit_session_and_project_refresh_events();
 
@@ -4307,6 +4316,7 @@ mod tests {
                     stats: agent::SessionStats {
                         added_lines: 0,
                         deleted_lines: 0,
+                        diff_state: agent::SessionDiffState::Unknown,
                         input_tokens: 0,
                         output_tokens: 0,
                     },

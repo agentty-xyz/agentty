@@ -2371,7 +2371,7 @@ mod fork_tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::domain::session::SessionStats;
+    use crate::domain::session::{SessionDiffState, SessionStats};
     use crate::domain::session_message::SessionMessageKind;
     use crate::infra::tmux::MockTmuxClient;
 
@@ -2397,6 +2397,14 @@ mod fork_tests {
 
         persist_fork_source_runtime_linkage(app, &source_session_id).await;
         persist_fork_source_transcript(app, &source_session_id).await;
+        let source_folder = app
+            .sessions
+            .session_for_id(&source_session_id)
+            .expect("missing source session")
+            .folder
+            .clone();
+        std::fs::write(source_folder.join("README.md"), "dirty source worktree")
+            .expect("failed to modify source worktree");
         crate::test_support::set_session_status_for_test(app, &source_session_id, Status::Review);
 
         source_session_id
@@ -2444,6 +2452,12 @@ mod fork_tests {
             )
             .await
             .expect("failed to persist source usage stats");
+        app.services
+            .db()
+            .sessions()
+            .update_session_diff_stats(1, 0, true, source_session_id, "XS")
+            .await
+            .expect("failed to persist source diff stats");
     }
 
     /// Persists source transcript rows that a fork must copy.
@@ -2486,9 +2500,21 @@ mod fork_tests {
                 && session.status == Status::Review
                 && session.parent_session_id.is_none()
                 && session.published_upstream_ref.is_none()
+                && session.stats.added_lines == 0
+                && session.stats.deleted_lines == 0
+                && session.stats.diff_state == SessionDiffState::Empty
                 && session.stats.input_tokens == 0
                 && session.stats.output_tokens == 0
         ));
+        let forked_session = app
+            .sessions
+            .session_for_id(forked_session_id)
+            .expect("missing forked session");
+        assert_eq!(
+            std::fs::read_to_string(forked_session.folder.join("README.md"))
+                .expect("failed to read forked worktree"),
+            "test"
+        );
 
         let forked_messages = app
             .services
@@ -2523,7 +2549,7 @@ mod fork_tests {
     }
 
     #[tokio::test]
-    async fn test_fork_session_opens_review_session_with_copied_transcript_snapshot() {
+    async fn test_fork_session_from_dirty_source_refreshes_fork_diff_state() {
         // Arrange
         let (mut app, _base_dir) =
             crate::test_support::new_git_test_app_with_mock_tmux_client().await;

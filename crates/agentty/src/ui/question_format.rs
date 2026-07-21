@@ -80,6 +80,9 @@ pub(crate) fn question_option_lines(
 
 /// Builds the question-mode help footer line for the current focus target.
 ///
+/// `has_session_diff` controls whether chat focus advertises the diff preview;
+/// the shortcut is hidden only for a known-empty diff.
+///
 /// `is_navigating_options` mirrors the runtime predicate that treats plain `q`
 /// as a navigation key while the user is moving through predefined options. The
 /// `q: Sessions` hint is surfaced whenever that predicate is satisfied so the
@@ -93,6 +96,7 @@ pub(crate) fn question_option_lines(
 /// primary `Enter` action, reading extras, and exit actions last.
 pub fn question_help_footer_line(
     focus: ChatFocus,
+    has_session_diff: bool,
     is_navigating_options: bool,
     is_at_mention_open: bool,
 ) -> Line<'static> {
@@ -102,7 +106,9 @@ pub fn question_help_footer_line(
 
     if is_chat_focused {
         help_actions.push(help_action::HelpAction::new("scroll", "j/k", "Scroll chat"));
-        help_actions.push(help_action::HelpAction::new("diff", "d", "Diff"));
+        if has_session_diff {
+            help_actions.push(help_action::HelpAction::new("diff", "d", "Diff"));
+        }
     } else {
         help_actions.push(help_action::HelpAction::new("send", "Enter", "Send answer"));
     }

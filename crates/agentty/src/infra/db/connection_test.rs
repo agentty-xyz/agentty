@@ -6,7 +6,8 @@ use tempfile::tempdir;
 use super::*;
 use crate::domain::agent::{AgentModel, ReasoningLevel};
 use crate::domain::session::{
-    DailyActivity, ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionStats,
+    DailyActivity, ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
+    SessionDiffState, SessionStats,
 };
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::setting::SettingName;
@@ -212,6 +213,7 @@ async fn test_load_sessions_maps_joined_session_fields() {
     assert_eq!(session_row.prompt, "Implement the feature");
     assert_eq!(session_row.added_lines, 14);
     assert_eq!(session_row.deleted_lines, 6);
+    assert_eq!(session_row.has_diff, Some(true));
     assert_eq!(session_row.input_tokens, 11);
     assert_eq!(session_row.output_tokens, 29);
     assert_eq!(session_row.parent_session_id, None);
@@ -227,6 +229,56 @@ async fn test_load_sessions_maps_joined_session_fields() {
         Some("origin/wt/session-a")
     );
     assert_review_request_row(&session_row);
+}
+
+/// Verifies the diff-presence migration preserves ambiguous legacy rows.
+#[tokio::test]
+async fn test_add_session_diff_presence_backfills_legacy_rows() {
+    // Arrange
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .expect("failed to open pre-migration database");
+    sqlx::raw_sql(
+        r"
+CREATE TABLE session (
+    id TEXT PRIMARY KEY NOT NULL,
+    added_lines INTEGER NOT NULL DEFAULT 0,
+    deleted_lines INTEGER NOT NULL DEFAULT 0
+);
+INSERT INTO session (id, added_lines, deleted_lines)
+VALUES ('legacy-clean', 0, 0),
+       ('legacy-added', 3, 0),
+       ('legacy-deleted', 0, 2);
+",
+    )
+    .execute(&pool)
+    .await
+    .expect("failed to seed pre-migration sessions");
+
+    // Act
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/061_add_session_diff_presence.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("failed to migrate legacy diff presence");
+    let rows =
+        sqlx::query_as::<_, (String, Option<bool>)>("SELECT id, has_diff FROM session ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .expect("failed to load migrated diff presence");
+
+    // Assert
+    assert_eq!(
+        rows,
+        vec![
+            ("legacy-added".to_string(), Some(true)),
+            ("legacy-clean".to_string(), None),
+            ("legacy-deleted".to_string(), Some(true)),
+        ]
+    );
 }
 
 /// Verifies message appends write ordered rows for the canonical transcript
@@ -484,7 +536,7 @@ async fn persist_joined_session_metadata(database: &Database, review_request: &R
         .expect("failed to update session updated_at");
     database
         .sessions()
-        .update_session_diff_stats(14, 6, "session-a", "L")
+        .update_session_diff_stats(14, 6, true, "session-a", "L")
         .await
         .expect("failed to update session diff stats");
     database
@@ -514,6 +566,7 @@ async fn persist_joined_session_metadata(database: &Database, review_request: &R
             &SessionStats {
                 added_lines: 0,
                 deleted_lines: 0,
+                diff_state: SessionDiffState::Unknown,
                 input_tokens: 11,
                 output_tokens: 29,
             },
@@ -1051,6 +1104,7 @@ async fn test_delete_session_removes_row_and_nulls_usage_foreign_key() {
             &SessionStats {
                 added_lines: 0,
                 deleted_lines: 0,
+                diff_state: SessionDiffState::Unknown,
                 input_tokens: 11,
                 output_tokens: 29,
             },
@@ -1399,6 +1453,7 @@ async fn test_upsert_session_usage_accumulates_counts_per_model() {
             &SessionStats {
                 added_lines: 0,
                 deleted_lines: 0,
+                diff_state: SessionDiffState::Unknown,
                 input_tokens: 11,
                 output_tokens: 29,
             },
@@ -1413,6 +1468,7 @@ async fn test_upsert_session_usage_accumulates_counts_per_model() {
             &SessionStats {
                 added_lines: 0,
                 deleted_lines: 0,
+                diff_state: SessionDiffState::Unknown,
                 input_tokens: 3,
                 output_tokens: 5,
             },
@@ -2244,6 +2300,7 @@ async fn test_load_projects_with_stats_returns_session_counts_tokens_and_last_up
                 token_usage_delta: SessionStats {
                     added_lines: 0,
                     deleted_lines: 0,
+                    diff_state: SessionDiffState::Unknown,
                     input_tokens: 1_200,
                     output_tokens: 650,
                 },
@@ -2269,6 +2326,7 @@ async fn test_load_projects_with_stats_returns_session_counts_tokens_and_last_up
                 token_usage_delta: SessionStats {
                     added_lines: 0,
                     deleted_lines: 0,
+                    diff_state: SessionDiffState::Unknown,
                     input_tokens: 3,
                     output_tokens: 5,
                 },
@@ -2645,6 +2703,7 @@ async fn test_persist_session_turn_metadata_rolls_back_on_failure() {
                 token_usage_delta: SessionStats {
                     added_lines: 0,
                     deleted_lines: 0,
+                    diff_state: SessionDiffState::Unknown,
                     input_tokens: 3,
                     output_tokens: 5,
                 },

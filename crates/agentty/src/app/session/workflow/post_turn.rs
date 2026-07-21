@@ -193,6 +193,7 @@ impl TurnPersistence<'_> {
         let token_usage_delta = SessionStats {
             added_lines: 0,
             deleted_lines: 0,
+            diff_state: agent::SessionDiffState::Unknown,
             input_tokens,
             output_tokens,
         };
@@ -275,23 +276,22 @@ pub(super) async fn finalize_channel_turn(
     context: &TurnFinalizerContext,
     result: &Result<Status, SessionError>,
 ) {
-    if let Some((session_size, added_lines, deleted_lines)) =
-        SessionTaskService::refresh_persisted_session_diff_stats(
-            &context.db,
-            context.fs_client.as_ref(),
-            context.git_client.as_ref(),
-            &context.session_id,
-            &context.folder,
-        )
-        .await
+    if let Some(diff_stats) = SessionTaskService::refresh_persisted_session_diff_stats(
+        &context.db,
+        context.fs_client.as_ref(),
+        context.git_client.as_ref(),
+        &context.session_id,
+        &context.folder,
+    )
+    .await
     {
         // Fire-and-forget: receiver may be dropped during shutdown.
-        let _ = context.app_event_tx.send(AppEvent::SessionSizeUpdated {
-            added_lines,
-            deleted_lines,
-            session_id: context.session_id.clone(),
-            session_size,
-        });
+        let _ = context
+            .app_event_tx
+            .send(AppEvent::SessionDiffStatsUpdated {
+                diff_stats,
+                session_id: context.session_id.clone(),
+            });
     }
 
     if let Some(target_status) = status_update_after_turn_result(result) {

@@ -330,16 +330,14 @@ impl SessionManager {
         self.state.sync_session_from_handle(session_id);
     }
 
-    /// Applies a recomputed diff-size snapshot to one loaded session.
-    pub(crate) fn apply_session_size_updated(
+    /// Applies recomputed diff metadata to one loaded session.
+    pub(crate) fn apply_session_diff_stats_updated(
         &mut self,
         session_id: &str,
-        added_lines: u64,
-        deleted_lines: u64,
-        session_size: crate::domain::session::SessionSize,
+        diff_stats: crate::domain::session::SessionDiffStats,
     ) {
         self.state
-            .apply_session_size_updated(session_id, added_lines, deleted_lines, session_size);
+            .apply_session_diff_stats_updated(session_id, diff_stats);
     }
 
     /// Returns runtime handles keyed by stable session id.

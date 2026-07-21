@@ -606,6 +606,7 @@ fn auto_commit_one_shot_client() -> Arc<dyn ag_agent::OneShotClient> {
                 stats: ag_agent::SessionStats {
                     added_lines: 0,
                     deleted_lines: 0,
+                    diff_state: ag_agent::SessionDiffState::Unknown,
                     input_tokens: 0,
                     output_tokens: 0,
                 },
@@ -3564,7 +3565,7 @@ async fn test_load_sessions_uses_persisted_size_for_non_terminal_status() {
     app.services
         .db()
         .sessions()
-        .update_session_diff_stats(8, 3, &session_id, "S")
+        .update_session_diff_stats(8, 3, true, &session_id, "S")
         .await
         .expect("failed to update size");
     let session_index = app
@@ -3687,7 +3688,7 @@ async fn test_load_sessions_uses_persisted_size_for_done_status() {
     app.services
         .db()
         .sessions()
-        .update_session_diff_stats(21, 9, &session_id, "L")
+        .update_session_diff_stats(21, 9, true, &session_id, "L")
         .await
         .expect("failed to update size");
     app.services
@@ -4352,6 +4353,7 @@ async fn test_commit_changes_reuses_existing_session_commit_message_in_tests() {
                 stats: ag_agent::SessionStats {
                     added_lines: 0,
                     deleted_lines: 0,
+                    diff_state: ag_agent::SessionDiffState::Unknown,
                     input_tokens: 0,
                     output_tokens: 0,
                 },

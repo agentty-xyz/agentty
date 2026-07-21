@@ -33,22 +33,13 @@ const PROMPT_FOOTER_ACTIONS: [help_action::HelpAction; 4] = [
     ),
     help_action::HelpAction::new("cancel", "Esc", "Cancel prompt"),
 ];
-/// Footer actions shown while the chat transcript above the composer is
-/// focused for scrolling.
-///
-/// Mirrors question mode's chat-focus footer: scrolling first, then the `d`
-/// diff-preview shortcut and the `q` return to the sessions list.
-const PROMPT_CHAT_FOCUS_FOOTER_ACTIONS: [help_action::HelpAction; 3] = [
-    help_action::HelpAction::new("scroll", "j/k", "Scroll chat"),
-    help_action::HelpAction::new("diff", "d", "Diff"),
-    help_action::HelpAction::new("sessions", "q", "Sessions"),
-];
-
 /// Builds the prompt-mode footer help line shown below the composer.
 ///
 /// The composer and the chat transcript above it share `Tab` as the focus
 /// toggle, so each focus target advertises its own action set: composing shows
-/// send/newline/cancel, and reading the transcript shows the scroll keys.
+/// send/newline/cancel, and reading the transcript shows the scroll keys. The
+/// diff-preview shortcut is omitted only when persisted session statistics
+/// report a known-empty diff.
 ///
 /// Footer entries follow the canonical composer-footer ordering shared with
 /// question mode: the `Tab` focus toggle first as the stable anchor, then the
@@ -62,7 +53,11 @@ pub fn prompt_footer_line(
     let focus_label = if is_chat_focused { "Compose" } else { "Chat" };
     let mut help_actions = vec![help_action::HelpAction::new("focus", "Tab", focus_label)];
     if is_chat_focused {
-        help_actions.extend(PROMPT_CHAT_FOCUS_FOOTER_ACTIONS);
+        help_actions.push(help_action::HelpAction::new("scroll", "j/k", "Scroll chat"));
+        if session.stats.should_show_diff() {
+            help_actions.push(help_action::HelpAction::new("diff", "d", "Diff"));
+        }
+        help_actions.push(help_action::HelpAction::new("sessions", "q", "Sessions"));
     } else {
         help_actions.extend_from_slice(prompt_footer_actions(session));
     }
