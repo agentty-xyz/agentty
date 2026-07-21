@@ -10,7 +10,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
-use crate::domain::session::{Session, Status};
+use crate::domain::session::Session;
 use crate::presentation::{help_action, review_comment as review_comment_selection};
 use crate::ui::component::vertical_scrollbar::VerticalScrollbar;
 use crate::ui::diff_util::{DiffLine, DiffLineKind};
@@ -79,13 +79,15 @@ impl<'a> ReviewCommentPage<'a> {
 
     /// Renders the left comment selector for loaded, loading, empty, and error
     /// states.
-    fn render_comment_list(&self, frame: &mut Frame, area: Rect) {
-        let entries = self
-            .comment_snapshot
-            .map(comment_entries)
-            .unwrap_or_default();
-        let title = format!(" Comments ({}) ", entries.len());
-        let (items, selection_rows) = if entries.is_empty() {
+    fn render_comment_list(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        rows: &[review_comment_selection::GroupedReviewCommentRow<'_>],
+    ) {
+        let item_count = review_comment_item_count(self.comment_snapshot);
+        let title = format!(" Comments ({item_count}) ");
+        let (items, selection_rows) = if rows.is_empty() {
             (
                 vec![ListItem::new(comment_list_fallback(
                     self.comment_error,
@@ -94,7 +96,7 @@ impl<'a> ReviewCommentPage<'a> {
                 Vec::new(),
             )
         } else {
-            comment_list_items(&entries)
+            comment_list_items(rows)
         };
         let list = List::new(items)
             .block(
@@ -111,9 +113,9 @@ impl<'a> ReviewCommentPage<'a> {
             )
             .highlight_symbol("▶ ");
         let mut state = ListState::default();
-        if !entries.is_empty() {
+        if item_count > 0 {
             let selected_entry_index =
-                normalized_selection(self.selected_comment_index, entries.len());
+                normalized_selection(self.selected_comment_index, item_count);
             state.select(selection_rows.get(selected_entry_index).copied());
         }
 
@@ -122,10 +124,15 @@ impl<'a> ReviewCommentPage<'a> {
 
     /// Renders metadata, conversation text, and attached code context for the
     /// selected comment entry.
-    fn render_comment_detail(&self, frame: &mut Frame, area: Rect) {
+    fn render_comment_detail(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        rows: &[review_comment_selection::GroupedReviewCommentRow<'_>],
+    ) {
         let content_width = usize::from(area.width.saturating_sub(2).max(1));
         let lines = comment_detail_lines(
-            self.comment_snapshot,
+            self.comment_snapshot.map(|_| rows),
             self.comment_error,
             self.is_loading_comments,
             self.diff,
@@ -158,19 +165,19 @@ impl<'a> ReviewCommentPage<'a> {
 impl Page for ReviewCommentPage<'_> {
     fn render(&mut self, frame: &mut Frame, area: Rect) {
         let areas = diff_util::diff_page_areas(area);
+        let rows = self
+            .comment_snapshot
+            .map(review_comment_selection::grouped_review_comment_rows)
+            .unwrap_or_default();
 
-        self.render_comment_list(frame, areas.file_list_area);
-        self.render_comment_detail(frame, areas.diff_area);
+        self.render_comment_list(frame, areas.file_list_area, &rows);
+        self.render_comment_detail(frame, areas.diff_area, &rows);
 
-        let can_reply =
-            self.session.status.allows_review_actions() || self.session.status == Status::Question;
+        let can_reply = self.session.allows_review_comment_reply();
         let can_resolve_all =
             can_reply && review_comment_has_actionable_items(self.comment_snapshot);
-        let can_resolve_selected = can_reply
-            && review_comment_selected_is_actionable(
-                self.comment_snapshot,
-                self.selected_comment_index,
-            );
+        let can_resolve_selected =
+            can_reply && review_comment_selected_is_actionable(&rows, self.selected_comment_index);
         let footer = Paragraph::new(help_format::footer_line(
             &help_action::review_comment_footer_actions(can_resolve_all, can_resolve_selected),
         ));
@@ -191,8 +198,11 @@ pub(crate) fn review_comment_view_max_scroll_offset(
     let detail_area = diff_util::diff_page_areas(area).diff_area;
     let viewport_height = detail_area.height.saturating_sub(2);
     let content_width = usize::from(detail_area.width.saturating_sub(2).max(1));
+    let rows = comment_snapshot
+        .map(review_comment_selection::grouped_review_comment_rows)
+        .unwrap_or_default();
     let line_count = comment_detail_lines(
-        comment_snapshot,
+        comment_snapshot.map(|_| rows.as_slice()),
         comment_error,
         is_loading_comments,
         diff,
@@ -218,18 +228,12 @@ pub(crate) fn review_comment_item_count(snapshot: Option<&ReviewCommentSnapshot>
 /// Returns whether the selected inline thread can be sent to the session
 /// agent.
 pub(crate) fn review_comment_selected_is_actionable(
-    snapshot: Option<&ReviewCommentSnapshot>,
+    rows: &[review_comment_selection::GroupedReviewCommentRow<'_>],
     selected_comment_index: usize,
 ) -> bool {
-    let Some(snapshot) = snapshot else {
-        return false;
-    };
-
-    comment_entries(snapshot)
-        .get(selected_comment_index)
-        .is_some_and(
-            |entry| matches!(entry, CommentEntry::Thread(thread) if thread.is_actionable()),
-        )
+    review_comment_selection::selected_entry(rows, selected_comment_index).is_some_and(
+        |entry| matches!(entry, review_comment_selection::ReviewCommentEntry::Thread(thread) if thread.is_actionable()),
+    )
 }
 
 /// Returns whether the snapshot contains any actionable inline thread.
@@ -244,108 +248,65 @@ pub(crate) fn review_comment_has_actionable_items(
     })
 }
 
-/// Group applied to one review-comment selector entry.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum CommentGroup {
-    Unresolved,
-    Resolved,
-    Standalone,
-}
-
-impl CommentGroup {
-    /// Returns the user-facing group heading.
-    fn label(self) -> &'static str {
-        match self {
-            Self::Unresolved => "Unresolved",
-            Self::Resolved => "Resolved",
-            Self::Standalone => "Standalone",
-        }
-    }
-}
-
-/// One selectable left-panel row and its right-panel detail source.
-enum CommentEntry<'a> {
-    General(&'a ReviewComment),
-    Thread(&'a ReviewCommentThread),
-}
-
-impl CommentEntry<'_> {
-    /// Returns the selector group for this entry.
-    fn group(&self) -> CommentGroup {
-        match self {
-            Self::General(_) => CommentGroup::Standalone,
-            Self::Thread(thread) if thread.is_resolved => CommentGroup::Resolved,
-            Self::Thread(_) => CommentGroup::Unresolved,
-        }
-    }
-
-    /// Builds the compact label shown in the left selector.
-    fn label(&self) -> Line<'static> {
-        match self {
-            Self::General(comment) => Line::from(vec![
-                Span::styled("General", Style::default().fg(style::palette::accent())),
-                Span::styled(
-                    format!(" · {}", comment.author),
-                    Style::default().fg(style::palette::text_muted()),
-                ),
-            ]),
-            Self::Thread(thread) => {
-                let anchor = review_comment_format::thread_anchor(thread);
-                let author = thread
-                    .comments
-                    .first()
-                    .map_or("unknown", |comment| comment.author.as_str());
-
-                Line::from(vec![
-                    Span::styled(anchor, Style::default().fg(style::palette::accent())),
-                    Span::styled(
-                        format!(" · {author}"),
-                        Style::default().fg(style::palette::text_muted()),
-                    ),
-                ])
-            }
-        }
-    }
-}
-
-/// Flattens comments into unresolved, resolved, and standalone selector
-/// groups while preserving source order inside each group.
-fn comment_entries(snapshot: &ReviewCommentSnapshot) -> Vec<CommentEntry<'_>> {
-    review_comment_selection::grouped_threads(snapshot)
-        .map(CommentEntry::Thread)
-        .chain(snapshot.pr_level_comments.iter().map(CommentEntry::General))
-        .collect()
-}
-
 /// Builds group headings and selectable entry rows, returning each entry's
 /// corresponding list-row index.
-fn comment_list_items(entries: &[CommentEntry<'_>]) -> (Vec<ListItem<'static>>, Vec<usize>) {
-    let mut items = Vec::with_capacity(entries.len().saturating_add(3));
-    let mut selection_rows = Vec::with_capacity(entries.len());
-    let mut previous_group = None;
+fn comment_list_items(
+    rows: &[review_comment_selection::GroupedReviewCommentRow<'_>],
+) -> (Vec<ListItem<'static>>, Vec<usize>) {
+    let mut items = Vec::with_capacity(rows.len());
+    let mut selection_rows = Vec::with_capacity(rows.len());
 
-    for entry in entries {
-        let group = entry.group();
-        if previous_group != Some(group) {
-            items.push(ListItem::new(Line::from(Span::styled(
-                group.label(),
-                Style::default()
-                    .fg(style::palette::text_muted())
-                    .add_modifier(Modifier::BOLD),
-            ))));
-            previous_group = Some(group);
+    for row in rows {
+        match row {
+            review_comment_selection::GroupedReviewCommentRow::Entry(entry) => {
+                selection_rows.push(items.len());
+                items.push(ListItem::new(comment_entry_label(*entry)));
+            }
+            review_comment_selection::GroupedReviewCommentRow::GroupLabel(label) => {
+                items.push(ListItem::new(Line::from(Span::styled(
+                    *label,
+                    Style::default()
+                        .fg(style::palette::text_muted())
+                        .add_modifier(Modifier::BOLD),
+                ))));
+            }
         }
-
-        selection_rows.push(items.len());
-        items.push(ListItem::new(entry.label()));
     }
 
     (items, selection_rows)
 }
 
+/// Builds the compact label shown for one selectable comment entry.
+fn comment_entry_label(entry: review_comment_selection::ReviewCommentEntry<'_>) -> Line<'static> {
+    match entry {
+        review_comment_selection::ReviewCommentEntry::General(comment) => Line::from(vec![
+            Span::styled("General", Style::default().fg(style::palette::accent())),
+            Span::styled(
+                format!(" · {}", comment.author),
+                Style::default().fg(style::palette::text_muted()),
+            ),
+        ]),
+        review_comment_selection::ReviewCommentEntry::Thread(thread) => {
+            let anchor = review_comment_format::thread_anchor(thread);
+            let author = thread
+                .comments
+                .first()
+                .map_or("unknown", |comment| comment.author.as_str());
+
+            Line::from(vec![
+                Span::styled(anchor, Style::default().fg(style::palette::accent())),
+                Span::styled(
+                    format!(" · {author}"),
+                    Style::default().fg(style::palette::text_muted()),
+                ),
+            ])
+        }
+    }
+}
+
 /// Builds all visible rows for one selected comment detail.
 fn comment_detail_lines(
-    snapshot: Option<&ReviewCommentSnapshot>,
+    rows: Option<&[review_comment_selection::GroupedReviewCommentRow<'_>]>,
     comment_error: Option<&str>,
     is_loading_comments: bool,
     diff: &str,
@@ -353,23 +314,25 @@ fn comment_detail_lines(
     markdown_render_cache: &markdown::MarkdownRenderCache,
     width: usize,
 ) -> Vec<Line<'static>> {
-    let Some(snapshot) = snapshot else {
+    let Some(rows) = rows else {
         return vec![Line::from(comment_detail_fallback(
             comment_error,
             is_loading_comments,
         ))];
     };
-    let entries = comment_entries(snapshot);
-    let Some(entry) = entries.get(normalized_selection(selected_comment_index, entries.len()))
-    else {
+    let item_count = review_comment_selection::selectable_entries(rows).count();
+    let Some(entry) = review_comment_selection::selected_entry(
+        rows,
+        normalized_selection(selected_comment_index, item_count),
+    ) else {
         return vec![Line::from("No review comments.")];
     };
 
     match entry {
-        CommentEntry::General(comment) => {
+        review_comment_selection::ReviewCommentEntry::General(comment) => {
             general_comment_detail_lines(comment, markdown_render_cache, width)
         }
-        CommentEntry::Thread(thread) => {
+        review_comment_selection::ReviewCommentEntry::Thread(thread) => {
             thread_comment_detail_lines(thread, diff, markdown_render_cache, width)
         }
     }
@@ -1034,11 +997,12 @@ mod tests {
             pr_level_comments: Vec::new(),
             threads: vec![inline_thread(2)],
         };
+        let rows = review_comment_selection::grouped_review_comment_rows(&snapshot);
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
 
         // Act
         let lines = comment_detail_lines(
-            Some(&snapshot),
+            Some(&rows),
             None,
             false,
             SAMPLE_DIFF,
@@ -1087,7 +1051,7 @@ mod tests {
     }
 
     #[test]
-    fn test_comment_entries_group_unresolved_resolved_and_standalone_rows() {
+    fn test_comment_list_items_map_grouped_rows_to_selectable_indexes() {
         // Arrange
         let mut resolved = inline_thread(3);
         resolved.id = "resolved".to_string();
@@ -1103,21 +1067,10 @@ mod tests {
         };
 
         // Act
-        let entries = comment_entries(&snapshot);
-        let (items, selection_rows) = comment_list_items(&entries);
+        let rows = review_comment_selection::grouped_review_comment_rows(&snapshot);
+        let (items, selection_rows) = comment_list_items(&rows);
 
         // Assert
-        assert_eq!(
-            entries.iter().map(CommentEntry::group).collect::<Vec<_>>(),
-            vec![
-                CommentGroup::Unresolved,
-                CommentGroup::Resolved,
-                CommentGroup::Standalone,
-            ]
-        );
-        assert!(matches!(entries[0], CommentEntry::Thread(thread) if thread.id == "unresolved"));
-        assert!(matches!(entries[1], CommentEntry::Thread(thread) if thread.id == "resolved"));
-        assert!(matches!(entries[2], CommentEntry::General(comment) if comment.author == "bob"));
         assert_eq!(items.len(), 6);
         assert_eq!(selection_rows, vec![1, 3, 5]);
     }
@@ -1140,13 +1093,14 @@ mod tests {
             }],
             threads: vec![current, resolved, outdated],
         };
+        let rows = review_comment_selection::grouped_review_comment_rows(&snapshot);
 
         // Act
-        let current_is_actionable = review_comment_selected_is_actionable(Some(&snapshot), 0);
-        let outdated_is_actionable = review_comment_selected_is_actionable(Some(&snapshot), 1);
-        let resolved_is_actionable = review_comment_selected_is_actionable(Some(&snapshot), 2);
-        let general_is_actionable = review_comment_selected_is_actionable(Some(&snapshot), 3);
-        let missing_is_actionable = review_comment_selected_is_actionable(Some(&snapshot), 99);
+        let current_is_actionable = review_comment_selected_is_actionable(&rows, 0);
+        let outdated_is_actionable = review_comment_selected_is_actionable(&rows, 1);
+        let resolved_is_actionable = review_comment_selected_is_actionable(&rows, 2);
+        let general_is_actionable = review_comment_selected_is_actionable(&rows, 3);
+        let missing_is_actionable = review_comment_selected_is_actionable(&rows, 99);
         let current_thread_id = review_comment_selection::selected_thread_id(&snapshot, 0);
         let general_thread_id = review_comment_selection::selected_thread_id(&snapshot, 3);
         let snapshot_has_actionable_items = review_comment_has_actionable_items(Some(&snapshot));
@@ -1160,7 +1114,7 @@ mod tests {
         assert_eq!(current_thread_id, Some("current"));
         assert_eq!(general_thread_id, None);
         assert!(snapshot_has_actionable_items);
-        assert!(!review_comment_selected_is_actionable(None, 0));
+        assert!(!review_comment_selected_is_actionable(&[], 0));
         assert!(!review_comment_has_actionable_items(None));
     }
 
