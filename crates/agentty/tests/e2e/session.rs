@@ -1462,7 +1462,7 @@ case "$*" in
     exit 0
     ;;
   *"api --hostname github.com graphql"*)
-    printf '%s\n' '{"data":{"repository":{"pullRequest":{"comments":{"nodes":[]},"reviewThreads":{"nodes":[{"id":"thread-inline","diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":2,"path":"src/main.rs","startLine":1,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"alice"},"body":"Please explain why this review output is needed."}]}},{"id":"thread-file","diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":null,"path":"src/main.rs","startLine":null,"subjectType":"FILE","comments":{"nodes":[{"author":{"login":"bob"},"body":"Please review the whole file."}]}}]}}}}}'
+    printf '%s\n' '{"data":{"repository":{"pullRequest":{"comments":{"nodes":[{"author":{"login":"carol"},"body":"Thanks for documenting the behavior."}]},"reviewThreads":{"nodes":[{"id":"thread-inline","diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":2,"path":"src/main.rs","startLine":1,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"alice"},"body":"Please explain why this review output is needed."}]}},{"id":"thread-file","diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":null,"path":"src/main.rs","startLine":null,"subjectType":"FILE","comments":{"nodes":[{"author":{"login":"bob"},"body":"Please review the whole file."}]}},{"id":"thread-resolved","diffSide":"RIGHT","isOutdated":false,"isResolved":true,"line":3,"path":"src/main.rs","startLine":null,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"dana"},"body":"This thread is complete."}]}}]}}}}}'
     ;;
   *"pr view"*)
     printf '%s\n' '{"number":42,"title":"Review-ready session shortcuts","state":"OPEN","url":"https://github.com/agentty-xyz/agentty/pull/42","baseRefName":"main","headRefName":"wt/review-s","isDraft":false,"mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","mergedAt":null}'
@@ -4250,7 +4250,10 @@ fn test_session_review_comments() -> E2eResult {
                     .find("Conversation")
                     .expect("conversation section should be visible");
 
-                assertion::assert_text_in_region(&inline_frame, "Comments (2)", &inline_full);
+                assertion::assert_text_in_region(&inline_frame, "Comments (4)", &inline_full);
+                assertion::assert_text_in_region(&inline_frame, "Unresolved", &inline_full);
+                assertion::assert_text_in_region(&inline_frame, "Resolved", &inline_full);
+                assertion::assert_text_in_region(&inline_frame, "Standalone", &inline_full);
                 assertion::assert_text_in_region(&inline_frame, "src/main.rs:1-2", &inline_full);
                 assertion::assert_text_in_region(&inline_frame, "Conversation", &inline_full);
                 assertion::assert_text_in_region(

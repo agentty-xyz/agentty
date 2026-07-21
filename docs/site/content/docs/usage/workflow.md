@@ -49,15 +49,16 @@ output panel, with a metadata row showing the size bucket, `+added` / `-deleted`
 totals, the cumulative active-work timer, the current model, the effective reasoning
 level, and token usage. A linked pull-request or merge-request URL appears in the header
 when present. Press `c` on a linked review request to open its comments in a split page:
-comments and inline threads appear on the left, while the selected thread's metadata,
-attached current-diff context, and conversation appear on the right. In **Review**,
-**AgentReview**, or **Question**, press `a` to send the selected actionable comment to
-the active session agent or `A` to send every actionable comment. The timer ticks only
-while the session is actively working. A linked terminal session keeps `C` available for
-starting a continuation draft. File-level comments show an explicit no-line-context
-message instead of a synthetic code anchor. Each session stores the project reasoning
-default when it is created, so later default changes affect new sessions without
-relabeling existing ones.
+unresolved threads, resolved threads, and standalone review-request comments are grouped
+on the left, while the selected entry's metadata, attached current-diff context, and
+conversation appear on the right. In **Review**, **AgentReview**, or **Question**, press
+`a` to send the selected actionable inline thread to the active session agent or `A` to
+send every actionable inline thread. Standalone comments are read-only because they do
+not have forge thread IDs. The timer ticks only while the session is actively working. A
+linked terminal session keeps `C` available for starting a continuation draft.
+File-level comments show an explicit no-line-context message instead of a synthetic code
+anchor. Each session stores the project reasoning default when it is created, so later
+default changes affect new sessions without relabeling existing ones.
 
 The top status bar shows the current version and update status, and rotates short
 page-scoped `FYI:` messages once per minute in the **Sessions** list and session chat

@@ -2568,7 +2568,7 @@ async fn test_resolve_session_review_comments_enqueues_turn_and_clears_focused_r
         .resolve_session_review_comments(
             &session_id,
             &snapshot,
-            ReviewCommentSelection::Selected(0),
+            ReviewCommentSelection::SelectedThread("thread-42".to_string()),
         )
         .await;
     done_rx.recv().await.expect("turn should start");

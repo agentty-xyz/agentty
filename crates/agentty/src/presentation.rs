@@ -6,4 +6,6 @@ pub mod app_mode;
 pub mod help_action;
 /// Prompt composer history, attachment, and suggestion state.
 pub mod prompt;
+/// Stable selection projection for grouped review-comment snapshots.
+pub(crate) mod review_comment;
 pub(crate) mod settings;

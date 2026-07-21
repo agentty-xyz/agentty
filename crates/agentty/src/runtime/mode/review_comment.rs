@@ -1,9 +1,11 @@
+use ag_forge::ReviewCommentSnapshot;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 
 use crate::app::App;
 use crate::app::prompt_intent::{ReviewCommentResolutionOutcome, ReviewCommentSelection};
 use crate::presentation::app_mode::AppMode;
+use crate::presentation::review_comment as review_comment_selection;
 use crate::runtime::EventResult;
 use crate::ui::{RenderCacheStore, page};
 
@@ -45,15 +47,11 @@ pub(crate) async fn handle_with_cache(
         return EventResult::Continue;
     };
     let item_count = page::review_comment::review_comment_item_count(comment_snapshot.as_ref());
-    let resolution_selection = match key.code {
-        KeyCode::Char('a') if key.modifiers == KeyModifiers::NONE => {
-            Some(ReviewCommentSelection::Selected(selected_comment_index))
-        }
-        KeyCode::Char('A') if key.modifiers == KeyModifiers::SHIFT => {
-            Some(ReviewCommentSelection::AllUnresolved)
-        }
-        _ => None,
-    };
+    let resolution_selection = review_comment_resolution_selection(
+        &key,
+        comment_snapshot.as_ref(),
+        selected_comment_index,
+    );
     if let (Some(selection), Some(snapshot)) = (resolution_selection, comment_snapshot.as_ref()) {
         let snapshot = snapshot.clone();
         app.mode = AppMode::ReviewComments {
@@ -122,6 +120,26 @@ pub(crate) async fn handle_with_cache(
     EventResult::Continue
 }
 
+/// Returns the thread-resolution action associated with one keypress and
+/// selected grouped comment row.
+fn review_comment_resolution_selection(
+    key: &KeyEvent,
+    comment_snapshot: Option<&ReviewCommentSnapshot>,
+    selected_comment_index: usize,
+) -> Option<ReviewCommentSelection> {
+    match key.code {
+        KeyCode::Char('a') if key.modifiers == KeyModifiers::NONE => comment_snapshot
+            .and_then(|snapshot| {
+                review_comment_selection::selected_thread_id(snapshot, selected_comment_index)
+            })
+            .map(|thread_id| ReviewCommentSelection::SelectedThread(thread_id.to_string())),
+        KeyCode::Char('A') if key.modifiers == KeyModifiers::SHIFT => {
+            Some(ReviewCommentSelection::AllUnresolved)
+        }
+        _ => None,
+    }
+}
+
 /// Applies presentation navigation returned by the review-comment workflow.
 fn apply_review_comment_resolution_outcome(app: &mut App, outcome: ReviewCommentResolutionOutcome) {
     match outcome {
@@ -186,6 +204,34 @@ mod tests {
                 start_line: None,
             }],
         }
+    }
+
+    #[test]
+    fn test_review_comment_resolution_selection_excludes_standalone_rows() {
+        // Arrange
+        let snapshot = comment_snapshot();
+        let selected_key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        let all_key = KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT);
+        let other_key = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
+
+        // Act
+        let selected = review_comment_resolution_selection(&selected_key, Some(&snapshot), 0);
+        let standalone = review_comment_resolution_selection(&selected_key, Some(&snapshot), 1);
+        let missing_snapshot = review_comment_resolution_selection(&selected_key, None, 0);
+        let all = review_comment_resolution_selection(&all_key, Some(&snapshot), 1);
+        let other = review_comment_resolution_selection(&other_key, Some(&snapshot), 0);
+
+        // Assert
+        assert_eq!(
+            selected,
+            Some(ReviewCommentSelection::SelectedThread(
+                "thread-id".to_string()
+            ))
+        );
+        assert_eq!(standalone, None);
+        assert_eq!(missing_snapshot, None);
+        assert_eq!(all, Some(ReviewCommentSelection::AllUnresolved));
+        assert_eq!(other, None);
     }
 
     #[tokio::test]
