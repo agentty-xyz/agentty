@@ -96,7 +96,7 @@ impl ViewSessionSnapshot {
     /// Returns whether the active session can enter the merge queue from view
     /// mode.
     fn can_merge_session(&self) -> bool {
-        is_view_action_allowed(self.session_status)
+        self.session_status.allows_session_actions()
             && self.can_merge_session_branch()
             && self.session_state != ViewSessionState::StackedDraft
     }
@@ -104,7 +104,7 @@ impl ViewSessionSnapshot {
     /// Returns whether the active session can start the session sync action
     /// from view mode.
     fn can_rebase_session(&self) -> bool {
-        is_view_rebase_allowed(self.session_status)
+        self.session_status.allows_rebase_action()
             && self.can_rebase_session_branch()
             && self.session_state != ViewSessionState::StackedDraft
     }
@@ -158,7 +158,7 @@ impl ViewSessionSnapshot {
 
     /// Returns whether `Enter` may open a prompt composer from view mode.
     fn can_open_prompt_composer(&self) -> bool {
-        if !is_view_chat_allowed(self.session_status) {
+        if !self.session_status.allows_chat_composer() {
             return false;
         }
 
@@ -167,7 +167,7 @@ impl ViewSessionSnapshot {
 
     /// Returns whether `/` may open the slash-command composer from view mode.
     fn can_launch_configuration_composer(&self) -> bool {
-        if !is_view_action_allowed(self.session_status) {
+        if !self.session_status.allows_session_actions() {
             return false;
         }
 
@@ -416,7 +416,7 @@ async fn handle_workflow_view_key(
     match key.code {
         KeyCode::Char('d')
             if !key.modifiers.contains(event::KeyModifiers::CONTROL)
-                && is_view_diff_allowed(view_session_snapshot.session_status) =>
+                && view_session_snapshot.session_status.allows_diff_view() =>
         {
             show_diff_for_view_session(app, view_context).await;
         }
@@ -444,7 +444,7 @@ async fn handle_workflow_view_key(
         }
         KeyCode::Char('f')
             if !key.modifiers.contains(event::KeyModifiers::CONTROL)
-                && is_view_review_allowed(view_session_snapshot.session_status) =>
+                && view_session_snapshot.session_status.allows_review_actions() =>
         {
             open_or_regenerate_review(app, view_context, pending_update).await;
         }
@@ -590,7 +590,7 @@ async fn open_or_regenerate_review(
 fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSessionSnapshot> {
     let session = app.sessions.session_at(view_context.session_index)?;
     let session_status = session.status;
-    let can_open_worktree = is_view_worktree_open_allowed(session_status)
+    let can_open_worktree = session_status.allows_session_actions()
         && *app
             .sessions
             .session_worktree_availability()
@@ -621,7 +621,7 @@ fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSe
             app.sessions
                 .can_reply_to_session_in_stack(view_context.session_id.as_str()),
         ),
-        review_comments: ViewActionState::from_bool(session.review_request.is_some()),
+        review_comments: ViewActionState::from_bool(session.has_review_request()),
         session_state: help_action::session_view_state(session),
         session_status,
         start_staged_session: ViewActionState::from_bool(
@@ -641,68 +641,6 @@ fn apply_view_scroll_and_output_mode(app: &mut App, scroll_offset: Option<u16>) 
     {
         *view_scroll_offset = scroll_offset;
     }
-}
-
-/// Returns whether `o` can access the session worktree.
-fn is_view_worktree_open_allowed(status: Status) -> bool {
-    !matches!(
-        status,
-        Status::Done
-            | Status::Merged
-            | Status::Canceled
-            | Status::InProgress
-            | Status::Rebasing
-            | Status::Merging
-            | Status::Queued
-    )
-}
-
-/// Returns whether non-navigation view shortcuts are available.
-///
-/// This covers `m` and the `/` slash-command shortcut.
-fn is_view_action_allowed(status: Status) -> bool {
-    !matches!(
-        status,
-        Status::Done
-            | Status::Merged
-            | Status::InProgress
-            | Status::Rebasing
-            | Status::Merging
-            | Status::Queued
-            | Status::Canceled
-    )
-}
-
-/// Returns whether `Enter` can open the chat composer.
-///
-/// Allowing `Enter` during `InProgress` or `Rebasing` lets users queue
-/// follow-up chat messages without waiting for the active operation to return
-/// to `Review`.
-/// Slash-command shortcuts and other action keys still require
-/// [`is_view_action_allowed`] so terminal or busy sessions are not
-/// accidentally re-driven.
-fn is_view_chat_allowed(status: Status) -> bool {
-    is_view_action_allowed(status) || matches!(status, Status::InProgress | Status::Rebasing)
-}
-
-/// Returns whether the `d` shortcut can open the diff view.
-fn is_view_diff_allowed(status: Status) -> bool {
-    status.allows_review_actions() || status == Status::Merged
-}
-
-/// Returns whether the `f` shortcut can open review content.
-fn is_view_review_allowed(status: Status) -> bool {
-    status.allows_review_actions()
-}
-
-/// Returns whether the `r` shortcut can start or queue session sync from view
-/// mode.
-///
-/// `AgentReview` is included so users can interrupt pending focused-review
-/// generation with an explicit sync request. `InProgress` is included so sync
-/// can queue behind the running turn on the existing session worker.
-fn is_view_rebase_allowed(status: Status) -> bool {
-    status.allows_review_actions() || matches!(status, Status::InProgress)
 }
 
 /// Handles `Ctrl+C` while a session is `InProgress` with a per-press policy.
@@ -1301,168 +1239,6 @@ mod tests {
             .folder(std::env::temp_dir())
             .project_name("")
             .build()
-    }
-
-    #[test]
-    fn test_is_view_worktree_open_allowed_returns_false_for_canceled() {
-        // Arrange
-        let status = Status::Canceled;
-
-        // Act
-        let can_open = is_view_worktree_open_allowed(status);
-
-        // Assert
-        assert!(!can_open);
-    }
-
-    #[test]
-    fn test_is_view_worktree_open_allowed_returns_false_for_in_progress() {
-        // Arrange
-        let status = Status::InProgress;
-
-        // Act
-        let can_open = is_view_worktree_open_allowed(status);
-
-        // Assert
-        assert!(!can_open);
-    }
-
-    #[test]
-    fn test_is_view_worktree_open_allowed_returns_false_for_rebasing() {
-        // Arrange
-        let status = Status::Rebasing;
-
-        // Act
-        let can_open = is_view_worktree_open_allowed(status);
-
-        // Assert
-        assert!(!can_open);
-    }
-
-    #[test]
-    fn test_is_view_worktree_open_allowed_returns_false_for_merge_queue_statuses() {
-        // Arrange
-        let merge_queue_statuses = [Status::Queued, Status::Merging, Status::Merged];
-
-        // Act
-        let can_open_for_statuses: Vec<bool> = merge_queue_statuses
-            .iter()
-            .map(|status| is_view_worktree_open_allowed(*status))
-            .collect();
-
-        // Assert
-        assert!(can_open_for_statuses.iter().all(|can_open| !can_open));
-    }
-
-    #[test]
-    fn test_is_view_action_allowed_only_for_non_done_non_in_progress_status() {
-        // Arrange
-        let canceled_status = Status::Canceled;
-        let review_status = Status::Review;
-        let in_progress_status = Status::InProgress;
-        let merged_status = Status::Merged;
-        let done_status = Status::Done;
-
-        // Act
-        let canceled_allowed = is_view_action_allowed(canceled_status);
-        let review_allowed = is_view_action_allowed(review_status);
-        let in_progress_allowed = is_view_action_allowed(in_progress_status);
-        let merged_allowed = is_view_action_allowed(merged_status);
-        let done_allowed = is_view_action_allowed(done_status);
-
-        // Assert
-        assert!(!canceled_allowed);
-        assert!(review_allowed);
-        assert!(!in_progress_allowed);
-        assert!(!merged_allowed);
-        assert!(!done_allowed);
-    }
-
-    #[test]
-    fn test_is_view_chat_allowed_includes_in_progress_and_rebasing() {
-        // Arrange
-        let review_status = Status::Review;
-        let in_progress_status = Status::InProgress;
-        let rebasing_status = Status::Rebasing;
-        let merging_status = Status::Merging;
-
-        // Act
-        let review_allowed = is_view_chat_allowed(review_status);
-        let in_progress_allowed = is_view_chat_allowed(in_progress_status);
-        let rebasing_allowed = is_view_chat_allowed(rebasing_status);
-        let merging_allowed = is_view_chat_allowed(merging_status);
-
-        // Assert
-        assert!(review_allowed);
-        assert!(in_progress_allowed);
-        assert!(rebasing_allowed);
-        assert!(!merging_allowed);
-    }
-
-    #[test]
-    fn test_is_view_diff_allowed_for_review_and_merged_status() {
-        // Arrange
-        let review_status = Status::Review;
-        let merged_status = Status::Merged;
-        let new_status = Status::Draft;
-        let in_progress_status = Status::InProgress;
-
-        // Act
-        let review_allowed = is_view_diff_allowed(review_status);
-        let merged_allowed = is_view_diff_allowed(merged_status);
-        let new_allowed = is_view_diff_allowed(new_status);
-        let in_progress_allowed = is_view_diff_allowed(in_progress_status);
-
-        // Assert
-        assert!(review_allowed);
-        assert!(merged_allowed);
-        assert!(!new_allowed);
-        assert!(!in_progress_allowed);
-    }
-
-    #[test]
-    fn test_is_view_review_allowed_only_for_review_status() {
-        // Arrange
-        let review_status = Status::Review;
-        let agent_review_status = Status::AgentReview;
-        let done_status = Status::Done;
-        let in_progress_status = Status::InProgress;
-
-        // Act
-        let review_allowed = is_view_review_allowed(review_status);
-        let agent_review_allowed = is_view_review_allowed(agent_review_status);
-        let done_allowed = is_view_review_allowed(done_status);
-        let in_progress_allowed = is_view_review_allowed(in_progress_status);
-
-        // Assert
-        assert!(review_allowed);
-        assert!(agent_review_allowed);
-        assert!(!done_allowed);
-        assert!(!in_progress_allowed);
-    }
-
-    #[test]
-    fn test_is_view_rebase_allowed_matches_backend_status_gate() {
-        // Arrange
-        let draft_status = Status::Draft;
-        let review_status = Status::Review;
-        let agent_review_status = Status::AgentReview;
-        let question_status = Status::Question;
-        let in_progress_status = Status::InProgress;
-
-        // Act
-        let draft_allowed = is_view_rebase_allowed(draft_status);
-        let review_allowed = is_view_rebase_allowed(review_status);
-        let agent_review_allowed = is_view_rebase_allowed(agent_review_status);
-        let question_allowed = is_view_rebase_allowed(question_status);
-        let in_progress_allowed = is_view_rebase_allowed(in_progress_status);
-
-        // Assert
-        assert!(!draft_allowed);
-        assert!(review_allowed);
-        assert!(agent_review_allowed);
-        assert!(!question_allowed);
-        assert!(in_progress_allowed);
     }
 
     #[tokio::test]
@@ -2481,54 +2257,6 @@ mod tests {
             } if upstream_ref == "origin/review/custom"
                 && input_state.text() == "review/custom"
         ));
-    }
-
-    #[test]
-    fn test_is_view_worktree_open_allowed_disables_canceled_state() {
-        // Arrange
-        let status = Status::Canceled;
-
-        // Act
-        let result = is_view_worktree_open_allowed(status);
-
-        // Assert
-        assert!(!result);
-    }
-
-    #[test]
-    fn test_is_view_worktree_open_allowed_disables_done_state() {
-        // Arrange
-        let status = Status::Done;
-
-        // Act
-        let result = is_view_worktree_open_allowed(status);
-
-        // Assert
-        assert!(!result);
-    }
-
-    #[test]
-    fn test_is_view_worktree_open_allowed_disables_queued_state() {
-        // Arrange
-        let status = Status::Queued;
-
-        // Act
-        let result = is_view_worktree_open_allowed(status);
-
-        // Assert
-        assert!(!result);
-    }
-
-    #[test]
-    fn test_is_view_worktree_open_allowed_enables_review_state() {
-        // Arrange
-        let status = Status::Review;
-
-        // Act
-        let result = is_view_worktree_open_allowed(status);
-
-        // Assert
-        assert!(result);
     }
 
     #[test]

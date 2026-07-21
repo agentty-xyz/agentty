@@ -62,8 +62,8 @@ For file-level detail, read the module docstrings directly.
   transient-message slots and lifecycles, prompt-composer logic, the shared `InputState`
   command and undo/redo model, stable input-revision and character-offset identities
   used to bind prompt attachments to exact placeholder occurrences and history states,
-  and thin re-export modules for `ag-agent` provider models plus shared protocol
-  question and turn prompt payloads. No I/O.
+  session action-eligibility policies, and thin re-export modules for `ag-agent`
+  provider models plus shared protocol question and turn prompt payloads. No I/O.
 - `infra/`: External integrations behind traits — Agentty data-root resolution, SQLite
   persistence (`infra/db/` repositories), git (`GitClient`, backed by `ag-git`),
   filesystem (`FsClient`), tmux, clipboard images, version checks, project discovery,

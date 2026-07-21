@@ -195,6 +195,30 @@ impl Status {
         Status::Canceled,
     ];
 
+    /// Returns whether this status permits opening the chat composer.
+    ///
+    /// Active turns and rebases accept queued follow-up messages even though
+    /// other session actions remain unavailable.
+    pub fn allows_chat_composer(self) -> bool {
+        self.allows_session_actions() || matches!(self, Status::InProgress | Status::Rebasing)
+    }
+
+    /// Returns whether this status permits idle session actions such as
+    /// opening the local worktree, merging, or editing launch configuration.
+    pub fn allows_session_actions(self) -> bool {
+        self.allows_review_actions() || matches!(self, Status::Draft | Status::Question)
+    }
+
+    /// Returns whether this status permits opening the session diff.
+    pub fn allows_diff_view(self) -> bool {
+        self.allows_review_actions() || self.is_read_only()
+    }
+
+    /// Returns whether this status permits starting or queuing session sync.
+    pub fn allows_rebase_action(self) -> bool {
+        self.allows_review_actions() || self == Status::InProgress
+    }
+
     /// Returns whether this status keeps the review shortcut set enabled.
     pub fn allows_review_actions(self) -> bool {
         matches!(self, Status::Review | Status::AgentReview)
@@ -769,13 +793,17 @@ impl Session {
         String::new()
     }
 
+    /// Returns whether this session has a linked forge review request.
+    pub fn has_review_request(&self) -> bool {
+        self.review_request.is_some()
+    }
+
     /// Returns whether this session can trigger a forge review request sync.
     ///
     /// Sync is available when the session has a published branch or a linked
     /// review request and the status allows review actions.
     pub fn can_sync_review_request(&self) -> bool {
-        let has_forge_context =
-            self.published_upstream_ref.is_some() || self.review_request.is_some();
+        let has_forge_context = self.published_upstream_ref.is_some() || self.has_review_request();
 
         has_forge_context && matches!(self.status, Status::Review | Status::AgentReview)
     }
@@ -1729,6 +1757,78 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn test_status_allows_session_actions_for_idle_interactive_states() {
+        // Arrange
+        let expected_statuses = [
+            Status::Draft,
+            Status::Review,
+            Status::AgentReview,
+            Status::Question,
+        ];
+
+        // Act
+        let allowed_statuses: Vec<Status> = Status::ALL
+            .into_iter()
+            .filter(|status| status.allows_session_actions())
+            .collect();
+
+        // Assert
+        assert_eq!(allowed_statuses, expected_statuses);
+    }
+
+    #[test]
+    fn test_status_allows_chat_composer_during_idle_and_queueable_states() {
+        // Arrange
+        let expected_statuses = [
+            Status::Draft,
+            Status::InProgress,
+            Status::Review,
+            Status::AgentReview,
+            Status::Question,
+            Status::Rebasing,
+        ];
+
+        // Act
+        let allowed_statuses: Vec<Status> = Status::ALL
+            .into_iter()
+            .filter(|status| status.allows_chat_composer())
+            .collect();
+
+        // Assert
+        assert_eq!(allowed_statuses, expected_statuses);
+    }
+
+    #[test]
+    fn test_status_allows_diff_view_for_review_ready_and_read_only_states() {
+        // Arrange
+        let expected_statuses = [Status::Review, Status::AgentReview, Status::Merged];
+
+        // Act
+        let allowed_statuses: Vec<Status> = Status::ALL
+            .into_iter()
+            .filter(|status| status.allows_diff_view())
+            .collect();
+
+        // Assert
+        assert_eq!(allowed_statuses, expected_statuses);
+    }
+
+    #[test]
+    fn test_status_allows_rebase_action_for_review_ready_and_in_progress_states() {
+        // Arrange
+        let expected_statuses = [Status::InProgress, Status::Review, Status::AgentReview];
+
+        // Act
+        let allowed_statuses: Vec<Status> = Status::ALL
+            .into_iter()
+            .filter(|status| status.allows_rebase_action())
+            .collect();
+
+        // Assert
+        assert_eq!(allowed_statuses, expected_statuses);
+    }
+
+    #[test]
     fn test_status_allows_terminal_continuation_only_for_done() {
         // Arrange
         let done_status = Status::Done;
@@ -2356,6 +2456,34 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
     }
 
     // -- can_sync_review_request tests ---------------------------------------
+
+    #[test]
+    fn test_has_review_request_reports_link_presence() {
+        // Arrange
+        let session_without_review_request = test_session(None);
+        let mut session_with_review_request = test_session(None);
+        session_with_review_request.review_request = Some(ReviewRequest {
+            last_refreshed_at: 0,
+            summary: ReviewRequestSummary {
+                display_id: "#1".to_string(),
+                forge_kind: ForgeKind::GitHub,
+                source_branch: "wt/session-id".to_string(),
+                state: ReviewRequestState::Open,
+                status_summary: None,
+                target_branch: "main".to_string(),
+                title: "feat".to_string(),
+                web_url: String::new(),
+            },
+        });
+
+        // Act
+        let has_no_link = session_without_review_request.has_review_request();
+        let has_link = session_with_review_request.has_review_request();
+
+        // Assert
+        assert!(!has_no_link);
+        assert!(has_link);
+    }
 
     #[test]
     fn test_can_sync_review_request_true_for_review_with_published_ref() {
