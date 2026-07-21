@@ -8,8 +8,10 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use crate::presentation::help_action;
 use crate::ui::{Page, help_format, layout, markdown, style};
 
-/// Page renderer for one selected GitHub issue and its base details.
+/// Page renderer for one selected GitHub issue, its base details, and the
+/// shortcut for starting an issue-addressing session.
 pub struct IssueDetailPage<'a> {
+    action_error: Option<&'a str>,
     detail: Option<&'a IssueDetail>,
     error: Option<&'a str>,
     issue: &'a AssignedIssue,
@@ -24,10 +26,12 @@ impl<'a> IssueDetailPage<'a> {
         issue: &'a AssignedIssue,
         detail: Option<&'a IssueDetail>,
         error: Option<&'a str>,
+        action_error: Option<&'a str>,
         markdown_render_cache: &'a markdown::MarkdownRenderCache,
         scroll_offset: u16,
     ) -> Self {
         Self {
+            action_error,
             detail,
             error,
             issue,
@@ -45,6 +49,7 @@ impl Page for IssueDetailPage<'_> {
             self.issue,
             self.detail,
             self.error,
+            self.action_error,
             self.markdown_render_cache,
             usize::from(content_area.width),
         ))
@@ -67,6 +72,7 @@ pub(crate) fn issue_detail_max_scroll_offset(
     issue: &AssignedIssue,
     detail: Option<&IssueDetail>,
     error: Option<&str>,
+    action_error: Option<&str>,
     area: Rect,
     markdown_render_cache: &markdown::MarkdownRenderCache,
 ) -> u16 {
@@ -80,6 +86,7 @@ pub(crate) fn issue_detail_max_scroll_offset(
         issue,
         detail,
         error,
+        action_error,
         markdown_render_cache,
         usize::from(content_area.width),
     )
@@ -93,13 +100,19 @@ fn issue_detail_lines(
     issue: &AssignedIssue,
     detail: Option<&IssueDetail>,
     error: Option<&str>,
+    action_error: Option<&str>,
     markdown_render_cache: &markdown::MarkdownRenderCache,
     width: usize,
 ) -> Vec<Line<'static>> {
+    let mut lines = action_error.map_or_else(Vec::new, |message| {
+        vec![error_line(message), Line::from("")]
+    });
     let Some(detail) = detail else {
-        return vec![Line::from(
+        lines.push(Line::from(
             error.unwrap_or("Loading issue details...").to_string(),
-        )];
+        ));
+
+        return lines;
     };
     if issue.display_id != detail.display_id {
         return vec![Line::from(
@@ -117,7 +130,7 @@ fn issue_detail_lines(
         .map(str::trim)
         .filter(|body| !body.is_empty())
         .unwrap_or("No description provided.");
-    let mut lines = vec![
+    lines.extend([
         field_line("Title", &detail.title),
         field_line("State", &detail.state),
         field_line("Author", &detail.author),
@@ -128,7 +141,7 @@ fn issue_detail_lines(
         field_line("URL", &detail.web_url),
         Line::from(""),
         section_label("Description"),
-    ];
+    ]);
     lines.extend(
         markdown_render_cache
             .render(description, width)
@@ -137,6 +150,14 @@ fn issue_detail_lines(
     );
 
     lines
+}
+
+/// Formats a user-facing issue-detail failure.
+fn error_line(text: &str) -> Line<'static> {
+    Line::from(Span::styled(
+        text.to_string(),
+        Style::default().fg(style::palette::danger()),
+    ))
 }
 
 /// Formats one metadata field as a bold label followed by its value.
@@ -221,11 +242,72 @@ mod tests {
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
 
         // Act
-        let lines = issue_detail_lines(&issue, Some(&detail), None, &markdown_render_cache, 80);
+        let lines = issue_detail_lines(
+            &issue,
+            Some(&detail),
+            None,
+            None,
+            &markdown_render_cache,
+            80,
+        );
 
         // Assert
         assert_eq!(lines.len(), 1);
         assert!(lines[0].to_string().contains("do not match"));
+    }
+
+    #[test]
+    fn test_issue_detail_lines_preserves_loaded_detail_with_action_error() {
+        // Arrange
+        let issue = assigned_issue();
+        let detail = issue_detail();
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+
+        // Act
+        let lines = issue_detail_lines(
+            &issue,
+            Some(&detail),
+            None,
+            Some("Failed to start issue session: worktree unavailable"),
+            &markdown_render_cache,
+            80,
+        );
+        let rendered_text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(rendered_text.contains("Failed to start issue session: worktree unavailable"));
+        assert!(rendered_text.contains("Title: Keep issue details reachable"));
+        assert!(rendered_text.contains("One description line."));
+    }
+
+    #[test]
+    fn test_issue_detail_lines_shows_action_error_while_details_load() {
+        // Arrange
+        let issue = assigned_issue();
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+
+        // Act
+        let lines = issue_detail_lines(
+            &issue,
+            None,
+            None,
+            Some("Failed to start issue session: worktree unavailable"),
+            &markdown_render_cache,
+            80,
+        );
+
+        // Assert
+        assert_eq!(lines.len(), 3);
+        assert!(
+            lines[0]
+                .to_string()
+                .contains("Failed to start issue session")
+        );
+        assert_eq!(lines[2].to_string(), "Loading issue details...");
     }
 
     #[test]
@@ -270,6 +352,7 @@ mod tests {
         let max_scroll_offset = issue_detail_max_scroll_offset(
             &issue,
             Some(&detail),
+            None,
             None,
             area,
             &markdown_render_cache,

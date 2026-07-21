@@ -138,9 +138,11 @@ to return to the review list.
 | `Tab` / `Shift+Tab` | Switch to next / previous tab                                    |
 | `?`                 | Help                                                             |
 
-On the read-only detail page, use `j` / `k` or `Up` / `Down` to scroll, `Ctrl+d` /
-`Ctrl+u` to move by half pages, `g` / `G` to jump to the top or bottom, and `q` / `Esc`
-to return to the issue list. Issue comments are not loaded in this iteration.
+On the detail page, press `a` to start a new session instructed to address the issue,
+with its URL included in the first prompt. Use `j` / `k` or `Up` / `Down` to scroll,
+`Ctrl+d` / `Ctrl+u` to move by half pages, `g` / `G` to jump to the top or bottom, and
+`q` / `Esc` to return to the issue list. Issue comments are not loaded in this
+iteration.
 
 ## Session View
 

@@ -445,11 +445,26 @@ impl App {
             self.services.review_request_client(),
         );
         self.mode = AppMode::IssueDetail {
+            action_error: None,
             detail: None,
             error: None,
             issue,
             scroll_offset: 0,
         };
+    }
+
+    /// Creates and starts a regular session instructed to address the linked
+    /// issue, then opens that session.
+    ///
+    /// # Errors
+    /// Returns an error if session creation fails. Initial prompt submission
+    /// failures are appended to the created session before it is opened.
+    pub(crate) async fn start_issue_session(&mut self, issue_url: &str) -> Result<(), AppError> {
+        let session_id = self.create_session().await?;
+        self.start_created_issue_session(&session_id, issue_url)
+            .await;
+
+        Ok(())
     }
 
     /// Moves selection to the next requested review in the `Inbox` tab.
@@ -1887,6 +1902,22 @@ impl App {
         );
 
         Ok(())
+    }
+
+    /// Starts one already-created issue session and opens it even when prompt
+    /// submission fails, keeping the recoverable session visible to the user.
+    async fn start_created_issue_session(&mut self, session_id: &str, issue_url: &str) {
+        if let Err(error) = self
+            .start_session(
+                session_id,
+                TurnPrompt::from_text(format!("Address this issue: {issue_url}")),
+            )
+            .await
+        {
+            self.append_output_for_session(session_id, &TranscriptNotice::Error.format(error))
+                .await;
+        }
+        self.open_session(session_id);
     }
 
     /// Opens one linked sibling session when it still exists in memory.

@@ -469,12 +469,31 @@ pub(crate) fn setup_test_git_repo(path: &Path) {
 pub(crate) async fn new_git_test_app_with_clients(
     clients: app::AppClients,
 ) -> (App, tempfile::TempDir) {
+    let (app, base_dir, _pool) = new_git_test_app_with_clients_and_pool(clients).await;
+
+    (app, base_dir)
+}
+
+/// Builds one git-backed app and exposes its shared database pool for tests
+/// that need to inject a persistence failure after app construction.
+#[cfg(test)]
+pub(crate) async fn new_git_test_app_with_pool() -> (App, tempfile::TempDir, sqlx::SqlitePool) {
+    new_git_test_app_with_clients_and_pool(test_app_clients()).await
+}
+
+/// Builds one git-backed app plus its shared database pool using the given
+/// clients.
+#[cfg(test)]
+async fn new_git_test_app_with_clients_and_pool(
+    clients: app::AppClients,
+) -> (App, tempfile::TempDir, sqlx::SqlitePool) {
     let base_dir = tempfile::tempdir().expect("failed to create temp dir");
     let base_path = base_dir.path().to_path_buf();
     setup_test_git_repo(base_dir.path());
     let database = Database::open_in_memory()
         .await
         .expect("failed to open in-memory db");
+    let pool = database.pool().clone();
     let app = App::new_with_clients(
         base_path.clone(),
         base_path,
@@ -485,7 +504,7 @@ pub(crate) async fn new_git_test_app_with_clients(
     .await
     .expect("failed to build app");
 
-    (app, base_dir)
+    (app, base_dir, pool)
 }
 
 /// Builds one git-backed app rooted at a retained temporary directory.
@@ -571,6 +590,18 @@ pub(crate) fn set_review_detail_mode(app: &mut App, review: ag_forge::RequestedR
         review,
         scroll_offset: 0,
     };
+}
+
+/// Builds one deterministic assigned-issue fixture for cross-module tests.
+#[cfg(test)]
+pub(crate) fn assigned_issue_fixture() -> ag_forge::AssignedIssue {
+    ag_forge::AssignedIssue {
+        display_id: "#124".to_string(),
+        repository: "agentty-xyz/agentty".to_string(),
+        title: "Keep issue details reachable".to_string(),
+        updated_at: None,
+        web_url: "https://github.com/agentty-xyz/agentty/issues/124".to_string(),
+    }
 }
 
 /// Returns the first rendered cell for a contiguous text match in a test

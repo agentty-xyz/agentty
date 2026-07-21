@@ -370,6 +370,7 @@ pub(crate) fn issue_actions() -> Vec<HelpAction> {
 pub(crate) fn issue_detail_actions() -> Vec<HelpAction> {
     vec![
         HelpAction::new("back", "q/Esc", "Back to issues"),
+        HelpAction::new("address", "a", "Address issue in a new session"),
         HelpAction::new("scroll", "j/k", "Scroll issue details"),
         HelpAction::new("page", "Ctrl+d/u", "Scroll half page"),
         HelpAction::new("top/bottom", "g/G", "Jump to top or bottom"),
@@ -1787,7 +1788,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(issue_keys, ["q/Esc", "j/k", "Ctrl+d/u", "g/G"]);
+        assert_eq!(issue_keys, ["q/Esc", "a", "j/k", "Ctrl+d/u", "g/G"]);
         assert_eq!(diff_keys, ["q/Esc", "j/k", "Up/Down", "?"]);
         assert_eq!(comment_keys, ["q/Esc", "j/k", "Up/Down"]);
     }
