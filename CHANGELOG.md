@@ -7,10 +7,36 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.13.5] - 2026-07-21
+
 ### Added
 
 - agentty: add a rendered markdown and Mermaid preview toggle for changed markdown files
   in diff view.
+- agentty: start a session directly from assigned issue details, using the issue URL as
+  the initial prompt.
+
+### Changed
+
+- agentty: group review comments by unresolved, resolved, and standalone state while
+  preserving thread selection across refreshes.
+- agentty: preserve prompt drafts when returning to `Sessions` and display `C` as the
+  done-session continuation shortcut.
+- agentty: centralize session action eligibility, prompt composer state, settings
+  presentation state, and agent CLI subprocess execution behind their owning runtime
+  boundaries.
+- docs: refresh the `README.md` navigation, homepage workflow highlights, and session
+  management showcase.
+- ci: enforce coverage checks on all builds and update the grouped GitHub Actions
+  dependencies.
+- deps: update `uuid` from `1.23.4` to `1.24.0`.
+- release: bump workspace crate metadata and lockfile package versions to `0.13.5`.
+
+### Contributors
+
+- @andagaev
+- @dependabot
+- @minev-dev
 
 ## [v0.13.4] - 2026-07-18
 
