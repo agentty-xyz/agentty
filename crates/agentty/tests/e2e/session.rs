@@ -1558,8 +1558,8 @@ if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 cat > /dev/null 2>&1
 sleep 10
 printf '%s\n' '{"type":"system","subtype":"init"}'
-printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Addressed the selected review thread."}]}}'
-printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Addressed the selected review thread.\",\"questions\":[],\"review_comment_outcomes\":[{\"reply\":\"Added the explanation.\",\"resolution\":\"fixed\",\"thread_id\":\"thread-inline\"}],\"summary\":null}","usage":{"input_tokens":5,"output_tokens":9}}'
+printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Processed the selected review threads."}]}}'
+printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Processed the selected review threads.\",\"questions\":[],\"review_comment_outcomes\":[{\"reply\":\"Added the explanation.\",\"resolution\":\"fixed\",\"thread_id\":\"thread-inline\"},{\"reply\":\"The whole-file change is not needed because the scoped update covers the request.\",\"resolution\":\"fixed\",\"thread_id\":\"thread-file\"}],\"summary\":null}","usage":{"input_tokens":5,"output_tokens":9}}'
 "#,
     )?;
     #[cfg(unix)]
@@ -4434,16 +4434,17 @@ fn diff_preview_opens_from_prompt_chat_focus() -> E2eResult {
     Ok(())
 }
 
-/// Verify an actionable review thread can be submitted to the active session
-/// agent from the comments page.
+/// Verify actionable review threads can be marked to address or deny and
+/// submitted to the active session agent as one batch.
 #[test]
 fn session_review_comment_agent_resolution() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_review_comment_agent_resolution")
         .with_git()
+        .with_terminal_size(160, 60)
         .zola(
-            "Agent review comment resolution",
-            "Address linked review comments with the active session agent.",
+            "Batch review comment actions",
+            "Mark linked review comments to address or deny, then submit one agent batch.",
             45,
         )
         .setup(seed_review_comment_agent_resolution)
@@ -4455,26 +4456,43 @@ fn session_review_comment_agent_resolution() -> E2eResult {
                     .compose(&common::open_selected_session_view())
                     .wait_for_text("c: comments", 5000)
                     .press_key("c")
-                    .wait_for_text("a: resolve selected", 5000)
+                    .wait_for_text("a: address", 5000)
                     .press_key("a")
-                    .wait_for_text("Address the following forge review comments", 5000)
+                    .wait_for_text("[A]", 5000)
+                    .press_key("j")
+                    .press_key("d")
+                    .wait_for_text("[D]", 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "review_comment_batch",
+                        "Comments marked to address and deny before batch submission",
+                    )
+                    .press_key("Enter")
+                    .wait_for_text("Process the following selected forge review comments", 5000)
                     .wait_for_text("Working...", 5000)
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(1500)
                     .capture_labeled(
                         "agent_review_comment_resolution",
-                        "Review comment submitted to the session agent",
+                        "Address and deny batch submitted to the session agent",
                     )
             },
-            |frame, _report| {
+            |frame, report| {
+                let selection_frame = common::frame_from_capture(&report.captures[0]);
+                let selection_full = Region::full(selection_frame.cols(), selection_frame.rows());
+                assertion::assert_text_in_region(&selection_frame, "[A]", &selection_full);
+                assertion::assert_text_in_region(&selection_frame, "[D]", &selection_full);
                 let full = Region::full(frame.cols(), frame.rows());
 
                 assertion::assert_text_in_region(
                     frame,
-                    "Address the following forge review comments",
+                    "Process the following selected forge review comments",
                     &full,
                 );
                 assertion::assert_text_in_region(frame, "Thread ID: thread-inline", &full);
+                assertion::assert_text_in_region(frame, "Requested action: Address", &full);
+                assertion::assert_text_in_region(frame, "Thread ID: thread-file", &full);
+                assertion::assert_text_in_region(frame, "Requested action: Deny", &full);
                 assertion::assert_text_in_region(frame, "Working...", &full);
             },
         )?;

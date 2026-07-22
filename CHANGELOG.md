@@ -7,6 +7,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- agentty: batch linked review comments by marking each actionable thread to address or
+  deny before submitting one session-agent turn.
+
 ## [v0.13.5] - 2026-07-21
 
 ### Added

@@ -1402,6 +1402,7 @@ mod tests {
         // Arrange
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::ReviewComments {
+            comment_actions: Vec::new(),
             comment_error: None,
             comment_snapshot: None,
             diff: String::new(),

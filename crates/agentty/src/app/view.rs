@@ -150,6 +150,7 @@ mod tests {
     fn visible_review_session_id_includes_review_comments() {
         // Arrange
         let mode = AppMode::ReviewComments {
+            comment_actions: Vec::new(),
             comment_error: None,
             comment_snapshot: None,
             diff: String::new(),

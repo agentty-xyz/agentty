@@ -515,10 +515,11 @@ orchestration paths:
   remote through the injected git/forge boundaries, falls back to the persisted
   review-request URL after terminal-session worktree cleanup, and uses the matching
   `AppEvent` to update only the still-open comments page. Inline code context is derived
-  from the already loaded current diff. From a reply-capable session, `a` or `A` renders
-  actionable comment data into a `TurnPrompt` and records the supplied forge thread IDs
-  in turn metadata. Post-turn handling accepts only deduplicated `fixed` outcomes with
-  an allowlisted ID and nonblank reply. After auto-commit and a successful
+  from the already loaded current diff. From a reply-capable session, `a` marks an
+  actionable thread to address, `d` marks it to deny, and `Enter` renders every marked
+  thread plus its requested action into one `TurnPrompt`. The selected forge thread IDs
+  are recorded in turn metadata. Post-turn handling accepts only deduplicated `fixed`
+  outcomes with an allowlisted ID and nonblank reply. After auto-commit and a successful
   published-branch push, the worker posts each reply and then resolves that thread
   through `ReviewRequestClient`; failed pushes never mutate forge thread state.
 - Assigned-issue refresh: the Issues tab resolves the active project remote and runs a

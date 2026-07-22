@@ -3,9 +3,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 
 use crate::app::App;
-use crate::app::prompt_intent::{ReviewCommentResolutionOutcome, ReviewCommentSelection};
-use crate::presentation::app_mode::AppMode;
-use crate::presentation::review_comment as review_comment_selection;
+use crate::app::prompt_intent::ReviewCommentResolutionOutcome;
+use crate::presentation::app_mode::{AppMode, ReviewCommentAction, ReviewCommentActionSelection};
+use crate::presentation::review_comment;
 use crate::runtime::EventResult;
 use crate::ui::{RenderCacheStore, page};
 
@@ -17,22 +17,13 @@ pub(crate) async fn handle_with_cache(
     content_area: Rect,
     key: KeyEvent,
 ) -> EventResult {
-    if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
-        let mode = std::mem::replace(&mut app.mode, AppMode::List);
-        if let AppMode::ReviewComments { session_id, .. } = mode {
-            app.mode = AppMode::View {
-                session_id,
-                scroll_offset: None,
-            };
-        } else {
-            app.mode = mode;
-        }
-
+    if exit_review_comments(app, &key) {
         return EventResult::Continue;
     }
 
     let mode = std::mem::replace(&mut app.mode, AppMode::List);
     let AppMode::ReviewComments {
+        mut comment_actions,
         comment_error,
         comment_snapshot,
         diff,
@@ -47,14 +38,15 @@ pub(crate) async fn handle_with_cache(
         return EventResult::Continue;
     };
     let item_count = page::review_comment::review_comment_item_count(comment_snapshot.as_ref());
-    let resolution_selection = review_comment_resolution_selection(
-        &key,
-        comment_snapshot.as_ref(),
-        selected_comment_index,
-    );
-    if let (Some(selection), Some(snapshot)) = (resolution_selection, comment_snapshot.as_ref()) {
+    if key.code == KeyCode::Enter
+        && key.modifiers == KeyModifiers::NONE
+        && !comment_actions.is_empty()
+        && let Some(snapshot) = comment_snapshot.as_ref()
+    {
         let snapshot = snapshot.clone();
+        let submitted_actions = comment_actions.clone();
         app.mode = AppMode::ReviewComments {
+            comment_actions,
             comment_error,
             comment_snapshot,
             diff,
@@ -64,13 +56,19 @@ pub(crate) async fn handle_with_cache(
             scroll_offset,
         };
         let outcome = app
-            .resolve_session_review_comments(&session_id, &snapshot, selection)
+            .resolve_session_review_comments(&session_id, &snapshot, &submitted_actions)
             .await;
         apply_review_comment_resolution_outcome(app, outcome);
 
         return EventResult::Continue;
     }
 
+    toggle_selected_comment_action(
+        &key,
+        comment_snapshot.as_ref(),
+        selected_comment_index,
+        &mut comment_actions,
+    );
     match key.code {
         KeyCode::Char('j') if key.modifiers == KeyModifiers::NONE => {
             let next_index = next_selected_index(selected_comment_index, item_count);
@@ -108,6 +106,7 @@ pub(crate) async fn handle_with_cache(
     }
 
     app.mode = AppMode::ReviewComments {
+        comment_actions,
         comment_error,
         comment_snapshot,
         diff,
@@ -120,24 +119,44 @@ pub(crate) async fn handle_with_cache(
     EventResult::Continue
 }
 
-/// Returns the thread-resolution action associated with one keypress and
-/// selected grouped comment row.
-fn review_comment_resolution_selection(
+/// Restores session view when the review-comments exit key is pressed.
+fn exit_review_comments(app: &mut App, key: &KeyEvent) -> bool {
+    if !matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
+        return false;
+    }
+
+    let mode = std::mem::replace(&mut app.mode, AppMode::List);
+    if let AppMode::ReviewComments { session_id, .. } = mode {
+        app.mode = AppMode::View {
+            session_id,
+            scroll_offset: None,
+        };
+    } else {
+        app.mode = mode;
+    }
+
+    true
+}
+
+/// Applies an address or deny toggle to the selected actionable thread.
+fn toggle_selected_comment_action(
     key: &KeyEvent,
     comment_snapshot: Option<&ReviewCommentSnapshot>,
     selected_comment_index: usize,
-) -> Option<ReviewCommentSelection> {
-    match key.code {
-        KeyCode::Char('a') if key.modifiers == KeyModifiers::NONE => comment_snapshot
-            .and_then(|snapshot| {
-                review_comment_selection::selected_thread_id(snapshot, selected_comment_index)
-            })
-            .map(|thread_id| ReviewCommentSelection::SelectedThread(thread_id.to_string())),
-        KeyCode::Char('A') if key.modifiers == KeyModifiers::SHIFT => {
-            Some(ReviewCommentSelection::AllUnresolved)
-        }
-        _ => None,
-    }
+    comment_actions: &mut Vec<ReviewCommentActionSelection>,
+) {
+    let action = match key.code {
+        KeyCode::Char('a') if key.modifiers == KeyModifiers::NONE => ReviewCommentAction::Address,
+        KeyCode::Char('d') if key.modifiers == KeyModifiers::NONE => ReviewCommentAction::Deny,
+        _ => return,
+    };
+    let Some(thread_id) = comment_snapshot.and_then(|snapshot| {
+        review_comment::selected_actionable_thread_id(snapshot, selected_comment_index)
+    }) else {
+        return;
+    };
+
+    review_comment::toggle_action(comment_actions, thread_id, action);
 }
 
 /// Applies presentation navigation returned by the review-comment workflow.
@@ -206,32 +225,40 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_review_comment_resolution_selection_excludes_standalone_rows() {
+    #[tokio::test]
+    async fn test_handle_marks_address_replaces_with_deny_and_toggles_off() {
         // Arrange
-        let snapshot = comment_snapshot();
-        let selected_key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
-        let all_key = KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT);
-        let other_key = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        app.mode = AppMode::ReviewComments {
+            comment_actions: Vec::new(),
+            comment_error: None,
+            comment_snapshot: Some(comment_snapshot()),
+            diff: String::new(),
+            is_loading_comments: false,
+            selected_comment_index: 0,
+            session_id: "session-id".into(),
+            scroll_offset: 0,
+        };
 
         // Act
-        let selected = review_comment_resolution_selection(&selected_key, Some(&snapshot), 0);
-        let standalone = review_comment_resolution_selection(&selected_key, Some(&snapshot), 1);
-        let missing_snapshot = review_comment_resolution_selection(&selected_key, None, 0);
-        let all = review_comment_resolution_selection(&all_key, Some(&snapshot), 1);
-        let other = review_comment_resolution_selection(&other_key, Some(&snapshot), 0);
+        for key_code in [KeyCode::Char('a'), KeyCode::Char('d'), KeyCode::Char('d')] {
+            handle_with_cache(
+                &mut app,
+                &RenderCacheStore::default(),
+                Rect::new(0, 0, 80, 24),
+                KeyEvent::new(key_code, KeyModifiers::NONE),
+            )
+            .await;
+        }
 
         // Assert
-        assert_eq!(
-            selected,
-            Some(ReviewCommentSelection::SelectedThread(
-                "thread-id".to_string()
-            ))
-        );
-        assert_eq!(standalone, None);
-        assert_eq!(missing_snapshot, None);
-        assert_eq!(all, Some(ReviewCommentSelection::AllUnresolved));
-        assert_eq!(other, None);
+        assert!(matches!(
+            app.mode,
+            AppMode::ReviewComments {
+                ref comment_actions,
+                ..
+            } if comment_actions.is_empty()
+        ));
     }
 
     #[tokio::test]
@@ -239,6 +266,7 @@ mod tests {
         // Arrange
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::ReviewComments {
+            comment_actions: Vec::new(),
             comment_error: None,
             comment_snapshot: Some(comment_snapshot()),
             diff: String::new(),
@@ -273,6 +301,7 @@ mod tests {
         // Arrange
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::ReviewComments {
+            comment_actions: Vec::new(),
             comment_error: None,
             comment_snapshot: None,
             diff: String::new(),
@@ -306,6 +335,7 @@ mod tests {
         // Arrange
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::ReviewComments {
+            comment_actions: Vec::new(),
             comment_error: None,
             comment_snapshot: Some(comment_snapshot()),
             diff: String::new(),
@@ -340,6 +370,7 @@ mod tests {
         // Arrange
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::ReviewComments {
+            comment_actions: Vec::new(),
             comment_error: None,
             comment_snapshot: Some(comment_snapshot()),
             diff: String::new(),
@@ -373,6 +404,7 @@ mod tests {
         // Arrange
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::ReviewComments {
+            comment_actions: Vec::new(),
             comment_error: None,
             comment_snapshot: Some(comment_snapshot()),
             diff: String::new(),
@@ -409,10 +441,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_agent_resolution_keys_preserve_page_when_session_cannot_reply() {
+    async fn test_handle_batch_keys_reject_read_only_rows_and_preserve_failed_submission() {
         // Arrange
         let mut selected_app = crate::test_support::new_test_app_without_retained_base_dir().await;
         selected_app.mode = AppMode::ReviewComments {
+            comment_actions: Vec::new(),
             comment_error: None,
             comment_snapshot: Some(comment_snapshot()),
             diff: String::new(),
@@ -421,8 +454,12 @@ mod tests {
             session_id: "missing-session".into(),
             scroll_offset: 3,
         };
-        let mut all_app = crate::test_support::new_test_app_without_retained_base_dir().await;
-        all_app.mode = AppMode::ReviewComments {
+        let mut submit_app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        submit_app.mode = AppMode::ReviewComments {
+            comment_actions: vec![ReviewCommentActionSelection {
+                action: ReviewCommentAction::Address,
+                thread_id: "thread-id".to_string(),
+            }],
             comment_error: None,
             comment_snapshot: Some(comment_snapshot()),
             diff: String::new(),
@@ -441,10 +478,10 @@ mod tests {
         )
         .await;
         handle_with_cache(
-            &mut all_app,
+            &mut submit_app,
             &RenderCacheStore::default(),
             Rect::new(0, 0, 80, 24),
-            KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT),
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
         )
         .await;
 
@@ -452,18 +489,20 @@ mod tests {
         assert!(matches!(
             selected_app.mode,
             AppMode::ReviewComments {
+                ref comment_actions,
                 selected_comment_index: 1,
                 scroll_offset: 3,
                 ..
-            }
+            } if comment_actions.is_empty()
         ));
         assert!(matches!(
-            all_app.mode,
+            submit_app.mode,
             AppMode::ReviewComments {
+                ref comment_actions,
                 selected_comment_index: 1,
                 scroll_offset: 3,
                 ..
-            }
+            } if comment_actions.len() == 1
         ));
     }
 

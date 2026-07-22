@@ -10,6 +10,34 @@ use crate::domain::input::InputState;
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{PublishBranchAction, SessionId};
 
+/// User-selected handling for one actionable forge review thread.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReviewCommentAction {
+    /// Ask the session agent to implement the reviewer's requested change.
+    Address,
+    /// Ask the session agent to rebut the reviewer's requested change.
+    Deny,
+}
+
+impl ReviewCommentAction {
+    /// Returns the prompt label used to communicate the selected handling.
+    pub(crate) fn prompt_label(self) -> &'static str {
+        match self {
+            Self::Address => "Address",
+            Self::Deny => "Deny",
+        }
+    }
+}
+
+/// One actionable forge thread selected for batched agent handling.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReviewCommentActionSelection {
+    /// Handling requested for the selected thread.
+    pub(crate) action: ReviewCommentAction,
+    /// Forge-native thread identifier.
+    pub(crate) thread_id: String,
+}
+
 /// Semantic intent for a `Confirmation` overlay interaction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConfirmationIntent {
@@ -471,6 +499,8 @@ pub enum AppMode {
     /// Displays forge review comments for one linked session review request,
     /// with agent-resolution actions and current diff context.
     ReviewComments {
+        /// Actionable threads marked for batched address or deny handling.
+        comment_actions: Vec<ReviewCommentActionSelection>,
         /// User-facing failure returned while loading review comments.
         comment_error: Option<String>,
         /// Loaded review-request comment snapshot.

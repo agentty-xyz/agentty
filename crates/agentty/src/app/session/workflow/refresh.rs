@@ -733,6 +733,7 @@ mod tests {
         let clock: Arc<dyn Clock> = Arc::new(FakeClock::new(now, SystemTime::UNIX_EPOCH));
         let session_manager = session_manager_fixture(clock);
         let mut mode = AppMode::ReviewComments {
+            comment_actions: Vec::new(),
             comment_error: None,
             comment_snapshot: None,
             diff: String::new(),

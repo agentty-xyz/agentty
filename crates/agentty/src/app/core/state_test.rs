@@ -272,6 +272,7 @@ async fn review_comments_page_has_no_tick_driven_ui() {
     // Arrange
     let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
     app.mode = AppMode::ReviewComments {
+        comment_actions: Vec::new(),
         comment_error: None,
         comment_snapshot: None,
         diff: String::new(),
@@ -860,6 +861,7 @@ async fn open_session_review_comments_requires_link_and_applies_background_snaps
     assert!(matches!(
         app.mode,
         AppMode::ReviewComments {
+            ref comment_actions,
             comment_error: None,
             comment_snapshot: Some(ref snapshot),
             ref diff,
@@ -867,7 +869,8 @@ async fn open_session_review_comments_requires_link_and_applies_background_snaps
             selected_comment_index: 0,
             ref session_id,
             scroll_offset: 0,
-        } if snapshot == &review_comment_snapshot()
+        } if comment_actions.is_empty()
+            && snapshot == &review_comment_snapshot()
             && diff == "review diff"
             && session_id == "session-review-comments"
     ));

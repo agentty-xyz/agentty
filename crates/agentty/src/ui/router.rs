@@ -732,6 +732,7 @@ fn render_session_or_diff_mode(
             }
         }
         AppMode::ReviewComments {
+            comment_actions,
             comment_error,
             comment_snapshot,
             diff,
@@ -743,6 +744,7 @@ fn render_session_or_diff_mode(
             if let Some(session) = sessions.iter().find(|session| &session.id == session_id) {
                 page::review_comment::ReviewCommentPage::new(
                     page::review_comment::ReviewCommentPageInput {
+                        comment_actions,
                         comment_error: comment_error.as_deref(),
                         comment_snapshot: comment_snapshot.as_ref(),
                         diff,
@@ -1361,6 +1363,7 @@ mod tests {
         let session_id = "session-comments";
         let sessions = vec![session_fixture(session_id)];
         let mode = AppMode::ReviewComments {
+            comment_actions: Vec::new(),
             comment_error: None,
             comment_snapshot: None,
             diff: String::new(),

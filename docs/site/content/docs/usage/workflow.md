@@ -395,7 +395,11 @@ publish popup for the linked forge review request:
   update the review request title and description from the latest session commit message
   when they differ. Failed background pushes keep the manual `p` flow available for
   retry.
-- Agent-driven review-comment turns report one structured outcome for each supplied
+- On the review-comments page, mark actionable inline threads with `a` to address or `d`
+  to deny, then press `Enter` to submit all marked threads in one agent turn. Address
+  actions request the relevant worktree change; deny actions request a concise technical
+  rebuttal.
+- Agent-driven review-comment turns report one structured outcome for each submitted
   inline thread. After Agentty commits the work and successfully pushes an already
   published branch, it posts the agent's concise reply and resolves only allowlisted
   threads reported as `fixed`. Threads reported as `no_change_needed`, unknown thread

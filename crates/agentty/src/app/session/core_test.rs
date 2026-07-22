@@ -22,7 +22,7 @@ use tempfile::tempdir;
 use tokio::sync::{Barrier, Notify};
 
 use super::*;
-use crate::app::prompt_intent::{ReviewCommentResolutionOutcome, ReviewCommentSelection};
+use crate::app::prompt_intent::ReviewCommentResolutionOutcome;
 use crate::app::review::{review_failure_message, review_loading_message};
 use crate::app::{App, AppEvent, ReviewCacheEntry, SyncSessionStartError, Tab};
 use crate::domain::agent::{
@@ -40,7 +40,7 @@ use crate::domain::transient_message::{
 use crate::infra::clock::RealClock;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs::{self as fs, FsClient};
-use crate::presentation::app_mode::AppMode;
+use crate::presentation::app_mode::{AppMode, ReviewCommentAction, ReviewCommentActionSelection};
 use crate::ui::activity_heatmap;
 
 /// Builds a filesystem mock that delegates operations to local disk.
@@ -2562,14 +2562,14 @@ async fn test_resolve_session_review_comments_enqueues_turn_and_clears_focused_r
         .worker_service
         .test_agent_channels
         .insert(session_id.clone(), Arc::new(mock_channel));
+    let comment_actions = vec![ReviewCommentActionSelection {
+        action: ReviewCommentAction::Address,
+        thread_id: "thread-42".to_string(),
+    }];
 
     // Act
     let outcome = app
-        .resolve_session_review_comments(
-            &session_id,
-            &snapshot,
-            ReviewCommentSelection::SelectedThread("thread-42".to_string()),
-        )
+        .resolve_session_review_comments(&session_id, &snapshot, &comment_actions)
         .await;
     done_rx.recv().await.expect("turn should start");
     wait_for_status(&mut app, &session_id, Status::Review).await;
