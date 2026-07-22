@@ -697,6 +697,12 @@ impl Session {
             && self.status.allows_review_actions()
     }
 
+    /// Returns whether the session can submit an agent reply for actionable
+    /// forge review comments.
+    pub fn allows_review_comment_reply(&self) -> bool {
+        self.status.allows_review_actions() || self.status == Status::Question
+    }
+
     /// Returns whether this session belongs to a one-level stack beneath a
     /// parent session branch.
     pub fn is_stacked_child(&self) -> bool {
@@ -1223,6 +1229,37 @@ pub(crate) mod tests {
         assert!(!allows_child_fork);
         assert!(!allows_active_fork);
         assert!(!allows_done_fork);
+    }
+
+    #[test]
+    fn test_allows_review_comment_reply_accepts_review_or_question_sessions() {
+        // Arrange
+        let statuses = [Status::Review, Status::AgentReview, Status::Question];
+
+        // Act
+        let reply_permissions = statuses.map(|status| {
+            SessionFixtureBuilder::new()
+                .status(status)
+                .build()
+                .allows_review_comment_reply()
+        });
+
+        // Assert
+        assert_eq!(reply_permissions, [true, true, true]);
+    }
+
+    #[test]
+    fn test_allows_review_comment_reply_rejects_non_reply_session() {
+        // Arrange
+        let session = SessionFixtureBuilder::new()
+            .status(Status::InProgress)
+            .build();
+
+        // Act
+        let allows_reply = session.allows_review_comment_reply();
+
+        // Assert
+        assert!(!allows_reply);
     }
 
     #[test]

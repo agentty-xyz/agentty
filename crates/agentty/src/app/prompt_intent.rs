@@ -9,7 +9,7 @@ use crate::app::{App, ReviewCacheEntry, diff_content_hash};
 use crate::domain::agent::{AgentSelection, ReasoningLevel};
 use crate::domain::composer::PromptAttachment;
 use crate::domain::review;
-use crate::domain::session::{SessionId, Status};
+use crate::domain::session::{Session, SessionId, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
 use crate::infra::clipboard_image;
@@ -120,9 +120,7 @@ impl App {
             .sessions()
             .iter()
             .find(|session| session.id == *session_id)
-            .is_some_and(|session| {
-                session.status.allows_review_actions() || session.status == Status::Question
-            });
+            .is_some_and(Session::allows_review_comment_reply);
         if !can_reply {
             return ReviewCommentResolutionOutcome::KeepReviewComments;
         }
