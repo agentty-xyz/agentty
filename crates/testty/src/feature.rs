@@ -380,7 +380,9 @@ impl FeatureDemo {
 
     /// Set the directory where GIF output and hash sidecars are written.
     ///
-    /// When not set, GIF generation is skipped entirely.
+    /// When not set, GIF generation is skipped entirely. A successful GIF
+    /// regeneration removes a same-named PNG so callers cannot mistake a
+    /// poster from the previous GIF for a current artifact.
     pub fn gif_output_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.gif_output_dir = Some(dir.into());
 
@@ -441,9 +443,11 @@ impl FeatureDemo {
                     redactions: &self.redactions,
                 },
                 VhsContext {
-                    settings: &self.gif_settings,
                     binary_path,
+                    check_vhs: check_vhs_installed,
                     env_pairs,
+                    execute_tape: VhsTape::execute,
+                    settings: &self.gif_settings,
                 },
             ),
             None => GifStatus::NoOutputDir,
@@ -583,9 +587,11 @@ struct GifContext<'a> {
 /// individual pieces (settings, binary, environment) that VHS needs.
 #[derive(Clone, Copy)]
 struct VhsContext<'a> {
-    settings: &'a VhsTapeSettings,
     binary_path: &'a Path,
+    check_vhs: fn() -> Result<(), VhsError>,
     env_pairs: &'a [(&'a str, &'a str)],
+    execute_tape: fn(&VhsTape, &Path) -> Result<PathBuf, VhsError>,
+    settings: &'a VhsTapeSettings,
 }
 
 /// Parsed state of a committed feature-GIF hash sidecar.
@@ -671,7 +677,7 @@ fn generate_gif(
     // missing VHS binary must surface as a hard failure rather than a
     // silent skip. Other modes treat a missing VHS as a benign skip and
     // return `VhsNotInstalled`.
-    if let Err(err) = check_vhs_installed() {
+    if let Err(err) = (vhs.check_vhs)() {
         return vhs_missing_status(mode, err);
     }
 
@@ -689,11 +695,13 @@ fn generate_gif(
     // Trailing newline so the sidecar is a well-formed text file and
     // end-of-file fixers do not rewrite it after every regeneration.
     let hash_string = format!("{current_hash}\n");
-    let screenshot_path = output_dir.join(format!("{name}.png"));
+    let poster_path = output_dir.join(format!("{name}.png"));
+    let screenshot_path = output_dir.join(format!(".{name}.capture.png"));
 
-    let tape = VhsTape::from_scenario_with_settings(
+    let tape = VhsTape::from_scenario_with_output_path(
         scenario,
         vhs.binary_path,
+        &gif_path,
         &screenshot_path,
         vhs.env_pairs,
         vhs.settings,
@@ -701,16 +709,18 @@ fn generate_gif(
 
     let tape_path = output_dir.join(format!("{name}.tape"));
 
-    match tape.execute(&tape_path) {
+    match (vhs.execute_tape)(&tape, &tape_path) {
         Ok(_) => {
             let _ = std::fs::write(&hash_path, &hash_string);
             let _ = std::fs::remove_file(&tape_path);
             let _ = std::fs::remove_file(&screenshot_path);
+            let _ = std::fs::remove_file(&poster_path);
 
             GifStatus::Generated(gif_path)
         }
         Err(err) => {
             let _ = std::fs::remove_file(&tape_path);
+            let _ = std::fs::remove_file(&screenshot_path);
 
             GifStatus::TapeExecutionFailed(err)
         }
@@ -794,6 +804,28 @@ mod tests {
 
         // Assert
         assert_eq!(demo.gif_output_dir.as_deref(), Some(Path::new("/tmp/gifs")));
+    }
+
+    #[test]
+    fn feature_demo_run_wires_check_only_vhs_context() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let scenario = Scenario::new("run_context")
+            .wait_for_text("ready", 3_000)
+            .capture_labeled("ready", "Shell is ready");
+        let builder = PtySessionBuilder::new("/bin/sh").args(["-c", "printf 'ready\\n'; sleep 60"]);
+        let demo = FeatureDemo::new("run_context")
+            .gif_output_dir(temp.path())
+            .gif_mode(GifMode::CheckOnly);
+
+        // Act
+        let result = demo
+            .run(&scenario, builder, Path::new("/bin/true"), &[])
+            .expect("feature demo should run");
+
+        // Assert
+        assert!(matches!(result.gif_status, GifStatus::Stale { .. }));
+        assert!(result.frame.all_text().contains("ready"));
     }
 
     #[test]
@@ -1132,9 +1164,11 @@ mod tests {
         let binary = Path::new("/usr/bin/true");
         let env_pairs: &[(&str, &str)] = &[];
         let vhs = VhsContext {
-            settings: &settings,
             binary_path: binary,
+            check_vhs: check_vhs_installed,
             env_pairs,
+            execute_tape: VhsTape::execute,
+            settings: &settings,
         };
 
         // Act
@@ -1194,9 +1228,11 @@ mod tests {
         let binary = Path::new("/usr/bin/true");
         let env_pairs: &[(&str, &str)] = &[];
         let vhs = VhsContext {
-            settings: &settings,
             binary_path: binary,
+            check_vhs: check_vhs_installed,
             env_pairs,
+            execute_tape: VhsTape::execute,
+            settings: &settings,
         };
 
         // Act
@@ -1248,9 +1284,11 @@ mod tests {
         let binary = Path::new("/usr/bin/true");
         let env_pairs: &[(&str, &str)] = &[];
         let vhs = VhsContext {
-            settings: &settings,
             binary_path: binary,
+            check_vhs: check_vhs_installed,
             env_pairs,
+            execute_tape: VhsTape::execute,
+            settings: &settings,
         };
 
         // Act
@@ -1285,6 +1323,118 @@ mod tests {
                 .is_some_and(|err| err.contains("failed to parse hash sidecar")),
             "expected parse error, got {committed_error:?}",
         );
+    }
+
+    #[test]
+    fn generate_gif_success_invalidates_poster_and_cleans_recording_files() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let output_dir = temp.path();
+        let name = "generated";
+        let frame = TerminalFrame::new(80, 24, b"Hello");
+        let mut report = ProofReport::new(name);
+        report.add_capture("snap", "Snapshot", &frame);
+        let gif_path = output_dir.join(format!("{name}.gif"));
+        let hash_path = hash_sidecar_path(output_dir, name);
+        let poster_path = output_dir.join(format!("{name}.png"));
+        let screenshot_path = output_dir.join(format!(".{name}.capture.png"));
+        let tape_path = output_dir.join(format!("{name}.tape"));
+        let expected_hash = compute_frame_hash(&report, &[]);
+        std::fs::write(&poster_path, b"stale poster").expect("write poster");
+        let scenario = Scenario::new(name).capture();
+        let settings = VhsTapeSettings::feature_demo();
+        let vhs = test_vhs_context(&settings, vhs_available, successful_tape_execution);
+
+        // Act
+        let status = generate_gif(
+            &scenario,
+            &report,
+            name,
+            output_dir,
+            GifContext {
+                mode: GifMode::AlwaysGenerate,
+                redactions: &[],
+            },
+            vhs,
+        );
+
+        // Assert
+        assert!(matches!(status, GifStatus::Generated(path) if path == gif_path));
+        assert_eq!(
+            std::fs::read_to_string(&hash_path).expect("read hash"),
+            format!("{expected_hash}\n")
+        );
+        assert!(!poster_path.exists());
+        assert!(!screenshot_path.exists());
+        assert!(!tape_path.exists());
+    }
+
+    #[test]
+    fn generate_gif_failure_preserves_poster_and_cleans_recording_files() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let output_dir = temp.path();
+        let name = "failed";
+        let report = ProofReport::new(name);
+        let hash_path = hash_sidecar_path(output_dir, name);
+        let poster_path = output_dir.join(format!("{name}.png"));
+        let screenshot_path = output_dir.join(format!(".{name}.capture.png"));
+        let tape_path = output_dir.join(format!("{name}.tape"));
+        std::fs::write(&poster_path, b"valid poster").expect("write poster");
+        let scenario = Scenario::new(name).capture();
+        let settings = VhsTapeSettings::feature_demo();
+        let vhs = test_vhs_context(&settings, vhs_available, failed_tape_execution);
+
+        // Act
+        let status = generate_gif(
+            &scenario,
+            &report,
+            name,
+            output_dir,
+            GifContext {
+                mode: GifMode::AlwaysGenerate,
+                redactions: &[],
+            },
+            vhs,
+        );
+
+        // Assert
+        assert!(matches!(status, GifStatus::TapeExecutionFailed(_)));
+        assert!(poster_path.exists());
+        assert!(!hash_path.exists());
+        assert!(!screenshot_path.exists());
+        assert!(!tape_path.exists());
+    }
+
+    #[test]
+    fn generate_gif_missing_vhs_preserves_artifacts() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let output_dir = temp.path();
+        let name = "missing_vhs";
+        let report = ProofReport::new(name);
+        let poster_path = output_dir.join(format!("{name}.png"));
+        std::fs::write(&poster_path, b"valid poster").expect("write poster");
+        let scenario = Scenario::new(name);
+        let settings = VhsTapeSettings::feature_demo();
+        let vhs = test_vhs_context(&settings, vhs_unavailable, failed_tape_execution);
+
+        // Act
+        let status = generate_gif(
+            &scenario,
+            &report,
+            name,
+            output_dir,
+            GifContext {
+                mode: GifMode::GenerateIfStale,
+                redactions: &[],
+            },
+            vhs,
+        );
+
+        // Assert
+        assert!(matches!(status, GifStatus::VhsNotInstalled));
+        assert!(poster_path.exists());
     }
 
     #[test]
@@ -1401,5 +1551,50 @@ mod tests {
         assert_eq!(status.gif_path(), Some(Path::new("/tmp/feature.gif")));
         assert!(!status.is_failure());
         assert!(status.is_stale());
+    }
+
+    fn test_vhs_context(
+        settings: &VhsTapeSettings,
+        check_vhs: fn() -> Result<(), VhsError>,
+        execute_tape: fn(&VhsTape, &Path) -> Result<PathBuf, VhsError>,
+    ) -> VhsContext<'_> {
+        VhsContext {
+            binary_path: Path::new("/usr/bin/true"),
+            check_vhs,
+            env_pairs: &[],
+            execute_tape,
+            settings,
+        }
+    }
+
+    fn vhs_available() -> Result<(), VhsError> {
+        std::fs::metadata(".")
+            .map(|_| ())
+            .map_err(|err| VhsError::IoError(err.to_string()))
+    }
+
+    fn vhs_unavailable() -> Result<(), VhsError> {
+        Err(VhsError::NotInstalled(
+            "VHS unavailable in test".to_string(),
+        ))
+    }
+
+    fn successful_tape_execution(tape: &VhsTape, tape_path: &Path) -> Result<PathBuf, VhsError> {
+        stage_tape_execution(tape, tape_path)
+    }
+
+    fn failed_tape_execution(tape: &VhsTape, tape_path: &Path) -> Result<PathBuf, VhsError> {
+        let _ = stage_tape_execution(tape, tape_path)?;
+
+        Err(VhsError::ExecutionFailed("simulated failure".to_string()))
+    }
+
+    fn stage_tape_execution(tape: &VhsTape, tape_path: &Path) -> Result<PathBuf, VhsError> {
+        tape.write_to(tape_path)
+            .map_err(|err| VhsError::IoError(err.to_string()))?;
+        std::fs::write(tape.screenshot_path(), b"temporary screenshot")
+            .map_err(|err| VhsError::IoError(err.to_string()))?;
+
+        Ok(tape.screenshot_path().to_path_buf())
     }
 }

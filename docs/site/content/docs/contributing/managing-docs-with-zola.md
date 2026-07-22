@@ -72,7 +72,9 @@ The `/features/` page auto-discovers entries from individual `.md` files in
    `crates/agentty/tests/e2e/`.
 1. Place the generated GIF in `static/features/`. `FeatureTest` writes this when VHS is
    installed; if GIF generation is skipped, do not add or keep the feature page until
-   the matching asset exists.
+   the matching asset exists. Successful GIF regeneration removes the previous
+   same-named PNG so it cannot remain as a stale poster; recreate and inspect the poster
+   before finalizing the feature.
 1. Create `content/features/<name>.md` with the following front matter:
    ```toml
    +++

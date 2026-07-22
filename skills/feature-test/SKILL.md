@@ -211,6 +211,79 @@ Routine agent validation must use `TESTTY_GIF_MODE=check` so the semantic PTY as
 still run while GIF freshness is checked without invoking VHS or launching Chrome. Use
 `TESTTY_GIF_MODE=force` only when intentionally regenerating GIF assets.
 
+### Record in the canonical container
+
+Committed hash sidecars must be produced by the same environment that CI verifies them
+in. `docker/e2e.Dockerfile` defines that environment: a pinned `linux/amd64` image with
+the Rust toolchain, `prek`, `cargo-nextest`, and the full VHS recording stack (`vhs`,
+`ttyd`, Chromium, `ffmpeg`, JetBrains Mono). Presubmit, postsubmit, and release checks
+pull this image from GHCR by digest and run the `test-agentty-e2e` hook inside it
+against a read-only checkout. Pull the same immutable digest for local recording instead
+of building or recording on the host. The host needs Docker only — no local Chrome or
+VHS — and the localhost-socket sandbox restriction below does not apply inside the
+container.
+
+Record or refresh feature artifacts with a writable workspace mount and `generate` mode,
+which re-records only missing or stale GIFs. Run the local container as the host user so
+Linux bind mounts remain writable. A host-owned cache directory provides writable home,
+Cargo, `prek`, and build locations while preserving them between runs:
+
+```sh
+e2e_image=ghcr.io/agentty-xyz/agentty-e2e@sha256:d348629b6c449d33f5285c9ef2b7ea0ac3c47fcf264b1ec7f3f4c58a6952a696
+e2e_cache_root="${XDG_CACHE_HOME:-${HOME}/.cache}/agentty-e2e"
+mkdir -p \
+  "${e2e_cache_root}/home" \
+  "${e2e_cache_root}/cargo" \
+  "${e2e_cache_root}/prek" \
+  "${e2e_cache_root}/target"
+
+docker pull "${e2e_image}"
+
+docker run --rm --platform linux/amd64 \
+  --user "$(id -u):$(id -g)" \
+  --mount type=bind,source="$PWD",target=/workspace \
+  --mount type=bind,source="${e2e_cache_root}",target=/cache \
+  --env HOME=/cache/home \
+  --env CARGO_HOME=/cache/cargo \
+  --env PREK_HOME=/cache/prek \
+  --env CARGO_TARGET_DIR=/cache/target \
+  --env TESTTY_GIF_MODE=generate \
+  "${e2e_image}" \
+  cargo nextest run --locked --profile ci -p agentty --test e2e test_{name}
+```
+
+The `--user` override is only for writable local recording. CI does not use it: the
+image retains its unprivileged UID 1001 default, and workflows mount the checkout
+read-only for `check` mode.
+
+Review the changed GIF and `.{name}.hash` sidecar, then refresh the PNG poster for every
+regenerated GIF (section 4) before committing all three together. Successful generation
+removes the previous same-named PNG intentionally so a stale poster cannot pass the
+nonempty-poster integrity check; a failed recording preserves the last valid poster.
+
+#### Refresh the canonical image
+
+Only maintainers changing `docker/e2e.Dockerfile` should build and publish a replacement
+image. Build the `linux/amd64` candidate, run the affected focused feature tests with
+the local tag, then push `latest` after authenticating Docker to GHCR with package-write
+permission:
+
+```sh
+docker build --platform linux/amd64 \
+  --file docker/e2e.Dockerfile \
+  --tag ghcr.io/agentty-xyz/agentty-e2e:latest docker
+
+docker push ghcr.io/agentty-xyz/agentty-e2e:latest
+```
+
+Copy the digest reported by `docker push` into every workflow `E2E_IMAGE` value and the
+local recording command above. Verify that the digest can be pulled without registry
+credentials so forked pull-request CI can use it. Re-record every feature affected by a
+tool, browser, font, or rendering change and refresh its PNG poster before committing
+the new digest and artifacts together.
+
+### Host recording caveats
+
 `force` mode must run from an unsandboxed shell — a normal user terminal, or a single
 agent command explicitly approved to bypass the sandbox. VHS records through localhost
 sockets (`ttyd` plus the Chrome DevTools protocol), and sandboxed agent shells deny all

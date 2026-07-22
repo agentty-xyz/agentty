@@ -113,12 +113,23 @@ impl VhsTape {
         env_vars: &[(&str, &str)],
         settings: &VhsTapeSettings,
     ) -> Self {
-        let content = compile_tape(scenario, binary_path, screenshot_path, env_vars, settings);
+        let gif_stem = screenshot_path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy();
+        let gif_path = screenshot_path
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join(format!("{gif_stem}.gif"));
 
-        Self {
-            content,
-            screenshot_path: screenshot_path.to_path_buf(),
-        }
+        Self::from_scenario_with_output_path(
+            scenario,
+            binary_path,
+            &gif_path,
+            screenshot_path,
+            env_vars,
+            settings,
+        )
     }
 
     /// Return the rendered tape content as a string.
@@ -185,6 +196,30 @@ impl VhsTape {
     pub fn screenshot_path(&self) -> &Path {
         &self.screenshot_path
     }
+
+    /// Compile a scenario while keeping GIF output separate from screenshots.
+    pub(crate) fn from_scenario_with_output_path(
+        scenario: &Scenario,
+        binary_path: &Path,
+        gif_path: &Path,
+        screenshot_path: &Path,
+        env_vars: &[(&str, &str)],
+        settings: &VhsTapeSettings,
+    ) -> Self {
+        let content = compile_tape(
+            scenario,
+            binary_path,
+            gif_path,
+            screenshot_path,
+            env_vars,
+            settings,
+        );
+
+        Self {
+            content,
+            screenshot_path: screenshot_path.to_path_buf(),
+        }
+    }
 }
 
 /// Errors from VHS tape operations.
@@ -211,23 +246,12 @@ pub enum VhsError {
 fn compile_tape(
     scenario: &Scenario,
     binary_path: &Path,
+    gif_path: &Path,
     screenshot_path: &Path,
     env_vars: &[(&str, &str)],
     settings: &VhsTapeSettings,
 ) -> String {
     let mut tape = String::new();
-
-    // Derive the GIF filename from the screenshot path stem so the output
-    // name matches the caller's expected feature name rather than the
-    // internal scenario name.
-    let gif_stem = screenshot_path
-        .file_stem()
-        .unwrap_or_default()
-        .to_string_lossy();
-    let gif_path = screenshot_path
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join(format!("{gif_stem}.gif"));
 
     // Infallible: all `writeln!` calls below write to a String, which cannot fail.
     // Header settings.
@@ -476,6 +500,7 @@ mod tests {
         let tape = compile_tape(
             &scenario,
             Path::new("/usr/bin/echo"),
+            Path::new("/tmp/shot.gif"),
             Path::new("/tmp/shot.png"),
             &[],
             &settings,
@@ -497,6 +522,7 @@ mod tests {
         let tape = compile_tape(
             &scenario,
             Path::new("/usr/bin/echo"),
+            Path::new("/tmp/shot.gif"),
             Path::new("/tmp/shot.png"),
             &[("AGENTTY_ROOT", "/tmp/root")],
             &VhsTapeSettings::default(),
@@ -515,6 +541,7 @@ mod tests {
         let tape = compile_tape(
             &scenario,
             Path::new("/usr/bin/echo"),
+            Path::new("/tmp/shot.gif"),
             Path::new("/tmp/shot.png"),
             &[],
             &VhsTapeSettings::default(),
@@ -723,6 +750,7 @@ mod tests {
         let tape = compile_tape(
             &scenario,
             Path::new("/usr/bin/echo"),
+            Path::new("/tmp/shot.gif"),
             Path::new("/tmp/shot.png"),
             &[("KEY", "it's a value")],
             &VhsTapeSettings::default(),
@@ -743,6 +771,7 @@ mod tests {
         let tape = compile_tape(
             &scenario,
             Path::new("/usr/bin/echo"),
+            Path::new("/tmp/shot.gif"),
             Path::new("/tmp/shot.png"),
             &[],
             &VhsTapeSettings::default(),
@@ -761,6 +790,7 @@ mod tests {
         let tape = compile_tape(
             &scenario,
             Path::new("/usr/bin/echo"),
+            Path::new("/tmp/shot.gif"),
             Path::new("/tmp/shot.png"),
             &[("KEY", "val")],
             &VhsTapeSettings::default(),
@@ -791,6 +821,7 @@ mod tests {
         let tape = compile_tape(
             &scenario,
             Path::new("/path with spaces/bin"),
+            Path::new("/tmp/shot.gif"),
             Path::new("/tmp/shot.png"),
             &[],
             &VhsTapeSettings::default(),
@@ -850,6 +881,33 @@ mod tests {
         assert!(content.contains("Set Height 1600"));
         assert!(content.contains("Set Theme \"OneDark\""));
         assert!(content.contains("Set Framerate 30"));
+    }
+
+    #[test]
+    fn from_scenario_with_output_path_separates_gif_and_screenshot() {
+        // Arrange
+        let scenario = Scenario::new("separate_paths").capture();
+        let settings = VhsTapeSettings::feature_demo();
+        let gif_path = Path::new("/tmp/feature.gif");
+        let screenshot_path = Path::new("/tmp/.feature.capture.png");
+
+        // Act
+        let tape = VhsTape::from_scenario_with_output_path(
+            &scenario,
+            Path::new("/usr/bin/echo"),
+            gif_path,
+            screenshot_path,
+            &[],
+            &settings,
+        );
+
+        // Assert
+        assert!(tape.render().contains("Output \"/tmp/feature.gif\""));
+        assert!(
+            tape.render()
+                .contains("Screenshot \"/tmp/.feature.capture.png\"")
+        );
+        assert_eq!(tape.screenshot_path(), screenshot_path);
     }
 
     #[test]
