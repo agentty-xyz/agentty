@@ -236,7 +236,7 @@ mod tests {
         assert!(
             turn_prompt
                 .text
-                .contains("provider enforces Agentty's response JSON schema")
+                .contains("provider enforces the response JSON schema")
         );
         assert!(!turn_prompt.text.contains("Authoritative JSON Schema:"));
     }

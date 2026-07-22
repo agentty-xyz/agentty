@@ -213,10 +213,21 @@ derived data instead of recomputing the render twice per frame.
    or waits until the active publish completes. Post-rebase auto-push transfers the
    guard again, preventing a subsequent sync from starting until that publish finishes.
    After a successful push, linked review-request and commit metadata are resolved and
-   refreshed; lookup failures append the existing warning notice instead of being
-   discarded. The push result is persisted as a durable transcript notice and atomically
-   replaces the matching transient progress row when the reducer applies the terminal
-   sync event.
+   refreshed. Agentty reads the current remote title and description after each
+   successful push and sends them, the cumulative session summary, and the generated
+   commit metadata through one semantic reconciliation prompt. The prompt keeps the
+   title byte-for-byte stable unless the primary objective changed materially and
+   updates the description while retaining intentional user additions such as issue
+   links, checklists, instructions, and context. No metadata baseline is persisted. A
+   proposed description that omits any substantive current line is rejected. Before
+   editing, the forge adapter reads the remote fields again and applies each changed
+   field only if it still matches the value used during reconciliation. This is
+   best-effort concurrent-edit protection: GitHub and GitLab metadata updates have no
+   atomic version precondition, so a manual edit made after the final read can still be
+   overwritten. Lookup or evaluation failures append the existing warning notice instead
+   of being discarded. The push result is persisted as a durable transcript notice and
+   atomically replaces the matching transient progress row when the reducer applies the
+   terminal sync event.
 1. Completed stacked-parent turns fan out `SessionCommand::Rebase` to review-ready
    materialized children so child branches replay onto the latest parent branch.
 1. The session size is refreshed and the final status becomes `Review` or `Question`

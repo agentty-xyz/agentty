@@ -369,7 +369,7 @@ mod tests {
         let normalized_resume_prompt = normalized_resume_prompt.join(" ");
         assert!(resume_prompt.contains("previous transcript line"));
         assert!(normalized_resume_prompt.contains("Treat the user's new prompt as a follow-up"));
-        assert!(normalized_resume_prompt.contains("changes made during this Agentty session"));
+        assert!(normalized_resume_prompt.contains("changes made during this session"));
         assert!(normalized_resume_prompt.contains("preserve unrelated pre-existing work"));
         assert!(resume_prompt.contains("Continue and update tests"));
     }
@@ -478,7 +478,7 @@ mod tests {
 
         // Assert
         assert!(rendered_prompt.contains("Structured response protocol:"));
-        assert!(rendered_prompt.contains("provider enforces Agentty's response JSON schema"));
+        assert!(rendered_prompt.contains("provider enforces the response JSON schema"));
         assert!(rendered_prompt.contains("Return a single JSON object"));
         assert!(!rendered_prompt.contains("Follow this JSON Schema exactly."));
         assert!(!rendered_prompt.contains("Authoritative JSON Schema:"));

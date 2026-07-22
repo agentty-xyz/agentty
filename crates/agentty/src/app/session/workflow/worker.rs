@@ -1259,11 +1259,18 @@ mod tests {
     /// canonical message they already expect.
     fn auto_commit_one_shot_client() -> Arc<dyn OneShotClient> {
         let mut one_shot_client = MockOneShotClient::new();
-        one_shot_client.expect_submit().times(0..).returning(|_| {
+        one_shot_client.expect_submit().times(0..).returning(|request| {
+            let answer = if request
+                .prompt
+                .contains("Reconcile the current review-request title")
+            {
+                r#"{"title":"Old title","description":"Old body\n\n- Update the linked review request body.","is_title_change_significant":false}"#
+            } else {
+                "Refine review metadata sync\n\n- Update the linked review request body."
+            };
+
             Ok(agent::OneShotSubmission {
-                response: AgentResponse::plain(
-                    "Refine review metadata sync\n\n- Update the linked review request body.",
-                ),
+                response: AgentResponse::plain(answer),
                 stats: agent::SessionStats {
                     added_lines: 0,
                     deleted_lines: 0,
@@ -2591,6 +2598,11 @@ mod tests {
             ),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
+        let mut turn_result = successful_turn_result("Implemented the change.");
+        turn_result.assistant_message.summary = Some(AgentResponseSummary {
+            session: "The linked review request still represents the same goal.".to_string(),
+            turn: "Updated the implementation details.".to_string(),
+        });
 
         // Act
         let status = apply_worker_turn_result(
@@ -2603,7 +2615,7 @@ mod tests {
                     crate::domain::agent::AgentModel::Gemini3FlashPreview,
                 ),
             },
-            Ok(successful_turn_result("Implemented the change.")),
+            Ok(turn_result),
         )
         .await
         .expect("turn result should succeed");
@@ -2636,7 +2648,7 @@ mod tests {
                 PublishedBranchSyncStatus::Succeeded,
             ]
         );
-        assert_eq!(review_request.title, "Refine review metadata sync");
+        assert_eq!(review_request.title, "Old title");
     }
 
     #[tokio::test]
@@ -2966,17 +2978,35 @@ mod tests {
             .in_sequence(sequence)
             .returning(|_| Ok(github_forge_remote()));
         mock_review_request_client
+            .expect_review_request_metadata()
+            .once()
+            .in_sequence(sequence)
+            .returning(|_, _| {
+                Box::pin(async {
+                    Ok(forge::ReviewRequestMetadata {
+                        body: "Old body".to_string(),
+                        title: "Old title".to_string(),
+                    })
+                })
+            });
+        mock_review_request_client
             .expect_sync_review_request_metadata()
             .once()
             .in_sequence(sequence)
             .withf(move |remote, display_id, input| {
                 remote.command_working_directory.as_deref() == Some(folder.as_path())
                     && display_id == "#42"
-                    && input.title == "Refine review metadata sync"
-                    && input.body.as_deref() == Some("- Update the linked review request body.")
+                    && input.title.as_ref().is_some_and(|title| {
+                        title.current == "Old title" && title.desired == "Old title"
+                    })
+                    && input.body.as_ref().is_some_and(|body| {
+                        body.current == "Old body"
+                            && body.desired
+                                == "Old body\n\n- Update the linked review request body."
+                    })
             })
-            .returning(|_, _, input| {
-                Box::pin(async move {
+            .returning(|_, _, _| {
+                Box::pin(async {
                     Ok(forge::ReviewRequestSummary {
                         display_id: "#42".to_string(),
                         forge_kind: forge::ForgeKind::GitHub,
@@ -2984,7 +3014,7 @@ mod tests {
                         state: ReviewRequestState::Open,
                         status_summary: Some("Draft".to_string()),
                         target_branch: "main".to_string(),
-                        title: input.title,
+                        title: "Old title".to_string(),
                         web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
                     })
                 })

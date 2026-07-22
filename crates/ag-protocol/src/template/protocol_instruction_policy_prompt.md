@@ -35,7 +35,7 @@ Structured response protocol:
 
 - Do not wrap the JSON in markdown code fences.
 
-- The provider enforces Agentty's response JSON schema outside this prompt. Follow the
+- The provider enforces the response JSON schema outside this prompt. Follow the
   structured response contract without adding fields or prose outside the JSON object.
 
 - {{ protocol_usage_instructions }}

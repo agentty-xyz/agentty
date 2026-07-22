@@ -29,7 +29,7 @@ use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel
 use crate::domain::session::{PublishedBranchSyncStatus, SessionId, Status};
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::transcript_notice::TranscriptNotice;
-use crate::infra::db::AppRepositories;
+use crate::infra::db::{AppRepositories, DbError};
 use crate::infra::fs::{self as fs, FsClient};
 
 const REBASE_ASSIST_POLICY: AssistPolicy = AssistPolicy {
@@ -265,8 +265,10 @@ struct FinalizeRebaseInput<'a> {
     folder: &'a Path,
     git_client: &'a Arc<dyn GitClient>,
     id: &'a str,
+    one_shot_client: &'a Arc<dyn OneShotClient>,
     rebase_result: Result<String, SessionError>,
     review_request_client: &'a Arc<dyn forge::ReviewRequestClient>,
+    session_agent: AgentSelection,
     session_update_versions: &'a SessionUpdateVersionMap,
     /// Bound transition context for restoring `Review` after rebase cleanup.
     status_transition: &'a StatusTransition,
@@ -283,7 +285,9 @@ struct RebaseAutoPushInput<'a> {
     db: &'a AppRepositories,
     folder: &'a Path,
     git_client: &'a Arc<dyn GitClient>,
+    one_shot_client: &'a Arc<dyn OneShotClient>,
     review_request_client: &'a Arc<dyn forge::ReviewRequestClient>,
+    session_agent: AgentSelection,
     session_id: &'a str,
     session_update_versions: &'a SessionUpdateVersionMap,
     transcript: &'a Arc<Mutex<SessionTranscript>>,
@@ -1859,7 +1863,7 @@ impl SessionManager {
                 fs_client: Arc::clone(&fs_client),
                 git_client: Arc::clone(&git_client),
                 id: id.clone(),
-                one_shot_client,
+                one_shot_client: Arc::clone(&one_shot_client),
                 rebase_plan,
                 session_agent,
                 session_update_versions: session_update_versions.clone(),
@@ -1879,8 +1883,10 @@ impl SessionManager {
             folder: &folder,
             git_client: &git_client,
             id: &id,
+            one_shot_client: &one_shot_client,
             rebase_result,
             review_request_client: &review_request_client,
+            session_agent,
             session_update_versions: &session_update_versions,
             status_transition: &status_transition,
             transcript: &transcript,
@@ -2117,8 +2123,10 @@ impl SessionManager {
             folder,
             git_client,
             id,
+            one_shot_client,
             rebase_result,
             review_request_client,
+            session_agent,
             session_update_versions,
             status_transition,
             transcript,
@@ -2146,7 +2154,9 @@ impl SessionManager {
                     db,
                     folder,
                     git_client,
+                    one_shot_client,
                     review_request_client,
+                    session_agent,
                     session_id: id,
                     session_update_versions,
                     transcript,
@@ -2192,7 +2202,9 @@ impl SessionManager {
             db,
             folder,
             git_client,
+            one_shot_client,
             review_request_client,
+            session_agent,
             session_id,
             session_update_versions,
             transcript,
@@ -2227,10 +2239,21 @@ impl SessionManager {
                 "failed to publish branch sync start because the app event receiver is closed"
             );
         }
-        let review_request_metadata_sync = Some(published_branch::ReviewRequestMetadataSyncInput {
-            clock: Arc::clone(clock),
-            commit_message: None,
-            review_request_client: Arc::clone(review_request_client),
+        let session_summary = Self::review_request_session_summary_after_rebase(
+            session_id,
+            db.sessions().load_session_summary(session_id).await,
+        );
+        let review_request_metadata_sync = session_summary.map(|session_summary| {
+            published_branch::ReviewRequestMetadataSyncInput {
+                clock: Arc::clone(clock),
+                commit_message: None,
+                evaluation: published_branch::ReviewRequestMetadataEvaluationInput {
+                    one_shot_client: Arc::clone(one_shot_client),
+                    session_agent,
+                    session_summary,
+                },
+                review_request_client: Arc::clone(review_request_client),
+            }
         });
 
         let app_event_tx = app_event_tx.clone();
@@ -2257,6 +2280,26 @@ impl SessionManager {
             let _branch_operation_guard = branch_operation_guard;
             published_branch::run_published_branch_auto_push(auto_push_input).await;
         });
+    }
+
+    /// Converts a post-rebase summary query into evaluator context, skipping
+    /// semantic metadata reconciliation when the query fails.
+    fn review_request_session_summary_after_rebase(
+        session_id: &str,
+        session_summary: Result<Option<String>, DbError>,
+    ) -> Option<String> {
+        match session_summary {
+            Ok(session_summary) => Some(session_summary.unwrap_or_default()),
+            Err(error) => {
+                warn!(
+                    session_id = session_id,
+                    error = %error,
+                    "failed to load session summary for post-rebase review-request metadata sync"
+                );
+
+                None
+            }
+        }
     }
 
     /// Updates the persisted session title from the canonical commit message.
@@ -3061,6 +3104,16 @@ mod tests {
         });
 
         Arc::new(one_shot_client)
+    }
+
+    /// Returns the agent selection used by rebase workflow tests.
+    fn test_session_agent() -> AgentSelection {
+        AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini3FlashPreview)
+    }
+
+    /// Returns an empty forge boundary for tests that do not sync metadata.
+    fn empty_review_request_client() -> Arc<dyn forge::ReviewRequestClient> {
+        Arc::new(forge::MockReviewRequestClient::new())
     }
 
     #[tokio::test]
@@ -5025,8 +5078,7 @@ mod tests {
         let status = Arc::new(Mutex::new(Status::Rebasing));
         let transcript = empty_transcript();
         let clock: Arc<dyn Clock> = Arc::new(crate::infra::clock::RealClock);
-        let review_request_client: Arc<dyn forge::ReviewRequestClient> =
-            Arc::new(forge::MockReviewRequestClient::new());
+        let review_request_client = empty_review_request_client();
         let status_transition = StatusTransition::from_parts(
             app_event_tx.clone(),
             Arc::clone(&clock),
@@ -5051,8 +5103,10 @@ mod tests {
             folder: &folder,
             git_client: &git_client,
             id: "sess-rebase",
+            one_shot_client: &test_one_shot_client(),
             rebase_result: Ok("Successfully synced wt/sess-rebase onto main".to_string()),
             review_request_client: &review_request_client,
+            session_agent: test_session_agent(),
             session_update_versions: &session_update_versions,
             status_transition: &status_transition,
             transcript: &transcript,
@@ -5167,6 +5221,10 @@ mod tests {
             .update_session_review_request("sess-rebase", Some(linked_github_review_request()))
             .await
             .expect("failed to persist review request");
+        db.sessions()
+            .update_session_summary("sess-rebase", "The rebase preserves the existing goal.")
+            .await
+            .expect("failed to persist session summary");
     }
 
     /// Returns one linked GitHub review request fixture for metadata-sync
@@ -5245,16 +5303,32 @@ mod tests {
             .once()
             .returning(|_| Ok(github_forge_remote()));
         mock_review_request_client
+            .expect_review_request_metadata()
+            .once()
+            .returning(|_, _| {
+                Box::pin(async {
+                    Ok(forge::ReviewRequestMetadata {
+                        body: "Old details.".to_string(),
+                        title: "Old title".to_string(),
+                    })
+                })
+            });
+        mock_review_request_client
             .expect_sync_review_request_metadata()
             .once()
             .withf(move |remote, display_id, input| {
                 remote.command_working_directory.as_deref() == Some(folder.as_path())
                     && display_id == "#42"
-                    && input.title == "Refresh queued sync metadata"
-                    && input.body.as_deref() == Some("- Preserve sync details.")
+                    && input.title.as_ref().is_some_and(|title| {
+                        title.current == "Old title" && title.desired == "Old title"
+                    })
+                    && input.body.as_ref().is_some_and(|body| {
+                        body.current == "Old details."
+                            && body.desired == "Old details.\n\n- Preserve sync details."
+                    })
             })
-            .returning(|_, _, input| {
-                Box::pin(async move {
+            .returning(|_, _, _| {
+                Box::pin(async {
                     Ok(forge::ReviewRequestSummary {
                         display_id: "#42".to_string(),
                         forge_kind: forge::ForgeKind::GitHub,
@@ -5262,13 +5336,28 @@ mod tests {
                         state: crate::domain::session::ReviewRequestState::Open,
                         status_summary: Some("Open".to_string()),
                         target_branch: "main".to_string(),
-                        title: input.title,
+                        title: "Old title".to_string(),
                         web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
                     })
                 })
             });
 
         mock_review_request_client
+    }
+
+    /// Returns one semantic metadata evaluator for post-rebase sync.
+    fn metadata_sync_one_shot_client() -> Arc<dyn OneShotClient> {
+        let mut one_shot_client = MockOneShotClient::new();
+        one_shot_client.expect_submit().once().returning(|_| {
+            Ok(agent::OneShotSubmission {
+                response: ag_protocol::AgentResponse::plain(
+                    r#"{"title":"Old title","description":"Old details.\n\n- Preserve sync details.","is_title_change_significant":false}"#,
+                ),
+                stats: agent::SessionStats::default(),
+            })
+        });
+
+        Arc::new(one_shot_client)
     }
 
     /// Collects the in-progress and terminal published-branch sync states.
@@ -5291,8 +5380,8 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies post-rebase auto-push refreshes linked PR/MR metadata from the
-    /// latest session commit message.
+    /// Verifies post-rebase auto-push reconciles live PR/MR metadata without a
+    /// persisted baseline.
     async fn test_finalize_rebase_task_syncs_review_request_metadata_after_auto_push() {
         // Arrange
         let db = AppRepositories::in_memory().await;
@@ -5325,8 +5414,13 @@ mod tests {
             folder: &folder,
             git_client: &git_client,
             id: "sess-rebase",
+            one_shot_client: &metadata_sync_one_shot_client(),
             rebase_result: Ok("Successfully synced wt/sess-rebase onto main".to_string()),
             review_request_client: &review_request_client,
+            session_agent: AgentSelection::new(
+                AgentKind::Antigravity,
+                AgentModel::Gemini3FlashPreview,
+            ),
             session_update_versions: &session_update_versions,
             status_transition: &status_transition,
             transcript: &transcript,
@@ -5348,7 +5442,22 @@ mod tests {
                 PublishedBranchSyncStatus::Succeeded,
             ]
         );
-        assert_eq!(review_request.title, "Refresh queued sync metadata");
+        assert_eq!(review_request.title, "Old title");
+    }
+
+    #[test]
+    fn test_review_request_session_summary_after_rebase_skips_database_errors() {
+        // Arrange
+        let session_summary = Err(DbError::Query(sqlx::Error::PoolClosed));
+
+        // Act
+        let summary = SessionManager::review_request_session_summary_after_rebase(
+            "sess-rebase",
+            session_summary,
+        );
+
+        // Assert
+        assert_eq!(summary, None);
     }
 
     #[tokio::test]
@@ -5397,8 +5506,7 @@ mod tests {
                 })
             });
         let git_client: Arc<dyn GitClient> = Arc::new(mock_git_client);
-        let review_request_client: Arc<dyn forge::ReviewRequestClient> =
-            Arc::new(forge::MockReviewRequestClient::new());
+        let review_request_client = empty_review_request_client();
 
         // Act
         SessionManager::finalize_rebase_task(FinalizeRebaseInput {
@@ -5409,8 +5517,10 @@ mod tests {
             folder: &folder,
             git_client: &git_client,
             id: "sess-rebase",
+            one_shot_client: &test_one_shot_client(),
             rebase_result: Ok("Successfully synced wt/sess-rebase onto main".to_string()),
             review_request_client: &review_request_client,
+            session_agent: test_session_agent(),
             session_update_versions: &session_update_versions,
             status_transition: &status_transition,
             transcript: &transcript,
@@ -5464,8 +5574,7 @@ mod tests {
         let status = Arc::new(Mutex::new(Status::Rebasing));
         let transcript = empty_transcript();
         let clock: Arc<dyn Clock> = Arc::new(crate::infra::clock::RealClock);
-        let review_request_client: Arc<dyn forge::ReviewRequestClient> =
-            Arc::new(forge::MockReviewRequestClient::new());
+        let review_request_client = empty_review_request_client();
         let status_transition = StatusTransition::from_parts(
             app_event_tx.clone(),
             Arc::clone(&clock),
@@ -5485,8 +5594,10 @@ mod tests {
             folder: &folder,
             git_client: &git_client,
             id: "sess-no-push",
+            one_shot_client: &test_one_shot_client(),
             rebase_result: Ok("Successfully synced wt/sess-no-push onto main".to_string()),
             review_request_client: &review_request_client,
+            session_agent: test_session_agent(),
             session_update_versions: &session_update_versions,
             status_transition: &status_transition,
             transcript: &transcript,

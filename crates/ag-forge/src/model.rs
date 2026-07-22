@@ -398,14 +398,32 @@ pub struct CreateReviewRequestInput {
     pub title: String,
 }
 
-/// Input required to keep an existing review request aligned with the latest
-/// session commit message.
+/// Current remote review-request title and description.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReviewRequestMetadata {
+    /// Current body or description.
+    pub body: String,
+    /// Current title.
+    pub title: String,
+}
+
+/// One review-request field update guarded by the remote value used during
+/// semantic reconciliation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReviewRequestMetadataFieldUpdate {
+    /// Remote value read before semantic reconciliation.
+    pub current: String,
+    /// Reconciled value to publish if the remote field is still unchanged.
+    pub desired: String,
+}
+
+/// Input required to conditionally update reconciled review-request metadata.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UpdateReviewRequestInput {
-    /// Optional body or description submitted with the review request.
-    pub body: Option<String>,
-    /// Title shown in the forge review-request UI.
-    pub title: String,
+    /// Optional description update.
+    pub body: Option<ReviewRequestMetadataFieldUpdate>,
+    /// Optional title update.
+    pub title: Option<ReviewRequestMetadataFieldUpdate>,
 }
 
 /// Review-request failures normalized for actionable UI messaging.

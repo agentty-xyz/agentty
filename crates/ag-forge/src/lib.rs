@@ -9,8 +9,8 @@ mod model;
 mod remote;
 
 pub(crate) use adapter_common::{
-    ReviewRequestOperations, SyncReviewRequestMetadataConfig, map_parse_error,
-    normalize_provider_label, operation_failed, status_summary_parts,
+    ReviewRequestMetadataEdit, ReviewRequestOperations, SyncReviewRequestMetadataConfig,
+    map_parse_error, normalize_provider_label, operation_failed, status_summary_parts,
 };
 #[cfg(any(test, feature = "test-utils"))]
 pub use client::MockReviewRequestClient;
@@ -25,8 +25,9 @@ pub(crate) use gitlab::GitLabReviewRequestAdapter;
 pub use model::{
     AssignedIssue, CreateReviewRequestInput, ForgeFuture, ForgeKind, ForgeRemote, IssueDetail,
     RequestedReview, RequestedReviewAudience, ReviewComment, ReviewCommentAnchorSide,
-    ReviewCommentSnapshot, ReviewCommentThread, ReviewRequestError, ReviewRequestState,
-    ReviewRequestSummary, UpdateReviewRequestInput, is_gitlab_host,
+    ReviewCommentSnapshot, ReviewCommentThread, ReviewRequestError, ReviewRequestMetadata,
+    ReviewRequestMetadataFieldUpdate, ReviewRequestState, ReviewRequestSummary,
+    UpdateReviewRequestInput, is_gitlab_host,
 };
 pub use remote::detect_remote;
 pub(crate) use remote::{parse_remote_url, strip_port};

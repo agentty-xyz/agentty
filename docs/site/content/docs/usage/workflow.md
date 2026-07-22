@@ -391,10 +391,21 @@ publish popup for the linked forge review request:
 - When no review request is linked yet, only an open request for the same branch is
   reused; merged or closed requests are left alone.
 - After the first publish, later completed turns push the same remote branch
-  automatically in the background when no chat message or sync is already queued, and
-  update the review request title and description from the latest session commit message
-  when they differ. Failed background pushes keep the manual `p` flow available for
-  retry.
+  automatically in the background when no chat message or sync is already queued. After
+  each successful push, Agentty reads the current remote title and description and
+  reconciles them with the cumulative session summary. The title stays exactly as it is
+  unless the primary objective changed materially; implementation refinements, tests,
+  documentation, and review fixes keep it stable.
+- Description updates retain the intent of user-added content, including issue links,
+  other URLs, checklists, instructions, and context, while incorporating session details
+  that changed. A proposed description that omits a substantive current line is
+  rejected, leaving the remote description unchanged. Agentty stores no metadata
+  baseline. It checks the remote fields again immediately before editing and skips a
+  field if somebody changed it during reconciliation. This check is best-effort because
+  forge metadata updates have no atomic version precondition; an edit made after the
+  final check can still race with Agentty's update. Failed background pushes or metadata
+  evaluation keep the manual `p` flow available for retry and surface the existing
+  review-request sync warning.
 - On the review-comments page, mark actionable inline threads with `a` to address or `d`
   to deny, then press `Enter` to submit all marked threads in one agent turn. Address
   actions request the relevant worktree change; deny actions request a concise technical
