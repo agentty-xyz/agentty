@@ -570,6 +570,7 @@ impl App {
         let working_dir = session.folder.clone();
 
         self.mode = AppMode::ReviewComments {
+            comment_actions: Vec::new(),
             comment_error: None,
             comment_snapshot: None,
             diff,

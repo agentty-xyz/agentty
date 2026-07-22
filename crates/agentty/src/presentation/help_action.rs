@@ -752,26 +752,31 @@ pub(crate) fn diff_footer_actions() -> Vec<HelpAction> {
 
 /// Returns compact review-comment page actions for the current selection.
 pub(crate) fn review_comment_footer_actions(
-    can_resolve_all: bool,
-    can_resolve_selected: bool,
+    can_mark_selected: bool,
+    can_submit: bool,
 ) -> Vec<HelpAction> {
     let mut actions = vec![
         HelpAction::new("back", "q/Esc", "Back to session"),
         HelpAction::new("select comment", "j/k", "Select comment"),
         HelpAction::new("scroll pane", "Up/Down", "Scroll comment details"),
     ];
-    if can_resolve_selected {
+    if can_mark_selected {
         actions.push(HelpAction::new(
-            "resolve selected",
+            "address",
             "a",
-            "Resolve selected with agent",
+            "Toggle selected comment for agent address",
+        ));
+        actions.push(HelpAction::new(
+            "deny",
+            "d",
+            "Toggle selected comment for agent denial",
         ));
     }
-    if can_resolve_all {
+    if can_submit {
         actions.push(HelpAction::new(
-            "resolve all",
-            "A",
-            "Resolve all with agent",
+            "submit",
+            "Enter",
+            "Submit marked comments to the agent",
         ));
     }
 
@@ -1796,12 +1801,12 @@ mod tests {
     }
 
     #[test]
-    fn test_review_comment_actions_include_enabled_agent_resolution_keys() {
+    fn test_review_comment_actions_include_enabled_batch_keys() {
         // Arrange, Act
         let actions = review_comment_footer_actions(true, true);
         let comment_keys = actions.iter().map(|action| action.key).collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(comment_keys, ["q/Esc", "j/k", "Up/Down", "a", "A"]);
+        assert_eq!(comment_keys, ["q/Esc", "j/k", "Up/Down", "a", "d", "Enter"]);
     }
 }

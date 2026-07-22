@@ -214,17 +214,21 @@ comments explicitly show that they have no attached code line instead of highlig
 arbitrary diff row. Inline snippets use the same gutters and added/removed line colors
 as diff view.
 
-| Key           | Action                                            |
-| ------------- | ------------------------------------------------- |
-| `q` / `Esc`   | Return to session view                            |
-| `j` / `k`     | Select previous/next comment                      |
-| `Up` / `Down` | Scroll selected comment info                      |
-| `a`           | Address the selected actionable thread with agent |
-| `A`           | Address all actionable threads with the agent     |
+| Key           | Action                                                  |
+| ------------- | ------------------------------------------------------- |
+| `q` / `Esc`   | Return to session view                                  |
+| `j` / `k`     | Select previous/next comment                            |
+| `Up` / `Down` | Scroll selected comment info                            |
+| `a`           | Toggle the selected actionable thread as address        |
+| `d`           | Toggle the selected actionable thread as deny           |
+| `Enter`       | Submit all marked address and deny actions to the agent |
 
-`a` and `A` appear only while the session can accept a turn. Resolved and outdated
-inline threads are not actionable. Standalone comments are also read-only because they
-have no forge thread ID.
+Actionable rows start with `[ ]`, then show `[A]` for address or `[D]` for deny.
+Pressing the same action again clears that row; pressing the other action replaces it.
+`a`, `d`, and `Enter` appear only while the session can accept a turn, and `Enter`
+appears only after at least one row is marked. Resolved and outdated inline threads are
+not actionable. Standalone comments are also read-only because they have no forge thread
+ID.
 
 ## Publish Popup
 

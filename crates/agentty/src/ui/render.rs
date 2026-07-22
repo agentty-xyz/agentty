@@ -350,6 +350,7 @@ mod tests {
                 scroll_offset: None,
             },
             AppMode::ReviewComments {
+                comment_actions: Vec::new(),
                 comment_error: None,
                 comment_snapshot: None,
                 diff: String::new(),

@@ -1,5 +1,7 @@
 use ag_forge::{ReviewComment, ReviewCommentSnapshot, ReviewCommentThread};
 
+use super::app_mode::{ReviewCommentAction, ReviewCommentActionSelection};
+
 /// One row in the grouped review-comment selector projection.
 pub(crate) enum GroupedReviewCommentRow<'a> {
     /// Selectable standalone comment or inline thread.
@@ -92,6 +94,68 @@ pub(crate) fn selected_thread_id(
         ReviewCommentEntry::General(_) => None,
         ReviewCommentEntry::Thread(thread) => Some(thread.id.as_str()),
     })
+}
+
+/// Returns the selected thread identifier only when the thread is actionable.
+pub(crate) fn selected_actionable_thread_id(
+    snapshot: &ReviewCommentSnapshot,
+    selected_comment_index: usize,
+) -> Option<&str> {
+    let rows = grouped_review_comment_rows(snapshot);
+
+    selected_entry(&rows, selected_comment_index).and_then(|entry| match entry {
+        ReviewCommentEntry::Thread(thread) if thread.is_actionable() => Some(thread.id.as_str()),
+        ReviewCommentEntry::General(_) | ReviewCommentEntry::Thread(_) => None,
+    })
+}
+
+/// Returns the action selected for one forge thread, when present.
+pub(crate) fn selected_action(
+    selections: &[ReviewCommentActionSelection],
+    thread_id: &str,
+) -> Option<ReviewCommentAction> {
+    selections
+        .iter()
+        .find(|selection| selection.thread_id == thread_id)
+        .map(|selection| selection.action)
+}
+
+/// Toggles one thread's batch action, replacing a different existing action.
+pub(crate) fn toggle_action(
+    selections: &mut Vec<ReviewCommentActionSelection>,
+    thread_id: &str,
+    action: ReviewCommentAction,
+) {
+    if let Some(selection_index) = selections
+        .iter()
+        .position(|selection| selection.thread_id == thread_id)
+    {
+        if selections[selection_index].action == action {
+            selections.remove(selection_index);
+        } else {
+            selections[selection_index].action = action;
+        }
+
+        return;
+    }
+
+    selections.push(ReviewCommentActionSelection {
+        action,
+        thread_id: thread_id.to_string(),
+    });
+}
+
+/// Drops selections for threads that are no longer actionable after refresh.
+pub(crate) fn retain_actionable_selections(
+    selections: &mut Vec<ReviewCommentActionSelection>,
+    snapshot: &ReviewCommentSnapshot,
+) {
+    selections.retain(|selection| {
+        snapshot
+            .threads
+            .iter()
+            .any(|thread| thread.id == selection.thread_id && thread.is_actionable())
+    });
 }
 
 /// Retargets a positional selection to the same forge thread in an updated
@@ -256,6 +320,59 @@ mod tests {
         // Assert
         assert_eq!(updated_index, 0);
         assert_eq!(empty_index, 0);
+    }
+
+    #[test]
+    fn test_toggle_action_adds_replaces_and_removes_thread_selection() {
+        // Arrange
+        let mut selections = Vec::new();
+
+        // Act
+        toggle_action(&mut selections, "thread", ReviewCommentAction::Address);
+        toggle_action(&mut selections, "thread", ReviewCommentAction::Deny);
+        let replaced = selections.clone();
+        toggle_action(&mut selections, "thread", ReviewCommentAction::Deny);
+
+        // Assert
+        assert_eq!(
+            replaced,
+            vec![ReviewCommentActionSelection {
+                action: ReviewCommentAction::Deny,
+                thread_id: "thread".to_string(),
+            }]
+        );
+        assert!(selections.is_empty());
+    }
+
+    #[test]
+    fn test_retain_actionable_selections_removes_stale_threads() {
+        // Arrange
+        let snapshot = snapshot_with_threads([thread("current", false), thread("resolved", true)]);
+        let mut selections = vec![
+            ReviewCommentActionSelection {
+                action: ReviewCommentAction::Address,
+                thread_id: "current".to_string(),
+            },
+            ReviewCommentActionSelection {
+                action: ReviewCommentAction::Deny,
+                thread_id: "resolved".to_string(),
+            },
+            ReviewCommentActionSelection {
+                action: ReviewCommentAction::Address,
+                thread_id: "missing".to_string(),
+            },
+        ];
+
+        // Act
+        retain_actionable_selections(&mut selections, &snapshot);
+
+        // Assert
+        assert_eq!(selections.len(), 1);
+        assert_eq!(
+            selected_action(&selections, "current"),
+            Some(ReviewCommentAction::Address)
+        );
+        assert_eq!(selected_action(&selections, "resolved"), None);
     }
 
     /// Builds a snapshot from inline threads without standalone comments.

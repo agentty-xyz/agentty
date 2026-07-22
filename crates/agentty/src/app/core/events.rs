@@ -40,6 +40,8 @@ use crate::presentation::app_mode::{
     AppMode, ChatFocus, ConfirmationViewMode, DiffPreview, DiffPreviewUnavailableReason,
     HelpContext,
 };
+#[cfg(test)]
+use crate::presentation::app_mode::{ReviewCommentAction, ReviewCommentActionSelection};
 use crate::presentation::prompt::PromptAtMentionState;
 use crate::presentation::review_comment as review_comment_selection;
 
@@ -999,6 +1001,7 @@ impl App {
     ) {
         for (loaded_session_id, result) in updates {
             let AppMode::ReviewComments {
+                comment_actions,
                 comment_error,
                 comment_snapshot,
                 is_loading_comments,
@@ -1016,6 +1019,10 @@ impl App {
             *is_loading_comments = false;
             match result {
                 Ok(snapshot) => {
+                    review_comment_selection::retain_actionable_selections(
+                        comment_actions,
+                        &snapshot,
+                    );
                     *selected_comment_index = review_comment_selection::retarget_selected_index(
                         comment_snapshot.as_ref(),
                         *selected_comment_index,
@@ -2394,6 +2401,7 @@ mod tests {
         // Arrange
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::ReviewComments {
+            comment_actions: Vec::new(),
             comment_error: None,
             comment_snapshot: None,
             diff: String::new(),
@@ -2435,6 +2443,16 @@ mod tests {
             review_comment_thread("other", false),
         ]);
         app.mode = AppMode::ReviewComments {
+            comment_actions: vec![
+                ReviewCommentActionSelection {
+                    action: ReviewCommentAction::Address,
+                    thread_id: "selected".to_string(),
+                },
+                ReviewCommentActionSelection {
+                    action: ReviewCommentAction::Deny,
+                    thread_id: "other".to_string(),
+                },
+            ],
             comment_error: None,
             comment_snapshot: Some(previous_snapshot),
             diff: String::new(),
@@ -2455,10 +2473,15 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::ReviewComments {
+                ref comment_actions,
                 comment_snapshot: Some(ref snapshot),
                 selected_comment_index: 1,
                 ..
             } if review_comment_selection::selected_thread_id(snapshot, 1) == Some("selected")
+                && comment_actions == &[ReviewCommentActionSelection {
+                    action: ReviewCommentAction::Deny,
+                    thread_id: "other".to_string(),
+                }]
         ));
     }
 
@@ -2474,6 +2497,7 @@ mod tests {
         })
         .await;
         app.mode = AppMode::ReviewComments {
+            comment_actions: Vec::new(),
             comment_error: None,
             comment_snapshot: None,
             diff: String::new(),

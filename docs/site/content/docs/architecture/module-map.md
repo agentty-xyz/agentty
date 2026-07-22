@@ -75,18 +75,18 @@ For file-level detail, read the module docstrings directly.
   thread, key dispatch, mode-focused handlers under `runtime/mode/`, and shared handlers
   for common interactions such as issue/review detail navigation, session-output
   metrics, transcript scrolling, `KeyEvent` mapping to domain input commands, and
-  session review-comment selection and agent-resolution shortcuts. Runtime owns
-  `PresentationState`, including the shared `RenderCacheStore` used by input metrics and
-  frame rendering.
+  session review-comment navigation, address/deny marking, and batch submission. Runtime
+  owns `PresentationState`, including the shared `RenderCacheStore` used by input
+  metrics and frame rendering.
 - `presentation.rs` and `presentation/`: Frontend-neutral interaction state shared by
   runtime input and UI output. They expose mode, help-action, prompt, settings-screen
   actions, editor, scroll, viewport, and semantic list-selection contracts without
   importing Ratatui or `ui/` formatting. `presentation/review_comment.rs` owns review
-  comment group ordering and headings while preserving forge-thread selection across
-  grouped snapshot refreshes. `presentation/settings.rs` owns settings row selection,
-  selectors, launch-configuration editing through the shared `InputState`, and
-  render-ready settings snapshots; it returns typed persistence operations to
-  `app/setting.rs`.
+  comment group ordering and headings while preserving forge-thread selection and batch
+  actions across grouped snapshot refreshes. `presentation/settings.rs` owns settings
+  row selection, selectors, launch-configuration editing through the shared
+  `InputState`, and render-ready settings snapshots; it returns typed persistence
+  operations to `app/setting.rs`.
 - `ui/`: Rendering — frame composition, mode-to-page routing, pages under `ui/page/`,
   reusable widgets under `ui/component/`, application-to-frame projection in
   `ui/app_render.rs`, Agentty theme adapters for `ag-tui-text`, plus diff, layout,
