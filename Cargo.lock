@@ -66,6 +66,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "ag-harness"
+version = "0.13.6"
+
+[[package]]
 name = "ag-protocol"
 version = "0.13.6"
 dependencies = [

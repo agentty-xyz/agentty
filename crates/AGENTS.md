@@ -13,6 +13,7 @@ Contains the workspace member crates.
   across the workspace.
 - `crates/ag-git/` holds reusable git, worktree, sync, rebase, and squash-merge
   operations shared across the workspace.
+- `crates/ag-harness/` is the planned application-facing LLM harness facade.
 - `crates/ag-protocol/` holds structured agent response contracts, protocol parsing,
   schema generation, and transport-neutral turn prompt payloads shared across frontends
   and agent adapters.
