@@ -7,6 +7,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.13.6] - 2026-07-22
+
 ### Added
 
 - agentty: batch linked review comments by marking each actionable thread to address or
@@ -16,6 +18,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - agentty: replace Gemini 3.5 Flash and Gemini 3.1 Flash-Lite with Gemini 3.6 Flash and
   Gemini 3.5 Flash-Lite, migrating persisted selections to their replacements.
+- agentty: centralize review comment selection and grouped-row presentation.
+- testty: refresh the `README.md` header layout.
+- ci: run E2E workflows in a pinned Linux/amd64 image and update the Zizmor action from
+  `0.5.7` to `0.6.0`.
+- release: bump workspace crate metadata and lockfile package versions to `0.13.6`.
+
+### Contributors
+
+- @andagaev
+- @dependabot
+- @minev-dev
 
 ## [v0.13.5] - 2026-07-21
 
