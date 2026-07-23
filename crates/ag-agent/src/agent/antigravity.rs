@@ -510,7 +510,7 @@ mod tests {
             local_image_path: attachment_directory.join("one.png"),
         };
         let backend = AntigravityBackend;
-        let requested_model = "gemini-3.5-flash";
+        let requested_model = "gemini-3.6-flash";
 
         // Act
         let command = AgentBackend::build_command(

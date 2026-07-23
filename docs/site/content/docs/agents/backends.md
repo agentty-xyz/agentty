@@ -146,9 +146,8 @@ entries with different trade-offs between speed, quality, and cost.
 Both providers share the same Gemini model ids:
 
 - `gemini-3.1-pro-preview` (default): Higher-quality Gemini model for deeper reasoning.
-- `gemini-3.5-flash`: Fast Gemini model for current Flash workloads.
-- `gemini-3.1-flash-lite-preview`: Lightweight Gemini model for fast, cost-conscious
-  iterations.
+- `gemini-3.6-flash`: Fast Gemini model for agentic and multimodal tasks.
+- `gemini-3.5-flash-lite`: Lightweight Gemini model for fast, cost-conscious workloads.
 - `gemini-3-flash-preview`: Fast Gemini model for quick iterations.
 
 ### Claude Models
@@ -167,8 +166,9 @@ Both providers share the same Gemini model ids:
 - `gpt-5.3-codex-spark`: Codex spark model for quick coding iterations.
 
 Stored project defaults or session rows that reference a retired model id (such as
-`claude-opus-4-6`, `claude-opus-4-7`, `claude-sonnet-4-6`, `gpt-5.4`, or `gpt-5.4-mini`)
-are upgraded to the current supported replacement when Agentty loads them.
+`gemini-3.5-flash`, `gemini-3.1-flash-lite-preview`, `claude-opus-4-6`,
+`claude-opus-4-7`, `claude-sonnet-4-6`, `gpt-5.4`, or `gpt-5.4-mini`) are upgraded to
+the current supported replacement when Agentty loads them.
 
 ## Switching Models
 

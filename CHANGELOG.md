@@ -12,6 +12,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - agentty: batch linked review comments by marking each actionable thread to address or
   deny before submitting one session-agent turn.
 
+### Changed
+
+- agentty: replace Gemini 3.5 Flash and Gemini 3.1 Flash-Lite with Gemini 3.6 Flash and
+  Gemini 3.5 Flash-Lite, migrating persisted selections to their replacements.
+
 ## [v0.13.5] - 2026-07-21
 
 ### Added
