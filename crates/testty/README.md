@@ -1,14 +1,20 @@
-# testty
+<div align="center">
+
+<h1>Testty</h1>
 
 [![crates.io](https://img.shields.io/crates/v/testty.svg)](https://crates.io/crates/testty)
 [![docs.rs](https://img.shields.io/docsrs/testty)](https://docs.rs/testty)
 [![license](https://img.shields.io/crates/l/testty.svg)](../../LICENSE)
 
-[Documentation](docs/README.md) | [API reference](https://docs.rs/testty)
-
 testty is a framework for end-to-end testing of terminal apps. It launches your real app
 and checks what shows up on screen — text, colors, and highlights — with a single Rust
 API.
+
+[Documentation](docs/README.md) · [API reference](https://docs.rs/testty)
+
+</div>
+
+______________________________________________________________________
 
 ## Installation
 
