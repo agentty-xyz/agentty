@@ -4,6 +4,7 @@
 //! [`FeatureTest`] for declarative feature demo tests with optional Zola
 //! page generation.
 
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
@@ -84,7 +85,10 @@ impl BuilderEnv {
         // from it, like the default agent a new session resolves — identical
         // on developer machines and CI, so the same scenario paints the same
         // frames everywhere and GIF freshness hashes stay reproducible.
-        for executable_name in STUB_AGENT_EXECUTABLES {
+        for executable_name in STUB_AGENT_EXECUTABLES
+            .into_iter()
+            .filter(|executable_name| *executable_name != "gemini")
+        {
             let stub_agent_path = stub_bin.join(executable_name);
             let stub_version_path = stub_bin.join(format!("{executable_name}.version"));
             let stub_script = format!(
@@ -98,12 +102,9 @@ impl BuilderEnv {
                 executable_name,
             );
             std::fs::write(&stub_agent_path, stub_script)?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&stub_agent_path, std::fs::Permissions::from_mode(0o755))?;
-            }
+            std::fs::set_permissions(&stub_agent_path, std::fs::Permissions::from_mode(0o755))?;
         }
+        Self::create_gemini_cli_stub(&stub_bin)?;
 
         Ok(Self {
             agentty_root,
@@ -111,6 +112,42 @@ impl BuilderEnv {
             stub_bin,
             workdir,
         })
+    }
+
+    /// Creates an npm-global Gemini CLI fixture whose package-manager update
+    /// changes the version reported by the linked `gemini` executable.
+    fn create_gemini_cli_stub(stub_bin: &Path) -> std::io::Result<()> {
+        let gemini_package_directory = stub_bin.join("lib/node_modules/@google/gemini-cli/bundle");
+        let gemini_package_path = gemini_package_directory.join("gemini.js");
+        let gemini_path = stub_bin.join("gemini");
+        let npm_path = stub_bin.join("npm");
+        let version_path = stub_bin.join("gemini.version");
+        std::fs::create_dir_all(&gemini_package_directory)?;
+        std::fs::write(
+            &gemini_package_path,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = \"update\" ]; then exit 91; fi\nif [ \"$1\" = \
+                 \"--version\" ]; then if [ -f \"{}\" ]; then read version < \"{}\"; else \
+                 version='0.0.0-test'; fi; printf 'gemini %s\\n' \"$version\"; exit 0; fi\nexit \
+                 1\n",
+                version_path.display(),
+                version_path.display(),
+            ),
+        )?;
+        std::fs::write(
+            &npm_path,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = \"install\" ] && [ \"$2\" = \"-g\" ] && [ \"$3\" = \
+                 \"@google/gemini-cli@latest\" ]; then printf '0.0.1-updated\\n' > \"{}\"; exit \
+                 0; fi\nexit 1\n",
+                version_path.display(),
+            ),
+        )?;
+        std::fs::set_permissions(&gemini_package_path, std::fs::Permissions::from_mode(0o755))?;
+        std::fs::set_permissions(&npm_path, std::fs::Permissions::from_mode(0o755))?;
+        symlink(&gemini_package_path, &gemini_path)?;
+
+        Ok(())
     }
 
     /// Return a configured [`PtySessionBuilder`] using this environment.

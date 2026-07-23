@@ -15,6 +15,26 @@ const AGENT_CLI_VERSION_TIMEOUT: Duration = Duration::from_secs(2);
 const AGENT_CLI_UPDATE_TIMEOUT: Duration = Duration::from_mins(5);
 /// Poll interval used while waiting for one bounded provider CLI subprocess.
 const AGENT_CLI_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(25);
+/// Canonical npm-global path segment for the Gemini CLI package.
+const GEMINI_NPM_PACKAGE_PATH: &str = "/lib/node_modules/@google/gemini-cli/";
+/// npm package spec used to refresh a globally installed Gemini CLI.
+const GEMINI_NPM_PACKAGE_SPEC: &str = "@google/gemini-cli@latest";
+
+/// Executable plus arguments for one provider CLI startup update.
+struct AgentCliUpdateCommand {
+    args: &'static [&'static str],
+    executable_path: PathBuf,
+}
+
+impl AgentCliUpdateCommand {
+    /// Creates one provider update command.
+    fn new(executable_path: PathBuf, args: &'static [&'static str]) -> Self {
+        Self {
+            args,
+            executable_path,
+        }
+    }
+}
 
 /// Detects which provider CLIs are locally runnable on the current machine.
 #[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
@@ -71,7 +91,9 @@ fn available_agent_clis_from_path(path_value: Option<&OsStr>) -> Vec<AgentCliInf
         })
         .collect();
 
-    refresh_agent_cli_versions(executable_agent_clis, refresh_agent_cli_version)
+    refresh_agent_cli_versions(executable_agent_clis, |agent_kind, executable_path| {
+        refresh_agent_cli_version(agent_kind, executable_path, path_value)
+    })
 }
 
 /// Returns agent kinds whose executables are present on one `PATH` value.
@@ -117,8 +139,12 @@ fn is_executable_file(candidate_path: &Path) -> bool {
 
 /// Runs one available CLI's update command, then extracts the installed
 /// version token from a fresh version probe.
-fn refresh_agent_cli_version(executable_path: &Path) -> Option<String> {
-    run_agent_cli_update(executable_path);
+fn refresh_agent_cli_version(
+    agent_kind: AgentKind,
+    executable_path: &Path,
+    path_value: Option<&OsStr>,
+) -> Option<String> {
+    run_agent_cli_update(agent_kind, executable_path, path_value);
 
     detect_agent_cli_version(executable_path)
 }
@@ -127,7 +153,7 @@ fn refresh_agent_cli_version(executable_path: &Path) -> Option<String> {
 /// provider display order.
 fn refresh_agent_cli_versions(
     executable_agent_clis: Vec<(AgentKind, PathBuf)>,
-    refresh_cli_version: impl Fn(&Path) -> Option<String> + Sync,
+    refresh_cli_version: impl Fn(AgentKind, &Path) -> Option<String> + Sync,
 ) -> Vec<AgentCliInfo> {
     std::thread::scope(|scope| {
         let refresh_cli_version = &refresh_cli_version;
@@ -136,7 +162,7 @@ fn refresh_agent_cli_versions(
             .map(|(agent_kind, executable_path)| {
                 (
                     agent_kind,
-                    scope.spawn(move || refresh_cli_version(&executable_path)),
+                    scope.spawn(move || refresh_cli_version(agent_kind, &executable_path)),
                 )
             })
             .collect::<Vec<_>>();
@@ -150,15 +176,68 @@ fn refresh_agent_cli_versions(
     })
 }
 
-/// Runs one available CLI's best-effort self-update command.
-fn run_agent_cli_update(executable_path: &Path) {
-    let _ = run_agent_cli_update_with_timeout(executable_path, AGENT_CLI_UPDATE_TIMEOUT);
+/// Runs one available CLI's best-effort provider or package-manager update.
+fn run_agent_cli_update(agent_kind: AgentKind, executable_path: &Path, path_value: Option<&OsStr>) {
+    let _ = run_agent_cli_update_with_timeout(
+        agent_kind,
+        executable_path,
+        path_value,
+        AGENT_CLI_UPDATE_TIMEOUT,
+    );
 }
 
-/// Runs one available CLI's best-effort self-update command with a
-/// caller-provided timeout.
-fn run_agent_cli_update_with_timeout(executable_path: &Path, timeout: Duration) -> bool {
-    command_status_with_timeout(executable_path, &["update"], timeout).is_some()
+/// Runs one available CLI's best-effort update with a caller-provided timeout.
+fn run_agent_cli_update_with_timeout(
+    agent_kind: AgentKind,
+    executable_path: &Path,
+    path_value: Option<&OsStr>,
+    timeout: Duration,
+) -> bool {
+    let Some(update_command) = agent_cli_update_command(agent_kind, executable_path, path_value)
+    else {
+        return false;
+    };
+
+    command_status_with_timeout(&update_command, timeout).is_some()
+}
+
+/// Builds the supported startup update command for one provider CLI.
+fn agent_cli_update_command(
+    agent_kind: AgentKind,
+    executable_path: &Path,
+    path_value: Option<&OsStr>,
+) -> Option<AgentCliUpdateCommand> {
+    if agent_kind == AgentKind::Gemini {
+        return gemini_npm_update_command(executable_path, path_value);
+    }
+
+    Some(AgentCliUpdateCommand::new(
+        executable_path.to_path_buf(),
+        &["update"],
+    ))
+}
+
+/// Builds Gemini's supported npm-global update command when the discovered
+/// executable resolves into the global Gemini CLI package.
+///
+/// Canonicalization failure is treated as an unknown installation because
+/// Agentty cannot safely prove that npm owns the executable.
+fn gemini_npm_update_command(
+    executable_path: &Path,
+    path_value: Option<&OsStr>,
+) -> Option<AgentCliUpdateCommand> {
+    let canonical_executable_path = executable_path.canonicalize().ok()?;
+    let normalized_executable_path = canonical_executable_path.to_string_lossy();
+    if !normalized_executable_path.contains(GEMINI_NPM_PACKAGE_PATH) {
+        return None;
+    }
+
+    let npm_executable_path = executable_path_on_path(path_value, "npm")?;
+
+    Some(AgentCliUpdateCommand::new(
+        npm_executable_path,
+        &["install", "-g", GEMINI_NPM_PACKAGE_SPEC],
+    ))
 }
 
 /// Runs one available CLI's version command and extracts the installed
@@ -192,12 +271,11 @@ fn version_command_output(executable_path: &Path, timeout: Duration) -> Option<O
 /// Runs one provider CLI command with output discarded and stops waiting once
 /// the timeout expires.
 fn command_status_with_timeout(
-    executable_path: &Path,
-    args: &[&str],
+    update_command: &AgentCliUpdateCommand,
     timeout: Duration,
 ) -> Option<()> {
-    let mut child = Command::new(executable_path)
-        .args(args)
+    let mut child = Command::new(&update_command.executable_path)
+        .args(update_command.args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -279,7 +357,7 @@ fn parse_agent_cli_version_output(output: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{PermissionsExt, symlink};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -294,6 +372,7 @@ mod tests {
         assert_eq!(executable_name(AgentKind::Antigravity), "agy");
         assert_eq!(executable_name(AgentKind::Claude), "claude");
         assert_eq!(executable_name(AgentKind::Codex), "codex");
+        assert_eq!(executable_name(AgentKind::Gemini), "gemini");
     }
 
     #[test]
@@ -392,7 +471,7 @@ mod tests {
         let refresh_cli_version = {
             let codex_started = Arc::clone(&codex_started);
 
-            move |executable_path: &Path| {
+            move |_agent_kind: AgentKind, executable_path: &Path| {
                 if executable_path.file_name() == Some(OsStr::new("agy")) {
                     let started_at = Instant::now();
                     while !codex_started.load(Ordering::SeqCst)
@@ -452,10 +531,104 @@ mod tests {
             .expect("failed to mark codex executable");
 
         // Act
-        let detected_version = refresh_agent_cli_version(&codex_path);
+        let detected_version = refresh_agent_cli_version(AgentKind::Codex, &codex_path, None);
 
         // Assert
         assert_eq!(detected_version, Some("1.2.3".to_string()));
+    }
+
+    #[test]
+    /// Ensures npm-global Gemini installations update through npm instead of
+    /// treating `update` as an interactive Gemini query.
+    fn test_available_agent_clis_from_path_updates_npm_global_gemini() {
+        // Arrange
+        let temp_directory = tempdir().expect("failed to create temp dir");
+        let bin_directory = temp_directory.path().join("bin");
+        let gemini_package_directory = temp_directory
+            .path()
+            .join("lib/node_modules/@google/gemini-cli/bundle");
+        let gemini_package_path = gemini_package_directory.join("gemini.js");
+        let gemini_path = bin_directory.join("gemini");
+        let npm_path = bin_directory.join("npm");
+        let version_path = temp_directory.path().join("gemini-version");
+        fs::create_dir_all(&bin_directory).expect("failed to create bin directory");
+        fs::create_dir_all(&gemini_package_directory)
+            .expect("failed to create Gemini package directory");
+        fs::write(
+            &gemini_package_path,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = \"update\" ]; then exit 91; fi\nif [ \"$1\" = \
+                 \"--version\" ]; then if [ -f \"{}\" ]; then read version < \"{}\"; else \
+                 version='1.0.0-old'; fi; printf 'gemini %s\\n' \"$version\"; exit 0; fi\nexit 1\n",
+                version_path.display(),
+                version_path.display(),
+            ),
+        )
+        .expect("failed to create Gemini executable");
+        fs::write(
+            &npm_path,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = \"install\" ] && [ \"$2\" = \"-g\" ] && [ \"$3\" = \
+                 \"@google/gemini-cli@latest\" ]; then printf '9.9.9-updated\\n' > \"{}\"; exit \
+                 0; fi\nexit 1\n",
+                version_path.display(),
+            ),
+        )
+        .expect("failed to create npm executable");
+        fs::set_permissions(&gemini_package_path, fs::Permissions::from_mode(0o755))
+            .expect("failed to mark Gemini executable");
+        fs::set_permissions(&npm_path, fs::Permissions::from_mode(0o755))
+            .expect("failed to mark npm executable");
+        symlink(&gemini_package_path, &gemini_path).expect("failed to link Gemini executable");
+        let path_value = env::join_paths([&bin_directory]).expect("valid path");
+
+        // Act
+        let available_agent_clis = available_agent_clis_from_path(Some(path_value.as_os_str()));
+
+        // Assert
+        assert_eq!(
+            available_agent_clis,
+            vec![AgentCliInfo::new(
+                AgentKind::Gemini,
+                Some("9.9.9-updated".to_string())
+            )]
+        );
+        assert_eq!(
+            fs::read_to_string(version_path).expect("updated Gemini version"),
+            "9.9.9-updated\n"
+        );
+    }
+
+    #[test]
+    /// Ensures Gemini installations with an unknown owner do not launch the
+    /// removed native update command.
+    fn test_run_agent_cli_update_skips_unknown_gemini_installation() {
+        // Arrange
+        let temp_directory = tempdir().expect("failed to create temp dir");
+        let gemini_path = temp_directory.path().join("gemini");
+        let update_marker_path = temp_directory.path().join("gemini-update");
+        fs::write(
+            &gemini_path,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = \"update\" ]; then touch \"{}\"; exit 0; fi\nexit 1\n",
+                update_marker_path.display(),
+            ),
+        )
+        .expect("failed to create Gemini executable");
+        fs::set_permissions(&gemini_path, fs::Permissions::from_mode(0o755))
+            .expect("failed to mark Gemini executable");
+
+        // Act
+        let did_update = run_agent_cli_update_with_timeout(
+            AgentKind::Gemini,
+            &gemini_path,
+            None,
+            Duration::from_millis(100),
+        );
+
+        // Assert
+        assert!(!did_update);
+        assert!(!update_marker_path.exists());
     }
 
     #[test]
@@ -478,7 +651,12 @@ mod tests {
             .expect("failed to mark codex executable");
 
         // Act
-        let did_finish = run_agent_cli_update_with_timeout(&codex_path, Duration::from_secs(2));
+        let did_finish = run_agent_cli_update_with_timeout(
+            AgentKind::Codex,
+            &codex_path,
+            None,
+            Duration::from_secs(10),
+        );
 
         // Assert
         assert!(did_finish);
