@@ -3349,12 +3349,12 @@ fn stacked_session_start_waits_for_parent_review() -> E2eResult {
     Ok(())
 }
 
-/// Verify that the prompt `/model` picker exposes the current Gemini Flash
-/// model when the Gemini CLI is locally available.
+/// Verify that the prompt `/model` picker exposes the current Gemini models
+/// when the Gemini CLI is locally available.
 #[test]
-fn gemini_model_picker_includes_current_flash() -> E2eResult {
+fn gemini_model_picker_lists_current_models() -> E2eResult {
     // Arrange, Act, Assert
-    FeatureTest::new("gemini_model_picker_includes_current_flash")
+    FeatureTest::new("gemini_model_picker_lists_current_models")
         .with_git()
         .setup(seed_failing_gemini_cli_stub)
         .run(
@@ -3372,15 +3372,16 @@ fn gemini_model_picker_includes_current_flash() -> E2eResult {
                     .press_key("Enter")
                     .wait_for_text("/model Agent", 3000)
                     .press_key("Enter")
-                    .wait_for_text("gemini-3.5-flash", 3000)
+                    .wait_for_text("gemini-3.6-flash", 3000)
                     .capture_labeled(
                         "gemini_model_picker",
-                        "Gemini model picker includes current Flash",
+                        "Gemini model picker lists current models",
                     )
             },
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "gemini-3.5-flash", &full);
+                assertion::assert_text_in_region(frame, "gemini-3.6-flash", &full);
+                assertion::assert_text_in_region(frame, "gemini-3.5-flash-lite", &full);
             },
         )?;
 
@@ -3456,7 +3457,7 @@ fn antigravity_model_picker_includes_gemini_models() -> E2eResult {
                     .wait_for_text("/model Agent", 3000)
                     .press_key("Down")
                     .press_key("Enter")
-                    .wait_for_text("gemini-3.5-flash", 3000)
+                    .wait_for_text("gemini-3.6-flash", 3000)
                     .capture_labeled(
                         "antigravity_model_picker",
                         "Antigravity model picker includes Gemini models",
@@ -3465,7 +3466,8 @@ fn antigravity_model_picker_includes_gemini_models() -> E2eResult {
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "gemini-3.1-pro-preview", &full);
-                assertion::assert_text_in_region(frame, "gemini-3.5-flash", &full);
+                assertion::assert_text_in_region(frame, "gemini-3.6-flash", &full);
+                assertion::assert_text_in_region(frame, "gemini-3.5-flash-lite", &full);
             },
         )?;
 

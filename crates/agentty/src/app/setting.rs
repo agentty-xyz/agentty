@@ -1092,7 +1092,7 @@ mod tests {
         let loaded_selection = load_default_smart_agent_setting(
             &services,
             Some(project_id),
-            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini35Flash),
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini36Flash),
         )
         .await;
 

@@ -66,7 +66,7 @@ mod tests {
                 folder: temp_directory.path(),
                 main_checkout_root: None,
                 replay_transcript: None,
-                model: "gemini-3.5-flash",
+                model: "gemini-3.6-flash",
                 prompt: "Generate title",
                 reasoning_level: ReasoningLevel::default(),
                 request_kind: &utility_request_kind(),
@@ -79,7 +79,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(args, vec!["--acp", "--model", "gemini-3.5-flash"]);
+        assert_eq!(args, vec!["--acp", "--model", "gemini-3.6-flash"]);
         assert_eq!(command.get_current_dir(), Some(temp_directory.path()));
     }
 }
