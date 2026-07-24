@@ -498,8 +498,9 @@ captured draft.
 On macOS, use `Ctrl+Z` rather than `Cmd+Z` for input undo. Terminal applications such as
 Ghostty may consume `Cmd+Z` before Agentty or a surrounding `tmux` session receives it.
 
-`@` file lookups keep the raw `@path/to/file` text visible in the composer and
-transcript; the agent-facing prompt rewrites them to quoted `path/to/file` tokens.
+`@` file lookups keep the raw `@path/to/file` text visible and highlighted in the
+composer and transcript; the agent-facing prompt rewrites them to quoted `path/to/file`
+tokens.
 
 If an agent command exits with an error, Agentty prints a short failure header followed
 by captured `stdout` and `stderr` sections, with JSONL provider events summarized into

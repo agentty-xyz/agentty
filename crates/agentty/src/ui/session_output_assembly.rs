@@ -724,7 +724,10 @@ fn append_user_prompt(
             prompt_block::user_prompt_prefix_style()
         };
         lines.push(prompt_block::user_prompt_markdown_line(
-            restored_user_prompt_spans(rendered_line, indent_marker),
+            markdown::user_prompt_content_line_spans(restored_user_prompt_spans(
+                rendered_line,
+                indent_marker,
+            )),
             prefix,
             prefix_style,
             inner_width,
@@ -906,6 +909,30 @@ mod tests {
 
         // Assert
         assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn test_user_prompt_highlights_at_lookup_file() {
+        // Arrange
+        let mut lines = Vec::new();
+        let lookup = "@crates/agentty/src/ui/markdown.rs";
+
+        // Act
+        append_user_prompt(
+            &mut lines,
+            &format!("Review {lookup} before replying"),
+            80,
+            None,
+        );
+
+        // Assert
+        let lookup_span = lines
+            .iter()
+            .flat_map(|line| &line.spans)
+            .find(|span| span.content.as_ref() == lookup)
+            .expect("file lookup should render as one highlighted span");
+        assert_eq!(lookup_span.style.fg, Some(style::palette::info()));
+        assert_eq!(lookup_span.style.bg, Some(style::palette::surface_prompt()));
     }
 
     #[test]
