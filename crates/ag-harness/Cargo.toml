@@ -1,0 +1,12 @@
+[package]
+name = "ag-harness"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lints]
+workspace = true

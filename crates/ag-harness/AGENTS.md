@@ -1,9 +1,3 @@
-+++
-title = "ag-harness Design"
-description = "Design for the planned ag-harness runtime."
-weight = 6
-+++
-
 # `ag-harness` - a light LLM harness
 
 `ag-harness` is the base layer between an application and an LLM. Rust-native,
