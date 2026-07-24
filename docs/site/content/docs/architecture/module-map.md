@@ -62,8 +62,9 @@ For file-level detail, read the module docstrings directly.
   transient-message slots and lifecycles, prompt-composer logic, the shared `InputState`
   command and undo/redo model, stable input-revision and character-offset identities
   used to bind prompt attachments to exact placeholder occurrences and history states,
-  session action-eligibility policies, and thin re-export modules for `ag-agent`
-  provider models plus shared protocol question and turn prompt payloads. No I/O.
+  session action-eligibility policies, fuzzy file-entry ranking shared by runtime
+  selection and UI suggestions, and thin re-export modules for `ag-agent` provider
+  models plus shared protocol question and turn prompt payloads. No I/O.
 - `infra/`: External integrations behind traits — Agentty data-root resolution, SQLite
   persistence (`infra/db/` repositories), git (`GitClient`, backed by `ag-git`),
   filesystem (`FsClient`), tmux, clipboard images, version checks, project discovery,
@@ -80,13 +81,13 @@ For file-level detail, read the module docstrings directly.
   metrics and frame rendering.
 - `presentation.rs` and `presentation/`: Frontend-neutral interaction state shared by
   runtime input and UI output. They expose mode, help-action, prompt, settings-screen
-  actions, editor, scroll, viewport, and semantic list-selection contracts without
-  importing Ratatui or `ui/` formatting. `presentation/review_comment.rs` owns review
-  comment group ordering and headings while preserving forge-thread selection and batch
-  actions across grouped snapshot refreshes. `presentation/settings.rs` owns settings
-  row selection, selectors, launch-configuration editing through the shared
-  `InputState`, and render-ready settings snapshots; it returns typed persistence
-  operations to `app/setting.rs`.
+  actions, editor, scroll, viewport, semantic list-selection contracts, and one coherent
+  `FrameTime` value per render pass without importing Ratatui or `ui/` formatting.
+  `presentation/review_comment.rs` owns review comment group ordering and headings while
+  preserving forge-thread selection and batch actions across grouped snapshot refreshes.
+  `presentation/settings.rs` owns settings row selection, selectors,
+  launch-configuration editing through the shared `InputState`, and render-ready
+  settings snapshots; it returns typed persistence operations to `app/setting.rs`.
 - `ui/`: Rendering — frame composition, mode-to-page routing, pages under `ui/page/`,
   reusable widgets under `ui/component/`, application-to-frame projection in
   `ui/app_render.rs`, Agentty theme adapters for `ag-tui-text`, plus diff, layout,
@@ -102,7 +103,15 @@ For file-level detail, read the module docstrings directly.
   its presentation cache into the UI projection boundary.
 - `App::view_snapshot()` creates the immutable borrowed application view consumed by
   frontends. `ui/app_render.rs` receives that snapshot plus runtime-owned Ratatui state
-  and does not access the concrete `App`, services, or managers directly.
+  and does not access the concrete `App`, services, or managers directly. The snapshot
+  resolves the injected clock once into `FrameTime`, including Unix seconds,
+  milliseconds, and the clock-provided UTC offset used by deterministic timers, loaders,
+  and activity-day projections. Fixed clocks own both their timestamp and offset, so
+  render projections do not depend on the host timezone.
+- Session activity persistence stores timestamps supplied by the injected `Clock`.
+  Session loading retrieves those immutable timestamps and applies the clock-provided
+  offset for each event before aggregating local-day counts; SQLite does not read the
+  host clock or timezone for this projection.
 - Application managers retain semantic selected-row indexes through
   `domain::selection::SelectionState`; runtime owns Ratatui table viewport state and
   synchronizes selection at the frame projection boundary.

@@ -32,6 +32,8 @@ pub(crate) const COMMITTING_PROGRESS_LABEL: &str = "Committing...";
 /// Lead sentence used when seeding a follow-on prompt from a terminal session.
 const TERMINAL_CONTINUATION_PROMPT_INTRO: &str =
     "Continue the work from this previous Agentty session.";
+/// Number of seconds in one activity-calendar day.
+const SECONDS_PER_DAY: i64 = 86_400;
 
 /// Shared stable identifier for one session.
 ///
@@ -536,6 +538,13 @@ pub struct DailyActivity {
     pub day_key: i64,
     /// Number of sessions created on the corresponding day.
     pub session_count: u32,
+}
+
+/// Converts Unix timestamp seconds to a day key after applying a UTC offset.
+pub fn activity_day_key_with_offset(timestamp_seconds: i64, utc_offset_seconds: i64) -> i64 {
+    timestamp_seconds
+        .saturating_add(utc_offset_seconds)
+        .div_euclid(SECONDS_PER_DAY)
 }
 
 /// Persisted read-only follow-up task rendered alongside one session.
@@ -1172,6 +1181,21 @@ pub(crate) mod tests {
     use super::*;
     use crate::domain::agent::AgentModel;
     use crate::test_support::SessionFixtureBuilder;
+
+    #[test]
+    fn test_activity_day_key_with_offset_applies_offsets_at_day_boundaries() {
+        // Arrange
+        let end_of_utc_day = 86_399_i64;
+        let start_of_utc_day = 86_400_i64;
+
+        // Act
+        let positive_offset_day_key = activity_day_key_with_offset(end_of_utc_day, 3_600);
+        let negative_offset_day_key = activity_day_key_with_offset(start_of_utc_day, -3_600);
+
+        // Assert
+        assert_eq!(positive_offset_day_key, 1);
+        assert_eq!(negative_offset_day_key, 0);
+    }
 
     #[test]
     fn test_allows_stacked_child_creation_returns_true_for_root_active_session() {

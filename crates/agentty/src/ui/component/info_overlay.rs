@@ -23,6 +23,7 @@ pub struct InfoOverlay<'a> {
     is_loading: bool,
     loading_label: &'a str,
     message: &'a str,
+    spinner_frame: usize,
     title: &'a str,
 }
 
@@ -33,6 +34,7 @@ impl<'a> InfoOverlay<'a> {
             is_loading: false,
             loading_label: "Sync in progress...",
             message,
+            spinner_frame: 0,
             title,
         }
     }
@@ -48,6 +50,14 @@ impl<'a> InfoOverlay<'a> {
     #[must_use]
     pub fn loading_label(mut self, loading_label: &'a str) -> Self {
         self.loading_label = loading_label;
+        self
+    }
+
+    /// Sets the deterministic animation frame for the loading indicator.
+    #[must_use]
+    pub fn spinner_frame(mut self, spinner_frame: usize) -> Self {
+        self.spinner_frame = spinner_frame;
+
         self
     }
 
@@ -277,7 +287,7 @@ impl Component for InfoOverlay<'_> {
             TachyonLoaderEffect::apply_to_last_glyph(
                 f.buffer_mut(),
                 popup_area,
-                Icon::current_spinner_frame(),
+                self.spinner_frame,
             );
         }
     }
@@ -350,6 +360,17 @@ mod tests {
         assert!(!overlay.is_loading);
         assert_eq!(overlay.message, message);
         assert_eq!(overlay.title, title);
+    }
+
+    #[test]
+    fn test_info_overlay_stores_injected_spinner_frame() {
+        // Arrange
+        let overlay = InfoOverlay::new("Sync in progress", "Synchronizing")
+            .is_loading(true)
+            .spinner_frame(42);
+
+        // Act & Assert
+        assert_eq!(overlay.spinner_frame, 42);
     }
 
     #[test]

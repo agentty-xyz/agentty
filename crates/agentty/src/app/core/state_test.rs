@@ -124,6 +124,18 @@ async fn start_created_issue_session_opens_session_when_command_persistence_fail
     ));
 }
 
+#[test]
+fn issue_session_prompt_renders_issue_url() {
+    // Arrange
+    let issue_url = "https://github.com/agentty-xyz/agentty/issues/124";
+
+    // Act
+    let prompt = App::issue_session_prompt(issue_url);
+
+    // Assert
+    assert_eq!(prompt, format!("Address this issue: {issue_url}"));
+}
+
 /// Builds one restorable prompt snapshot without attachments.
 fn test_prompt_mode_snapshot(session_id: SessionId) -> PromptModeSnapshot {
     PromptModeSnapshot {

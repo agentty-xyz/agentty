@@ -1,7 +1,3 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use time::{OffsetDateTime, UtcOffset};
-
 use crate::domain::session::DailyActivity;
 
 const HEATMAP_DAY_COUNT: usize = 7;
@@ -11,7 +7,6 @@ const HEATMAP_WEEK_COUNT_I64: i64 = 53;
 const HEATMAP_MONTH_LABELS: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
-const SECONDS_PER_DAY: i64 = 86_400;
 
 /// Recent activity metrics used by compact dashboard widgets.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -24,42 +19,6 @@ pub struct RecentActivityStats {
     pub sessions_last_30_days: u32,
     /// Sessions created in the trailing 7 days, including `end_day_key`.
     pub sessions_last_7_days: u32,
-}
-
-/// Returns the current UTC day key as days since Unix epoch.
-pub fn current_day_key_utc() -> i64 {
-    let now_seconds = current_unix_timestamp_seconds();
-
-    activity_day_key(now_seconds)
-}
-
-/// Returns the current local day key as days since Unix epoch.
-pub fn current_day_key_local() -> i64 {
-    let now_seconds = current_unix_timestamp_seconds();
-
-    activity_day_key_local(now_seconds)
-}
-
-/// Converts Unix timestamp seconds to a UTC day key.
-pub fn activity_day_key(timestamp_seconds: i64) -> i64 {
-    timestamp_seconds.div_euclid(SECONDS_PER_DAY)
-}
-
-/// Converts Unix timestamp seconds to a local day key.
-///
-/// The local offset is resolved for the provided timestamp, so daylight-saving
-/// transitions are applied automatically.
-pub fn activity_day_key_local(timestamp_seconds: i64) -> i64 {
-    let utc_offset_seconds = local_utc_offset_seconds(timestamp_seconds);
-
-    activity_day_key_with_offset(timestamp_seconds, utc_offset_seconds)
-}
-
-/// Converts Unix timestamp seconds to a day key after applying a UTC offset.
-pub fn activity_day_key_with_offset(timestamp_seconds: i64, utc_offset_seconds: i64) -> i64 {
-    timestamp_seconds
-        .saturating_add(utc_offset_seconds)
-        .div_euclid(SECONDS_PER_DAY)
 }
 
 /// Builds a 53-week x 7-day heatmap grid from daily activity counts.
@@ -235,23 +194,6 @@ pub fn heatmap_max_count(grid: &[Vec<u32>]) -> u32 {
         .unwrap_or(0)
 }
 
-fn current_unix_timestamp_seconds() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| i64::try_from(duration.as_secs()).unwrap_or(0))
-}
-
-fn local_utc_offset_seconds(timestamp_seconds: i64) -> i64 {
-    let Ok(utc_timestamp) = OffsetDateTime::from_unix_timestamp(timestamp_seconds) else {
-        return 0;
-    };
-    let Ok(local_offset) = UtcOffset::local_offset_at(utc_timestamp) else {
-        return 0;
-    };
-
-    i64::from(local_offset.whole_seconds())
-}
-
 fn heatmap_start_week_day_key(end_day_key: i64) -> i64 {
     let end_week_start =
         end_day_key - i64::try_from(weekday_index_monday(end_day_key)).unwrap_or(0);
@@ -369,32 +311,6 @@ fn civil_from_days(day_key: i64) -> (i32, u8, u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_activity_day_key_with_offset_applies_positive_offset() {
-        // Arrange
-        let timestamp_seconds = 86_399_i64;
-        let utc_offset_seconds = 3_600_i64;
-
-        // Act
-        let day_key = activity_day_key_with_offset(timestamp_seconds, utc_offset_seconds);
-
-        // Assert
-        assert_eq!(day_key, 1);
-    }
-
-    #[test]
-    fn test_activity_day_key_with_offset_applies_negative_offset() {
-        // Arrange
-        let timestamp_seconds = 86_400_i64;
-        let utc_offset_seconds = -3_600_i64;
-
-        // Act
-        let day_key = activity_day_key_with_offset(timestamp_seconds, utc_offset_seconds);
-
-        // Assert
-        assert_eq!(day_key, 0);
-    }
 
     #[test]
     fn test_build_activity_heatmap_grid_places_values_in_expected_cells() {

@@ -1,6 +1,6 @@
 //! Session loading and derived snapshot attributes from persisted rows.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use ag_git::GitClient;
@@ -12,14 +12,33 @@ use crate::domain::question::QuestionItem;
 use crate::domain::session::{
     DailyActivity, ReviewRequest, ReviewRequestSummary, Session, SessionDiffState,
     SessionDiffStats, SessionFollowUpTask, SessionHandles, SessionId, SessionSize, SessionStats,
-    Status,
+    Status, activity_day_key_with_offset,
 };
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use crate::domain::transient_message::TransientMessageStore;
+use crate::infra::clock::Clock;
 use crate::infra::db::{
     AppRepositories, DbError, SessionDetailRow, SessionListRow, SessionMessageRow,
 };
 use crate::infra::fs::FsClient;
+
+/// Inputs required to load one project's session and activity snapshots.
+pub(crate) struct SessionLoadInput<'a> {
+    /// Project identifier used to scope persisted session rows.
+    pub(crate) active_project_id: i64,
+    /// Session whose transcript-scale details should be loaded.
+    pub(crate) active_session_id: Option<&'a str>,
+    /// Root directory containing Agentty-managed session worktrees.
+    pub(crate) base: &'a Path,
+    /// Clock used to resolve the local offset for each activity event.
+    pub(crate) clock: &'a dyn Clock,
+    /// Repository bundle used to load persisted session state.
+    pub(crate) db: &'a AppRepositories,
+    /// Filesystem boundary used to check session worktree availability.
+    pub(crate) fs_client: &'a dyn FsClient,
+    /// Active project directory used to derive display metadata.
+    pub(crate) working_dir: &'a Path,
+}
 
 /// Mutable context threaded through the per-row session-load helper.
 ///
@@ -83,14 +102,18 @@ impl SessionManager {
     /// persisted session-creation activity history, and cached worktree
     /// availability keyed by session id.
     pub(crate) async fn load_sessions_with_fs_client(
-        base: &Path,
-        db: &AppRepositories,
-        active_project_id: i64,
-        working_dir: &Path,
+        input: SessionLoadInput<'_>,
         handles: &mut HashMap<SessionId, SessionHandles>,
-        fs_client: &dyn FsClient,
-        active_session_id: Option<&str>,
     ) -> (Vec<Session>, Vec<DailyActivity>, HashMap<SessionId, bool>) {
+        let SessionLoadInput {
+            active_project_id,
+            active_session_id,
+            base,
+            clock,
+            db,
+            fs_client,
+            working_dir,
+        } = input;
         let project_name = working_dir
             .file_name()
             .and_then(|name| name.to_str())
@@ -107,11 +130,12 @@ impl SessionManager {
             .load_session_follow_up_tasks()
             .await
             .unwrap_or_default();
-        let stats_activity = db
+        let activity_timestamps = db
             .activity()
-            .load_session_activity()
+            .load_session_activity_timestamps()
             .await
             .unwrap_or_default();
+        let stats_activity = Self::daily_activity_from_timestamps(activity_timestamps, clock);
         let mut sessions: Vec<Session> = Vec::new();
         let mut follow_up_tasks_by_session = HashMap::<SessionId, Vec<_>>::new();
         let mut session_worktree_availability = HashMap::new();
@@ -138,6 +162,29 @@ impl SessionManager {
         }
 
         (sessions, stats_activity, session_worktree_availability)
+    }
+
+    /// Aggregates persisted activity timestamps using the clock-provided
+    /// offset active for each event.
+    fn daily_activity_from_timestamps(
+        timestamps: Vec<i64>,
+        clock: &dyn Clock,
+    ) -> Vec<DailyActivity> {
+        let mut activity_by_day = BTreeMap::<i64, u32>::new();
+        for timestamp_seconds in timestamps {
+            let utc_offset_seconds = clock.local_utc_offset_seconds(timestamp_seconds);
+            let day_key = activity_day_key_with_offset(timestamp_seconds, utc_offset_seconds);
+            let session_count = activity_by_day.entry(day_key).or_default();
+            *session_count = session_count.saturating_add(1);
+        }
+
+        activity_by_day
+            .into_iter()
+            .map(|(day_key, session_count)| DailyActivity {
+                day_key,
+                session_count,
+            })
+            .collect()
     }
 
     /// Loads one persisted session row into `sessions`, reusing existing
@@ -584,13 +631,36 @@ fn parse_questions_json(raw_json: &str) -> Option<Vec<QuestionItem>> {
 mod tests {
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
+    use std::time::{Instant, SystemTime};
 
     use ag_git::{GitError, MockGitClient};
 
     use super::*;
     use crate::domain::session::{ForgeKind, ReviewRequestState, ReviewRequestSummary};
+    use crate::infra::clock::RealClock;
     use crate::infra::db::SessionReviewRequestRow;
     use crate::infra::fs;
+
+    /// Clock fixture that supplies event-specific offsets for activity rows.
+    struct ActivityOffsetClock;
+
+    impl Clock for ActivityOffsetClock {
+        fn local_utc_offset_seconds(&self, timestamp_seconds: i64) -> i64 {
+            if timestamp_seconds < 86_400 {
+                3_600
+            } else {
+                -3_600
+            }
+        }
+
+        fn now_instant(&self) -> Instant {
+            Instant::now()
+        }
+
+        fn now_system_time(&self) -> SystemTime {
+            SystemTime::UNIX_EPOCH
+        }
+    }
 
     fn session_replay_text(session: &Session) -> String {
         session
@@ -612,6 +682,35 @@ mod tests {
         assistant_transcript(content)
             .replay_text()
             .expect("assistant transcript should have replay text")
+    }
+
+    #[test]
+    fn daily_activity_uses_clock_offset_for_each_timestamp() {
+        // Arrange
+        let timestamps = vec![86_399, 86_400, 86_399];
+        let clock = ActivityOffsetClock;
+
+        // Act
+        let activity = SessionManager::daily_activity_from_timestamps(timestamps, &clock);
+        let monotonic_time = clock.now_instant();
+        let system_time = clock.now_system_time();
+
+        // Assert
+        assert!(monotonic_time <= Instant::now());
+        assert_eq!(system_time, SystemTime::UNIX_EPOCH);
+        assert_eq!(
+            activity,
+            vec![
+                DailyActivity {
+                    day_key: 0,
+                    session_count: 1,
+                },
+                DailyActivity {
+                    day_key: 1,
+                    session_count: 2,
+                },
+            ]
+        );
     }
 
     #[tokio::test]
@@ -736,13 +835,16 @@ mod tests {
 
         // Act
         let (sessions, _, _) = SessionManager::load_sessions_with_fs_client(
-            base_path,
-            &db,
-            project_id,
-            Path::new("/tmp/test"),
+            SessionLoadInput {
+                active_project_id: project_id,
+                active_session_id: None,
+                base: base_path,
+                clock: &RealClock,
+                db: &db,
+                fs_client: &mock_fs_client,
+                working_dir: Path::new("/tmp/test"),
+            },
             &mut handles,
-            &mock_fs_client,
-            None,
         )
         .await;
 
@@ -813,13 +915,16 @@ mod tests {
 
         // Act
         let (_, _, session_worktree_availability) = SessionManager::load_sessions_with_fs_client(
-            base_path,
-            &db,
-            project_id,
-            Path::new("/tmp/test"),
+            SessionLoadInput {
+                active_project_id: project_id,
+                active_session_id: None,
+                base: base_path,
+                clock: &RealClock,
+                db: &db,
+                fs_client: &mock_fs_client,
+                working_dir: Path::new("/tmp/test"),
+            },
             &mut handles,
-            &mock_fs_client,
-            None,
         )
         .await;
 
@@ -895,13 +1000,16 @@ mod tests {
 
         // Act
         let (sessions, _, _) = SessionManager::load_sessions_with_fs_client(
-            base_path,
-            &db,
-            project_id,
-            Path::new("/tmp/test"),
+            SessionLoadInput {
+                active_project_id: project_id,
+                active_session_id: Some(session_id),
+                base: base_path,
+                clock: &RealClock,
+                db: &db,
+                fs_client: &mock_fs_client,
+                working_dir: Path::new("/tmp/test"),
+            },
             &mut handles,
-            &mock_fs_client,
-            Some(session_id),
         )
         .await;
 
@@ -975,13 +1083,16 @@ mod tests {
 
         // Act
         let (sessions, _, _) = SessionManager::load_sessions_with_fs_client(
-            base_path,
-            &db,
-            project_id,
-            Path::new("/tmp/test"),
+            SessionLoadInput {
+                active_project_id: project_id,
+                active_session_id: None,
+                base: base_path,
+                clock: &RealClock,
+                db: &db,
+                fs_client: &mock_fs_client,
+                working_dir: Path::new("/tmp/test"),
+            },
             &mut handles,
-            &mock_fs_client,
-            None,
         )
         .await;
 
@@ -1047,13 +1158,16 @@ mod tests {
 
         // Act
         let (sessions, _, _) = SessionManager::load_sessions_with_fs_client(
-            base_path,
-            &db,
-            project_id,
-            Path::new("/tmp/test"),
+            SessionLoadInput {
+                active_project_id: project_id,
+                active_session_id: Some(session_id),
+                base: base_path,
+                clock: &RealClock,
+                db: &db,
+                fs_client: &mock_fs_client,
+                working_dir: Path::new("/tmp/test"),
+            },
             &mut handles,
-            &mock_fs_client,
-            Some(session_id),
         )
         .await;
 
@@ -1133,13 +1247,16 @@ mod tests {
 
         // Act
         let (sessions, _, _) = SessionManager::load_sessions_with_fs_client(
-            base_path,
-            &db,
-            project_id,
-            Path::new("/tmp/test"),
+            SessionLoadInput {
+                active_project_id: project_id,
+                active_session_id: None,
+                base: base_path,
+                clock: &RealClock,
+                db: &db,
+                fs_client: &mock_fs_client,
+                working_dir: Path::new("/tmp/test"),
+            },
             &mut handles,
-            &mock_fs_client,
-            None,
         )
         .await;
 
@@ -1204,13 +1321,16 @@ mod tests {
 
         // Act
         let (sessions, _, _) = SessionManager::load_sessions_with_fs_client(
-            base_path,
-            &db,
-            project_id,
-            Path::new("/tmp/test"),
+            SessionLoadInput {
+                active_project_id: project_id,
+                active_session_id: None,
+                base: base_path,
+                clock: &RealClock,
+                db: &db,
+                fs_client: &mock_fs_client,
+                working_dir: Path::new("/tmp/test"),
+            },
             &mut handles,
-            &mock_fs_client,
-            None,
         )
         .await;
 

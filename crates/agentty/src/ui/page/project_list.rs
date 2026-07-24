@@ -14,8 +14,8 @@ use crate::domain::session::DailyActivity;
 use crate::presentation::help_action;
 use crate::ui::activity_heatmap::{
     RecentActivityStats, build_activity_heatmap_grid, build_recent_activity_stats,
-    build_visible_heatmap_month_row, current_day_key_local, heatmap_intensity_level,
-    heatmap_max_count, visible_heatmap_week_count,
+    build_visible_heatmap_month_row, heatmap_intensity_level, heatmap_max_count,
+    visible_heatmap_week_count,
 };
 use crate::ui::{Page, layout, style};
 
@@ -36,6 +36,8 @@ const PROJECT_DASHBOARD_PANEL_HEIGHT: u16 = HEATMAP_CONTENT_HEIGHT + 2;
 pub struct ProjectListPage<'a> {
     /// Identifier for the currently active project.
     pub active_project_id: i64,
+    /// Local day key derived from the frame timestamp and UTC offset.
+    pub activity_end_day_key: i64,
     /// Locally available agent CLI executables and detected versions.
     pub agent_clis: &'a [AgentCliInfo],
     /// Git repository project rows displayed in the table.
@@ -55,9 +57,11 @@ impl<'a> ProjectListPage<'a> {
         stats_activity: &'a [DailyActivity],
         table_state: &'a mut TableState,
         active_project_id: i64,
+        activity_end_day_key: i64,
     ) -> Self {
         Self {
             active_project_id,
+            activity_end_day_key,
             agent_clis,
             projects,
             stats_activity,
@@ -101,7 +105,7 @@ impl Page for ProjectListPage<'_> {
             .block(heatmap_block)
             .wrap(Wrap { trim: false });
         let activity_stats =
-            build_recent_activity_stats(self.stats_activity, current_day_key_local());
+            build_recent_activity_stats(self.stats_activity, self.activity_end_day_key);
         let active_stats = ActiveProjectStats::from_projects(self.projects);
         let details_panel = Paragraph::new(work_stats_summary_lines(&activity_stats, active_stats))
             .style(Style::default().fg(style::palette::text()))
@@ -156,7 +160,7 @@ impl ProjectListPage<'_> {
     /// Builds the heatmap month heading and weekday rows, trimming week
     /// columns to the visible panel width.
     fn build_heatmap_lines(&self, available_width: u16) -> Vec<Line<'static>> {
-        let end_day_key = current_day_key_local();
+        let end_day_key = self.activity_end_day_key;
         let grid = build_activity_heatmap_grid(self.stats_activity, end_day_key);
         let max_count = heatmap_max_count(&grid);
         let visible_week_count = Self::visible_heatmap_week_count(available_width);
@@ -480,6 +484,8 @@ mod tests {
     use crate::domain::project::Project;
     use crate::domain::theme::ColorTheme;
 
+    const TEST_ACTIVITY_DAY_KEY: i64 = 20_000;
+
     #[test]
     fn test_row_highlight_symbol_uses_background_only_selection() {
         // Arrange
@@ -579,8 +585,15 @@ mod tests {
         // Act
         terminal
             .draw(|frame| {
-                ProjectListPage::new(&projects, &[], &activity, &mut table_state, 42)
-                    .render(frame, frame.area());
+                ProjectListPage::new(
+                    &projects,
+                    &[],
+                    &activity,
+                    &mut table_state,
+                    42,
+                    TEST_ACTIVITY_DAY_KEY,
+                )
+                .render(frame, frame.area());
             })
             .expect("failed to draw projects page");
 
@@ -889,7 +902,7 @@ mod tests {
             session_count: 0,
         }];
         let activity = vec![DailyActivity {
-            day_key: current_day_key_local(),
+            day_key: TEST_ACTIVITY_DAY_KEY,
             session_count: 3,
         }];
         let agent_clis = vec![AgentCliInfo::new(
@@ -903,8 +916,15 @@ mod tests {
         // Act
         terminal
             .draw(|frame| {
-                ProjectListPage::new(&projects, &agent_clis, &activity, &mut table_state, 42)
-                    .render(frame, frame.area());
+                ProjectListPage::new(
+                    &projects,
+                    &agent_clis,
+                    &activity,
+                    &mut table_state,
+                    42,
+                    TEST_ACTIVITY_DAY_KEY,
+                )
+                .render(frame, frame.area());
             })
             .expect("failed to draw projects page");
 
@@ -927,11 +947,18 @@ mod tests {
     fn test_build_heatmap_lines_uses_persisted_activity_for_intensity() {
         // Arrange
         let activity = vec![DailyActivity {
-            day_key: current_day_key_local(),
+            day_key: TEST_ACTIVITY_DAY_KEY,
             session_count: 50,
         }];
         let mut table_state = TableState::default();
-        let page = ProjectListPage::new(&[], &[], &activity, &mut table_state, 42);
+        let page = ProjectListPage::new(
+            &[],
+            &[],
+            &activity,
+            &mut table_state,
+            42,
+            TEST_ACTIVITY_DAY_KEY,
+        );
 
         // Act
         let heatmap_lines = page.build_heatmap_lines(80);
@@ -949,11 +976,18 @@ mod tests {
     fn test_build_heatmap_lines_trims_visible_weeks_on_narrow_width() {
         // Arrange
         let activity = vec![DailyActivity {
-            day_key: current_day_key_local(),
+            day_key: TEST_ACTIVITY_DAY_KEY,
             session_count: 1,
         }];
         let mut table_state = TableState::default();
-        let page = ProjectListPage::new(&[], &[], &activity, &mut table_state, 42);
+        let page = ProjectListPage::new(
+            &[],
+            &[],
+            &activity,
+            &mut table_state,
+            42,
+            TEST_ACTIVITY_DAY_KEY,
+        );
 
         // Act
         let heatmap_lines = page.build_heatmap_lines(28);

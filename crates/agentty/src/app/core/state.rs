@@ -31,6 +31,7 @@ use app::setting::SettingsManager;
 use app::sync::SyncMainRunner;
 use app::tab::{Tab, TabManager};
 use app::{sync, task};
+use askama::Template;
 use session::StatusTransition;
 #[cfg(test)]
 use session::{SyncMainOutcome, SyncSessionStartError, TurnAppliedState};
@@ -95,6 +96,13 @@ pub enum UpdateStatus {
 pub(super) struct SyncPopupContext {
     pub(super) default_branch: String,
     pub(super) project_name: String,
+}
+
+/// Askama view model for the initial prompt of an issue-backed session.
+#[derive(Template)]
+#[template(path = "issue_session_prompt.md", escape = "none")]
+struct IssueSessionPromptTemplate<'a> {
+    issue_url: &'a str,
 }
 
 /// Source-session context needed to create a seeded continuation draft.
@@ -1917,17 +1925,22 @@ impl App {
     /// Starts one already-created issue session and opens it even when prompt
     /// submission fails, keeping the recoverable session visible to the user.
     async fn start_created_issue_session(&mut self, session_id: &str, issue_url: &str) {
-        if let Err(error) = self
-            .start_session(
-                session_id,
-                TurnPrompt::from_text(format!("Address this issue: {issue_url}")),
-            )
-            .await
-        {
+        let prompt = Self::issue_session_prompt(issue_url);
+        let start_result = self
+            .start_session(session_id, TurnPrompt::from_text(prompt))
+            .await;
+        if let Err(error) = start_result {
             self.append_output_for_session(session_id, &TranscriptNotice::Error.format(error))
                 .await;
         }
         self.open_session(session_id);
+    }
+
+    /// Renders the initial prompt for an issue-backed session.
+    fn issue_session_prompt(issue_url: &str) -> String {
+        let template = IssueSessionPromptTemplate { issue_url };
+
+        template.render().unwrap_or_default().trim_end().to_string()
     }
 
     /// Opens one linked sibling session when it still exists in memory.

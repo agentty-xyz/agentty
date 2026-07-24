@@ -16,7 +16,9 @@ use crate::ui::component::tachyon_loader::TachyonLoaderEffect;
 use crate::ui::component::vertical_scrollbar::VerticalScrollbar;
 #[cfg(test)]
 use crate::ui::component::vertical_scrollbar::{SCROLLBAR_THUMB_SYMBOL, SCROLLBAR_TRACK_SYMBOL};
-use crate::ui::icon::{Icon, TACHYON_LOADER_WIDTH};
+#[cfg(test)]
+use crate::ui::icon::Icon;
+use crate::ui::icon::TACHYON_LOADER_WIDTH;
 use crate::ui::input_layout::{bottom_pinned_scroll_offset, panel_inner_width};
 use crate::ui::session_output_assembly::{self, SessionOutputBody, SessionOutputLines};
 use crate::ui::{Component, markdown, session_format, style};
@@ -381,6 +383,7 @@ pub struct SessionOutput<'a> {
     scroll_offset: Option<u16>,
     session: &'a Session,
     session_update_version: u64,
+    spinner_frame: usize,
 }
 
 /// Borrowed inputs that control how session output lines are derived from one
@@ -407,6 +410,7 @@ impl<'a> SessionOutput<'a> {
             scroll_offset: None,
             session,
             session_update_version: 0,
+            spinner_frame: 0,
         }
     }
 
@@ -452,6 +456,14 @@ impl<'a> SessionOutput<'a> {
     #[must_use]
     pub fn session_update_version(mut self, version: u64) -> Self {
         self.session_update_version = version;
+        self
+    }
+
+    /// Sets the deterministic animation frame for active loader effects.
+    #[must_use]
+    pub fn spinner_frame(mut self, spinner_frame: usize) -> Self {
+        self.spinner_frame = spinner_frame;
+
         self
     }
 
@@ -726,7 +738,7 @@ impl Component for SessionOutput<'_> {
     /// component keeps the output border title-free.
     fn render(&self, f: &mut Frame, output_area: Rect) {
         let status = self.session.status;
-        let spinner_frame = Icon::current_spinner_frame();
+        let spinner_frame = self.spinner_frame;
         let viewport_height = Self::session_output_inner_area(output_area).height;
         let resolved_layout = Self::resolved_layout(
             self.session,
@@ -899,6 +911,18 @@ mod tests {
                 .collect(),
         );
         session.transcript = Some(transcript);
+    }
+
+    #[test]
+    fn test_spinner_frame_uses_injected_render_time() {
+        // Arrange
+        let session = session_fixture();
+
+        // Act
+        let output = SessionOutput::new(&session).spinner_frame(42);
+
+        // Assert
+        assert_eq!(output.spinner_frame, 42);
     }
 
     #[test]

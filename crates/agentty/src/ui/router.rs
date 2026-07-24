@@ -8,8 +8,9 @@ use crate::app::{AssignedIssueState, RequestedReviewState, Tab};
 use crate::domain::agent::{AgentCliInfo, ReasoningLevel};
 use crate::domain::input::InputState;
 use crate::domain::project::{ProjectListItem, ordered_project_items};
-use crate::domain::session::{DailyActivity, Session, SessionId};
+use crate::domain::session::{DailyActivity, Session, SessionId, activity_day_key_with_offset};
 use crate::presentation::app_mode::{AppMode, ConfirmationIntent, ConfirmationViewMode};
+use crate::presentation::frame_time::FrameTime;
 use crate::presentation::settings::SettingsScreenSnapshot;
 use crate::ui::overlay::{
     HelpOverlayRenderContext, SyncBlockedPopupRenderContext, ViewInfoPopupRenderContext,
@@ -109,7 +110,7 @@ struct SessionChatRenderContext<'a> {
     session_worktree_availability: &'a HashMap<SessionId, bool>,
     sessions: &'a [Session],
     scroll_offset: Option<u16>,
-    wall_clock_unix_seconds: i64,
+    frame_time: FrameTime,
 }
 
 /// Borrowed inputs for rendering the publish-branch overlay and its
@@ -143,7 +144,7 @@ struct RouteAuxContext<'a> {
     session_progress_messages: &'a HashMap<SessionId, String>,
     session_update_versions: &'a HashMap<SessionId, u64>,
     session_worktree_availability: &'a HashMap<SessionId, bool>,
-    wall_clock_unix_seconds: i64,
+    frame_time: FrameTime,
 }
 
 impl<'a> RouteAuxContext<'a> {
@@ -172,7 +173,7 @@ impl<'a> RouteAuxContext<'a> {
             session_worktree_availability: self.session_worktree_availability,
             sessions,
             scroll_offset,
-            wall_clock_unix_seconds: self.wall_clock_unix_seconds,
+            frame_time: self.frame_time,
         }
     }
 
@@ -197,7 +198,7 @@ impl<'a> RouteAuxContext<'a> {
             session_update_versions: self.session_update_versions,
             session_worktree_availability: self.session_worktree_availability,
             sessions,
-            wall_clock_unix_seconds: self.wall_clock_unix_seconds,
+            frame_time: self.frame_time,
         }
     }
 
@@ -258,7 +259,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         stats_activity,
         sessions,
         table_state,
-        wall_clock_unix_seconds,
+        frame_time,
         ..
     } = context;
 
@@ -292,7 +293,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         session_progress_messages,
         session_update_versions,
         session_worktree_availability,
-        wall_clock_unix_seconds,
+        frame_time,
     };
 
     if render_list_or_overlay_mode(f, area, mode, &mut shared, aux) {
@@ -311,12 +312,7 @@ fn render_list_or_overlay_mode(
     aux: RouteAuxContext<'_>,
 ) -> bool {
     match mode {
-        AppMode::List => render_list_background(
-            f,
-            area,
-            shared.list_background(),
-            aux.wall_clock_unix_seconds,
-        ),
+        AppMode::List => render_list_background(f, area, shared.list_background(), aux.frame_time),
         AppMode::SessionCreation {
             selected_option_index,
         } => overlay::render_session_creation_overlay(
@@ -324,14 +320,14 @@ fn render_list_or_overlay_mode(
             area,
             shared.list_background(),
             *selected_option_index,
-            aux.wall_clock_unix_seconds,
+            aux.frame_time,
         ),
         AppMode::PreCommitHookWarning { message } => overlay::render_pre_commit_hook_warning(
             f,
             area,
             shared.list_background(),
             message,
-            aux.wall_clock_unix_seconds,
+            aux.frame_time,
         ),
         AppMode::ProjectSwitcher {
             selected_option_index,
@@ -340,7 +336,7 @@ fn render_list_or_overlay_mode(
             area,
             shared.list_background(),
             *selected_option_index,
-            aux.wall_clock_unix_seconds,
+            aux.frame_time,
         ),
         AppMode::Confirmation { .. } => render_confirmation_mode(f, area, mode, shared, aux),
 
@@ -354,7 +350,7 @@ fn render_list_or_overlay_mode(
             f,
             area,
             shared.list_background(),
-            aux.wall_clock_unix_seconds,
+            aux.frame_time,
             SyncBlockedPopupRenderContext {
                 default_branch: default_branch.as_deref(),
                 is_loading: *is_loading,
@@ -385,7 +381,7 @@ fn render_list_or_overlay_mode(
                 scroll_offset: *scroll_offset,
                 session_progress_messages: aux.session_progress_messages,
                 session_update_versions: aux.session_update_versions,
-                wall_clock_unix_seconds: aux.wall_clock_unix_seconds,
+                frame_time: aux.frame_time,
             },
         ),
         AppMode::View { .. }
@@ -484,13 +480,7 @@ fn render_confirmation_mode(
         return;
     }
 
-    overlay::render_confirmation_overlay(
-        f,
-        area,
-        mode,
-        shared.list_background(),
-        aux.wall_clock_unix_seconds,
-    );
+    overlay::render_confirmation_overlay(f, area, mode, shared.list_background(), aux.frame_time);
 }
 
 /// Renders an informational popup above a restored session-view background.
@@ -532,7 +522,7 @@ fn render_view_info_popup_mode(
             session_update_versions: aux.session_update_versions,
             sessions,
             title,
-            wall_clock_unix_seconds: aux.wall_clock_unix_seconds,
+            frame_time: aux.frame_time,
         },
     );
 }
@@ -574,7 +564,7 @@ struct SessionOverlayRenderContext<'a> {
     /// Session rows available for background rendering.
     sessions: &'a [Session],
     /// Render-time clock used for deterministic timers.
-    wall_clock_unix_seconds: i64,
+    frame_time: FrameTime,
 }
 
 impl SessionOverlayRenderContext<'_> {
@@ -594,7 +584,7 @@ impl SessionOverlayRenderContext<'_> {
             session_worktree_availability: self.session_worktree_availability,
             sessions: self.sessions,
             scroll_offset: self.restore_view.scroll_offset,
-            wall_clock_unix_seconds: self.wall_clock_unix_seconds,
+            frame_time: self.frame_time,
         }
     }
 }
@@ -602,10 +592,7 @@ impl SessionOverlayRenderContext<'_> {
 impl<'context> PublishBranchOverlayContext<'context> {
     /// Creates the session-overlay context that restores the chat page behind
     /// the publish-branch prompt.
-    fn session_overlay(
-        self,
-        wall_clock_unix_seconds: i64,
-    ) -> SessionOverlayRenderContext<'context> {
+    fn session_overlay(self, frame_time: FrameTime) -> SessionOverlayRenderContext<'context> {
         SessionOverlayRenderContext {
             active_prompt_outputs: self.active_prompt_outputs,
             default_reasoning_level: self.default_reasoning_level,
@@ -617,7 +604,7 @@ impl<'context> PublishBranchOverlayContext<'context> {
             session_update_versions: self.session_update_versions,
             session_worktree_availability: self.session_worktree_availability,
             sessions: self.sessions,
-            wall_clock_unix_seconds,
+            frame_time,
         }
     }
 }
@@ -775,7 +762,7 @@ fn render_publish_branch_input_mode(
         f,
         area,
         aux.publish_branch_overlay(sessions, mode_context),
-        aux.wall_clock_unix_seconds,
+        aux.frame_time,
     );
 }
 
@@ -814,9 +801,9 @@ fn render_publish_branch_overlay(
     f: &mut Frame,
     area: Rect,
     context: PublishBranchOverlayContext<'_>,
-    wall_clock_unix_seconds: i64,
+    frame_time: FrameTime,
 ) {
-    render_session_overlay_background(f, area, context.session_overlay(wall_clock_unix_seconds));
+    render_session_overlay_background(f, area, context.session_overlay(frame_time));
 
     component::publish_branch_overlay::PublishBranchOverlay::new(
         context.input,
@@ -841,7 +828,7 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         session_worktree_availability,
         sessions,
         scroll_offset,
-        wall_clock_unix_seconds,
+        frame_time,
     } = context;
 
     let Some(session_index) = sessions.iter().position(|session| session.id == session_id) else {
@@ -873,7 +860,7 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         session_index,
         session_update_version,
         sessions,
-        wall_clock_unix_seconds,
+        frame_time,
     })
     .can_open_worktree(
         *session_worktree_availability
@@ -888,7 +875,7 @@ pub(crate) fn render_list_background(
     f: &mut Frame,
     content_area: Rect,
     context: ListBackgroundRenderContext<'_, '_>,
-    wall_clock_unix_seconds: i64,
+    frame_time: FrameTime,
 ) {
     let shared = context.shared;
 
@@ -911,6 +898,10 @@ pub(crate) fn render_list_background(
                 shared.stats_activity,
                 &mut *shared.project_table_state,
                 shared.active_project_id,
+                activity_day_key_with_offset(
+                    frame_time.unix_seconds(),
+                    frame_time.local_utc_offset_seconds(),
+                ),
             )
             .render(f, chunks[1]);
         }
@@ -919,7 +910,7 @@ pub(crate) fn render_list_background(
                 shared.sessions,
                 &mut *shared.table_state,
                 shared.default_reasoning_level,
-                wall_clock_unix_seconds,
+                frame_time.unix_seconds(),
             )
             .render(f, chunks[1]);
         }
@@ -1064,7 +1055,12 @@ mod tests {
 
         terminal
             .draw(|frame| {
-                render_list_background(frame, frame.area(), shared.list_background(), 0);
+                render_list_background(
+                    frame,
+                    frame.area(),
+                    shared.list_background(),
+                    FrameTime::new(0, 0, 0),
+                );
             })
             .expect("failed to draw list tab");
 
@@ -1072,6 +1068,71 @@ mod tests {
             buffer_text(terminal.backend().buffer()),
             default_reasoning_level,
         )
+    }
+
+    /// Renders one list-backed mode through the production router.
+    fn render_list_backed_mode(mode: &AppMode) -> (bool, String) {
+        let backend = ratatui::backend::TestBackend::new(120, 40);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let mut assigned_issue_table_state = TableState::default();
+        let assigned_issues = AssignedIssueState::default();
+        let mut project_table_state = TableState::default();
+        let mut requested_review_table_state = TableState::default();
+        let requested_reviews = RequestedReviewState::default();
+        let sessions = vec![session_fixture("session-overlay")];
+        let mut table_state = TableState::default();
+        let mut shared = RouteSharedContext {
+            active_project_id: 1,
+            assigned_issue_selected_index: None,
+            assigned_issue_table_state: &mut assigned_issue_table_state,
+            assigned_issues: &assigned_issues,
+            available_agent_clis: &[],
+            current_tab: Tab::Sessions,
+            default_reasoning_level: ReasoningLevel::High,
+            mru_project_order: &[],
+            project_table_state: &mut project_table_state,
+            projects: &[],
+            requested_review_selected_index: None,
+            requested_review_table_state: &mut requested_review_table_state,
+            requested_reviews: &requested_reviews,
+            sessions: &sessions,
+            settings_screen: None,
+            stats_activity: &[],
+            table_state: &mut table_state,
+        };
+        let diff_layout_cache = page::diff::DiffLayoutCache::default();
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let output_layout_cache = component::session_output::SessionOutputLayoutCache::default();
+        let active_prompt_outputs = HashMap::new();
+        let session_progress_messages = HashMap::new();
+        let session_update_versions = HashMap::new();
+        let session_worktree_availability = HashMap::new();
+        let mut handled = false;
+
+        terminal
+            .draw(|frame| {
+                handled = render_list_or_overlay_mode(
+                    frame,
+                    frame.area(),
+                    mode,
+                    &mut shared,
+                    RouteAuxContext {
+                        active_prompt_outputs: &active_prompt_outputs,
+                        default_reasoning_level: ReasoningLevel::High,
+                        diff_layout_cache: &diff_layout_cache,
+                        markdown_render_cache: &markdown_render_cache,
+                        output_layout_cache: &output_layout_cache,
+                        review_snapshot: None,
+                        session_progress_messages: &session_progress_messages,
+                        session_update_versions: &session_update_versions,
+                        session_worktree_availability: &session_worktree_availability,
+                        frame_time: FrameTime::new(90, 90_000, -28_800),
+                    },
+                );
+            })
+            .expect("failed to draw list-backed mode");
+
+        (handled, buffer_text(terminal.backend().buffer()))
     }
 
     #[test]
@@ -1168,7 +1229,7 @@ mod tests {
                         session_progress_messages: &HashMap::new(),
                         session_update_versions: &HashMap::new(),
                         session_worktree_availability: &HashMap::new(),
-                        wall_clock_unix_seconds: 0,
+                        frame_time: FrameTime::new(0, 0, 0),
                     },
                 );
             })
@@ -1177,6 +1238,151 @@ mod tests {
         // Assert
         assert!(handled);
         assert!(buffer_text(terminal.backend().buffer()).contains("Keybindings"));
+    }
+
+    #[test]
+    fn render_list_backed_modes_forward_frame_time_to_every_overlay() {
+        // Arrange
+        let restore_view = ConfirmationViewMode {
+            scroll_offset: None,
+            session_id: "session-overlay".into(),
+        };
+        let modes = [
+            (
+                AppMode::SessionCreation {
+                    selected_option_index: 0,
+                },
+                "New Session",
+            ),
+            (
+                AppMode::PreCommitHookWarning {
+                    message: "Install the hook".to_string(),
+                },
+                "Pre-commit hook warning",
+            ),
+            (
+                AppMode::ProjectSwitcher {
+                    selected_option_index: 0,
+                },
+                "Switch project",
+            ),
+            (
+                AppMode::Confirmation {
+                    confirmation_intent: ConfirmationIntent::Quit,
+                    confirmation_message: "Quit now?".to_string(),
+                    confirmation_title: "Confirm Quit".to_string(),
+                    restore_view: None,
+                    session_id: None,
+                    selected_confirmation_index: 0,
+                },
+                "Confirm Quit",
+            ),
+            (
+                AppMode::Confirmation {
+                    confirmation_intent: ConfirmationIntent::MergeSession,
+                    confirmation_message: "Merge now?".to_string(),
+                    confirmation_title: "Confirm Merge".to_string(),
+                    restore_view: Some(restore_view.clone()),
+                    session_id: Some("session-overlay".into()),
+                    selected_confirmation_index: 0,
+                },
+                "Confirm Merge",
+            ),
+            (
+                AppMode::SyncBlockedPopup {
+                    default_branch: Some("main".to_string()),
+                    is_loading: true,
+                    message: "Waiting for sync".to_string(),
+                    project_name: Some("agentty".to_string()),
+                    title: "Syncing".to_string(),
+                },
+                "Syncing",
+            ),
+            (
+                AppMode::ViewInfoPopup {
+                    is_loading: true,
+                    loading_label: "Publishing branch".to_string(),
+                    message: "Waiting for forge".to_string(),
+                    restore_view,
+                    title: "Publishing".to_string(),
+                },
+                "Publishing",
+            ),
+        ];
+
+        // Act
+        let rendered_modes = modes
+            .iter()
+            .map(|(mode, expected_text)| {
+                let (handled, text) = render_list_backed_mode(mode);
+
+                (handled, text, *expected_text)
+            })
+            .collect::<Vec<_>>();
+
+        // Assert
+        for (handled, text, expected_text) in rendered_modes {
+            assert!(handled);
+            assert!(
+                text.contains(expected_text),
+                "rendered output should contain `{expected_text}`"
+            );
+        }
+    }
+
+    #[test]
+    fn render_help_modes_forward_frame_time_to_list_and_view_backgrounds() {
+        // Arrange
+        let modes = [
+            (
+                AppMode::Help {
+                    context: crate::presentation::app_mode::HelpContext::List {
+                        keybindings: vec![],
+                    },
+                    scroll_offset: 0,
+                },
+                "Keybindings",
+            ),
+            (
+                AppMode::Help {
+                    context: crate::presentation::app_mode::HelpContext::View {
+                        can_fork_session: true,
+                        can_merge_session_branch: true,
+                        can_mutate_session_branch: true,
+                        can_open_worktree: true,
+                        can_rebase_session_branch: true,
+                        can_reply_to_session: true,
+                        can_start_staged_session: false,
+                        can_view_review_comments: false,
+                        publish_pull_request_action: None,
+                        session_id: "session-overlay".into(),
+                        session_state: crate::presentation::help_action::ViewSessionState::Review,
+                        scroll_offset: None,
+                    },
+                    scroll_offset: 0,
+                },
+                "Keybindings",
+            ),
+        ];
+
+        // Act
+        let rendered_modes = modes
+            .iter()
+            .map(|(mode, expected_text)| {
+                let (handled, text) = render_list_backed_mode(mode);
+
+                (handled, text, *expected_text)
+            })
+            .collect::<Vec<_>>();
+
+        // Assert
+        for (handled, text, expected_text) in rendered_modes {
+            assert!(handled);
+            assert!(
+                text.contains(expected_text),
+                "rendered output should contain `{expected_text}`"
+            );
+        }
     }
 
     #[test]
@@ -1214,7 +1420,7 @@ mod tests {
                         session_progress_messages: &progress_messages,
                         session_update_versions: &session_update_versions,
                         session_worktree_availability: &HashMap::new(),
-                        wall_clock_unix_seconds: 0,
+                        frame_time: FrameTime::new(0, 0, 0),
                     },
                 );
             })
@@ -1262,7 +1468,7 @@ mod tests {
                         session_progress_messages: &progress_messages,
                         session_update_versions: &session_update_versions,
                         session_worktree_availability: &HashMap::new(),
-                        wall_clock_unix_seconds: 0,
+                        frame_time: FrameTime::new(0, 0, 0),
                     },
                 );
             })
@@ -1343,7 +1549,7 @@ mod tests {
                         session_progress_messages: &progress_messages,
                         session_update_versions: &session_update_versions,
                         session_worktree_availability: &HashMap::new(),
-                        wall_clock_unix_seconds: 0,
+                        frame_time: FrameTime::new(0, 0, 0),
                     },
                 );
             })
@@ -1396,7 +1602,7 @@ mod tests {
                         session_progress_messages: &progress_messages,
                         session_update_versions: &session_update_versions,
                         session_worktree_availability: &HashMap::new(),
-                        wall_clock_unix_seconds: 0,
+                        frame_time: FrameTime::new(0, 0, 0),
                     },
                 );
             })
@@ -1446,7 +1652,7 @@ mod tests {
                         session_update_versions: &session_update_versions,
                         session_worktree_availability: &HashMap::new(),
                         sessions: &sessions,
-                        wall_clock_unix_seconds: 0,
+                        frame_time: FrameTime::new(0, 0, 0),
                     },
                     &confirmation_context,
                 );
@@ -1457,5 +1663,60 @@ mod tests {
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("Confirm Merge"));
         assert!(text.contains("Queue merge now?"));
+    }
+
+    #[test]
+    fn render_session_or_diff_mode_forwards_frame_time_to_publish_overlay() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(120, 40);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let session_id = "session-publish";
+        let sessions = vec![session_fixture(session_id)];
+        let mode = AppMode::PublishBranchInput {
+            default_branch_name: "wt/session-publish".to_string(),
+            input: InputState::default(),
+            locked_upstream_ref: None,
+            publish_branch_action: crate::domain::session::PublishBranchAction::PublishPullRequest,
+            restore_view: ConfirmationViewMode {
+                scroll_offset: None,
+                session_id: session_id.into(),
+            },
+        };
+        let diff_layout_cache = page::diff::DiffLayoutCache::default();
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let output_layout_cache = component::session_output::SessionOutputLayoutCache::default();
+        let active_prompt_outputs = HashMap::new();
+        let session_progress_messages = HashMap::new();
+        let session_update_versions = HashMap::new();
+        let session_worktree_availability = HashMap::new();
+
+        // Act
+        terminal
+            .draw(|frame| {
+                render_session_or_diff_mode(
+                    frame,
+                    frame.area(),
+                    &mode,
+                    &sessions,
+                    RouteAuxContext {
+                        active_prompt_outputs: &active_prompt_outputs,
+                        default_reasoning_level: ReasoningLevel::High,
+                        diff_layout_cache: &diff_layout_cache,
+                        markdown_render_cache: &markdown_render_cache,
+                        output_layout_cache: &output_layout_cache,
+                        review_snapshot: None,
+                        session_progress_messages: &session_progress_messages,
+                        session_update_versions: &session_update_versions,
+                        session_worktree_availability: &session_worktree_availability,
+                        frame_time: FrameTime::new(90, 90_000, -28_800),
+                    },
+                );
+            })
+            .expect("failed to draw publish overlay");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("Publish Review Request"));
+        assert!(text.contains("wt/session-publish"));
     }
 }

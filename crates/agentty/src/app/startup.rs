@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 use super::core::{AGENTTY_WT_DIR, AppEvent};
 use super::task;
 use crate::app::service::AppServices;
-use crate::app::session::SessionManager;
+use crate::app::session::{SessionLoadInput, SessionManager};
 use crate::app::session_state::SessionState;
 use crate::app::tab::Tab;
 use crate::app::{AppError, session};
@@ -206,19 +206,22 @@ impl AppStartup {
         } = context;
         let mut table_state = SelectionState::default();
         let mut handles = std::collections::HashMap::new();
+        let clock = services.clock();
         let fs_client = services.fs_client();
         let (sessions, stats_activity, session_worktree_availability) =
             SessionManager::load_sessions_with_fs_client(
-                services.base_path(),
-                services.db(),
-                active_project_id,
-                startup_working_dir,
+                SessionLoadInput {
+                    active_project_id,
+                    active_session_id: None,
+                    base: services.base_path(),
+                    clock: clock.as_ref(),
+                    db: services.db(),
+                    fs_client: fs_client.as_ref(),
+                    working_dir: startup_working_dir,
+                },
                 &mut handles,
-                fs_client.as_ref(),
-                None,
             )
             .await;
-        let clock = services.clock();
         let (sessions_row_count, sessions_updated_at_max) = services
             .db()
             .sessions()

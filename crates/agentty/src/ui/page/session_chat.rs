@@ -12,12 +12,14 @@ use crate::domain::session::{
 };
 use crate::domain::{input, review};
 use crate::presentation::app_mode::{AppMode, ChatFocus};
+use crate::presentation::frame_time::FrameTime;
 use crate::presentation::help_action::{self, ViewActionAvailability, ViewHelpState};
 use crate::presentation::prompt::PromptAtMentionState;
 use crate::ui::component::chat_input::{ChatInput, SuggestionList};
 use crate::ui::component::session_output::{
     SessionOutput, SessionOutputLayoutCache, SessionOutputLineContext,
 };
+use crate::ui::icon::Icon;
 use crate::ui::input_layout::{
     calculate_input_height, overlay_area_above, panel_inner_height, suggestion_dropdown_height,
 };
@@ -62,6 +64,8 @@ pub struct SessionChatPage<'a> {
     pub can_open_worktree: bool,
     /// Active project-scoped default reasoning level.
     pub default_reasoning_level: ReasoningLevel,
+    /// One coherent render-time clock snapshot.
+    pub(crate) frame_time: FrameTime,
     /// Shared markdown cache reused across transcript renders in this page.
     pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
     /// Current UI mode that controls the bottom panel and focus.
@@ -79,8 +83,6 @@ pub struct SessionChatPage<'a> {
     pub session_update_version: u64,
     /// Session rows available to the page.
     pub sessions: &'a [Session],
-    /// Render-time clock used for deterministic timers.
-    pub wall_clock_unix_seconds: i64,
 }
 
 /// Borrowed inputs needed to construct one session chat page renderer.
@@ -93,6 +95,8 @@ pub struct SessionChatPageInput<'a> {
     pub active_progress: Option<&'a str>,
     /// Active project-scoped default reasoning level.
     pub default_reasoning_level: ReasoningLevel,
+    /// One coherent render-time clock snapshot.
+    pub(crate) frame_time: FrameTime,
     /// Shared render cache for session transcript markdown.
     pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
     /// Current UI mode that determines view, prompt, and question rendering.
@@ -109,8 +113,6 @@ pub struct SessionChatPageInput<'a> {
     pub session_update_version: u64,
     /// Session rows available to the page.
     pub sessions: &'a [Session],
-    /// Render-time clock used for deterministic timers.
-    pub wall_clock_unix_seconds: i64,
 }
 
 impl<'a> SessionChatPage<'a> {
@@ -120,6 +122,7 @@ impl<'a> SessionChatPage<'a> {
             active_prompt_output,
             active_progress,
             default_reasoning_level,
+            frame_time,
             markdown_render_cache,
             mode,
             output_layout_cache,
@@ -128,7 +131,6 @@ impl<'a> SessionChatPage<'a> {
             session_index,
             session_update_version,
             sessions,
-            wall_clock_unix_seconds,
         } = input;
 
         Self {
@@ -136,6 +138,7 @@ impl<'a> SessionChatPage<'a> {
             active_progress,
             can_open_worktree: false,
             default_reasoning_level,
+            frame_time,
             markdown_render_cache,
             mode,
             output_layout_cache,
@@ -144,7 +147,6 @@ impl<'a> SessionChatPage<'a> {
             session_index,
             session_update_version,
             sessions,
-            wall_clock_unix_seconds,
         }
     }
 
@@ -190,7 +192,7 @@ impl<'a> SessionChatPage<'a> {
             session,
             area.width.saturating_sub(2),
             self.default_reasoning_level,
-            self.wall_clock_unix_seconds,
+            self.frame_time.unix_seconds(),
         );
         let header_height = header_height(&header_lines);
         let bottom_height = prepared_prompt_panel.as_ref().map_or_else(
@@ -202,7 +204,10 @@ impl<'a> SessionChatPage<'a> {
         let mut output = SessionOutput::new(session)
             .markdown_render_cache(self.markdown_render_cache)
             .output_layout_cache(self.output_layout_cache)
-            .session_update_version(self.session_update_version);
+            .session_update_version(self.session_update_version)
+            .spinner_frame(Icon::spinner_frame_from_millis(
+                self.frame_time.unix_millis(),
+            ));
         output = output.active_prompt_output(self.active_prompt_output);
         if let Some(scroll_offset) = self.scroll_offset {
             output = output.scroll_offset(scroll_offset);
@@ -665,6 +670,7 @@ mod tests {
             active_prompt_output: None,
             active_progress: None,
             default_reasoning_level: ReasoningLevel::default(),
+            frame_time: FrameTime::new(0, 0, 0),
             markdown_render_cache: test_markdown_render_cache(),
             mode,
             output_layout_cache: test_output_layout_cache(),
@@ -673,7 +679,6 @@ mod tests {
             session_index: 0,
             session_update_version: 0,
             sessions: std::slice::from_ref(session),
-            wall_clock_unix_seconds: 0,
         })
     }
 

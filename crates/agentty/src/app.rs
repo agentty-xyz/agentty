@@ -49,4 +49,5 @@ pub use setting::SettingsManager;
 #[cfg(test)]
 pub(crate) use sync::MockSyncMainRunner;
 pub use tab::{Tab, TabManager};
+pub(crate) use task::TaskService;
 pub(crate) use view::AppViewSnapshot;

@@ -24,6 +24,7 @@ use tokio::sync::{Barrier, Notify};
 use super::*;
 use crate::app::prompt_intent::ReviewCommentResolutionOutcome;
 use crate::app::review::{review_failure_message, review_loading_message};
+use crate::app::session::SessionLoadInput;
 use crate::app::{App, AppEvent, ReviewCacheEntry, SyncSessionStartError, Tab};
 use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ReasoningLevel,
@@ -31,17 +32,17 @@ use crate::domain::agent::{
 use crate::domain::selection::SelectionState;
 use crate::domain::session::{
     DailyActivity, SESSION_DATA_DIR, Session, SessionHandles, SessionSize, SessionStats, Status,
+    activity_day_key_with_offset,
 };
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::setting::SettingName;
 use crate::domain::transient_message::{
     TransientMessageAnchor, TransientMessageBody, TransientMessageSlot, TransientMessageStore,
 };
-use crate::infra::clock::RealClock;
+use crate::infra::clock::{Clock, RealClock};
 use crate::infra::db::AppRepositories;
 use crate::infra::fs::{self as fs, FsClient};
 use crate::presentation::app_mode::{AppMode, ReviewCommentAction, ReviewCommentActionSelection};
-use crate::ui::activity_heatmap;
 
 /// Builds a filesystem mock that delegates operations to local disk.
 fn create_passthrough_mock_fs_client() -> fs::MockFsClient {
@@ -3158,7 +3159,10 @@ async fn test_load_sessions_aggregates_daily_activity() {
         day_key_one * seconds_per_day + 600,
         day_key_two * seconds_per_day + 50,
     ] {
-        let day_key = activity_heatmap::activity_day_key_local(timestamp_seconds);
+        let day_key = activity_day_key_with_offset(
+            timestamp_seconds,
+            RealClock.local_utc_offset_seconds(timestamp_seconds),
+        );
         let day_count = expected_activity_by_day.entry(day_key).or_insert(0);
         *day_count = day_count.saturating_add(1);
     }
@@ -3173,13 +3177,16 @@ async fn test_load_sessions_aggregates_daily_activity() {
     // Act
     let fs_client = fs::RealFsClient;
     let (sessions, stats_activity, _) = SessionManager::load_sessions_with_fs_client(
-        dir.path(),
-        &db,
-        project_id,
-        &working_dir,
+        SessionLoadInput {
+            active_project_id: project_id,
+            active_session_id: None,
+            base: dir.path(),
+            clock: &RealClock,
+            db: &db,
+            fs_client: &fs_client,
+            working_dir: &working_dir,
+        },
         &mut handles,
-        &fs_client,
-        None,
     )
     .await;
 
@@ -3224,13 +3231,16 @@ async fn test_load_sessions_keeps_daily_activity_after_session_deletion() {
     // Act
     let fs_client = fs::RealFsClient;
     let (sessions, stats_activity, _) = SessionManager::load_sessions_with_fs_client(
-        dir.path(),
-        &db,
-        project_id,
-        &working_dir,
+        SessionLoadInput {
+            active_project_id: project_id,
+            active_session_id: None,
+            base: dir.path(),
+            clock: &RealClock,
+            db: &db,
+            fs_client: &fs_client,
+            working_dir: &working_dir,
+        },
         &mut handles,
-        &fs_client,
-        None,
     )
     .await;
 
@@ -3579,13 +3589,16 @@ async fn test_load_sessions_uses_persisted_size_for_non_terminal_status() {
     // Act
     let fs_client = fs::RealFsClient;
     let (reloaded_sessions, _, _) = SessionManager::load_sessions_with_fs_client(
-        app.services.base_path(),
-        app.services.db(),
-        app.projects.active_project_id(),
-        app.projects.working_dir(),
+        SessionLoadInput {
+            active_project_id: app.projects.active_project_id(),
+            active_session_id: None,
+            base: app.services.base_path(),
+            clock: &RealClock,
+            db: app.services.db(),
+            fs_client: &fs_client,
+            working_dir: app.projects.working_dir(),
+        },
         app.sessions.session_handles_mut(),
-        &fs_client,
-        None,
     )
     .await;
     let db_sessions = app
@@ -3708,13 +3721,16 @@ async fn test_load_sessions_uses_persisted_size_for_done_status() {
     // Act
     let fs_client = fs::RealFsClient;
     let (reloaded_sessions, _, _) = SessionManager::load_sessions_with_fs_client(
-        app.services.base_path(),
-        app.services.db(),
-        app.projects.active_project_id(),
-        app.projects.working_dir(),
+        SessionLoadInput {
+            active_project_id: app.projects.active_project_id(),
+            active_session_id: None,
+            base: app.services.base_path(),
+            clock: &RealClock,
+            db: app.services.db(),
+            fs_client: &fs_client,
+            working_dir: app.projects.working_dir(),
+        },
         app.sessions.session_handles_mut(),
-        &fs_client,
-        None,
     )
     .await;
     let db_sessions = app

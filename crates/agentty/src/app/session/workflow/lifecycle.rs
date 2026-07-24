@@ -2604,10 +2604,11 @@ impl SessionManager {
     /// Records that one session was created and warns if analytics persistence
     /// fails.
     async fn record_session_creation_activity(services: &AppServices, session_id: &str) {
+        let timestamp_seconds = unix_timestamp_from_system_time(services.clock().now_system_time());
         if let Err(error) = services
             .db()
             .activity()
-            .insert_session_creation_activity_now(session_id)
+            .insert_session_creation_activity_at(session_id, timestamp_seconds)
             .await
         {
             warn!(
@@ -3066,6 +3067,7 @@ mod test_support {
 mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
+    use std::time::{Duration, Instant, SystemTime};
 
     use ag_agent::MockOneShotClient;
     use ag_forge as forge;
@@ -3083,6 +3085,7 @@ mod tests {
     use crate::infra::clock::RealClock;
     use crate::infra::db::{self, AppRepositories};
     use crate::infra::fs;
+    use crate::test_support::FixedClock;
 
     /// Builds a session manager with one session for reply-context tests.
     fn session_manager_with_one_session(session: Session) -> SessionManager {
@@ -3222,6 +3225,7 @@ mod tests {
     /// boundaries.
     fn test_services_with_fs_client(
         database: &AppRepositories,
+        clock: Arc<dyn crate::infra::clock::Clock>,
         fs_client: Arc<dyn fs::FsClient>,
         git_client: Arc<dyn git::GitClient>,
         review_request_client: Arc<dyn forge::ReviewRequestClient>,
@@ -3230,7 +3234,7 @@ mod tests {
 
         AppServices::new_with_agent_clis(
             PathBuf::from("/tmp/agentty-tests"),
-            Arc::new(crate::infra::clock::RealClock),
+            clock,
             event_tx,
             crate::app::service::AppServiceDeps {
                 app_server_client_override: Some(crate::test_support::mock_app_server()),
@@ -3254,6 +3258,7 @@ mod tests {
     ) -> AppServices {
         test_services_with_fs_client(
             database,
+            Arc::new(crate::infra::clock::RealClock),
             Arc::new(create_passthrough_mock_fs_client()),
             git_client,
             review_request_client,
@@ -3348,6 +3353,36 @@ mod tests {
             .into_iter()
             .find(|row| row.id == "session-id")
             .expect("session row should exist")
+    }
+
+    #[tokio::test]
+    async fn record_session_creation_activity_uses_injected_clock() {
+        // Arrange
+        let timestamp_seconds = 123_i64;
+        let session = test_session("", Status::Draft, None, "");
+        let database = database_with_session(&session).await;
+        let clock = Arc::new(FixedClock::new(
+            Instant::now(),
+            SystemTime::UNIX_EPOCH + Duration::from_secs(123),
+        ));
+        let services = test_services_with_fs_client(
+            &database,
+            clock,
+            Arc::new(create_passthrough_mock_fs_client()),
+            Arc::new(git::MockGitClient::new()),
+            Arc::new(forge::MockReviewRequestClient::new()),
+        );
+
+        // Act
+        SessionManager::record_session_creation_activity(&services, "session-id").await;
+        let activity_timestamps = database
+            .activity()
+            .load_session_activity_timestamps()
+            .await
+            .expect("activity timestamps should load");
+
+        // Assert
+        assert_eq!(activity_timestamps, vec![timestamp_seconds]);
     }
 
     #[tokio::test]
@@ -3616,6 +3651,7 @@ mod tests {
         });
         let services = test_services_with_fs_client(
             &database,
+            Arc::new(crate::infra::clock::RealClock),
             Arc::new(mock_fs_client),
             Arc::new(git::MockGitClient::new()),
             Arc::new(forge::MockReviewRequestClient::new()),
@@ -3656,6 +3692,7 @@ mod tests {
         mock_git_client.expect_find_git_repo_root().times(0);
         let services = test_services_with_fs_client(
             &database,
+            Arc::new(crate::infra::clock::RealClock),
             Arc::new(mock_fs_client),
             Arc::new(mock_git_client),
             Arc::new(forge::MockReviewRequestClient::new()),
@@ -3704,6 +3741,7 @@ mod tests {
         mock_git_client.expect_find_git_repo_root().times(0);
         let services = test_services_with_fs_client(
             &database,
+            Arc::new(crate::infra::clock::RealClock),
             Arc::new(mock_fs_client),
             Arc::new(mock_git_client),
             Arc::new(forge::MockReviewRequestClient::new()),
@@ -3743,6 +3781,7 @@ mod tests {
             .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
         let services = test_services_with_fs_client(
             &database,
+            Arc::new(crate::infra::clock::RealClock),
             Arc::new(create_passthrough_mock_fs_client()),
             Arc::new(mock_git_client),
             Arc::new(forge::MockReviewRequestClient::new()),

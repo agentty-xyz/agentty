@@ -1,24 +1,17 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
 
 #[cfg(test)]
 use at_mention_task::clear_pending_load;
 use tokio::sync::mpsc;
-use tracing::warn;
 
+#[cfg(test)]
+use crate::app::at_mention_task;
 use crate::app::session::SessionManager;
-use crate::app::{AppEvent, at_mention_task};
-use crate::domain::file_entry::{FileEntry, at_mention_lookup_root};
+use crate::app::{AppEvent, TaskService};
+use crate::domain::file_entry::{FileEntry, at_mention_lookup_root, filter_entries};
 use crate::domain::input::InputState;
 use crate::domain::session::SessionId;
-use crate::infra::file_index;
 use crate::presentation::prompt::PromptAtMentionState;
-
-/// Delay applied before a fresh `@`-mention filesystem walk starts.
-const AT_MENTION_LOAD_DEBOUNCE: Duration = Duration::from_millis(75);
-/// Monotonic counter used to distinguish stale and current load tasks.
-static NEXT_AT_MENTION_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Describes how one mode should update its visible `@`-mention state after an
 /// input edit or cursor move.
@@ -69,60 +62,9 @@ pub(crate) fn start_loading_entries(
     session_id: SessionId,
     session_manager: &mut SessionManager,
 ) {
-    if let Some(entries) = session_manager.at_mention_index_for_root(&lookup_root) {
-        if event_tx
-            .send(AppEvent::AtMentionEntriesLoaded {
-                entries,
-                session_id: session_id.clone(),
-            })
-            .is_err()
-        {
-            warn!(
-                session_id = %session_id,
-                "failed to publish cached at-mention entries because the app event receiver is closed"
-            );
-        }
+    let cached_entries = session_manager.at_mention_index_for_root(&lookup_root);
 
-        return;
-    }
-
-    let request_id = NEXT_AT_MENTION_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
-    let tracked_session_id = session_id.clone();
-    let task_session_id = session_id.clone();
-    let handle = tokio::spawn(async move {
-        tokio::time::sleep(AT_MENTION_LOAD_DEBOUNCE).await;
-
-        let entries =
-            match tokio::task::spawn_blocking(move || file_index::list_files(&lookup_root)).await {
-                Ok(entries) => entries,
-                Err(error) => {
-                    warn!(
-                        session_id = %session_id,
-                        error = %error,
-                        "failed to join at-mention file index task"
-                    );
-
-                    Vec::new()
-                }
-            };
-
-        if event_tx
-            .send(AppEvent::AtMentionEntriesLoaded {
-                entries,
-                session_id: session_id.clone(),
-            })
-            .is_err()
-        {
-            warn!(
-                session_id = %session_id,
-                "failed to publish at-mention entries because the app event receiver is closed"
-            );
-        }
-
-        at_mention_task::finish_pending_load(&task_session_id, request_id);
-    });
-
-    at_mention_task::track_pending_load(tracked_session_id, request_id, handle);
+    TaskService::spawn_at_mention_entries_task(event_tx, cached_entries, lookup_root, session_id);
 }
 
 /// Returns the directory that should back one active `@`-mention lookup.
@@ -188,7 +130,7 @@ pub(crate) fn selected_replacement(
     at_mention_state: &PromptAtMentionState,
 ) -> Option<AtMentionSelection> {
     let (at_start, query) = input.at_mention_query()?;
-    let filtered = file_index::filter_entries(&at_mention_state.all_entries, &query);
+    let filtered = filter_entries(&at_mention_state.all_entries, &query);
     let clamped_index = at_mention_state
         .selected_index
         .min(filtered.len().saturating_sub(1));
@@ -207,10 +149,7 @@ fn filtered_entries<'a>(
 ) -> Option<Vec<&'a FileEntry>> {
     let (_, query) = input.at_mention_query()?;
 
-    Some(file_index::filter_entries(
-        &at_mention_state.all_entries,
-        &query,
-    ))
+    Some(filter_entries(&at_mention_state.all_entries, &query))
 }
 
 /// Formats one selected file or directory entry for insertion into the input.
@@ -227,6 +166,7 @@ mod tests {
     use std::cell::Cell;
     use std::collections::HashMap;
     use std::sync::Arc;
+    use std::time::Duration;
 
     use ag_git as git;
     use tempfile::TempDir;

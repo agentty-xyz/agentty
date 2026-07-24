@@ -6,6 +6,7 @@ use std::time::Instant;
 use ag_forge as forge;
 
 use super::SESSION_REFRESH_INTERVAL;
+use super::load::SessionLoadInput;
 use crate::app::session::SessionError;
 use crate::app::{AppServices, ProjectManager, SessionManager};
 use crate::domain::session::{ForgeKind, ReviewRequest, SessionId};
@@ -108,15 +109,20 @@ impl SessionManager {
             .and_then(|index| self.state.sessions.get(index))
             .map(|session| session.id.clone());
 
+        let clock = services.clock();
+        let fs_client = services.fs_client();
         let (sessions, stats_activity, session_worktree_availability) =
             Self::load_sessions_with_fs_client(
-                services.base_path(),
-                services.db(),
-                projects.active_project_id(),
-                projects.working_dir(),
+                SessionLoadInput {
+                    active_project_id: projects.active_project_id(),
+                    active_session_id: selected_session_id.as_deref(),
+                    base: services.base_path(),
+                    clock: clock.as_ref(),
+                    db: services.db(),
+                    fs_client: fs_client.as_ref(),
+                    working_dir: projects.working_dir(),
+                },
                 &mut self.state.handles,
-                services.fs_client().as_ref(),
-                selected_session_id.as_deref(),
             )
             .await;
         self.state.replace_sessions(sessions);
