@@ -14,7 +14,7 @@ use std::time::Duration;
 use agentty::db::{DB_DIR, DB_FILE, Database};
 use agentty::domain::agent::ReasoningLevel;
 use agentty::domain::session::{
-    ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
+    ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionSize,
 };
 use agentty::domain::session_message::SessionMessageKind;
 use agentty::test_support;
@@ -36,6 +36,9 @@ const RUNNING_STOP_SESSION_ID: &str = "running-stop-0001";
 
 /// Stable id for the seeded rebasing session used by message-queue tests.
 const REBASING_QUEUE_SESSION_ID: &str = "rebasing-queue-0001";
+
+/// Stable id for the seeded binary-only diff session.
+const BINARY_DIFF_SESSION_ID: &str = "binary-diff-0001";
 
 /// Stable id for the seeded clarification-question session used by the
 /// question-resume test.
@@ -477,7 +480,7 @@ fn seed_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
         let database = common::open_database(env).await?;
         database
             .sessions()
-            .update_session_diff_stats(12, 3, "review-shortcut-0001", "M")
+            .update_session_diff_stats(12, 3, true, "review-shortcut-0001", "M")
             .await
     })?;
 
@@ -682,7 +685,7 @@ fn seed_agent_review_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
             .await?;
         database
             .sessions()
-            .update_session_diff_stats(8, 2, "agent-review-sync-0001", "S")
+            .update_session_diff_stats(8, 2, true, "agent-review-sync-0001", "S")
             .await
     })?;
 
@@ -1108,8 +1111,8 @@ fn seed_rebasing_queue_session(env: &BuilderEnv) -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
-/// Seeds one `Question`-status session with two option questions so the
-/// question-resume flow can run without a live agent backend.
+/// Seeds one `Question`-status session with two option questions and a known
+/// empty diff state.
 fn seed_question_resume_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
@@ -1117,10 +1120,18 @@ fn seed_question_resume_session(env: &BuilderEnv) -> Result<(), Box<dyn std::err
             .with_title("Question resume session"),
     )?;
 
-    std::fs::create_dir_all(test_support::session_folder(
-        &env.agentty_root.join("wt"),
-        QUESTION_RESUME_SESSION_ID,
-    ))?;
+    let session_worktree =
+        test_support::session_folder(&env.agentty_root.join("wt"), QUESTION_RESUME_SESSION_ID);
+    std::fs::create_dir_all(&session_worktree)?;
+    run_git(&session_worktree, &["init", "-b", "main"])?;
+    run_git(
+        &session_worktree,
+        &["config", "user.email", "test@test.com"],
+    )?;
+    run_git(&session_worktree, &["config", "user.name", "Test"])?;
+    std::fs::write(session_worktree.join("README.md"), "clean session\n")?;
+    run_git(&session_worktree, &["add", "."])?;
+    run_git(&session_worktree, &["commit", "-m", "init"])?;
 
     let questions_json = format!(
         r#"[{{"options":["Yes","No"],"text":"{FIRST_QUESTION_TEXT}"}},{{"options":["Unit","Integration"],"text":"{SECOND_QUESTION_TEXT}"}}]"#
@@ -1133,6 +1144,16 @@ fn seed_question_resume_session(env: &BuilderEnv) -> Result<(), Box<dyn std::err
         database
             .sessions()
             .update_session_questions(QUESTION_RESUME_SESSION_ID, &questions_json)
+            .await?;
+        database
+            .sessions()
+            .update_session_diff_stats(
+                0,
+                0,
+                false,
+                QUESTION_RESUME_SESSION_ID,
+                SessionSize::Xs.label(),
+            )
             .await
     })?;
 
@@ -1434,6 +1455,48 @@ fn seed_markdown_diff_preview(env: &BuilderEnv) -> Result<(), Box<dyn std::error
             "```mermaid\ngraph TD\nSource[Source] --> Preview[Preview]\n```\n",
         ),
     )?;
+
+    Ok(())
+}
+
+/// Seeds a review-ready fork source whose persisted and actual worktree diff
+/// must not be inherited by the forked branch-tip worktree.
+fn seed_dirty_fork_source_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session(env)?;
+    seed_review_worktree_with_diff(env)
+}
+
+/// Seeds a review-ready session whose only worktree change is binary and
+/// whose persisted diff presence remains conservatively unknown.
+fn seed_binary_diff_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    common::seed_session(
+        env,
+        SessionSeed::regular(BINARY_DIFF_SESSION_ID, "gpt-5.5", "main", "Review")
+            .with_title("Binary diff session"),
+    )?;
+
+    let session_worktree =
+        test_support::session_folder(&env.agentty_root.join("wt"), BINARY_DIFF_SESSION_ID);
+    std::fs::create_dir_all(&session_worktree)?;
+    run_git(&session_worktree, &["init", "-b", "main"])?;
+    run_git(
+        &session_worktree,
+        &["config", "user.email", "test@test.com"],
+    )?;
+    run_git(&session_worktree, &["config", "user.name", "Test"])?;
+    std::fs::write(session_worktree.join("asset.bin"), [0_u8, 1, 2, 3])?;
+    run_git(&session_worktree, &["add", "."])?;
+    run_git(&session_worktree, &["commit", "-m", "init"])?;
+    std::fs::write(session_worktree.join("asset.bin"), [0_u8, 4, 5, 6, 7])?;
+
+    let runtime = common::seed_runtime()?;
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .mark_session_diff_unknown(BINARY_DIFF_SESSION_ID)
+            .await
+    })?;
 
     Ok(())
 }
@@ -2745,9 +2808,10 @@ fn session_question_resume_after_leaving_to_list() -> E2eResult {
                     Region::full(chat_focused_frame.cols(), chat_focused_frame.rows());
                 assertion::assert_text_in_region(
                     &chat_focused_frame,
-                    "Tab: focus | j/k: scroll | d: diff | q: sessions",
+                    "Tab: focus | j/k: scroll | q: sessions",
                     &chat_focused_full,
                 );
+                assertion::assert_not_visible(&chat_focused_frame, "d: diff");
                 assertion::assert_not_visible(&chat_focused_frame, "Ctrl+C");
                 assertion::assert_text_in_region(
                     &chat_focused_frame,
@@ -2874,6 +2938,11 @@ fn session_prompt_chat_focus_toggle() -> E2eResult {
                 assertion::assert_text_in_region(
                     &chat_focused_frame,
                     "q: sessions",
+                    &chat_focused_full,
+                );
+                assertion::assert_text_in_region(
+                    &chat_focused_frame,
+                    "d: diff",
                     &chat_focused_full,
                 );
                 // Chat focus exposes no cancel shortcut, so the composer draft
@@ -4436,6 +4505,46 @@ fn diff_preview_opens_from_prompt_chat_focus() -> E2eResult {
     Ok(())
 }
 
+/// Verify binary-only changes retain the chat-focus diff hint and open in the
+/// diff preview even though their added/deleted line totals are zero.
+#[test]
+fn binary_diff_preview_opens_from_prompt_chat_focus() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("binary_diff_preview_from_prompt")
+        .with_git()
+        .setup(seed_binary_diff_session)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .press_key("Enter")
+                    .wait_for_text("Type your message", 5000)
+                    .press_key("Tab")
+                    .wait_for_text("d: diff", 5000)
+                    .capture_labeled(
+                        "binary_diff_chat_focus",
+                        "Binary-only diff remains available from chat focus",
+                    )
+                    .press_key("d")
+                    .wait_for_text("asset.bin", 5000)
+                    .wait_for_text("Binary files", 5000)
+            },
+            |frame, report| {
+                let focused_frame = common::frame_from_capture(&report.captures[0]);
+                let focused_full = Region::full(focused_frame.cols(), focused_frame.rows());
+                assertion::assert_text_in_region(&focused_frame, "d: diff", &focused_full);
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "asset.bin", &full);
+                assertion::assert_text_in_region(frame, "Binary files", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
 /// Verify actionable review threads can be marked to address or deny and
 /// submitted to the active session agent as one batch.
 #[test]
@@ -4739,7 +4848,7 @@ fn session_fork_confirmation_creates_session_from_review_session() -> E2eResult 
     FeatureTest::new("session_fork_confirmation")
         .with_git()
         .with_terminal_size(120, 24)
-        .setup(seed_review_ready_session)
+        .setup(seed_dirty_fork_source_session)
         .run(
             |scenario| {
                 scenario
@@ -4757,6 +4866,14 @@ fn session_fork_confirmation_creates_session_from_review_session() -> E2eResult 
                     .wait_for_text("Review-ready session shortcuts", 5000)
                     .wait_for_stable_frame(300, 5000)
                     .capture_labeled("forked_session_view", "Forked session opened")
+                    .press_key("Enter")
+                    .wait_for_text("Type your message", 5000)
+                    .press_key("Tab")
+                    .wait_for_text("j/k: scroll", 5000)
+                    .capture_labeled(
+                        "forked_session_chat_focus",
+                        "Clean fork hides the diff preview shortcut",
+                    )
                     .press_key("q")
                     .wait_for_stable_frame(300, 5000)
                     .capture_labeled("session_list_after_fork", "Source and fork listed")
@@ -4789,6 +4906,16 @@ fn session_fork_confirmation_creates_session_from_review_session() -> E2eResult 
                     &forked_view_full,
                 );
                 assertion::assert_not_visible(&forked_view_frame, "Confirm Fork");
+
+                let forked_chat_frame = common::frame_from_capture(&report.captures[3]);
+                let forked_chat_full =
+                    Region::full(forked_chat_frame.cols(), forked_chat_frame.rows());
+                assertion::assert_text_in_region(
+                    &forked_chat_frame,
+                    "Tab: focus | j/k: scroll | q: sessions",
+                    &forked_chat_full,
+                );
+                assertion::assert_not_visible(&forked_chat_frame, "d: diff");
 
                 let full = Region::full(frame.cols(), frame.rows());
                 let session_list_text = frame.text_in_region(&full);

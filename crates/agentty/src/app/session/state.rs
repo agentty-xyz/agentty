@@ -4,7 +4,7 @@ use std::time::{Instant, SystemTime};
 
 use crate::app::session::{Clock, SESSION_REFRESH_INTERVAL};
 use crate::domain::selection::SelectionState;
-use crate::domain::session::{Session, SessionHandles, SessionId, SessionSize};
+use crate::domain::session::{Session, SessionDiffStats, SessionHandles, SessionId};
 
 /// Cached ahead/behind snapshots for one session branch.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -186,13 +186,11 @@ impl SessionState {
         }
     }
 
-    /// Applies one recomputed diff summary to the matching snapshot.
-    pub fn apply_session_size_updated(
+    /// Applies one recomputed diff metadata result to the matching snapshot.
+    pub fn apply_session_diff_stats_updated(
         &mut self,
         session_id: &str,
-        added_lines: u64,
-        deleted_lines: u64,
-        session_size: SessionSize,
+        diff_stats: SessionDiffStats,
     ) {
         let Some(session_index) = self.session_index_for_id(session_id) else {
             return;
@@ -201,9 +199,18 @@ impl SessionState {
             return;
         };
 
-        session.stats.added_lines = added_lines;
-        session.stats.deleted_lines = deleted_lines;
-        session.size = session_size;
+        session.stats.diff_state = diff_stats.diff_state();
+        if let SessionDiffStats::Known {
+            added_lines,
+            deleted_lines,
+            session_size,
+            ..
+        } = diff_stats
+        {
+            session.stats.added_lines = added_lines;
+            session.stats.deleted_lines = deleted_lines;
+            session.size = session_size;
+        }
     }
 
     /// Returns the currently selected follow-up task position for one session.
@@ -424,7 +431,9 @@ mod tests {
 
     use super::*;
     use crate::domain::selection::SelectionState;
-    use crate::domain::session::{Session, SessionHandles, SessionSize, SessionStats, Status};
+    use crate::domain::session::{
+        Session, SessionDiffState, SessionHandles, SessionSize, SessionStats, Status,
+    };
     use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
     use crate::domain::transient_message::{
         TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
@@ -644,8 +653,9 @@ mod tests {
     }
 
     #[test]
-    /// Verifies explicit size updates patch the in-memory session snapshot.
-    fn apply_session_size_updated_updates_matching_session() {
+    /// Verifies known and unknown diff updates patch the in-memory snapshot
+    /// without discarding the last known line totals.
+    fn apply_session_diff_stats_updated_updates_matching_session() {
         // Arrange
         let session_id = "session-3".to_string();
         let session = Session {
@@ -689,11 +699,24 @@ mod tests {
         );
 
         // Act
-        state.apply_session_size_updated(&session_id, 12, 4, SessionSize::S);
+        state.apply_session_diff_stats_updated(
+            &session_id,
+            SessionDiffStats::Known {
+                added_lines: 12,
+                deleted_lines: 4,
+                has_diff: true,
+                session_size: SessionSize::S,
+            },
+        );
+        state.apply_session_diff_stats_updated(&session_id, SessionDiffStats::Unknown);
 
         // Assert
         assert_eq!(state.sessions[0].stats.added_lines, 12);
         assert_eq!(state.sessions[0].stats.deleted_lines, 4);
+        assert_eq!(
+            state.sessions[0].stats.diff_state,
+            SessionDiffState::Unknown
+        );
         assert_eq!(state.sessions[0].size, SessionSize::S);
     }
 

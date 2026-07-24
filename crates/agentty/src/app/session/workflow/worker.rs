@@ -409,6 +409,7 @@ impl SessionWorkerRebaseAssistClient {
         let token_usage_delta = SessionStats {
             added_lines: 0,
             deleted_lines: 0,
+            diff_state: agent::SessionDiffState::Unknown,
             input_tokens: turn_result.input_tokens,
             output_tokens: turn_result.output_tokens,
         };
@@ -1274,6 +1275,7 @@ mod tests {
                 stats: agent::SessionStats {
                     added_lines: 0,
                     deleted_lines: 0,
+                    diff_state: agent::SessionDiffState::Unknown,
                     input_tokens: 0,
                     output_tokens: 0,
                 },

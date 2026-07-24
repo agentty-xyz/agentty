@@ -84,6 +84,9 @@ pub struct SessionRow {
     pub created_at: i64,
     /// Persisted deleted-line count from the latest diff stats refresh.
     pub deleted_lines: i64,
+    /// Whether the latest successful diff refresh returned content, or
+    /// `None` when diff availability is unknown.
+    pub has_diff: Option<bool>,
     /// Stable session identifier.
     pub id: String,
     /// Open active-work interval start timestamp, if any.
@@ -140,6 +143,9 @@ pub struct SessionListRow {
     pub created_at: i64,
     /// Persisted deleted-line count from the latest diff stats refresh.
     pub deleted_lines: i64,
+    /// Whether the latest successful diff refresh returned content, or
+    /// `None` when diff availability is unknown.
+    pub has_diff: Option<bool>,
     /// Stable session identifier.
     pub id: String,
     /// Open active-work interval start timestamp, if any.
@@ -419,12 +425,17 @@ pub trait SessionRepository: Send + Sync {
         follow_up_tasks: &[String],
     ) -> Result<(), DbError>;
 
-    /// Updates persisted diff-derived size and line-count fields for a
-    /// session row.
+    /// Marks persisted diff availability unknown while retaining the last
+    /// known size and line counts.
+    async fn mark_session_diff_unknown(&self, id: &str) -> Result<(), DbError>;
+
+    /// Updates persisted diff-derived presence, size, and line-count fields
+    /// for a session row.
     async fn update_session_diff_stats(
         &self,
         added_lines: u64,
         deleted_lines: u64,
+        has_diff: bool,
         id: &str,
         size: &str,
     ) -> Result<(), DbError>;
@@ -611,6 +622,7 @@ struct SessionRowMetadata {
     base_branch: String,
     created_at: i64,
     deleted_lines: i64,
+    has_diff: Option<bool>,
     id: String,
     in_progress_started_at: Option<i64>,
     in_progress_total_seconds: i64,
@@ -640,6 +652,7 @@ impl SessionRowMetadata {
             base_branch: self.base_branch,
             created_at: self.created_at,
             deleted_lines: self.deleted_lines,
+            has_diff: self.has_diff,
             id: self.id,
             in_progress_started_at: self.in_progress_started_at,
             in_progress_total_seconds: self.in_progress_total_seconds,
@@ -756,7 +769,7 @@ impl SessionReviewRequestJoinRow {
 }
 
 /// SQL statement that copies session metadata for one fork while clearing
-/// runtime- and source-specific linkage.
+/// runtime-, source-, and worktree-derived state.
 const FORK_SESSION_ROW_SQL: &str = r"
 INSERT INTO session (
     id,
@@ -771,6 +784,7 @@ INSERT INTO session (
     reasoning_level,
     added_lines,
     deleted_lines,
+    has_diff,
     size,
     input_tokens,
     output_tokens,
@@ -799,9 +813,10 @@ SELECT ?,
        summary,
        title,
        reasoning_level,
-       added_lines,
-       deleted_lines,
-       size,
+       0,
+       0,
+       NULL,
+       'XS',
        0,
        0,
        0,
@@ -1180,6 +1195,7 @@ SELECT session.base_branch AS base_branch,
        session.agent AS agent,
        session.created_at AS created_at,
        session.deleted_lines AS deleted_lines,
+       session.has_diff AS has_diff,
        session.id AS id,
        session.in_progress_started_at,
        session.in_progress_total_seconds AS in_progress_total_seconds,
@@ -1233,6 +1249,7 @@ SELECT session.base_branch AS base_branch,
        session.agent AS agent,
        session.created_at AS created_at,
        session.deleted_lines AS deleted_lines,
+       session.has_diff AS has_diff,
        session.id AS id,
        session.in_progress_started_at,
        session.in_progress_total_seconds AS in_progress_total_seconds,
@@ -1669,6 +1686,7 @@ VALUES (?, ?, ?)
         &self,
         added_lines: u64,
         deleted_lines: u64,
+        has_diff: bool,
         id: &str,
         size: &str,
     ) -> Result<(), DbError> {
@@ -1677,22 +1695,42 @@ VALUES (?, ?, ?)
 UPDATE session
 SET added_lines = ?,
     deleted_lines = ?,
+    has_diff = ?,
     size = ?
 WHERE id = ?
   AND (
       added_lines <> ?
       OR deleted_lines <> ?
+      OR has_diff IS NOT ?
       OR size <> ?
   )
 ",
         )
         .bind(added_lines.cast_signed())
         .bind(deleted_lines.cast_signed())
+        .bind(has_diff)
         .bind(size)
         .bind(id)
         .bind(added_lines.cast_signed())
         .bind(deleted_lines.cast_signed())
+        .bind(has_diff)
         .bind(size)
+        .execute(&self.0)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn mark_session_diff_unknown(&self, id: &str) -> Result<(), DbError> {
+        sqlx::query(
+            r"
+UPDATE session
+SET has_diff = NULL
+WHERE id = ?
+  AND has_diff IS NOT NULL
+",
+        )
+        .bind(id)
         .execute(&self.0)
         .await?;
 
@@ -2154,13 +2192,14 @@ INSERT INTO session (
     model,
     base_branch,
     status,
+    has_diff,
     is_draft,
     parent_session_id,
     project_id,
     reasoning_level,
     prompt
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ",
     )
     .bind(id)
@@ -2168,6 +2207,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     .bind(model)
     .bind(base_branch)
     .bind(status)
+    // Diff availability remains unknown until the worktree is refreshed.
+    .bind(Option::<bool>::None)
     .bind(is_draft)
     .bind(parent_session_id)
     .bind(project_id)
@@ -2278,6 +2319,7 @@ mod tests {
                 base_branch: self.base_branch,
                 created_at: self.created_at,
                 deleted_lines: self.deleted_lines,
+                has_diff: self.has_diff,
                 id: self.id,
                 in_progress_started_at: self.in_progress_started_at,
                 in_progress_total_seconds: self.in_progress_total_seconds,
@@ -2367,6 +2409,7 @@ mod tests {
                     base_branch: "main".to_string(),
                     created_at: 100,
                     deleted_lines: 6,
+                    has_diff: Some(true),
                     id: "session-a".to_string(),
                     in_progress_started_at: None,
                     in_progress_total_seconds: 0,
@@ -2563,12 +2606,18 @@ WHERE id = ?
                 &SessionStats {
                     added_lines: 0,
                     deleted_lines: 0,
+                    diff_state: agent::SessionDiffState::Unknown,
                     input_tokens: 11,
                     output_tokens: 29,
                 },
             )
             .await
             .expect("failed to update token stats");
+        database
+            .sessions()
+            .update_session_diff_stats(7, 3, true, "source-session", "S")
+            .await
+            .expect("failed to update source diff stats");
         database
             .reviews()
             .update_session_review_request("source-session", Some(review_request_fixture()))
@@ -2600,9 +2649,14 @@ WHERE id = ?
     /// Asserts the fixture source row actually had source-only state before
     /// the snapshot was taken.
     fn assert_source_reset_state(
+        source_row: &SessionRow,
         source_reset_row: &ForkResetRow,
         source_review_request: Option<&SessionReviewRequestRow>,
     ) {
+        assert_eq!(source_row.added_lines, 7);
+        assert_eq!(source_row.deleted_lines, 3);
+        assert_eq!(source_row.has_diff, Some(true));
+        assert_eq!(source_row.size, "S");
         assert!(source_reset_row.is_draft);
         assert_eq!(
             source_reset_row.parent_session_id.as_deref(),
@@ -2662,6 +2716,10 @@ WHERE id = ?
         assert_eq!(fork_row.parent_session_id, None);
         assert_eq!(fork_row.input_tokens, 0);
         assert_eq!(fork_row.output_tokens, 0);
+        assert_eq!(fork_row.added_lines, 0);
+        assert_eq!(fork_row.deleted_lines, 0);
+        assert_eq!(fork_row.has_diff, None);
+        assert_eq!(fork_row.size, "XS");
         assert_eq!(fork_row.questions, None);
         assert_eq!(fork_row.published_upstream_ref, None);
         assert_eq!(fork_row.review_request, None);
@@ -2678,6 +2736,35 @@ WHERE id = ?
         assert_eq!(fork_reset_row.in_progress_started_at, None);
         assert_eq!(fork_reset_row.in_progress_total_seconds, 0);
         assert_eq!(fork_review_request, None);
+    }
+
+    #[tokio::test]
+    async fn test_insert_session_starts_with_unknown_diff() {
+        // Arrange
+        let (database, _) = AppRepositories::in_memory_with_pool().await;
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/project", None)
+            .await
+            .expect("failed to upsert project");
+
+        // Act
+        database
+            .sessions()
+            .insert_session("session-a", "gpt-5.5", "main", "Draft", project_id)
+            .await
+            .expect("failed to insert session");
+        let session = database
+            .sessions()
+            .load_sessions()
+            .await
+            .expect("failed to load sessions")
+            .into_iter()
+            .next()
+            .expect("missing inserted session");
+
+        // Assert
+        assert_eq!(session.has_diff, None);
     }
 
     #[tokio::test]
@@ -2750,12 +2837,17 @@ WHERE id IN ('a-older', 'z-newer')
             .expect("failed to fork session snapshot");
 
         // Assert
-        let fork_row = database
+        let session_rows = database
             .sessions()
             .load_sessions()
             .await
-            .expect("failed to load sessions")
-            .into_iter()
+            .expect("failed to load sessions");
+        let source_row = session_rows
+            .iter()
+            .find(|session_row| session_row.id == "source-session")
+            .expect("missing source session row");
+        let fork_row = session_rows
+            .iter()
             .find(|session_row| session_row.id == "fork-session")
             .expect("missing forked session row");
         let fork_reset_row = load_fork_reset_row(&pool, "fork-session").await;
@@ -2765,8 +2857,12 @@ WHERE id IN ('a-older', 'z-newer')
             .await
             .expect("failed to load fork review request");
 
-        assert_source_reset_state(&source_reset_row, source_review_request.as_ref());
-        assert_fork_reset_state(&fork_row, &fork_reset_row, fork_review_request.as_ref());
+        assert_source_reset_state(
+            source_row,
+            &source_reset_row,
+            source_review_request.as_ref(),
+        );
+        assert_fork_reset_state(fork_row, &fork_reset_row, fork_review_request.as_ref());
     }
 
     #[tokio::test]

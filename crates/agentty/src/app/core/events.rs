@@ -32,7 +32,8 @@ use crate::domain::file_entry::{FileEntry, at_mention_lookup_root};
 use crate::domain::input::InputState;
 use crate::domain::question::default_option_index;
 use crate::domain::session::{
-    PublishBranchAction, PublishedBranchSyncStatus, SessionHandles, SessionId, SessionSize, Status,
+    PublishBranchAction, PublishedBranchSyncStatus, SessionDiffStats, SessionHandles, SessionId,
+    Status,
 };
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::transient_message::TransientMessageBody;
@@ -162,13 +163,10 @@ pub(crate) enum AppEvent {
     },
     /// Indicates list-mode sync is resolving rebase conflicts.
     SyncMainConflictResolutionStarted { conflicted_files: Vec<String> },
-    /// Indicates recomputed diff-derived size and line-count totals for one
-    /// session.
-    SessionSizeUpdated {
-        added_lines: u64,
-        deleted_lines: u64,
+    /// Indicates recomputed diff-derived metadata for one session.
+    SessionDiffStatsUpdated {
+        diff_stats: SessionDiffStats,
         session_id: SessionId,
-        session_size: SessionSize,
     },
     /// Indicates one tracked draft-title generation task reached a terminal
     /// outcome and can be pruned from in-memory task tracking.
@@ -260,7 +258,7 @@ pub(super) struct AppEventBatch {
     pub(super) session_progress_updates: HashMap<SessionId, Option<String>>,
     pub(super) session_review_comment_snapshots:
         HashMap<SessionId, Result<ag_forge::ReviewCommentSnapshot, String>>,
-    pub(super) session_size_updates: HashMap<SessionId, (u64, u64, SessionSize)>,
+    pub(super) session_diff_stats_updates: HashMap<SessionId, SessionDiffStats>,
     pub(super) stacked_parent_merge_child_rebases: HashSet<SessionId>,
     pub(super) stacked_parent_syncs_completed: HashSet<SessionId>,
     pub(super) stacked_parent_turns_completed: HashSet<SessionId>,
@@ -444,14 +442,12 @@ impl AppEventBatch {
             AppEvent::SyncMainConflictResolutionStarted { conflicted_files } => {
                 self.collect_sync_main_conflict_resolution_started(conflicted_files);
             }
-            AppEvent::SessionSizeUpdated {
-                added_lines,
-                deleted_lines,
+            AppEvent::SessionDiffStatsUpdated {
+                diff_stats,
                 session_id,
-                session_size,
             } => {
-                self.session_size_updates
-                    .insert(session_id, (added_lines, deleted_lines, session_size));
+                self.session_diff_stats_updates
+                    .insert(session_id, diff_stats);
             }
             AppEvent::SessionTitleGenerationFinished {
                 generation,
@@ -1438,7 +1434,7 @@ impl App {
             || !event_batch.session_progress_updates.is_empty()
             || !event_batch.session_review_comment_snapshots.is_empty()
             || !event_batch.session_reasoning_level_updates.is_empty()
-            || !event_batch.session_size_updates.is_empty()
+            || !event_batch.session_diff_stats_updates.is_empty()
             || !event_batch.session_title_generation_finished.is_empty()
             || !event_batch.session_workflow_notice_updates.is_empty()
             || !event_batch.stacked_parent_merge_child_rebases.is_empty()
@@ -1502,15 +1498,10 @@ impl App {
                 .apply_session_reasoning_level_updated(&session_id, reasoning_level);
         }
 
-        for (session_id, (added_lines, deleted_lines, session_size)) in
-            std::mem::take(&mut event_batch.session_size_updates)
+        for (session_id, diff_stats) in std::mem::take(&mut event_batch.session_diff_stats_updates)
         {
-            self.sessions.apply_session_size_updated(
-                &session_id,
-                added_lines,
-                deleted_lines,
-                session_size,
-            );
+            self.sessions
+                .apply_session_diff_stats_updated(&session_id, diff_stats);
         }
 
         for (session_id, generation) in

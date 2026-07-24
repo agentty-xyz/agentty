@@ -316,7 +316,7 @@ fn app_event_label(event: &AppEvent) -> &'static str {
         AppEvent::SessionProgressUpdated { .. } => "SessionProgressUpdated",
         AppEvent::SyncMainCompleted { .. } => "SyncMainCompleted",
         AppEvent::SyncMainConflictResolutionStarted { .. } => "SyncMainConflictResolutionStarted",
-        AppEvent::SessionSizeUpdated { .. } => "SessionSizeUpdated",
+        AppEvent::SessionDiffStatsUpdated { .. } => "SessionDiffStatsUpdated",
         AppEvent::SessionTitleGenerationFinished { .. } => "SessionTitleGenerationFinished",
         AppEvent::BranchPublishActionCompleted { .. } => "BranchPublishActionCompleted",
         AppEvent::ReviewPrepared { .. } => "ReviewPrepared",
@@ -368,6 +368,21 @@ mod tests {
 
         // Assert
         assert_eq!(label, "DiffPreviewLoaded");
+    }
+
+    #[test]
+    fn app_event_label_names_session_diff_stats_updates() {
+        // Arrange
+        let event = AppEvent::SessionDiffStatsUpdated {
+            diff_stats: crate::domain::session::SessionDiffStats::Unknown,
+            session_id: "session-id".into(),
+        };
+
+        // Act
+        let label = app_event_label(&event);
+
+        // Assert
+        assert_eq!(label, "SessionDiffStatsUpdated");
     }
 
     #[tokio::test]

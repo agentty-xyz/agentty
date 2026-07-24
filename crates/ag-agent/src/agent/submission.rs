@@ -23,7 +23,7 @@ use super::{
 use crate::app_server::{AppServerClient, AppServerTurnRequest};
 use crate::channel::AgentRequestKind;
 use crate::model::agent::{AgentKind, AgentModel, ReasoningLevel};
-use crate::model::session::SessionStats;
+use crate::model::session::{SessionDiffState, SessionStats};
 
 /// Input payload for one isolated prompt that prefers structured protocol
 /// output.
@@ -218,6 +218,7 @@ async fn submit_one_shot_with_app_server_client(
         stats: SessionStats {
             added_lines: 0,
             deleted_lines: 0,
+            diff_state: SessionDiffState::Unknown,
             input_tokens: turn_result.input_tokens + repair_input_tokens,
             output_tokens: turn_result.output_tokens + repair_output_tokens,
         },

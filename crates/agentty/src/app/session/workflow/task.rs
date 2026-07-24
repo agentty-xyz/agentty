@@ -23,7 +23,7 @@ use crate::domain::agent::{AgentKind, AgentSelection};
 #[cfg(test)]
 use crate::domain::agent::{AgentModel, AgentSelectionMetadata};
 use crate::domain::session::{
-    COMMITTING_PROGRESS_LABEL, SessionHandles, SessionId, SessionSize, Status,
+    COMMITTING_PROGRESS_LABEL, SessionDiffStats, SessionHandles, SessionId, Status,
 };
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::setting::SettingName;
@@ -262,10 +262,11 @@ impl SessionTaskService {
         version
     }
 
-    /// Recomputes and persists diff-derived size and line-count totals using
-    /// the session worktree diff.
+    /// Recomputes and persists diff-derived metadata using the session
+    /// worktree diff.
     ///
-    /// Returns the recomputed size plus added/deleted line totals when the
+    /// Unknown refreshes persist only unknown availability, preserving the
+    /// last known size and line totals. Returns the refresh result when the
     /// base-branch lookup and persistence both succeed.
     pub(crate) async fn refresh_persisted_session_diff_stats(
         db: &AppRepositories,
@@ -273,7 +274,7 @@ impl SessionTaskService {
         git_client: &dyn GitClient,
         session_id: &str,
         folder: &Path,
-    ) -> Option<(SessionSize, u64, u64)> {
+    ) -> Option<SessionDiffStats> {
         let base_branch = match db.sessions().get_session_base_branch(session_id).await {
             Ok(base_branch) => base_branch?,
             Err(error) => {
@@ -287,24 +288,33 @@ impl SessionTaskService {
             }
         };
 
-        let (computed_size, added_lines, deleted_lines) =
-            SessionManager::session_diff_stats_for_folder(
-                fs_client,
-                git_client,
-                folder,
-                &base_branch,
-            )
-            .await;
-        if let Err(error) = db
-            .sessions()
-            .update_session_diff_stats(
+        let diff_stats = SessionManager::session_diff_stats_for_folder(
+            fs_client,
+            git_client,
+            folder,
+            &base_branch,
+        )
+        .await;
+        let persist_result = match diff_stats {
+            SessionDiffStats::Known {
                 added_lines,
                 deleted_lines,
-                session_id,
-                &computed_size.to_string(),
-            )
-            .await
-        {
+                has_diff,
+                session_size,
+            } => {
+                db.sessions()
+                    .update_session_diff_stats(
+                        added_lines,
+                        deleted_lines,
+                        has_diff,
+                        session_id,
+                        &session_size.to_string(),
+                    )
+                    .await
+            }
+            SessionDiffStats::Unknown => db.sessions().mark_session_diff_unknown(session_id).await,
+        };
+        if let Err(error) = persist_result {
             warn!(
                 session_id = session_id,
                 error = %error,
@@ -314,7 +324,7 @@ impl SessionTaskService {
             return None;
         }
 
-        Some((computed_size, added_lines, deleted_lines))
+        Some(diff_stats)
     }
 
     /// Commits pending worktree changes and reports user-visible outcomes.
@@ -1489,6 +1499,7 @@ mod tests {
             stats: agent::SessionStats {
                 added_lines: 0,
                 deleted_lines: 0,
+                diff_state: agent::SessionDiffState::Unknown,
                 input_tokens,
                 output_tokens,
             },
@@ -1507,6 +1518,55 @@ mod tests {
             .insert_session("session-id", model, "main", "Review", project_id)
             .await
             .expect("failed to insert session");
+    }
+
+    #[tokio::test]
+    async fn refresh_diff_stats_marks_git_failures_unknown_without_erasing_totals() {
+        // Arrange
+        let database = AppRepositories::in_memory().await;
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to upsert project");
+        database
+            .sessions()
+            .insert_session("session-id", "gpt-5.5", "main", "Review", project_id)
+            .await
+            .expect("failed to insert session");
+        database
+            .sessions()
+            .update_session_diff_stats(7, 3, true, "session-id", "S")
+            .await
+            .expect("failed to seed diff stats");
+        let mut fs_client = fs::MockFsClient::new();
+        fs_client.expect_is_dir().times(1).return_const(true);
+        let mut git_client = MockGitClient::new();
+        git_client.expect_diff().times(1).returning(|_, _| {
+            Box::pin(async { Err(GitError::OutputParse("diff failed".to_string())) })
+        });
+
+        // Act
+        let diff_stats = SessionTaskService::refresh_persisted_session_diff_stats(
+            &database,
+            &fs_client,
+            &git_client,
+            "session-id",
+            &PathBuf::from("/tmp/missing-session"),
+        )
+        .await;
+        let sessions = database
+            .sessions()
+            .load_sessions_for_project(project_id)
+            .await
+            .expect("failed to reload session");
+
+        // Assert
+        assert_eq!(diff_stats, Some(SessionDiffStats::Unknown));
+        assert_eq!(sessions[0].added_lines, 7);
+        assert_eq!(sessions[0].deleted_lines, 3);
+        assert_eq!(sessions[0].has_diff, None);
+        assert_eq!(sessions[0].size, "S");
     }
 
     #[tokio::test]

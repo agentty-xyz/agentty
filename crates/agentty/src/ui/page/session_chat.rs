@@ -283,6 +283,7 @@ impl<'a> SessionChatPage<'a> {
                     at_mention_state: at_mention_state.as_ref(),
                     current_index: *current_index,
                     focus: *focus,
+                    has_session_diff: session.stats.should_show_diff(),
                     input,
                     questions,
                     selected_option_index: *selected_option_index,
@@ -475,6 +476,7 @@ struct QuestionPanelState<'a> {
     at_mention_state: Option<&'a PromptAtMentionState>,
     current_index: usize,
     focus: ChatFocus,
+    has_session_diff: bool,
     input: &'a input::InputState,
     questions: &'a [QuestionItem],
     selected_option_index: Option<usize>,
@@ -487,6 +489,7 @@ fn render_question_panel(f: &mut Frame, bottom_area: Rect, state: &QuestionPanel
         at_mention_state,
         current_index,
         focus,
+        has_session_diff,
         input,
         questions,
         selected_option_index,
@@ -567,12 +570,16 @@ fn render_question_panel(f: &mut Frame, bottom_area: Rect, state: &QuestionPanel
         panel_areas.help_area,
         panel_areas.help_area.height,
         focus,
+        has_session_diff,
         !is_free_text_mode,
         is_at_mention_open,
     );
 }
 
 /// Renders the question-mode help footer with context-aware action hints.
+///
+/// `has_session_diff` controls whether the chat-focused footer advertises the
+/// diff preview.
 ///
 /// `is_navigating_options` mirrors the runtime predicate that treats plain `q`
 /// as a sessions-list shortcut, so the footer can surface it whenever the
@@ -584,6 +591,7 @@ fn render_question_help_footer(
     area: Rect,
     help_height: u16,
     focus: ChatFocus,
+    has_session_diff: bool,
     is_navigating_options: bool,
     is_at_mention_open: bool,
 ) {
@@ -593,6 +601,7 @@ fn render_question_help_footer(
 
     let help_para = Paragraph::new(question_format::question_help_footer_line(
         focus,
+        has_session_diff,
         is_navigating_options,
         is_at_mention_open,
     ))

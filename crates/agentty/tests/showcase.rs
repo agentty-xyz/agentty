@@ -357,7 +357,7 @@ async fn seed_showcase_sessions(
 
         database
             .sessions()
-            .update_session_diff_stats(10, 5, session.id, session.size)
+            .update_session_diff_stats(10, 5, true, session.id, session.size)
             .await?;
         database
             .sessions()

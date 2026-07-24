@@ -19,7 +19,8 @@ use crate::domain::file_entry::FileEntry;
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
     ForgeKind, PublishedBranchSyncStatus, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
-    SESSION_DATA_DIR, SessionFollowUpTask, SessionHandles, SessionSize, SessionStats, Status,
+    SESSION_DATA_DIR, SessionDiffState, SessionDiffStats, SessionFollowUpTask, SessionHandles,
+    SessionSize, SessionStats, Status,
 };
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::setting::SettingName;
@@ -2583,6 +2584,7 @@ fn app_event_batch_collect_event_merges_agent_response_token_usage() {
         SessionStats {
             added_lines: 0,
             deleted_lines: 0,
+            diff_state: SessionDiffState::Unknown,
             input_tokens: 7,
             output_tokens: 11,
         },
@@ -2601,6 +2603,7 @@ fn app_event_batch_collect_event_merges_agent_response_token_usage() {
             SessionStats {
                 added_lines: 0,
                 deleted_lines: 0,
+                diff_state: SessionDiffState::Unknown,
                 input_tokens: 3,
                 output_tokens: 5,
             },
@@ -2721,17 +2724,13 @@ fn app_event_batch_collect_event_keeps_latest_same_session_updates() {
         progress_message: Some("second".to_string()),
         session_id: "session-a".into(),
     });
-    event_batch.collect_event(AppEvent::SessionSizeUpdated {
-        added_lines: 1,
-        deleted_lines: 2,
+    event_batch.collect_event(AppEvent::SessionDiffStatsUpdated {
+        diff_stats: known_session_diff_stats(1, 2, SessionSize::S),
         session_id: "session-a".into(),
-        session_size: SessionSize::S,
     });
-    event_batch.collect_event(AppEvent::SessionSizeUpdated {
-        added_lines: 8,
-        deleted_lines: 13,
+    event_batch.collect_event(AppEvent::SessionDiffStatsUpdated {
+        diff_stats: known_session_diff_stats(8, 13, SessionSize::L),
         session_id: "session-a".into(),
-        session_size: SessionSize::L,
     });
     event_batch.collect_event(AppEvent::SessionTitleGenerationFinished {
         generation: 1,
@@ -2781,8 +2780,8 @@ fn app_event_batch_collect_event_keeps_latest_same_session_updates() {
         Some(&Some("second".to_string()))
     );
     assert_eq!(
-        event_batch.session_size_updates.get("session-a"),
-        Some(&(8, 13, SessionSize::L))
+        event_batch.session_diff_stats_updates.get("session-a"),
+        Some(&known_session_diff_stats(8, 13, SessionSize::L))
     );
     assert_eq!(
         event_batch.session_update_versions.get("session-a"),
@@ -2802,6 +2801,19 @@ fn app_event_batch_collect_event_keeps_latest_same_session_updates() {
             .map(|turn_applied_state| turn_applied_state.questions.clone()),
         Some(vec![QuestionItem::new("second question")])
     );
+}
+
+fn known_session_diff_stats(
+    added_lines: u64,
+    deleted_lines: u64,
+    session_size: SessionSize,
+) -> SessionDiffStats {
+    SessionDiffStats::Known {
+        added_lines,
+        deleted_lines,
+        has_diff: true,
+        session_size,
+    }
 }
 
 #[test]
@@ -3900,6 +3912,7 @@ async fn apply_app_events_agent_response_updates_questions_and_token_usage() {
             SessionStats {
                 added_lines: 0,
                 deleted_lines: 0,
+                diff_state: SessionDiffState::Unknown,
                 input_tokens: 13,
                 output_tokens: 21,
             },
@@ -4067,6 +4080,7 @@ async fn apply_app_events_agent_response_batches_same_session_turns() {
         SessionStats {
             added_lines: 0,
             deleted_lines: 0,
+            diff_state: SessionDiffState::Unknown,
             input_tokens: 2,
             output_tokens: 3,
         },
@@ -4078,6 +4092,7 @@ async fn apply_app_events_agent_response_batches_same_session_turns() {
         SessionStats {
             added_lines: 0,
             deleted_lines: 0,
+            diff_state: SessionDiffState::Unknown,
             input_tokens: 5,
             output_tokens: 8,
         },

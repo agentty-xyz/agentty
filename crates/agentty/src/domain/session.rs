@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
-pub use ag_agent::SessionStats;
+pub use ag_agent::{SessionDiffState, SessionStats};
 use serde::de::{self, Deserializer};
 use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
@@ -400,6 +400,50 @@ impl SessionSize {
             SessionSize::L => "L",
             SessionSize::Xl => "XL",
             SessionSize::Xxl => "XXL",
+        }
+    }
+}
+
+/// Result of refreshing diff-derived metadata for one session worktree.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SessionDiffStats {
+    /// The worktree diff was loaded successfully.
+    Known {
+        /// Added line count parsed from the diff.
+        added_lines: u64,
+        /// Deleted line count parsed from the diff.
+        deleted_lines: u64,
+        /// Whether the diff contains any content, including binary-only or
+        /// metadata-only changes.
+        has_diff: bool,
+        /// Size bucket derived from text line changes.
+        session_size: SessionSize,
+    },
+    /// The worktree diff could not be loaded.
+    Unknown,
+}
+
+impl SessionDiffStats {
+    /// Derives known diff metadata from one successful Git diff response.
+    pub fn from_diff(diff: &str) -> Self {
+        let (added_lines, deleted_lines) = SessionStats::line_change_counts(diff);
+
+        Self::Known {
+            added_lines,
+            deleted_lines,
+            has_diff: !diff.trim().is_empty(),
+            session_size: SessionSize::from_diff(diff),
+        }
+    }
+
+    /// Returns the UI availability state represented by this refresh result.
+    pub fn diff_state(self) -> SessionDiffState {
+        match self {
+            Self::Known { has_diff: true, .. } => SessionDiffState::Present,
+            Self::Known {
+                has_diff: false, ..
+            } => SessionDiffState::Empty,
+            Self::Unknown => SessionDiffState::Unknown,
         }
     }
 }
@@ -1957,6 +2001,21 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
 
         // Assert
         assert_eq!(session_size, SessionSize::Xs);
+    }
+
+    #[test]
+    fn session_diff_stats_distinguish_empty_and_binary_diffs() {
+        // Arrange
+        let empty_diff = "";
+        let binary_diff = "diff --git a/image.png b/image.png\nBinary files differ\n";
+
+        // Act
+        let empty_stats = SessionDiffStats::from_diff(empty_diff);
+        let binary_stats = SessionDiffStats::from_diff(binary_diff);
+
+        // Assert
+        assert_eq!(empty_stats.diff_state(), SessionDiffState::Empty);
+        assert_eq!(binary_stats.diff_state(), SessionDiffState::Present);
     }
 
     #[test]

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
-use crate::model::session::SessionStats;
+use crate::model::session::{SessionDiffState, SessionStats};
 
 /// Parsed agent response including content text and usage statistics.
 pub(crate) struct ParsedResponse {
@@ -388,6 +388,7 @@ fn parse_codex_response(stdout: &str) -> Option<ParsedResponse> {
     let stats = SessionStats {
         added_lines: 0,
         deleted_lines: 0,
+        diff_state: SessionDiffState::Unknown,
         input_tokens: total_input_tokens,
         output_tokens: total_output_tokens,
     };
@@ -502,6 +503,7 @@ fn parse_claude_response_payload(stdout: &str) -> Option<ParsedResponse> {
     let stats = SessionStats {
         added_lines: 0,
         deleted_lines: 0,
+        diff_state: SessionDiffState::Unknown,
         input_tokens: response
             .usage
             .as_ref()
@@ -541,6 +543,7 @@ fn extract_gemini_stats(stats: Option<&GeminiStats>) -> SessionStats {
     SessionStats {
         added_lines: 0,
         deleted_lines: 0,
+        diff_state: SessionDiffState::Unknown,
         input_tokens: tokens.input.unwrap_or(0).cast_unsigned(),
         output_tokens: tokens.candidates.unwrap_or(0).cast_unsigned(),
     }
@@ -592,6 +595,7 @@ fn extract_gemini_stream_stats(stdout_line: &str) -> Option<SessionStats> {
     Some(SessionStats {
         added_lines: 0,
         deleted_lines: 0,
+        diff_state: SessionDiffState::Unknown,
         input_tokens: stats.input_tokens.unwrap_or(0).cast_unsigned(),
         output_tokens: stats.output_tokens.unwrap_or(0).cast_unsigned(),
     })
@@ -640,6 +644,7 @@ fn extract_claude_usage_stats(stream_event: &serde_json::Value) -> Option<Sessio
     Some(SessionStats {
         added_lines: 0,
         deleted_lines: 0,
+        diff_state: SessionDiffState::Unknown,
         input_tokens: usage
             .get("input_tokens")
             .and_then(serde_json::Value::as_i64)
@@ -893,6 +898,40 @@ mod tests {
         assert_eq!(parsed.content, "Planned response");
         assert_eq!(parsed.stats.input_tokens, 11);
         assert_eq!(parsed.stats.output_tokens, 7);
+    }
+
+    #[test]
+    fn test_gemini_parse_response_reads_legacy_usage() {
+        // Arrange
+        let stdout = r#"{"response":"Planned response","stats":{"models":{"gemini":{"tokens":{"input":11,"candidates":7}}}}}"#;
+
+        // Act
+        let parsed = parse_gemini_response_with_fallback(stdout, "");
+
+        // Assert
+        assert_eq!(parsed.content, "Planned response");
+        assert_eq!(parsed.stats.input_tokens, 11);
+        assert_eq!(parsed.stats.output_tokens, 7);
+        assert_eq!(parsed.stats.diff_state, SessionDiffState::Unknown);
+    }
+
+    #[test]
+    fn test_gemini_parse_response_reads_stream_usage() {
+        // Arrange
+        let stdout = concat!(
+            r#"{"type":"content","text":"Streamed response"}"#,
+            "\n",
+            r#"{"type":"result","stats":{"input_tokens":13,"output_tokens":5}}"#
+        );
+
+        // Act
+        let parsed = parse_gemini_response_with_fallback(stdout, "");
+
+        // Assert
+        assert_eq!(parsed.content, "Streamed response");
+        assert_eq!(parsed.stats.input_tokens, 13);
+        assert_eq!(parsed.stats.output_tokens, 5);
+        assert_eq!(parsed.stats.diff_state, SessionDiffState::Unknown);
     }
 
     #[test]

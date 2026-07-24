@@ -171,6 +171,7 @@ mod tests {
                     stats: ag_agent::SessionStats {
                         added_lines: 0,
                         deleted_lines: 0,
+                        diff_state: ag_agent::SessionDiffState::Unknown,
                         input_tokens: 0,
                         output_tokens: 0,
                     },

@@ -230,8 +230,11 @@ derived data instead of recomputing the render twice per frame.
    terminal sync event.
 1. Completed stacked-parent turns fan out `SessionCommand::Rebase` to review-ready
    materialized children so child branches replay onto the latest parent branch.
-1. The session size is refreshed and the final status becomes `Review` or `Question`
-   (failures return to `Review`).
+1. Diff metadata is refreshed before the final status becomes `Review` or `Question`
+   (failures return to `Review`). Successful refreshes persist line totals, size, and
+   explicit empty/present state so binary and metadata-only diffs remain discoverable.
+   Failed refreshes persist unknown availability without erasing the last known totals,
+   allowing the diff view to surface its Git diagnostic.
 
 ### Operation Lifecycle and Recovery
 
@@ -461,8 +464,9 @@ their triggers:
 
 - **Session fork** (root session view `F`): creates a new worktree branch from the
   source session branch, copies `session_message` rows in one transaction, clears
-  provider/review-request/stack linkage, and marks the fork for one-time transcript
-  replay before its first reply. Stacked child sessions do not expose this action.
+  provider/review-request/stack linkage and source diff metadata, refreshes diff state
+  directly from the new worktree, and marks the fork for one-time transcript replay
+  before its first reply. Stacked child sessions do not expose this action.
 
 - **Focused review assist** (entering review): runs the review prompt with the diff and
   saved user/agent chat history, then stores the result or error.
