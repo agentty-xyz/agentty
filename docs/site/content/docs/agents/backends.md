@@ -119,9 +119,13 @@ The picker is filtered to the backend CLIs currently available on the machine. I
 `agy` is installed, `/model` shows only Antigravity and its selectable Gemini model
 choices.
 
-At startup, Agentty runs each available agent CLI's `update` command in the background,
-then probes `--version` and refreshes the Projects tab's **Agent CLIs** rows with the
-current version. Rows show `updating...` until that refresh completes.
+At startup, Agentty refreshes each available agent CLI in the background, then probes
+`--version` and updates the Projects tab's **Agent CLIs** rows with the current version.
+Antigravity, Claude, and Codex use their native `update` commands. Because current
+Gemini CLI releases do not expose that command, npm-global Gemini installations are
+refreshed with `npm install -g @google/gemini-cli@latest`. Rows show `updating...` until
+the refresh completes. Gemini installations that Agentty cannot identify as npm-global
+are version-probed without an automatic update.
 
 <a id="backends-persistent-defaults"></a> For persistent defaults, choose a default
 model in the **Settings** tab (`Tab` to navigate, `Enter` to open the selector). The
