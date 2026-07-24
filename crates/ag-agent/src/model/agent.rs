@@ -427,6 +427,18 @@ impl ReasoningLevel {
         }
     }
 
+    /// Returns the Antigravity `--effort` value for this level.
+    ///
+    /// Antigravity accepts `low`, `medium`, and `high`, so higher generic
+    /// reasoning levels map to its highest supported value.
+    pub fn antigravity(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High | Self::XHigh | Self::Max => "high",
+        }
+    }
+
     /// Returns the Claude `--effort` value for this level.
     ///
     /// Maps `XHigh` and `Max` to `"max"`, which is currently only supported on
@@ -1055,6 +1067,18 @@ mod tests {
         assert_eq!(ReasoningLevel::High.claude(), "high");
         assert_eq!(ReasoningLevel::XHigh.claude(), "max");
         assert_eq!(ReasoningLevel::Max.claude(), "max");
+    }
+
+    #[test]
+    /// Ensures Antigravity reasoning values stay within the CLI's accepted
+    /// `low`, `medium`, and `high` effort levels.
+    fn test_reasoning_level_antigravity_maps_all_levels() {
+        // Arrange / Act / Assert
+        assert_eq!(ReasoningLevel::Low.antigravity(), "low");
+        assert_eq!(ReasoningLevel::Medium.antigravity(), "medium");
+        assert_eq!(ReasoningLevel::High.antigravity(), "high");
+        assert_eq!(ReasoningLevel::XHigh.antigravity(), "high");
+        assert_eq!(ReasoningLevel::Max.antigravity(), "high");
     }
 
     #[test]

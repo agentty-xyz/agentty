@@ -48,7 +48,7 @@ impl AgentBackend for AntigravityBackend {
             prompt: _prompt,
             request_kind: _request_kind,
             replay_transcript: _replay_transcript,
-            reasoning_level: _reasoning_level,
+            reasoning_level,
         } = request;
         let mut command = Command::new("agy");
 
@@ -68,6 +68,8 @@ impl AgentBackend for AntigravityBackend {
             .arg(ANTIGRAVITY_PRINT_TIMEOUT)
             .arg("--model")
             .arg(model)
+            .arg("--effort")
+            .arg(reasoning_level.antigravity())
             .current_dir(folder)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -351,12 +353,53 @@ mod tests {
                 ANTIGRAVITY_PRINT_TIMEOUT.to_string(),
                 "--model".to_string(),
                 requested_model.to_string(),
+                "--effort".to_string(),
+                ReasoningLevel::default().antigravity().to_string(),
             ]
         );
         assert_eq!(command.get_current_dir(), Some(temp_directory.path()));
         assert_antigravity_project_state_patterns_ignored(&read_standard_git_exclude(
             temp_directory.path(),
         ));
+    }
+
+    #[test]
+    /// Verifies Antigravity receives every supported effort and caps higher
+    /// Agentty reasoning levels at the CLI's highest accepted value.
+    fn test_antigravity_build_command_passes_supported_effort() {
+        // Arrange
+        let temp_directory = visible_tempdir();
+        let backend = AntigravityBackend;
+        let cases = ReasoningLevel::ALL;
+
+        for reasoning_level in cases {
+            // Act
+            let command = AgentBackend::build_command(
+                &backend,
+                BuildCommandRequest {
+                    attachments: &[],
+                    folder: temp_directory.path(),
+                    main_checkout_root: None,
+                    replay_transcript: None,
+                    model: AgentModel::Gemini31ProPreview.provider_model_str(),
+                    prompt: "Write tests",
+                    reasoning_level,
+                    request_kind: &session_start_request_kind(),
+                },
+            )
+            .expect("command should build");
+            let args = command
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            let effort_position = args
+                .iter()
+                .position(|arg| arg == "--effort")
+                .expect("--effort flag should be present");
+
+            // Assert
+            assert_eq!(args[effort_position + 1], reasoning_level.antigravity());
+        }
     }
 
     #[test]
