@@ -133,12 +133,14 @@ selected model is stored with its backend as `agent/model`, which keeps shared G
 model ids tied to the selected Gemini or Antigravity provider. Stored defaults that
 point at an unavailable backend fall back to the first available backend default.
 
-<a id="backends-reasoning-level"></a> For Codex and Claude sessions, the **Settings**
-tab also exposes `Default Reasoning Level` (`low`, `medium`, `high`, `xhigh`, `max`).
-The selected level is persisted per project and is sent with turns unless a
-session-specific override is active. Codex receives `max` as a distinct reasoning
-effort. For Claude, both `xhigh` and `max` map to `--effort max`, which is currently
-only supported by `claude-opus-4-8`.
+<a id="backends-reasoning-level"></a> For Antigravity, Codex, and Claude sessions, the
+**Settings** tab also exposes `Default Reasoning Level` (`low`, `medium`, `high`,
+`xhigh`, `max`). The selected level is persisted per project and is sent with turns
+unless a session-specific override is active. Antigravity receives `--effort low`,
+`--effort medium`, or `--effort high`; `xhigh` and `max` map to its highest supported
+value, `--effort high`. Codex receives `max` as a distinct reasoning effort. For Claude,
+both `xhigh` and `max` map to `--effort max`, which is currently only supported by
+`claude-opus-4-8`.
 
 ## Available Models
 
