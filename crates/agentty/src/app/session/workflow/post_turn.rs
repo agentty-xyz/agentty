@@ -440,10 +440,15 @@ async fn apply_successful_turn_result(
     })
     .await;
     let review_request_commit_message = commit_outcome.map(|outcome| outcome.commit_message);
+    let review_request_session_summary = assistant_message
+        .summary
+        .as_ref()
+        .map(|summary| summary.session.clone());
     start_published_branch_auto_push(
         context,
         turn_metadata,
         review_request_commit_message,
+        review_request_session_summary,
         review_comment_outcomes,
     )
     .await;
@@ -522,6 +527,7 @@ async fn start_published_branch_auto_push(
     context: &PostTurnContext,
     turn_metadata: TurnMetadata,
     review_request_commit_message: Option<String>,
+    review_request_session_summary: Option<String>,
     review_comment_outcomes: Vec<ReviewCommentOutcome>,
 ) {
     let Some(published_upstream_ref) = turn_metadata.published_upstream_ref else {
@@ -545,11 +551,14 @@ async fn start_published_branch_auto_push(
             db: context.db.clone(),
             folder: context.folder.clone(),
             git_client: Arc::clone(&context.git_client),
+            one_shot_client: Arc::clone(&context.one_shot_client),
             published_upstream_ref,
             review_comment_outcomes,
             review_request_client: Arc::clone(&context.review_request_client),
             review_request_commit_message,
+            session_agent: turn_metadata.session_agent,
             session_id: context.session_id.clone(),
+            session_summary: review_request_session_summary,
             session_update_versions: context.session_update_versions.clone(),
             transcript: Arc::clone(&context.transcript),
         },
@@ -794,6 +803,7 @@ mod tests {
                             AgentModel::Gemini3FlashPreview,
                         ),
                     },
+                    None,
                     None,
                     Vec::new(),
                 )

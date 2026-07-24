@@ -9,9 +9,10 @@ use super::{
     AssignedIssue, CreateReviewRequestInput, ForgeCommand, ForgeCommandRunner, ForgeFuture,
     ForgeKind, ForgeRemote, IssueDetail, RequestedReview, RequestedReviewAudience, ReviewComment,
     ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread, ReviewRequestAdapter,
-    ReviewRequestError, ReviewRequestOperations, ReviewRequestState, ReviewRequestSummary,
-    SyncReviewRequestMetadataConfig, UpdateReviewRequestInput, map_parse_error,
-    normalize_provider_label, operation_failed, parse_remote_url, status_summary_parts, strip_port,
+    ReviewRequestError, ReviewRequestMetadata, ReviewRequestMetadataEdit, ReviewRequestOperations,
+    ReviewRequestState, ReviewRequestSummary, SyncReviewRequestMetadataConfig,
+    UpdateReviewRequestInput, map_parse_error, normalize_provider_label, operation_failed,
+    parse_remote_url, status_summary_parts, strip_port,
 };
 
 /// Maximum requested-review rows loaded from `gh` for one refresh.
@@ -184,8 +185,18 @@ impl ReviewRequestAdapter for GitHubReviewRequestAdapter {
         )
     }
 
-    /// Checks the current pull-request title/body and updates them when they
-    /// differ from `input`.
+    /// Loads current pull-request title/body metadata.
+    fn authenticated_review_request_metadata(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+    ) -> ForgeFuture<Result<ReviewRequestMetadata, ReviewRequestError>> {
+        self.operations
+            .review_request_metadata_future(remote, display_id, &metadata_sync_config())
+    }
+
+    /// Checks the current pull-request title/body and updates fields that still
+    /// match the reconciled input.
     fn sync_authenticated_review_request_metadata(
         &self,
         remote: ForgeRemote,
@@ -193,21 +204,12 @@ impl ReviewRequestAdapter for GitHubReviewRequestAdapter {
         input: UpdateReviewRequestInput,
     ) -> ForgeFuture<Result<ReviewRequestSummary, ReviewRequestError>> {
         let adapter = self.clone();
-        let config = SyncReviewRequestMetadataConfig {
-            edit_metadata_command,
-            edit_operation: "update pull-request metadata",
-            parse_display_id,
-            parse_metadata_response,
-            requires_update: GitHubMetadataResponse::requires_update,
-            view_metadata_command,
-            view_operation: "view pull-request metadata",
-        };
 
         self.operations.sync_review_request_metadata_future(
             remote,
             display_id,
             input,
-            &config,
+            &metadata_sync_config(),
             move |remote, display_id| {
                 adapter.refresh_authenticated_review_request(remote, display_id)
             },
@@ -314,6 +316,18 @@ impl ReviewRequestAdapter for GitHubReviewRequestAdapter {
 
             Ok(categorize_requested_reviews(all_reviews, &personal_reviews))
         })
+    }
+}
+
+/// Builds GitHub-specific metadata view and edit configuration.
+fn metadata_sync_config() -> SyncReviewRequestMetadataConfig {
+    SyncReviewRequestMetadataConfig {
+        edit_metadata_command,
+        edit_operation: "update pull-request metadata",
+        parse_display_id,
+        parse_metadata_response,
+        view_metadata_command,
+        view_operation: "view pull-request metadata",
     }
 }
 
@@ -539,31 +553,37 @@ fn view_metadata_command(remote: &ForgeRemote, pull_request_number: &str) -> For
 }
 
 /// Parses current pull-request title/body metadata from `gh pr view` JSON.
-fn parse_metadata_response(stdout: &str) -> Result<GitHubMetadataResponse, String> {
-    serde_json::from_str(stdout)
-        .map_err(|error| format!("invalid GitHub pull-request metadata response: {error}"))
+fn parse_metadata_response(stdout: &str) -> Result<ReviewRequestMetadata, String> {
+    let metadata: GitHubMetadataResponse = serde_json::from_str(stdout)
+        .map_err(|error| format!("invalid GitHub pull-request metadata response: {error}"))?;
+
+    Ok(ReviewRequestMetadata {
+        body: metadata.body,
+        title: metadata.title,
+    })
 }
 
 /// Builds the `gh pr edit` command for updating one pull-request title/body.
 fn edit_metadata_command(
     remote: &ForgeRemote,
     pull_request_number: &str,
-    input: &UpdateReviewRequestInput,
+    edit: &ReviewRequestMetadataEdit,
 ) -> ForgeCommand {
-    github_command(
-        remote,
-        vec![
-            "pr".to_string(),
-            "edit".to_string(),
-            pull_request_number.to_string(),
-            "--repo".to_string(),
-            remote.project_path(),
-            "--title".to_string(),
-            input.title.clone(),
-            "--body".to_string(),
-            input.body.clone().unwrap_or_default(),
-        ],
-    )
+    let mut arguments = vec![
+        "pr".to_string(),
+        "edit".to_string(),
+        pull_request_number.to_string(),
+        "--repo".to_string(),
+        remote.project_path(),
+    ];
+    if let Some(title) = edit.title.as_ref() {
+        arguments.extend(["--title".to_string(), title.clone()]);
+    }
+    if let Some(body) = edit.body.as_ref() {
+        arguments.extend(["--body".to_string(), body.clone()]);
+    }
+
+    github_command(remote, arguments)
 }
 
 /// Builds one `gh api graphql` command that fetches review threads and
@@ -1075,13 +1095,6 @@ struct GitHubMetadataResponse {
     title: String,
 }
 
-impl GitHubMetadataResponse {
-    /// Returns whether the remote metadata differs from the desired input.
-    fn requires_update(&self, input: &UpdateReviewRequestInput) -> bool {
-        self.title != input.title || self.body != input.body.clone().unwrap_or_default()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -1090,6 +1103,7 @@ mod tests {
     use mockall::Sequence;
 
     use super::*;
+    use crate::ReviewRequestMetadataFieldUpdate;
     use crate::command::{ForgeCommandOutput, MockForgeCommandRunner};
 
     #[tokio::test]
@@ -1343,12 +1357,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn authenticated_review_request_metadata_loads_current_pull_request() {
+        // Arrange
+        let remote = github_remote();
+        let mut command_runner = MockForgeCommandRunner::new();
+        command_runner
+            .expect_run()
+            .once()
+            .withf({
+                let remote = remote.clone();
+
+                move |command| command == &view_metadata_command(&remote, "42")
+            })
+            .returning(|_| Box::pin(async { Ok(success_output(github_metadata_json())) }));
+        let adapter = GitHubReviewRequestAdapter::new(Arc::new(command_runner));
+
+        // Act
+        let metadata = adapter
+            .authenticated_review_request_metadata(remote, "#42".to_string())
+            .await
+            .expect("GitHub metadata lookup should succeed");
+
+        // Assert
+        assert_eq!(
+            metadata,
+            ReviewRequestMetadata {
+                body: "Current body.".to_string(),
+                title: "Add forge review support".to_string(),
+            }
+        );
+    }
+
+    #[tokio::test]
     async fn sync_authenticated_review_request_metadata_edits_changed_pull_request() {
         // Arrange
         let remote = github_remote();
         let input = UpdateReviewRequestInput {
+            body: Some(reconciled_field("Current body.", "Updated body.")),
+            title: Some(reconciled_field(
+                "Add forge review support",
+                "Refine forge review support",
+            )),
+        };
+        let edit = ReviewRequestMetadataEdit {
             body: Some("Updated body.".to_string()),
-            title: "Refine forge review support".to_string(),
+            title: Some("Refine forge review support".to_string()),
         };
         let mut sequence = Sequence::new();
         let mut command_runner = MockForgeCommandRunner::new();
@@ -1368,9 +1421,9 @@ mod tests {
             .in_sequence(&mut sequence)
             .withf({
                 let remote = remote.clone();
-                let input = input.clone();
+                let edit = edit.clone();
 
-                move |command| command == &edit_metadata_command(&remote, "42", &input)
+                move |command| command == &edit_metadata_command(&remote, "42", &edit)
             })
             .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
         command_runner
@@ -1386,13 +1439,13 @@ mod tests {
         let adapter = GitHubReviewRequestAdapter::new(Arc::new(command_runner));
 
         // Act
-        let review_request = adapter
+        let summary = adapter
             .sync_authenticated_review_request_metadata(remote, "#42".to_string(), input)
             .await
             .expect("GitHub metadata sync should succeed");
 
         // Assert
-        assert_eq!(review_request.display_id, "#42");
+        assert_eq!(summary.display_id, "#42");
     }
 
     #[tokio::test]
@@ -1400,8 +1453,11 @@ mod tests {
         // Arrange
         let remote = github_remote();
         let input = UpdateReviewRequestInput {
-            body: Some("Current body.".to_string()),
-            title: "Add forge review support".to_string(),
+            body: Some(reconciled_field("Current body.", "Current body.")),
+            title: Some(reconciled_field(
+                "Add forge review support",
+                "Add forge review support",
+            )),
         };
         let mut sequence = Sequence::new();
         let mut command_runner = MockForgeCommandRunner::new();
@@ -1428,13 +1484,73 @@ mod tests {
         let adapter = GitHubReviewRequestAdapter::new(Arc::new(command_runner));
 
         // Act
-        let review_request = adapter
+        let summary = adapter
             .sync_authenticated_review_request_metadata(remote, "#42".to_string(), input)
             .await
             .expect("GitHub metadata sync should succeed");
 
         // Assert
-        assert_eq!(review_request.display_id, "#42");
+        assert_eq!(summary.display_id, "#42");
+    }
+
+    #[test]
+    fn edit_metadata_command_can_update_only_title() {
+        // Arrange
+        let remote = github_remote();
+        let edit = ReviewRequestMetadataEdit {
+            body: None,
+            title: Some("Manual-safe title".to_string()),
+        };
+
+        // Act
+        let command = edit_metadata_command(&remote, "42", &edit);
+
+        // Assert
+        assert_eq!(
+            command,
+            github_command(
+                &remote,
+                vec![
+                    "pr".to_string(),
+                    "edit".to_string(),
+                    "42".to_string(),
+                    "--repo".to_string(),
+                    remote.project_path(),
+                    "--title".to_string(),
+                    "Manual-safe title".to_string(),
+                ],
+            )
+        );
+    }
+
+    #[test]
+    fn edit_metadata_command_can_update_only_body() {
+        // Arrange
+        let remote = github_remote();
+        let edit = ReviewRequestMetadataEdit {
+            body: Some("Manual-safe body".to_string()),
+            title: None,
+        };
+
+        // Act
+        let command = edit_metadata_command(&remote, "42", &edit);
+
+        // Assert
+        assert_eq!(
+            command,
+            github_command(
+                &remote,
+                vec![
+                    "pr".to_string(),
+                    "edit".to_string(),
+                    "42".to_string(),
+                    "--repo".to_string(),
+                    remote.project_path(),
+                    "--body".to_string(),
+                    "Manual-safe body".to_string(),
+                ],
+            )
+        );
     }
 
     #[tokio::test]
@@ -1932,11 +2048,18 @@ mod tests {
     }
 
     fn github_metadata_json() -> String {
-        r#"{
+        serde_json::json!({
             "body": "Current body.",
             "title": "Add forge review support"
-        }"#
+        })
         .to_string()
+    }
+
+    fn reconciled_field(current: &str, desired: &str) -> ReviewRequestMetadataFieldUpdate {
+        ReviewRequestMetadataFieldUpdate {
+            current: current.to_string(),
+            desired: desired.to_string(),
+        }
     }
 
     fn github_assigned_issues_json() -> String {

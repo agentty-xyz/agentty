@@ -5,8 +5,10 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use ag_agent::{self as agent, OneShotClient};
+use ag_forge as forge;
 use ag_git::{self as git, GitClient};
 use askama::Template;
+use serde::Deserialize;
 use tokio::sync::mpsc;
 use tracing::warn;
 
@@ -57,6 +59,26 @@ struct SessionCommitMessagePromptTemplate<'a> {
     /// Full cumulative diff payload wrapped in a Markdown fence sized for its
     /// content.
     fenced_diff: &'a str,
+}
+
+/// Askama view model for semantic review-request metadata reconciliation.
+#[derive(Template)]
+#[template(path = "review_request_metadata_prompt.md", escape = "none")]
+struct ReviewRequestMetadataPromptTemplate<'a> {
+    /// Serialized current remote metadata treated as untrusted input.
+    current_metadata: &'a str,
+    /// Serialized generated metadata from the cumulative session commit.
+    generated_metadata: &'a str,
+    /// Serialized cumulative session summary.
+    session_summary: &'a str,
+}
+
+/// Structured answer returned by the metadata reconciliation utility prompt.
+#[derive(Deserialize)]
+struct ReviewRequestMetadataEvaluation {
+    description: String,
+    is_title_change_significant: bool,
+    title: String,
 }
 
 /// Stateless helpers for session process execution and output handling.
@@ -524,6 +546,62 @@ impl SessionTaskService {
         .await
     }
 
+    /// Reconciles current remote review-request metadata with the latest
+    /// cumulative session state while retaining intentional user additions.
+    pub(crate) async fn review_request_metadata(
+        current_metadata: &forge::ReviewRequestMetadata,
+        folder: &Path,
+        generated_description: &str,
+        generated_title: &str,
+        one_shot_client: &dyn OneShotClient,
+        session_agent: AgentSelection,
+        session_summary: &str,
+    ) -> Result<forge::ReviewRequestMetadata, SessionError> {
+        let prompt = Self::review_request_metadata_prompt(
+            current_metadata,
+            generated_description,
+            generated_title,
+            session_summary,
+        );
+        let submission = one_shot_client
+            .submit(agent::OneShotRequest {
+                agent_kind: session_agent.kind(),
+                child_pid: None,
+                folder: folder.to_path_buf(),
+                model: session_agent.model(),
+                prompt,
+                request_kind: ag_agent::AgentRequestKind::UtilityPrompt,
+                reasoning_level: crate::domain::agent::ReasoningLevel::default(),
+            })
+            .await?;
+        let answer_text = submission.response.to_answer_display_text();
+        let evaluation = serde_json::from_str::<ReviewRequestMetadataEvaluation>(
+            answer_text.trim(),
+        )
+        .map_err(|error| {
+            SessionError::Workflow(format!(
+                "Failed to parse review-request metadata evaluation: {error}"
+            ))
+        })?;
+        let title = if evaluation.is_title_change_significant {
+            let title = evaluation.title.trim();
+            if title.is_empty() || title.lines().count() != 1 {
+                return Err(SessionError::Workflow(
+                    "Review-request metadata evaluation returned an invalid title".to_string(),
+                ));
+            }
+
+            title.to_string()
+        } else {
+            current_metadata.title.clone()
+        };
+        Self::validate_preserved_review_content(&current_metadata.body, &evaluation.description)?;
+        Ok(forge::ReviewRequestMetadata {
+            body: evaluation.description,
+            title,
+        })
+    }
+
     async fn commit_changes_with_assist(
         context: &AssistContext,
     ) -> Result<Option<SessionCommitOutcome>, SessionError> {
@@ -681,6 +759,99 @@ impl SessionTaskService {
                 "Failed to render `session_commit_message_prompt.md`: {error}"
             ))
         })
+    }
+
+    /// Renders the semantic review-request metadata reconciliation prompt.
+    fn review_request_metadata_prompt(
+        current_metadata: &forge::ReviewRequestMetadata,
+        generated_description: &str,
+        generated_title: &str,
+        session_summary: &str,
+    ) -> String {
+        let current_metadata_json = serde_json::json!({
+            "description": current_metadata.body,
+            "title": current_metadata.title,
+        })
+        .to_string();
+        let generated_metadata_json = serde_json::json!({
+            "description": generated_description,
+            "title": generated_title,
+        })
+        .to_string();
+        let session_summary_json = serde_json::json!(session_summary).to_string();
+        let template = ReviewRequestMetadataPromptTemplate {
+            current_metadata: &current_metadata_json,
+            generated_metadata: &generated_metadata_json,
+            session_summary: &session_summary_json,
+        };
+
+        // This template writes borrowed strings into a `String`, whose
+        // formatter cannot fail. A blank prompt still degrades safely to a
+        // rejected evaluation if that invariant ever changes.
+        template.render().unwrap_or_default()
+    }
+
+    /// Rejects a reconciled description that drops an existing substantive
+    /// line, URL, or numeric issue reference.
+    fn validate_preserved_review_content(
+        current_description: &str,
+        desired_description: &str,
+    ) -> Result<(), SessionError> {
+        if let Some(reference) = Self::review_references(current_description)
+            .into_iter()
+            .find(|reference| !desired_description.contains(reference))
+        {
+            return Err(SessionError::Workflow(format!(
+                "Review-request metadata evaluation omitted current reference `{reference}`"
+            )));
+        }
+
+        if let Some(content) = current_description
+            .lines()
+            .map(str::trim)
+            .filter(|line| Self::is_substantive_review_line(line))
+            .find(|line| {
+                !desired_description
+                    .lines()
+                    .map(str::trim)
+                    .any(|desired_line| desired_line == *line)
+            })
+        {
+            return Err(SessionError::Workflow(format!(
+                "Review-request metadata evaluation omitted current content `{content}`"
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Returns whether a review-description line contains text or a non-ASCII
+    /// symbol rather than only Markdown punctuation and whitespace.
+    fn is_substantive_review_line(line: &str) -> bool {
+        line.chars().any(|character| {
+            character.is_alphanumeric() || (!character.is_ascii() && !character.is_whitespace())
+        })
+    }
+
+    /// Extracts URLs and numeric `#123` issue references from one description.
+    fn review_references(description: &str) -> Vec<&str> {
+        description
+            .split(|character: char| {
+                character.is_whitespace()
+                    || matches!(character, '(' | ')' | '[' | ']' | '<' | '>' | '"' | '\'')
+            })
+            .map(|token| {
+                token.trim_matches(|character: char| matches!(character, ',' | '.' | ';' | ':'))
+            })
+            .filter(|token| {
+                token.starts_with("https://")
+                    || token.starts_with("http://")
+                    || token.strip_prefix('#').is_some_and(|number| {
+                        !number.is_empty()
+                            && number.chars().all(|character| character.is_ascii_digit())
+                    })
+            })
+            .collect()
     }
 
     /// Generates and commits the canonical session commit message through an
@@ -1719,6 +1890,211 @@ mod tests {
         // Assert
         assert!(!prompt.contains(SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER));
         assert!(prompt.contains("Keep session commit accurate"));
+    }
+
+    #[tokio::test]
+    async fn review_request_metadata_preserves_user_details_from_semantic_evaluation() {
+        // Arrange
+        let mut one_shot_client = MockOneShotClient::new();
+        one_shot_client.expect_submit().once().returning(|request| {
+            assert!(
+                request
+                    .prompt
+                    .contains(r#""title":"Keep metadata stable""#)
+            );
+            assert!(
+                request
+                    .prompt
+                    .contains(r#""description":"Tracks #42: https://example.com/issue/42""#)
+            );
+            assert!(
+                request
+                    .prompt
+                    .contains("Preserve the intent and useful substance")
+            );
+            assert!(
+                request
+                    .prompt
+                    .contains("Keep every substantive current line verbatim")
+            );
+
+            Ok(one_shot_submission(
+                r#"{"title":"Build release dashboard","description":"Tracks #42: https://example.com/issue/42\n\nAdds the release dashboard.","is_title_change_significant":true}"#,
+                0,
+                0,
+            ))
+        });
+        let current_metadata = forge::ReviewRequestMetadata {
+            body: "Tracks #42: https://example.com/issue/42".to_string(),
+            title: "Keep metadata stable".to_string(),
+        };
+
+        // Act
+        let metadata = SessionTaskService::review_request_metadata(
+            &current_metadata,
+            Path::new("/tmp/project"),
+            "Adds the release dashboard.",
+            "Build release dashboard",
+            &one_shot_client,
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+            "The session now builds a release dashboard.",
+        )
+        .await
+        .expect("metadata evaluation should parse");
+
+        // Assert
+        assert_eq!(
+            metadata,
+            forge::ReviewRequestMetadata {
+                body: "Tracks #42: https://example.com/issue/42\n\nAdds the release dashboard."
+                    .to_string(),
+                title: "Build release dashboard".to_string(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn review_request_metadata_rejects_invalid_json() {
+        // Arrange
+        let mut one_shot_client = MockOneShotClient::new();
+        one_shot_client
+            .expect_submit()
+            .once()
+            .returning(|_| Ok(one_shot_submission("not json", 0, 0)));
+        let current_metadata = forge::ReviewRequestMetadata {
+            body: "Current body".to_string(),
+            title: "Current title".to_string(),
+        };
+
+        // Act
+        let error = SessionTaskService::review_request_metadata(
+            &current_metadata,
+            Path::new("/tmp/project"),
+            "Generated body",
+            "Generated title",
+            &one_shot_client,
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+            "Current session summary",
+        )
+        .await
+        .expect_err("invalid JSON should fail reconciliation");
+
+        // Assert
+        assert!(
+            error
+                .to_string()
+                .contains("Failed to parse review-request metadata evaluation")
+        );
+    }
+
+    #[tokio::test]
+    async fn review_request_metadata_rejects_invalid_title() {
+        // Arrange
+        let mut one_shot_client = MockOneShotClient::new();
+        one_shot_client.expect_submit().once().returning(|_| {
+            Ok(one_shot_submission(
+                r#"{"title":"First line\nSecond line","description":"Body","is_title_change_significant":true}"#,
+                0,
+                0,
+            ))
+        });
+        let current_metadata = forge::ReviewRequestMetadata {
+            body: "Current body".to_string(),
+            title: "Current title".to_string(),
+        };
+
+        // Act
+        let error = SessionTaskService::review_request_metadata(
+            &current_metadata,
+            Path::new("/tmp/project"),
+            "Generated body",
+            "Generated title",
+            &one_shot_client,
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+            "Current session summary",
+        )
+        .await
+        .expect_err("multiline title should fail reconciliation");
+
+        // Assert
+        assert!(
+            error
+                .to_string()
+                .contains("metadata evaluation returned an invalid title")
+        );
+    }
+
+    #[tokio::test]
+    async fn review_request_metadata_rejects_dropped_current_reference() {
+        // Arrange
+        let mut one_shot_client = MockOneShotClient::new();
+        one_shot_client.expect_submit().once().returning(|_| {
+            Ok(one_shot_submission(
+                r#"{"title":"Current title","description":"Updated body without references.","is_title_change_significant":false}"#,
+                0,
+                0,
+            ))
+        });
+        let current_metadata = forge::ReviewRequestMetadata {
+            body: "Tracks [#42](https://example.com/issues/42).".to_string(),
+            title: "Current title".to_string(),
+        };
+
+        // Act
+        let error = SessionTaskService::review_request_metadata(
+            &current_metadata,
+            Path::new("/tmp/project"),
+            "Generated body",
+            "Generated title",
+            &one_shot_client,
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+            "Current session summary",
+        )
+        .await
+        .expect_err("dropping a current issue reference should fail reconciliation");
+
+        // Assert
+        assert!(
+            error
+                .to_string()
+                .contains("omitted current reference `#42`")
+        );
+    }
+
+    #[tokio::test]
+    async fn review_request_metadata_rejects_dropped_current_note_without_reference() {
+        // Arrange
+        let mut one_shot_client = MockOneShotClient::new();
+        one_shot_client.expect_submit().once().returning(|_| {
+            Ok(one_shot_submission(
+                r#"{"title":"Current title","description":"Generated summary.\n\nUpdated generated details.","is_title_change_significant":false}"#,
+                0,
+                0,
+            ))
+        });
+        let current_metadata = forge::ReviewRequestMetadata {
+            body: "Generated summary.\n\n- [ ] Reviewer note: coordinate the ACME-OPS handoff."
+                .to_string(),
+            title: "Current title".to_string(),
+        };
+
+        // Act
+        let error = SessionTaskService::review_request_metadata(
+            &current_metadata,
+            Path::new("/tmp/project"),
+            "Updated generated details.",
+            "Generated title",
+            &one_shot_client,
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+            "Current session summary",
+        )
+        .await
+        .expect_err("dropping a current reviewer note should fail reconciliation");
+
+        // Assert
+        assert!(error.to_string().contains(
+            "omitted current content `- [ ] Reviewer note: coordinate the ACME-OPS handoff.`"
+        ));
     }
 
     #[tokio::test]

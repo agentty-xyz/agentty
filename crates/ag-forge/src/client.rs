@@ -6,7 +6,7 @@ use super::{
     AssignedIssue, CreateReviewRequestInput, ForgeCommandRunner, ForgeFuture, ForgeKind,
     ForgeRemote, GitHubReviewRequestAdapter, GitLabReviewRequestAdapter, IssueDetail,
     RealForgeCommandRunner, RequestedReview, ReviewCommentSnapshot, ReviewRequestError,
-    ReviewRequestSummary, UpdateReviewRequestInput, detect_remote,
+    ReviewRequestMetadata, ReviewRequestSummary, UpdateReviewRequestInput, detect_remote,
 };
 
 /// Async boundary used by app orchestration for forge review requests.
@@ -72,8 +72,22 @@ pub trait ReviewRequestClient: Send + Sync {
         display_id: String,
     ) -> ForgeFuture<Result<ReviewRequestSummary, ReviewRequestError>>;
 
-    /// Syncs an existing review request title/body to `input` after checking
-    /// the current remote metadata.
+    /// Loads the current title and body of one existing review request.
+    ///
+    /// # Errors
+    /// Returns a provider-specific review-request error when metadata lookup
+    /// fails.
+    fn review_request_metadata(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+    ) -> ForgeFuture<Result<ReviewRequestMetadata, ReviewRequestError>>;
+
+    /// Best-effort syncs reconciled metadata after rechecking that the remote
+    /// fields match the values used during evaluation.
+    ///
+    /// The provider CLI update is not atomic with the recheck, so a later
+    /// concurrent manual edit can still be overwritten.
     ///
     /// # Errors
     /// Returns a provider-specific review-request error when metadata lookup,
@@ -270,6 +284,16 @@ impl ReviewRequestClient for RealReviewRequestClient {
         })
     }
 
+    fn review_request_metadata(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+    ) -> ForgeFuture<Result<ReviewRequestMetadata, ReviewRequestError>> {
+        self.call_with_authenticated_adapter(remote, move |adapter, remote| {
+            adapter.authenticated_review_request_metadata(remote, display_id)
+        })
+    }
+
     fn sync_review_request_metadata(
         &self,
         remote: ForgeRemote,
@@ -376,6 +400,13 @@ pub(crate) trait ReviewRequestAdapter: Send + Sync {
         remote: ForgeRemote,
         display_id: String,
     ) -> ForgeFuture<Result<ReviewRequestSummary, ReviewRequestError>>;
+
+    /// Loads current review-request metadata after authentication.
+    fn authenticated_review_request_metadata(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+    ) -> ForgeFuture<Result<ReviewRequestMetadata, ReviewRequestError>>;
 
     /// Synchronizes review-request metadata after authentication.
     fn sync_authenticated_review_request_metadata(
@@ -572,6 +603,68 @@ mod tests {
                 title: "Add forge review support".to_string(),
                 web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
             })
+        );
+    }
+
+    #[tokio::test]
+    async fn review_request_metadata_authenticates_before_github_lookup() {
+        // Arrange
+        let remote = github_remote();
+        let mut sequence = Sequence::new();
+        let mut command_runner = MockForgeCommandRunner::new();
+        command_runner
+            .expect_run()
+            .once()
+            .in_sequence(&mut sequence)
+            .withf(|command| {
+                command_arguments_are(
+                    command,
+                    "gh",
+                    &["auth", "status", "--hostname", "github.com"],
+                )
+            })
+            .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
+        command_runner
+            .expect_run()
+            .once()
+            .in_sequence(&mut sequence)
+            .withf(|command| {
+                command_arguments_are(
+                    command,
+                    "gh",
+                    &[
+                        "pr",
+                        "view",
+                        "42",
+                        "--repo",
+                        "agentty-xyz/agentty",
+                        "--json",
+                        "title,body",
+                    ],
+                )
+            })
+            .returning(|_| {
+                Box::pin(async {
+                    Ok(success_output(
+                        r#"{"title":"Current title","body":"Current body"}"#.to_string(),
+                    ))
+                })
+            });
+        let client = RealReviewRequestClient::new(Arc::new(command_runner));
+
+        // Act
+        let metadata = client
+            .review_request_metadata(remote, "#42".to_string())
+            .await
+            .expect("GitHub metadata lookup should succeed");
+
+        // Assert
+        assert_eq!(
+            metadata,
+            ReviewRequestMetadata {
+                body: "Current body".to_string(),
+                title: "Current title".to_string(),
+            }
         );
     }
 

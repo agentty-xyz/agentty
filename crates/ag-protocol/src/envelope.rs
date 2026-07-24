@@ -292,7 +292,7 @@ mod tests {
         assert!(rendered_prompt.contains("```mermaid"));
         assert!(rendered_prompt.contains("put the diagram only in `answer`"));
         assert!(normalized_rendered_prompt.contains("start the opening fence at column 1"));
-        assert!(rendered_prompt.contains("recognizes Mermaid diagrams only in this fenced"));
+        assert!(rendered_prompt.contains("Mermaid diagrams are recognized only in this fenced"));
         assert!(rendered_prompt.contains("Do not emit Mermaid as plain text"));
         assert!(rendered_prompt.contains("Supported mermaid syntax"));
         assert!(normalized_rendered_prompt.contains("Do not create commits"));
@@ -329,7 +329,7 @@ mod tests {
         assert!(rendered_prompt.contains("Your workspace root is `/tmp/agentty-wt/session-1`."));
         assert!(rendered_prompt.contains("Anything outside that"));
         assert!(rendered_prompt.contains("root is read-only."));
-        assert!(rendered_prompt.contains("provider enforces Agentty's response JSON schema"));
+        assert!(rendered_prompt.contains("provider enforces the response JSON schema"));
         assert!(rendered_prompt.contains("Return a single JSON object"));
         assert!(!rendered_prompt.contains("Follow this JSON Schema exactly."));
         assert!(!rendered_prompt.contains("Authoritative JSON Schema:"));

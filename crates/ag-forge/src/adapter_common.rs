@@ -10,8 +10,45 @@ use std::sync::Arc;
 use super::{
     ForgeCommand, ForgeCommandError, ForgeCommandOutput, ForgeCommandRunner, ForgeFuture,
     ForgeKind, ForgeRemote, RequestedReview, ReviewCommentSnapshot, ReviewRequestError,
-    ReviewRequestSummary, UpdateReviewRequestInput, command_output_detail,
+    ReviewRequestMetadata, ReviewRequestSummary, UpdateReviewRequestInput, command_output_detail,
 };
+
+/// Provider-neutral partial edit produced after a best-effort recheck that the
+/// remote fields still match the values used during semantic reconciliation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ReviewRequestMetadataEdit {
+    pub(crate) body: Option<String>,
+    pub(crate) title: Option<String>,
+}
+
+/// Best-effort conditional edit calculated from the last observed metadata.
+struct ReviewRequestMetadataPlan {
+    edit: ReviewRequestMetadataEdit,
+}
+
+impl ReviewRequestMetadataPlan {
+    /// Builds a field-level edit when the last observed remote value matches
+    /// the value used by the semantic reconciliation step.
+    fn new(metadata: &ReviewRequestMetadata, input: &UpdateReviewRequestInput) -> Self {
+        let body = input.body.as_ref().and_then(|field| {
+            (metadata.body == field.current && metadata.body != field.desired)
+                .then(|| field.desired.clone())
+        });
+        let title = input.title.as_ref().and_then(|field| {
+            (metadata.title == field.current && metadata.title != field.desired)
+                .then(|| field.desired.clone())
+        });
+
+        Self {
+            edit: ReviewRequestMetadataEdit { body, title },
+        }
+    }
+
+    /// Returns whether at least one reconciled field needs a remote edit.
+    fn requires_edit(&self) -> bool {
+        self.edit.body.is_some() || self.edit.title.is_some()
+    }
+}
 
 /// Shared command runner and operation flow used by forge adapters.
 #[derive(Clone)]
@@ -171,15 +208,45 @@ impl ReviewRequestOperations {
         })
     }
 
-    /// Synchronizes review-request metadata when the remote values differ
-    /// from `input`, then refreshes the full summary in an owned future for
-    /// adapter trait implementations.
-    pub(crate) fn sync_review_request_metadata_future<Metadata: Send + 'static>(
+    /// Fetches current review-request metadata in an owned future for adapter
+    /// trait implementations.
+    pub(crate) fn review_request_metadata_future(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+        config: &SyncReviewRequestMetadataConfig,
+    ) -> ForgeFuture<Result<ReviewRequestMetadata, ReviewRequestError>> {
+        let parse_display_id = config.parse_display_id;
+        let parse_metadata_response = config.parse_metadata_response;
+        let view_metadata_command = config.view_metadata_command;
+        let view_operation = config.view_operation;
+        let operations = self.clone();
+
+        Box::pin(async move {
+            let command_display_id = parse_display_id(&display_id)?;
+            let output = operations
+                .run_review_command(
+                    &remote,
+                    view_metadata_command(&remote, &command_display_id),
+                    view_operation,
+                )
+                .await?;
+
+            map_parse_error(remote.forge_kind, parse_metadata_response(&output.stdout))
+        })
+    }
+
+    /// Rechecks reconciled fields immediately before a best-effort metadata
+    /// update, then refreshes the full summary in an owned future.
+    ///
+    /// Provider CLI updates have no atomic version precondition, so a manual
+    /// edit made after this recheck can still be overwritten.
+    pub(crate) fn sync_review_request_metadata_future(
         &self,
         remote: ForgeRemote,
         display_id: String,
         input: UpdateReviewRequestInput,
-        config: &SyncReviewRequestMetadataConfig<Metadata>,
+        config: &SyncReviewRequestMetadataConfig,
         refresh_review_request: impl FnOnce(
             ForgeRemote,
             String,
@@ -192,7 +259,6 @@ impl ReviewRequestOperations {
         let edit_operation = config.edit_operation;
         let parse_display_id = config.parse_display_id;
         let parse_metadata_response = config.parse_metadata_response;
-        let requires_update = config.requires_update;
         let view_metadata_command = config.view_metadata_command;
         let view_operation = config.view_operation;
         let operations = self.clone();
@@ -208,12 +274,13 @@ impl ReviewRequestOperations {
                 .await?;
             let metadata =
                 map_parse_error(remote.forge_kind, parse_metadata_response(&output.stdout))?;
+            let plan = ReviewRequestMetadataPlan::new(&metadata, &input);
 
-            if requires_update(&metadata, &input) {
+            if plan.requires_edit() {
                 operations
                     .run_review_command(
                         &remote,
-                        edit_metadata_command(&remote, &command_display_id, &input),
+                        edit_metadata_command(&remote, &command_display_id, &plan.edit),
                         edit_operation,
                     )
                     .await?;
@@ -339,18 +406,16 @@ impl ReviewRequestOperations {
 }
 
 /// Configuration for provider-specific metadata synchronization.
-pub(crate) struct SyncReviewRequestMetadataConfig<Metadata> {
+pub(crate) struct SyncReviewRequestMetadataConfig {
     /// Builds the edit command when metadata differs from desired input.
     pub(crate) edit_metadata_command:
-        fn(&ForgeRemote, &str, &UpdateReviewRequestInput) -> ForgeCommand,
+        fn(&ForgeRemote, &str, &ReviewRequestMetadataEdit) -> ForgeCommand,
     /// User-facing operation prefix for edit failures.
     pub(crate) edit_operation: &'static str,
     /// Parses one provider display id into a CLI argument.
     pub(crate) parse_display_id: fn(&str) -> Result<String, ReviewRequestError>,
     /// Parses provider metadata JSON.
-    pub(crate) parse_metadata_response: fn(&str) -> Result<Metadata, String>,
-    /// Returns whether the remote metadata differs from desired input.
-    pub(crate) requires_update: fn(&Metadata, &UpdateReviewRequestInput) -> bool,
+    pub(crate) parse_metadata_response: fn(&str) -> Result<ReviewRequestMetadata, String>,
     /// Builds the metadata view command.
     pub(crate) view_metadata_command: fn(&ForgeRemote, &str) -> ForgeCommand,
     /// User-facing operation prefix for metadata view failures.
@@ -403,6 +468,85 @@ pub(crate) fn normalize_provider_label(label: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metadata_plan_updates_fields_that_still_match_reconciled_values() {
+        // Arrange
+        let metadata = ReviewRequestMetadata {
+            body: "Current body.".to_string(),
+            title: "Current title".to_string(),
+        };
+        let input = UpdateReviewRequestInput {
+            body: Some(crate::ReviewRequestMetadataFieldUpdate {
+                current: "Current body.".to_string(),
+                desired: "New body.".to_string(),
+            }),
+            title: Some(crate::ReviewRequestMetadataFieldUpdate {
+                current: "Current title".to_string(),
+                desired: "New title".to_string(),
+            }),
+        };
+
+        // Act
+        let plan = ReviewRequestMetadataPlan::new(&metadata, &input);
+
+        // Assert
+        assert_eq!(plan.edit.body.as_deref(), Some("New body."));
+        assert_eq!(plan.edit.title.as_deref(), Some("New title"));
+        assert!(plan.requires_edit());
+    }
+
+    #[test]
+    fn metadata_plan_skips_fields_changed_after_reconciliation() {
+        // Arrange
+        let metadata = ReviewRequestMetadata {
+            body: "New remote body.".to_string(),
+            title: "New remote title".to_string(),
+        };
+        let input = UpdateReviewRequestInput {
+            body: Some(crate::ReviewRequestMetadataFieldUpdate {
+                current: "Earlier body.".to_string(),
+                desired: "Desired body.".to_string(),
+            }),
+            title: Some(crate::ReviewRequestMetadataFieldUpdate {
+                current: "Earlier title".to_string(),
+                desired: "Desired title".to_string(),
+            }),
+        };
+
+        // Act
+        let plan = ReviewRequestMetadataPlan::new(&metadata, &input);
+
+        // Assert
+        assert_eq!(plan.edit.body, None);
+        assert_eq!(plan.edit.title, None);
+        assert!(!plan.requires_edit());
+    }
+
+    #[test]
+    fn metadata_plan_omits_unchanged_reconciled_fields() {
+        // Arrange
+        let metadata = ReviewRequestMetadata {
+            body: "Current body.".to_string(),
+            title: "Current title".to_string(),
+        };
+        let input = UpdateReviewRequestInput {
+            body: Some(crate::ReviewRequestMetadataFieldUpdate {
+                current: "Current body.".to_string(),
+                desired: "Current body.".to_string(),
+            }),
+            title: Some(crate::ReviewRequestMetadataFieldUpdate {
+                current: "Current title".to_string(),
+                desired: "Current title".to_string(),
+            }),
+        };
+
+        // Act
+        let plan = ReviewRequestMetadataPlan::new(&metadata, &input);
+
+        // Assert
+        assert!(!plan.requires_edit());
+    }
 
     #[test]
     fn looks_like_authentication_failure_matches_github_cli_login_prompt() {
