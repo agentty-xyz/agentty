@@ -44,6 +44,7 @@ pub(crate) fn turn_prompt_for_runtime(
     request_kind: &AgentRequestKind,
     replay_transcript: Option<&str>,
     instruction_delivery_mode: InstructionDeliveryMode,
+    personality: &crate::channel::PersonalityPrompt,
     schema_instruction_mode: ProtocolSchemaInstructionMode,
     workspace_root: &Path,
 ) -> Result<TurnPrompt, AppServerError> {
@@ -51,6 +52,8 @@ pub(crate) fn turn_prompt_for_runtime(
     let agent_prompt = prompt.agent_text();
     let turn_prompt = agent::prepare_prompt_text(agent::PromptPreparationRequest {
         instruction_delivery_mode,
+        personality_prompt: personality.current(),
+        personality_update: personality.update(),
         prompt: &agent_prompt,
         protocol_profile: request_kind.protocol_profile(),
         replay_transcript,
@@ -126,6 +129,7 @@ mod tests {
             live_transcript: Some(live_transcript("live content")),
             main_checkout_root: None,
             model: "test-model".to_string(),
+            personality: crate::channel::PersonalityPrompt::default(),
             prompt: TurnPrompt::from("hello"),
             provider_conversation_id: None,
             persisted_instruction_conversation_id: None,
@@ -150,6 +154,7 @@ mod tests {
             live_transcript: Some(live_transcript("  ")),
             main_checkout_root: None,
             model: "test-model".to_string(),
+            personality: crate::channel::PersonalityPrompt::default(),
             prompt: TurnPrompt::from("hello"),
             provider_conversation_id: None,
             persisted_instruction_conversation_id: None,
@@ -174,6 +179,7 @@ mod tests {
             live_transcript: None,
             main_checkout_root: None,
             model: "test-model".to_string(),
+            personality: crate::channel::PersonalityPrompt::default(),
             prompt: TurnPrompt::from("hello"),
             provider_conversation_id: None,
             persisted_instruction_conversation_id: None,
@@ -202,6 +208,7 @@ mod tests {
             &request_kind,
             None,
             InstructionDeliveryMode::BootstrapFull,
+            &crate::channel::PersonalityPrompt::default(),
             ProtocolSchemaInstructionMode::PromptSchema,
             Path::new(TEST_WORKSPACE_ROOT),
         );
@@ -226,6 +233,7 @@ mod tests {
             &request_kind,
             None,
             InstructionDeliveryMode::BootstrapFull,
+            &crate::channel::PersonalityPrompt::default(),
             ProtocolSchemaInstructionMode::TransportSchema,
             Path::new(TEST_WORKSPACE_ROOT),
         );
@@ -253,6 +261,7 @@ mod tests {
             &request_kind,
             None,
             InstructionDeliveryMode::DeltaOnly,
+            &crate::channel::PersonalityPrompt::default(),
             ProtocolSchemaInstructionMode::PromptSchema,
             Path::new(TEST_WORKSPACE_ROOT),
         );
@@ -275,6 +284,7 @@ mod tests {
             &request_kind,
             None,
             InstructionDeliveryMode::BootstrapFull,
+            &crate::channel::PersonalityPrompt::default(),
             ProtocolSchemaInstructionMode::PromptSchema,
             Path::new(TEST_WORKSPACE_ROOT),
         );
@@ -300,6 +310,7 @@ mod tests {
             &request_kind,
             None,
             InstructionDeliveryMode::BootstrapFull,
+            &crate::channel::PersonalityPrompt::default(),
             ProtocolSchemaInstructionMode::PromptSchema,
             Path::new(TEST_WORKSPACE_ROOT),
         );
@@ -318,6 +329,7 @@ mod tests {
             live_transcript: None,
             main_checkout_root: None,
             model: "test-model".to_string(),
+            personality: crate::channel::PersonalityPrompt::default(),
             prompt: TurnPrompt::from("hello"),
             provider_conversation_id: Some("thread-123".to_string()),
             persisted_instruction_conversation_id:

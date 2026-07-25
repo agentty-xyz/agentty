@@ -33,6 +33,7 @@ use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::{AppRepositories, SessionOperationRow};
 use crate::infra::fs::FsClient;
+use crate::infra::personality::PersonalityCatalogClient;
 use crate::infra::process;
 
 const RESTART_FAILURE_REASON: &str = "Interrupted by app restart";
@@ -147,6 +148,8 @@ pub(super) struct SessionWorkerContext {
     pub(super) folder: PathBuf,
     pub(super) fs_client: Arc<dyn FsClient>,
     pub(super) git_client: Arc<dyn GitClient>,
+    /// Workspace-only personality discovery used immediately before turns.
+    pub(super) personality_catalog_client: Arc<dyn PersonalityCatalogClient>,
     /// In-memory queue of prompts staged while the session is `InProgress`.
     ///
     /// Shared with [`SessionHandles::queued_messages`]. The worker drains
@@ -286,6 +289,7 @@ impl SessionWorkerRebaseAssistClient {
             folder: self.folder.clone(),
             main_checkout_root: self.main_checkout_root.clone(),
             model: self.session_agent.model().provider_model_str().to_string(),
+            personality: ag_agent::PersonalityPrompt::default(),
             prompt: TurnPrompt::from_agent_data(prompt),
             reasoning_level,
             request_kind: AgentRequestKind::UtilityPrompt,
@@ -484,6 +488,7 @@ pub(super) struct SessionWorkerRuntime {
     cancel_token: Arc<Mutex<CancellationToken>>,
     child_pid: Arc<Mutex<Option<u32>>>,
     folder: PathBuf,
+    personality_catalog_client: Arc<dyn PersonalityCatalogClient>,
     queued_messages: Arc<Mutex<VecDeque<TurnPrompt>>>,
     review_request_client: Arc<dyn forge::ReviewRequestClient>,
     /// Per-app session update versions shared with the main runtime.
@@ -678,6 +683,7 @@ impl SessionWorkerService {
             folder: runtime.folder.clone(),
             fs_client: services.fs_client(),
             git_client: services.git_client(),
+            personality_catalog_client: Arc::clone(&runtime.personality_catalog_client),
             queued_messages: Arc::clone(&runtime.queued_messages),
             review_request_client: Arc::clone(&runtime.review_request_client),
             session_update_versions: Arc::clone(&runtime.session_update_versions),
@@ -1099,6 +1105,7 @@ impl SessionManager {
             cancel_token: Arc::clone(&handles.cancel_token),
             child_pid: Arc::clone(&handles.child_pid),
             folder: session.folder.clone(),
+            personality_catalog_client: services.personality_catalog_client(),
             queued_messages: Arc::clone(&handles.queued_messages),
             review_request_client: services.review_request_client(),
             session_update_versions: services.session_update_versions(),
@@ -1141,20 +1148,25 @@ mod tests {
     use serde_json;
     use tempfile::tempdir;
     use tokio::sync::Notify;
+    use tracing::instrument::WithSubscriber;
 
     use super::super::post_turn::{
-        PostTurnContext, apply_turn_result, build_assistant_message_content,
-        persisted_session_summary_payload, status_update_after_turn_result,
+        PostTurnContext, TurnPersonalityPersistence, apply_turn_result,
+        build_assistant_message_content, persisted_session_summary_payload,
+        status_update_after_turn_result,
     };
     use super::super::turn::{
-        consume_turn_events, run_channel_turn, run_turn_with_cancellation, terminate_child_process,
+        consume_turn_events, resolve_turn_personality, run_channel_turn,
+        run_turn_with_cancellation, terminate_child_process,
     };
     use super::*;
     use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
+    use crate::domain::personality::Personality;
     use crate::domain::question::QuestionItem;
     use crate::domain::session::{PublishedBranchSyncStatus, ReviewRequest, ReviewRequestState};
-    use crate::infra::db::AppRepositories;
+    use crate::infra::db::{AppRepositories, SessionTurnMetadata};
     use crate::infra::fs;
+    use crate::infra::personality::{MockPersonalityCatalogClient, RealPersonalityCatalogClient};
 
     /// Builds one filesystem mock that treats every probed path as an
     /// existing directory.
@@ -1295,7 +1307,13 @@ mod tests {
         let post_turn_context =
             PostTurnContext::from_worker(context, auto_commit_one_shot_client());
 
-        apply_turn_result(&post_turn_context, turn_metadata, turn_result).await
+        apply_turn_result(
+            &post_turn_context,
+            turn_metadata,
+            TurnPersonalityPersistence::default(),
+            turn_result,
+        )
+        .await
     }
 
     #[test]
@@ -1591,6 +1609,7 @@ mod tests {
             fs_client: Arc::new(mock_fs_client_with_existing_directories()),
             git_client: Arc::new(mock_git_client),
             transcript: Arc::clone(&transcript),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
@@ -1719,6 +1738,7 @@ mod tests {
             fs_client: Arc::new(mock_fs_client_with_existing_directories()),
             git_client: Arc::new(mock_git_client),
             transcript: empty_transcript(),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
@@ -1817,6 +1837,7 @@ mod tests {
             fs_client: Arc::new(mock_fs_client_with_existing_directories()),
             git_client: Arc::new(mock_git_client),
             transcript: Arc::clone(&transcript),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
@@ -1918,6 +1939,7 @@ mod tests {
             fs_client: Arc::new(mock_fs_client_with_existing_directories()),
             git_client: Arc::new(mock_git_client),
             transcript: Arc::clone(&transcript),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
@@ -2006,6 +2028,7 @@ mod tests {
             fs_client: Arc::new(mock_fs_client_with_existing_directories()),
             git_client: Arc::new(mock_git_client),
             transcript: Arc::clone(&transcript),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
@@ -2100,6 +2123,7 @@ mod tests {
             fs_client: Arc::new(mock_fs_client_with_existing_directories()),
             git_client: Arc::new(mock_git_client),
             transcript: Arc::clone(&transcript),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
@@ -2132,6 +2156,48 @@ mod tests {
         assert!(output_text.contains("done"));
     }
 
+    #[tokio::test]
+    async fn test_run_channel_turn_persists_failure_when_main_checkout_snapshot_fails() {
+        // Arrange
+        let (mut context, _db, _queue, base_dir) =
+            queue_test_context(MockAgentChannel::new(), VecDeque::new(), Status::InProgress).await;
+        let main_repo_root = base_dir.path().join("main");
+        let mut mock_git_client = mock_git_client_detecting_main_repo(main_repo_root);
+        mock_git_client
+            .expect_diff()
+            .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+        mock_git_client
+            .expect_is_worktree_clean()
+            .returning(|_| Box::pin(async { Ok(true) }));
+        mock_git_client
+            .expect_tracked_worktree_status()
+            .once()
+            .returning(|_| {
+                Box::pin(async {
+                    Err(ag_git::GitError::CommandFailed {
+                        command: "git status".to_string(),
+                        stderr: "status failed".to_string(),
+                    })
+                })
+            });
+        context.git_client = Arc::new(mock_git_client);
+
+        // Act
+        let result = run_channel_turn(
+            &context,
+            auto_commit_one_shot_client(),
+            default_turn_metadata(),
+            AgentRequestKind::SessionStart,
+            None,
+            "test prompt".into(),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(result, Err(SessionError::Workflow(_))));
+        assert!(transcript_text(&context.transcript).contains("status failed"));
+    }
+
     /// Builds the default turn metadata used by session worker tests that
     /// exercise the `Gemini3FlashPreview` path without branch publication.
     fn default_turn_metadata() -> TurnMetadata {
@@ -2143,6 +2209,187 @@ mod tests {
                 AgentModel::Gemini3FlashPreview,
             ),
         }
+    }
+
+    #[tokio::test]
+    async fn test_resolve_turn_personality_marks_new_and_unchanged_prompts() {
+        // Arrange
+        let (mut context, db, _queue, _base_dir) =
+            queue_test_context(MockAgentChannel::new(), VecDeque::new(), Status::InProgress).await;
+        db.sessions()
+            .update_session_personality_id("sess1", Some("reviewer".to_string()))
+            .await
+            .expect("personality selection should persist");
+        let personality = Personality {
+            description: "Reviews code".to_string(),
+            id: "reviewer".to_string(),
+            name: "Code Reviewer".to_string(),
+            prompt: "Review carefully.".to_string(),
+        };
+        let fingerprint = personality.fingerprint();
+        let mut personality_catalog_client = MockPersonalityCatalogClient::new();
+        personality_catalog_client
+            .expect_resolve()
+            .times(2)
+            .returning(move |_, _| {
+                let personality = personality.clone();
+                Box::pin(async move { Some(personality) })
+            });
+        context.personality_catalog_client = Arc::new(personality_catalog_client);
+
+        // Act
+        let changed = resolve_turn_personality(&context).await;
+        persist_test_personality_state(&db, changed.persistence.clone()).await;
+        let unchanged = resolve_turn_personality(&context).await;
+
+        // Assert
+        assert_eq!(
+            changed.prompt,
+            ag_agent::PersonalityPrompt::active("Review carefully.".to_string(), true)
+        );
+        assert_eq!(
+            unchanged.prompt,
+            ag_agent::PersonalityPrompt::active("Review carefully.".to_string(), false)
+        );
+        assert_eq!(
+            unchanged.persistence,
+            TurnPersonalityPersistence {
+                applied_personality_id: Some("reviewer".to_string()),
+                applied_personality_prompt_hash: Some(fingerprint),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn test_resolve_turn_personality_reports_unavailable_profile_once_and_clears_prior() {
+        // Arrange
+        let (mut context, db, _queue, _base_dir) =
+            queue_test_context(MockAgentChannel::new(), VecDeque::new(), Status::InProgress).await;
+        db.sessions()
+            .update_session_personality_id("sess1", Some("missing".to_string()))
+            .await
+            .expect("personality selection should persist");
+        persist_test_personality_state(
+            &db,
+            TurnPersonalityPersistence {
+                applied_personality_id: Some("reviewer".to_string()),
+                applied_personality_prompt_hash: Some("prior-hash".to_string()),
+            },
+        )
+        .await;
+        let mut personality_catalog_client = MockPersonalityCatalogClient::new();
+        personality_catalog_client
+            .expect_resolve()
+            .times(2)
+            .returning(|_, _| Box::pin(async { None }));
+        context.personality_catalog_client = Arc::new(personality_catalog_client);
+
+        // Act
+        let first_resolution = resolve_turn_personality(&context).await;
+        persist_test_personality_state(&db, first_resolution.persistence.clone()).await;
+        let second_resolution = resolve_turn_personality(&context).await;
+        let transcript = transcript_text(&context.transcript);
+
+        // Assert
+        assert_eq!(
+            first_resolution.prompt,
+            ag_agent::PersonalityPrompt::cleared(true)
+        );
+        assert_eq!(
+            second_resolution.prompt,
+            ag_agent::PersonalityPrompt::cleared(false)
+        );
+        assert_eq!(
+            second_resolution.persistence,
+            TurnPersonalityPersistence {
+                applied_personality_id: Some("missing".to_string()),
+                applied_personality_prompt_hash: None,
+            }
+        );
+        assert_eq!(transcript.matches("is unavailable").count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_turn_personality_clears_removed_selection() {
+        // Arrange
+        let (context, db, _queue, _base_dir) =
+            queue_test_context(MockAgentChannel::new(), VecDeque::new(), Status::InProgress).await;
+        persist_test_personality_state(
+            &db,
+            TurnPersonalityPersistence {
+                applied_personality_id: Some("reviewer".to_string()),
+                applied_personality_prompt_hash: Some("prior-hash".to_string()),
+            },
+        )
+        .await;
+
+        // Act
+        let resolution = resolve_turn_personality(&context).await;
+
+        // Assert
+        assert_eq!(
+            resolution.prompt,
+            ag_agent::PersonalityPrompt::cleared(true)
+        );
+        assert_eq!(
+            resolution.persistence,
+            TurnPersonalityPersistence::default()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_resolve_turn_personality_defaults_when_session_state_is_unavailable() {
+        // Arrange
+        let (mut context, _db, _queue, _base_dir) =
+            queue_test_context(MockAgentChannel::new(), VecDeque::new(), Status::InProgress).await;
+        context.session_id = "missing-session".into();
+
+        // Act
+        let missing_session = resolve_turn_personality(&context).await;
+        let (closed_db, pool) = AppRepositories::in_memory_with_pool().await;
+        pool.close().await;
+        context.db = closed_db;
+        let query_failure = resolve_turn_personality(&context)
+            .with_subscriber(crate::test_support::TestSubscriber)
+            .await;
+
+        // Assert
+        assert_eq!(
+            missing_session.prompt,
+            ag_agent::PersonalityPrompt::default()
+        );
+        assert_eq!(
+            missing_session.persistence,
+            TurnPersonalityPersistence::default()
+        );
+        assert_eq!(query_failure.prompt, ag_agent::PersonalityPrompt::default());
+        assert_eq!(
+            query_failure.persistence,
+            TurnPersonalityPersistence::default()
+        );
+    }
+
+    /// Persists one successful personality-delivery marker for resolver tests.
+    async fn persist_test_personality_state(
+        db: &AppRepositories,
+        personality: TurnPersonalityPersistence,
+    ) {
+        db.sessions()
+            .persist_session_turn_metadata(
+                "sess1",
+                &SessionTurnMetadata {
+                    applied_personality_id: personality.applied_personality_id,
+                    applied_personality_prompt_hash: personality.applied_personality_prompt_hash,
+                    instruction_conversation_id: None,
+                    model: AgentModel::Gemini3FlashPreview.as_str().to_string(),
+                    provider_conversation_id: None,
+                    questions_json: "[]".to_string(),
+                    summary: String::new(),
+                    token_usage_delta: SessionStats::default(),
+                },
+            )
+            .await
+            .expect("personality application should persist");
     }
 
     #[tokio::test]
@@ -2178,6 +2425,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             transcript: empty_transcript(),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
@@ -2195,6 +2443,7 @@ mod tests {
             folder: context.folder.clone(),
             main_checkout_root: None,
             model: "gemini-3-flash-preview".to_string(),
+            personality: ag_agent::PersonalityPrompt::default(),
             prompt: "test".into(),
             reasoning_level: ReasoningLevel::default(),
             request_kind: AgentRequestKind::SessionStart,
@@ -2250,6 +2499,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             transcript: empty_transcript(),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
@@ -2267,6 +2517,7 @@ mod tests {
             folder: context.folder.clone(),
             main_checkout_root: None,
             model: "gemini-3-flash-preview".to_string(),
+            personality: ag_agent::PersonalityPrompt::default(),
             prompt: "test".into(),
             reasoning_level: ReasoningLevel::default(),
             request_kind: AgentRequestKind::SessionStart,
@@ -2319,6 +2570,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             transcript: empty_transcript(),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
@@ -2364,6 +2616,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             transcript: empty_transcript(),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
@@ -2500,6 +2753,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
             transcript: empty_transcript(),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
@@ -2587,6 +2841,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(auto_commit_git_client(commit_message, &mut sequence)),
             transcript: empty_transcript(),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(review_metadata_sync_client(
                 base_dir.path(),
@@ -2675,6 +2930,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(auto_commit_git_client_with_push_failure(commit_message)),
             transcript: empty_transcript(),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
@@ -3104,6 +3360,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
             transcript: empty_transcript(),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
@@ -3194,6 +3451,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
             transcript: Arc::clone(&transcript),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(review_request_client),
             session_update_versions: Arc::default(),
@@ -3307,6 +3565,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
             transcript: empty_transcript(),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             queued_messages: Arc::new(Mutex::new(VecDeque::from([TurnPrompt::from_text(
                 "queued follow-up".to_string(),
             )]))),
@@ -3406,6 +3665,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
             transcript: empty_transcript(),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
@@ -3510,6 +3770,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
             transcript: Arc::clone(&transcript),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
@@ -3603,6 +3864,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             transcript: empty_transcript(),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
@@ -3710,6 +3972,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
             transcript: Arc::clone(&transcript),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
@@ -3795,6 +4058,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
             transcript: empty_transcript(),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
@@ -4048,6 +4312,7 @@ mod tests {
                 main_checkout_root,
             )),
             transcript: empty_transcript(),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
@@ -4275,6 +4540,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             transcript: empty_transcript(),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
@@ -4348,6 +4614,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             transcript: empty_transcript(),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
@@ -4435,6 +4702,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             transcript: empty_transcript(),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
@@ -4540,6 +4808,7 @@ mod tests {
             fs_client: Arc::new(mock_fs_client_with_existing_directories()),
             git_client: Arc::new(mock_git_client),
             transcript: empty_transcript(),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             queued_messages: Arc::clone(&queue_handle),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),
@@ -4570,6 +4839,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             transcript: empty_transcript(),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             queued_messages: queue,
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             session_update_versions: Arc::default(),

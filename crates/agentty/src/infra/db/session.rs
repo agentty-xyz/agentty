@@ -20,6 +20,12 @@ use crate::infra::db::DbError;
 /// the data is allocation-cheap on this once-per-turn path and keeps the trait
 /// signature stable across toolchains.
 pub struct SessionTurnMetadata {
+    /// Personality id successfully delivered for this turn, or `None` when
+    /// the turn cleared or had no personality.
+    pub(crate) applied_personality_id: Option<String>,
+    /// Fingerprint of the personality prompt successfully delivered for this
+    /// turn.
+    pub(crate) applied_personality_prompt_hash: Option<String>,
     /// Session-scoped instruction bootstrap marker for app-server providers.
     pub(crate) instruction_conversation_id: Option<String>,
     /// Model identifier used for per-model usage aggregation.
@@ -103,6 +109,8 @@ pub struct SessionRow {
     pub output_tokens: i64,
     /// Parent session id when this is a one-level stacked draft.
     pub parent_session_id: Option<String>,
+    /// Workspace personality selected for future turns, when present.
+    pub personality_id: Option<String>,
     /// Owning project identifier, when present.
     pub project_id: Option<i64>,
     /// Initial or staged prompt text.
@@ -162,6 +170,8 @@ pub struct SessionListRow {
     pub output_tokens: i64,
     /// Parent session id when this row is a one-level stacked draft.
     pub parent_session_id: Option<String>,
+    /// Workspace personality selected for future turns, when present.
+    pub personality_id: Option<String>,
     /// Owning project identifier, when present.
     pub project_id: Option<i64>,
     /// Published upstream branch reference, when present.
@@ -226,6 +236,17 @@ pub struct SessionFocusedReviewRow {
     pub(crate) session_id: String,
     /// Generated focused-review markdown text.
     pub(crate) text: String,
+}
+
+/// Persisted selected and successfully applied personality state.
+#[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
+pub struct SessionPersonalityState {
+    /// Personality id delivered during the latest successful turn.
+    pub applied_personality_id: Option<String>,
+    /// Fingerprint of the personality prompt delivered during that turn.
+    pub applied_personality_prompt_hash: Option<String>,
+    /// Personality id selected for the session's next turn.
+    pub personality_id: Option<String>,
 }
 
 impl SessionFollowUpTaskRow {
@@ -364,6 +385,12 @@ pub trait SessionRepository: Send + Sync {
     /// Loads the project identifier associated with one session.
     async fn load_session_project_id(&self, session_id: &str) -> Result<Option<i64>, DbError>;
 
+    /// Loads selected and last-applied personality state for one session.
+    async fn load_session_personality_state(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<SessionPersonalityState>, DbError>;
+
     /// Loads parentless review-ready sessions that still need their recorded
     /// stack-base commit replayed onto their current base branch.
     async fn load_pending_stack_restack_session_ids(
@@ -459,6 +486,13 @@ pub trait SessionRepository: Send + Sync {
 
     /// Updates the persisted model for a session.
     async fn update_session_model(&self, id: &str, model: &str) -> Result<(), DbError>;
+
+    /// Updates or clears the personality selected for future turns.
+    async fn update_session_personality_id(
+        &self,
+        id: &str,
+        personality_id: Option<String>,
+    ) -> Result<(), DbError>;
 
     /// Updates the persisted agent provider and model for a session.
     async fn update_session_agent_model(
@@ -631,6 +665,7 @@ struct SessionRowMetadata {
     model: String,
     output_tokens: i64,
     parent_session_id: Option<String>,
+    personality_id: Option<String>,
     project_id: Option<i64>,
     published_upstream_ref: Option<String>,
     reasoning_level_override: Option<String>,
@@ -661,6 +696,7 @@ impl SessionRowMetadata {
             model: self.model,
             output_tokens: self.output_tokens,
             parent_session_id: self.parent_session_id,
+            personality_id: self.personality_id,
             project_id: self.project_id,
             published_upstream_ref: self.published_upstream_ref,
             reasoning_level_override: self.reasoning_level_override,
@@ -790,7 +826,10 @@ INSERT INTO session (
     output_tokens,
     is_draft,
     parent_session_id,
+    personality_id,
     provider_conversation_id,
+    applied_personality_id,
+    applied_personality_prompt_hash,
     app_server_instruction_provider_conversation_id,
     questions,
     published_upstream_ref,
@@ -820,6 +859,9 @@ SELECT ?,
        0,
        0,
        0,
+       NULL,
+       personality_id,
+       NULL,
        NULL,
        NULL,
        NULL,
@@ -1204,6 +1246,7 @@ SELECT session.base_branch AS base_branch,
        session.model AS model,
        session.output_tokens AS output_tokens,
        session.parent_session_id,
+       session.personality_id,
        session.project_id,
        session.prompt AS prompt,
        session.reasoning_level AS reasoning_level_override,
@@ -1258,6 +1301,7 @@ SELECT session.base_branch AS base_branch,
        session.model AS model,
        session.output_tokens AS output_tokens,
        session.parent_session_id,
+       session.personality_id,
        session.project_id,
        session.reasoning_level AS reasoning_level_override,
        session.published_upstream_ref,
@@ -1415,6 +1459,26 @@ WHERE id = ?
         .await?;
 
         Ok(row.and_then(|row| row.value))
+    }
+
+    async fn load_session_personality_state(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<SessionPersonalityState>, DbError> {
+        let state = sqlx::query_as::<_, SessionPersonalityState>(
+            r"
+SELECT applied_personality_id,
+       applied_personality_prompt_hash,
+       personality_id
+FROM session
+WHERE id = ?
+",
+        )
+        .bind(session_id)
+        .fetch_optional(&self.0)
+        .await?;
+
+        Ok(state)
     }
 
     async fn load_pending_stack_restack_session_ids(
@@ -1580,7 +1644,9 @@ UPDATE session
 SET questions = ?,
     summary = ?,
     provider_conversation_id = ?,
-    app_server_instruction_provider_conversation_id = ?
+    app_server_instruction_provider_conversation_id = ?,
+    applied_personality_id = ?,
+    applied_personality_prompt_hash = ?
 WHERE id = ?
 ",
         )
@@ -1588,6 +1654,8 @@ WHERE id = ?
         .bind(turn_metadata.summary.as_str())
         .bind(turn_metadata.provider_conversation_id.as_deref())
         .bind(turn_metadata.instruction_conversation_id.as_deref())
+        .bind(turn_metadata.applied_personality_id.as_deref())
+        .bind(turn_metadata.applied_personality_prompt_hash.as_deref())
         .bind(session_id)
         .execute(&mut *transaction)
         .await?;
@@ -1798,6 +1866,26 @@ WHERE id = ?
         )
         .bind(agent)
         .bind(model)
+        .bind(id)
+        .execute(&self.0)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn update_session_personality_id(
+        &self,
+        id: &str,
+        personality_id: Option<String>,
+    ) -> Result<(), DbError> {
+        sqlx::query(
+            r"
+UPDATE session
+SET personality_id = ?
+WHERE id = ?
+",
+        )
+        .bind(personality_id.as_deref())
         .bind(id)
         .execute(&self.0)
         .await?;
@@ -2289,6 +2377,8 @@ mod tests {
     /// Session columns that must be reset when snapshotting a fork.
     #[derive(sqlx::FromRow)]
     struct ForkResetRow {
+        applied_personality_id: Option<String>,
+        applied_personality_prompt_hash: Option<String>,
         app_server_instruction_provider_conversation_id: Option<String>,
         focused_review_diff_hash: Option<String>,
         focused_review_text: Option<String>,
@@ -2328,6 +2418,7 @@ mod tests {
                 model: self.model,
                 output_tokens: self.output_tokens,
                 parent_session_id: self.parent_session_id,
+                personality_id: self.personality_id,
                 project_id: self.project_id,
                 prompt,
                 published_upstream_ref: self.published_upstream_ref,
@@ -2418,6 +2509,7 @@ mod tests {
                     model: "gpt-5.5".to_string(),
                     output_tokens: 29,
                     parent_session_id: Some("parent-session".to_string()),
+                    personality_id: Some("reviewer".to_string()),
                     project_id: Some(7),
                     published_upstream_ref: Some("origin/session-a".to_string()),
                     reasoning_level_override: None,
@@ -2483,6 +2575,8 @@ mod tests {
         sqlx::query_as::<_, ForkResetRow>(
             r"
 SELECT app_server_instruction_provider_conversation_id,
+       applied_personality_id,
+       applied_personality_prompt_hash,
        focused_review_diff_hash,
        focused_review_text,
        in_progress_started_at,
@@ -2548,6 +2642,28 @@ WHERE id = ?
 
     /// Persists source-only linkage and counters on the fork source row.
     async fn seed_fork_snapshot_source_linkage(database: &AppRepositories) {
+        database
+            .sessions()
+            .update_session_personality_id("source-session", Some("reviewer".to_string()))
+            .await
+            .expect("failed to update personality id");
+        database
+            .sessions()
+            .persist_session_turn_metadata(
+                "source-session",
+                &SessionTurnMetadata {
+                    applied_personality_id: Some("reviewer".to_string()),
+                    applied_personality_prompt_hash: Some("personality-hash".to_string()),
+                    instruction_conversation_id: None,
+                    model: "gpt-5.5".to_string(),
+                    provider_conversation_id: None,
+                    questions_json: "[]".to_string(),
+                    summary: String::new(),
+                    token_usage_delta: SessionStats::default(),
+                },
+            )
+            .await
+            .expect("failed to persist applied personality");
         database
             .sessions()
             .update_session_provider_conversation_id(
@@ -2658,6 +2774,15 @@ WHERE id = ?
         assert_eq!(source_row.has_diff, Some(true));
         assert_eq!(source_row.size, "S");
         assert!(source_reset_row.is_draft);
+        assert_eq!(source_row.personality_id.as_deref(), Some("reviewer"));
+        assert_eq!(
+            source_reset_row.applied_personality_id.as_deref(),
+            Some("reviewer")
+        );
+        assert_eq!(
+            source_reset_row.applied_personality_prompt_hash.as_deref(),
+            Some("personality-hash")
+        );
         assert_eq!(
             source_reset_row.parent_session_id.as_deref(),
             Some("parent-session")
@@ -2714,6 +2839,7 @@ WHERE id = ?
         assert_eq!(fork_row.status, "Review");
         assert!(!fork_row.is_draft);
         assert_eq!(fork_row.parent_session_id, None);
+        assert_eq!(fork_row.personality_id.as_deref(), Some("reviewer"));
         assert_eq!(fork_row.input_tokens, 0);
         assert_eq!(fork_row.output_tokens, 0);
         assert_eq!(fork_row.added_lines, 0);
@@ -2724,6 +2850,8 @@ WHERE id = ?
         assert_eq!(fork_row.published_upstream_ref, None);
         assert_eq!(fork_row.review_request, None);
         assert_eq!(fork_reset_row.provider_conversation_id, None);
+        assert_eq!(fork_reset_row.applied_personality_id, None);
+        assert_eq!(fork_reset_row.applied_personality_prompt_hash, None);
         assert_eq!(
             fork_reset_row.app_server_instruction_provider_conversation_id,
             None

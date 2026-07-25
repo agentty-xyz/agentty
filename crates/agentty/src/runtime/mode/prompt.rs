@@ -690,6 +690,7 @@ fn advance_prompt_slash_selection(app: &mut App) {
     let (
         available_agent_kinds,
         input_text,
+        personalities,
         selected_agent,
         selected_index,
         session_agent_kind,
@@ -704,6 +705,7 @@ fn advance_prompt_slash_selection(app: &mut App) {
         } => (
             slash_state.available_agent_kinds.clone(),
             input.text().to_string(),
+            slash_state.personalities.clone(),
             slash_state.selected_agent,
             slash_state.selected_index,
             app.selected_session()
@@ -721,6 +723,7 @@ fn advance_prompt_slash_selection(app: &mut App) {
         stage,
         selected_agent,
         &available_agent_kinds,
+        &personalities,
         session_agent_kind,
         allow_apply_command,
     );
@@ -830,6 +833,28 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
                 slash_state.selected_index = selected_index;
             }
         }
+        Some(PromptSuggestionSelection::Command("/personality")) => {
+            let personalities = app
+                .list_prompt_personalities(&prompt_context.session_id)
+                .await;
+            let selected_personality_id = app
+                .session_at(prompt_context.session_index)
+                .and_then(|session| session.personality_id.as_deref());
+            let selected_index = selected_personality_id
+                .and_then(|selected_id| {
+                    personalities
+                        .iter()
+                        .position(|personality| personality.id == selected_id)
+                })
+                .map_or(0, |index| index.saturating_add(1));
+
+            if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+                slash_state.personalities = personalities;
+                slash_state.stage = PromptSlashStage::Personality;
+                slash_state.selected_agent = None;
+                slash_state.selected_index = selected_index;
+            }
+        }
         Some(PromptSuggestionSelection::Command(_)) => {
             if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
                 slash_state.stage = PromptSlashStage::Agent;
@@ -847,6 +872,11 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
         Some(PromptSuggestionSelection::Model(selected_agent)) => {
             clear_prompt_slash_input(app).await;
             app.update_prompt_session_model(&prompt_context.session_id, selected_agent)
+                .await;
+        }
+        Some(PromptSuggestionSelection::Personality(personality)) => {
+            clear_prompt_slash_input(app).await;
+            app.update_prompt_session_personality(&prompt_context.session_id, personality)
                 .await;
         }
         Some(PromptSuggestionSelection::Reasoning(reasoning_level)) => {
@@ -1220,6 +1250,7 @@ mod tests {
                 fs_client,
                 git_client: mock_git_client,
                 one_shot_client_override: None,
+                personality_catalog_client_override: None,
                 repositories: db,
                 review_request_client,
             },
@@ -1257,6 +1288,7 @@ mod tests {
                 fs_client,
                 git_client,
                 one_shot_client_override: None,
+                personality_catalog_client_override: None,
                 repositories: db,
                 review_request_client,
             },
@@ -1289,6 +1321,7 @@ mod tests {
                 fs_client,
                 git_client,
                 one_shot_client_override: None,
+                personality_catalog_client_override: None,
                 repositories: db,
                 review_request_client,
             },
@@ -2237,7 +2270,10 @@ mod tests {
             .collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(commands, vec!["/apply", "/model", "/reasoning"]);
+        assert_eq!(
+            commands,
+            vec!["/apply", "/model", "/personality", "/reasoning"]
+        );
     }
 
     #[test]
@@ -2262,6 +2298,7 @@ mod tests {
             PromptSlashStage::Agent,
             None,
             AgentKind::ALL,
+            &[],
             AgentKind::Codex,
             true,
         );
@@ -2278,6 +2315,7 @@ mod tests {
             PromptSlashStage::Model,
             Some(AgentKind::Claude),
             AgentKind::ALL,
+            &[],
             AgentKind::Codex,
             true,
         );
@@ -2297,6 +2335,7 @@ mod tests {
             PromptSlashStage::Agent,
             None,
             &available_agent_kinds,
+            &[],
             AgentKind::Codex,
             true,
         );
@@ -2652,6 +2691,55 @@ mod tests {
         assert_eq!(
             app.sessions.sessions()[0].reasoning_level_override,
             Some(ReasoningLevel::High)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_personality_slash_submit_loads_worktree_profile_and_selects_it() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/personality", None).await;
+        app.sessions.sessions_mut()[0].personality_id = Some("reviewer".to_string());
+        let session_folder = app.sessions.sessions()[0].folder.clone();
+        let agent_directory = session_folder
+            .join(".agents")
+            .join("agents")
+            .join("reviewer");
+        tokio::fs::create_dir_all(&agent_directory)
+            .await
+            .expect("personality directory should be created");
+        tokio::fs::write(
+            agent_directory.join("agent.md"),
+            "---\nid: reviewer\nname: Code Reviewer\ndescription: Reviews code\n---\nReview \
+             carefully.",
+        )
+        .await
+        .expect("personality definition should be written");
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Prompt { slash_state, .. }
+                if slash_state.stage == PromptSlashStage::Personality
+                    && slash_state.selected_index == 1
+        ));
+
+        // Act
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+        app.process_pending_app_events().await;
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Prompt { input, slash_state, .. }
+                if input.is_empty() && *slash_state == PromptSlashState::default()
+        ));
+        assert_eq!(
+            app.sessions.sessions()[0].personality_id.as_deref(),
+            Some("reviewer")
         );
     }
 

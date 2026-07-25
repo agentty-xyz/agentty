@@ -601,6 +601,8 @@ pub struct Session {
     /// Parent session this stacked session is based on while its parent branch
     /// remains active.
     pub parent_session_id: Option<SessionId>,
+    /// Workspace personality selected for future turns, when present.
+    pub personality_id: Option<String>,
     /// Human-readable project name associated with the session.
     pub project_name: String,
     /// Initial user prompt used to create the session.
@@ -2194,6 +2196,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
                 AgentModel::Gemini3FlashPreview,
             ),
             parent_session_id: None,
+            personality_id: None,
             project_name: "project".to_string(),
             prompt: String::new(),
             queued_messages: Vec::new(),
@@ -2236,6 +2239,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
                 AgentModel::Gemini3FlashPreview,
             ),
             parent_session_id: None,
+            personality_id: None,
             project_name: "project".to_string(),
             prompt: String::new(),
             queued_messages: Vec::new(),
@@ -2297,6 +2301,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
                 AgentModel::Gemini3FlashPreview,
             ),
             parent_session_id: None,
+            personality_id: None,
             project_name: "project".to_string(),
             prompt: String::new(),
             queued_messages: Vec::new(),
@@ -2339,6 +2344,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
                 AgentModel::Gemini3FlashPreview,
             ),
             parent_session_id: None,
+            personality_id: None,
             project_name: "project".to_string(),
             prompt: String::new(),
             queued_messages: Vec::new(),
@@ -2381,6 +2387,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
                 AgentModel::Gemini3FlashPreview,
             ),
             parent_session_id: None,
+            personality_id: None,
             project_name: "project".to_string(),
             prompt: String::new(),
             queued_messages: Vec::new(),
@@ -2423,6 +2430,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
                 AgentModel::Gemini3FlashPreview,
             ),
             parent_session_id: None,
+            personality_id: None,
             project_name: "project".to_string(),
             prompt: String::new(),
             queued_messages: Vec::new(),

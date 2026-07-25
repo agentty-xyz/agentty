@@ -38,6 +38,8 @@ pub(crate) enum TranscriptNotice {
     MainCheckoutWarning,
     /// Prompt image-paste failure.
     PasteImageError,
+    /// Session personality selection or fallback status.
+    Personality,
     /// Queued prompt failure.
     QueueError,
     /// Session sync workflow progress.
@@ -81,6 +83,7 @@ impl TranscriptNotice {
             Self::MergeError => "[Merge Error]",
             Self::MainCheckoutWarning => "[Main Checkout Warning]",
             Self::PasteImageError => "[Paste Image Error]",
+            Self::Personality => "[Personality]",
             Self::QueueError => "[Queue Error]",
             Self::Rebase => "[Sync]",
             Self::RebaseAssist => "[Sync Assist]",

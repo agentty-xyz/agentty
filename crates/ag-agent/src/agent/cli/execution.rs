@@ -347,6 +347,7 @@ mod tests {
             folder,
             main_checkout_root: None,
             model: "test-model",
+            personality_prompt: None,
             prompt,
             reasoning_level: ReasoningLevel::default(),
             request_kind,

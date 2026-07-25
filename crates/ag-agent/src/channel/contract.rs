@@ -63,6 +63,69 @@ pub struct TurnContinuation {
     kind: TurnContinuationKind,
 }
 
+/// Personality prompt state prepared for one provider turn.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct PersonalityPrompt {
+    current: Option<String>,
+    update: PersonalityPromptUpdate,
+}
+
+impl PersonalityPrompt {
+    /// Creates one active personality, marking whether delta-mode providers
+    /// must receive its body as an update.
+    #[must_use]
+    pub fn active(prompt: String, changed: bool) -> Self {
+        let update = if changed {
+            PersonalityPromptUpdate::Set(prompt.clone())
+        } else {
+            PersonalityPromptUpdate::Unchanged
+        };
+
+        Self {
+            current: Some(prompt),
+            update,
+        }
+    }
+
+    /// Creates a cleared personality state.
+    ///
+    /// `changed` is true when a delta-mode provider previously held active
+    /// personality instructions and must be told to discard them.
+    #[must_use]
+    pub fn cleared(changed: bool) -> Self {
+        Self {
+            current: None,
+            update: if changed {
+                PersonalityPromptUpdate::Clear
+            } else {
+                PersonalityPromptUpdate::Unchanged
+            },
+        }
+    }
+
+    /// Returns the current personality body for a full bootstrap.
+    #[must_use]
+    pub fn current(&self) -> Option<&str> {
+        self.current.as_deref()
+    }
+
+    pub(crate) fn update(&self) -> &PersonalityPromptUpdate {
+        &self.update
+    }
+}
+
+/// Delta-mode personality change for a provider-managed conversation.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) enum PersonalityPromptUpdate {
+    /// Clear personality behavior that was active on the previous turn.
+    Clear,
+    /// Apply a new or edited personality body.
+    Set(String),
+    /// Reuse the personality behavior already present in provider context.
+    #[default]
+    Unchanged,
+}
+
 impl TurnContinuation {
     /// Creates continuation state for a fresh turn with no prior context.
     #[must_use]
@@ -192,6 +255,8 @@ pub struct TurnRequest {
     pub main_checkout_root: Option<PathBuf>,
     /// Provider-specific model identifier.
     pub model: String,
+    /// Personality prompt state resolved from the session worktree.
+    pub personality: PersonalityPrompt,
     /// Structured prompt payload for the turn.
     pub prompt: TurnPrompt,
     /// Reasoning effort preference for the turn.
@@ -330,6 +395,26 @@ pub trait AgentChannel: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_personality_prompt_tracks_active_change_and_clear_state() {
+        // Arrange / Act
+        let changed = PersonalityPrompt::active("Review carefully.".to_string(), true);
+        let unchanged = PersonalityPrompt::active("Review carefully.".to_string(), false);
+        let cleared = PersonalityPrompt::cleared(true);
+        let empty = PersonalityPrompt::cleared(false);
+
+        // Assert
+        assert_eq!(changed.current(), Some("Review carefully."));
+        assert_eq!(
+            changed.update(),
+            &PersonalityPromptUpdate::Set("Review carefully.".to_string())
+        );
+        assert_eq!(unchanged.update(), &PersonalityPromptUpdate::Unchanged);
+        assert_eq!(cleared.current(), None);
+        assert_eq!(cleared.update(), &PersonalityPromptUpdate::Clear);
+        assert_eq!(empty.update(), &PersonalityPromptUpdate::Unchanged);
+    }
 
     #[test]
     fn test_turn_continuation_fresh_has_no_context() {

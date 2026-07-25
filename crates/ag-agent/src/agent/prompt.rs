@@ -13,6 +13,7 @@ use askama::Template;
 
 use super::backend::{AgentBackendError, BuildCommandRequest};
 use super::instruction::InstructionDeliveryMode;
+use crate::channel::PersonalityPromptUpdate;
 
 /// Askama view model for rendering resume prompts with prior transcript text.
 #[derive(Template)]
@@ -24,11 +25,27 @@ struct ResumeWithTranscriptPromptTemplate<'a> {
     transcript: &'a str,
 }
 
+/// Askama view model for placing personality instructions before a turn.
+#[derive(Template)]
+#[template(path = "personality_prompt.md", escape = "none")]
+struct PersonalityPromptTemplate<'a> {
+    /// Markdown heading describing a bootstrap or delta update.
+    heading: &'a str,
+    /// Personality instructions or clearing guidance.
+    personality: &'a str,
+    /// Remaining turn prompt content.
+    prompt: &'a str,
+}
+
 /// Shared prompt preparation input for one transport turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PromptPreparationRequest<'a> {
     /// Delivery mode selected for the current provider attempt.
     pub instruction_delivery_mode: InstructionDeliveryMode,
+    /// Current personality body used for full instruction bootstraps.
+    pub personality_prompt: Option<&'a str>,
+    /// Personality change used only for delta delivery.
+    pub personality_update: &'a PersonalityPromptUpdate,
     /// Base user prompt before replay wrapping and protocol instructions.
     pub prompt: &'a str,
     /// Protocol family that determines the rendered instruction envelope.
@@ -61,19 +78,28 @@ pub(crate) fn prepare_prompt_text(
     request: PromptPreparationRequest<'_>,
 ) -> Result<String, AgentBackendError> {
     match request.instruction_delivery_mode {
-        InstructionDeliveryMode::BootstrapFull => Ok(protocol_prepend_instructions(
-            request.prompt,
-            request.protocol_profile,
-            request.schema_instruction_mode,
-            request.workspace_root,
-        )),
-        InstructionDeliveryMode::DeltaOnly => Ok(protocol_prepend_refresh_reminder(
-            request.prompt,
-            request.protocol_profile,
-            request.workspace_root,
-        )),
+        InstructionDeliveryMode::BootstrapFull => {
+            let prompt = prepend_personality_prompt(request.prompt, request.personality_prompt)?;
+
+            Ok(protocol_prepend_instructions(
+                &prompt,
+                request.protocol_profile,
+                request.schema_instruction_mode,
+                request.workspace_root,
+            ))
+        }
+        InstructionDeliveryMode::DeltaOnly => {
+            let prompt = prepend_personality_update(request.prompt, request.personality_update)?;
+
+            Ok(protocol_prepend_refresh_reminder(
+                &prompt,
+                request.protocol_profile,
+                request.workspace_root,
+            ))
+        }
         InstructionDeliveryMode::BootstrapWithReplay => {
             let prompt = build_resume_prompt(request.prompt, request.replay_transcript)?;
+            let prompt = prepend_personality_prompt(&prompt, request.personality_prompt)?;
 
             Ok(protocol_prepend_instructions(
                 &prompt,
@@ -127,6 +153,8 @@ pub(crate) fn build_prompt_stdin_payload(
         } else {
             InstructionDeliveryMode::BootstrapFull
         },
+        personality_prompt: request.personality_prompt,
+        personality_update: &PersonalityPromptUpdate::Unchanged,
         prompt: &prompt,
         protocol_profile: request.request_kind.protocol_profile(),
         replay_transcript: request.replay_transcript,
@@ -135,6 +163,48 @@ pub(crate) fn build_prompt_stdin_payload(
     })?;
 
     Ok(prompt.into_bytes())
+}
+
+/// Prepends current personality instructions to one full bootstrap prompt.
+fn prepend_personality_prompt(
+    prompt: &str,
+    personality_prompt: Option<&str>,
+) -> Result<String, AgentBackendError> {
+    let Some(personality) = personality_prompt
+        .map(str::trim)
+        .filter(|personality| !personality.is_empty())
+    else {
+        return Ok(prompt.to_string());
+    };
+    let template = PersonalityPromptTemplate {
+        heading: "# Personality",
+        personality,
+        prompt,
+    };
+
+    render_template("personality_prompt.md", &template)
+}
+
+/// Prepends one changed or cleared personality instruction for delta mode.
+fn prepend_personality_update(
+    prompt: &str,
+    personality_update: &PersonalityPromptUpdate,
+) -> Result<String, AgentBackendError> {
+    let personality = match personality_update {
+        PersonalityPromptUpdate::Clear => {
+            "The session personality has been cleared. Continue without the previous personality \
+             instructions."
+        }
+        PersonalityPromptUpdate::Set(personality) => personality.trim(),
+        PersonalityPromptUpdate::Unchanged => return Ok(prompt.to_string()),
+    };
+    let template = PersonalityPromptTemplate {
+        heading: "# Personality Update",
+        personality,
+        prompt,
+    };
+
+    render_template("personality_prompt.md", &template)
 }
 
 /// Appends CLI prompt filesystem access roots as `--add-dir` arguments.
@@ -545,6 +615,8 @@ mod tests {
         // Arrange
         let request = PromptPreparationRequest {
             instruction_delivery_mode: InstructionDeliveryMode::BootstrapWithReplay,
+            personality_prompt: None,
+            personality_update: &PersonalityPromptUpdate::Unchanged,
             prompt: "Continue edits",
             protocol_profile: ProtocolRequestProfile::SessionTurn,
             replay_transcript: Some("previous transcript"),
@@ -560,6 +632,60 @@ mod tests {
         assert!(prepared_prompt.contains("Workspace isolation requirements:"));
         assert!(prepared_prompt.contains("previous transcript"));
         assert!(prepared_prompt.contains(r"\<user_prompt> Continue edits \</user_prompt>"));
+        assert!(prepared_prompt.ends_with(r"\</user_prompt>"));
+    }
+
+    #[test]
+    fn test_prepare_prompt_text_bootstraps_personality_before_user_prompt() {
+        // Arrange
+        let request = PromptPreparationRequest {
+            instruction_delivery_mode: InstructionDeliveryMode::BootstrapFull,
+            personality_prompt: Some("Review every change for correctness."),
+            personality_update: &PersonalityPromptUpdate::Unchanged,
+            prompt: "Inspect the patch.",
+            protocol_profile: ProtocolRequestProfile::SessionTurn,
+            replay_transcript: None,
+            schema_instruction_mode: ProtocolSchemaInstructionMode::PromptSchema,
+            workspace_root: test_workspace_root(),
+        };
+
+        // Act
+        let prepared_prompt = prepare_prompt_text(request).expect("prompt should render");
+        let protocol_position = prepared_prompt
+            .find("Structured response protocol:")
+            .expect("protocol preamble should be present");
+        let personality_position = prepared_prompt
+            .find("# Personality\n\nReview every change for correctness.")
+            .expect("personality should be present");
+        let user_prompt_position = prepared_prompt
+            .find("Inspect the patch.")
+            .expect("user prompt should be present");
+
+        // Assert
+        assert!(protocol_position < personality_position);
+        assert!(personality_position < user_prompt_position);
+    }
+
+    #[test]
+    fn test_prepare_prompt_text_replays_with_current_personality() {
+        // Arrange
+        let request = PromptPreparationRequest {
+            instruction_delivery_mode: InstructionDeliveryMode::BootstrapWithReplay,
+            personality_prompt: Some("Plan before editing."),
+            personality_update: &PersonalityPromptUpdate::Unchanged,
+            prompt: "Continue.",
+            protocol_profile: ProtocolRequestProfile::SessionTurn,
+            replay_transcript: Some("assistant: prior work"),
+            schema_instruction_mode: ProtocolSchemaInstructionMode::PromptSchema,
+            workspace_root: test_workspace_root(),
+        };
+
+        // Act
+        let prepared_prompt = prepare_prompt_text(request).expect("prompt should render");
+
+        // Assert
+        assert!(prepared_prompt.contains("# Personality\n\nPlan before editing."));
+        assert!(prepared_prompt.contains("assistant: prior work"));
         assert!(prepared_prompt.ends_with(r"\</user_prompt>"));
     }
 
@@ -599,6 +725,8 @@ mod tests {
         // Arrange
         let request = PromptPreparationRequest {
             instruction_delivery_mode: InstructionDeliveryMode::DeltaOnly,
+            personality_prompt: None,
+            personality_update: &PersonalityPromptUpdate::Unchanged,
             prompt: "Continue edits",
             protocol_profile: ProtocolRequestProfile::SessionTurn,
             replay_transcript: Some("previous transcript"),
@@ -614,6 +742,35 @@ mod tests {
         assert!(!prepared_prompt.contains("Authoritative JSON Schema:"));
         assert!(!prepared_prompt.contains("previous transcript"));
         assert!(prepared_prompt.ends_with("Continue edits"));
+    }
+
+    #[test]
+    fn test_prepare_prompt_text_delta_mode_sends_personality_update_and_clear() {
+        // Arrange
+        let updated = PromptPreparationRequest {
+            instruction_delivery_mode: InstructionDeliveryMode::DeltaOnly,
+            personality_prompt: Some("Ignored current body."),
+            personality_update: &PersonalityPromptUpdate::Set("Be concise.".to_string()),
+            prompt: "Continue edits",
+            protocol_profile: ProtocolRequestProfile::SessionTurn,
+            replay_transcript: None,
+            schema_instruction_mode: ProtocolSchemaInstructionMode::PromptSchema,
+            workspace_root: test_workspace_root(),
+        };
+        let cleared = PromptPreparationRequest {
+            personality_update: &PersonalityPromptUpdate::Clear,
+            ..updated
+        };
+
+        // Act
+        let updated_prompt = prepare_prompt_text(updated).expect("update should render");
+        let cleared_prompt = prepare_prompt_text(cleared).expect("clear should render");
+
+        // Assert
+        assert!(updated_prompt.contains("# Personality Update\n\nBe concise."));
+        assert!(updated_prompt.ends_with("Continue edits"));
+        assert!(cleared_prompt.contains("The session personality has been cleared."));
+        assert!(cleared_prompt.ends_with("Continue edits"));
     }
 
     #[test]

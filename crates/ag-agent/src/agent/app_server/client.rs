@@ -268,6 +268,7 @@ mod tests {
             main_checkout_root: None,
             model: "test-model".to_string(),
             persisted_instruction_conversation_id: None,
+            personality: crate::channel::PersonalityPrompt::default(),
             prompt: TurnPrompt::from_text("Hello".to_string()),
             provider_conversation_id: None,
             reasoning_level: ReasoningLevel::High,

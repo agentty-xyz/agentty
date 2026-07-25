@@ -20,6 +20,7 @@ use crate::domain::session::SessionId;
 use crate::infra::clipboard_image::{ClipboardImageClient, RealClipboardImageClient};
 use crate::infra::clock::Clock;
 use crate::infra::fs::FsClient;
+use crate::infra::personality::{PersonalityCatalogClient, RealPersonalityCatalogClient};
 
 /// Shared per-app session redraw version counters keyed by session id.
 pub(crate) type SessionUpdateVersionMap = Arc<Mutex<HashMap<SessionId, u64>>>;
@@ -45,6 +46,8 @@ pub(crate) struct AppServiceDeps {
     /// Optional isolated-prompt client override used by tests and injected
     /// environments.
     pub(crate) one_shot_client_override: Option<Arc<dyn OneShotClient>>,
+    /// Optional workspace personality catalog override used by tests.
+    pub(crate) personality_catalog_client_override: Option<Arc<dyn PersonalityCatalogClient>>,
     /// Shared repository bundle used by app workflows.
     pub(crate) repositories: AppRepositories,
     /// Shared forge review-request client.
@@ -64,6 +67,7 @@ pub struct AppServices {
     fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
     one_shot_client: Arc<dyn OneShotClient>,
+    personality_catalog_client: Arc<dyn PersonalityCatalogClient>,
     repositories: AppRepositories,
     review_request_client: Arc<dyn ReviewRequestClient>,
     session_update_versions: SessionUpdateVersionMap,
@@ -86,6 +90,7 @@ impl AppServices {
             fs_client,
             git_client,
             one_shot_client_override,
+            personality_catalog_client_override,
             repositories,
             review_request_client,
         } = deps;
@@ -100,6 +105,8 @@ impl AppServices {
                 app_server_client_override.as_ref().map(Arc::clone),
             ))
         });
+        let personality_catalog_client = personality_catalog_client_override
+            .unwrap_or_else(|| Arc::new(RealPersonalityCatalogClient));
 
         Self {
             available_agent_clis: Arc::new(Mutex::new(available_agent_clis)),
@@ -113,6 +120,7 @@ impl AppServices {
             fs_client,
             git_client,
             one_shot_client,
+            personality_catalog_client,
             repositories,
             review_request_client,
             session_update_versions: Arc::default(),
@@ -163,6 +171,11 @@ impl AppServices {
     /// Returns the shared client for isolated structured agent prompts.
     pub(crate) fn one_shot_client(&self) -> Arc<dyn OneShotClient> {
         Arc::clone(&self.one_shot_client)
+    }
+
+    /// Returns the workspace personality discovery client.
+    pub(crate) fn personality_catalog_client(&self) -> Arc<dyn PersonalityCatalogClient> {
+        Arc::clone(&self.personality_catalog_client)
     }
 
     /// Enqueues an app event onto the internal event bus with debug
@@ -304,6 +317,7 @@ fn app_event_label(event: &AppEvent) -> &'static str {
         AppEvent::AgentCliVersionsUpdated { .. } => "AgentCliVersionsUpdated",
         AppEvent::UpdateStatusChanged { .. } => "UpdateStatusChanged",
         AppEvent::SessionModelUpdated { .. } => "SessionModelUpdated",
+        AppEvent::SessionPersonalityUpdated { .. } => "SessionPersonalityUpdated",
         AppEvent::SessionReasoningLevelUpdated { .. } => "SessionReasoningLevelUpdated",
         AppEvent::RefreshSessions => "RefreshSessions",
         AppEvent::RefreshProjects => "RefreshProjects",

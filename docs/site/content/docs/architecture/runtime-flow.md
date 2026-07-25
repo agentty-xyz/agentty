@@ -185,8 +185,14 @@ derived data instead of recomputing the render twice per frame.
    drains them after the active operation. The receiver is checked between every pair of
    retractable queued-chat turns, so a command received during one chat turn waits for
    that turn and then runs before the remaining chat queue.
-1. `workflow/turn.rs` builds a `TurnRequest` and calls `AgentChannel::run_turn()`, which
-   streams `TurnEvent` values (loader updates) and returns a `TurnResult`.
+1. Immediately before a chat turn, the worker resolves the persisted personality ID
+   through `PersonalityCatalogClient`. The catalog scans only the session worktree's
+   `.agents/agents` directory. The worker compares the resolved prompt fingerprint with
+   the last successfully applied personality and prepares an active, updated, cleared,
+   or unchanged personality payload.
+1. `workflow/turn.rs` builds a `TurnRequest`, including that personality payload, and
+   calls `AgentChannel::run_turn()`, which streams `TurnEvent` values (loader updates)
+   and returns a `TurnResult`.
 1. `workflow/post_turn.rs` appends the final assistant transcript output, then
    `TurnPersistence::apply(...)` transactionally stores the summary payload, question
    payload, token-usage deltas, and provider conversation markers.
@@ -317,7 +323,7 @@ with prompt payloads owned by `ag-protocol` and re-exported through
 
 | Type               | Purpose                                         |
 | ------------------ | ----------------------------------------------- |
-| `TurnRequest`      | Turn inputs and one continuation value.         |
+| `TurnRequest`      | Turn inputs, continuation, and personality.     |
 | `TurnContinuation` | Fresh, replay, or provider-resume context.      |
 | `TurnEvent`        | Thought, completion, failure, or PID event.     |
 | `TurnResult`       | Assistant output, usage, and provider id.       |
@@ -329,6 +335,12 @@ with an instruction-bootstrap marker. The next worker turn constructs one
 `TurnContinuation`, so channels receive only valid combinations for a fresh request,
 transcript replay, or native provider resume and can choose between resending the full
 prompt contract and a compact reminder.
+
+Bootstrap and replay requests include the active personality after the protocol
+instructions. Delta-only requests include it only when the selection or prompt body
+changed, and emit a clear marker when the personality was removed. Successful turn
+persistence records the applied ID and prompt fingerprint so retries do not advance the
+delivery state prematurely.
 
 Codex keeps its app-server runtime resident between turns. Gemini ACP shuts down after
 each completed turn and replays the persisted transcript when a follow-up starts, so

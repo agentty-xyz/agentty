@@ -1805,6 +1805,7 @@ mod tests {
                 fs_client: Arc::new(fs::MockFsClient::new()),
                 git_client: Arc::new(MockGitClient::new()),
                 one_shot_client_override: None,
+                personality_catalog_client_override: None,
                 repositories: database.clone(),
                 review_request_client: Arc::new(ag_forge::MockReviewRequestClient::new()),
             },

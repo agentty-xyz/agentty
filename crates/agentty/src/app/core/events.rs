@@ -109,6 +109,11 @@ pub(crate) enum AppEvent {
         session_id: SessionId,
         session_agent: crate::domain::agent::AgentSelection,
     },
+    /// Indicates a session personality selection has been persisted.
+    SessionPersonalityUpdated {
+        personality_id: Option<String>,
+        session_id: SessionId,
+    },
     /// Indicates a session reasoning-level selection has been persisted.
     SessionReasoningLevelUpdated {
         reasoning_level: crate::domain::agent::ReasoningLevel,
@@ -253,6 +258,7 @@ pub(super) struct AppEventBatch {
     pub(super) session_ids: HashSet<SessionId>,
     pub(super) session_update_versions: HashMap<SessionId, u64>,
     pub(super) session_model_updates: HashMap<SessionId, crate::domain::agent::AgentSelection>,
+    pub(super) session_personality_updates: HashMap<SessionId, Option<String>>,
     pub(super) session_reasoning_level_updates:
         HashMap<SessionId, crate::domain::agent::ReasoningLevel>,
     pub(super) session_progress_updates: HashMap<SessionId, Option<String>>,
@@ -390,6 +396,10 @@ impl AppEventBatch {
                 session_id,
                 session_agent,
             } => self.collect_session_model_updated(session_id, session_agent),
+            AppEvent::SessionPersonalityUpdated {
+                personality_id,
+                session_id,
+            } => self.collect_session_personality_updated(session_id, personality_id),
             AppEvent::SessionReasoningLevelUpdated {
                 reasoning_level,
                 session_id,
@@ -571,6 +581,16 @@ impl AppEventBatch {
         session_agent: crate::domain::agent::AgentSelection,
     ) {
         self.session_model_updates.insert(session_id, session_agent);
+    }
+
+    /// Stores a session personality update for reducer application.
+    fn collect_session_personality_updated(
+        &mut self,
+        session_id: SessionId,
+        personality_id: Option<String>,
+    ) {
+        self.session_personality_updates
+            .insert(session_id, personality_id);
     }
 
     /// Stores a session reasoning-level update for reducer application.
@@ -1431,6 +1451,7 @@ impl App {
             || !event_batch.requested_review_comment_snapshots.is_empty()
             || !event_batch.review_updates.is_empty()
             || !event_batch.session_model_updates.is_empty()
+            || !event_batch.session_personality_updates.is_empty()
             || !event_batch.session_progress_updates.is_empty()
             || !event_batch.session_review_comment_snapshots.is_empty()
             || !event_batch.session_reasoning_level_updates.is_empty()
@@ -1489,6 +1510,13 @@ impl App {
         for (session_id, session_agent) in std::mem::take(&mut event_batch.session_model_updates) {
             self.sessions
                 .apply_session_model_updated(&session_id, session_agent);
+        }
+
+        for (session_id, personality_id) in
+            std::mem::take(&mut event_batch.session_personality_updates)
+        {
+            self.sessions
+                .apply_session_personality_updated(&session_id, personality_id);
         }
 
         for (session_id, reasoning_level) in

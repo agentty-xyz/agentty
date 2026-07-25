@@ -490,6 +490,26 @@ fn seed_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+/// Seeds one review-ready session with a worktree-local personality.
+fn seed_session_personality(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session(env)?;
+
+    let session_folder =
+        test_support::session_folder(&env.agentty_root.join("wt"), "review-shortcut-0001");
+    let personality_directory = session_folder
+        .join(".agents")
+        .join("agents")
+        .join("reviewer");
+    std::fs::create_dir_all(&personality_directory)?;
+    std::fs::write(
+        personality_directory.join("agent.md"),
+        "---\nid: reviewer\nname: Code Reviewer\ndescription: Reviews code carefully\nrole: \
+         delegation-target\nenabled: true\n---\nReview every change for correctness.",
+    )?;
+
+    Ok(())
+}
+
 /// Seeds a review-ready transcript and delays its Git rebase long enough to
 /// inspect the in-progress session output ordering.
 fn seed_rebase_transcript_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
@@ -5136,6 +5156,66 @@ fn model_slash_command_contains_match_is_visible() -> E2eResult {
                     "Choose an agent and model for this session.",
                     &full,
                 );
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify `/personality` lists worktree-local agent definitions and persists
+/// the selected profile with visible transcript feedback.
+#[test]
+fn test_session_personality() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_personality")
+        .with_git()
+        .setup(seed_session_personality)
+        .zola(
+            "Session personality",
+            "Choose a worktree-local agent personality for a session.",
+            41,
+        )
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .press_key("Enter")
+                    .wait_for_text("Type your message", 5000)
+                    .press_key("/")
+                    .write_text("personality")
+                    .wait_for_text("Slash Command", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("None (default)", 3000)
+                    .wait_for_text("Code Reviewer", 3000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "personality_picker",
+                        "Worktree personalities appear in the session picker",
+                    )
+                    .press_key("Down")
+                    .press_key("Enter")
+                    .wait_for_text("Personality set to", 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "personality_selected",
+                        "Selected personality is confirmed in the transcript",
+                    )
+            },
+            |frame, report| {
+                let picker_frame = common::frame_from_capture(&report.captures[0]);
+                let picker_full = Region::full(picker_frame.cols(), picker_frame.rows());
+                assertion::assert_text_in_region(&picker_frame, "None (default)", &picker_full);
+                assertion::assert_text_in_region(&picker_frame, "Code Reviewer", &picker_full);
+                assertion::assert_text_in_region(
+                    &picker_frame,
+                    "Reviews code carefully",
+                    &picker_full,
+                );
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Personality set to Code Reviewer.", &full);
             },
         )?;
 

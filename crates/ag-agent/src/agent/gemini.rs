@@ -67,6 +67,7 @@ mod tests {
                 main_checkout_root: None,
                 replay_transcript: None,
                 model: "gemini-3.6-flash",
+                personality_prompt: None,
                 prompt: "Generate title",
                 reasoning_level: ReasoningLevel::default(),
                 request_kind: &utility_request_kind(),

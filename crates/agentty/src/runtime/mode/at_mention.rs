@@ -354,6 +354,7 @@ mod tests {
                     AgentModel::Gpt55,
                 ),
                 parent_session_id: None,
+                personality_id: None,
                 project_name: "project".to_string(),
                 prompt: String::new(),
                 queued_messages: Vec::new(),

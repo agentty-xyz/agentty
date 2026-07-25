@@ -1430,6 +1430,32 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Updates and persists the personality selected for a single session.
+    ///
+    /// # Errors
+    /// Returns an error if the session is missing or persistence fails.
+    pub async fn set_session_personality(
+        &mut self,
+        services: &AppServices,
+        session_id: &str,
+        personality_id: Option<String>,
+    ) -> Result<(), SessionError> {
+        self.session_index_or_err(session_id)?;
+
+        services
+            .db()
+            .sessions()
+            .update_session_personality_id(session_id, personality_id.clone())
+            .await?;
+
+        services.emit_app_event(AppEvent::SessionPersonalityUpdated {
+            personality_id,
+            session_id: SessionId::from(session_id),
+        });
+
+        Ok(())
+    }
+
     /// Returns whether session model switches should also persist the
     /// `DefaultSmartAgent` and `DefaultSmartModel` setting pair.
     async fn should_persist_last_used_model_as_default(
@@ -3243,6 +3269,7 @@ mod tests {
                 fs_client,
                 git_client,
                 one_shot_client_override: None,
+                personality_catalog_client_override: None,
                 repositories: database.clone(),
                 review_request_client,
             },
@@ -3284,6 +3311,7 @@ mod tests {
                 fs_client: Arc::new(create_passthrough_mock_fs_client()),
                 git_client,
                 one_shot_client_override: None,
+                personality_catalog_client_override: None,
                 repositories: database.clone(),
                 review_request_client,
             },

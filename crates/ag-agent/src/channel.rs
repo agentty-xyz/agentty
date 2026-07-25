@@ -11,9 +11,10 @@ mod factory;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub use contract::MockAgentChannel;
+pub(crate) use contract::PersonalityPromptUpdate;
 pub use contract::{
-    AgentChannel, AgentError, AgentFuture, AgentRequestKind, LiveTranscript, SessionRef,
-    StartSessionRequest, TurnContinuation, TurnEvent, TurnRequest, TurnResult,
+    AgentChannel, AgentError, AgentFuture, AgentRequestKind, LiveTranscript, PersonalityPrompt,
+    SessionRef, StartSessionRequest, TurnContinuation, TurnEvent, TurnRequest, TurnResult,
 };
 pub use factory::create_agent_channel;
 #[cfg(any(test, feature = "test-utils"))]
