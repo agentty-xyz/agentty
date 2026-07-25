@@ -701,7 +701,7 @@ pub(super) fn build_turn_start_payload(
             "input": build_turn_input_items(&prompt),
             "cwd": folder.to_string_lossy(),
             "approvalPolicy": policy::approval_policy(),
-            "sandboxPolicy": policy::turn_sandbox_policy(),
+            "sandboxPolicy": policy::turn_sandbox_policy(folder),
             "model": model,
             "effort": reasoning_level.codex(),
             "summary": Value::Null,
@@ -1036,6 +1036,37 @@ mod tests {
             Some("existing-thread")
         );
         assert_eq!(params.get("model").and_then(Value::as_str), Some(model));
+    }
+
+    #[test]
+    fn build_turn_start_payload_allows_worktree_agents_edits() {
+        // Arrange
+        let folder = PathBuf::from("/tmp/agentty-codex-turn-start");
+
+        // Act
+        let payload = build_turn_start_payload(
+            &folder,
+            AgentModel::Gpt55.as_str(),
+            ReasoningLevel::Medium,
+            "thread-1",
+            "Update the repository instructions",
+            "turn-start-1",
+        );
+
+        // Assert
+        let sandbox_policy = payload
+            .pointer("/params/sandboxPolicy")
+            .expect("turn/start sandbox policy should be present");
+        assert_eq!(
+            sandbox_policy,
+            &serde_json::json!({
+                "type": "workspaceWrite",
+                "networkAccess": true,
+                "writableRoots": [
+                    folder.join(".agents").to_string_lossy(),
+                ],
+            })
+        );
     }
 
     #[test]
