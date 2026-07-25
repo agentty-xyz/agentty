@@ -5186,6 +5186,11 @@ fn test_session_personality() -> E2eResult {
                     .press_key("/")
                     .write_text("personality")
                     .wait_for_text("Slash Command", 3000)
+                    .wait_for_text("List: .agents/agents/.", 3000)
+                    .capture_labeled(
+                        "personality_slash_command",
+                        "Personality source directory appears in the slash-command menu",
+                    )
                     .press_key("Enter")
                     .wait_for_text("None (default)", 3000)
                     .wait_for_text("Code Reviewer", 3000)
@@ -5204,7 +5209,15 @@ fn test_session_personality() -> E2eResult {
                     )
             },
             |frame, report| {
-                let picker_frame = common::frame_from_capture(&report.captures[0]);
+                let command_frame = common::frame_from_capture(&report.captures[0]);
+                let command_full = Region::full(command_frame.cols(), command_frame.rows());
+                assertion::assert_text_in_region(
+                    &command_frame,
+                    "List: .agents/agents/.",
+                    &command_full,
+                );
+
+                let picker_frame = common::frame_from_capture(&report.captures[1]);
                 let picker_full = Region::full(picker_frame.cols(), picker_frame.rows());
                 assertion::assert_text_in_region(&picker_frame, "None (default)", &picker_full);
                 assertion::assert_text_in_region(&picker_frame, "Code Reviewer", &picker_full);
