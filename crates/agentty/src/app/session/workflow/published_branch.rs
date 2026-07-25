@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use ag_agent::OneShotClient;
 use ag_forge as forge;
 use ag_git::GitClient;
-use ag_protocol::ReviewCommentOutcome;
+use ag_protocol::{ReviewCommentOutcome, ReviewCommentResolution};
 use tokio::sync::{OwnedMutexGuard, mpsc};
 use uuid::Uuid;
 
@@ -42,7 +42,7 @@ pub(super) struct PublishedBranchAutoPushStartInput {
     pub(super) one_shot_client: Arc<dyn OneShotClient>,
     /// Published upstream reference that provides the remote branch target.
     pub(super) published_upstream_ref: String,
-    /// Fixed review-thread outcomes eligible for post-push forge updates.
+    /// Valid review-thread outcomes eligible for post-push forge updates.
     pub(super) review_comment_outcomes: Vec<ReviewCommentOutcome>,
     /// Forge boundary used for optional linked PR/MR metadata refresh.
     pub(super) review_request_client: Arc<dyn forge::ReviewRequestClient>,
@@ -163,7 +163,7 @@ pub(super) struct ReviewRequestMetadataEvaluationInput {
 
 /// Owned dependencies for forge thread replies and resolution after push.
 pub(super) struct ReviewCommentResolutionInput {
-    /// Fixed, allowlisted outcomes reported by the completed agent turn.
+    /// Valid, allowlisted outcomes reported by the completed agent turn.
     pub(super) outcomes: Vec<ReviewCommentOutcome>,
     /// Forge boundary used to post replies and resolve review threads.
     pub(super) review_request_client: Arc<dyn forge::ReviewRequestClient>,
@@ -225,18 +225,30 @@ async fn run_published_branch_auto_push_task(input: PublishedBranchAutoPushInput
     }
 }
 
-/// Posts agent-authored replies and resolves their allowlisted review threads
+/// Posts agent-authored replies and resolves fixed allowlisted review threads
 /// after the updated branch is visible on the forge.
 async fn resolve_review_comments_after_push(
     input: &PublishedBranchAutoPushInput,
     resolution_input: &ReviewCommentResolutionInput,
 ) {
+    let expected_reply_count = resolution_input.outcomes.len();
+    let expected_resolution_count = resolution_input
+        .outcomes
+        .iter()
+        .filter(|outcome| outcome.resolution == ReviewCommentResolution::Fixed)
+        .count();
     let linked_review_request = match load_open_review_request(input).await {
         Ok(Some(linked_review_request)) => linked_review_request,
         Ok(None) => return,
         Err(error) => {
-            append_review_comment_resolution_notice(input, 0, resolution_input.outcomes.len())
-                .await;
+            append_review_comment_resolution_notice(
+                input,
+                0,
+                expected_reply_count,
+                0,
+                expected_resolution_count,
+            )
+            .await;
             tracing::warn!(
                 session_id = %input.session_id,
                 %error,
@@ -249,8 +261,14 @@ async fn resolve_review_comments_after_push(
     let repo_url = match input.git_client.repo_url(input.folder.clone()).await {
         Ok(repo_url) => repo_url,
         Err(error) => {
-            append_review_comment_resolution_notice(input, 0, resolution_input.outcomes.len())
-                .await;
+            append_review_comment_resolution_notice(
+                input,
+                0,
+                expected_reply_count,
+                0,
+                expected_resolution_count,
+            )
+            .await;
             tracing::warn!(
                 session_id = %input.session_id,
                 %error,
@@ -267,8 +285,14 @@ async fn resolve_review_comments_after_push(
     {
         Ok(remote) => remote,
         Err(error) => {
-            append_review_comment_resolution_notice(input, 0, resolution_input.outcomes.len())
-                .await;
+            append_review_comment_resolution_notice(
+                input,
+                0,
+                expected_reply_count,
+                0,
+                expected_resolution_count,
+            )
+            .await;
             let error_detail = error.detail_message();
             tracing::warn!(
                 session_id = %input.session_id,
@@ -280,13 +304,39 @@ async fn resolve_review_comments_after_push(
         }
     };
 
+    let (replied_count, resolved_count) = post_review_comment_outcomes(
+        input,
+        resolution_input,
+        &remote,
+        &linked_review_request.summary.display_id,
+    )
+    .await;
+    append_review_comment_resolution_notice(
+        input,
+        replied_count,
+        expected_reply_count,
+        resolved_count,
+        expected_resolution_count,
+    )
+    .await;
+}
+
+/// Posts each accepted reply and resolves only fixed outcomes.
+async fn post_review_comment_outcomes(
+    input: &PublishedBranchAutoPushInput,
+    resolution_input: &ReviewCommentResolutionInput,
+    remote: &forge::ForgeRemote,
+    display_id: &str,
+) -> (usize, usize) {
+    let mut replied_count = 0;
     let mut resolved_count = 0;
+
     for outcome in &resolution_input.outcomes {
         let reply_result = resolution_input
             .review_request_client
             .reply_to_thread(
                 remote.clone(),
-                linked_review_request.summary.display_id.clone(),
+                display_id.to_string(),
                 outcome.thread_id.clone(),
                 outcome.reply.clone(),
             )
@@ -297,9 +347,13 @@ async fn resolve_review_comments_after_push(
                 session_id = %input.session_id,
                 thread_id = %outcome.thread_id,
                 error = %error_detail,
-                "failed to reply to resolved review thread"
+                "failed to reply to review thread"
             );
 
+            continue;
+        }
+        replied_count += 1;
+        if outcome.resolution == ReviewCommentResolution::NoChangeNeeded {
             continue;
         }
 
@@ -307,7 +361,7 @@ async fn resolve_review_comments_after_push(
             .review_request_client
             .resolve_thread(
                 remote.clone(),
-                linked_review_request.summary.display_id.clone(),
+                display_id.to_string(),
                 outcome.thread_id.clone(),
             )
             .await;
@@ -325,26 +379,30 @@ async fn resolve_review_comments_after_push(
         }
     }
 
-    append_review_comment_resolution_notice(input, resolved_count, resolution_input.outcomes.len())
-        .await;
+    (replied_count, resolved_count)
 }
 
 /// Appends a concise durable result for post-push review-thread updates.
 async fn append_review_comment_resolution_notice(
     input: &PublishedBranchAutoPushInput,
+    replied_count: usize,
+    expected_reply_count: usize,
     resolved_count: usize,
-    total_count: usize,
+    expected_resolution_count: usize,
 ) {
-    let message = if resolved_count == total_count {
-        TranscriptNotice::ReviewComments.format(format!(
-            "Replied to and resolved {resolved_count} review thread(s)."
-        ))
-    } else {
-        TranscriptNotice::ReviewCommentsWarning.format(format!(
-            "Resolved {resolved_count} of {total_count} review thread(s). Reopen review comments \
-             to retry the remaining threads."
-        ))
-    };
+    let message =
+        if replied_count == expected_reply_count && resolved_count == expected_resolution_count {
+            TranscriptNotice::ReviewComments.format(format!(
+                "Replied to {replied_count} review thread(s) and resolved {resolved_count} fixed \
+                 thread(s)."
+            ))
+        } else {
+            TranscriptNotice::ReviewCommentsWarning.format(format!(
+                "Replied to {replied_count} of {expected_reply_count} review thread(s) and \
+                 resolved {resolved_count} of {expected_resolution_count} fixed thread(s). Reopen \
+                 review comments to retry the remaining threads."
+            ))
+        };
     SessionTaskService::append_workflow_notice(
         &input.transcript,
         &input.db,
@@ -719,8 +777,55 @@ mod tests {
         // Assert
         assert_eq!(
             last_transcript_message(&transcript),
-            "[Review Comments Warning] Resolved 0 of 2 review thread(s). Reopen review comments \
-             to retry the remaining threads."
+            "[Review Comments Warning] Replied to 1 of 2 review thread(s) and resolved 0 of 2 \
+             fixed thread(s). Reopen review comments to retry the remaining threads."
+        );
+    }
+
+    #[tokio::test]
+    async fn review_comment_resolution_replies_to_all_outcomes_and_resolves_only_fixed() {
+        // Arrange
+        let db = linked_review_request_db().await;
+        let mut git_client = MockGitClient::new();
+        git_client.expect_repo_url().once().returning(|_| {
+            Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
+        });
+        let mut review_request_client = MockReviewRequestClient::new();
+        review_request_client
+            .expect_detect_remote()
+            .once()
+            .returning(|_| Ok(github_remote()));
+        review_request_client
+            .expect_reply_to_thread()
+            .withf(|_, _, thread_id, body| {
+                (thread_id == "no-change" && body == "The current implementation is already safe.")
+                    || (thread_id == "fixed" && body == "Addressed fixed.")
+            })
+            .times(2)
+            .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
+        review_request_client
+            .expect_resolve_thread()
+            .withf(|_, _, thread_id| thread_id == "fixed")
+            .once()
+            .returning(|_, _, _| Box::pin(async { Ok(()) }));
+        let (input, transcript) = resolution_test_input(
+            db,
+            git_client,
+            review_request_client,
+            vec![no_change_outcome("no-change"), fixed_outcome("fixed")],
+        );
+        let resolution_input = input
+            .review_comment_resolution
+            .as_ref()
+            .expect("resolution input should exist");
+
+        // Act
+        resolve_review_comments_after_push(&input, resolution_input).await;
+
+        // Assert
+        assert_eq!(
+            last_transcript_message(&transcript),
+            "[Review Comments] Replied to 2 review thread(s) and resolved 1 fixed thread(s)."
         );
     }
 
@@ -754,8 +859,8 @@ mod tests {
         // Assert
         assert_eq!(
             last_transcript_message(&transcript),
-            "[Review Comments Warning] Resolved 0 of 1 review thread(s). Reopen review comments \
-             to retry the remaining threads."
+            "[Review Comments Warning] Replied to 0 of 1 review thread(s) and resolved 0 of 1 \
+             fixed thread(s). Reopen review comments to retry the remaining threads."
         );
     }
 
@@ -790,8 +895,8 @@ mod tests {
         // Assert
         assert_eq!(
             last_transcript_message(&transcript),
-            "[Review Comments Warning] Resolved 0 of 1 review thread(s). Reopen review comments \
-             to retry the remaining threads."
+            "[Review Comments Warning] Replied to 0 of 1 review thread(s) and resolved 0 of 1 \
+             fixed thread(s). Reopen review comments to retry the remaining threads."
         );
     }
 
@@ -845,8 +950,8 @@ mod tests {
         // Assert
         assert_eq!(
             last_transcript_message(&transcript),
-            "[Review Comments Warning] Resolved 0 of 1 review thread(s). Reopen review comments \
-             to retry the remaining threads."
+            "[Review Comments Warning] Replied to 0 of 1 review thread(s) and resolved 0 of 1 \
+             fixed thread(s). Reopen review comments to retry the remaining threads."
         );
     }
 
@@ -906,6 +1011,15 @@ mod tests {
         ReviewCommentOutcome {
             reply: format!("Addressed {thread_id}."),
             resolution: ag_protocol::ReviewCommentResolution::Fixed,
+            thread_id: thread_id.to_string(),
+        }
+    }
+
+    /// Builds one no-change outcome that receives a reply but remains open.
+    fn no_change_outcome(thread_id: &str) -> ReviewCommentOutcome {
+        ReviewCommentOutcome {
+            reply: "The current implementation is already safe.".to_string(),
+            resolution: ag_protocol::ReviewCommentResolution::NoChangeNeeded,
             thread_id: thread_id.to_string(),
         }
     }

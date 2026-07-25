@@ -1615,7 +1615,7 @@ case "$*" in
     exit 0
     ;;
   *"api --hostname github.com graphql"*)
-    printf '%s\n' '{"data":{"repository":{"pullRequest":{"comments":{"nodes":[{"author":{"login":"carol"},"body":"Thanks for documenting the behavior."}]},"reviewThreads":{"nodes":[{"id":"thread-inline","diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":2,"path":"src/main.rs","startLine":1,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"alice"},"body":"Please explain why this review output is needed."}]}},{"id":"thread-file","diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":null,"path":"src/main.rs","startLine":null,"subjectType":"FILE","comments":{"nodes":[{"author":{"login":"bob"},"body":"Please review the whole file."}]}},{"id":"thread-resolved","diffSide":"RIGHT","isOutdated":false,"isResolved":true,"line":3,"path":"src/main.rs","startLine":null,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"dana"},"body":"This thread is complete."}]}}]}}}}}'
+    printf '%s\n' '{"data":{"repository":{"pullRequest":{"comments":{"nodes":[{"author":{"login":"carol"},"body":"Thanks for documenting the behavior."}]},"reviewThreads":{"nodes":[{"id":"thread-inline","diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":2,"path":"src/main.rs","startLine":1,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"alice"},"body":"Please explain why this review output is needed."}]}},{"id":"thread-file","diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":null,"path":"src/main.rs","startLine":null,"subjectType":"FILE","comments":{"nodes":[{"author":{"login":"bob"},"body":"Please review the whole file."}]}},{"id":"thread-outdated","diffSide":"RIGHT","isOutdated":true,"isResolved":false,"line":2,"path":"old.rs","startLine":null,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"erin"},"body":"This comment refers to an earlier diff."}]}},{"id":"thread-resolved","diffSide":"RIGHT","isOutdated":false,"isResolved":true,"line":3,"path":"src/main.rs","startLine":null,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"dana"},"body":"This thread is complete."}]}},{"id":"thread-resolved-outdated","diffSide":"LEFT","isOutdated":true,"isResolved":true,"line":4,"path":"ro.rs","startLine":null,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"frank"},"body":"This resolved thread refers to an earlier diff."}]}}]}}}}}'
     ;;
   *"pr view"*)
     printf '%s\n' '{"number":42,"title":"Review-ready session shortcuts","state":"OPEN","url":"https://github.com/agentty-xyz/agentty/pull/42","baseRefName":"main","headRefName":"wt/review-s","isDraft":false,"mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","mergedAt":null}'
@@ -4553,51 +4553,100 @@ fn test_session_review_comments() -> E2eResult {
                         "file_review_comment",
                         "File-level review comment without a synthetic code anchor",
                     )
+                    .press_key("j")
+                    .wait_for_text("Original code context unavailable.", 5000)
+                    .wait_for_text("a: address", 5000)
+                    .press_key("a")
+                    .wait_for_text("[A]", 5000)
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "outdated_review_comment",
+                        "Outdated comment without misleading current diff context",
+                    )
             },
             |frame, report| {
                 let inline_frame = common::frame_from_capture(&report.captures[0]);
-                let inline_full = Region::full(inline_frame.cols(), inline_frame.rows());
-                let page_text = inline_frame.text_in_region(&inline_full);
-                let code_context_index = page_text
-                    .find("Code context")
-                    .expect("code context section should be visible");
-                let conversation_index = page_text
-                    .find("Conversation")
-                    .expect("conversation section should be visible");
+                assert_inline_review_comment(&inline_frame);
 
-                assertion::assert_text_in_region(&inline_frame, "Comments (4)", &inline_full);
-                assertion::assert_text_in_region(&inline_frame, "Unresolved", &inline_full);
-                assertion::assert_text_in_region(&inline_frame, "Resolved", &inline_full);
-                assertion::assert_text_in_region(&inline_frame, "Standalone", &inline_full);
-                assertion::assert_text_in_region(&inline_frame, "src/main.rs:1-2", &inline_full);
-                assertion::assert_text_in_region(&inline_frame, "Conversation", &inline_full);
+                let file_frame = common::frame_from_capture(&report.captures[1]);
+                let file_full = Region::full(file_frame.cols(), file_frame.rows());
+                assertion::assert_text_in_region(&file_frame, "file  ·  1 comments", &file_full);
                 assertion::assert_text_in_region(
-                    &inline_frame,
-                    "Please explain why this review output is needed.",
-                    &inline_full,
-                );
-                assertion::assert_text_in_region(&inline_frame, "Code context", &inline_full);
-                assertion::assert_text_in_region(
-                    &inline_frame,
-                    "println!(\"review\")",
-                    &inline_full,
-                );
-                assert!(code_context_index < conversation_index);
-
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "file  ·  1 comments", &full);
-                assertion::assert_text_in_region(
-                    frame,
+                    &file_frame,
                     "This file-level comment is not attached to a code line.",
-                    &full,
+                    &file_full,
                 );
-                assertion::assert_text_in_region(frame, "Please review the whole file.", &full);
-                assertion::assert_not_visible(frame, "println!(\"review\")");
-                assertion::assert_text_in_region(frame, "j/k: select comment", &full);
+                assertion::assert_text_in_region(
+                    &file_frame,
+                    "Please review the whole file.",
+                    &file_full,
+                );
+                assertion::assert_not_visible(&file_frame, "println!(\"review\")");
+
+                assert_outdated_review_comment(frame);
             },
         )?;
 
     Ok(())
+}
+
+/// Verifies grouped row placement and inline code-context rendering.
+fn assert_inline_review_comment(frame: &TerminalFrame) {
+    let full = Region::full(frame.cols(), frame.rows());
+    let page_text = frame.text_in_region(&full);
+
+    assertion::assert_text_in_region(frame, "Comments (6)", &full);
+    assertion::assert_text_in_region(frame, "Unresolved", &full);
+    assertion::assert_text_in_region(frame, "Outdated", &full);
+    assertion::assert_text_in_region(frame, "Resolved", &full);
+    assertion::assert_text_in_region(frame, "Standalone", &full);
+    assertion::assert_text_in_region(frame, "src/main.rs:1-2", &full);
+    assertion::assert_text_in_region(frame, "Conversation", &full);
+    assertion::assert_text_in_region(
+        frame,
+        "Please explain why this review output is needed.",
+        &full,
+    );
+    assertion::assert_text_in_region(frame, "Code context", &full);
+    assertion::assert_text_in_region(frame, "println!(\"review\")", &full);
+    assert!(
+        matches!(
+            (
+                page_text.find("Code context"),
+                page_text.find("Conversation"),
+                page_text.find("Outdated"),
+                page_text.find("old.rs:2"),
+                page_text.find("Resolved"),
+                page_text.find("ro.rs:4"),
+            ),
+            (
+                Some(code_context_index),
+                Some(conversation_index),
+                Some(outdated_group_index),
+                Some(outdated_thread_index),
+                Some(resolved_group_index),
+                Some(resolved_outdated_thread_index),
+            ) if code_context_index < conversation_index
+                && outdated_group_index < outdated_thread_index
+                && outdated_thread_index < resolved_group_index
+                && resolved_group_index < resolved_outdated_thread_index
+        ),
+        "unexpected review comment layout:\n{page_text}"
+    );
+}
+
+/// Verifies that an outdated thread stays actionable without stale context.
+fn assert_outdated_review_comment(frame: &TerminalFrame) {
+    let full = Region::full(frame.cols(), frame.rows());
+
+    assertion::assert_text_in_region(frame, "unresolved  ·  outdated", &full);
+    assertion::assert_text_in_region(frame, "Original code context unavailable.", &full);
+    assertion::assert_text_in_region(frame, "This comment refers to an earlier diff.", &full);
+    assertion::assert_text_in_region(frame, "[A]", &full);
+    assertion::assert_not_visible(frame, "println!(\"review\")");
+    assertion::assert_text_in_region(frame, "a: address", &full);
+    assertion::assert_text_in_region(frame, "d: den", &full);
+    assertion::assert_text_in_region(frame, "j/k: select comment", &full);
 }
 
 /// Verify that pressing `d` while the chat transcript is focused in the reply

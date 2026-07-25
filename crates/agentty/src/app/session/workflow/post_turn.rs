@@ -8,7 +8,7 @@ use ag_agent as agent;
 use ag_agent::{AgentError, OneShotClient, TurnResult};
 use ag_forge as forge;
 use ag_git::GitClient;
-use ag_protocol::{AgentResponse, ReviewCommentOutcome, ReviewCommentResolution};
+use ag_protocol::{AgentResponse, ReviewCommentOutcome};
 use serde_json;
 use tokio::sync::mpsc;
 use tracing::warn;
@@ -438,7 +438,7 @@ async fn apply_successful_turn_result(
     } else {
         Status::Question
     };
-    let review_comment_outcomes = fixed_review_comment_outcomes(
+    let review_comment_outcomes = valid_review_comment_outcomes(
         &turn_metadata.review_comment_thread_ids,
         &assistant_message.review_comment_outcomes,
     );
@@ -484,9 +484,9 @@ async fn apply_successful_turn_result(
     Ok(target_status)
 }
 
-/// Returns deduplicated fixed outcomes whose thread identifiers were
-/// explicitly allowlisted for this turn.
-fn fixed_review_comment_outcomes(
+/// Returns deduplicated outcomes whose thread identifiers were explicitly
+/// allowlisted for this turn and whose replies are nonblank.
+fn valid_review_comment_outcomes(
     allowed_thread_ids: &[String],
     outcomes: &[ReviewCommentOutcome],
 ) -> Vec<ReviewCommentOutcome> {
@@ -498,7 +498,6 @@ fn fixed_review_comment_outcomes(
 
     outcomes
         .iter()
-        .filter(|outcome| outcome.resolution == ReviewCommentResolution::Fixed)
         .filter(|outcome| allowed_thread_ids.contains(outcome.thread_id.as_str()))
         .filter(|outcome| !outcome.reply.trim().is_empty())
         .filter(|outcome| accepted_thread_ids.insert(outcome.thread_id.clone()))
@@ -660,6 +659,7 @@ fn turn_applied_follow_up_tasks(_assistant_message: &AgentResponse) -> Vec<Sessi
 mod tests {
     use ag_agent::MockOneShotClient;
     use ag_git::MockGitClient;
+    use ag_protocol::ReviewCommentResolution;
 
     use super::*;
     use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
@@ -693,7 +693,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fixed_review_comment_outcomes_filters_and_normalizes_agent_output() {
+    fn test_valid_review_comment_outcomes_filters_and_normalizes_agent_output() {
         // Arrange
         let allowed_thread_ids = vec!["thread-fixed".to_string(), "thread-other".to_string()];
         let outcomes = vec![
@@ -725,16 +725,23 @@ mod tests {
         ];
 
         // Act
-        let accepted = fixed_review_comment_outcomes(&allowed_thread_ids, &outcomes);
+        let accepted = valid_review_comment_outcomes(&allowed_thread_ids, &outcomes);
 
         // Assert
         assert_eq!(
             accepted,
-            vec![ReviewCommentOutcome {
-                reply: "Applied the validation.".to_string(),
-                resolution: ReviewCommentResolution::Fixed,
-                thread_id: "thread-fixed".to_string(),
-            }]
+            vec![
+                ReviewCommentOutcome {
+                    reply: "Applied the validation.".to_string(),
+                    resolution: ReviewCommentResolution::Fixed,
+                    thread_id: "thread-fixed".to_string(),
+                },
+                ReviewCommentOutcome {
+                    reply: "No change needed.".to_string(),
+                    resolution: ReviewCommentResolution::NoChangeNeeded,
+                    thread_id: "thread-other".to_string(),
+                }
+            ]
         );
     }
 

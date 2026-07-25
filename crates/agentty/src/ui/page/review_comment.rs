@@ -429,6 +429,10 @@ fn code_context_lines(
     diff: &str,
     width: usize,
 ) -> Vec<Line<'static>> {
+    if thread.is_outdated == Some(true) {
+        return vec![muted_line("Original code context unavailable.")];
+    }
+
     if thread.anchor_side == ReviewCommentAnchorSide::File {
         return vec![muted_line(
             "This file-level comment is not attached to a code line.",
@@ -1033,6 +1037,28 @@ mod tests {
     }
 
     #[test]
+    fn test_code_context_lines_explain_outdated_anchor_without_current_diff_context() {
+        // Arrange
+        let mut thread = inline_thread(2);
+        thread.is_outdated = Some(true);
+
+        // Act
+        let lines = code_context_lines(&thread, SAMPLE_DIFF, 80);
+
+        // Assert
+        assert_eq!(
+            lines.iter().map(Line::to_string).collect::<Vec<_>>(),
+            vec!["Original code context unavailable."]
+        );
+        assert!(
+            lines
+                .iter()
+                .flat_map(|line| &line.spans)
+                .all(|span| span.style.bg.is_none())
+        );
+    }
+
+    #[test]
     fn test_code_context_lines_cover_old_side_and_missing_anchor_fallbacks() {
         // Arrange
         let mut old_thread = inline_thread(1);
@@ -1171,7 +1197,7 @@ mod tests {
     }
 
     #[test]
-    fn test_review_comment_actionability_excludes_resolved_outdated_and_missing_rows() {
+    fn test_review_comment_actionability_includes_outdated_unresolved_rows() {
         // Arrange
         let mut current = inline_thread(2);
         current.id = "current".to_string();
@@ -1203,7 +1229,7 @@ mod tests {
         assert!(!general_is_actionable);
         assert!(current_is_actionable);
         assert!(!resolved_is_actionable);
-        assert!(!outdated_is_actionable);
+        assert!(outdated_is_actionable);
         assert!(!missing_is_actionable);
         assert_eq!(current_thread_id, Some("current"));
         assert_eq!(general_thread_id, None);

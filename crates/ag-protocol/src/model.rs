@@ -84,9 +84,11 @@ pub struct AgentResponseSummary {
     description = "Disposition reported for one targeted forge review thread."
 )]
 pub enum ReviewCommentResolution {
-    /// The agent addressed the review thread in the worktree.
+    /// The agent completed the requested action and the thread can be
+    /// resolved after its reply is posted.
     Fixed,
-    /// The agent determined that no code or documentation change was needed.
+    /// The agent determined that no code or documentation change was needed;
+    /// its explanatory reply is posted while the thread remains open.
     NoChangeNeeded,
 }
 

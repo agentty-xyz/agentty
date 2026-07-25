@@ -363,10 +363,12 @@ pub struct ReviewCommentThread {
 }
 
 impl ReviewCommentThread {
-    /// Returns whether this thread is unresolved and still anchored to the
-    /// current review diff.
+    /// Returns whether this thread remains open for a reply and resolution.
+    ///
+    /// Outdated threads remain actionable because their forge-native thread
+    /// identifiers survive after their original line anchors become stale.
     pub fn is_actionable(&self) -> bool {
-        !self.is_resolved && self.is_outdated != Some(true)
+        !self.is_resolved
     }
 }
 
@@ -623,7 +625,7 @@ mod tests {
     }
 
     #[test]
-    fn review_comment_thread_is_actionable_only_when_current_and_unresolved() {
+    fn review_comment_thread_is_actionable_when_unresolved_even_if_outdated() {
         // Arrange
         let actionable = review_comment_thread();
         let mut resolved = review_comment_thread();
@@ -634,7 +636,7 @@ mod tests {
         // Act, Assert
         assert!(actionable.is_actionable());
         assert!(!resolved.is_actionable());
-        assert!(!outdated.is_actionable());
+        assert!(outdated.is_actionable());
     }
 
     #[test]

@@ -3516,7 +3516,7 @@ mod tests {
         assert_eq!(status, Status::Review);
         assert_eq!(
             notice.trim(),
-            "[Review Comments] Replied to and resolved 1 review thread(s)."
+            "[Review Comments] Replied to 1 review thread(s) and resolved 1 fixed thread(s)."
         );
     }
 
