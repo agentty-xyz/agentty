@@ -19,8 +19,9 @@ pub(crate) enum ReviewCommentEntry<'a> {
     Thread(&'a ReviewCommentThread),
 }
 
-/// Returns the complete selector projection in unresolved, resolved, then
-/// standalone order, including labels for each populated group.
+/// Returns the complete selector projection in unresolved, outdated,
+/// resolved, then standalone order, including labels for each populated
+/// group.
 pub(crate) fn grouped_review_comment_rows(
     snapshot: &ReviewCommentSnapshot,
 ) -> Vec<GroupedReviewCommentRow<'_>> {
@@ -29,7 +30,7 @@ pub(crate) fn grouped_review_comment_rows(
             .threads
             .len()
             .saturating_add(snapshot.pr_level_comments.len())
-            .saturating_add(3),
+            .saturating_add(4),
     );
     append_group_rows(
         &mut rows,
@@ -37,7 +38,16 @@ pub(crate) fn grouped_review_comment_rows(
         snapshot
             .threads
             .iter()
-            .filter(|thread| !thread.is_resolved)
+            .filter(|thread| !thread.is_resolved && thread.is_outdated != Some(true))
+            .map(ReviewCommentEntry::Thread),
+    );
+    append_group_rows(
+        &mut rows,
+        "Outdated",
+        snapshot
+            .threads
+            .iter()
+            .filter(|thread| !thread.is_resolved && thread.is_outdated == Some(true))
             .map(ReviewCommentEntry::Thread),
     );
     append_group_rows(
@@ -209,8 +219,16 @@ mod tests {
     #[test]
     fn test_grouped_review_comment_rows_include_populated_labels_and_entries() {
         // Arrange
-        let mut snapshot =
-            snapshot_with_threads([thread("resolved", true), thread("unresolved", false)]);
+        let mut outdated = thread("outdated", false);
+        outdated.is_outdated = Some(true);
+        let mut resolved_outdated = thread("resolved-outdated", true);
+        resolved_outdated.is_outdated = Some(true);
+        let mut snapshot = snapshot_with_threads([
+            thread("resolved", true),
+            outdated,
+            resolved_outdated,
+            thread("unresolved", false),
+        ]);
         snapshot.pr_level_comments.push(ReviewComment {
             author: "reviewer".to_string(),
             body: "Standalone comment".to_string(),
@@ -237,8 +255,11 @@ mod tests {
             vec![
                 "label:Unresolved",
                 "thread:unresolved",
+                "label:Outdated",
+                "thread:outdated",
                 "label:Resolved",
                 "thread:resolved",
+                "thread:resolved-outdated",
                 "label:Standalone",
                 "comment:Standalone comment",
             ]

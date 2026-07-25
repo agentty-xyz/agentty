@@ -207,12 +207,16 @@ Publish (`p`), sync (`r`), and stacked behavior are described in
 ## Review Comments
 
 The review-comments page uses the same split layout as diff view. The left panel lists
-unresolved threads, resolved threads, and standalone review-request comments in separate
-groups; the right panel shows the selected comment's author and thread state, current
-diff context for its attached line or range, and then the conversation. File-level
-comments explicitly show that they have no attached code line instead of highlighting an
-arbitrary diff row. Inline snippets use the same gutters and added/removed line colors
-as diff view.
+unresolved, outdated, and resolved threads plus standalone review-request comments in
+separate groups. The Outdated group contains unresolved threads with stale anchors;
+resolved threads stay in the Resolved group even when their anchors are outdated. The
+right panel shows the selected comment's author, resolution state, outdated-anchor
+metadata when applicable, current diff context for its attached line or range, and then
+the conversation. Outdated threads explicitly report that their original context is
+unavailable instead of mapping the stale anchor onto the current diff. File-level
+comments similarly show that they have no attached code line instead of highlighting an
+arbitrary diff row. Current inline snippets use the same gutters and added/removed line
+colors as diff view.
 
 | Key           | Action                                                  |
 | ------------- | ------------------------------------------------------- |
@@ -226,9 +230,9 @@ as diff view.
 Actionable rows start with `[ ]`, then show `[A]` for address or `[D]` for deny.
 Pressing the same action again clears that row; pressing the other action replaces it.
 `a`, `d`, and `Enter` appear only while the session can accept a turn, and `Enter`
-appears only after at least one row is marked. Resolved and outdated inline threads are
-not actionable. Standalone comments are also read-only because they have no forge thread
-ID.
+appears only after at least one row is marked. Unresolved outdated threads remain
+actionable through their forge thread ID, although their original code context is no
+longer available. Resolved threads and standalone comments are read-only.
 
 ## Publish Popup
 

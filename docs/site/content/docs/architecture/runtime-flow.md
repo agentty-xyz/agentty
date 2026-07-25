@@ -545,11 +545,13 @@ orchestration paths:
   `AppEvent` to update only the still-open comments page. Inline code context is derived
   from the already loaded current diff. From a reply-capable session, `a` marks an
   actionable thread to address, `d` marks it to deny, and `Enter` renders every marked
-  thread plus its requested action into one `TurnPrompt`. The selected forge thread IDs
-  are recorded in turn metadata. Post-turn handling accepts only deduplicated `fixed`
-  outcomes with an allowlisted ID and nonblank reply. After auto-commit and a successful
-  published-branch push, the worker posts each reply and then resolves that thread
-  through `ReviewRequestClient`; failed pushes never mutate forge thread state.
+  thread plus its requested action into one `TurnPrompt`; outdated threads include an
+  explicit stale-anchor marker. The selected forge thread IDs are recorded in turn
+  metadata. Post-turn handling accepts deduplicated outcomes with an allowlisted ID and
+  nonblank reply. After auto-commit and a successful published-branch push, the worker
+  posts every accepted reply and resolves only outcomes reported as `fixed` through
+  `ReviewRequestClient`; `no_change_needed` outcomes remain open, and failed pushes
+  never mutate forge thread state.
 - Assigned-issue refresh: the Issues tab resolves the active project remote and runs a
   repository-scoped, generation-scoped `gh search issues` task through
   `ReviewRequestClient`; stale completions are discarded before the list cache is

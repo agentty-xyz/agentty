@@ -420,11 +420,14 @@ publish popup for the linked forge review request:
   rebuttal.
 - Agent-driven review-comment turns report one structured outcome for each submitted
   inline thread. After Agentty commits the work and successfully pushes an already
-  published branch, it posts the agent's concise reply and resolves only allowlisted
-  threads reported as `fixed`. Threads reported as `no_change_needed`, unknown thread
-  IDs, blank replies, resolved threads, and outdated threads remain open. Reply or
-  resolution failures produce a `[Review Comments Warning]` transcript notice and do not
-  block the successful branch push.
+  published branch, it posts the agent's concise reply for every valid allowlisted
+  outcome and resolves only threads reported as `fixed`. Threads reported as
+  `no_change_needed` receive their explanatory reply but remain open. Unknown thread
+  IDs, blank replies, and resolved threads are ignored. Unresolved outdated threads
+  remain actionable through their forge thread ID while their stale line anchor is
+  omitted from current diff context. Reply or resolution failures produce a
+  `[Review Comments Warning]` transcript notice and do not block the successful branch
+  push.
 
 <a id="usage-review-request-prerequisites"></a> Publishing needs regular Git
 authentication (credential helper or PAT for HTTPS remotes, SSH key for SSH remotes)

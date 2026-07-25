@@ -503,8 +503,8 @@ pub(crate) fn build_apply_review_prompt(suggestions: &str) -> TurnPrompt {
 /// Builds an agent-facing review-comment prompt and its forge thread
 /// allowlist.
 ///
-/// Resolved and outdated threads are excluded. Standalone discussion comments
-/// are read-only because they have no forge-side thread identifier.
+/// Resolved threads are excluded. Standalone discussion comments are
+/// read-only because they have no forge-side thread identifier.
 pub(crate) fn build_resolve_review_comment_prompt(
     snapshot: &ReviewCommentSnapshot,
     selections: &[ReviewCommentActionSelection],
@@ -564,6 +564,12 @@ fn append_review_thread_prompt(
         action.prompt_label()
     );
     let _ = writeln!(review_comments, "Path: {}", thread.path);
+    if thread.is_outdated == Some(true) {
+        let _ = writeln!(
+            review_comments,
+            "Anchor status: outdated; inspect the current file instead of trusting the line anchor"
+        );
+    }
     let _ = writeln!(
         review_comments,
         "Anchor: {:?}, start line: {}, end line: {}",
@@ -636,10 +642,10 @@ mod tests {
         assert!(prompt.text.contains("````text\n"));
         assert!(prompt.text.contains("```markdown\nexample\n```"));
     }
-    /// Ensures the all-comments prompt includes only unresolved, current
-    /// thread IDs.
+    /// Ensures the all-comments prompt includes unresolved current and
+    /// outdated thread IDs.
     #[test]
-    fn test_build_resolve_review_comment_prompt_filters_non_actionable_threads() {
+    fn test_build_resolve_review_comment_prompt_filters_resolved_threads() {
         // Arrange
         let snapshot = review_comment_snapshot();
 
@@ -653,7 +659,10 @@ mod tests {
             .expect("snapshot should contain actionable comments");
 
         // Assert
-        assert_eq!(thread_ids, vec!["thread-current".to_string()]);
+        assert_eq!(
+            thread_ids,
+            vec!["thread-current".to_string(), "thread-outdated".to_string()]
+        );
         assert!(!prompt.text.contains("Update the overview."));
         assert!(prompt.text.contains("Thread ID: thread-current"));
         assert!(prompt.text.contains("Requested action: Address"));
@@ -664,7 +673,11 @@ mod tests {
                 .contains("Anchor: New, start line: 11, end line: 12")
         );
         assert!(!prompt.text.contains("thread-resolved"));
-        assert!(!prompt.text.contains("thread-outdated"));
+        assert!(prompt.text.contains("Thread ID: thread-outdated"));
+        assert!(prompt.text.contains("Requested action: Deny"));
+        assert!(prompt.text.contains(
+            "Anchor status: outdated; inspect the current file instead of trusting the line anchor"
+        ));
         assert!(prompt.attachments.is_empty());
         assert_eq!(prompt.text_source, TurnPromptTextSource::UserPrompt);
     }
@@ -689,7 +702,7 @@ mod tests {
         assert_eq!(thread_ids, vec!["thread-current".to_string()]);
     }
 
-    /// Ensures selected non-actionable and out-of-range rows cannot start a
+    /// Ensures selected resolved and out-of-range rows cannot start a
     /// resolution turn.
     #[test]
     fn test_build_resolve_review_comment_prompt_rejects_non_actionable_selection() {
@@ -699,10 +712,6 @@ mod tests {
             "thread-resolved",
             ReviewCommentAction::Address,
         )];
-        let outdated_selection = vec![review_comment_selection(
-            "thread-outdated",
-            ReviewCommentAction::Deny,
-        )];
         let missing_selection = vec![review_comment_selection(
             "thread-missing",
             ReviewCommentAction::Address,
@@ -710,13 +719,11 @@ mod tests {
 
         // Act
         let resolved = build_resolve_review_comment_prompt(&snapshot, &resolved_selection);
-        let outdated = build_resolve_review_comment_prompt(&snapshot, &outdated_selection);
         let missing = build_resolve_review_comment_prompt(&snapshot, &missing_selection);
         let empty = build_resolve_review_comment_prompt(&snapshot, &[]);
 
         // Assert
         assert!(resolved.is_none());
-        assert!(outdated.is_none());
         assert!(missing.is_none());
         assert!(empty.is_none());
     }

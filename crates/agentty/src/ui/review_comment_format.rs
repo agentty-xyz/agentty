@@ -20,8 +20,8 @@ pub(crate) fn append_comment_bodies(
     }
 }
 
-/// Renders the `path:start-end · side · N comments · resolved/unresolved`
-/// header shared by review-detail and diff comment panels.
+/// Renders the anchor, side, comment count, resolution, and optional outdated
+/// metadata shared by review-detail and diff comment panels.
 pub(crate) fn thread_header_line(
     thread: &ReviewCommentThread,
     anchor_style: Style,
@@ -111,7 +111,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_thread_header_line_includes_outdated_resolution_metadata() {
+    fn test_thread_header_line_includes_resolution_and_outdated_metadata() {
         // Arrange
         let thread = ReviewCommentThread {
             anchor_side: ReviewCommentAnchorSide::Old,
