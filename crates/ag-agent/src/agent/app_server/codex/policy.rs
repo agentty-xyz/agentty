@@ -28,7 +28,7 @@ pub(super) struct PermissionModePolicy {
 ///
 /// The `never` approval policy keeps normal turns from blocking on user
 /// approvals, while the workspace-write sandbox still constrains filesystem
-/// writes to the session worktree and explicit extra workspace roots.
+/// writes to the session worktree and its explicit `.agents` root.
 const AUTO_EDIT_POLICY: PermissionModePolicy = PermissionModePolicy {
     approval_policy: "never",
     legacy_pre_action_decision: "approved",
@@ -40,6 +40,14 @@ const AUTO_EDIT_POLICY: PermissionModePolicy = PermissionModePolicy {
     turn_sandbox_type: "workspaceWrite",
     web_search_mode: "live",
 };
+
+/// Repository metadata directory that remains editable during Codex turns.
+///
+/// Codex protects this path by default even when it lives under the writable
+/// worktree. Listing it as an exact writable root reopens only this
+/// worktree-local directory while preserving the read-only `.git` and
+/// `.codex` boundaries.
+const EDITABLE_WORKTREE_METADATA_PATH: &str = ".agents";
 
 /// Pre-action approval request categories understood by Agentty.
 enum PreActionApprovalKind {
@@ -119,23 +127,19 @@ pub(super) fn thread_sandbox_mode() -> &'static str {
     permission_mode_policy(PermissionMode::default()).thread_sandbox_mode
 }
 
-/// Returns the turn-level sandbox policy object for one permission mode.
-pub(super) fn turn_sandbox_policy() -> Value {
+/// Returns the turn-level sandbox policy object for one session worktree.
+pub(super) fn turn_sandbox_policy(session_folder: &Path) -> Value {
     let policy = permission_mode_policy(PermissionMode::default());
-    let mut turn_sandbox_policy = serde_json::json!({
-        "type": policy.turn_sandbox_type
-    });
+    let writable_root = session_folder
+        .join(EDITABLE_WORKTREE_METADATA_PATH)
+        .to_string_lossy()
+        .into_owned();
 
-    if policy.turn_sandbox_type == "workspaceWrite"
-        && let Some(policy_object) = turn_sandbox_policy.as_object_mut()
-    {
-        policy_object.insert(
-            "networkAccess".to_string(),
-            Value::Bool(policy.turn_network_access),
-        );
-    }
-
-    turn_sandbox_policy
+    serde_json::json!({
+        "type": policy.turn_sandbox_type,
+        "networkAccess": policy.turn_network_access,
+        "writableRoots": [writable_root],
+    })
 }
 
 /// Returns per-thread config overrides for one permission mode.

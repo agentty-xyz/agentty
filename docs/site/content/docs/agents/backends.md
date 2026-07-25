@@ -31,6 +31,10 @@ All backends accept pasted local prompt images from the Agentty composer (`Ctrl+
 `Ctrl+Shift+V`, or `Alt+V` in prompt mode) and run their turns non-interactively inside
 the session worktree.
 
+Codex can edit repository-local `.agents/` content inside that worktree, including
+project skills and instructions. Its `.git` and `.codex/` paths remain read-only during
+normal turns.
+
 Claude turns also allow Claude Code's `WebSearch` and `WebFetch` tools, so prompts that
 need current external information can use the web without an interactive permission
 grant. File edits remain scoped to the session worktree.
