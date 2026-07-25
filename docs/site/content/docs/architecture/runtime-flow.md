@@ -395,7 +395,9 @@ optional `summary`):
    empty; review-comment prompts provide the only accepted thread-ID allowlist.
 1. Final output must parse as the shared protocol JSON object. Claude, Gemini, and Codex
    session turns fail closed on invalid output; Antigravity tries one protocol-repair
-   retry and then preserves non-empty plain text as `answer`.
+   retry and then preserves non-empty plain text as `answer`. Claude result events
+   prefer the schema-validated `structured_output` value over the legacy string-valued
+   `result` field before protocol parsing.
 1. Turn errors are rendered into the session transcript, so no failure surface
    reproduces provider output. A rejected payload surfaces the parse reason plus
    *derived* diagnostics only (response sizing, parser location, visible top-level

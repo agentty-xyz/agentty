@@ -72,6 +72,10 @@ describes subscription OAuth as intended for Claude Code and native Anthropic
 applications, while developer integrations should use API keys or supported cloud
 providers.
 
+Claude turns use the CLI's schema-validated structured result for the final chat
+response. Tool-use events remain transient progress updates and are replaced by the
+validated answer when the turn completes.
+
 If Claude session turns or utility prompts fail with `authentication_error`,
 `Failed to authenticate`, or `OAuth token has expired`, refresh the CLI session and
 retry:
