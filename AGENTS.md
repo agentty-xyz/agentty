@@ -357,7 +357,7 @@ the full suite.
   focused E2E workflow. For routine validation, run E2E feature tests with
   `TESTTY_GIF_MODE=check` so agents verify GIF freshness without launching VHS/Chrome.
   When intentionally regenerating GIF assets, record in the pinned `linux/amd64` image
-  from `docker/e2e.Dockerfile` with `TESTTY_GIF_MODE=generate` so committed hash
+  from `container/e2e.Containerfile` with `TESTTY_GIF_MODE=generate` so committed hash
   sidecars match the container CI verifies them in; follow
   `skills/feature-test/SKILL.md` for the exact commands. If recording on the host
   instead, `TESTTY_GIF_MODE=force` must run from an unsandboxed shell (a normal

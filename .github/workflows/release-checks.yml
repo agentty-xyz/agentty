@@ -30,14 +30,14 @@ jobs:
           persist-credentials: false
 
       - name: Pull the pinned E2E image
-        run: docker pull "$E2E_IMAGE"
+        run: podman pull "$E2E_IMAGE"
 
       # The checkout is mounted read-only so `TESTTY_GIF_MODE=check` (set by
       # the hook) verifies committed GIF hash sidecars without rewriting them.
       - name: Run end-to-end feature suite
         run: >-
-          docker run --rm --platform linux/amd64
-          --mount type=bind,source="$PWD",target=/workspace,readonly
+          podman run --rm --platform linux/amd64
+          --mount type=bind,source="$PWD",target=/workspace,readonly=true
           --env CARGO_TARGET_DIR=/tmp/target
           "$E2E_IMAGE"
           prek run test-agentty-e2e --all-files --hook-stage manual

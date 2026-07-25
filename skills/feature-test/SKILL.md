@@ -214,14 +214,18 @@ still run while GIF freshness is checked without invoking VHS or launching Chrom
 ### Record in the canonical container
 
 Committed hash sidecars must be produced by the same environment that CI verifies them
-in. `docker/e2e.Dockerfile` defines that environment: a pinned `linux/amd64` image with
-the Rust toolchain, `prek`, `cargo-nextest`, and the full VHS recording stack (`vhs`,
-`ttyd`, Chromium, `ffmpeg`, JetBrains Mono). Presubmit, postsubmit, and release checks
-pull this image from GHCR by digest and run the `test-agentty-e2e` hook inside it
+in. `container/e2e.Containerfile` defines that environment: a pinned `linux/amd64` image
+with the Rust toolchain, `prek`, `cargo-nextest`, and the full VHS recording stack
+(`vhs`, `ttyd`, Chromium, `ffmpeg`, JetBrains Mono). Presubmit, postsubmit, and release
+checks pull this image from GHCR by digest and run the `test-agentty-e2e` hook inside it
 against a read-only checkout. Pull the same immutable digest for local recording instead
-of building or recording on the host. The host needs Docker only — no local Chrome or
-VHS — and the localhost-socket sandbox restriction below does not apply inside the
-container.
+of building or recording on the host. The host needs a running Podman environment only —
+no local Chrome or VHS — and the localhost-socket sandbox restriction below does not
+apply inside the container.
+
+On macOS or Windows, initialize the Podman machine once with `podman machine init`, then
+start it with `podman machine start` before pulling or running the image. Linux hosts
+run Podman directly without a machine.
 
 Record or refresh feature artifacts with a writable workspace mount and `generate` mode,
 which re-records only missing or stale GIFs. Run the local container as the host user so
@@ -237,9 +241,9 @@ mkdir -p \
   "${e2e_cache_root}/prek" \
   "${e2e_cache_root}/target"
 
-docker pull "${e2e_image}"
+podman pull "${e2e_image}"
 
-docker run --rm --platform linux/amd64 \
+podman run --rm --platform linux/amd64 \
   --user "$(id -u):$(id -g)" \
   --mount type=bind,source="$PWD",target=/workspace \
   --mount type=bind,source="${e2e_cache_root}",target=/cache \
@@ -263,20 +267,20 @@ nonempty-poster integrity check; a failed recording preserves the last valid pos
 
 #### Refresh the canonical image
 
-Only maintainers changing `docker/e2e.Dockerfile` should build and publish a replacement
-image. Build the `linux/amd64` candidate, run the affected focused feature tests with
-the local tag, then push `latest` after authenticating Docker to GHCR with package-write
-permission:
+Only maintainers changing `container/e2e.Containerfile` should build and publish a
+replacement image. Build the `linux/amd64` candidate, run the affected focused feature
+tests with the local tag, then push `latest` after authenticating Podman to GHCR with
+package-write permission:
 
 ```sh
-docker build --platform linux/amd64 \
-  --file docker/e2e.Dockerfile \
-  --tag ghcr.io/agentty-xyz/agentty-e2e:latest docker
+podman build --platform linux/amd64 \
+  --file container/e2e.Containerfile \
+  --tag ghcr.io/agentty-xyz/agentty-e2e:latest container
 
-docker push ghcr.io/agentty-xyz/agentty-e2e:latest
+podman push ghcr.io/agentty-xyz/agentty-e2e:latest
 ```
 
-Copy the digest reported by `docker push` into every workflow `E2E_IMAGE` value and the
+Copy the digest reported by `podman push` into every workflow `E2E_IMAGE` value and the
 local recording command above. Verify that the digest can be pulled without registry
 credentials so forked pull-request CI can use it. Re-record every feature affected by a
 tool, browser, font, or rendering change and refresh its PNG poster before committing
