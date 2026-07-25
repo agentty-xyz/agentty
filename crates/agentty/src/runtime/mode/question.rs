@@ -1,12 +1,13 @@
+use ag_session::SessionService;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
+use tracing::warn;
 
 use crate::app::session::SessionTaskService;
 use crate::app::{self, App, AppEvent};
 use crate::domain::input::InputState;
 use crate::domain::question::{QuestionItem, QuestionProgress, default_option_index};
 use crate::domain::session::{SessionId, Status};
-use crate::domain::turn_prompt::TurnPrompt;
 use crate::presentation::app_mode::{AppMode, ChatFocus, DiffRestoreTarget, QuestionModeSnapshot};
 use crate::presentation::prompt::PromptAtMentionState;
 use crate::runtime::EventResult;
@@ -627,17 +628,29 @@ async fn submit_response(app: &mut App, response: String) {
         session_id: session_id.clone(),
         scroll_offset: None,
     };
-    let reply_enqueued = app
-        .reply(&session_id, TurnPrompt::from_text(question_reply))
-        .await;
+    let reply_enqueued = match SessionService::new(app)
+        .send_message(&session_id, question_reply)
+        .await
+    {
+        Ok(()) => true,
+        Err(error) => {
+            warn!(
+                session_id = %session_id,
+                error = %error,
+                "failed to send completed question response"
+            );
+
+            false
+        }
+    };
 
     // Optimistically advance the session out of `Question` once the reply is
     // enqueued so the open-view question reconciliation does not re-open the
     // just-answered panel before the worker transitions to `InProgress`. The
-    // reply eligibility check runs against the pre-reply `Question` status, so
-    // this must happen after `reply`. Skip the advance when the reply never
-    // reached the worker (for example a rejected stacked reply) so the pending
-    // question is not hidden behind a stalled `InProgress` state.
+    // send eligibility check runs against the pre-send `Question` status, so
+    // this must happen after `send_message()`. Skip the advance when the reply
+    // never reached the worker (for example a rejected stacked reply) so the
+    // pending question is not hidden behind a stalled `InProgress` state.
     if reply_enqueued {
         mark_session_in_progress(app, &session_id);
     } else {
@@ -1624,6 +1637,48 @@ mod tests {
             *handles.status.lock().expect("lock should succeed"),
             Status::InProgress
         );
+    }
+
+    #[tokio::test]
+    async fn submit_response_advances_session_when_reply_is_enqueued() {
+        // Arrange
+        let (mut app, _base_dir) =
+            crate::test_support::new_git_test_app_with_mock_tmux_client().await;
+        let session_id = app
+            .create_session()
+            .await
+            .expect("session should be created");
+        crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Question);
+        app.mode = AppMode::Question {
+            at_mention_state: None,
+            current_index: 0,
+            focus: ChatFocus::Input,
+            input: InputState::default(),
+            questions: vec![QuestionItem::new("Which tests should be added?")],
+            responses: Vec::new(),
+            scroll_offset: None,
+            selected_option_index: None,
+            session_id: session_id.clone().into(),
+        };
+
+        // Act
+        submit_response(&mut app, "Unit and integration tests".to_string()).await;
+
+        // Assert
+        let session = app
+            .sessions
+            .sessions()
+            .iter()
+            .find(|session| session.id == session_id)
+            .expect("session should exist");
+        assert_eq!(session.status, Status::InProgress);
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                ref session_id,
+                scroll_offset: None,
+            } if session_id == &session.id
+        ));
     }
 
     #[tokio::test]

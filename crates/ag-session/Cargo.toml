@@ -1,0 +1,25 @@
+[package]
+name = "ag-session"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ag-agent.workspace = true
+ag-forge.workspace = true
+ag-protocol.workspace = true
+async-trait.workspace = true
+rustc-hash.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tokio.workspace = true

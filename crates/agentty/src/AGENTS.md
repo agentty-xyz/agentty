@@ -8,9 +8,9 @@
   `SettingName`; do not introduce ad hoc string keys or legacy aliases.
 - Prefer `module.rs` plus `module/` for nested modules. Avoid `mod.rs` module roots.
 - Session status flow:
-  - `Status::can_transition_to()` in `domain/session.rs` is the canonical transition
-    graph. Read and update that function and its tests instead of duplicating the full
-    state machine in prose.
+  - `SessionStatus::can_transition_to()` in `crates/ag-session/src/model.rs` is the
+    canonical transition graph. Read and update that function and its tests instead of
+    duplicating the full state machine in prose.
   - `Draft` is set when `create_session()` creates a blank session before the user types
     a prompt.
   - `InProgress` can be entered from `Draft` (first prompt) or from `Review`/`Question`
@@ -48,7 +48,8 @@ When changing architecture-level behavior under `src/`, update:
 ## Major Areas
 
 - `app.rs` and `app/` own orchestration and workflow state.
-- `domain.rs` and `domain/` own business entities and enums.
+- `domain.rs` and `domain/` own Agentty-specific business entities and re-export shared
+  session models from `ag-session`.
 - `infra.rs` and `infra/` own external integrations and persistence.
 - `runtime.rs` and `runtime/` own terminal lifecycle and event dispatch.
 - `ui.rs` and `ui/` own rendering, layout, and interaction widgets.

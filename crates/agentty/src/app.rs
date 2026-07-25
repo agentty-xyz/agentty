@@ -18,6 +18,7 @@ mod review;
 mod review_request;
 mod service;
 pub(crate) mod session;
+mod session_api;
 pub mod session_state;
 pub(crate) mod setting;
 mod startup;

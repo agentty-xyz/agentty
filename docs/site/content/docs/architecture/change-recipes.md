@@ -11,8 +11,11 @@ through the correct modules without crossing layer boundaries.
 
 ## Add or Modify a Session Workflow
 
-1. Update orchestration in `crates/agentty/src/app/session/` (`lifecycle.rs`,
-   `worker.rs`, `task.rs`, etc.).
+1. Keep frontend-neutral request/result models and programmatic operations in
+   `crates/ag-session/`.
+1. Update Agentty orchestration in `crates/agentty/src/app/session/` (`lifecycle.rs`,
+   `worker.rs`, `task.rs`, etc.) and adapt it through
+   `crates/agentty/src/app/session_api.rs`.
 1. Keep persistence in `crates/agentty/src/infra/db/` domain modules and keep
    `crates/agentty/src/infra/db.rs` router-only. Use `repository.rs` for repository
    bundle composition and `connection.rs` for pool wiring.

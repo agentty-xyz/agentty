@@ -32,6 +32,7 @@ these constraints:
 | `crates/ag-git/`          | Shared git, worktree, sync, rebase, and merge library.               |
 | `crates/ag-agent/`        | Shared agent provider models plus channel and transport boundaries.  |
 | `crates/ag-protocol/`     | Shared structured response protocol and turn prompt payload library. |
+| `crates/ag-session/`      | Shared session models and frontend-neutral lifecycle API.            |
 | `crates/ag-tui-text/`     | Shared markdown, mermaid, wrapping, and truncation text helpers.     |
 | `crates/agentty/`         | Main TUI application crate.                                          |
 | `crates/testty/`          | TUI end-to-end testing framework.                                    |
@@ -170,6 +171,33 @@ derived data instead of recomputing the render twice per frame.
 ## Session Turn Data Flow
 
 <a id="architecture-runtime-flow-turn"></a> From prompt submit to persisted result:
+
+`ag-session` provides the programmatic entry point used by terminal interactions and
+future non-TUI callers. `SessionService` accepts a `SessionBackend` trait object and
+offers create, complete by-id lookup, send, merge, and review-request operations.
+`app/session_api.rs` implements that port for `App`: commands reuse the existing worker
+and merge workflows, while lookup joins the persisted session settings and ordered
+messages into one frontend-neutral aggregate. The adapter deliberately contains no
+orchestrator policy, so a future orchestrator can own sequencing while calling the same
+API as the current frontend. `CreateSessionRequest` carries an explicit project id; the
+current `App` adapter validates that it matches the loaded project context, while
+another host can resolve project contexts independently.
+
+```mermaid
+flowchart LR
+  tui["TUI runtime"]
+  future["Future orchestrator"]
+  api["ag-session service"]
+  adapter["App session adapter"]
+  workers["Session workers"]
+  repos["Session repositories"]
+
+  tui --> api
+  future --> api
+  api --> adapter
+  adapter --> workers
+  adapter --> repos
+```
 
 1. Prompt mode drains presentation-owned composer state into a typed submission, or
    resolves a presentation-owned slash-menu selection. `app/prompt_intent.rs` executes

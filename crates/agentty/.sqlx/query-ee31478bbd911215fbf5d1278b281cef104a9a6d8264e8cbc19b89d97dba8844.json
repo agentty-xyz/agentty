@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\nSELECT session.base_branch AS base_branch,\n       session.added_lines AS added_lines,\n       session.agent AS agent,\n       session.created_at AS created_at,\n       session.deleted_lines AS deleted_lines,\n       session.has_diff AS \"has_diff: bool\",\n       session.id AS id,\n       session.in_progress_started_at,\n       session.in_progress_total_seconds AS in_progress_total_seconds,\n       session.input_tokens AS input_tokens,\n       session.is_draft AS \"is_draft: bool\",\n       session.model AS model,\n       session.output_tokens AS output_tokens,\n       session.parent_session_id,\n       session.personality_id,\n       session.project_id,\n       session.reasoning_level AS reasoning_level_override,\n       session.published_upstream_ref,\n       session_review_request.display_id AS review_request_display_id,\n       session_review_request.forge_kind AS review_request_forge_kind,\n       session_review_request.last_refreshed_at AS review_request_last_refreshed_at,\n       session_review_request.source_branch AS review_request_source_branch,\n       session_review_request.state AS review_request_state,\n       session_review_request.status_summary AS review_request_status_summary,\n       session_review_request.target_branch AS review_request_target_branch,\n       session_review_request.title AS review_request_title,\n       session_review_request.web_url AS review_request_web_url,\n       session.size AS size,\n       session.status AS status,\n       session.title,\n       session.updated_at AS updated_at\nFROM session\nLEFT JOIN session_review_request\nON session_review_request.session_id = session.id\nWHERE session.project_id = ?\nORDER BY session.updated_at DESC, session.created_at DESC, session.id\n",
+  "query": "\nSELECT session.base_branch AS base_branch,\n       session.added_lines AS added_lines,\n       session.agent AS agent,\n       session.created_at AS created_at,\n       session.deleted_lines AS deleted_lines,\n       session.has_diff AS \"has_diff: bool\",\n       session.id AS id,\n       session.in_progress_started_at,\n       session.in_progress_total_seconds AS in_progress_total_seconds,\n       session.input_tokens AS input_tokens,\n       session.is_draft AS \"is_draft: bool\",\n       session.model AS model,\n       session.output_tokens AS output_tokens,\n       session.parent_session_id,\n       session.personality_id,\n       session.project_id,\n       '' AS \"prompt!: String\",\n       session.reasoning_level AS reasoning_level_override,\n       session.published_upstream_ref,\n       NULL AS \"questions: String\",\n       session_review_request.display_id AS review_request_display_id,\n       session_review_request.forge_kind AS review_request_forge_kind,\n       session_review_request.last_refreshed_at AS review_request_last_refreshed_at,\n       session_review_request.source_branch AS review_request_source_branch,\n       session_review_request.state AS review_request_state,\n       session_review_request.status_summary AS review_request_status_summary,\n       session_review_request.target_branch AS review_request_target_branch,\n       session_review_request.title AS review_request_title,\n       session_review_request.web_url AS review_request_web_url,\n       session.size AS size,\n       session.status AS status,\n       NULL AS \"summary: String\",\n       session.title,\n       session.updated_at AS updated_at\nFROM session\nLEFT JOIN session_review_request\nON session_review_request.session_id = session.id\nWHERE session.project_id = ?\nORDER BY session.updated_at DESC, session.created_at DESC, session.id\n",
   "describe": {
     "columns": [
       {
@@ -180,8 +180,14 @@
         }
       },
       {
-        "name": "reasoning_level_override",
+        "name": "prompt!: String",
         "ordinal": 16,
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "name": "reasoning_level_override",
+        "ordinal": 17,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -192,7 +198,7 @@
       },
       {
         "name": "published_upstream_ref",
-        "ordinal": 17,
+        "ordinal": 18,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -202,8 +208,14 @@
         }
       },
       {
+        "name": "questions: String",
+        "ordinal": 19,
+        "type_info": "Null",
+        "origin": "Expression"
+      },
+      {
         "name": "review_request_display_id",
-        "ordinal": 18,
+        "ordinal": 20,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -214,7 +226,7 @@
       },
       {
         "name": "review_request_forge_kind",
-        "ordinal": 19,
+        "ordinal": 21,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -225,7 +237,7 @@
       },
       {
         "name": "review_request_last_refreshed_at",
-        "ordinal": 20,
+        "ordinal": 22,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -236,7 +248,7 @@
       },
       {
         "name": "review_request_source_branch",
-        "ordinal": 21,
+        "ordinal": 23,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -247,7 +259,7 @@
       },
       {
         "name": "review_request_state",
-        "ordinal": 22,
+        "ordinal": 24,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -258,7 +270,7 @@
       },
       {
         "name": "review_request_status_summary",
-        "ordinal": 23,
+        "ordinal": 25,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -269,7 +281,7 @@
       },
       {
         "name": "review_request_target_branch",
-        "ordinal": 24,
+        "ordinal": 26,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -280,7 +292,7 @@
       },
       {
         "name": "review_request_title",
-        "ordinal": 25,
+        "ordinal": 27,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -291,7 +303,7 @@
       },
       {
         "name": "review_request_web_url",
-        "ordinal": 26,
+        "ordinal": 28,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -302,7 +314,7 @@
       },
       {
         "name": "size",
-        "ordinal": 27,
+        "ordinal": 29,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -313,7 +325,7 @@
       },
       {
         "name": "status",
-        "ordinal": 28,
+        "ordinal": 30,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -323,8 +335,14 @@
         }
       },
       {
+        "name": "summary: String",
+        "ordinal": 31,
+        "type_info": "Null",
+        "origin": "Expression"
+      },
+      {
         "name": "title",
-        "ordinal": 29,
+        "ordinal": 32,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -335,7 +353,7 @@
       },
       {
         "name": "updated_at",
-        "ordinal": 30,
+        "ordinal": 33,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -365,6 +383,8 @@
       true,
       true,
       true,
+      false,
+      true,
       true,
       true,
       true,
@@ -378,9 +398,10 @@
       true,
       false,
       false,
+      true,
       true,
       false
     ]
   },
-  "hash": "9b21f47aed094ea3fbeadf1e1d856c3a438e250dc123337af775d979610b2620"
+  "hash": "ee31478bbd911215fbf5d1278b281cef104a9a6d8264e8cbc19b89d97dba8844"
 }
