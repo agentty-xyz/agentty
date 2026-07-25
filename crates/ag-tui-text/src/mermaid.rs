@@ -45,8 +45,8 @@ pub struct MermaidDiagram {
 /// flattened, styling statements are skipped, over-long labels are truncated
 /// with an ellipsis, and sequence notes, activations, and control blocks are
 /// skipped rather than drawn.
-/// Returns `None` for unsupported diagram types, unsupported cycles, or
-/// layouts so callers can keep the plain code-block presentation.
+/// Returns `None` for unsupported diagram types or layouts so callers can keep
+/// the plain code-block presentation.
 pub fn render_mermaid(source: &str) -> Option<MermaidDiagram> {
     render_mermaid_active_settings(source)
 }
@@ -74,11 +74,15 @@ fn render_mermaid_active_settings(source: &str) -> Option<MermaidDiagram> {
         return Some(diagram);
     }
 
+    let (mut graph, feedback_edges) = split_feedback_edges(graph)?;
+    if !feedback_edges.is_empty() && matches!(graph.direction, FlowDirection::LeftRight) {
+        graph.direction = FlowDirection::TopDown;
+    }
     let graph = expand_long_edges(graph)?;
     let layout = layout_layers(&graph)?;
 
     let diagram = match graph.direction {
-        FlowDirection::TopDown => draw_top_down(&graph, &layout),
+        FlowDirection::TopDown => draw_top_down(&graph, &layout, &feedback_edges),
         FlowDirection::LeftRight => draw_left_right(&graph, &layout),
     };
 
@@ -620,6 +624,68 @@ fn bounded_graph(
         edges,
         nodes,
     })
+}
+
+/// Separates edges that close cycles from the acyclic graph used for layered
+/// layout.
+///
+/// Feedback edges are retained for a dedicated outer routing lane. Self-links
+/// remain unsupported because they have no distinct source and target layer.
+fn split_feedback_edges(mut graph: MermaidGraph) -> Option<(MermaidGraph, Vec<MermaidEdge>)> {
+    let mut feedback_edges = Vec::new();
+    let mut layout_edges = Vec::with_capacity(graph.edges.len());
+
+    for edge in graph.edges.drain(..) {
+        if edge.from_index == edge.to_index {
+            return None;
+        }
+
+        if graph_path_exists(
+            edge.to_index,
+            edge.from_index,
+            &layout_edges,
+            graph.nodes.len(),
+        ) {
+            feedback_edges.push(edge);
+        } else {
+            layout_edges.push(edge);
+        }
+    }
+
+    graph.edges = layout_edges;
+
+    Some((graph, feedback_edges))
+}
+
+/// Returns whether `target_index` is reachable from `source_index` through
+/// edges already admitted to the layered graph.
+fn graph_path_exists(
+    source_index: usize,
+    target_index: usize,
+    edges: &[MermaidEdge],
+    node_count: usize,
+) -> bool {
+    let mut pending = VecDeque::from([source_index]);
+    let mut visited = vec![false; node_count];
+    visited[source_index] = true;
+
+    while let Some(node_index) = pending.pop_front() {
+        for target in edges
+            .iter()
+            .filter(|edge| edge.from_index == node_index)
+            .map(|edge| edge.to_index)
+        {
+            if target == target_index {
+                return true;
+            }
+            if !visited[target] {
+                visited[target] = true;
+                pending.push_back(target);
+            }
+        }
+    }
+
+    false
 }
 
 /// Splits long graph edges into adjacent-layer segments through hidden nodes.
@@ -1491,8 +1557,13 @@ struct TopDownEdgePath {
     track_row: usize,
 }
 
-/// Draws a top-down diagram: layers as rows, edges as vertical elbows.
-fn draw_top_down(graph: &MermaidGraph, layout: &GraphLayout) -> MermaidDiagram {
+/// Draws a top-down diagram with forward edges as vertical elbows and feedback
+/// edges as independent return rows beneath the layered graph.
+fn draw_top_down(
+    graph: &MermaidGraph,
+    layout: &GraphLayout,
+    feedback_edges: &[MermaidEdge],
+) -> MermaidDiagram {
     let box_widths = top_down_node_widths(graph);
     let layer_widths = top_down_layer_widths(layout, &box_widths);
     let canvas_width = layer_widths.iter().copied().max().unwrap_or(1);
@@ -1518,8 +1589,46 @@ fn draw_top_down(graph: &MermaidGraph, layout: &GraphLayout) -> MermaidDiagram {
     );
 
     draw_top_down_edge_paths(&mut canvas, &edge_paths);
+    let mut diagram = canvas.into_diagram();
+    append_feedback_edge_lines(&mut diagram, graph, feedback_edges);
 
-    canvas.into_diagram()
+    diagram
+}
+
+/// Appends each visible feedback edge on its own row so unrelated cycles
+/// cannot share tracks or appear connected.
+fn append_feedback_edge_lines(
+    diagram: &mut MermaidDiagram,
+    graph: &MermaidGraph,
+    feedback_edges: &[MermaidEdge],
+) {
+    for edge in feedback_edges.iter().filter(|edge| edge.is_visible) {
+        let line = feedback_edge_line(graph, edge);
+        diagram.width = diagram.width.max(line.width());
+        diagram.lines.push(line);
+    }
+}
+
+/// Formats one feedback edge as an independent source-to-target return row.
+fn feedback_edge_line(graph: &MermaidGraph, edge: &MermaidEdge) -> Line<'static> {
+    let source_end =
+        edge.source_marker
+            .unwrap_or(if edge.has_source_arrow { '◀' } else { '─' });
+    let target_end = edge
+        .target_marker
+        .unwrap_or(if edge.has_arrow { '▶' } else { '─' });
+    let label = edge.label.as_deref().map_or_else(
+        || Span::raw(""),
+        |label| Span::styled(format!(" {label} "), label_style()),
+    );
+
+    Line::from(vec![
+        Span::styled(graph.nodes[edge.from_index].label.clone(), label_style()),
+        Span::styled(format!(" {source_end}─"), structure_style()),
+        label,
+        Span::styled(format!("─{target_end} "), structure_style()),
+        Span::styled(graph.nodes[edge.to_index].label.clone(), label_style()),
+    ])
 }
 
 /// Returns the rendered width of each top-down graph node.
@@ -2366,6 +2475,102 @@ mod tests {
     }
 
     #[test]
+    fn test_render_mermaid_draws_multi_node_feedback_cycles() {
+        // Arrange
+        let source = concat!(
+            "flowchart LR\n",
+            "    U[User and TUI] --> C[Orchestrator controller]\n",
+            "    M[Agent model] --> P[Typed command response]\n",
+            "    P --> C\n",
+            "    C --> S[ag-session service]\n",
+            "    S --> A[Agentty host adapter]\n",
+            "    A --> W[Session workers]\n",
+            "    W --> E[Session events]\n",
+            "    E --> C\n",
+            "    C --> M\n",
+        );
+
+        // Act
+        let diagram = render_mermaid(source).expect("cyclic flowchart should render");
+        let text = diagram_text(&diagram);
+
+        // Assert
+        assert!(text.contains("Orchestrator controller"));
+        assert!(text.contains("Typed command response"));
+        assert!(text.contains("Session events"));
+        assert!(text.contains("Session events ───▶ Orchestrator controller"));
+        assert!(text.contains("Orchestrator controller ───▶ Agent model"));
+        assert!(!text.contains("flowchart LR"));
+        assert!(diagram.width < 80);
+    }
+
+    #[test]
+    fn test_render_mermaid_keeps_independent_feedback_cycles_separate() {
+        // Arrange
+        let source = concat!(
+            "flowchart TD\n",
+            "    A[First start] --> B[First middle]\n",
+            "    B --> C[First end]\n",
+            "    C --> A\n",
+            "    X[Second start] --> Y[Second middle]\n",
+            "    Y --> Z[Second end]\n",
+            "    Z --> X\n",
+        );
+
+        // Act
+        let diagram = render_mermaid(source).expect("independent cycles should render");
+        let feedback_lines = diagram
+            .lines
+            .iter()
+            .map(ToString::to_string)
+            .filter(|line| line.contains("───▶"))
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(
+            feedback_lines,
+            ["First end ───▶ First start", "Second end ───▶ Second start",]
+        );
+    }
+
+    #[test]
+    fn test_render_mermaid_draws_labeled_top_down_feedback_edge() {
+        // Arrange
+        let source = "flowchart TD\n    A[Start] --> B[Work]\n    B <-->|retry| A";
+
+        // Act
+        let diagram = render_mermaid(source).expect("labeled cycle should render");
+        let text = diagram_text(&diagram);
+
+        // Assert
+        assert!(text.contains("retry"));
+        assert!(text.contains('◀'));
+        assert!(text.contains('▶'));
+    }
+
+    #[test]
+    fn test_render_mermaid_keeps_self_link_fallback() {
+        // Arrange, Act, Assert
+        assert!(render_mermaid("flowchart LR\n    A --> A").is_none());
+    }
+
+    #[test]
+    fn test_render_mermaid_uses_invisible_feedback_for_layout_only() {
+        // Arrange
+        let source = "flowchart TD\n    A[Start] --> B[Finish]\n    B ~~~ A";
+
+        // Act
+        let diagram = render_mermaid(source).expect("invisible feedback should not reject diagram");
+        let text = diagram_text(&diagram);
+
+        // Assert
+        assert!(text.contains("Start"));
+        assert!(text.contains("Finish"));
+        assert_eq!(text.matches('▼').count(), 1);
+        assert!(!text.contains('◀'));
+    }
+
+    #[test]
     fn test_render_mermaid_writes_edge_label_on_track() {
         // Arrange
         let source = "graph TD\n    A --> B\n    A -->|yes| C";
@@ -2496,14 +2701,17 @@ mod tests {
         let left_right = "flowchart LR\n    A --> B\n    A <-- B";
 
         // Act
-        let feedback_diagram =
+        let top_down_diagram =
+            render_mermaid(top_down).expect("top-down feedback loop should render");
+        let top_down_text = diagram_text(&top_down_diagram);
+        let left_right_diagram =
             render_mermaid(left_right).expect("two-node feedback loop should render");
-        let feedback_text = diagram_text(&feedback_diagram);
+        let left_right_text = diagram_text(&left_right_diagram);
 
         // Assert
-        assert!(render_mermaid(top_down).is_none());
-        assert!(feedback_text.contains('▶'));
-        assert!(feedback_text.contains('◀'));
+        assert!(top_down_text.contains("B ───▶ A"));
+        assert!(left_right_text.contains('▶'));
+        assert!(left_right_text.contains('◀'));
     }
 
     #[test]
@@ -2853,14 +3061,19 @@ mod tests {
     }
 
     #[test]
-    fn test_render_mermaid_rejects_unsupported_cycles() {
+    fn test_render_mermaid_renders_small_cycles() {
         // Arrange
         let cyclic = "graph TD\n    A --> B\n    B --> A";
         let three_node_cycle = "graph LR\n    A --> B\n    B --> C\n    C --> A";
 
-        // Act & Assert
-        assert!(render_mermaid(cyclic).is_none());
-        assert!(render_mermaid(three_node_cycle).is_none());
+        // Act
+        let top_down_diagram = render_mermaid(cyclic).expect("top-down cycle should render");
+        let left_right_diagram =
+            render_mermaid(three_node_cycle).expect("left-right cycle should render");
+
+        // Assert
+        assert!(diagram_text(&top_down_diagram).contains("B ───▶ A"));
+        assert!(diagram_text(&left_right_diagram).contains("C ───▶ A"));
     }
 
     #[test]
