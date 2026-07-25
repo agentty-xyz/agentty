@@ -1007,7 +1007,7 @@ fn command_description(command: &str) -> &'static str {
     match command {
         "/apply" => "Verify focused-review suggestions, then apply the correct ones.",
         "/model" => "Choose an agent and model for this session.",
-        "/personality" => "Choose a personality for this session.",
+        "/personality" => "List: .agents/agents/. Choose a personality for this session.",
         "/reasoning" => "Override the reasoning level for this session.",
         _ => "Prompt slash command.",
     }
@@ -1379,7 +1379,7 @@ mod tests {
     fn test_slash_suggestion_list_for_command_stage_has_description() {
         // Arrange
         let composer = PromptComposerState::with_input_and_history(
-            InputState::with_text("/m".to_string()),
+            InputState::with_text("/pers".to_string()),
             AgentKind::ALL.to_vec(),
             Vec::new(),
         );
@@ -1395,8 +1395,10 @@ mod tests {
             PromptSuggestionList {
                 items: vec![PromptSuggestionItem {
                     badge: None,
-                    detail: Some("Choose an agent and model for this session.".to_string()),
-                    label: "/model".to_string(),
+                    detail: Some(
+                        "List: .agents/agents/. Choose a personality for this session.".to_string(),
+                    ),
+                    label: "/personality".to_string(),
                     metadata: None,
                 }],
                 selected_index: 0,
