@@ -831,6 +831,7 @@ fn review_highlight(
             &normalized_path,
             &[
                 "cargo.toml",
+                "containerfile",
                 ".github/workflows",
                 "dockerfile",
                 ".yaml",
@@ -1465,6 +1466,23 @@ diff --git a/src/auth.rs b/src/auth.rs
         assert!(review.contains("Authorization or security-sensitive logic changed."));
         assert!(review.contains("Runtime safety or error handling changed."));
         assert!(review.contains("src/auth.rs"));
+    }
+
+    #[test]
+    fn test_build_review_text_highlights_containerfile_configuration() {
+        // Arrange
+        let diff = "\
+diff --git a/container/e2e.Containerfile b/container/e2e.Containerfile
+@@ -1,1 +1,1 @@
+-FROM scratch
++FROM debian";
+
+        // Act
+        let review = build_review_text(diff, None);
+
+        // Assert
+        assert!(review.contains("container/e2e.Containerfile"));
+        assert!(review.contains("Build or runtime configuration changed."));
     }
 
     #[test]

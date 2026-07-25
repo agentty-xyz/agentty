@@ -82,17 +82,17 @@ still show the real value.
 ## Canonical container workflow
 
 Agentty checks feature GIF freshness in one pinned `linux/amd64` container defined by
-`docker/e2e.Dockerfile`. Presubmit, postsubmit, and release workflows pull the same GHCR
-image by digest, mount the checkout read-only, and run the suite in `check` mode. CI
-never records, rewrites, or commits feature artifacts.
+`container/e2e.Containerfile`. Presubmit, postsubmit, and release workflows use Podman
+to pull the same GHCR image by digest, mount the checkout read-only, and run the suite
+in `check` mode. CI never records, rewrites, or commits feature artifacts.
 
 When an intentional UI change makes a sidecar stale, a developer runs the affected test
 in that container with a writable checkout and `generate` mode. Only missing or stale
 GIFs are recorded. The developer reviews the changed GIF and hash sidecar, refreshes the
 matching PNG poster, and commits the three artifacts with the UI change.
 
-Use the exact digest-pinned recording command in `skills/feature-test/SKILL.md`. It runs
-the local container as the host UID and GID so Linux bind mounts remain writable, while
-CI keeps the image's fixed non-root user and read-only checkout. Recording in the same
-container that performs the freshness check prevents host-specific output from churning
-committed artifacts.
+Use the exact digest-pinned Podman recording command in `skills/feature-test/SKILL.md`.
+It runs the local container as the host UID and GID so Linux bind mounts remain
+writable, while CI keeps the image's fixed non-root user and read-only checkout.
+Recording in the same container that performs the freshness check prevents host-specific
+output from churning committed artifacts.
