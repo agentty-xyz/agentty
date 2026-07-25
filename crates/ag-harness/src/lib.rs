@@ -1,4 +1,9 @@
 //! Lightweight, Rust-native LLM harness for application-facing agent workflows.
 //!
-//! The crate is currently a scaffold. Its planned architecture and boundaries
-//! are documented in the crate-level `AGENTS.md`.
+//! The crate provides a provider-neutral model contract and model adapters.
+
+mod model;
+mod qwen;
+
+pub use model::{Model, ModelError, ModelRequest, ModelResponse};
+pub use qwen::{Qwen, QwenConfig};

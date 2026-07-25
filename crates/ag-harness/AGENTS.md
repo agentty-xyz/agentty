@@ -35,6 +35,10 @@ agentty/
 │   ├── ag-harness-core       # loop, tools, sessions, context, storage
 ```
 
+The current foundation lives entirely in `ag-harness`: the provider-neutral `Model`
+contract accepts a text `ModelRequest` and returns a text `ModelResponse`. `Qwen` is its
+first adapter and uses the OpenAI-compatible Chat Completions API.
+
 ## Session management
 
 - One host process manages multiple independent sessions.
@@ -107,7 +111,21 @@ sequenceDiagram
 
 ## Structured output
 
-The harness uses structured input and output to communicate with models.
+The next model-contract iteration evolves the current text-only response into
+provider-neutral structured output:
+
+- The caller supplies the expected JSON shape as a provider-independent schema.
+- Each adapter uses the strongest structured-output mechanism its provider supports,
+  then the harness parses and validates the returned JSON against the caller's schema.
+- Provider-specific request fields remain inside the adapter. For Qwen, the adapter uses
+  JSON Object mode and performs schema validation in the harness because Qwen guarantees
+  valid JSON, not schema conformance.
+- Every new model adapter must implement these structured-output semantics before it is
+  added.
+
+Configurations that cannot satisfy the contract, such as Qwen thinking mode, return an
+explicit unsupported-configuration error rather than silently falling back to
+unstructured text.
 
 ## Permissions
 
@@ -152,11 +170,12 @@ best cost and performance:
 
 ## Next iterations
 
-1. **Model round trip.** Integrate one Qwen model API and complete a typed
-   prompt-response flow.
+1. **Structured model output.** Add the provider-neutral schema contract, Qwen JSON
+   Object mode translation, parsing, validation, and typed errors described above.
 1. **Tool round trip.** Support one model-requested tool through execution to the final
    response.
-1. **Second provider.** Integrate another model API through the same contract.
+1. **Second provider.** Integrate another model API through the structured-output
+   contract.
 
 ## Roadmap
 

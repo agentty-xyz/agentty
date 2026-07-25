@@ -30,9 +30,9 @@ For file-level detail, read the module docstrings directly.
 - `crates/ag-git/`: Shared git library crate with worktree creation, repository
   metadata, commit/diff/push/pull sync, rebase/conflict handling, and squash-merge
   workflows behind the `GitClient` boundary.
-- `crates/ag-harness/`: Planned application-facing LLM harness facade. The crate is
-  currently a scaffold; its local `AGENTS.md` records the intended agent loop, tools,
-  session, event, and permission boundaries.
+- `crates/ag-harness/`: Application-facing LLM harness crate with the provider-neutral
+  `Model` contract and its first Qwen adapter. Its local `AGENTS.md` records the
+  intended agent loop, tools, session, event, and permission boundaries.
 - `crates/ag-protocol/`: Shared structured response protocol library crate with
   transport-neutral response models, schema generation, parser diagnostics, protocol
   prompt envelopes, repair prompts, review-comment outcomes, and turn prompt payload
