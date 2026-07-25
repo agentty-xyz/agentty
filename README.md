@@ -1,6 +1,6 @@
 <div align="center">
 
-<h1>Agentty</h1>
+<h1>Agentty ADE</h1>
 
 ![NPM Version](https://img.shields.io/npm/v/agentty)
 [![codecov](https://codecov.io/gh/agentty-xyz/agentty/graph/badge.svg?token=YRGKGTM0HP)](https://codecov.io/gh/agentty-xyz/agentty)
