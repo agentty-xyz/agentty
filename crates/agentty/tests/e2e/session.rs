@@ -952,6 +952,9 @@ const PROTOCOL_FAILURE_PAYLOAD_FILLER: &str = "not-json-filler";
 /// report why the payload was rejected without reproducing the payload.
 const PROTOCOL_FAILURE_TAIL_MARKER: &str = "TAILOFPAYLOAD";
 
+/// Answer returned through Claude's schema-validated result field.
+const CLAUDE_STRUCTURED_RESPONSE_TEXT: &str = "Claude structured response rendered";
+
 /// Installs a Claude stub whose final payload is not protocol JSON.
 ///
 /// The payload is far longer than the excerpt budget and carries a marker at
@@ -972,6 +975,32 @@ if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 cat > /dev/null 2>&1
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
 printf '%s\n' '{{"type":"result","subtype":"success","result":"{payload}"}}'
+"#
+    );
+    std::fs::write(&claude_path, script)?;
+
+    #[cfg(unix)]
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+
+    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])?;
+
+    Ok(())
+}
+
+/// Installs a Claude stub that returns its final protocol reply through
+/// `structured_output`, matching current Claude Code schema-validated turns.
+fn seed_claude_structured_output_project(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let claude_path = env.stub_bin.join("claude");
+    let script = format!(
+        r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+cat > /dev/null 2>&1
+printf '%s\n' '{{"type":"system","subtype":"init"}}'
+printf '%s\n' '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"tool_use","name":"StructuredOutput","input":{{"answer":"{CLAUDE_STRUCTURED_RESPONSE_TEXT}"}}}}]}}}}'
+printf '%s\n' '{{"type":"result","subtype":"success","result":"","structured_output":{{"answer":"{CLAUDE_STRUCTURED_RESPONSE_TEXT}","questions":[],"summary":null}},"usage":{{"input_tokens":8,"output_tokens":6}}}}'
 "#
     );
     std::fs::write(&claude_path, script)?;
@@ -1964,6 +1993,45 @@ fn test_session_invalid_protocol_output_is_bounded() -> E2eResult {
                 assertion::assert_text_in_region(frame, "embedded_json_candidate", &full);
                 assertion::assert_not_visible(frame, PROTOCOL_FAILURE_TAIL_MARKER);
                 assertion::assert_not_visible(frame, PROTOCOL_FAILURE_PAYLOAD_FILLER);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that schema-validated Claude results render their final answer
+/// instead of leaving a transient structured-output tool event in chat.
+#[test]
+fn test_claude_structured_output_response() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("claude_structured_output_response")
+        .with_git()
+        .setup(seed_claude_structured_output_project)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .write_text("Return a structured response")
+                    .wait_for_text("Return a structured response", 3000)
+                    .press_key("Enter")
+                    .wait_for_text(CLAUDE_STRUCTURED_RESPONSE_TEXT, 30000)
+                    .capture_labeled(
+                        "structured_response",
+                        "Claude schema-validated response renders in chat",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, CLAUDE_STRUCTURED_RESPONSE_TEXT, &full);
+                assertion::assert_not_visible(
+                    frame,
+                    "Agent output did not match the required JSON schema",
+                );
+                assertion::assert_not_visible(frame, "Working: tool use");
             },
         )?;
 

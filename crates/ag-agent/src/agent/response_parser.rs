@@ -16,6 +16,7 @@ pub(crate) struct ParsedResponse {
 #[derive(Deserialize)]
 struct ClaudeResponse {
     result: Option<String>,
+    structured_output: Option<serde_json::Value>,
     usage: Option<ClaudeUsage>,
 }
 
@@ -140,10 +141,11 @@ pub(super) fn parse_antigravity_stream_output_line(_stdout_line: &str) -> Option
 
 /// Parses one full Claude turn payload from stream-json stdout.
 ///
-/// Prefers the final non-empty `result` field when present. When Claude emits
-/// an empty or missing `result` field (observed in some stream-json runs), this
-/// falls back to the latest assistant stream message content so callers still
-/// receive the assistant reply instead of raw NDJSON.
+/// Prefers the final schema-validated `structured_output` or non-empty
+/// `result` field when present. When Claude emits neither field (observed in
+/// some stream-json runs), this falls back to the latest assistant stream
+/// message content so callers still receive the assistant reply instead of
+/// raw NDJSON.
 fn parse_claude_response(stdout: &str) -> Option<ParsedResponse> {
     let trimmed_stdout = stdout.trim();
     if trimmed_stdout.is_empty() {
@@ -499,7 +501,10 @@ pub(super) fn parse_codex_stream_output_line(stdout_line: &str) -> Option<(Strin
 
 fn parse_claude_response_payload(stdout: &str) -> Option<ParsedResponse> {
     let response = serde_json::from_str::<ClaudeResponse>(stdout).ok()?;
-    let content = response.result?;
+    let content = response
+        .structured_output
+        .map(|structured_output| structured_output.to_string())
+        .or(response.result)?;
     let stats = SessionStats {
         added_lines: 0,
         deleted_lines: 0,
@@ -605,12 +610,13 @@ fn extract_gemini_stream_stats(stdout_line: &str) -> Option<SessionStats> {
 /// result text and usage stats.
 ///
 /// Newer CLI variants can emit one JSON array containing init/assistant/result
-/// events rather than one flat object. This parser keeps the latest non-empty
-/// `result` string when present, otherwise falls back to assistant message
-/// text.
+/// events rather than one flat object. This parser keeps the latest
+/// schema-validated `structured_output` value, then the latest non-empty
+/// `result` string, and otherwise falls back to assistant message text.
 fn parse_claude_response_array_payload(stdout: &str) -> Option<ParsedResponse> {
     let events = serde_json::from_str::<serde_json::Value>(stdout).ok()?;
     let events = events.as_array()?;
+    let mut latest_structured_output_content: Option<String> = None;
     let mut latest_result_content: Option<String> = None;
     let mut latest_assistant_content: Option<String> = None;
     let mut latest_stats: Option<SessionStats> = None;
@@ -626,12 +632,20 @@ fn parse_claude_response_array_payload(stdout: &str) -> Option<ParsedResponse> {
             latest_result_content = Some(result_content.to_string());
         }
 
+        if let Some(structured_output) = event.get("structured_output")
+            && !structured_output.is_null()
+        {
+            latest_structured_output_content = Some(structured_output.to_string());
+        }
+
         if let Some(assistant_content) = extract_claude_stream_assistant_content(event) {
             latest_assistant_content = Some(assistant_content);
         }
     }
 
-    let content = latest_result_content.or(latest_assistant_content)?;
+    let content = latest_structured_output_content
+        .or(latest_result_content)
+        .or(latest_assistant_content)?;
     let stats = latest_stats.unwrap_or_default();
 
     Some(ParsedResponse { content, stats })
@@ -901,6 +915,27 @@ mod tests {
     }
 
     #[test]
+    fn test_claude_parse_response_reads_structured_output_payload() {
+        // Arrange
+        let stdout = concat!(
+            r#"{"type":"result","subtype":"success","result":"","structured_output":"#,
+            r#"{"answer":"Rendered response","questions":[],"summary":null},"#,
+            r#""usage":{"input_tokens":13,"output_tokens":9}}"#
+        );
+
+        // Act
+        let parsed = parse_claude_response_with_fallback(stdout, "");
+
+        // Assert
+        assert_eq!(
+            parsed.content,
+            r#"{"answer":"Rendered response","questions":[],"summary":null}"#
+        );
+        assert_eq!(parsed.stats.input_tokens, 13);
+        assert_eq!(parsed.stats.output_tokens, 9);
+    }
+
+    #[test]
     fn test_gemini_parse_response_reads_legacy_usage() {
         // Arrange
         let stdout = r#"{"response":"Planned response","stats":{"models":{"gemini":{"tokens":{"input":11,"candidates":7}}}}}"#;
@@ -1015,6 +1050,28 @@ mod tests {
         );
         assert_eq!(parsed.stats.input_tokens, 5);
         assert_eq!(parsed.stats.output_tokens, 3);
+    }
+
+    #[test]
+    fn test_claude_parse_response_reads_structured_output_from_json_array_payload() {
+        // Arrange
+        let stdout = concat!(
+            r#"[{"type":"system","subtype":"init"},"#,
+            r#"{"type":"result","subtype":"success","result":"","structured_output":"#,
+            r#"{"answer":"Array response","questions":[],"summary":null},"#,
+            r#""usage":{"input_tokens":7,"output_tokens":4}}]"#
+        );
+
+        // Act
+        let parsed = parse_claude_response_with_fallback(stdout, "");
+
+        // Assert
+        assert_eq!(
+            parsed.content,
+            r#"{"answer":"Array response","questions":[],"summary":null}"#
+        );
+        assert_eq!(parsed.stats.input_tokens, 7);
+        assert_eq!(parsed.stats.output_tokens, 4);
     }
 
     #[test]
